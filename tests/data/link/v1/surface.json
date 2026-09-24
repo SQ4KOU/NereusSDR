@@ -1246,6 +1246,11 @@
             "unit": "count",
             "value": 2
         },
+        "shortNameMaxBytes": {
+            "source": "DeviceStore::kMaxShortNameBytes",
+            "unit": "bytes",
+            "value": 32
+        },
         "stationInboundMessageBytes": {
             "source": "StationServer::kMaxIncomingMessageBytes",
             "unit": "bytes",

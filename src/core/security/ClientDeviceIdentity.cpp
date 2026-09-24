@@ -10,6 +10,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/ClientDeviceIdentity.h"
@@ -51,9 +54,24 @@ QString ClientDeviceIdentity::machineName()
 
 QString ClientDeviceIdentity::deviceNameFrom(const QString& hostName)
 {
+    return cleanedName(hostName, kMaxNameBytes);
+}
+
+QString ClientDeviceIdentity::machineShortName()
+{
+    return shortNameFrom(QSysInfo::machineHostName());
+}
+
+QString ClientDeviceIdentity::shortNameFrom(const QString& hostName)
+{
+    return cleanedName(hostName.trimmed().section(QLatin1Char('.'), 0, 0), kMaxShortNameBytes);
+}
+
+QString ClientDeviceIdentity::cleanedName(const QString& text, int maxBytes)
+{
     QString name;
-    name.reserve(hostName.size());
-    for (const QChar c : hostName) {
+    name.reserve(text.size());
+    for (const QChar c : text) {
         // What DeviceStore::isValidName refuses.
         const QChar::Category category = c.category();
         if (c.isNull() || category == QChar::Other_Control || category == QChar::Other_Format
@@ -69,7 +87,7 @@ QString ClientDeviceIdentity::deviceNameFrom(const QString& hostName)
         name = name.trimmed();
     }
     // Cut at a character boundary so the UTF-8 form fits.
-    while (!name.isEmpty() && name.toUtf8().size() > kMaxNameBytes) {
+    while (!name.isEmpty() && name.toUtf8().size() > maxBytes) {
         name.chop(1);
         if (!name.isEmpty() && name.back().isHighSurrogate()) {
             name.chop(1);

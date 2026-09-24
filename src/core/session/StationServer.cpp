@@ -199,6 +199,9 @@
 //                                    connection signed in with a paired
 //                                    device's key. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1971,6 +1974,10 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
                                   : QStringLiteral("Computer");
                 device.kind = QStringLiteral("computer");
                 device.enrolledThroughToken = true;
+                // Part C fix wave: its short name, when it sent a usable one.
+                if (DeviceStore::isValidShortName(message.device->shortName)) {
+                    device.shortName = message.device->shortName;
+                }
                 if (m_devices->add(device)) {
                     qCInfo(lcStation) << "Enrolled the device key of" << description
                                       << "signing in with the pairing token";
@@ -1997,8 +2004,11 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
     // One change to the devices object for this sign-in, not two.
     m_devicesFacade->holdRefresh();
     if (!deviceId.isEmpty()) {
-        // lastSeen and lastAddress, on every authenticated connection.
-        m_devices->touch(deviceId, address);
+        // lastSeen and lastAddress, on every authenticated connection, and
+        // the short name the device sent this time (Part C fix wave: it
+        // replaces the stored one when usable; outside the signed transcript).
+        m_devices->touch(deviceId, address,
+                         message.device ? message.device->shortName : QString());
     }
     publishConnectedDevices();
     m_devicesFacade->resumeRefresh();

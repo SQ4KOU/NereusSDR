@@ -132,6 +132,9 @@
 //                                    pair.accept, pair.spake, pair.confirm,
 //                                    pair.fail). AI-assisted implementation
 //                                    via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -320,6 +323,11 @@ struct SessionDeviceBlock {
     QString name;
     QString kind;       // "phone", "tablet", "computer"
     QString signature;  // raw r || s over the device-auth transcript
+    /// Optional (Part C fix wave, settled with the phone session): the
+    /// device's own short name, at most DeviceStore::kMaxShortNameBytes of
+    /// UTF-8; "" when absent, and then not encoded. Outside the signed
+    /// transcript, as `name` is.
+    QString shortName;
 };
 
 /// One property's WIRE DECLARATION: name, ordinal and kind, carrying no

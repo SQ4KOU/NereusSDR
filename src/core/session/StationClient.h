@@ -244,6 +244,9 @@
 //                                    and the end report reads the Core's
 //                                    end code. AI-assisted transformation
 //                                    via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -446,8 +449,10 @@ public:
     /// the same step (the link document, section 3.5). Without one this
     /// client signs in with the token alone, as before. Not owned beyond
     /// the shared pointer; applies from the next hello.
+    /// Part C fix wave: `shortName`, when not empty, goes in every device
+    /// block as its `shortName` (ClientDeviceIdentity::machineShortName()).
     void setDeviceIdentity(std::shared_ptr<const ClientDeviceIdentity> identity,
-                           const QString& deviceName);
+                           const QString& deviceName, const QString& shortName = QString());
 
     /// The identity fingerprint this client trusts the Core by: the one it
     /// was given to connect with, or the one its key was just enrolled
@@ -970,6 +975,7 @@ private:
     /// sign-in in flight is enrolling with (empty when none is).
     std::shared_ptr<const ClientDeviceIdentity> m_deviceIdentity;
     QString m_deviceName;
+    QString m_deviceShortName;
     QByteArray m_stationIdentity;
     QByteArray m_enrollingIdentity;
     quint16 m_agreedMajor = 0;

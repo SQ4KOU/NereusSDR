@@ -185,14 +185,16 @@ Each paired device holds its own P-256 key. The Core keeps the paired
 devices in `paired-devices.json` in its profile directory, mode 0600,
 written atomically (`DeviceStore`): each device's `id` (the fingerprint of
 its key), key, name, kind (`phone`, `tablet` or `computer`), when it was
-paired and last seen, its last address, and whether it was enrolled through
-the token. A file that cannot be read fails closed: no device signs in, the
+paired and last seen, its last address, whether it was enrolled through
+the token, and its short name (below; `""` until a sign-in brings one, and
+absent from a list written before it). A file that cannot be read fails closed: no device signs in, the
 file is never overwritten, and the Core counts as claimed.
 
 A device signs in with `auth.request`, `token` `""`, and `device`
 `{"id", "publicKey", "name", "kind", "signature"}` (all strings;
-`SessionDeviceBlock`), where `signature` is its key's signature over the
-transcript (`DeviceAuthenticator::transcript`):
+`SessionDeviceBlock`), plus an optional string `shortName`, where
+`signature` is its key's signature over the transcript
+(`DeviceAuthenticator::transcript`):
 
 ```
 "NereusSDR device-auth v1\n" || challenge (32 bytes)
@@ -205,6 +207,24 @@ is well formed, the `id` is the fingerprint of `publicKey`, the signature
 verifies over this connection's challenge and this Core's certificate and
 key, and the device is in the paired devices with that key. A client sends
 `device` only to a station whose `hello` declares `deviceAuth` 1.
+
+**The short name.** `shortName` is the device's own short name, for the
+places a screen has room for one word; a client sends it at every sign-in,
+with no gate. It is at most 32 bytes of UTF-8 (`shortNameMaxBytes`,
+`DeviceStore::kMaxShortNameBytes`), counted as the 64-byte name cap is, and
+it is validated as a name is (`DeviceStore::isValidShortName`: not empty
+after trimming, no control, format, line-separator or paragraph-separator
+characters, valid UTF-8). It is the operator's own words, so it is not held
+to the Core's wording rules: "Grant's iPhone" passes. It sits outside the
+signed transcript, as `name` does. The Core stores it with the device and
+replaces it at each sign-in that carries a usable one; an absent or
+unusable one changes nothing and refuses nothing. When present it must be a
+string, or the message is malformed. A token sign-in that enrols its key
+(below) stores it too. The desktop sends the computer's short host name,
+trimmed to the cap (`ClientDeviceIdentity::machineShortName`). Pairing does
+not carry it: `pair.start`'s `device` block and the code-mode box keep
+`{"publicKey", "name", "kind"}`, and a device signs in straight after
+pairing.
 
 | Case | `auth.result` reason | `retryable` | `code` |
 | --- | --- | --- | --- |
@@ -2124,6 +2144,7 @@ maximum also equals `kMaximumSpectrumDisplayFramesPerSecond` in
 | `maxPeers` | 8 | count | StationServer::kMaxConcurrentPeers |
 | `mediaControlBytes` | 131072 | bytes | kMaxMediaControlBytes |
 | `missedPongs` | 2 | count | StationServer::kDefaultMaxMissedPongs |
+| `shortNameMaxBytes` | 32 | bytes | DeviceStore::kMaxShortNameBytes |
 | `stationInboundMessageBytes` | 1048576 | bytes | StationServer::kMaxIncomingMessageBytes |
 | `telemetryBytes` | 16384 | bytes | kMaxStationTelemetryBytes |
 
@@ -2200,7 +2221,7 @@ a JSON string:
 | `"$ref:<name>"` | the value recorded under `<name>`, compared the same way | yes | yes, filled with the recorded value |
 | `"$ref:device:<n>"`, `"$ref:device:self"` | only in a fixture for the station alone: the id (base64url key fingerprint) of a device the station runner paired at run time, `<n>` from 1 to `otherPairedDevices` in the order it paired them, `self` its own (`pairedDevice`); recorded before the client connects | yes | yes, by the station's runner |
 | `"$within:<t>:<v>"` | a number no further than `<t>` from `<v>`; `<t>` and `<v>` are each exactly a JSON number (RFC 8259 section 6: no `+`, no leading `.`, no `inf` or `nan`, no spaces), `<t>` at least 0; any other text is a malformed fixture | yes | no |
-| `"$device:<case>"` | only as `auth.request`'s `device` | no | yes, by the station's runner: the device block (section 3.5) of the runner's own device, whose key it makes at run time, signing the transcript of the challenge recorded as `challenge`; `<case>` is `signed` (that transcript), `otherChallenge` (a challenge of the runner's own in its place) or `otherCertificate` (another certificate's SHA-256 in place of the station's). An app's runner fills none: in a fixture for the app only `"$device:signed"` appears, in a behaviour step, and it is checked (section 16.3) |
+| `"$device:<case>"` | only as `auth.request`'s `device` | no | yes, by the station's runner: the device block (section 3.5, with `shortName` "Conformance") of the runner's own device, whose key it makes at run time, signing the transcript of the challenge recorded as `challenge`; `<case>` is `signed` (that transcript), `otherChallenge` (a challenge of the runner's own in its place) or `otherCertificate` (another certificate's SHA-256 in place of the station's). An app's runner fills none: in a fixture for the app only `"$device:signed"` appears, in a behaviour step, and it is checked (section 16.3) |
 
 A number the station's DSP measures is written `"$within:<t>:<v>"`, with
 the tolerance stated, never `"$any"`; a counter whose value depends on
@@ -2237,7 +2258,8 @@ from the station (the sixteen before pairing, and `pair.accept`,
 `pair.spake`, `pair.confirm`, `pair.fail`), with a `delta` carrying `"nan"` and `"-inf"`
 (section 4.2). The client's `hello` has two fixtures: an older app's,
 without `majors` or `features`, and one declaring both; `auth.request` has
-two: a token, and a device sign-in with its `device` block (section 3.5).
+three: a token, a device sign-in with its `device` block (section 3.5), and
+one whose block carries `shortName`.
 The station's `hello` carries `majors`, `features` (`deviceAuth` 1 and
 `pairing` 1),
 `identity` and `challenge`, from a station supporting `[1, 2]`, so `major`
@@ -2250,7 +2272,7 @@ missing required key (`command.invoke` without `id`), a wrong type (an
 section 4.2, a `hello` major above 65535, a `hello` with an empty `majors`,
 a `hello` declaring a feature version that is not a whole number, a
 `hello` whose `identity` is not an object, an `auth.request` whose `device`
-lacks `signature`, a `session.end` with an empty `code`, a `pair.start`
+lacks `signature`, one whose `shortName` is not a string, a `session.end` with an empty `code`, a `pair.start`
 whose `mode` is neither `lan` nor `code`, a `pair.spake` step outside 0 to
 3, a `pair.fail` whose `retryAfterMs` is not a whole number, and an
 unknown `type`. The pairing fixtures carry placeholders for keys, shares
@@ -2378,7 +2400,8 @@ except in the station `hello`:
 
 **The app's device (an app's runner).** In a behaviour `auth.request`,
 `"$device:signed"` is a check, not a fill: the block the app's client
-sent must be well formed (section 3.5), its `id` the fingerprint of its
+sent must be well formed (section 3.5; a `shortName`, when present, a
+usable short name), its `id` the fingerprint of its
 `publicKey`, a canonical P-256 key, and its `signature` must verify over
 this connection's transcript: the challenge recorded as `challenge`, the
 certificate SHA-256 the runner's transport reported, the test station

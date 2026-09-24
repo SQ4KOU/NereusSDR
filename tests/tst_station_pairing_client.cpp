@@ -32,6 +32,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -73,6 +76,7 @@ using NereusSDR::Test::LoopbackTransport;
 namespace {
 
 const QString kDeviceName = QStringLiteral("Shack MacBook");
+const QString kShortName = QStringLiteral("MacBook");
 
 // One Core over the loopback, as tst_station_pairing stands it up.
 struct Core {
@@ -228,6 +232,28 @@ private slots:
         QVERIFY(longName.toUtf8().size() <= ClientDeviceIdentity::kMaxNameBytes);
         QVERIFY(DeviceStore::isValidName(longName));
         QVERIFY(DeviceStore::isValidName(ClientDeviceIdentity::machineName()));
+    }
+
+    void theShortNameIsTheShortHostName()
+    {
+        // Part C fix wave: the computer's short host name, trimmed to the
+        // Core's 32-byte cap.
+        QCOMPARE(ClientDeviceIdentity::kMaxShortNameBytes, DeviceStore::kMaxShortNameBytes);
+        QCOMPARE(ClientDeviceIdentity::kMaxNameBytes, DeviceStore::kMaxNameBytes);
+        QCOMPARE(ClientDeviceIdentity::shortNameFrom(QStringLiteral("Shack-MacBook.local")),
+                 QStringLiteral("Shack-MacBook"));
+        QCOMPARE(ClientDeviceIdentity::shortNameFrom(QStringLiteral("bench.example.org")),
+                 QStringLiteral("bench"));
+        QCOMPARE(ClientDeviceIdentity::shortNameFrom(QStringLiteral("  bench\x01pc  ")),
+                 QStringLiteral("benchpc"));
+        QCOMPARE(ClientDeviceIdentity::shortNameFrom(QString()), QStringLiteral("Computer"));
+        QCOMPARE(ClientDeviceIdentity::shortNameFrom(QStringLiteral(".local")),
+                 QStringLiteral("Computer"));
+        const QString longName =
+            ClientDeviceIdentity::shortNameFrom(QString(40, QChar(0x00E9)) + QStringLiteral(".lan"));
+        QCOMPARE(longName.toUtf8().size(), 32);
+        QVERIFY(DeviceStore::isValidShortName(longName));
+        QVERIFY(DeviceStore::isValidShortName(ClientDeviceIdentity::machineShortName()));
     }
 
     // Every sentence this computer's pairing and sign-in can show is in
@@ -567,11 +593,17 @@ private:
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient window(&remote, &proxy);
-        window.setDeviceIdentity(key, kDeviceName);
+        window.setDeviceIdentity(key, kDeviceName, kShortName);
         LoopbackTransport* app = core.open(address, core.certSha256());
         window.startSession(app, QString(), QString(), identity);
         QTRY_VERIFY(window.isHandshakeComplete());
         QVERIFY(core.server->hasAuthenticatedSession());
+        // Part C fix wave: the device block carried the short name, and the
+        // Core stored it.
+        const std::optional<PairedDevice> stored =
+            core.server->deviceStore()->find(key->fingerprint());
+        QVERIFY(stored.has_value());
+        QCOMPARE(stored->shortName, kShortName);
         QCOMPARE(window.lastEndReport().kind, StationEndReport::Kind::None);
         window.disconnectFromStation(QStringLiteral("test done"));
     }

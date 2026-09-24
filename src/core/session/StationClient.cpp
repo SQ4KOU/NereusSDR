@@ -112,6 +112,9 @@
 //                version reasons through SessionEndReasons, and a version
 //                this app refuses itself records the same end. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -326,8 +329,8 @@ StationEndReport stationEndReport(const QString& reason, const QString& code)
 // transcript of this connection's challenge, the Core's certificate and
 // the Core's key.
 SessionDeviceBlock deviceBlockFor(const ClientDeviceIdentity& identity, const QString& name,
-                                  const QByteArray& challenge, const QByteArray& certSha256,
-                                  const QByteArray& stationSpki)
+                                  const QString& shortName, const QByteArray& challenge,
+                                  const QByteArray& certSha256, const QByteArray& stationSpki)
 {
     const QByteArray deviceSpki = identity.publicKeySpki();
     return SessionDeviceBlock{
@@ -337,6 +340,8 @@ SessionDeviceBlock deviceBlockFor(const ClientDeviceIdentity& identity, const QS
         QString::fromLatin1(ClientDeviceIdentity::kKind),
         StationIdentity::toBase64Url(identity.sign(
             DeviceAuthenticator::transcript(challenge, certSha256, stationSpki, deviceSpki))),
+        // Part C fix wave: outside the signed transcript, as `name` is.
+        shortName,
     };
 }
 
@@ -1635,10 +1640,11 @@ void StationClient::handleHello(const SessionMessage& message)
 }
 
 void StationClient::setDeviceIdentity(std::shared_ptr<const ClientDeviceIdentity> identity,
-                                      const QString& deviceName)
+                                      const QString& deviceName, const QString& shortName)
 {
     m_deviceIdentity = std::move(identity);
     m_deviceName = deviceName;
+    m_deviceShortName = shortName;
     // A client that cannot sign in by key does not say it can.
     if (m_deviceIdentity && m_deviceIdentity->isValid()) {
         m_declaredFeatures.insert(QByteArrayLiteral("deviceAuth"), 1);
@@ -1728,8 +1734,8 @@ bool StationClient::signIn(const SessionMessage& hello)
                                     peerNameForThisProcess(), m_supportedMajors,
                                     m_declaredFeatures));
         send(SessionMessages::authRequest(
-            QString(), deviceBlockFor(*m_deviceIdentity, m_deviceName, challenge, certificate,
-                                      stationSpki)));
+            QString(), deviceBlockFor(*m_deviceIdentity, m_deviceName, m_deviceShortName,
+                                      challenge, certificate, stationSpki)));
         return true;
     }
 
@@ -1748,8 +1754,8 @@ bool StationClient::signIn(const SessionMessage& hello)
             m_transport != nullptr ? m_transport->peerCertificateSha256() : QByteArray();
         if (!stationSpki.isEmpty()
             && bindingHolds(stationSpki, hello.stationIdentity->certBinding, certificate)) {
-            block = deviceBlockFor(*m_deviceIdentity, m_deviceName, challenge, certificate,
-                                   stationSpki);
+            block = deviceBlockFor(*m_deviceIdentity, m_deviceName, m_deviceShortName,
+                                   challenge, certificate, stationSpki);
             m_enrollingIdentity = StationIdentity::fingerprintOf(stationSpki);
         } else {
             qCWarning(lcStationClient) << "The Core's identity does not match its certificate;"

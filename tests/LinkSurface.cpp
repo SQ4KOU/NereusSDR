@@ -42,6 +42,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08): the
 //                                    five pair.* kinds' sample messages.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -73,6 +76,7 @@
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/dsp/DspAssetService.h"
+#include "core/security/DeviceStore.h"
 #include "core/session/MirrorEnumDomain.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
@@ -176,7 +180,7 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
             QStringLiteral("placeholder"),
             SessionDeviceBlock{QStringLiteral("id"), QStringLiteral("key"),
                                QStringLiteral("name"), QStringLiteral("phone"),
-                               QStringLiteral("signature")});
+                               QStringLiteral("signature"), QStringLiteral("short")});
     case SessionMessageKind::AuthResult:
         // With Task 12's end `code` (optional).
         return SessionMessages::authResult(false, QStringLiteral("refused"), true,
@@ -1064,6 +1068,10 @@ QJsonObject captureLimits()
     limits.insert(QStringLiteral("maxPeers"),
                   limit(StationServer::kMaxConcurrentPeers, QStringLiteral("count"),
                         QStringLiteral("StationServer::kMaxConcurrentPeers")));
+    // Part C fix wave: auth.request's optional device `shortName`.
+    limits.insert(QStringLiteral("shortNameMaxBytes"),
+                  limit(DeviceStore::kMaxShortNameBytes, QStringLiteral("bytes"),
+                        QStringLiteral("DeviceStore::kMaxShortNameBytes")));
     // DaemonMediaController.cpp:35 [file scope, unreachable here]:
     //   constexpr int kMaxEndpoints = 8;
     limits.insert(QStringLiteral("maxDisplayEndpoints"),

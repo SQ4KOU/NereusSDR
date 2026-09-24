@@ -8,6 +8,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/DeviceStore.h"
@@ -50,7 +53,8 @@ bool wellFormed(const PairedDevice& device)
 {
     return StationIdentity::isP256Spki(device.publicKeySpki)
            && device.id == StationIdentity::fingerprintOf(device.publicKeySpki)
-           && DeviceStore::isKnownKind(device.kind) && DeviceStore::isValidName(device.name);
+           && DeviceStore::isKnownKind(device.kind) && DeviceStore::isValidName(device.name)
+           && (device.shortName.isEmpty() || DeviceStore::isValidShortName(device.shortName));
 }
 
 QJsonObject toJson(const PairedDevice& device)
@@ -64,6 +68,7 @@ QJsonObject toJson(const PairedDevice& device)
         {QStringLiteral("lastSeen"), isoTime(device.lastSeen)},
         {QStringLiteral("lastAddress"), device.lastAddress},
         {QStringLiteral("enrolledThroughToken"), device.enrolledThroughToken},
+        {QStringLiteral("shortName"), device.shortName},
     };
 }
 
@@ -93,6 +98,15 @@ bool fromJson(const QJsonValue& value, PairedDevice* device)
     device->lastSeen = fromIso(o.value(QStringLiteral("lastSeen")).toString());
     device->lastAddress = o.value(QStringLiteral("lastAddress")).toString();
     device->enrolledThroughToken = o.value(QStringLiteral("enrolledThroughToken")).toBool();
+    // Part C fix wave, additive: a list written before it has no shortName.
+    device->shortName.clear();
+    if (o.contains(QStringLiteral("shortName"))) {
+        const QJsonValue shortName = o.value(QStringLiteral("shortName"));
+        if (!shortName.isString()) {
+            return false;
+        }
+        device->shortName = shortName.toString();  // checked by wellFormed()
+    }
     return idOk && keyOk && wellFormed(*device);
 }
 
@@ -209,7 +223,17 @@ bool DeviceStore::isKnownKind(const QString& kind)
 
 bool DeviceStore::isValidName(const QString& name)
 {
-    if (name.trimmed().isEmpty() || name.toUtf8().size() > kMaxNameBytes) {
+    return isValidLabel(name, kMaxNameBytes);
+}
+
+bool DeviceStore::isValidShortName(const QString& shortName)
+{
+    return isValidLabel(shortName, kMaxShortNameBytes);
+}
+
+bool DeviceStore::isValidLabel(const QString& name, int maxBytes)
+{
+    if (name.trimmed().isEmpty() || name.toUtf8().size() > maxBytes) {
         return false;
     }
     for (const QChar c : name) {
@@ -318,7 +342,8 @@ std::optional<PairedDevice> DeviceStore::find(const QByteArray& id) const
     return std::nullopt;
 }
 
-void DeviceStore::touch(const QByteArray& id, const QString& address)
+void DeviceStore::touch(const QByteArray& id, const QString& address,
+                        const QString& shortName)
 {
     if (!m_valid) {
         return;
@@ -328,6 +353,9 @@ void DeviceStore::touch(const QByteArray& id, const QString& address)
         if (device.id == id) {
             device.lastSeen = now();
             device.lastAddress = address;
+            if (isValidShortName(shortName)) {
+                device.shortName = shortName;
+            }
             if (save(next)) {
                 m_devices = next;
                 emit devicesChanged();

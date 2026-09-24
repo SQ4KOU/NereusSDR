@@ -22,11 +22,17 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
 
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
@@ -221,6 +227,98 @@ private slots:
         QCOMPARE(changed.count(), 5);
         QVERIFY(!store.find(phone.key.fingerprint()).has_value());
         QVERIFY(!store.remove(phone.key.fingerprint()));
+    }
+
+    void theShortNameIsStoredAndReplacedAtEachSignIn()
+    {
+        // Part C fix wave: auth.request's `shortName`, the operator's own
+        // words (so "Grant's iPhone" passes), at most 32 bytes of UTF-8,
+        // replaced when a sign-in carries a usable one.
+        QCOMPARE(DeviceStore::kMaxShortNameBytes, 32);
+        QVERIFY(DeviceStore::isValidShortName(QStringLiteral("Grant's iPhone")));
+        QVERIFY(DeviceStore::isValidShortName(QString(16, QChar(0x00E9))));        // 32 bytes
+        QVERIFY(!DeviceStore::isValidShortName(QString(17, QChar(0x00E9))));       // 34 bytes
+        QVERIFY(DeviceStore::isValidShortName(QString(32, QLatin1Char('a'))));
+        QVERIFY(!DeviceStore::isValidShortName(QString(33, QLatin1Char('a'))));
+        QVERIFY(!DeviceStore::isValidShortName(QString()));
+        QVERIFY(!DeviceStore::isValidShortName(QStringLiteral("   ")));
+        QVERIFY(!DeviceStore::isValidShortName(QStringLiteral("a\nb")));
+        QVERIFY(!DeviceStore::isValidShortName(QStringLiteral("a\u200Eb")));
+
+        QTemporaryDir dir;
+        TestDevice phone;
+        {
+            DeviceStore store(dir.path());
+            QVERIFY(store.add(phone.record()));
+            QVERIFY(store.find(phone.key.fingerprint())->shortName.isEmpty());
+            store.touch(phone.key.fingerprint(), QStringLiteral("192.0.2.7"),
+                        QStringLiteral("Grant's iPhone"));
+            QCOMPARE(store.find(phone.key.fingerprint())->shortName,
+                     QStringLiteral("Grant's iPhone"));
+            // A sign-in without one, or with an unusable one, keeps it.
+            store.touch(phone.key.fingerprint(), QStringLiteral("192.0.2.7"));
+            store.touch(phone.key.fingerprint(), QStringLiteral("192.0.2.7"),
+                        QString(33, QLatin1Char('a')));
+            QCOMPARE(store.find(phone.key.fingerprint())->shortName,
+                     QStringLiteral("Grant's iPhone"));
+            // The next usable one replaces it.
+            store.touch(phone.key.fingerprint(), QStringLiteral("192.0.2.7"),
+                        QStringLiteral("iPhone"));
+            QCOMPARE(store.find(phone.key.fingerprint())->shortName, QStringLiteral("iPhone"));
+        }
+        // It survives a restart.
+        DeviceStore reloaded(dir.path());
+        QVERIFY2(reloaded.isValid(), qPrintable(reloaded.lastError()));
+        QCOMPARE(reloaded.find(phone.key.fingerprint())->shortName, QStringLiteral("iPhone"));
+
+        // A record with an unusable short name is refused.
+        TestDevice tablet;
+        PairedDevice bad = tablet.record(QStringLiteral("Tablet"), QStringLiteral("tablet"));
+        bad.shortName = QString(33, QLatin1Char('a'));
+        QVERIFY(!reloaded.add(bad));
+    }
+
+    void aListFromBeforeShortNamesStillLoads()
+    {
+        // Additive: a list written before the short name has no key for it.
+        QTemporaryDir dir;
+        TestDevice phone;
+        {
+            DeviceStore store(dir.path());
+            QVERIFY(store.add(phone.record()));
+        }
+        const QString path = dir.filePath(QString::fromLatin1(DeviceStore::kFileName));
+        QJsonDocument doc = QJsonDocument::fromJson(readAll(path));
+        QJsonObject root = doc.object();
+        QJsonArray devices = root.value(QStringLiteral("devices")).toArray();
+        QJsonObject first = devices.at(0).toObject();
+        QVERIFY(first.contains(QStringLiteral("shortName")));
+        first.remove(QStringLiteral("shortName"));
+        devices.replace(0, first);
+        root.insert(QStringLiteral("devices"), devices);
+        {
+            QFile file(path);
+            QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            file.write(QJsonDocument(root).toJson());
+        }
+        DeviceStore old(dir.path());
+        QVERIFY2(old.isValid(), qPrintable(old.lastError()));
+        QVERIFY(old.find(phone.key.fingerprint())->shortName.isEmpty());
+
+        // One that is there but not a string, or not usable, fails closed.
+        for (const QJsonValue& wrong :
+             {QJsonValue(7), QJsonValue(QString(33, QLatin1Char('a')))}) {
+            first.insert(QStringLiteral("shortName"), wrong);
+            devices.replace(0, first);
+            root.insert(QStringLiteral("devices"), devices);
+            {
+                QFile file(path);
+                QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+                file.write(QJsonDocument(root).toJson());
+            }
+            DeviceStore damaged(dir.path());
+            QVERIFY(!damaged.isValid());
+        }
     }
 
     void theListSurvivesARestartInAnOwnerOnlyFile()

@@ -44,6 +44,9 @@
 //               through the token is not revoked while the token works. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -103,6 +106,8 @@ struct Device {
 
     QString id() const { return StationIdentity::toBase64Url(key.fingerprint()); }
 
+    QString shortName;  // Part C fix wave: sent when not empty
+
     SessionDeviceBlock block(const QByteArray& challenge, const QByteArray& certSha256,
                              const QByteArray& stationSpki) const
     {
@@ -110,7 +115,8 @@ struct Device {
             id(), StationIdentity::toBase64Url(key.publicKeySpki()), QStringLiteral("Shack iPhone"),
             QStringLiteral("phone"),
             StationIdentity::toBase64Url(key.sign(DeviceAuthenticator::transcript(
-                challenge, certSha256, stationSpki, key.publicKeySpki())))};
+                challenge, certSha256, stationSpki, key.publicKeySpki()))),
+            shortName};
     }
 };
 
@@ -556,6 +562,43 @@ private slots:
         QVERIFY2(result.value(QStringLiteral("accepted")).toBool(),
                  qPrintable(result.value(QStringLiteral("reason")).toString()));
         QVERIFY(!core.server->deviceStore()->find(computer.key.fingerprint()));
+    }
+
+    void eachSignInCarriesTheShortNameTheCoreStores()
+    {
+        // Part C fix wave: `shortName` in auth.request's device block,
+        // outside the signed transcript; stored, and replaced at each
+        // sign-in that carries a usable one.
+        Core core(false);
+        Device phone;
+        QVERIFY(core.server->deviceStore()->add(phone.record()));
+        phone.shortName = QStringLiteral("Grant's iPhone");
+        LoopbackTransport* app = core.deviceSession(phone);
+        QVERIFY(app != nullptr);
+        QCOMPARE(core.server->deviceStore()->find(phone.key.fingerprint())->shortName,
+                 QStringLiteral("Grant's iPhone"));
+        // Without one, or with one past 32 bytes, the stored one stays.
+        for (const QString& next : {QString(), QString(33, QLatin1Char('a'))}) {
+            phone.shortName = next;
+            QVERIFY(core.deviceSession(phone) != nullptr);
+            QCOMPARE(core.server->deviceStore()->find(phone.key.fingerprint())->shortName,
+                     QStringLiteral("Grant's iPhone"));
+        }
+        phone.shortName = QStringLiteral("iPhone");
+        QVERIFY(core.deviceSession(phone) != nullptr);
+        QCOMPARE(core.server->deviceStore()->find(phone.key.fingerprint())->shortName,
+                 QStringLiteral("iPhone"));
+
+        // A window enrolling through the token keeps its short name too.
+        Core upgraded(/*upgradedWithToken=*/true);
+        Device window;
+        window.shortName = QStringLiteral("MacBook");
+        QVERIFY(upgraded.tokenSession({{"deviceAuth", 1}}, kSessionProtocolMinor, &window)
+                != nullptr);
+        const std::optional<PairedDevice> enrolled =
+            upgraded.server->deviceStore()->find(window.key.fingerprint());
+        QVERIFY(enrolled.has_value());
+        QCOMPARE(enrolled->shortName, QStringLiteral("MacBook"));
     }
 
     void revokeRefusesWhatItCannotDo()

@@ -29,6 +29,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/StationIdentity.h"
@@ -50,6 +53,8 @@ public:
     /// The longest device name the Core stores (DeviceStore), in UTF-8
     /// bytes.
     static constexpr int kMaxNameBytes = 64;
+    /// DeviceStore::kMaxShortNameBytes, the Core's cap on a short name.
+    static constexpr int kMaxShortNameBytes = 32;
 
     /// An invalid identity (no key).
     ClientDeviceIdentity() = default;
@@ -84,8 +89,19 @@ public:
     /// kMaxNameBytes UTF-8 bytes at a character boundary; "Computer" when
     /// nothing is left.
     static QString deviceNameFrom(const QString& hostName);
+    /// Part C fix wave: the short name this computer sends at each sign-in:
+    /// shortNameFrom(QSysInfo::machineHostName()).
+    static QString machineShortName();
+    /// `hostName`'s first label (the short host name) as a short name: the
+    /// characters the Core refuses dropped, trimmed, and cut to
+    /// kMaxShortNameBytes UTF-8 bytes at a character boundary; "Computer"
+    /// when nothing is left.
+    static QString shortNameFrom(const QString& hostName);
 
 private:
+    /// deviceNameFrom()'s cleaning, cut to `maxBytes`.
+    static QString cleanedName(const QString& text, int maxBytes);
+
     StationIdentity m_key;
 };
 

@@ -51,6 +51,9 @@
 //                                    five pair.* kinds. AI-assisted
 //                                    implementation via Anthropic Claude
 //                                    Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -876,14 +879,18 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
         o.insert(QStringLiteral("token"), message.token);
         // iPhone app Task 12: the device sign-in block.
         if (message.device) {
-            o.insert(QStringLiteral("device"),
-                     QJsonObject{
-                         {QStringLiteral("id"), message.device->id},
-                         {QStringLiteral("publicKey"), message.device->publicKey},
-                         {QStringLiteral("name"), message.device->name},
-                         {QStringLiteral("kind"), message.device->kind},
-                         {QStringLiteral("signature"), message.device->signature},
-                     });
+            QJsonObject device{
+                {QStringLiteral("id"), message.device->id},
+                {QStringLiteral("publicKey"), message.device->publicKey},
+                {QStringLiteral("name"), message.device->name},
+                {QStringLiteral("kind"), message.device->kind},
+                {QStringLiteral("signature"), message.device->signature},
+            };
+            // Part C fix wave: the optional short name, only when there is one.
+            if (!message.device->shortName.isEmpty()) {
+                device.insert(QStringLiteral("shortName"), message.device->shortName);
+            }
+            o.insert(QStringLiteral("device"), device);
         }
         break;
     case SessionMessageKind::AuthResult:
@@ -1173,6 +1180,11 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
                 return false;
             }
         }
+        // Part C fix wave: `shortName` is optional, and a string when present.
+        if (device.toObject().contains(QStringLiteral("shortName"))
+            && !device.toObject().value(QStringLiteral("shortName")).isString()) {
+            return false;
+        }
     }
     if (kind == SessionMessageKind::AuthResult) {
         if (!o.value(QStringLiteral("accepted")).isBool()
@@ -1447,6 +1459,7 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
                 device.value(QStringLiteral("name")).toString(),
                 device.value(QStringLiteral("kind")).toString(),
                 device.value(QStringLiteral("signature")).toString(),
+                device.value(QStringLiteral("shortName")).toString(),
             };
         }
         break;

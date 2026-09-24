@@ -33,6 +33,9 @@
 //                                    runner's own, for "$ref:device:<n>"
 //                                    and "$ref:device:self".
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -954,6 +957,9 @@ QJsonValue fillDevice(const QJsonValue& value, const ConformanceDevice& device,
             {QStringLiteral("kind"), QStringLiteral("phone")},
             {QStringLiteral("signature"),
              StationIdentity::toBase64Url(device.key.sign(transcript))},
+            // Part C fix wave: every sign-in the station's runner makes
+            // carries a short name, as the app's does.
+            {QStringLiteral("shortName"), QStringLiteral("Conformance")},
         };
     }
     if (value.isObject()) {

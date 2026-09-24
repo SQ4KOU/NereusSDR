@@ -39,6 +39,9 @@
 //               Claude Code.
 //   2026-09-24: reset() for the console's reset (iPhone app Task 17).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -63,6 +66,9 @@ struct PairedDevice {
     QDateTime lastSeen;
     QString lastAddress;        // empty over the relay
     bool enrolledThroughToken = false;
+    /// Part C fix wave: the short name the device sent at its last sign-in
+    /// that carried a usable one; "" until then.
+    QString shortName;
 };
 
 class DeviceStore : public QObject {
@@ -72,6 +78,9 @@ public:
     static constexpr const char* kFileName = "paired-devices.json";
     /// Longest device name, in UTF-8 bytes.
     static constexpr int kMaxNameBytes = 64;
+    /// Longest short name (auth.request's device block `shortName`), in
+    /// UTF-8 bytes, counted as kMaxNameBytes is.
+    static constexpr int kMaxShortNameBytes = 32;
     /// Most devices one Core keeps.
     static constexpr int kMaxDevices = 64;
 
@@ -90,7 +99,8 @@ public:
     /// Adds a device. False (and nothing changes) when the store is
     /// invalid, the record is not well formed (id not the fingerprint of a
     /// P-256 key, a kind other than the three, a name that is empty, too
-    /// long or holds a control character), the id is already paired, the
+    /// long or holds a control character, or a short name that is neither
+    /// empty nor usable), the id is already paired, the
     /// store is full, or the file could not be written. pairedAt and
     /// lastSeen default to now when not set.
     bool add(const PairedDevice& device);
@@ -110,8 +120,12 @@ public:
     std::optional<PairedDevice> find(const QByteArray& id) const;
     QList<PairedDevice> list() const { return m_devices; }
     /// An authenticated connection: lastSeen becomes now and lastAddress
-    /// `address` (empty over the relay). Nothing for an unknown id.
-    void touch(const QByteArray& id, const QString& address);
+    /// `address` (empty over the relay), and the short name becomes
+    /// `shortName` when that is a usable one (isValidShortName); an absent
+    /// or unusable one leaves the stored one as it is. Nothing for an
+    /// unknown id.
+    void touch(const QByteArray& id, const QString& address,
+               const QString& shortName = QString());
 
     /// Any paired device, or a pairing token not yet retired (or a token
     /// file that could not be read), or a store that could not be read
@@ -127,12 +141,16 @@ public:
     /// A device name: not empty, at most kMaxNameBytes of UTF-8, no
     /// control characters.
     static bool isValidName(const QString& name);
+    /// A short name: the same rules with kMaxShortNameBytes. The operator's
+    /// own words, so not held to the Core's wording rules.
+    static bool isValidShortName(const QString& shortName);
 
 signals:
     void devicesChanged();
     void deviceRemoved(const QByteArray& id);
 
 private:
+    static bool isValidLabel(const QString& name, int maxBytes);
     bool load();
     bool save(const QList<PairedDevice>& devices);
     QDateTime now() const;
