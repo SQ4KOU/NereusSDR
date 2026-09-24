@@ -1,0 +1,3717 @@
+{
+    "capabilities": [
+        {
+            "kind": "utf8",
+            "name": "stationName"
+        },
+        {
+            "kind": "utf8",
+            "name": "radioModel"
+        },
+        {
+            "kind": "utf8",
+            "name": "firmwareVersion"
+        },
+        {
+            "kind": "utf8",
+            "name": "macAddress"
+        },
+        {
+            "kind": "i64",
+            "name": "board"
+        },
+        {
+            "kind": "bool",
+            "name": "radioConnected"
+        },
+        {
+            "kind": "i64",
+            "name": "effectiveMaxSlices"
+        },
+        {
+            "kind": "i64",
+            "name": "boardMaxSlices"
+        },
+        {
+            "kind": "i64",
+            "name": "userDdcCount"
+        },
+        {
+            "kind": "bool",
+            "name": "pureSignalPresent"
+        },
+        {
+            "kind": "bool",
+            "name": "txPermitted"
+        },
+        {
+            "kind": "i64",
+            "name": "remoteMediaVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "remoteWidebandDisplayVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "remoteAudioStatusVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "spectrumGrantVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "remoteDisplayBudgetVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "remoteCtunVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "stationTelemetryVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "remoteTgxlConfigVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "remoteFourO3AControlVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "wdspVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "wdspCompatibilityVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "nnrVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "psAlgorithmVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "propertyResultVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "dspAssetVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "psDisplayVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "notchControlVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "audioProfileVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "audioClockVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "receiverAudioVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "headphonesMixVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "settingsSchemaVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "displayApplicationBytesPerSecond"
+        },
+        {
+            "kind": "i64",
+            "name": "spectrumSampleUnitsPerSecond"
+        },
+        {
+            "kind": "i64",
+            "name": "displayBudgetGeneration"
+        },
+        {
+            "kind": "bool",
+            "name": "remotePs3DisplaySubscribed"
+        },
+        {
+            "kind": "utf8",
+            "name": "displayBudgetReason"
+        },
+        {
+            "kind": "i64",
+            "name": "hpsdrModel"
+        },
+        {
+            "kind": "i64",
+            "name": "radioProtocol"
+        },
+        {
+            "kind": "utf8",
+            "name": "radioAddress"
+        },
+        {
+            "kind": "i64",
+            "name": "radioHardwareVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "remotePgxlControlVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "remoteRfKitControlVersion"
+        }
+    ],
+    "commands": [
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "initialPanId",
+                    "optional": false
+                }
+            ],
+            "capability": "",
+            "capabilityVersion": 0,
+            "minMinor": 0,
+            "verb": "addSlice"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                }
+            ],
+            "capability": "",
+            "capabilityVersion": 0,
+            "minMinor": 0,
+            "verb": "removeSlice"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "rateHz",
+                    "optional": false
+                }
+            ],
+            "capability": "",
+            "capabilityVersion": 0,
+            "minMinor": 0,
+            "verb": "requestSliceSampleRate"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "panId",
+                    "optional": false
+                }
+            ],
+            "capability": "",
+            "capabilityVersion": 0,
+            "minMinor": 0,
+            "verb": "addSliceOnPan"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                }
+            ],
+            "capability": "",
+            "capabilityVersion": 0,
+            "minMinor": 0,
+            "verb": "setActiveSliceById"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "pinned",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteCtunVersion",
+            "capabilityVersion": 1,
+            "minMinor": 2,
+            "verb": "requestStreamCtunPinned"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "centreHz",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteCtunVersion",
+            "capabilityVersion": 1,
+            "minMinor": 2,
+            "verb": "requestStreamCentre"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "host",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTgxlConfigVersion",
+            "capabilityVersion": 1,
+            "minMinor": 4,
+            "verb": "configureTgxl"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remoteTgxlConfigVersion",
+            "capabilityVersion": 1,
+            "minMinor": 4,
+            "verb": "disconnectTgxl"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "enabled",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteFourO3AControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 4,
+            "verb": "setFourO3AEnabled"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "host",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "configurePgxl"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "disconnectPgxl"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "autoReconnect",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "keepaliveSec",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "pingSec",
+                    "optional": false
+                }
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "setPgxlConnectionSettings"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "radioHardwareVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "requestIoBoardProbe"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "band",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "antenna",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "rxOnly",
+                    "optional": false
+                }
+            ],
+            "capability": "radioHardwareVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "setAlexRxAntenna"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "testMode",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "outputMode",
+                    "optional": false
+                }
+            ],
+            "capability": "nnrVersion",
+            "capabilityVersion": 1,
+            "minMinor": 5,
+            "verb": "nnr.setDiagnostics"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                }
+            ],
+            "capability": "nnrVersion",
+            "capabilityVersion": 1,
+            "minMinor": 5,
+            "verb": "nnr.resetTuning"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                }
+            ],
+            "capability": "nnrVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "nnr.tryAgain"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "revision",
+                    "optional": false
+                }
+            ],
+            "capability": "dspAssetVersion",
+            "capabilityVersion": 1,
+            "minMinor": 5,
+            "verb": "nnr.applyModelSelection"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "dspAssetVersion",
+            "capabilityVersion": 1,
+            "minMinor": 5,
+            "verb": "dspAssets.list"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "kind",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "label",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "size",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "hash",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "radioIdentity",
+                    "optional": false
+                }
+            ],
+            "capability": "dspAssetVersion",
+            "capabilityVersion": 1,
+            "minMinor": 5,
+            "verb": "dspAssets.beginImport"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "transferId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "offset",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "data",
+                    "optional": false
+                }
+            ],
+            "capability": "dspAssetVersion",
+            "capabilityVersion": 1,
+            "minMinor": 5,
+            "verb": "dspAssets.chunk"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "transferId",
+                    "optional": false
+                }
+            ],
+            "capability": "dspAssetVersion",
+            "capabilityVersion": 1,
+            "minMinor": 5,
+            "verb": "dspAssets.finishImport"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "transferId",
+                    "optional": false
+                }
+            ],
+            "capability": "dspAssetVersion",
+            "capabilityVersion": 1,
+            "minMinor": 5,
+            "verb": "dspAssets.cancelImport"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "id",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "offset",
+                    "optional": false
+                }
+            ],
+            "capability": "dspAssetVersion",
+            "capabilityVersion": 1,
+            "minMinor": 5,
+            "verb": "dspAssets.export"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "slot",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "id",
+                    "optional": false
+                }
+            ],
+            "capability": "dspAssetVersion",
+            "capabilityVersion": 1,
+            "minMinor": 5,
+            "verb": "dspAssets.selectNnrModel"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "id",
+                    "optional": false
+                }
+            ],
+            "capability": "dspAssetVersion",
+            "capabilityVersion": 2,
+            "minMinor": 5,
+            "verb": "dspAssets.selectNr3Model"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "enabled",
+                    "optional": false
+                }
+            ],
+            "capability": "psDisplayVersion",
+            "capabilityVersion": 1,
+            "minMinor": 1,
+            "verb": "ps3.subscribeDisplay"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "psAlgorithmVersion",
+            "capabilityVersion": 3,
+            "minMinor": 5,
+            "verb": "ps3.off"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "psAlgorithmVersion",
+            "capabilityVersion": 3,
+            "minMinor": 5,
+            "verb": "ps3.single"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "psAlgorithmVersion",
+            "capabilityVersion": 3,
+            "minMinor": 5,
+            "verb": "ps3.automatic"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "psAlgorithmVersion",
+            "capabilityVersion": 3,
+            "minMinor": 5,
+            "verb": "ps3.applyCurrent"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "enabled",
+                    "optional": false
+                }
+            ],
+            "capability": "psAlgorithmVersion",
+            "capabilityVersion": 3,
+            "minMinor": 5,
+            "verb": "ps3.twoTone"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "label",
+                    "optional": false
+                }
+            ],
+            "capability": "psAlgorithmVersion",
+            "capabilityVersion": 3,
+            "minMinor": 5,
+            "verb": "ps3.saveCorrection"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "assetId",
+                    "optional": false
+                }
+            ],
+            "capability": "psAlgorithmVersion",
+            "capabilityVersion": 3,
+            "minMinor": 5,
+            "verb": "ps3.restoreCorrection"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "centreHz",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "widthHz",
+                    "optional": false
+                }
+            ],
+            "capability": "notchControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 5,
+            "verb": "notch.add"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "centreHz",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "widthHz",
+                    "optional": false
+                }
+            ],
+            "capability": "notchControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 5,
+            "verb": "notch.move"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "active",
+                    "optional": false
+                }
+            ],
+            "capability": "notchControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 5,
+            "verb": "notch.setActive"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                }
+            ],
+            "capability": "notchControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 5,
+            "verb": "notch.delete"
+        }
+    ],
+    "limits": {
+        "clientInboundMessageBytes": {
+            "source": "StationClient::kMaxIncomingMessageBytes",
+            "unit": "bytes",
+            "value": 8388608
+        },
+        "clientReconnectBackoffMs": {
+            "source": "StationClient.cpp kReconnectBackoffSteps x StationClient::kDefaultReconnectBackoffUnitMs",
+            "unit": "ms",
+            "value": [
+                1000,
+                2000,
+                5000,
+                10000,
+                30000,
+                60000
+            ]
+        },
+        "connectDeadlineMs": {
+            "source": "kStationHandshakeDeadlineMs",
+            "unit": "ms",
+            "value": 30000
+        },
+        "deltaFlushMs": {
+            "source": "StationServer::kDefaultDeltaFlushMs",
+            "unit": "ms",
+            "value": 50
+        },
+        "endpointFps": {
+            "source": "DaemonMediaController.cpp handleSubscribe literal 1; kMaximumSpectrumDisplayFramesPerSecond",
+            "unit": "frames per second",
+            "value": {
+                "max": 60,
+                "min": 1
+            }
+        },
+        "endpointPixels": {
+            "source": "DaemonMediaController.cpp handleSubscribe literal 1; SpectrumEndpoint::kMaxPixels",
+            "unit": "pixels",
+            "value": {
+                "max": 4096,
+                "min": 1
+            }
+        },
+        "heartbeatIntervalMs": {
+            "source": "StationServer::kDefaultHeartbeatIntervalMs",
+            "unit": "ms",
+            "value": 20000
+        },
+        "maxDisplayEndpoints": {
+            "source": "DaemonMediaController.cpp kMaxEndpoints",
+            "unit": "count",
+            "value": 8
+        },
+        "maxPeers": {
+            "source": "StationServer::kMaxConcurrentPeers",
+            "unit": "count",
+            "value": 8
+        },
+        "mediaControlBytes": {
+            "source": "kMaxMediaControlBytes",
+            "unit": "bytes",
+            "value": 131072
+        },
+        "missedPongs": {
+            "source": "StationServer::kDefaultMaxMissedPongs",
+            "unit": "count",
+            "value": 2
+        },
+        "stationInboundMessageBytes": {
+            "source": "StationServer::kMaxIncomingMessageBytes",
+            "unit": "bytes",
+            "value": 1048576
+        },
+        "telemetryBytes": {
+            "source": "kMaxStationTelemetryBytes",
+            "unit": "bytes",
+            "value": 16384
+        }
+    },
+    "mediaControl": {
+        "coreToGui": {
+            "allocation-result": {
+                "capability": "remoteDisplayBudgetVersion",
+                "fields": [
+                    "accepted",
+                    "acceptedRevision",
+                    "applicationBytesPerSecond",
+                    "budgetGeneration",
+                    "connectionId",
+                    "endpointId",
+                    "messagesPerSecond",
+                    "op",
+                    "reason",
+                    "revision",
+                    "spectrumSampleUnitsPerSecond"
+                ]
+            },
+            "audio-context": {
+                "capability": "remoteMediaVersion",
+                "conditional": {
+                    "encoder": [
+                        "enabled=true",
+                        "remoteAudioStatusVersion"
+                    ],
+                    "profile": [
+                        "audioProfileVersion",
+                        "remoteAudioStatusVersion"
+                    ],
+                    "profileRefusal": [
+                        "audioProfileVersion",
+                        "profile=opus",
+                        "profileRefused",
+                        "remoteAudioStatusVersion"
+                    ],
+                    "reason": [
+                        "enabled=false",
+                        "remoteAudioStatusVersion"
+                    ]
+                },
+                "fields": [
+                    "connectionId",
+                    "enabled",
+                    "firstSequence",
+                    "firstTimestamp",
+                    "generation",
+                    "op",
+                    "revision",
+                    "ssrc"
+                ],
+                "nested": {
+                    "encoder": [
+                        [
+                            "audioBandwidthHz",
+                            "channels",
+                            "codec",
+                            "frameSamples",
+                            "sampleRate",
+                            "targetBitrate"
+                        ],
+                        [
+                            "bitsPerSample",
+                            "channels",
+                            "codec",
+                            "frameSamples",
+                            "payloadType",
+                            "sampleRate"
+                        ]
+                    ]
+                }
+            },
+            "candidate": {
+                "capability": "remoteMediaVersion",
+                "fields": [
+                    "candidate",
+                    "connectionId",
+                    "mid",
+                    "op"
+                ]
+            },
+            "clock-echo": {
+                "capability": "audioClockVersion",
+                "fields": [
+                    "capturedNs",
+                    "connectionId",
+                    "generation",
+                    "id",
+                    "op",
+                    "rtpTimestamp",
+                    "t0",
+                    "t1",
+                    "t2"
+                ]
+            },
+            "context": {
+                "capability": "remoteMediaVersion",
+                "conditional": {
+                    "grantedFftSize": [
+                        "spectrumGrantVersion"
+                    ],
+                    "grantedPixels": [
+                        "spectrumGrantVersion"
+                    ],
+                    "grantedTier": [
+                        "spectrumGrantVersion"
+                    ],
+                    "limit": [
+                        "spectrumGrantVersion"
+                    ],
+                    "requestedPixels": [
+                        "spectrumGrantVersion"
+                    ],
+                    "wideband": [
+                        "remoteWidebandDisplayVersion"
+                    ]
+                },
+                "fields": [
+                    "centreHz",
+                    "connectionId",
+                    "contextGeneration",
+                    "endpointId",
+                    "fps",
+                    "framesPerLine",
+                    "maxDbm",
+                    "minDbm",
+                    "op",
+                    "revision",
+                    "sampleRateHz",
+                    "sourceCentreHz",
+                    "sourceStream",
+                    "spanHz",
+                    "traceSamples",
+                    "waterfallSamples",
+                    "wideCentreHz",
+                    "wideSamples",
+                    "wideSpanHz"
+                ],
+                "nested": {
+                    "wideband": [
+                        [
+                            "active",
+                            "adcRateHz",
+                            "available",
+                            "filterChainIndex",
+                            "geometryRateBasis",
+                            "highHz",
+                            "levelReference",
+                            "lowHz",
+                            "physicalAdcIndex",
+                            "sourceGeneration",
+                            "version"
+                        ],
+                        [
+                            "active",
+                            "available",
+                            "version"
+                        ]
+                    ]
+                }
+            },
+            "description": {
+                "capability": "remoteMediaVersion",
+                "fields": [
+                    "connectionId",
+                    "op",
+                    "sdp",
+                    "type"
+                ]
+            },
+            "headphones-audio-context": {
+                "capability": "headphonesMixVersion",
+                "conditional": {
+                    "encoder": [
+                        "enabled=true"
+                    ],
+                    "profileRefusal": [
+                        "profile=opus",
+                        "profileRefused"
+                    ],
+                    "reason": [
+                        "enabled=false"
+                    ]
+                },
+                "fields": [
+                    "connectionId",
+                    "enabled",
+                    "firstSequence",
+                    "firstTimestamp",
+                    "generation",
+                    "op",
+                    "profile",
+                    "revision",
+                    "ssrc"
+                ],
+                "nested": {
+                    "encoder": [
+                        [
+                            "audioBandwidthHz",
+                            "channels",
+                            "codec",
+                            "frameSamples",
+                            "sampleRate",
+                            "targetBitrate"
+                        ],
+                        [
+                            "bitsPerSample",
+                            "channels",
+                            "codec",
+                            "frameSamples",
+                            "payloadType",
+                            "sampleRate"
+                        ]
+                    ]
+                }
+            },
+            "noise-floor": {
+                "capability": "remoteMediaVersion",
+                "fields": [
+                    "connectionId",
+                    "contextGeneration",
+                    "endpointId",
+                    "floorDbm",
+                    "op",
+                    "revision"
+                ]
+            },
+            "receiver-audio-context": {
+                "capability": "receiverAudioVersion",
+                "conditional": {
+                    "encoder": [
+                        "enabled=true"
+                    ],
+                    "profileRefusal": [
+                        "profile=opus",
+                        "profileRefused"
+                    ],
+                    "reason": [
+                        "enabled=false"
+                    ]
+                },
+                "fields": [
+                    "connectionId",
+                    "enabled",
+                    "firstSequence",
+                    "firstTimestamp",
+                    "generation",
+                    "op",
+                    "profile",
+                    "revision",
+                    "sliceId",
+                    "ssrc"
+                ],
+                "nested": {
+                    "encoder": [
+                        [
+                            "audioBandwidthHz",
+                            "channels",
+                            "codec",
+                            "frameSamples",
+                            "sampleRate",
+                            "targetBitrate"
+                        ],
+                        [
+                            "bitsPerSample",
+                            "channels",
+                            "codec",
+                            "frameSamples",
+                            "payloadType",
+                            "sampleRate"
+                        ]
+                    ]
+                }
+            },
+            "rejected": {
+                "capability": "remoteMediaVersion",
+                "fields": [
+                    "connectionId",
+                    "endpointId",
+                    "op",
+                    "reason",
+                    "revision"
+                ]
+            }
+        },
+        "guiToCore": {
+            "audio": {
+                "capability": "remoteMediaVersion",
+                "conditional": {
+                    "profile": [
+                        "audioProfileVersion",
+                        "remoteAudioStatusVersion"
+                    ]
+                },
+                "fields": [
+                    "connectionId",
+                    "enabled",
+                    "op",
+                    "revision"
+                ]
+            },
+            "candidate": {
+                "capability": "remoteMediaVersion",
+                "fields": [
+                    "candidate",
+                    "connectionId",
+                    "mid",
+                    "op"
+                ]
+            },
+            "clock-probe": {
+                "capability": "audioClockVersion",
+                "fields": [
+                    "connectionId",
+                    "id",
+                    "op",
+                    "t0"
+                ]
+            },
+            "description": {
+                "capability": "remoteMediaVersion",
+                "fields": [
+                    "connectionId",
+                    "op",
+                    "sdp",
+                    "type"
+                ]
+            },
+            "headphones-audio": {
+                "capability": "headphonesMixVersion",
+                "fields": [
+                    "connectionId",
+                    "enabled",
+                    "op",
+                    "profile",
+                    "revision"
+                ]
+            },
+            "keyframe": {
+                "capability": "remoteMediaVersion",
+                "fields": [
+                    "connectionId",
+                    "contextGeneration",
+                    "endpointId",
+                    "op"
+                ]
+            },
+            "receiver-audio": {
+                "capability": "receiverAudioVersion",
+                "fields": [
+                    "connectionId",
+                    "enabled",
+                    "op",
+                    "profile",
+                    "revision",
+                    "sliceId"
+                ]
+            },
+            "start": {
+                "capability": "remoteMediaVersion",
+                "conditional": {
+                    "audioProfileVersion": [
+                        "audioProfileVersion"
+                    ],
+                    "headphonesMixVersion": [
+                        "headphonesMixVersion"
+                    ],
+                    "receiverAudioVersion": [
+                        "receiverAudioVersion"
+                    ]
+                },
+                "fields": [
+                    "connectionId",
+                    "op"
+                ]
+            },
+            "subscribe": {
+                "capability": "remoteMediaVersion",
+                "conditional": {
+                    "extendedView": [
+                        "remoteWidebandDisplayVersion"
+                    ]
+                },
+                "fields": [
+                    "centreHz",
+                    "connectionId",
+                    "endpointId",
+                    "fftSize",
+                    "fps",
+                    "framesPerLine",
+                    "maxDbm",
+                    "minDbm",
+                    "op",
+                    "pixels",
+                    "revision",
+                    "sliceId",
+                    "spanHz",
+                    "tier",
+                    "trace",
+                    "waterfall",
+                    "wideSpanFactor",
+                    "windowType"
+                ],
+                "nested": {
+                    "trace": [
+                        [
+                            "averageAlpha",
+                            "averageMode",
+                            "detector"
+                        ]
+                    ],
+                    "waterfall": [
+                        [
+                            "averageAlpha",
+                            "averageMode",
+                            "detector"
+                        ]
+                    ]
+                }
+            },
+            "unsubscribe": {
+                "capability": "remoteMediaVersion",
+                "conditional": {
+                    "revision": [
+                        "remoteDisplayBudgetVersion"
+                    ]
+                },
+                "fields": [
+                    "connectionId",
+                    "endpointId",
+                    "op"
+                ]
+            }
+        },
+        "kind": "media.control"
+    },
+    "messageKinds": {
+        "auth.request": {
+            "optional": [
+            ],
+            "required": [
+                "token",
+                "type"
+            ]
+        },
+        "auth.result": {
+            "optional": [
+                "retryable"
+            ],
+            "required": [
+                "accepted",
+                "reason",
+                "type"
+            ]
+        },
+        "capabilities": {
+            "optional": [
+            ],
+            "required": [
+                "properties",
+                "type"
+            ]
+        },
+        "command.invoke": {
+            "optional": [
+            ],
+            "required": [
+                "args",
+                "id",
+                "type",
+                "verb"
+            ]
+        },
+        "command.result": {
+            "optional": [
+                "values"
+            ],
+            "required": [
+                "accepted",
+                "affected",
+                "id",
+                "reason",
+                "type",
+                "verb"
+            ]
+        },
+        "delta": {
+            "optional": [
+            ],
+            "required": [
+                "key",
+                "properties",
+                "type"
+            ]
+        },
+        "hello": {
+            "optional": [
+            ],
+            "required": [
+                "major",
+                "minor",
+                "peer",
+                "settingsSchema",
+                "type"
+            ]
+        },
+        "media.control": {
+            "optional": [
+            ],
+            "required": [
+                "payload",
+                "type"
+            ]
+        },
+        "object.create": {
+            "optional": [
+            ],
+            "required": [
+                "class",
+                "key",
+                "properties",
+                "type"
+            ]
+        },
+        "object.destroy": {
+            "optional": [
+            ],
+            "required": [
+                "class",
+                "key",
+                "type"
+            ]
+        },
+        "property.result": {
+            "optional": [
+            ],
+            "required": [
+                "key",
+                "results",
+                "type",
+                "writeId"
+            ]
+        },
+        "property.write": {
+            "optional": [
+                "writeId"
+            ],
+            "required": [
+                "key",
+                "properties",
+                "type"
+            ]
+        },
+        "schema": {
+            "optional": [
+            ],
+            "required": [
+                "class",
+                "fields",
+                "type"
+            ]
+        },
+        "session.end": {
+            "optional": [
+                "retryable"
+            ],
+            "required": [
+                "reason",
+                "type"
+            ]
+        },
+        "settings.reject": {
+            "optional": [
+                "reason"
+            ],
+            "required": [
+                "key",
+                "properties",
+                "type"
+            ]
+        },
+        "settings.remove": {
+            "optional": [
+            ],
+            "required": [
+                "key",
+                "properties",
+                "type"
+            ]
+        },
+        "settings.snapshot": {
+            "optional": [
+            ],
+            "required": [
+                "properties",
+                "type"
+            ]
+        },
+        "settings.value": {
+            "optional": [
+            ],
+            "required": [
+                "key",
+                "origin",
+                "properties",
+                "type"
+            ]
+        },
+        "settings.write": {
+            "optional": [
+            ],
+            "required": [
+                "key",
+                "origin",
+                "properties",
+                "type"
+            ]
+        },
+        "snapshot.complete": {
+            "optional": [
+            ],
+            "required": [
+                "type"
+            ]
+        },
+        "station.metrics.v1": {
+            "optional": [
+            ],
+            "required": [
+                "payload",
+                "type"
+            ]
+        }
+    },
+    "mirrorClasses": {
+        "AlexAntennaFacade": {
+            "properties": [
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "rxAntennas",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "rxOnlyAntennas",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "useTxAntennaForRx",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "txAntennas",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "blockTxAnt2",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "blockTxAnt3",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "rxOutOnTx",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "ext1OutOnTx",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "ext2OutOnTx",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "rxOutOverride",
+                    "ordinal": 9
+                }
+            ]
+        },
+        "AmplifierModel": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7
+                    ],
+                    "kind": "enum",
+                    "name": "connectionPhase",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "configuredHost",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "configuredPort",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "connectionError",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "deviceModel",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "deviceSerial",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "deviceVersion",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "deviceNickname",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "present",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7
+                    ],
+                    "kind": "enum",
+                    "name": "state",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "deviceState",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "operate",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "transmitting",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "forwardPowerW",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "swr",
+                    "ordinal": 14
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "temperatureC",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "mainsVoltageV",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "drainCurrentA",
+                    "ordinal": 17
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "efficiencyText",
+                    "ordinal": 18
+                }
+            ]
+        },
+        "DspAssetService": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "nnrStandardAsset",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "nnrPremiumAsset",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "nnrModelSelectionPending",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "nnrModelStatus",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "selectionRevision",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "nr3ModelAsset",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "nr3ModelStatus",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "nr3Runnable",
+                    "ordinal": 7
+                }
+            ]
+        },
+        "IoBoardHl2Facade": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "detected",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "hardwareVersion",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "registers",
+                    "ordinal": 2
+                }
+            ]
+        },
+        "NotchModel": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "listJson",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "revision",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "globalEnabled",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "autoIncrease",
+                    "ordinal": 3
+                }
+            ]
+        },
+        "PanadapterModel": {
+            "properties": [
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "centerFrequency",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "bandwidth",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "dBmFloor",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "dBmCeiling",
+                    "ordinal": 3
+                }
+            ]
+        },
+        "PureSignalSessionFacade": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "available",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "canActuate",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "twoToneOn",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "statusJson",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "lastActionError",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "displayGeneration",
+                    "ordinal": 5
+                }
+            ]
+        },
+        "PureSignalSettings": {
+            "properties": [
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "autoCalEnabled",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "runCalibrationProcessing",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "autoAttenuate",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "quickAttenuate",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "moxDelaySeconds",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "loopDelaySeconds",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "requestedTxDelayNs",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "hardwarePeakOverrideEnabled",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "hardwarePeakOverride",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "lastLoadError",
+                    "ordinal": 9
+                }
+            ]
+        },
+        "RadioModel": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "settingsSaveError",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "receiveLayoutRestoreState",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "receiveLayoutRestoreMessage",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "name",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "model",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "version",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "connected",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "rfKitEnabled",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "fourO3AEnabled",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "fourO3AListening",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "fourO3AListenerError",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rxFilter0Mode",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rxFilter0Effective",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rxFilter0Band",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "rxFilter0Reason",
+                    "ordinal": 14
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rxFilter1Mode",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rxFilter1Effective",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rxFilter1Band",
+                    "ordinal": 17
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "rxFilter1Reason",
+                    "ordinal": 18
+                }
+            ]
+        },
+        "RfKitModel": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7
+                    ],
+                    "kind": "enum",
+                    "name": "connectionPhase",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "configuredHost",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "configuredPort",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "connectionError",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "deviceModel",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "deviceSerial",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "deviceVersion",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "deviceNickname",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "present",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "operate",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "forwardPowerW",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "reflectedPowerW",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "swr",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "temperatureC",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "voltageV",
+                    "ordinal": 14
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "currentA",
+                    "ordinal": 15
+                }
+            ]
+        },
+        "SliceModel": {
+            "properties": [
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1
+                    ],
+                    "kind": "enum",
+                    "name": "outputRoute",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "frequency",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7,
+                        8,
+                        9,
+                        10,
+                        11,
+                        12,
+                        13
+                    ],
+                    "kind": "enum",
+                    "name": "dspMode",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "filterLow",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "filterHigh",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ],
+                    "kind": "enum",
+                    "name": "agcMode",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "stepHz",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "afGain",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "rfGain",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "rxAntenna",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "txAntenna",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "active",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "txSlice",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "constantSnapshot",
+                    "kind": "i64",
+                    "name": "sliceIndex",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7,
+                        8,
+                        9,
+                        10,
+                        11,
+                        12,
+                        13,
+                        14,
+                        15,
+                        16,
+                        17,
+                        18,
+                        19,
+                        20,
+                        21,
+                        22,
+                        23,
+                        24,
+                        25,
+                        26
+                    ],
+                    "kind": "enum",
+                    "name": "band",
+                    "ordinal": 14
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "signalStrengthDbm",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "signalPeakDbm",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "signalAverageDbm",
+                    "ordinal": 17
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "stationAutoAgcNoiseFloorDbm",
+                    "ordinal": 18
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "stationAutoAgcNoiseFloorValid",
+                    "ordinal": 19
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "stationAutoAgcNoiseFloorGeneration",
+                    "ordinal": 20
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "chainIndex",
+                    "ordinal": 21
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "ddcIndex",
+                    "ordinal": 22
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "streamIndex",
+                    "ordinal": 23
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "streamCtunPinned",
+                    "ordinal": 24
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "streamEpoch",
+                    "ordinal": 25
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "shiftOffsetHz",
+                    "ordinal": 26
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "panKey",
+                    "ordinal": 27
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "sampleRateHz",
+                    "ordinal": 28
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "diversityEnabled",
+                    "ordinal": 29
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "diversityPhaseDeg",
+                    "ordinal": 30
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "diversityGainDb",
+                    "ordinal": 31
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "diversityFineNullEnabled",
+                    "ordinal": 32
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "widebandExtensionRequested",
+                    "ordinal": 33
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "psPaused",
+                    "ordinal": 34
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "locked",
+                    "ordinal": 35
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "muted",
+                    "ordinal": 36
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "audioPan",
+                    "ordinal": 37
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "ssqlEnabled",
+                    "ordinal": 38
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "ssqlThresh",
+                    "ordinal": 39
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "amsqEnabled",
+                    "ordinal": 40
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "amsqThresh",
+                    "ordinal": 41
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "fmsqEnabled",
+                    "ordinal": 42
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "fmsqThresh",
+                    "ordinal": 43
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "agcThreshold",
+                    "ordinal": 44
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "agcHang",
+                    "ordinal": 45
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "agcSlope",
+                    "ordinal": 46
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "agcAttack",
+                    "ordinal": 47
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "agcDecay",
+                    "ordinal": 48
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "autoAgcEnabled",
+                    "ordinal": 49
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "autoAgcOffset",
+                    "ordinal": 50
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "agcFixedGain",
+                    "ordinal": 51
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "agcHangThreshold",
+                    "ordinal": 52
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "agcMaxGain",
+                    "ordinal": 53
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "ritEnabled",
+                    "ordinal": 54
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "ritHz",
+                    "ordinal": 55
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "xitEnabled",
+                    "ordinal": 56
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "xitHz",
+                    "ordinal": 57
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1,
+                        2
+                    ],
+                    "kind": "enum",
+                    "name": "nbMode",
+                    "ordinal": 58
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7,
+                        8
+                    ],
+                    "kind": "enum",
+                    "name": "activeNr",
+                    "ordinal": 59
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "nnrModelSlot",
+                    "ordinal": 60
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nnrMaskFloorDb",
+                    "ordinal": 61
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1
+                    ],
+                    "kind": "enum",
+                    "name": "nnrPosition",
+                    "ordinal": 62
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nnrAlpha",
+                    "ordinal": 63
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nnrAlphaKneeDb",
+                    "ordinal": 64
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nnrTauSeconds",
+                    "ordinal": 65
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nnrMaxGainDb",
+                    "ordinal": 66
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nnrAttackMs",
+                    "ordinal": 67
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nnrReleaseMs",
+                    "ordinal": 68
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "nnrAvailable",
+                    "ordinal": 69
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "nnrReady",
+                    "ordinal": 70
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "nnrRunning",
+                    "ordinal": 71
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "nnrStandardAvailable",
+                    "ordinal": 72
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "nnrPremiumAvailable",
+                    "ordinal": 73
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "nnrRateSupported",
+                    "ordinal": 74
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "nnrActualModelSlot",
+                    "ordinal": 75
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "nnrDspRateHz",
+                    "ordinal": 76
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "nnrNetworkRateHz",
+                    "ordinal": 77
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "nnrDelaySamples",
+                    "ordinal": 78
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "nnrProfilingAvailable",
+                    "ordinal": 79
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "nnrLatencyMs",
+                    "ordinal": 80
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "nnrTestMode",
+                    "ordinal": 81
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "nnrOutputMode",
+                    "ordinal": 82
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "nnrModelSource",
+                    "ordinal": 83
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "nnrStatus",
+                    "ordinal": 84
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "nnrLastError",
+                    "ordinal": 85
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "nnrLimit",
+                    "ordinal": 86
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "nr1Taps",
+                    "ordinal": 87
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "nr1Delay",
+                    "ordinal": 88
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nr1Gain",
+                    "ordinal": 89
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nr1Leakage",
+                    "ordinal": 90
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1
+                    ],
+                    "kind": "enum",
+                    "name": "nr1Position",
+                    "ordinal": 91
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3
+                    ],
+                    "kind": "enum",
+                    "name": "nr2GainMethod",
+                    "ordinal": 92
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1,
+                        2
+                    ],
+                    "kind": "enum",
+                    "name": "nr2NpeMethod",
+                    "ordinal": 93
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nr2TrainT1",
+                    "ordinal": 94
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nr2TrainT2",
+                    "ordinal": 95
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "nr2AeFilter",
+                    "ordinal": 96
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1
+                    ],
+                    "kind": "enum",
+                    "name": "nr2Position",
+                    "ordinal": 97
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "nr2Post2Run",
+                    "ordinal": 98
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nr2Post2Level",
+                    "ordinal": 99
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nr2Post2Factor",
+                    "ordinal": 100
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nr2Post2Rate",
+                    "ordinal": 101
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "nr2Post2Taper",
+                    "ordinal": 102
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1
+                    ],
+                    "kind": "enum",
+                    "name": "nr3Position",
+                    "ordinal": 103
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "nr3UseDefaultGain",
+                    "ordinal": 104
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nr4Reduction",
+                    "ordinal": 105
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nr4Smoothing",
+                    "ordinal": 106
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nr4Whitening",
+                    "ordinal": 107
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nr4Rescale",
+                    "ordinal": 108
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nr4PostThresh",
+                    "ordinal": 109
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1,
+                        2
+                    ],
+                    "kind": "enum",
+                    "name": "nr4Algo",
+                    "ordinal": 110
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dfnrAttenLimit",
+                    "ordinal": 111
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dfnrPostFilterBeta",
+                    "ordinal": 112
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "bnrStrength",
+                    "ordinal": 113
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "mnrStrength",
+                    "ordinal": 114
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "mnrOversub",
+                    "ordinal": 115
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "mnrFloor",
+                    "ordinal": 116
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "mnrAlpha",
+                    "ordinal": 117
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "mnrBias",
+                    "ordinal": 118
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "mnrGsmooth",
+                    "ordinal": 119
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "snbEnabled",
+                    "ordinal": 120
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "anfEnabled",
+                    "ordinal": 121
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "nb1Threshold",
+                    "ordinal": 122
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nb1TransitionMs",
+                    "ordinal": 123
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nb1LeadMs",
+                    "ordinal": 124
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "nb1LagMs",
+                    "ordinal": 125
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "nb2Mode",
+                    "ordinal": 126
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "snbK1",
+                    "ordinal": 127
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "snbK2",
+                    "ordinal": 128
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "snbOutputBandwidthHz",
+                    "ordinal": 129
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "apfEnabled",
+                    "ordinal": 130
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "apfTuneHz",
+                    "ordinal": 131
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "binauralEnabled",
+                    "ordinal": 132
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "fmCtcssMode",
+                    "ordinal": 133
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "fmCtcssValueHz",
+                    "ordinal": 134
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "fmOffsetHz",
+                    "ordinal": 135
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1,
+                        2
+                    ],
+                    "kind": "enum",
+                    "name": "fmTxMode",
+                    "ordinal": 136
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "fmReverse",
+                    "ordinal": 137
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "diglOffsetHz",
+                    "ordinal": 138
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "diguOffsetHz",
+                    "ordinal": 139
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "rttyMarkHz",
+                    "ordinal": 140
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "rttyShiftHz",
+                    "ordinal": 141
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "snrDb",
+                    "ordinal": 142
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "lastRadeRxCallsign",
+                    "ordinal": 143
+                }
+            ]
+        },
+        "StepAttenuatorFacade": {
+            "properties": [
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "enabled",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "attenuationDb",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "preampMode",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "rx1Preamp",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "autoAttEnabled",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "autoAttMode",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "autoAttUndo",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "autoAttUndoDelayMs",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "autoAttHoldMs",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "minDb",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "maxDb",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "autoAttApplied",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "overloadAdc0",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "overloadAdc1",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "adcLinked",
+                    "ordinal": 14
+                }
+            ]
+        },
+        "TransmitModel": {
+            "properties": [
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "mox",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "tune",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "power",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "micGain",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "pureSig",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "filterLow",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "filterHigh",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "lineInGain",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "userDigOut",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "forceAttwhenPSAoff",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "forceAttwhenPowerChangesWhenPSAon",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "forceAttwhenPowerChangesWhenPSAonAndDecreased",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "antiVoxTauMs",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "antiVoxRun",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "paSettingsBypass",
+                    "ordinal": 14
+                }
+            ]
+        },
+        "TunerModel": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7
+                    ],
+                    "kind": "enum",
+                    "name": "connectionPhase",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "configuredHost",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "configuredPort",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "connectionError",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "deviceModel",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "deviceSerial",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "deviceVersion",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "deviceNickname",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "relayC1",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "relayL",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "relayC2",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "isOperate",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "isBypass",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "isTuning",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "antennaA",
+                    "ordinal": 14
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "hasAntennaSwitch",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "isPresent",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "hasDirectConnection",
+                    "ordinal": 17
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "tgxlIp",
+                    "ordinal": 18
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "fwdPower",
+                    "ordinal": 19
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "swr",
+                    "ordinal": 20
+                }
+            ]
+        }
+    },
+    "objectKeys": [
+        {
+            "class": "RadioModel",
+            "key": "radio"
+        },
+        {
+            "class": "PureSignalSettings",
+            "key": "pureSignalSettings"
+        },
+        {
+            "class": "DspAssetService",
+            "key": "dspAssets"
+        },
+        {
+            "class": "NotchModel",
+            "key": "notches"
+        },
+        {
+            "class": "StepAttenuatorFacade",
+            "key": "stepAtt"
+        },
+        {
+            "class": "AlexAntennaFacade",
+            "key": "alexAntennas"
+        },
+        {
+            "class": "IoBoardHl2Facade",
+            "key": "ioBoard"
+        },
+        {
+            "class": "PureSignalSessionFacade",
+            "key": "pureSignal"
+        },
+        {
+            "class": "TransmitModel",
+            "key": "transmit"
+        },
+        {
+            "class": "TunerModel",
+            "key": "tuner"
+        },
+        {
+            "class": "AmplifierModel",
+            "key": "amplifier"
+        },
+        {
+            "class": "RfKitModel",
+            "key": "rfkit"
+        },
+        {
+            "class": "PanadapterModel",
+            "key": "pan:<i>"
+        },
+        {
+            "class": "SliceModel",
+            "key": "slice:<id>"
+        }
+    ],
+    "settingsScope": {
+        "exceptions": [
+            {
+                "key": "TciLogWindowGeometry",
+                "scope": "operatorLocal"
+            },
+            {
+                "key": "TciLogWindowAutoScroll",
+                "scope": "operatorLocal"
+            },
+            {
+                "key": "FreeDvReporter/ColumnWidths",
+                "scope": "operatorLocal"
+            },
+            {
+                "key": "FreeDvReporter/SortColumn",
+                "scope": "operatorLocal"
+            },
+            {
+                "key": "FreeDvReporter/SortAscending",
+                "scope": "operatorLocal"
+            },
+            {
+                "key": "FreeDvReporter/VisibleColumns",
+                "scope": "operatorLocal"
+            },
+            {
+                "key": "FreeDvReporter/ColumnFilters",
+                "scope": "operatorLocal"
+            },
+            {
+                "key": "FreeDvReporter/BandFilter",
+                "scope": "operatorLocal"
+            },
+            {
+                "key": "FreeDvReporter/Hidden",
+                "scope": "operatorLocal"
+            },
+            {
+                "key": "FreeDvReporter/DistanceMiles",
+                "scope": "operatorLocal"
+            },
+            {
+                "key": "FreeDvReporter/DirectionAsCardinal",
+                "scope": "operatorLocal"
+            },
+            {
+                "key": "FreeDvReporter/FrequencyAsKhz",
+                "scope": "operatorLocal"
+            }
+        ],
+        "operatorLocalKeys": [
+            "DisableHfPa",
+            "ExtendedTxAllowed",
+            "PreventTxOnDifferentBandToRx",
+            "NetworkWatchdogEnabled",
+            "RxOnly"
+        ],
+        "operatorLocalPrefixes": [
+            "Tci",
+            "radios/",
+            "ConnectionTargets/",
+            "RemoteVax/"
+        ],
+        "stationKeys": [
+            "DisplayFftSize",
+            "DisplayFftWindow",
+            "DisplayHzPerBinTarget",
+            "DisplaySpectrumFps",
+            "DisplayTxFftSize",
+            "DisplayTxWindowType",
+            "DisplayTxPanDetector",
+            "DisplayTxPanAveraging",
+            "DisplayTxPanAvTimeMs",
+            "DisplayTxPanNormalize",
+            "DisplayTxWfDetector",
+            "DisplayTxWfAveraging",
+            "DisplayTxWfAvTimeMs",
+            "audio/DspRate",
+            "audio/DspBlockSize",
+            "BandPlanName",
+            "BandPlanRegion",
+            "Region",
+            "CWPitch",
+            "Nr3ModelPath",
+            "StationCallsign",
+            "RX1_MeterCalOffsetDb",
+            "PeripheralsMigrationDone",
+            "SwrProtectionEnabled",
+            "SwrProtectionLimit",
+            "SwrTuneProtectionEnabled",
+            "TunePowerSwrIgnore",
+            "TxInhibitMonitorEnabled",
+            "TxInhibitMonitorReversed",
+            "WindBackPowerSwr",
+            "MultimeterDelayMs"
+        ],
+        "stationPrefixes": [
+            "hardware/",
+            "Slice",
+            "Vfo",
+            "PGXL_",
+            "TGXL_",
+            "RfKit_",
+            "DxCluster",
+            "Rbn",
+            "Pota",
+            "PskReporter",
+            "FreeDv",
+            "SpotCollector",
+            "Wsjtx",
+            "User/",
+            "Notch",
+            "DspOptions",
+            "Nb",
+            "Snb",
+            "Rade"
+        ]
+    },
+    "telemetry": {
+        "kind": "station.metrics.v1",
+        "versions": [
+            {
+                "fields": [
+                    "audio.active",
+                    "audio.contextGeneration",
+                    "audio.encodeFailuresPerSecond",
+                    "audio.encodedPacketsPerSecond",
+                    "audio.sendAcceptedPerSecond",
+                    "audio.sendRejectedPerSecond",
+                    "audio.sourceDropsPerSecond",
+                    "audio.sourceFramesPerSecond",
+                    "radio.connected",
+                    "radio.rttAgeMs",
+                    "radio.rttMs",
+                    "radio.rxMbps",
+                    "radio.txMbps",
+                    "sampledElapsedMs",
+                    "sequence"
+                ],
+                "minMinor": 3,
+                "version": 1
+            },
+            {
+                "fields": [
+                    "audio.active",
+                    "audio.contextGeneration",
+                    "audio.encodeFailuresPerSecond",
+                    "audio.encodedPacketsPerSecond",
+                    "audio.sendAcceptedPerSecond",
+                    "audio.sendRejectedPerSecond",
+                    "audio.sourceDropsPerSecond",
+                    "audio.sourceFramesPerSecond",
+                    "host.hottestZoneCelsius",
+                    "host.hottestZoneName",
+                    "host.memoryAvailableKiB",
+                    "host.memoryTotalKiB",
+                    "host.processCpuPercent",
+                    "host.processResidentKiB",
+                    "host.systemCpuPercent",
+                    "radio.connected",
+                    "radio.rttAgeMs",
+                    "radio.rttMs",
+                    "radio.rxMbps",
+                    "radio.txMbps",
+                    "sampledElapsedMs",
+                    "sequence"
+                ],
+                "minMinor": 10,
+                "version": 2
+            },
+            {
+                "fields": [
+                    "audio.active",
+                    "audio.contextGeneration",
+                    "audio.encodeFailuresPerSecond",
+                    "audio.encodedPacketsPerSecond",
+                    "audio.sendAcceptedPerSecond",
+                    "audio.sendRejectedPerSecond",
+                    "audio.sourceDropsPerSecond",
+                    "audio.sourceFramesPerSecond",
+                    "host.hottestZoneCelsius",
+                    "host.hottestZoneName",
+                    "host.memoryAvailableKiB",
+                    "host.memoryTotalKiB",
+                    "host.processCpuPercent",
+                    "host.processResidentKiB",
+                    "host.systemCpuPercent",
+                    "radio.connected",
+                    "radio.rttAgeMs",
+                    "radio.rttMs",
+                    "radio.rxMbps",
+                    "radio.txMbps",
+                    "receivers[].inputDelayMs",
+                    "receivers[].loadPercent",
+                    "receivers[].skippedInputMs",
+                    "receivers[].sliceId",
+                    "sampledElapsedMs",
+                    "sequence"
+                ],
+                "minMinor": 11,
+                "version": 3
+            }
+        ]
+    }
+}

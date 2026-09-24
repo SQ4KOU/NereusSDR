@@ -47,6 +47,10 @@
 //                                    setPgxlConnectionSettings for the
 //                                    Core's Power Genius XL. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 1 (R-IOS-01):
+//                                    verbSpecs(), the declared verb table.
+//                                    Routing unchanged. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -219,6 +223,127 @@ QString notRepresentableReason(const QByteArray& name)
 }
 
 } // namespace
+
+// ── The declared verb table (R-IOS-01) ───────────────────────────────────
+//
+// Each row is what dispatch() and the handler behind it accept: argument
+// names and wire kinds as the handler checks them (every handler requires
+// every argument it names, so none is optional today), and the gate a
+// client applies before sending the verb, as StationClient applies it:
+//
+//   slice verbs            none: they predate capability gating
+//   requestStreamCtun*     remoteCtunAvailable()          (StationClient.cpp)
+//   configure/disconnectTgxl remoteTgxlConfigAvailable()
+//   setFourO3AEnabled      remoteFourO3AControlAvailable()
+//   *Pgxl*                 remotePgxlControlAvailable() (version 2)
+//   requestIoBoardProbe    remoteHardwareConfigAvailable() (version 2)
+//   setAlexRxAntenna       radioHardwareVersion 3 (requestAlexRxAntenna)
+//   nnr.*                  nnrControlAvailable(); nnr.tryAgain adds
+//                          kNnrLimitSessionProtocolMinor
+//   nnr.applyModelSelection dspAssetVersion 1 (requestApplyNnrModels)
+//   dspAssets.*            dspAssetVersion 1; selectNr3Model version 2
+//   ps3.subscribeDisplay   psDisplayVersion 1 with media
+//   ps3.<action>           psAlgorithmVersion 3
+//   notch.*                remoteNotchControlAvailable()
+//
+// tst_link_surface_manifest keeps this table and the routing in step: a
+// source scan of dispatch() and of each prefix family's handler, and a
+// dispatch of every row on a live RadioModel.
+const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
+{
+    constexpr MirrorWireKind kInt = MirrorWireKind::Int64;
+    constexpr MirrorWireKind kUtf8 = MirrorWireKind::Utf8;
+    constexpr MirrorWireKind kBool = MirrorWireKind::Bool;
+    constexpr MirrorWireKind kDouble = MirrorWireKind::Float64;
+    const auto arg = [](const char* name, MirrorWireKind kind) {
+        return CommandArgumentSpec{QByteArray(name), kind, false};
+    };
+    static const QList<CommandVerbSpec> specs{
+        // Slices (R2 Task 11).
+        {"addSlice", {arg("initialPanId", kUtf8)}, {}, 0, 0},
+        {"removeSlice", {arg("sliceId", kInt)}, {}, 0, 0},
+        {"requestSliceSampleRate", {arg("sliceId", kInt), arg("rateHz", kInt)}, {}, 0, 0},
+        {"addSliceOnPan", {arg("panId", kUtf8)}, {}, 0, 0},
+        {"setActiveSliceById", {arg("sliceId", kInt)}, {}, 0, 0},
+        // C-Tune.
+        {"requestStreamCtunPinned", {arg("sliceId", kInt), arg("pinned", kBool)},
+         "remoteCtunVersion", 1, kRemoteCtunSessionProtocolMinor},
+        {"requestStreamCentre", {arg("sliceId", kInt), arg("centreHz", kDouble)},
+         "remoteCtunVersion", 1, kRemoteCtunSessionProtocolMinor},
+        // 4O3A accessories.
+        {"configureTgxl", {arg("host", kUtf8), arg("port", kInt)},
+         "remoteTgxlConfigVersion", 1, kRemoteTgxlConfigSessionProtocolMinor},
+        {"disconnectTgxl", {}, "remoteTgxlConfigVersion", 1,
+         kRemoteTgxlConfigSessionProtocolMinor},
+        {"setFourO3AEnabled", {arg("enabled", kBool)}, "remoteFourO3AControlVersion", 1,
+         kRemoteFourO3AControlSessionProtocolMinor},
+        {"configurePgxl", {arg("host", kUtf8), arg("port", kInt)},
+         "remotePgxlControlVersion", 2, kRadioIdentitySessionProtocolMinor},
+        {"disconnectPgxl", {}, "remotePgxlControlVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
+        {"setPgxlConnectionSettings",
+         {arg("autoReconnect", kBool), arg("keepaliveSec", kInt), arg("pingSec", kInt)},
+         "remotePgxlControlVersion", 2, kRadioIdentitySessionProtocolMinor},
+        // The Core's radio hardware (R-R3-46).
+        {"requestIoBoardProbe", {}, "radioHardwareVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
+        {"setAlexRxAntenna", {arg("band", kInt), arg("antenna", kInt), arg("rxOnly", kBool)},
+         "radioHardwareVersion", 3, kRadioIdentitySessionProtocolMinor},
+        // Neural noise reduction.
+        {"nnr.setDiagnostics",
+         {arg("sliceId", kInt), arg("testMode", kInt), arg("outputMode", kInt)},
+         "nnrVersion", 1, kDspControlSessionProtocolMinor},
+        {"nnr.resetTuning", {arg("sliceId", kInt)}, "nnrVersion", 1,
+         kDspControlSessionProtocolMinor},
+        {"nnr.tryAgain", {arg("sliceId", kInt)}, "nnrVersion", 1,
+         kNnrLimitSessionProtocolMinor},
+        {"nnr.applyModelSelection", {arg("revision", kInt)}, "dspAssetVersion", 1,
+         kDspControlSessionProtocolMinor},
+        // DSP assets (DspAssetService::execute).
+        {"dspAssets.list", {}, "dspAssetVersion", 1, kDspControlSessionProtocolMinor},
+        {"dspAssets.beginImport",
+         {arg("kind", kInt), arg("label", kUtf8), arg("size", kInt), arg("hash", kUtf8),
+          arg("radioIdentity", kUtf8)},
+         "dspAssetVersion", 1, kDspControlSessionProtocolMinor},
+        {"dspAssets.chunk",
+         {arg("transferId", kUtf8), arg("offset", kInt), arg("data", kUtf8)},
+         "dspAssetVersion", 1, kDspControlSessionProtocolMinor},
+        {"dspAssets.finishImport", {arg("transferId", kUtf8)}, "dspAssetVersion", 1,
+         kDspControlSessionProtocolMinor},
+        {"dspAssets.cancelImport", {arg("transferId", kUtf8)}, "dspAssetVersion", 1,
+         kDspControlSessionProtocolMinor},
+        {"dspAssets.export", {arg("id", kUtf8), arg("offset", kInt)}, "dspAssetVersion", 1,
+         kDspControlSessionProtocolMinor},
+        {"dspAssets.selectNnrModel", {arg("slot", kInt), arg("id", kUtf8)},
+         "dspAssetVersion", 1, kDspControlSessionProtocolMinor},
+        {"dspAssets.selectNr3Model", {arg("id", kUtf8)}, "dspAssetVersion", 2,
+         kDspControlSessionProtocolMinor},
+        // PureSignal (PureSignalSessionFacade::actionVerb and the display
+        // subscription handled here).
+        {"ps3.subscribeDisplay", {arg("enabled", kBool)}, "psDisplayVersion", 1,
+         kMediaSessionProtocolMinor},
+        {"ps3.off", {}, "psAlgorithmVersion", 3, kDspControlSessionProtocolMinor},
+        {"ps3.single", {}, "psAlgorithmVersion", 3, kDspControlSessionProtocolMinor},
+        {"ps3.automatic", {}, "psAlgorithmVersion", 3, kDspControlSessionProtocolMinor},
+        {"ps3.applyCurrent", {}, "psAlgorithmVersion", 3, kDspControlSessionProtocolMinor},
+        {"ps3.twoTone", {arg("enabled", kBool)}, "psAlgorithmVersion", 3,
+         kDspControlSessionProtocolMinor},
+        {"ps3.saveCorrection", {arg("label", kUtf8)}, "psAlgorithmVersion", 3,
+         kDspControlSessionProtocolMinor},
+        {"ps3.restoreCorrection", {arg("assetId", kUtf8)}, "psAlgorithmVersion", 3,
+         kDspControlSessionProtocolMinor},
+        // Notches (R-R3-21 / R-R3-09).
+        {"notch.add", {arg("sliceId", kInt), arg("centreHz", kDouble), arg("widthHz", kDouble)},
+         "notchControlVersion", 1, kDspControlSessionProtocolMinor},
+        {"notch.move", {arg("id", kInt), arg("centreHz", kDouble), arg("widthHz", kDouble)},
+         "notchControlVersion", 1, kDspControlSessionProtocolMinor},
+        {"notch.setActive", {arg("id", kInt), arg("active", kBool)}, "notchControlVersion", 1,
+         kDspControlSessionProtocolMinor},
+        {"notch.delete", {arg("id", kInt)}, "notchControlVersion", 1,
+         kDspControlSessionProtocolMinor},
+    };
+    return specs;
+}
 
 SessionCommandDispatcher::SessionCommandDispatcher(RadioModel* radioModel, QObject* parent)
     : QObject(parent)

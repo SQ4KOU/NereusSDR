@@ -110,6 +110,11 @@
 //                                    settingsValueAbsent(). AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 1 (R-IOS-01):
+//                                    allKinds(), the declared list of every
+//                                    kind the link surface is captured
+//                                    from. AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -535,6 +540,12 @@ public:
     /// extend the same table rather than inventing a second one.
     static QByteArray kindName(SessionMessageKind kind);
     static bool kindFromName(const QByteArray& name, SessionMessageKind* out);
+
+    /// Every SessionMessageKind enumerator, in declaration order. The link
+    /// surface (tests/LinkSurface.cpp, R-IOS-01) lists the wire kinds from
+    /// this; tst_link_surface_manifest scans the enum's declaration so an
+    /// enumerator added here without being listed fails the build's tests.
+    static QList<SessionMessageKind> allKinds();
 
     static QByteArray wireKindName(MirrorWireKind kind);
     static bool wireKindFromName(const QByteArray& name, MirrorWireKind* out);

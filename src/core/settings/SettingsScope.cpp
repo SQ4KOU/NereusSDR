@@ -136,6 +136,10 @@
 //                                    and slice, is OperatorLocal.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 1 (R-IOS-01):
+//                                    settingsScopeRules(). AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -594,6 +598,21 @@ bool isModelOwnedDspSettingsKey(QStringView rawKey)
     return (parts.size() >= 4 && parts[2] == QStringLiteral("puresignal"))
         || (parts.size() >= 6 && parts[2] == QStringLiteral("slices")
             && parts[4] == QStringLiteral("nnr"));
+}
+
+QList<SettingsScopeRule> settingsScopeRules()
+{
+    QList<SettingsScopeRule> rules;
+    for (const Rule& r : kExceptions) {
+        rules.append({SettingsScopeRuleKind::Exception, QString::fromLatin1(r.text), r.scope});
+    }
+    for (const Rule& r : kPrefixes) {
+        rules.append({SettingsScopeRuleKind::Prefix, QString::fromLatin1(r.text), r.scope});
+    }
+    for (const Rule& r : kWholeKeys) {
+        rules.append({SettingsScopeRuleKind::WholeKey, QString::fromLatin1(r.text), r.scope});
+    }
+    return rules;
 }
 
 QString modelOwnedSettingsRefusal(QStringView rawKey)

@@ -7154,6 +7154,25 @@ nereus_add_test(tst_session_transport_telemetry
 nereus_add_test(tst_station_session
     fakes/LoopbackTransport.cpp)
 
+# iPhone app plan, Task 1 (R-IOS-01): the link's surface, captured from the
+# code (LinkSurface.cpp) and guarded against tests/data/link/v1/surface.json.
+# The manifest test also scans the routing and media sources, and dispatches
+# every declared verb on a connected model. The regen target writes the file
+# only into NEREUS_LINK_REGEN_OUT; otherwise into a temporary directory.
+nereus_add_test(tst_link_surface_manifest
+    LinkSurface.cpp
+    fakes/LoopbackTransport.cpp
+    fakes/P1FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_link_surface_manifest PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
+nereus_add_test(tst_link_surface_manifest_regen
+    LinkSurface.cpp
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+
 # R-R3-46 / R-R3-11 / R-R3-13: the Core's step attenuator and preamp as the
 # mirrored `stepAtt` object, end to end: a DaemonApp Core on a primed board
 # with a fake radio connection, a StationServer, and a remote window over the

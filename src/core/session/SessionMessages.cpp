@@ -28,6 +28,10 @@
 //                                    absence encoding for a removed key.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 1 (R-IOS-01):
+//                                    allKinds(). AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -342,6 +346,36 @@ bool SessionMessages::kindFromName(const QByteArray& name, SessionMessageKind* o
         }
     }
     return false;
+}
+
+QList<SessionMessageKind> SessionMessages::allKinds()
+{
+    // Declaration order of SessionMessageKind (SessionMessages.h), not the
+    // order of kKindNames above, which lists property.result beside
+    // property.write.
+    return {
+        SessionMessageKind::Schema,
+        SessionMessageKind::ObjectCreate,
+        SessionMessageKind::ObjectDestroy,
+        SessionMessageKind::Delta,
+        SessionMessageKind::SnapshotComplete,
+        SessionMessageKind::CommandInvoke,
+        SessionMessageKind::CommandResult,
+        SessionMessageKind::Hello,
+        SessionMessageKind::AuthRequest,
+        SessionMessageKind::AuthResult,
+        SessionMessageKind::Capabilities,
+        SessionMessageKind::SessionEnd,
+        SessionMessageKind::PropertyWrite,
+        SessionMessageKind::SettingsSnapshot,
+        SessionMessageKind::SettingsWrite,
+        SessionMessageKind::SettingsRemove,
+        SessionMessageKind::SettingsValue,
+        SessionMessageKind::SettingsReject,
+        SessionMessageKind::MediaControl,
+        SessionMessageKind::StationTelemetry,
+        SessionMessageKind::PropertyResult,
+    };
 }
 
 QByteArray SessionMessages::wireKindName(MirrorWireKind kind)

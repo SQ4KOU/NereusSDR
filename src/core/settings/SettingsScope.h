@@ -45,8 +45,15 @@
 //                                    computer's. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 1 (R-IOS-01):
+//                                    settingsScopeRules(), the rule tables
+//                                    read out for the link surface.
+//                                    Classification unchanged. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
+#include <QList>
 #include <QString>
 #include <QStringView>
 
@@ -104,5 +111,25 @@ bool isModelOwnedAlexAntennaSettingsKey(QStringView key);
 // The reason a raw write or remove of a model-owned key is refused, in the
 // operator's words.
 QString modelOwnedSettingsRefusal(QStringView key);
+
+/// Which of classifySettingsKey()'s three tables a rule comes from. It
+/// walks them in this order, after the model-owned keys and after
+/// stripping a "_<digits>" pan suffix: whole-key exceptions, then
+/// prefixes, then whole keys; a key no rule names is OperatorLocal.
+enum class SettingsScopeRuleKind {
+    Exception,
+    Prefix,
+    WholeKey,
+};
+
+struct SettingsScopeRule {
+    SettingsScopeRuleKind kind = SettingsScopeRuleKind::Prefix;
+    QString text;
+    SettingsScope scope = SettingsScope::OperatorLocal;
+};
+
+/// R-IOS-01: every rule classifySettingsKey() walks, in the order it walks
+/// them, so the link surface is read from the tables rather than copied.
+QList<SettingsScopeRule> settingsScopeRules();
 
 } // namespace NereusSDR
