@@ -1408,6 +1408,142 @@ private slots:
         QCOMPARE(c, a);   // lowest free id
         QVERIFY(engine->rxChannel(c)->isActive());
     }
+
+    // ── A radio-wide live rate change quiesces every slice's channel ─────
+    //
+    // setSampleRateLive used to switch off channel 0 alone before moving the
+    // rate on every slice's channel, and switched on channel 0 alone after.
+    // Every other slice's channel was re-rated while still running.  Thetis
+    // switches off every receiver channel first (subs, then the main channel
+    // last with a drain), changes the rate, then switches the main channel
+    // back on first and the others only if they had been running:
+    //   From Thetis setup.cs:7112-7115 and 7175-7179 [v2.10.3.15]
+    //
+    // Each activeChanged is recorded with the channel's input rate at that
+    // moment. A channel whose off event carries the old rate and whose on
+    // event carries the new one was re-rated only while it was stopped.
+    void a_live_rate_change_stops_and_restarts_every_slices_channel()
+    {
+        RadioModel model;
+        P1RadioConnection conn;
+        model.injectConnectionForTest(&conn);
+        DetachConnection detach{&model};
+
+        WdspEngine* engine = model.wdspEngine();
+        engine->m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+
+        model.configureStreamPool(5, 5, 192000);
+        const int a = model.addSlice();
+        model.sliceById(a)->setFrequency(14200000.0);
+        const int b = model.addSlice();
+        model.sliceById(b)->setFrequency(7150000.0);
+        const int c = model.addSlice();
+        model.sliceById(c)->setFrequency(3700000.0);
+        const int d = model.addSlice();
+        QVERIFY(d >= 0);
+        model.sliceById(d)->setFrequency(21200000.0);
+        model.openRxChannelPool(5, bufferSizeForRate(192000), 192000);
+
+        const int chA = model.sliceById(a)->sliceIndex();
+        const int chB = model.sliceById(b)->sliceIndex();
+        const int chC = model.sliceById(c)->sliceIndex();
+        const int chD = model.sliceById(d)->sliceIndex();
+        QCOMPARE(chA, 0);
+        QCOMPARE(chB, 1);
+        QCOMPARE(chC, 2);
+        QCOMPARE(chD, 3);
+
+        QVERIFY(engine->rxChannel(chA)->isActive());
+        QVERIFY(engine->rxChannel(chB)->isActive());
+        QVERIFY(engine->rxChannel(chC)->isActive());
+        // Slice D's channel is stopped before the change and must stay so.
+        engine->rxChannel(chD)->setActive(false);
+
+        struct Event { int ch; bool active; int rate; };
+        QVector<Event> events;
+        // Declared after `events` so it dies first and takes the recording
+        // connections with it before the model's teardown can emit.
+        QObject recorder;
+        for (int ch : {chA, chB, chC, chD}) {
+            RxChannel* rx = engine->rxChannel(ch);
+            connect(rx, &RxChannel::activeChanged, &recorder,
+                    [&events, rx, ch](bool on) {
+                        events.append({ch, on, rx->sampleRate()});
+                    });
+        }
+
+        QVERIFY(model.setSampleRateLive(384000, false) >= 0);
+
+        const QVector<Event> expected{
+            // Off: highest channel first, channel 0 (the drained one) last.
+            {chC, false, 192000},
+            {chB, false, 192000},
+            {chA, false, 192000},
+            // On: channel 0 first, then the others that were running.
+            {chA, true, 384000},
+            {chB, true, 384000},
+            {chC, true, 384000},
+        };
+        QCOMPARE(events.size(), expected.size());
+        for (int i = 0; i < expected.size(); ++i) {
+            QVERIFY2(events[i].ch == expected[i].ch
+                         && events[i].active == expected[i].active
+                         && events[i].rate == expected[i].rate,
+                     qPrintable(QStringLiteral("event %1: got ch%2 %3 @%4, "
+                                               "want ch%5 %6 @%7")
+                                    .arg(i)
+                                    .arg(events[i].ch)
+                                    .arg(events[i].active ? "on" : "off")
+                                    .arg(events[i].rate)
+                                    .arg(expected[i].ch)
+                                    .arg(expected[i].active ? "on" : "off")
+                                    .arg(expected[i].rate)));
+        }
+
+        QVERIFY(engine->rxChannel(chA)->isActive());
+        QVERIFY(engine->rxChannel(chB)->isActive());
+        QVERIFY(engine->rxChannel(chC)->isActive());
+        QVERIFY(!engine->rxChannel(chD)->isActive());
+        QCOMPARE(engine->rxChannel(chD)->sampleRate(), 384000);
+    }
+
+    // One slice: channel 0 goes off at the old rate and back on at the new
+    // one, exactly as before the change above.
+    void a_live_rate_change_with_one_slice_cycles_channel_zero_only()
+    {
+        RadioModel model;
+        P1RadioConnection conn;
+        model.injectConnectionForTest(&conn);
+        DetachConnection detach{&model};
+
+        WdspEngine* engine = model.wdspEngine();
+        engine->m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+
+        model.configureStreamPool(5, 5, 192000);
+        const int a = model.addSlice();
+        model.sliceById(a)->setFrequency(14200000.0);
+        model.openRxChannelPool(5, bufferSizeForRate(192000), 192000);
+        QCOMPARE(model.sliceById(a)->sliceIndex(), 0);
+
+        QVector<QPair<bool, int>> events;
+        QObject recorder;   // dies before `events`; see the test above
+        RxChannel* rx0 = engine->rxChannel(0);
+        QVERIFY(rx0->isActive());
+        connect(rx0, &RxChannel::activeChanged, &recorder,
+                [&events, rx0](bool on) { events.append({on, rx0->sampleRate()}); });
+        for (int ch = 1; ch < 5; ++ch) {
+            connect(engine->rxChannel(ch), &RxChannel::activeChanged, &recorder,
+                    [ch](bool) { QFAIL(qPrintable(
+                        QStringLiteral("unbound channel %1 toggled").arg(ch))); });
+        }
+
+        QVERIFY(model.setSampleRateLive(384000, false) >= 0);
+
+        QCOMPARE(events.size(), 2);
+        QCOMPARE(events[0], qMakePair(false, 192000));
+        QCOMPARE(events[1], qMakePair(true, 384000));
+        QVERIFY(rx0->isActive());
+    }
 };
 
 QTEST_MAIN(TestStreamPoolBinding)

@@ -501,6 +501,7 @@ warren@wpratt.com
 #include <cmath>
 #include <limits>
 #include <tuple>
+#include <vector>
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -18000,17 +18001,50 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
 
     const int newInSize = bufferSizeForRate(newRateHz);
 
-    // ── Step 1: Drain the RX channel ──────────────────────────────────────
-    // Thetis setup.cs:7010 / 7081 [v2.10.3.13]: SetChannelState(id, 0, 1)
-    // — off + drain to flush the slew envelope cleanly.  RxChannel is owned
-    // by WdspEngine; look it up by channel ID rather than caching a raw
-    // pointer (the previous pattern's failure mode is exactly what this
-    // fix replaces).
-    RxChannel* rxCh = m_wdspEngine->rxChannel(0);
-    if (rxCh && rxCh->isActive()) {
-        rxCh->setActive(false);
+    // Every receive channel this change re-rates: channel 0 plus one per
+    // slice (Phase 3F section 3, one WDSP channel per slice), ascending and
+    // without repeats. Steps 1, 6 and 9 all walk this one list, so no channel
+    // is re-rated that was not first stopped.
+    std::vector<int> rxChannelIds{0};
+    for (SliceModel* s : std::as_const(m_slices)) {
+        if (s) {
+            rxChannelIds.push_back(s->sliceIndex());
+        }
     }
-    QThread::msleep(10);  // setup.cs:7011 / 7082 [v2.10.3.13]: Thread.Sleep(10)
+    std::sort(rxChannelIds.begin(), rxChannelIds.end());
+    rxChannelIds.erase(std::unique(rxChannelIds.begin(), rxChannelIds.end()),
+                       rxChannelIds.end());
+
+    // ── Step 1: Stop every RX channel, draining channel 0 last ────────────
+    // Upstream switches off every receiver channel, the sub-receivers with
+    // no drain and the main channel last with a drain, while data is still
+    // flowing so each one slews down and flushes:
+    //   From Thetis setup.cs:7112-7115 [v2.10.3.15] (Protocol 1)
+    //     // turn OFF the RX DSP channels so they get flushed out (must do while data is flowing to get slew-down and flush)
+    //     WDSP.SetChannelState(3, 0, 0); // RX2_sub
+    //     WDSP.SetChannelState(2, 0, 0); // RX2_main
+    //     WDSP.SetChannelState(1, 0, 0); // RX1_sub
+    //     WDSP.SetChannelState(0, 0, 1);  // RX1_main
+    // Protocol 2 does the same for its pair at setup.cs:7043-7044
+    // [v2.10.3.15]: WDSP.id(0, 1) with no drain, then WDSP.id(0, 0) drained.
+    // Here that is every slice's channel from the highest id down, then
+    // channel 0 with the drain. RxChannel is owned by WdspEngine; look each
+    // one up by channel ID rather than caching a raw pointer. Record which
+    // were running, because step 9 restarts only those.
+    std::vector<int> rxChannelsWereActive;
+    for (auto it = rxChannelIds.rbegin(); it != rxChannelIds.rend(); ++it) {
+        RxChannel* rx = m_wdspEngine->rxChannel(*it);
+        if (!rx || !rx->isActive()) {
+            continue;
+        }
+        rxChannelsWereActive.push_back(*it);
+        if (*it == 0) {
+            rx->setActive(false);          // dmode 1: drain
+        } else {
+            rx->deactivateWithoutDrain();  // dmode 0
+        }
+    }
+    QThread::msleep(10);  // From Thetis setup.cs:7116 [v2.10.3.15]: Thread.Sleep(10)
 
     // ── Step 2: Quiesce DSP worker ────────────────────────────────────────
     // Disconnect the I/Q feed so no new batches land while the WDSP channel
@@ -18056,8 +18090,7 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     // Thetis cmaster.c:473-474 [v2.10.3.13] via WdspEngine::setRxChannelRate.
     // No destroy-and-recreate — the RxChannel C++ wrapper stays alive,
     // m_rxChannel raw pointer (and every other holder) remains valid.
-    m_wdspEngine->setRxChannelRate(0, newRateHz);
-
+    //
     // Phase 3F Sub-Epic I closeout, defect H1: every slice's channel, not
     // just channel 0. This is a radio-wide rate, and step 7 below gives the
     // whole worker one drain size, so a channel left at the old rate would be
@@ -18067,11 +18100,9 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     //         SetInputSamplerate (chid (in_id, i), rate);
     //         SetInputBuffsize (chid (in_id, i), pcm->xcm_insize[in_id]);
     //     }
-    // Idempotent for channel 0, which the line above already moved.
-    for (SliceModel* s : std::as_const(m_slices)) {
-        if (s) {
-            m_wdspEngine->setRxChannelRate(s->sliceIndex(), newRateHz);
-        }
+    // Every channel in the list was stopped in step 1.
+    for (int ch : rxChannelIds) {
+        m_wdspEngine->setRxChannelRate(ch, newRateHz);
     }
 
     // ── Step 7: Reconfigure AudioEngine and DSP worker for new rate ───────
@@ -18115,11 +18146,26 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     //   Thread.Sleep(5);  // P1
     QThread::msleep(5);
 
-    // ── Step 9: Re-enable the RX channel ─────────────────────────────────
-    // Thetis setup.cs:7056 / 7141 [v2.10.3.13]: SetChannelState(id, 1, 0).
-    // Re-look-up rather than reuse rxCh in case the engine state shifted.
-    if (RxChannel* rx = m_wdspEngine->rxChannel(0)) {
-        rx->setActive(true);
+    // ── Step 9: Restart the RX channels that were running ────────────────
+    // Upstream switches the main channel on first, then each other channel
+    // only if it had been running:
+    //   From Thetis setup.cs:7175-7179 [v2.10.3.15] (Protocol 1)
+    //     WDSP.SetChannelState(0, 1, 0);              // RX1_main
+    //     if (console.radio.GetDSPRX(0, 1).Active)
+    //         WDSP.SetChannelState(1, 1, 0);          // RX1_sub
+    //     if (console.RX2Enabled)
+    //         WDSP.SetChannelState(2, 1, 0);          // RX2_main
+    // Protocol 2 gates its main channel on the state saved before the stop
+    // (setup.cs:7090-7091 [v2.10.3.15]), from setup.cs:7035 [v2.10.3.15]:
+    //     bool was_enabled = console.RX1Enabled;  //... was set to RX2 for some reason, it should be RX1 which always true. MW0LGE_21a
+    // Here: ascending, so channel 0 comes first, and only the channels step 1
+    // found running. A channel that was stopped before stays stopped.
+    // Re-look-up each one in case the engine state shifted.
+    std::sort(rxChannelsWereActive.begin(), rxChannelsWereActive.end());
+    for (int ch : rxChannelsWereActive) {
+        if (RxChannel* rx = m_wdspEngine->rxChannel(ch)) {
+            rx->setActive(true);
+        }
     }
 
     // ── Step 10: Reconnect I/Q feed ──────────────────────────────────────
