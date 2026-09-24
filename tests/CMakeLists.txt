@@ -326,8 +326,9 @@ if(TARGET wdsp_static)
     nereus_add_test(tst_wdsp_nnr EXTRA_LABELS core)
     nereus_add_test(tst_nnr_model_assets EXTRA_LABELS core)
     if(NOT WIN32)
+        # wdsp_static arrives through the core library, as for tst_wdsp_nnr;
+        # linking it again here made the linker warn about a duplicate library.
         nereus_add_test(tst_linux_port_wait EXTRA_LABELS core)
-        target_link_libraries(tst_linux_port_wait PRIVATE wdsp_static)
         target_compile_definitions(tst_linux_port_wait PRIVATE WDSP_STATIC_BUILD)
     endif()
     # R-R3-39: a real RX channel with an overloaded worker still gives
