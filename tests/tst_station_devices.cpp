@@ -389,10 +389,12 @@ private slots:
         caps.stationIdentityVersion = 1;
         caps.deviceAdminVersion = 1;
         const QList<MirrorUpdate> updates = caps.toUpdates();
-        // iPhone app Task 14's pairingVersion follows it.
-        QCOMPARE(updates.last().name, QByteArray("pairingVersion"));
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("deviceAdminVersion"));
-        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("stationIdentityVersion"));
+        // iPhone app Task 14's pairingVersion follows it, then Task 19's
+        // stationCatalogVersion.
+        QCOMPARE(updates.last().name, QByteArray("stationCatalogVersion"));
+        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("pairingVersion"));
+        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("deviceAdminVersion"));
+        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("stationIdentityVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).deviceAdminVersion, 1);
 
         caps.radioIdentityEntries = false;

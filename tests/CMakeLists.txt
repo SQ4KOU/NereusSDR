@@ -7264,6 +7264,14 @@ nereus_add_test(tst_device_auth
 nereus_add_test(tst_station_devices
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# iPhone app Task 19 (R-IOS-06): the Core's catalogue; the G2 and HL2
+# catalogue fixtures against the desktop's own values, the revision, a
+# preset change reaching a client over the in-process loopback, the size.
+nereus_add_test(tst_station_catalog
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_station_catalog PRIVATE
+    NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
 # iPhone app Task 14 (R-IOS-08, D37): the pairing code and its word list,
 # the pairing window (injected clock), and the SPAKE2+EE exchange with its
 # confirmation boxes.

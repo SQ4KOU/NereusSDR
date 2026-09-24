@@ -199,6 +199,14 @@
 //                                    connection signed in with a paired
 //                                    device's key. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 19 (R-IOS-06): the
+//                                    `catalog` object for a peer at minor
+//                                    11, stationCatalogVersion 1 last in
+//                                    the minor-11 block, and a refresh
+//                                    when a filter preset or the CW pitch
+//                                    changes in the Core's settings.
+//                                    AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -222,6 +230,7 @@
 #include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/StateMirror.h"
+#include "core/session/StationCatalog.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/settings/SettingsProxyServer.h"
 #include "core/settings/SettingsScope.h"
@@ -476,6 +485,26 @@ bool isDevicesSettingsKey(const QString& key)
 {
     return key.compare(QLatin1String("StationCallsign"), Qt::CaseInsensitive) == 0
         || isCoreOwnedIdentitySettingsKey(key);
+}
+
+// iPhone app Task 19 (R-IOS-06, stationCatalogVersion 1): the values the
+// Core owns and an app draws its controls from, read-only, for a peer at
+// kRadioIdentitySessionProtocolMinor. An older peer never sees the object.
+constexpr const char* kCatalogKey = "catalog";
+
+bool isCatalogMessage(const SessionMessage& message)
+{
+    return message.objectKey == kCatalogKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "StationCatalog");
+}
+
+// The settings the catalogue reads: the filter presets (FilterPresetStore's
+// filters/<mode>/<slot>/...) and the CW pitch the CW presets follow.
+bool isCatalogSettingsKey(const QString& key)
+{
+    return key.startsWith(QLatin1String("filters/"))
+        || key.compare(QLatin1String("CWPitch"), Qt::CaseInsensitive) == 0;
 }
 
 // iPhone app Task 13: why a connection ends when its device is removed, and
@@ -767,6 +796,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                               QString::fromLatin1(kDeviceRemovedReason),
                               SessionEndCode::kDeviceRemoved);
     });
+    // iPhone app Task 19 (R-IOS-06): the catalogue follows the Core's radio,
+    // its filter presets and its band plans from here on.
+    m_catalog = std::make_unique<StationCatalog>();
+    m_catalog->bind(radioModel);
     connect(m_devicesFacade.get(), &StationDevicesFacade::tokenRetired, this, [this]() {
         endAuthenticatedPeers([](const Peer& peer) { return peer.signedInWithToken; },
                               QString::fromLatin1(kPairingRequiredReason),
@@ -890,11 +923,20 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 if (isDevicesSettingsKey(key)) {
                     m_devicesFacade->refresh();
                 }
+                // iPhone app Task 19: a preset or the CW pitch changed,
+                // from this computer or a window. Coalesced, so the three
+                // settings of one preset move the revision once.
+                if (isCatalogSettingsKey(key)) {
+                    m_catalog->scheduleRefresh();
+                }
             });
     connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
             [this](const QString& key) {
                 if (isDevicesSettingsKey(key)) {
                     m_devicesFacade->refresh();
+                }
+                if (isCatalogSettingsKey(key)) {
+                    m_catalog->scheduleRefresh();
                 }
             });
     connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
@@ -1119,6 +1161,16 @@ const StationIdentity& StationServer::stationIdentity() const
 StationDevicesFacade* StationServer::devicesFacade() const
 {
     return m_devicesFacade.get();
+}
+
+StationCatalog* StationServer::catalog() const
+{
+    return m_catalog.get();
+}
+
+int StationServer::stationCatalogVersion() const
+{
+    return 1;
 }
 
 int StationServer::deviceAdminVersion() const
@@ -2548,6 +2600,11 @@ void StationServer::buildMirror()
     // iPhone app Task 13 (deviceAdminVersion 1): the Core's paired devices.
     // Sent only to a device at minor 11 that declares deviceAuth.
     m_mirror->watch(QByteArray(kDevicesKey), m_devicesFacade.get());
+    // iPhone app Task 19 (stationCatalogVersion 1): the Core's catalogue,
+    // read again now so the snapshot carries the radio as it is. Sent only
+    // to a peer at minor 11 (sendToSession).
+    m_catalog->refresh();
+    m_mirror->watch(QByteArray(kCatalogKey), m_catalog.get());
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
     for (int i = 0; i < pans.size(); ++i) {
         m_mirror->watch(panKey(i), pans.at(i));
@@ -3011,6 +3068,11 @@ void StationServer::sendToSession(const SessionMessage& original)
                 || deviceAdminVersion() < 1)) {
             return;
         }
+        // iPhone app Task 19: nor the catalogue to an older app.
+        if (isCatalogMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor || stationCatalogVersion() < 1)) {
+            return;
+        }
         if (!needsNnrFit(message, minor)) {
             // Most messages carry no NNR field: send them as they are.
             if (worthSendingAfterNnrFit(message)) {
@@ -3301,6 +3363,8 @@ StationCapabilities StationServer::buildCapabilities() const
             caps.deviceAdminVersion = deviceAdminVersion();
             // iPhone app Task 14: pairing and the pairing window, last.
             caps.pairingVersion = pairingVersion();
+            // iPhone app Task 19: the catalogue, last.
+            caps.stationCatalogVersion = stationCatalogVersion();
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();

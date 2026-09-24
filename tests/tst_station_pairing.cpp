@@ -966,7 +966,9 @@ private slots:
         caps.radioIdentityEntries = true;
         caps.pairingVersion = 1;
         const QList<MirrorUpdate> updates = caps.toUpdates();
-        QCOMPARE(updates.last().name, QByteArray("pairingVersion"));
+        // iPhone app Task 19's stationCatalogVersion follows it.
+        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("pairingVersion"));
+        QCOMPARE(updates.last().name, QByteArray("stationCatalogVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).pairingVersion, 1);
     }
 

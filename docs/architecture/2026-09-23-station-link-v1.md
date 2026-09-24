@@ -656,6 +656,7 @@ change shows as surface drift and as a change to this table.
 | `stationIdentityVersion` | 1 |
 | `deviceAdminVersion` | 1 |
 | `pairingVersion` | 1 |
+| `stationCatalogVersion` | 1 |
 
 <!-- /surface -->
 
@@ -712,6 +713,10 @@ When a feature is off, its version is 0:
   `devices` object's `pairingWindowOpen` and `pairingCode`, and
   `pairing.open` and `pairing.close` (section 9.1), for the same peers as
   `deviceAdminVersion`. 0 otherwise.
+- `stationCatalogVersion`: sent only at agreed minor 11, last. 1 on every
+  Core that has it: the read-only `catalog` object (section 7.4) goes to
+  every peer at minor 11. A Core from before it sends neither the entry
+  nor the object.
 
 `txPermitted` is always false today: remote transmit is R4.
 
@@ -781,6 +786,7 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 | 48 | `stationIdentityVersion` | `i64` |
 | 49 | `deviceAdminVersion` | `i64` |
 | 50 | `pairingVersion` | `i64` |
+| 51 | `stationCatalogVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1184,6 +1190,13 @@ An enum property lists the values its domain allows.
 | 142 | `snrDb` | `f64` | outbound |  |
 | 143 | `lastRadeRxCallsign` | `utf8` | outbound |  |
 
+**StationCatalog** (2 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `json` | `utf8` | outbound |  |
+| 1 | `revision` | `i64` | outbound |  |
+
 **StationDevicesFacade** (9 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
@@ -1300,6 +1313,7 @@ destroyed during the session.
 | `accessoryData` | `AccessoryDataModel` |
 | `accessorySettings` | `AccessorySettingsModel` |
 | `devices` | `StationDevicesFacade` |
+| `catalog` | `StationCatalog` |
 | `pan:<i>` | `PanadapterModel` |
 | `slice:<id>` | `SliceModel` |
 
@@ -1318,8 +1332,9 @@ Notes on the keys:
   minor 11 on a Core that owns its accessories, `accessoryData` only at
   minor 11 while `accessoryDataVersion` is 1, `accessorySettings` only at
   minor 11 while `remotePgxlControlVersion` is at least 3 or
-  `remoteTgxlControlVersion` at least 1, and `stationTci` only at
-  minor 11 on a Core that runs a station TCI server
+  `remoteTgxlControlVersion` at least 1, `stationTci` only at
+  minor 11 on a Core that runs a station TCI server, and `catalog` only at
+  minor 11 while `stationCatalogVersion` is at least 1
   (`StationServer::sendToSession`). An older peer never sees their schema
   either.
 - **`devices`.** Sent only to a peer at agreed minor 11 whose hello
@@ -1355,6 +1370,14 @@ Notes on the keys:
     `""` while the window is closed and while no code is shown. Sent only
     to a connection signed in with a paired device's own key; any other
     connection receives `""` (`StationServer::withPairingCodeFor`).
+- **`catalog`.** The values the Core owns and an app draws its controls
+  from (section 7.4). Both properties are `outbound`
+  (`StationCatalog`): `json` (`utf8`), the catalogue, and `revision`
+  (`i64`), which moves by one each time `json` changes, from 0 to 2^32 - 1
+  and then round to 0; compare by serial-number arithmetic. A write to
+  either is refused as any `outbound` write is. Today's desktop window
+  holds no object for the key and drops it, as it does any class it does
+  not know.
 - **Unknown classes.** A client that receives a schema for a class it does
   not know records the difference and drops that class's objects and
   deltas.
@@ -1401,6 +1424,85 @@ requested properties back in that `delta`.
 
 A property write never keys the transmitter: `txPermitted` is false and
 the transmit safety gates stay at the station (section 17).
+
+### 7.4 The catalogue
+
+The `catalog` object's `json` is one JSON object (RFC 8259, UTF-8,
+compact) holding the values the Core owns and an app shows: the modes, the
+Core's filter presets, the tune steps, the AGC and gauge ranges, the
+radio's capabilities, the band plans, the waterfall palettes, the slice
+colours and the Core's tools (`StationCatalog`, spec section 4.10). An app
+draws its controls from it and carries no table of its own, so a Hermes
+Lite 2 and an ANAN-G2 each get their own. It is the same for every device
+connected to the Core; nothing in it is per device.
+
+**When it changes.** The Core keeps it current: it builds it at start, reads
+it again as a session's snapshot is first sent, and rebuilds it, at most
+once per turn of its event loop, when a filter preset or the CW pitch
+changes in its settings (from its own computer or a window, section 8),
+when its band plan data is read again, and when its radio changes (a radio
+found after the session began included). A rebuild
+that changes nothing leaves `revision` alone; one that changes anything
+moves it by one, so the three settings of one preset move it once. The new
+value reaches a connected client as a `delta` (section 7.2).
+
+**Size.** At most 256 KiB of `json` for the largest radio
+(`StationCatalog::kMaxJsonBytes`); today's are about 40 KiB, most of it the
+band plans.
+
+**Units and forms.** A key names its unit (`Hz`, `Db`, `Dbm`, `W`);
+numbers are JSON numbers and a whole value is written without a fraction.
+Colours are `#RRGGBB`, upper case. Labels are the desktop's own words,
+shown as sent. A key an app does not know is ignored; an app given an
+empty `json` (the stand-in of section 16.3) has no catalogue yet.
+
+The object has exactly these twelve keys:
+
+| Key | Holds |
+| --- | --- |
+| `modes` | `[{id, label, sideband}]`: the 14 modes, `id` the slice's `dspMode` value 0 to 13, `label` its name (`LSB`, `USB`, ..., `RADE-U`, `RADE-L`), `sideband` `lower`, `upper` or `both` |
+| `filterPresets` | `{<mode label>: [{slot, label, lowHz, highHz}]}`: each mode's presets from the Core's store, slot 0 first (`F1`), edges signed as a slice's `filterLow` and `filterHigh`; a mode has 1 to 10 |
+| `tuneSteps` | `[{hz, label}]`: the step list, smallest first, as the slice's `stepHz` takes it; `label` like `500 Hz`, `1 kHz`, `2.5 kHz`, `1 MHz` |
+| `agc` | `{modes: [{id, label}], thresholdDb: {min, max, step}}`: the AGC modes an operator picks (`id` the slice's `agcMode`: `Off`, `Long`, `Slow`, `Med`, `Fast`), and AGC-T's range for `agcThreshold`. The Modes tab's AGC section shows no other range; a later one arrives as another `{min, max, step}` key named after the setting it bounds |
+| `meters` | The gauges an app draws (below) |
+| `board` | The radio (below) |
+| `bandPlans` | `[{id, name, default, segments: [{lowHz, highHz, label, licence, colour}]}]`: every bundled plan, `id` its file's name (`arrl-us`), `default` true on ARRL (US) alone; `licence` lists the licence classes (`E,G`), empty for a beacon or no transmit |
+| `palettes` | `[{id, name, stops: [{at, colour}]}]`: the waterfall palettes, `id` the desktop's palette number, `at` from 0 to 1 to three places, lowest first. The Custom palette is each computer's own and is not listed |
+| `sliceColours` | `[colour]`: slice A's colour first, one for each slice the radio allows |
+| `tools` | `[{id, label, where, offered}]`: the desktop's Tools menu in its order, `where` `station` (works at the Core) or `both`; MIDI Mapping and Macro Buttons are not listed |
+| `radioItems` | `[{id, label, offered}]`: Manage Radios, Antenna Setup, Transverters and Protocol Info, in the desktop's Radio-menu order |
+| `audio` | `{}` (filled in a later revision) |
+
+`meters`:
+
+| Key | Holds |
+| --- | --- |
+| `sMeter` | `{minDbm, s9Dbm, maxDbm, dbPerSUnit, redFromDbm, sUnits: [{label, dbm}], overS9: [{label, dbm}]}`: S0 at -127 dBm, 6 dB an S-unit, S9 at -73 dBm, then `+10` to `+60` every 10 dB up to -13 dBm, red from S9 |
+| `micLevel` | `{minDb, maxDb, yellowFromDb, redFromDb}`: -40 to +10 dB, yellow from -10, red from 0 |
+| `rfPower` | `{minW, maxW, ratedW, redFromW}`: red from the PA rating, full scale 20% past it |
+| `swr` | `{min, max, redFrom}`: 1.0 to 3.0, red from 2.5 |
+
+`board`:
+
+| Key | Holds |
+| --- | --- |
+| `model` | The radio model, as `hpsdrModel` in capabilities |
+| `productLabel` | Its name (`ANAN-G2`, `Hermes Lite 2`) |
+| `maxSlices` | The slices it allows |
+| `attenuator` | `{min, max, step}` in dB for the step attenuator, or `null` without one |
+| `preampItems` | `[{id, label}]`: the preamp choices, `id` the `stepAtt` object's `preampMode` |
+| `rxAntennas`, `txAntennas` | The main antenna ports (`ANT1` upwards) |
+| `rxOnlyInputs` | The receive-only inputs by the product's own labels (`BYPS`, `EXT1`, `XVTR` on an ANAN-G2), empty without them |
+| `sampleRates` | The receive rates in Hz the radio offers on the protocol it runs |
+| `pureSignal` | Whether it has PureSignal |
+| `paRatingW` | Its PA rating in watts |
+| `micJack` | Whether it has a microphone input of its own |
+
+`offered` is the Core's: an item is listed as offered once the desktop has
+built it (CWX, Memory Manager, CAT Control and Transverters are not yet),
+and an app shows only offered items, in their place. The two catalogue
+fixtures (section 16.3) hold an ANAN-G2's and a Hermes Lite 2's catalogue
+in full.
 
 ## 8. The settings proxy
 
@@ -1453,6 +1555,7 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 2. prefix | `Nb` | station |
 | 2. prefix | `Snb` | station |
 | 2. prefix | `Rade` | station |
+| 2. prefix | `filters/` | station |
 | 2. prefix | `Tci` | operatorLocal |
 | 2. prefix | `radios/` | operatorLocal |
 | 2. prefix | `ConnectionTargets/` | operatorLocal |
@@ -2379,7 +2482,8 @@ role.
   heartbeat intervals with the link up; `heartbeat-missed` has a client
   that never answers, and the station ends the session on the third
   interval, `retryable` true (section 12.1).
-- **Summarised snapshots.** Outside `connect-connectable` (and where a
+- **Summarised snapshots.** Outside `connect-connectable` and the two
+  catalogue fixtures, whose `catalog` object is in full (and where a
   fixture needs a value from it, as `verbs-nnr` needs `dspAssets`'
   revision), a `schema` message's `fields` and an `object.create`
   message's `properties` are `"$any"`: `connect-connectable` and
@@ -2395,7 +2499,8 @@ role.
 
 | Key | Meaning | Default |
 | --- | --- | --- |
-| `radio` | `"static"`: a model reporting a connected Hermes Lite 2 (MAC `AA:BB:CC:DD:EE:01`) with no radio behind it, so nothing changes on its own; `"connectable"`: a model connected to the fake Protocol 1 radio, receive processing and all; PureSignal's readiness (`canActuate`) is off on a receive-only station from the moment the station makes the radio receive-only, and the runner waits for each slice's signal readings to leave the no-reading value before the client attaches | `"static"` |
+| `board` | the static radio's model: `"hermesLite2"`, a Hermes Lite 2 on Protocol 1, or `"ananG2"`, an ANAN-G2 on Protocol 2 (same MAC); only with `"radio": "static"` | `"hermesLite2"` |
+| `radio` | `"static"`: a model reporting a connected Hermes Lite 2 (MAC `AA:BB:CC:DD:EE:01`, or the `board` below) with no radio behind it, so nothing changes on its own; `"connectable"`: a model connected to the fake Protocol 1 radio, receive processing and all; PureSignal's readiness (`canActuate`) is off on a receive-only station from the moment the station makes the radio receive-only, and the runner waits for each slice's signal readings to leave the no-reading value before the client attaches | `"static"` |
 | `slices` | slices before the client connects | 1 |
 | `panadapters` | panadapters before the client connects | 0 |
 | `coreAccessories` | the Core owns its accessories: the `tuner`, `amplifier`, `rfkit`, `accessoryData` and `accessorySettings` objects and the accessory commands | false |
@@ -2416,7 +2521,7 @@ same on every machine.
 
 | Fixture | What it holds the station to |
 | --- | --- |
-| `connect-connectable` | The whole connect sequence to `snapshot.complete` on a connected radio with one slice, every message in full, except: PureSignal's `statusJson` (`"$string"`, it carries a capture time) and `displayGeneration` (`"$int"`, a counter whose value depends on timing), and the slice's `signalStrengthDbm`, `signalPeakDbm` and `signalAverageDbm`, which the receiver measures: `"$within:0.5:-399.02"`, within 0.5 dB, which leaves out the meter's no-reading value of -400 |
+| `connect-connectable` | The whole connect sequence to `snapshot.complete` on a connected radio with one slice, every message in full, except: PureSignal's `statusJson` (`"$string"`, it carries a capture time) and `displayGeneration` (`"$int"`, a counter whose value depends on timing), the catalogue's `json` (`"$string"`, held in full by the catalogue fixtures), and the slice's `signalStrengthDbm`, `signalPeakDbm` and `signalAverageDbm`, which the receiver measures: `"$within:0.5:-399.02"`, within 0.5 dB, which leaves out the meter's no-reading value of -400 |
 | `wrong-token` | `auth.result` refused, `retryable` false, `code` `wrongToken`, then the close |
 | `pairing-required` | On a new Core (no token), a token sign-in is refused "This Core uses paired devices. Pair this device first.", `retryable` false, `code` `pairingRequired`; on the app, the app handles that refusal and does not reconnect |
 | `device-sign-in` | On a new Core, the paired device signs this connection's transcript (`"$capture:challenge"` from the `hello`, then `"$device:signed"`) and is admitted: the whole connect sequence to `snapshot.complete`, summarised; on the app, the app's own device signs and its block is checked |
@@ -2426,6 +2531,7 @@ same on every machine.
 | `devices-not-offered` | A window at minor 11 that declares no features receives no `devices` object, and `station.rename` is refused "Update this app to manage this Core's paired devices." Runs on the station alone |
 | `devices-pairing` | On the same Core as `devices`, `pairing.open` and `pairing.close` each with a renamed argument are refused; `pairing.open` is accepted with `values` `code` as `"$string"`, and the object's next `delta` has `pairingWindowOpen` true and `pairingCode` `"$string"`; `pairing.close` is accepted and the next `delta` has them false and `""`. Runs on the station alone |
 | `devices-retire-token-refused`, `devices-retire-token` | On an upgraded Core, a token connection that declares `deviceAuth` receives the object with `tokenActive` true; `station.retireToken` is refused with no device paired, and with one paired it is accepted and the connection ends: `session.end` `pairingRequired`, `retryable` false. Run on the station alone |
+| `catalog-anan-g2`, `catalog-hermes-lite-2` | The connect sequence to `snapshot.complete` on the static radio as an ANAN-G2 and as a Hermes Lite 2: the capabilities in full, and the `catalog` object with its `json` in full and `revision` 1 (section 7.4). The two differ exactly where the radios do: the board's model, name, attenuator (0 to 31 against -28 to 31), sample rates (six against four), antennas (three plus three receive-only against one plus none), PA rating and microphone input, and the RF power gauge its rating scales |
 | `connection-limit` | With eight other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
 | `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This Core runs link version 1 and this app runs version 2. Update the Core.", `retryable` false, `code` `linkVersion` |

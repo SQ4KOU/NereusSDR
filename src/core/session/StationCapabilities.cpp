@@ -40,6 +40,9 @@
 //   2026-09-24 - iPhone app Task 14 (R-IOS-08): pairingVersion, last in
 //                the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06): stationCatalogVersion,
+//                last in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -142,8 +145,10 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         updates.append(intEntry("stationIdentityVersion", stationIdentityVersion));
         // iPhone app Task 13: the devices object and its verbs.
         updates.append(intEntry("deviceAdminVersion", deviceAdminVersion));
-        // iPhone app Task 14: pairing, the pairing window and its verbs, last.
+        // iPhone app Task 14: pairing, the pairing window and its verbs.
         updates.append(intEntry("pairingVersion", pairingVersion));
+        // iPhone app Task 19: the catalogue, last.
+        updates.append(intEntry("stationCatalogVersion", stationCatalogVersion));
     }
     return updates;
 }
@@ -328,7 +333,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "remoteTgxlControlVersion"
                    || u.name == "stationIdentityVersion"
                    || u.name == "deviceAdminVersion"
-                   || u.name == "pairingVersion") {
+                   || u.name == "pairingVersion"
+                   || u.name == "stationCatalogVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -349,6 +355,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.deviceAdminVersion = version;
                 } else if (u.name == "pairingVersion") {
                     caps.pairingVersion = version;
+                } else if (u.name == "stationCatalogVersion") {
+                    caps.stationCatalogVersion = version;
                 } else {
                     caps.remoteTgxlControlVersion = version;
                 }

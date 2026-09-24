@@ -42,6 +42,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08): the
 //                                    five pair.* kinds' sample messages.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 19 (R-IOS-06): the
+//                                    `catalog` class. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -81,6 +84,7 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
+#include "core/session/StationCatalog.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/StationServer.h"
 #include "core/session/StationTelemetry.h"
@@ -1247,7 +1251,8 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &StationTciModel::staticMetaObject,
             &AccessoryDataModel::staticMetaObject,
             &AccessorySettingsModel::staticMetaObject,
-            &StationDevicesFacade::staticMetaObject};
+            &StationDevicesFacade::staticMetaObject,
+            &StationCatalog::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

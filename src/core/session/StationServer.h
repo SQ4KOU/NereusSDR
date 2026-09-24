@@ -200,6 +200,10 @@
 //                                    to a connection signed in with a
 //                                    paired device's key. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 19 (R-IOS-06): the
+//                                    `catalog` object and
+//                                    stationCatalogVersion 1. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -239,6 +243,7 @@ class SessionCommandDispatcher;
 class SessionTransport;
 class SettingsProxyServer;
 class StateMirror;
+class StationCatalog;
 class StationDevicesFacade;
 class TokenStore;
 
@@ -394,6 +399,11 @@ public:
     /// 1 when the Core sends `devices` and takes its verbs (its identity
     /// key is usable), else 0.
     int deviceAdminVersion() const;
+    /// iPhone app Task 19 (R-IOS-06): the mirrored `catalog` object, the
+    /// values the Core owns and an app draws its controls from. Never null.
+    StationCatalog* catalog() const;
+    /// 1: the Core sends `catalog` to a peer at minor 11.
+    int stationCatalogVersion() const;
 
     /// The first-run block, exactly as the operator is shown it: the TLS
     /// pin and the identity key's path with the prompt to back it up.
@@ -757,6 +767,8 @@ private:
     std::unique_ptr<DeviceAuthenticator> m_deviceAuth;
     // iPhone app Task 13: after the three it reads, so it goes first.
     std::unique_ptr<StationDevicesFacade> m_devicesFacade;
+    // iPhone app Task 19: the Core's catalogue.
+    std::unique_ptr<StationCatalog> m_catalog;
     // The connection whose command.invoke is being dispatched, and the end
     // it is owed once its result has been sent (a self-revoke, or a token
     // session retiring the token).

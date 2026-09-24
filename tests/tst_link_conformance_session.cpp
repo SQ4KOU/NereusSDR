@@ -16,6 +16,9 @@
 //                    slice meter pump stopped, so nothing changes on its own;
 //                    "connectable": ConnectableRadioModel, a RadioModel
 //                    connected to the P1 fake radio, WDSP channels and all
+//   board            the static radio's model: "hermesLite2" (the HL2 on
+//                    Protocol 1, "Bench HL2") or "ananG2" (an ANAN-G2 on
+//                    Protocol 2, "Bench G2", same MAC) ("hermesLite2")
 //   slices           slices the model holds before the client connects (1)
 //   panadapters      panadapters it holds (0)
 //   coreAccessories  the Core owns its accessories (the amplifier, RF-Kit
@@ -92,6 +95,14 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08):
 //                                    stationSetup "otherPairedDevices".
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 19 (R-IOS-06):
+//                                    stationSetup "board", so a catalogue
+//                                    fixture can stand up an ANAN-G2 as
+//                                    well as the HL2; the verbs-ps3 steps
+//                                    the guard test plants into move by
+//                                    two (the catalogue's schema and
+//                                    object). AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -144,6 +155,7 @@ const QStringList kSetupKeys{
     QStringLiteral("clientAnswersPings"), QStringLiteral("preemptingClient"),
     QStringLiteral("otherConnections"), QStringLiteral("token"),
     QStringLiteral("pairedDevice"),    QStringLiteral("otherPairedDevices"),
+    QStringLiteral("board"),
 };
 
 // The station a fixture's stationSetup describes. Members are declared in
@@ -195,13 +207,26 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         }
         station->model = &station->harness->model();
     } else if (radio == QStringLiteral("static")) {
+        // iPhone app Task 19: "board" picks the static radio's model.
+        const QString board =
+            setup.value(QStringLiteral("board")).toString(QStringLiteral("hermesLite2"));
+        if (board != QStringLiteral("hermesLite2") && board != QStringLiteral("ananG2")) {
+            return QStringLiteral("stationSetup.board must be \"hermesLite2\" or \"ananG2\"");
+        }
         station->ownModel = std::make_unique<RadioModel>();
         station->model = station->ownModel.get();
-        station->model->setBoardForTest(HPSDRHW::HermesLite);
         RadioInfo info;
         info.macAddress = QStringLiteral("AA:BB:CC:DD:EE:01");
-        info.name = QStringLiteral("Bench HL2");
-        info.boardType = HPSDRHW::HermesLite;
+        if (board == QStringLiteral("ananG2")) {
+            station->model->setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+            info.name = QStringLiteral("Bench G2");
+            info.boardType = HPSDRHW::Saturn;
+            info.protocol = ProtocolVersion::Protocol2;
+        } else {
+            station->model->setBoardForTest(HPSDRHW::HermesLite);
+            info.name = QStringLiteral("Bench HL2");
+            info.boardType = HPSDRHW::HermesLite;
+        }
         station->model->setLastRadioInfoForTest(info);
         station->model->setConnectionStateForTest(ConnectionState::Connected);
         // No WDSP channels, so the pump would write its no-reading value to
@@ -212,6 +237,9 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         }
     } else {
         return QStringLiteral("stationSetup.radio must be \"static\" or \"connectable\"");
+    }
+    if (radio != QStringLiteral("static") && setup.contains(QStringLiteral("board"))) {
+        return QStringLiteral("stationSetup.board applies only to the static radio");
     }
 
     RadioModel& model = *station->model;
@@ -1110,7 +1138,7 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
     QVERIFY2(found.contains(QStringLiteral("a device sign-in is")), qPrintable(found));
     // A verb with arguments it does not take, and one not advertised
     // (PureSignal's gate is psAlgorithmVersion equal to 3; 4 fails it).
-    found = planted(ps3, 36, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 38, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("args"),
               QJsonArray{QJsonObject{{QStringLiteral("ordinal"), 0},
                                      {QStringLiteral("name"), QStringLiteral("enabled")},
@@ -1133,7 +1161,7 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
     });
     QVERIFY2(found.contains(QStringLiteral("ps3.off was not advertised")), qPrintable(found));
     // A placeholder among a behaviour step's arguments.
-    found = planted(ps3, 43, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 45, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("args"),
               QJsonArray{QJsonObject{{QStringLiteral("ordinal"), 0},
                                      {QStringLiteral("name"), QStringLiteral("label")},
@@ -1142,20 +1170,20 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
     });
     QVERIFY2(found.contains(QStringLiteral("never placeholders")), qPrintable(found));
     // An id without the link's range, or from 0 where 1 is the least.
-    found = planted(ps3, 23, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 25, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("id"), QStringLiteral("$int:invoke23"));
     });
     QVERIFY2(found.contains(QStringLiteral(":1:4294967295")), qPrintable(found));
-    found = planted(ps3, 23, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 25, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("id"), QStringLiteral("$int:invoke23:0:4294967295"));
     });
     QVERIFY2(found.contains(QStringLiteral(":1:4294967295")), qPrintable(found));
     // A scripted id below 1000, and a scripted message naming a value.
-    found = planted(ps3, 40, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 42, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("id"), 167);
     });
     QVERIFY2(found.contains(QStringLiteral("from 1000 up")), qPrintable(found));
-    found = planted(ps3, 40, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 42, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("id"), QStringLiteral("$int:scripted"));
     });
     QVERIFY2(found.contains(QStringLiteral("a scripted message holds $int:scripted")),

@@ -170,6 +170,10 @@
 //                accessory settings and RF-Kit reset refusals in plain
 //                words. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06, D40): a remote window's
+//                 filter presets follow the Core's (FilterPresetStore::
+//                 followStationSetting on stationSettingChanged). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1407,6 +1411,11 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // Wraps Thetis-verbatim defaults from SliceModel::presetsForMode with a
     // user-override layer persisted in AppSettings (keys: "filters/<mode>/<slot>/…").
     m_filterPresetStore = new FilterPresetStore(this);
+    // iPhone app Task 19 (D40): the presets are the Core's in a remote
+    // window. stationSettingChanged fires only there, so a window running
+    // its radio locally is unchanged.
+    connect(this, &RadioModel::stationSettingChanged, m_filterPresetStore,
+            &FilterPresetStore::followStationSetting);
 
     // ── Phase 3P-II Task 19: PGXL / TGXL / Tuner ownership ───────────────────
     // Constructed once here; accessors return non-null from this point on.

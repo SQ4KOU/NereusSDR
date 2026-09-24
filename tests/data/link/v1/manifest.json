@@ -66,6 +66,8 @@
         {"id": "session-devices-retire-token-refused", "file": "sessions/devices-retire-token-refused.json", "kind": "session", "requires": {"deviceAdminVersion": 1}},
         {"id": "session-devices-retire-token", "file": "sessions/devices-retire-token.json", "kind": "session", "requires": {"deviceAdminVersion": 1}},
         {"id": "session-devices-pairing", "file": "sessions/devices-pairing.json", "kind": "session", "requires": {"pairingVersion": 1}},
+        {"id": "session-catalog-anan-g2", "file": "sessions/catalog-anan-g2.json", "kind": "session", "requires": {"stationCatalogVersion": 1}},
+        {"id": "session-catalog-hermes-lite-2", "file": "sessions/catalog-hermes-lite-2.json", "kind": "session", "requires": {"stationCatalogVersion": 1}},
         {"id": "session-major-refused", "file": "sessions/major-refused.json", "kind": "session", "requires": {}},
         {"id": "session-version-declares", "file": "sessions/version-declares.json", "kind": "session", "requires": {}},
         {"id": "session-version-app-one-ahead", "file": "sessions/version-app-one-ahead.json", "kind": "session", "requires": {}},
