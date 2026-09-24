@@ -818,6 +818,12 @@ nereus_add_test(tst_p1_codec_anvelina_pro3)
 # ── Phase 3P-A P1CodecRedPitaya bank 12 ADC1 MOX carve-out (Task 8) ──
 nereus_add_test(tst_p1_codec_redpitaya)
 
+# ── Task 11: every Protocol 1 radio gets Thetis's receiver layout for its
+# own model (Phase 3F section 16.3.2). Table per model and per PS / diversity /
+# MOX / RX2 state, expected values from Thetis UpdateDDCs, GetDDC and the
+# CMLoadRouterAll router.
+nereus_add_test(tst_p1_ddc_layout_per_model)
+
 # ── Phase 3P-A P1CodecHl2 mi0bot WriteMainLoop_HL2 port (Tasks 9+10) ──
 nereus_add_test(tst_p1_codec_hl2)
 

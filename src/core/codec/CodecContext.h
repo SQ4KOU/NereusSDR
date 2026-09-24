@@ -575,9 +575,15 @@ struct PsDdcConfig {
     //       DdcAssignment::psFwdDdc / psRevDdc from P1CodecStandard and
     //       P1CodecHl2 applyDdcAssignment carry the same pair (the HL2 one
     //       said 0/1 until 2026-09-24; tst_codec_ps_ddc_config pins both).
-    //   nddc=5 (Orion / Saturn / Andromeda / etc.):
+    //   nddc=5 on Protocol 1 (Orion class, AnvelinaPro3, RedPitaya,
+    //   ANAN-G2 / G2-1K):
+    //       psFbDdc=3, txMonDdc=4 — networkproto1.c MetisRead case 5
+    //       `twist(spr, 3, 4, 1)` pairs slots 3+4 (slots 0+1 are RX1 and its
+    //       diversity partner); GetDDC Protocol 1 cases 5 and 7: psrx = 3;
+    //       pstx = 4 (Thetis console.cs:8651-8702 [v2.10.3.15]).
+    //   Saturn-class on Protocol 2:
     //       psFbDdc=0, txMonDdc=1 — P2 network.c:936-945 unconditional
-    //       freq override; P1 case 5 in MetisRead twists DDC0+DDC1
+    //       freq override
     //
     // From Thetis cmaster.cs:533-534 [v2.10.3.13]:
     //   SetPSRxIdx(0, 0);   // ps_rx_idx points to data[0] in InboundBlock

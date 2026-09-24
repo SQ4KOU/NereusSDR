@@ -20058,18 +20058,18 @@ void RadioModel::publishDdcAssignment(const NereusSDR::DdcAssignment& assignment
     // literally empty, so rx1 and rx2 both come back -1
     // (console.cs:8635-8636 and 8641-8642 [v2.10.3.15]).
     //
-    // Protocol 1 does not collapse that far. For the four Hermes-class
-    // models (HERMES, ANAN10, ANAN100, ANAN_G2E) P1CodecStandard keeps both
-    // user streams on DDC0 and DDC1 while PureSignal transmits, because the
-    // pair rides DDC2 + DDC3 there (P1 GetDDC cases 5 and 7: rx1 = 0;
-    // rx2 = 1; psrx = 2; pstx = 3). Every other Protocol 1 model it serves
-    // (ANAN10E, ANAN100B, and the Orion/G2 class) leaves stream 1
-    // unassigned while PureSignal transmits, so slice B is suspended here
-    // until those models' own layouts are ported. Under diversity without
-    // PureSignal transmit, stream 1 is unassigned on every model the codec
-    // serves: DDC1 is DDC0's sync partner. Diversity with PureSignal
-    // transmitting (P1 GetDDC case 7) takes the PureSignal branch instead,
-    // so on those four Hermes-class models stream 1 keeps DDC1 there too.
+    // Protocol 1 follows each model's own Thetis layout (plan Task 11;
+    // P1CodecStandard::applyDdcAssignment; the values are frame slots).
+    // Hermes class (HERMES, ANAN10, ANAN100, ANAN_G2E): slices A and B keep
+    // slots 0 and 1 in every state, the PureSignal pair rides slots 2 + 3
+    // (P1 GetDDC: rx1 = 0; rx2 = 1; psrx = 2; pstx = 3). Orion class and
+    // RedPitaya: A on slot 0, B on slot 2 in every state, the pair on slots
+    // 3 + 4. HermesII (ANAN10E, ANAN100B): the pair takes both slots while
+    // PureSignal transmits (psrx = 0; pstx = 1), so slices A and B are
+    // suspended here then, as on Protocol 2 Hermes. Diversity keeps B on
+    // its slot on every Protocol 1 model (GetDDC rx2 = 1, or 2 on Orion).
+    // Slices beyond B lose their slots while PureSignal transmits (the pair)
+    // and under diversity.
     //
     // What Thetis does NOT do is tell the operator. Nothing unchecks RX2,
     // nothing greys it, and the only trace is a label that quietly fails to

@@ -2,9 +2,13 @@
 // src/core/codec/P1CodecStandard.cpp  (NereusSDR)
 // =================================================================
 //
-// Ported from Thetis sources:
+// Ported from Thetis sources (multi-source) [v2.10.3.15]:
 //   Project Files/Source/ChannelMaster/networkproto1.c:419-698 (WriteMainLoop)
-//   original licence from Thetis source is included below
+//   Project Files/Source/Console/console.cs:8194-8812 (UpdateDDCs, GetDDC:
+//     per-model Protocol 1 receiver layout and PureSignal DDC config)
+//   Project Files/Source/Console/cmaster.cs:566-760 (CMLoadRouterAll,
+//     Protocol 1 half: which frame slot feeds RX1, RX2 and PureSignal)
+//   original licences from Thetis source are included below
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -13,6 +17,14 @@
 //                Claude Code. Lifted from P1RadioConnection::composeCcForBank
 //                which previously held the inline ramdor port; now
 //                delegates here.
+//   2026-09-24 - Plan Task 11: applyDdcAssignment gives every Protocol 1
+//                model Thetis's own receiver layout (Hermes, HermesII and
+//                Orion classes, RedPitaya), from console.cs UpdateDDCs and
+//                GetDDC and cmaster.cs CMLoadRouterAll [v2.10.3.15], with
+//                stream values as Protocol 1 frame slots. The console.cs and
+//                cmaster.cs headers below were missing although UpdateDDCs
+//                logic already lived here. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis ChannelMaster/networkproto1.c header (lines 1-45) ===
@@ -35,6 +47,108 @@
 //  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 //  *
 //  */
+//
+// --- From console.cs ---
+// === Verbatim Thetis Console/console.cs header (lines 1-56) ===
+// //=================================================================
+// // console.cs
+// //=================================================================
+// // Thetis is a C# implementation of a Software Defined Radio.
+// // Copyright (C) 2004-2009  FlexRadio Systems
+// // Copyright (C) 2010-2020  Doug Wigley
+// // Credit is given to Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font.
+// //
+// // This program is free software; you can redistribute it and/or
+// // modify it under the terms of the GNU General Public License
+// // as published by the Free Software Foundation; either version 2
+// // of the License, or (at your option) any later version.
+// //
+// // This program is distributed in the hope that it will be useful,
+// // but WITHOUT ANY WARRANTY; without even the implied warranty of
+// // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// // GNU General Public License for more details.
+// //
+// // You should have received a copy of the GNU General Public License
+// // along with this program; if not, write to the Free Software
+// // Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+// //
+// // You may contact us via email at: sales@flex-radio.com.
+// // Paper mail may be sent to:
+// //    FlexRadio Systems
+// //    8900 Marybank Dr.
+// //    Austin, TX 78750
+// //    USA
+// //
+// //=================================================================
+// // Modifications to support the Behringer Midi controllers
+// // by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines.
+// // Modifications for using the new database import function.  W2PA, 29 May 2017
+// // Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019
+// // Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+// // ApacheLabs G2E support added throughout Thetis in various files, all changes marked  //N1GP G2E added
+// //
+// //============================================================================================//
+// // Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// // ------------------------------------------------------------------------------------------ //
+// // For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// // made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// // right to use, license, and distribute such code under different terms, including           //
+// // closed-source and proprietary licences, in addition to the GNU General Public License      //
+// // granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// // the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// // its original terms and is not affected by this dual-licensing statement in any way.        //
+// // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+// //============================================================================================//
+// //
+// //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// // Final modifictions by MW0LGE Richard Samphire - 19th April 2026
+// // Nothing further added by him after this date, and his repo is now in archive https://github.com/ramdor/Thetis
+// //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+//
+// --- From cmaster.cs ---
+// === Verbatim Thetis Console/cmaster.cs header (lines 1-40) ===
+// /*  cmaster.cs
+//
+// This file is part of a program that implements a Software-Defined Radio.
+//
+// This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+//
+// Copyright (C) 2000-2025 Original authors
+// Copyright (C) 2020-2026 Richard Samphire MW0LGE
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+//
+// The author can be reached by email at
+//
+// mw0lge@grange-lane.co.uk
+// */
+// //
+// //============================================================================================//
+// // Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// // ------------------------------------------------------------------------------------------ //
+// // For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// // made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// // right to use, license, and distribute such code under different terms, including           //
+// // closed-source and proprietary licences, in addition to the GNU General Public License      //
+// // granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// // the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// // its original terms and is not affected by this dual-licensing statement in any way.        //
+// // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+// //============================================================================================//
 // =================================================================
 
 #include "P1CodecStandard.h"
@@ -470,9 +584,12 @@ PsDdcConfig P1CodecStandard::psDdcConfigG2Class(
 
     if (!moxState) {
         if (diversityEnabled) {
-            // From console.cs:8223-8232 [v2.10.3.13]
-            // P1_DDCConfig =       (Thetis fall-through assignment; defaults to 0)
-            cfg.p1DdcConfig = 0;
+            // From Thetis console.cs:8232-8240 [v2.10.3.15]:
+            //   P1_DDCConfig =
+            //   DDCEnable = DDC0;
+            // A chained assignment, so P1_DDCConfig = DDC0 = 1 (plan Task 11;
+            // this read 0 before, taking the first line for a bare statement).
+            cfg.p1DdcConfig = DDC0;
             cfg.ddcEnable   = DDC0;
             cfg.syncEnable  = DDC1;
             cfg.rate[0]     = static_cast<uint32_t>(rx1Rate);
@@ -818,103 +935,159 @@ PsDdcConfig P1CodecStandard::psDdcConfigHermesIIClass(
 }
 
 // =================================================================
-// P1CodecStandard::applyDdcAssignment - Hermes-class (1 ADC, 4 DDCs)
+// P1CodecStandard::applyDdcAssignment - per-model Protocol 1 layout
 // =================================================================
 //
-// Porting from Thetis console.cs:8387-8455 [v2.10.3.15] UpdateDDCs()
-// Hermes-class branch:
+// Plan Task 11 (Phase 3F design section 16.3.2): every Protocol 1 model
+// gets Thetis's receiver layout for its own model. Before this the codec
+// ported only the Hermes-class branch and served it to the HermesII and
+// Orion-class models too.
 //
-//   case HPSDRModel.HERMES:
-//   case HPSDRModel.ANAN_G2E: //N1GP G2E added
-//   case HPSDRModel.ANAN10:
-//   case HPSDRModel.ANAN100:
-//       P1_rxcount = 4;  // RX4 used for puresignal feedback
-//       nddc = 4;
-//       if (!_mox) {
-//           if (!diversity_enabled) {
-//               P1_DDCConfig = 4; DDCEnable = DDC0; SyncEnable = 0;
-//               Rate[0] = rx1_rate; cntrl1 = 0; cntrl2 = 0;
-//               if (rx2_enabled) { DDCEnable += DDC1; Rate[1] = rx2_rate; }
-//           } else {
-//               P1_DDCConfig = 5; DDCEnable = DDC0; SyncEnable = DDC1;
-//               Rate[0] = rx1_rate; Rate[1] = rx1_rate;
-//               cntrl1 = 0; cntrl2 = 0;
-//           }
-//       } else {
-//           if (!diversity_enabled && !puresignal_enabled) {
-//               P1_DDCConfig = 4; DDCEnable = DDC0; SyncEnable = 0;
-//               Rate[0] = rx1_rate; cntrl1 = 0; cntrl2 = 0;
-//               if (rx2_enabled) { DDCEnable += DDC1; Rate[1] = rx2_rate; }
-//           } else if (diversity_enabled && !puresignal_enabled) {
-//               P1_DDCConfig = 5; DDCEnable = DDC0; SyncEnable = DDC1;
-//               Rate[0] = rx1_rate; Rate[1] = rx1_rate;
-//               cntrl1 = 0; cntrl2 = 0;
-//           } else { // transmitting and PS is ON
-//               P1_DDCConfig = 6; DDCEnable = DDC0; SyncEnable = DDC1;
-//               Rate[0] = ps_rate; Rate[1] = ps_rate; cntrl1 = 4; cntrl2 = 0;
-//           }
-//       }
+// Three Thetis sources decide the layout, and all three are ported here:
 //
-// DDC0=1, DDC1=2 bitmask from Thetis console.cs:8196-8197 [v2.10.3.15].
-// ps_rate = cmaster.PSrate = 192000 from cmaster.cs:425 [v2.10.3.15].
+//   console.cs UpdateDDCs [v2.10.3.15] gives P1_DDCConfig, DDCEnable,
+//     SyncEnable, Rate[0..3], cntrl1/cntrl2, P1_diversity, P1_rxcount and
+//     nddc per model and per PureSignal / diversity / MOX state.
+//   console.cs GetDDC, Protocol 1 half [v2.10.3.15], gives the frame slot
+//     each receiver reads and the PureSignal pair.
+//   cmaster.cs CMLoadRouterAll, Protocol 1 half [v2.10.3.15], with the
+//     slot pairing in networkproto1.c MetisReadThreadMainLoop, is what
+//     actually hands slots to RX1, RX2 and PureSignal.
 //
-// Phase 3F multi-slice extension: Thetis's Hermes branch maps Slice A →
-// DDC0 and Slice B → DDC1 (rx2_enabled). Slices C+D (indices 2,3) extend
-// to DDC2+DDC3 additively in the plain-RX path. Slices C/D are suppressed
-// while PureSignal transmits, because DDC2+DDC3 carry the PureSignal pair
-// (GetDDC psrx = 2, pstx = 3), and while diversity is on, because that mode
-// reclaims DDC0+DDC1 as a sync pair.
-// Slice E (index 4) is always ignored on Hermes-class (maxSlices=4 cap,
-// from BoardCapabilities based on Thetis P1_rxcount=4 for this family).
+// streamDdc, psFwdDdc and psRevDdc are FRAME SLOT numbers: the index of the
+// receiver inside the Protocol 1 EP6 frame, which is also the index
+// P1RadioConnection emits with iqDataReceived. They are GetDDC's Protocol 1
+// numbers, not UpdateDDCs's Protocol 2-style DDC numbers (on the Orion class
+// UpdateDDCs enables "DDC2" for RX1, while the frame carries RX1 in slot 0).
+// DDCEnable, SyncEnable and Rate[] keep UpdateDDCs's own numbering, as
+// Thetis passes them to NetworkIO; on Protocol 1 none of them reaches the
+// wire (Protocol1DDCConfig stores P1_DDCConfig and nothing reads it,
+// netInterface.c:1249-1255 [v2.10.3.15]).
 //
-// //N1GP G2E added  [original inline tag from console.cs:8388 - ANAN_G2E case label]
+// The PureSignal pair here is the one applyPureSignalDdcConfig emits for
+// the same model, which is the pair P1RadioConnection latches for its EP6
+// paired emit; tst_p1_ddc_layout_per_model checks both halves together.
+//
+// Models this class does not otherwise name (FIRST in a bare test context,
+// HPSDR) keep the Hermes-class layout, as before. Thetis's UpdateDDCs gives
+// HPSDR (Atlas) nothing at all (`case HPSDRModel.HPSDR: break;`,
+// console.cs:8533-8534 [v2.10.3.15]); an all-idle layout would suspend
+// every Atlas slice, so the Hermes layout stays until the Atlas is benched.
 DdcAssignment P1CodecStandard::applyDdcAssignment(
     const CodecContext& ctx,
     const std::array<SliceConfig, 5>& slices) const
 {
-    // DDC0=1, DDC1=2 from Thetis console.cs:8196-8197 [v2.10.3.15]
+    switch (ctx.model) {
+        // From Thetis console.cs:8220-8227 [v2.10.3.15]:
+        //   case HPSDRModel.ANAN100D:
+        //   case HPSDRModel.ANAN200D:
+        //   case HPSDRModel.ORIONMKII:
+        //   case HPSDRModel.ANAN7000D:
+        //   case HPSDRModel.ANAN8000D:
+        //   case HPSDRModel.ANAN_G2:
+        //   case HPSDRModel.ANAN_G2_1K:
+        //   case HPSDRModel.ANVELINAPRO3:
+        case HPSDRModel::ANAN100D:
+        case HPSDRModel::ANAN200D:
+        case HPSDRModel::ORIONMKII:
+        case HPSDRModel::ANAN7000D:
+        case HPSDRModel::ANAN8000D:
+        case HPSDRModel::ANAN_G2:
+        case HPSDRModel::ANAN_G2_1K:
+        case HPSDRModel::ANVELINAPRO3:
+            return ddcAssignmentOrionClass(ctx, slices, /*redPitaya=*/false);
+
+        // From Thetis console.cs:8305 [v2.10.3.15]:
+        //   case HPSDRModel.REDPITAYA: //DH1KLM
+        case HPSDRModel::REDPITAYA:
+            return ddcAssignmentOrionClass(ctx, slices, /*redPitaya=*/true);
+
+        // From Thetis console.cs:8461-8464 [v2.10.3.15]:
+        //   case HPSDRModel.ANAN10E:
+        //   case HPSDRModel.ANAN100B:
+        //       P1_rxcount = 2;                     // RX2 used for puresignal feedback
+        //       nddc = 2;
+        case HPSDRModel::ANAN10E:
+        case HPSDRModel::ANAN100B:
+            return ddcAssignmentHermesIIClass(ctx, slices);
+
+        // From Thetis console.cs:8387-8392 [v2.10.3.15]:
+        //   case HPSDRModel.HERMES:
+        //   case HPSDRModel.ANAN_G2E: //N1GP G2E added
+        //   case HPSDRModel.ANAN10:
+        //   case HPSDRModel.ANAN100:
+        //       P1_rxcount = 4;                     // RX4 used for puresignal feedback
+        //       nddc = 4;
+        default:
+            return ddcAssignmentHermesClass(ctx, slices);
+    }
+}
+
+// -----------------------------------------------------------------
+// Hermes class: HERMES, ANAN10, ANAN100, ANAN_G2E (nddc 4)
+// -----------------------------------------------------------------
+//
+// UpdateDDCs, from Thetis console.cs:8393-8458 [v2.10.3.15]:
+//   if (!_mox) {
+//       if (!diversity_enabled) {
+//           P1_DDCConfig = 4; DDCEnable = DDC0; SyncEnable = 0;
+//           Rate[0] = rx1_rate; cntrl1 = 0; cntrl2 = 0;
+//           if (rx2_enabled) { DDCEnable += DDC1; Rate[1] = rx2_rate; }
+//       } else {
+//           P1_DDCConfig = 5; DDCEnable = DDC0; SyncEnable = DDC1;
+//           Rate[0] = rx1_rate; Rate[1] = rx1_rate; cntrl1 = 0; cntrl2 = 0;
+//       }
+//   } else {
+//       if (!diversity_enabled && !puresignal_enabled) { ...as !_mox plain... }
+//       else if (diversity_enabled && !puresignal_enabled) { ...as !_mox diversity... }
+//       else { // transmitting and PS is ON
+//           P1_DDCConfig = 6; DDCEnable = DDC0; SyncEnable = DDC1;
+//           Rate[0] = ps_rate; Rate[1] = ps_rate; cntrl1 = 4; cntrl2 = 0;
+//       }
+//   }
+//
+// Frame slots, from Thetis console.cs:8704-8745 [v2.10.3.15] GetDDC(),
+// Protocol 1:
+//   case HPSDRHW.Hermes: // ANAN-10 ANAN-100 Heremes (4 adc)
+//   case HPSDRHW.HermesC10: // ANAN-G2E //N1GP G2E added (HermesC10)
+//   every case: rx1 = 0; rx2 = 1;   cases 5 and 7 also psrx = 2; pstx = 3;
+// and the router agrees: slot 0 to RX1 and slot 1 to RX2 in every state,
+// slots 2 + 3 to PureSignal at PS + MOX (cmaster.cs:684-706 [v2.10.3.15],
+// FOUR_DDC table, `case HPSDRModel.ANAN_G2E: //N1GP G2E added`).
+//
+// Phase 3F extension (NereusSDR): streams 2 and 3 ride slots 2 and 3 in
+// plain receive, where the PureSignal pair is not running. They get nothing
+// while PureSignal transmits (the pair) and under diversity, as before.
+// Stream 4 has no slot (nddc 4).
+DdcAssignment P1CodecStandard::ddcAssignmentHermesClass(
+    const CodecContext& ctx,
+    const std::array<SliceConfig, 5>& slices) const
+{
+    // DDC0=1, DDC1=2 from Thetis console.cs:8199 [v2.10.3.15]
     static constexpr int kDDC0 = 1;
     static constexpr int kDDC1 = 2;
-
     // ps_rate = cmaster.PSrate default from Thetis cmaster.cs:425 [v2.10.3.15]
     static constexpr int kPsRate = 192000;
 
     DdcAssignment a{};
-
-    // From Thetis console.cs:8388-8391 [v2.10.3.15]:
-    //   case HPSDRModel.ANAN_G2E: //N1GP G2E added
-    //   ...
-    //   P1_rxcount = 4;  // RX4 used for puresignal feedback
-    //   nddc = 4;
-    //N1GP G2E added  [original inline tag from console.cs:8388 - ANAN_G2E case label]
+    // From Thetis console.cs:8391-8392 [v2.10.3.15] //N1GP G2E added (case label 8388)
     a.p1RxCount = 4;
     a.nDdc      = 4;
+    // From Thetis console.cs:8216 [v2.10.3.15]:
+    //   if (diversity_enabled) P1_diversity = 1;
+    a.p1Diversity = ctx.diversity ? 1 : 0;
 
-    // Stream 0 = DDC0; stream 1 = DDC1. Phase 3F Sub-Epic I Task 7b: the
-    // input array is indexed by DDC STREAM, not by slice, so co-hosted
-    // slices share one entry (and therefore one DDC) instead of each
-    // claiming their own.
-    // (Thetis uses rx1_rate for stream 0, rx2_rate for stream 1.)
-    const int rx1Rate = slices[0].live ? slices[0].sampleRateHz : 0;
-    const int rx2Rate = slices[1].live ? slices[1].sampleRateHz : 0;
+    const int  rx1Rate = slices[0].live ? slices[0].sampleRateHz : 0;
+    const int  rx2Rate = slices[1].live ? slices[1].sampleRateHz : 0;
     const bool rx2Live = slices[1].live;
+    const bool psTransmit = ctx.mox && ctx.puresignalRun;
 
-    // Each branch below sets the user streams' DDCs itself. A mapping made
-    // here, before the branch runs, is the shape section 16.3.2 (PS4) of the
-    // Phase 3F design removed from P2CodecHermes: there the PureSignal branch
-    // takes DDC0 away from stream 0, and an early mapping survived into it.
-    // On Protocol 1 every branch happens to keep stream 0 on DDC0, but that
-    // is now stated where each branch decides it, with its own citation.
+    // GetDDC: rx1 = 0 and rx2 = 1 in every state on this hardware.
+    if (slices[0].live) { a.streamDdc[0] = 0; }
+    if (rx2Live)        { a.streamDdc[1] = 1; }
 
-    if (ctx.puresignalRun && ctx.mox) {
-        // From Thetis console.cs:8440-8449 [v2.10.3.15]:
-        //   else // transmitting and PS is ON
-        //   {
-        //       P1_DDCConfig = 6; DDCEnable = DDC0; SyncEnable = DDC1;
-        //       Rate[0] = ps_rate; Rate[1] = ps_rate;
-        //       cntrl1 = 4; cntrl2 = 0;
-        //   }
-        // //N1GP G2E added  [original inline tag from console.cs:8388 - ANAN_G2E case label]
+    if (psTransmit) {
+        // From Thetis console.cs:8449-8457 [v2.10.3.15] (transmitting and PS is ON)
         a.p1DdcConfig = 6;
         a.ddcEnable   = kDDC0;
         a.syncEnable  = kDDC1;
@@ -922,65 +1095,19 @@ DdcAssignment P1CodecStandard::applyDdcAssignment(
         a.rate[1]     = kPsRate;
         a.adcCtrl1    = 4;
         a.adcCtrl2    = 0;
-
-        // Which DDC each receiver reads while PureSignal transmits.
-        // From Thetis console.cs:8704-8743 [v2.10.3.15] GetDDC(), P1 branch:
-        //   case HPSDRHW.Hermes: // ANAN-10 ANAN-100 Heremes (4 adc)
-        //   case HPSDRHW.HermesC10: // ANAN-G2E //N1GP G2E added (HermesC10)
-        //   ...
-        //   case 5: // on off on
-        //       rx1 = 0; rx2 = 1; psrx = 2; pstx = 3;
-        //   ...
-        //   case 7: // on on on
-        //       rx1 = 0; rx2 = 1; psrx = 2; pstx = 3;
-        // Protocol 1 Hermes does not collapse under PureSignal (Phase 3F
-        // design section 16.3.2): the pair rides DDC2 + DDC3, so both user
-        // streams keep their DDCs. DDC1 still carries RX2's frequency here,
-        // because the bank 3 PureSignal override applies to nddc == 2 only
-        // (composeCcForBank, frequency banks, above).
-        //
-        // That holds only for the four nddc == 4 models of that UpdateDDCs
-        // case. From Thetis console.cs:8387-8392 [v2.10.3.15]:
-        //   case HPSDRModel.HERMES:
-        //   case HPSDRModel.ANAN_G2E: //N1GP G2E added
-        //   case HPSDRModel.ANAN10:
-        //   case HPSDRModel.ANAN100:
-        //       P1_rxcount = 4;                     // RX4 used for puresignal feedback
-        //       nddc = 4;
-        // This class serves other models too. HermesII (ANAN10E, ANAN100B)
-        // puts the pair on DDC0 + DDC1 (GetDDC cases 5 and 7 there give
-        // psrx = 0; pstx = 1 and no rx2, console.cs:8746-8779), so DDC1 is
-        // the TX monitor and slice B must not read it. The Orion/G2-class
-        // models route DDC2 to RX2 in the read loop (networkproto1.c
-        // case 5), not DDC1. Until their own layouts are ported, every
-        // model but these four keeps stream 1 unassigned here, as it was
-        // before the Hermes mapping was added.
-        if (slices[0].live) { a.streamDdc[0] = 0; }
-        const bool hermesClassNddc4 = ctx.model == HPSDRModel::HERMES
-                                   || ctx.model == HPSDRModel::ANAN_G2E
-                                   || ctx.model == HPSDRModel::ANAN10
-                                   || ctx.model == HPSDRModel::ANAN100;
-        if (slices[1].live && hermesClassNddc4) { a.streamDdc[1] = 1; }
-
-        // The read loop pairs the same two slots for nddc == 4.
         // From Thetis ChannelMaster/networkproto1.c:380-384 [v2.10.3.15]:
         //   case 4:
         //       xrouter(0, 0, 0, spr, prn->RxBuff[0]);
         //       twist(spr, 2, 3, 1);
         //       xrouter(0, 0, 2, spr, prn->RxBuff[1]);
-        // Same pair psDdcConfigHermesClass emits as psFbDdc / txMonDdc.
-        a.psFwdDdc    = 2;  // psrx = 2, PS feedback
-        a.psRevDdc    = 3;  // pstx = 3, TX monitor
-        // DDC2 and DDC3 are the PureSignal pair, so streams 2 and 3 get no
-        // DDC in this branch.
-        a.nDdc = 4;
-    } else if (ctx.diversity) {
-        // From Thetis console.cs:8438-8447 [v2.10.3.15] (8410-8419 is the
-        // same body while not transmitting):
-        //   else if (diversity_enabled && !puresignal_enabled) {
-        //       P1_DDCConfig = 5; DDCEnable = DDC0; SyncEnable = DDC1;
-        //       Rate[0] = rx1_rate; Rate[1] = rx1_rate;
-        //       cntrl1 = 0; cntrl2 = 0; }
+        // GetDDC cases 5 and 7: psrx = 2; pstx = 3.
+        a.psFwdDdc = 2;
+        a.psRevDdc = 3;
+        return a;
+    }
+
+    if (ctx.diversity) {
+        // From Thetis console.cs:8411-8419 / 8439-8447 [v2.10.3.15]
         a.p1DdcConfig = 5;
         a.ddcEnable   = kDDC0;
         a.syncEnable  = kDDC1;
@@ -988,83 +1115,313 @@ DdcAssignment P1CodecStandard::applyDdcAssignment(
         a.rate[1]     = rx1Rate;
         a.adcCtrl1    = 0;
         a.adcCtrl2    = 0;
-        a.p1Diversity = 1;
-        a.nDdc = 4;
-        // Which DDC each receiver reads under diversity.
-        // From Thetis console.cs:8716-8723, 8734-8737 [v2.10.3.15] GetDDC(),
-        // P1 branch, case HPSDRHW.Hermes / HPSDRHW.HermesC10:
-        //   case 2: // off on off
-        //       rx1 = 0;
-        //       rx2 = 1;
-        //   case 3: // off on on
-        //       rx1 = 0;
-        //       rx2 = 1;
-        //   case 6: // on on off
-        //       rx1 = 0;
-        //       rx2 = 1;
-        // The case number packs three flags, and the comments read them from
-        // the high bit down. From Thetis console.cs:8556-8560 [v2.10.3.15]:
-        //   int nME = MOX ? 1 : 0; // [0]
-        //   int nDE = diversityForm != null && Diversity2 ? 1 : 0; // [1]
-        //   int nPSE = psform.PSEnabled ? 1 : 0; // [2]
-        //   int tot = nME + (nDE << 1) + (nPSE << 2);
-        // So case 2 is diversity, case 3 diversity with MOX, and case 6
-        // diversity with PureSignal armed but not transmitting. All three
-        // land in this branch (case 7, PureSignal transmitting, takes the
-        // branch above).
-        //
-        // Stream 0 follows rx1 = 0. Stream 1 does not follow rx2 = 1: it
-        // stays -1, because DDC1 is DDC0's sync partner here (SyncEnable =
-        // DDC1, both at rx1_rate). No slice controller parks slice B ahead of
-        // this; the -1 is what takes it off the air. RadioModel::
-        // publishDdcAssignment deactivates stream 1's receiver and reports
-        // its slices suspended ("no receiver while diversity is on").
-        if (slices[0].live) { a.streamDdc[0] = 0; }
-    } else {
-        // From Thetis console.cs:8393-8407 [v2.10.3.15]:
-        //   case HPSDRModel.ANAN_G2E: //N1GP G2E added  [original from console.cs:8388]
-        //   P1_DDCConfig = 4; DDCEnable = DDC0; SyncEnable = 0;
-        //   Rate[0] = rx1_rate; cntrl1 = 0; cntrl2 = 0;
-        //   if (rx2_enabled) { DDCEnable += DDC1; Rate[1] = rx2_rate; }
-        //N1GP G2E added  [original inline tag from console.cs:8388 - ANAN_G2E case label]
-        a.p1DdcConfig = 4;
-        a.ddcEnable   = kDDC0;
-        a.syncEnable  = 0;
-        a.rate[0]     = rx1Rate;
-        a.adcCtrl1    = 0;
-        a.adcCtrl2    = 0;
-        a.nDdc        = 1;
-        // From Thetis console.cs:8708-8711 / 8724-8727 [v2.10.3.15] GetDDC()
-        // cases 0 and 4: rx1 = 0.
-        if (slices[0].live) { a.streamDdc[0] = 0; }
-
-        if (rx2Live) {
-            a.ddcEnable += kDDC1;
-            a.rate[1]    = rx2Rate;
-            a.nDdc       = 2;
-            // Phase 3F Sub-Epic I Task 7b: stream 1 -> DDC1. The diversity
-            // branch leaves streamDdc[1] at -1 (DDC1 is its sync partner);
-            // the PureSignal branch maps it itself.
-            a.streamDdc[1] = 1;
-        }
-
-        // Phase 3F extension: streams 2+3 → DDC2+DDC3 additively (plain-RX path only).
-        // Thetis Hermes branch caps at nddc=4 (P1_rxcount=4, console.cs:8390 [v2.10.3.15]).
-        if (slices[2].live) {
-            a.ddcEnable |= (1 << 2);  // DDC2
-            a.rate[2]    = slices[2].sampleRateHz;
-            ++a.nDdc;
-            a.streamDdc[2] = 2;  // Phase 3F Sub-Epic I Task 7b
-        }
-        if (slices[3].live) {
-            a.ddcEnable |= (1 << 3);  // DDC3
-            a.rate[3]    = slices[3].sampleRateHz;
-            ++a.nDdc;
-            a.streamDdc[3] = 3;  // Phase 3F Sub-Epic I Task 7b
-        }
-        // Stream 4 always ignored on Hermes-class (4 DDCs).
+        return a;
     }
 
+    // From Thetis console.cs:8397-8409 / 8425-8437 [v2.10.3.15] (plain receive)
+    a.p1DdcConfig = 4;
+    a.ddcEnable   = kDDC0;
+    a.syncEnable  = 0;
+    a.rate[0]     = rx1Rate;
+    a.adcCtrl1    = 0;
+    a.adcCtrl2    = 0;
+    if (rx2Live) {
+        a.ddcEnable += kDDC1;
+        a.rate[1]    = rx2Rate;
+    }
+    for (int st = 2; st <= 3; ++st) {
+        if (slices[st].live) {
+            a.ddcEnable     |= (1 << st);
+            a.rate[st]       = slices[st].sampleRateHz;
+            a.streamDdc[st]  = st;
+        }
+    }
+    return a;
+}
+
+// -----------------------------------------------------------------
+// HermesII class: ANAN10E, ANAN100B (nddc 2)
+// -----------------------------------------------------------------
+//
+// UpdateDDCs, from Thetis console.cs:8465-8531 [v2.10.3.15]: the Hermes
+// body except that PureSignal transmit is P1_DDCConfig = 5 (not 6):
+//   else // transmitting and PS is ON
+//   {
+//       P1_DDCConfig = 5; DDCEnable = DDC0; SyncEnable = DDC1;
+//       Rate[0] = ps_rate; Rate[1] = ps_rate; cntrl1 = 4; cntrl2 = 0;
+//   }
+//
+// Frame slots, from Thetis console.cs:8746-8779 [v2.10.3.15] GetDDC(),
+// Protocol 1:
+//   case HPSDRHW.HermesII: // ANAN-10E ANAN-100B HeremesII (2 adc)
+//   cases 0-4 and 6: rx1 = 0; rx2 = 1;
+//   cases 5 and 7 (PureSignal transmitting): psrx = 0; pstx = 1;
+// The frame carries only slots 0 and 1, and while PureSignal transmits both
+// are tuned to the TX frequency (networkproto1.c:484-511 [v2.10.3.15]).
+//
+// Deliberate divergence: under PureSignal transmit NereusSDR gives neither
+// user stream a slot, so both slices suspend, as Protocol 2 Hermes does
+// (Phase 3F design section 16.3.2). Thetis's router also hands the two
+// slots to RX1 and RX2 there for the panadapter, from Thetis
+// cmaster.cs:664-682 [v2.10.3.15] (TWO_DDC table, second call):
+//   0, 0, 0, 0, 0, 2, 0, 2      // DDC0+DDC1, port 1035, Call 1 Sends TX_freq data to both RX //MW0LGE_21d DUP on top panadaptor (Warren provided info)
+//   0, 0, 0, 0, 0, 2, 0, 2      // DDC0+DDC1, port 1035, Call 1 Sends TX_freq data to both RX //MW0LGE_21d DUP on top panadaptor (Warren provided info), // MW0LGE [2.9.0.8] from Warren, change 3's to 2's
+//   LoadRouterAll((void*)0, 0, 1, /*1*/2, 8, pstreams, pfunction, pcallid); //MW0LGE_21d DUP on top panadaptor (Warren provided info)
+// In NereusSDR that would put the PureSignal feedback through slice A's
+// demodulator and onto its speakers (the 2026-07-31 bench report recorded
+// in RadioModel::publishDdcAssignment), so it is not followed.
+DdcAssignment P1CodecStandard::ddcAssignmentHermesIIClass(
+    const CodecContext& ctx,
+    const std::array<SliceConfig, 5>& slices) const
+{
+    // DDC0=1, DDC1=2 from Thetis console.cs:8199 [v2.10.3.15]
+    static constexpr int kDDC0 = 1;
+    static constexpr int kDDC1 = 2;
+    // ps_rate = cmaster.PSrate default from Thetis cmaster.cs:425 [v2.10.3.15]
+    static constexpr int kPsRate = 192000;
+
+    DdcAssignment a{};
+    // From Thetis console.cs:8463-8464 [v2.10.3.15]
+    a.p1RxCount = 2;
+    a.nDdc      = 2;
+    // From Thetis console.cs:8216 [v2.10.3.15]:
+    //   if (diversity_enabled) P1_diversity = 1;
+    a.p1Diversity = ctx.diversity ? 1 : 0;
+
+    const int  rx1Rate = slices[0].live ? slices[0].sampleRateHz : 0;
+    const int  rx2Rate = slices[1].live ? slices[1].sampleRateHz : 0;
+    const bool rx2Live = slices[1].live;
+
+    if (ctx.mox && ctx.puresignalRun) {
+        // From Thetis console.cs:8521-8529 [v2.10.3.15] (transmitting and PS is ON)
+        a.p1DdcConfig = 5;
+        a.ddcEnable   = kDDC0;
+        a.syncEnable  = kDDC1;
+        a.rate[0]     = kPsRate;
+        a.rate[1]     = kPsRate;
+        a.adcCtrl1    = 4;
+        a.adcCtrl2    = 0;
+        // From Thetis ChannelMaster/networkproto1.c:378-379 [v2.10.3.15]:
+        //   case 2:
+        //       twist(spr, 0, 1, 0);
+        // GetDDC cases 5 and 7: psrx = 0; pstx = 1. Same pair
+        // psDdcConfigHermesIIClass emits.
+        a.psFwdDdc = 0;
+        a.psRevDdc = 1;
+        // Both user streams stay -1 (the divergence above).
+        return a;
+    }
+
+    // GetDDC cases 0-4 and 6: rx1 = 0; rx2 = 1.
+    if (slices[0].live) { a.streamDdc[0] = 0; }
+    if (rx2Live)        { a.streamDdc[1] = 1; }
+
+    if (ctx.diversity) {
+        // From Thetis console.cs:8483-8491 / 8511-8519 [v2.10.3.15]
+        a.p1DdcConfig = 5;
+        a.ddcEnable   = kDDC0;
+        a.syncEnable  = kDDC1;
+        a.rate[0]     = rx1Rate;
+        a.rate[1]     = rx1Rate;
+        a.adcCtrl1    = 0;
+        a.adcCtrl2    = 0;
+        return a;
+    }
+
+    // From Thetis console.cs:8469-8481 / 8497-8509 [v2.10.3.15] (plain receive)
+    a.p1DdcConfig = 4;
+    a.ddcEnable   = kDDC0;
+    a.syncEnable  = 0;
+    a.rate[0]     = rx1Rate;
+    a.adcCtrl1    = 0;
+    a.adcCtrl2    = 0;
+    if (rx2Live) {
+        a.ddcEnable += kDDC1;
+        a.rate[1]    = rx2Rate;
+    }
+    return a;
+}
+
+// -----------------------------------------------------------------
+// Orion class (nddc 5): ANAN100D, ANAN200D, ORIONMKII, ANAN7000D,
+// ANAN8000D, ANAN_G2, ANAN_G2_1K, ANVELINAPRO3; and REDPITAYA
+// -----------------------------------------------------------------
+//
+// UpdateDDCs, from Thetis console.cs:8228-8303 [v2.10.3.15] (with p1 true):
+//   P1_rxcount = 5;                     // RX5 used for puresignal feedback
+//   nddc = 5;
+//   if (!_mox) {
+//       if (diversity_enabled) {
+//           P1_DDCConfig =
+//           DDCEnable = DDC0;                     (so P1_DDCConfig = 1)
+//           SyncEnable = DDC1; Rate[0] = rx1_rate; Rate[1] = rx1_rate;
+//           cntrl1 = rx_adc_ctrl1 & 0xff; cntrl2 = rx_adc_ctrl2 & 0x3f;
+//       } else {
+//           P1_DDCConfig = 1; DDCEnable = DDC2; SyncEnable = 0;
+//           if (p1) Rate[0] = rx1_rate; // [2.10.3.13]MW0LGE p1 !
+//           Rate[2] = rx1_rate; cntrl1/cntrl2 as above;
+//       }
+//   } else {
+//       !diversity && !PS: as the plain branch above
+//       PS (either diversity state):
+//           P1_DDCConfig = 3; DDCEnable = DDC0 + DDC2; SyncEnable = DDC1;
+//           Rate[0] = ps_rate; Rate[1] = ps_rate; Rate[2] = rx1_rate;
+//           cntrl1 = (rx_adc_ctrl1 & 0xf3) | 0x08; cntrl2 = rx_adc_ctrl2 & 0x3f;
+//       diversity && !PS:
+//           P1_DDCConfig = 2; DDCEnable = DDC0; SyncEnable = DDC1;
+//           Rate[0] = rx1_rate; Rate[1] = rx1_rate;
+//   }
+//   if (rx2_enabled) { DDCEnable += DDC3; Rate[3] = rx2_rate; }
+//
+// REDPITAYA (console.cs:8305-8385 [v2.10.3.15], //DH1KLM) is the same body
+// plus its `// REDPITAYA PAVEL` lines: P1_DDCConfig = 2 for diversity
+// without MOX, Rate[1] = rx1_rate in plain receive, Rate[2] = rx1_rate
+// under diversity.
+//
+// ANAN_G2 and ANAN_G2_1K (Saturn hardware) are in this UpdateDDCs case and
+// follow it (the operator's ruling, 2026-09-24). Thetis itself has no
+// Protocol 1 router for them: CMLoadRouterAll's Protocol 1 tables name no
+// ANAN_G2 or ANAN_G2_1K, and GetDDC's Protocol 1 half has no Saturn case
+// ("note Saturn would only be used with P2, so not added here",
+// console.cs:8653-8654 [v2.10.3.15]).
+//
+// Frame slots, from Thetis console.cs:8651-8702 [v2.10.3.15] GetDDC(),
+// Protocol 1 (Angelia / Orion / OrionMKII, which covers ANVELINAPRO3 and
+// REDPITAYA): rx1 = 0 (sync1 = 0 under diversity), rx2 = 2, and in cases 5
+// and 7 psrx = 3; pstx = 4. The read loop and router agree: slots 0 + 1 go
+// to RX1 (alone, or through the diversity combiner), slot 2 to RX2 in every
+// state, slots 3 + 4 to PureSignal at PS + MOX (networkproto1.c:380-384
+// case 5; cmaster.cs FIVE_DDC table). Slot 1 carries RX1's frequency
+// (networkproto1.c:497-511 bank 3, nddc == 5), so no other receiver can use
+// it. UpdateDDCs's "DDC2" for RX1 and "DDC3" for RX2 are Protocol 2
+// numbers; the frame slots are what this assignment publishes.
+//
+// cntrl1 / cntrl2 come from CodecContext::p1AdcCntrl, the Protocol 1 ADC
+// word indexed by frame slot (P1_adc_cntrl, bank 4 C1 = low byte, C2 = high
+// byte, networkproto1.c:517-523 [v2.10.3.15]), so adcForDdc() decodes the
+// ADC of the slot each stream reads. Thetis's UpdateDDCs reads
+// rx_adc_ctrl1 / rx_adc_ctrl2 there, its Protocol 2 per-DDC word; on
+// Protocol 1 neither value reaches the wire.
+//
+// Phase 3F extension (NereusSDR): streams 2 and 3 ride slots 3 and 4 in
+// plain receive, the PureSignal pair's slots while the pair is not running.
+// Stream 4 has no slot (slot 1 is tied to RX1's frequency and the frame
+// carries five). PENDING the operator's ruling on the Orion-class bank 6/7
+// frequency (task-11-report.md): Thetis always tunes slots 3 and 4 to the TX
+// frequency.
+DdcAssignment P1CodecStandard::ddcAssignmentOrionClass(
+    const CodecContext& ctx,
+    const std::array<SliceConfig, 5>& slices,
+    bool redPitaya) const
+{
+    // DDC bitmask constants from Thetis console.cs:8199 [v2.10.3.15]
+    static constexpr int kDDC0 = 1;
+    static constexpr int kDDC1 = 2;
+    static constexpr int kDDC2 = 4;
+    static constexpr int kDDC3 = 8;
+    // ps_rate = cmaster.PSrate from Thetis cmaster.cs:425 [v2.10.3.15]
+    static constexpr int kPsRate = 192000;
+
+    DdcAssignment a{};
+    // From Thetis console.cs:8228-8229 [v2.10.3.15]:
+    //   P1_rxcount = 5;                     // RX5 used for puresignal feedback
+    //   nddc = 5;
+    a.p1RxCount = 5;
+    a.nDdc      = 5;
+    // From Thetis console.cs:8216 [v2.10.3.15]:
+    //   if (diversity_enabled) P1_diversity = 1;
+    a.p1Diversity = ctx.diversity ? 1 : 0;
+
+    const int  rx1Rate = slices[0].live ? slices[0].sampleRateHz : 0;
+    const int  rx2Rate = slices[1].live ? slices[1].sampleRateHz : 0;
+    const bool rx2Live = slices[1].live;
+    const int  ctrl1   = ctx.p1AdcCntrl & 0xff;
+    const int  ctrl2   = (ctx.p1AdcCntrl >> 8) & 0x3f;
+    const bool psTransmit = ctx.mox && ctx.puresignalRun;
+
+    // GetDDC: rx1 = 0 (or sync1 = 0) and rx2 = 2 in every state.
+    if (slices[0].live) { a.streamDdc[0] = 0; }
+    if (rx2Live)        { a.streamDdc[1] = 2; }
+
+    a.adcCtrl1 = ctrl1;
+    a.adcCtrl2 = ctrl2;
+
+    if (psTransmit) {
+        // From Thetis console.cs:8264-8283 [v2.10.3.15] (PS, either diversity state)
+        // [2.10.3.13]MW0LGE p1 !  [original inline tag from console.cs:8260]
+        a.p1DdcConfig = 3;
+        a.ddcEnable   = kDDC0 + kDDC2;
+        a.syncEnable  = kDDC1;
+        a.rate[0]     = kPsRate;
+        a.rate[1]     = kPsRate;
+        a.rate[2]     = rx1Rate;
+        a.adcCtrl1    = (ctrl1 & 0xf3) | 0x08;
+        // From Thetis ChannelMaster/networkproto1.c:380-384 [v2.10.3.15]:
+        //   case 5:
+        //       twist(spr, 0, 1, 0);
+        //       twist(spr, 3, 4, 1);
+        //       xrouter(0, 0, 2, spr, prn->RxBuff[2]);
+        // GetDDC cases 5 and 7: psrx = 3; pstx = 4.
+        a.psFwdDdc = 3;
+        a.psRevDdc = 4;
+    } else if (ctx.diversity) {
+        if (!ctx.mox) {
+            if (redPitaya) {
+                // From Thetis console.cs:8310-8319 [v2.10.3.15]: //DH1KLM
+                //   P1_DDCConfig = 2; // REDPITAYA PAVEL
+                //   Rate[2] = rx1_rate; // REDPITAYA PAVEL
+                a.p1DdcConfig = 2; // REDPITAYA PAVEL
+                a.rate[2]     = rx1Rate; // REDPITAYA PAVEL
+            } else {
+                // From Thetis console.cs:8232-8240 [v2.10.3.15]:
+                //   P1_DDCConfig =
+                //   DDCEnable = DDC0;
+                a.p1DdcConfig = kDDC0;
+            }
+        } else {
+            // From Thetis console.cs:8286-8295 [v2.10.3.15] (diversity && !PS)
+            // REDPITAYA adds Rate[2] = rx1_rate; // REDPITAYA PAVEL (console.cs:8375)
+            a.p1DdcConfig = 2;
+            if (redPitaya) {
+                a.rate[2] = rx1Rate; // REDPITAYA PAVEL
+            }
+        }
+        a.ddcEnable  = kDDC0;
+        a.syncEnable = kDDC1;
+        a.rate[0]    = rx1Rate;
+        a.rate[1]    = rx1Rate;
+    } else {
+        // From Thetis console.cs:8243-8250 / 8256-8263 [v2.10.3.15]:
+        //   P1_DDCConfig = 1; DDCEnable = DDC2; SyncEnable = 0;
+        //   if (p1) Rate[0] = rx1_rate; // [2.10.3.13]MW0LGE p1 !
+        //   Rate[2] = rx1_rate;
+        // REDPITAYA, console.cs:8321-8330 / 8335-8344 [v2.10.3.15] //DH1KLM:
+        //   Rate[0] = rx1_rate; // REDPITAYA PAVEL
+        //   Rate[1] = rx1_rate; // REDPITAYA PAVEL
+        a.p1DdcConfig = 1;
+        a.ddcEnable   = kDDC2;
+        a.syncEnable  = 0;
+        a.rate[0]     = rx1Rate;  // [2.10.3.13]MW0LGE p1 !
+        if (redPitaya) {
+            a.rate[1] = rx1Rate;  // REDPITAYA PAVEL
+        }
+        a.rate[2]     = rx1Rate;
+
+        // Phase 3F extension: streams 2 and 3 on slots 3 and 4 (see above).
+        static constexpr int kExtraSlot[5] = {-1, -1, 3, 4, -1};
+        for (int st = 2; st <= 3; ++st) {
+            if (slices[st].live) {
+                a.streamDdc[st] = kExtraSlot[st];
+            }
+        }
+    }
+
+    // From Thetis console.cs:8299-8303 [v2.10.3.15] (8381-8385 for REDPITAYA //DH1KLM):
+    //   if (rx2_enabled) { DDCEnable += DDC3; Rate[3] = rx2_rate; }
+    if (rx2Live) {
+        a.ddcEnable += kDDC3;
+        a.rate[3]    = rx2Rate;
+    }
     return a;
 }
 

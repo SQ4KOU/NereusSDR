@@ -351,8 +351,11 @@ private slots:
     void protocol1_leaves_receiver_routing_auto_assigned()
     {
         RadioModel model;
-        // Plain-RX RedPitaya puts stream 0 on DDC2, so a P1 board that
-        // wrongly routed by DDC number would look for frame slot 2.
+        // RedPitaya used to publish stream 0 on "DDC2" (UpdateDDCs's
+        // Protocol 2-style number), which a P1 board routing by that number
+        // would have looked for in frame slot 2 (issue #263). Plan Task 11:
+        // every P1 codec now publishes Protocol 1 frame slots, and RX1 is
+        // slot 0 on RedPitaya (GetDDC Protocol 1 OrionMKII: rx1 = 0).
         P1CodecRedPitaya codec;
         model.receiverManager()->setP1Codec(&codec);
         model.configureStreamPool(5, 5, 192000);
@@ -363,16 +366,11 @@ private slots:
         const int a = model.addSlice();
         model.slices().at(a)->setFrequency(14200000.0);
 
-        // The codec's DDC number reaches the slice: that is wire truth, and
-        // the P1 C&C bytes really do enable DDC2.
-        QCOMPARE(model.ddcForStream(0), 2);
-        QCOMPARE(model.slices().at(a)->ddcIndex(), 2);
+        QCOMPARE(model.ddcForStream(0), 0);
+        QCOMPARE(model.slices().at(a)->ddcIndex(), 0);
 
-        // But Protocol 1 packs ACTIVE receivers sequentially into the EP6
-        // frame and emits the frame-slot index, not the DDC number
-        // (P1RadioConnection.cpp:2999-3007), so routing must stay on
-        // rebuildHardwareMapping's sequential auto-assign. Routing by DDC
-        // here would drop every EP6 packet (issue #263).
+        // Protocol 1 routing is still rebuildHardwareMapping's sequential
+        // auto-assign: the codec's slot is not yet a routing key here.
         QCOMPARE(model.receiverManager()->ddcIndex(0), 0);
     }
 

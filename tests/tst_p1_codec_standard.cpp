@@ -206,7 +206,7 @@ private slots:
     // Protocol 2 Hermes, whose tot=5 body is empty.
     //
     // Only the four nddc == 4 models of UpdateDDCs's Hermes case share this
-    // layout (console.cs:8386-8391 [v2.10.3.15]), so each one is a row.
+    // layout (console.cs:8387-8392 [v2.10.3.15]), so each one is a row.
     void ps_mox_keeps_stream0_on_ddc0_and_stream1_on_ddc1_data() {
         QTest::addColumn<int>("model");
         QTest::newRow("HERMES")   << int(HPSDRModel::HERMES);
@@ -324,15 +324,15 @@ private slots:
     //   ...
     //   case 5: // on off on    psrx = 0; pstx = 1;
     //   case 7: // on on on     psrx = 0; pstx = 1;
-    // so DDC1 is the TX monitor and slice B must not demodulate it. The
-    // Orion/G2-class models (ANAN7000D here) are not ported yet either.
-    // Each keeps stream 1 unassigned under PureSignal transmit, as before
-    // the Hermes mapping was added.
+    // so DDC1 is the TX monitor and slice B must not demodulate it; DDC0 is
+    // the feedback, so slice A must not either (plan Task 11: both user
+    // streams suspend). The Orion/G2-class models (ANAN7000D among them) now
+    // keep RX2 on frame slot 2 there, per GetDDC's Protocol 1 Orion case;
+    // tst_p1_ddc_layout_per_model carries those rows.
     void ps_mox_leaves_stream1_unassigned_off_the_hermes_models_data() {
         QTest::addColumn<int>("model");
         QTest::newRow("ANAN10E")   << int(HPSDRModel::ANAN10E);
         QTest::newRow("ANAN100B")  << int(HPSDRModel::ANAN100B);
-        QTest::newRow("ANAN7000D") << int(HPSDRModel::ANAN7000D);
     }
     void ps_mox_leaves_stream1_unassigned_off_the_hermes_models() {
         QFETCH(int, model);
@@ -350,7 +350,10 @@ private slots:
 
         const DdcAssignment a = codec.applyDdcAssignment(ctx, slices);
 
+        QCOMPARE(a.streamDdc[0], -1);
         QCOMPARE(a.streamDdc[1], -1);
+        QCOMPARE(a.psFwdDdc, 0);
+        QCOMPARE(a.psRevDdc, 1);
     }
 
     // PureSignal armed but not transmitting is plain receive: no pair.

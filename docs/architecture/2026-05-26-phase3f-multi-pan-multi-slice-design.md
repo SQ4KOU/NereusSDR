@@ -2015,6 +2015,36 @@ ANAN100B, where DDC1 carries the TX monitor (HermesII `GetDDC` cases 5 and 7: `p
 loop routes RX2 from DDC2 (`networkproto1.c:385-388 [v2.10.3.15]`). Their own receiver layouts are
 ported separately; until then slice B reads as PS HOLD on them while PureSignal transmits.
 
+**Update (2026-09-24, receiver-and-transmit-gaps Task 11).** Every Protocol 1 model now gets its
+own Thetis layout. `P1CodecStandard::applyDdcAssignment` dispatches on the model; AnvelinaPro3 and
+RedPitaya call the same Orion-class helper. The layout comes from three places, all
+`[v2.10.3.15]`: `UpdateDDCs` (the configuration fields), `GetDDC`'s Protocol 1 half (which frame
+slot each receiver reads) and `cmaster.cs` `CMLoadRouterAll`'s Protocol 1 half with the read loop
+(which slots actually reach RX1, RX2 and PureSignal). On Protocol 1 the stream values and the
+PureSignal pair are **frame slots**, the index of the receiver inside the EP6 frame, not
+`UpdateDDCs`'s Protocol 2-style DDC numbers. `tst_p1_ddc_layout_per_model` pins every row below
+for all sixteen PureSignal / diversity / MOX / RX2 states and checks that `psDdcConfig` agrees.
+
+| Model (Protocol 1) | nddc, P1_rxcount | Slice A | Slice B | PureSignal pair | Under PS transmit | Source |
+| --- | --- | --- | --- | --- | --- | --- |
+| ANAN-10E, ANAN-100B (HermesII) | 2, 2 | slot 0 | slot 1 | slots 0 + 1 | A and B suspended; P1_DDCConfig 5 | `console.cs:8461-8531`, `8746-8779` |
+| HERMES, ANAN-10, ANAN-100, ANAN-G2E (Hermes) | 4, 4 | slot 0 | slot 1 | slots 2 + 3 | A and B keep their slots; P1_DDCConfig 6 | `console.cs:8387-8458`, `8704-8745` |
+| ANAN-100D, ANAN-200D, ORIONMKII, ANAN-7000D, ANAN-8000D, ANAN-G2, ANAN-G2-1K, ANVELINAPRO3 (Orion) | 5, 5 | slot 0 | slot 2 | slots 3 + 4 | A and B keep their slots; P1_DDCConfig 3 | `console.cs:8220-8303`, `8651-8702` |
+| REDPITAYA (Orion, `//DH1KLM`) | 5, 5 | slot 0 | slot 2 | slots 3 + 4 | as Orion, plus the `// REDPITAYA PAVEL` rates | `console.cs:8305-8385` |
+
+- Diversity keeps slice B on its slot on every model (GetDDC `rx2 = 1`, or 2 on the Orion class);
+  it used to be unassigned under diversity.
+- HermesII under PureSignal transmit is a deliberate divergence: Thetis's router also hands slots 0
+  and 1 to RX1 and RX2 there for the panadapter (`cmaster.cs:664-682`, `//MW0LGE_21d DUP on top
+  panadaptor`). In NereusSDR that would demodulate the PureSignal feedback, so both slices suspend,
+  as on Protocol 2 Hermes.
+- ANAN-G2 and ANAN-G2-1K follow `UpdateDDCs`'s Orion case, as Thetis's `UpdateDDCs` does, although
+  Thetis has no Protocol 1 router for them and `GetDDC` says Saturn runs Protocol 2 only
+  (`console.cs:8653-8654`).
+- `P1_DDCConfig`, `DDCEnable`, `SyncEnable` and the per-DDC rates never reach the Protocol 1 wire
+  (`Protocol1DDCConfig` stores the configuration and nothing reads it, `netInterface.c:1249-1255`).
+- The Atlas (HPSDR) keeps the Hermes layout: `UpdateDDCs` gives it nothing at all.
+
 The HL2 is left as documented above: `P1CodecHl2::applyDdcAssignment` still suppresses stream 1
 (`streamDdc[1] = -1`) under PS-MOX, even though mi0bot's `GetDDC` (`console.cs:8733-8762
 [@c26a8a4]`) shows the same `rx2 = 1` shape for cases 5 and 7. This is pending a careful mi0bot
