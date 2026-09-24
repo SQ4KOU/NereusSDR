@@ -1272,6 +1272,7 @@ void MainWindow::ensureRemoteSession()
                 this, &MainWindow::placeCoreStopBanner);
         // R-R3-38: place it again when the content area changes size or
         // moves without the window resizing (a dock); see eventFilter.
+        // A later setCentralWidget would need this filter moved to the new one.
         if (QWidget* content = centralWidget()) {
             content->installEventFilter(this);
         }
