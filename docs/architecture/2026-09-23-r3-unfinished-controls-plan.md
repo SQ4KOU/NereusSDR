@@ -109,6 +109,7 @@ goes.
 | remote-filter-policy | The filter policy dialog in a remote window says editing is not available; a local window edits it | Build: moved to the remote radio hardware plan's Task 6 (it needs a new Core property and a version; added 2026-09-24) |
 | hpf-bcast | Filter policy dialog: "HPF (broadcast band reject) enabled" (nothing reads it) | Hide (added 2026-09-24 under the operator's decision-page rule, until built = hide) |
 | freq-cal | Calibration: the frequency calibration Start button (nothing handles it) | Hide (added 2026-09-24, same rule) |
+| fm-flag | The VFO flag's FM page: the CTCSS tone mode and tone choices (no tone encoder or detector), the Offset box (a transmit shift) and Rev (it only changes the display) | Hide until built: controls that only serve FM transmit go with the FM transmit entry; a receive-side one that is not built gets its own entry (added 2026-09-24, same rule) |
 
 ## Global Constraints
 
