@@ -60,6 +60,12 @@ public:
                                        QStringLiteral("scripted core")))));
             connect(socket, &QWebSocket::textMessageReceived, this,
                     [this, socket](const QString&) {
+                if (dropWithoutEnd && !socket->property("ended").toBool()) {
+                    // The link just goes: no session end, no close frame.
+                    socket->setProperty("ended", true);
+                    socket->abort();
+                    return;
+                }
                 if (m_endReason.isEmpty() || socket->property("ended").toBool()) { return; }
                 socket->setProperty("ended", true);
                 socket->sendTextMessage(QString::fromUtf8(SessionMessages::encode(
@@ -74,6 +80,8 @@ public:
         return QStringLiteral("ws://127.0.0.1:%1").arg(m_server.serverPort());
     }
     int connections = 0;
+    // After the app's hello, drop the transport with no session end.
+    bool dropWithoutEnd = false;
 
 private:
     QWebSocketServer m_server{QStringLiteral("scripted core"), QWebSocketServer::NonSecureMode};
@@ -384,6 +392,36 @@ private slots:
         QSignalSpy retries(client, &StationClient::reconnectScheduled);
         window.startInitialConnection();
         QTRY_VERIFY(retries.size() >= 1);
+        QVERIFY(client->isReconnectPending());
+        QCOMPARE(client->lastEndReport().kind, StationEndReport::Kind::None);
+        QCOMPARE(controls->stopNotice(), CoreStopNotice::None);
+        QCOMPARE(controls->statusText(), QStringLiteral("Retrying Core (attempt 1)"));
+        const StopBannerView view = bannerOf(window);
+        QVERIFY(view.banner);
+        QVERIFY(!view.banner->isVisibleTo(&window));
+        controls->disconnectFromStation();
+    }
+
+    // R-R3-38: the transport drops with no session end at all (a network
+    // cut, a Core that dies): the window retries and shows no stop message.
+    void droppedTransportWithNoEndStillRetries()
+    {
+        ScriptedCore core(kSessionProtocolMajor);
+        core.dropWithoutEnd = true;
+        QVERIFY(core.listen());
+        SettingsProxy proxy;
+        ScopedRemoteBackend remoteBackend(&proxy);
+        MainWindow window({core.url(), QStringLiteral("token"), {}, true}, nullptr,
+                          MainWindow::ConnectionStartup::Deferred);
+        window.setConnectionPickerManaged(true);
+        StationClient* const client = window.findChild<StationClient*>();
+        auto* const controls = window.findChild<RemoteConnectionController*>();
+        QVERIFY(client && controls);
+        client->setReconnectBackoffUnitMs(10000);
+        QSignalSpy retries(client, &StationClient::reconnectScheduled);
+        window.startInitialConnection();
+        QTRY_VERIFY(retries.size() >= 1);
+        QCOMPARE(core.connections, 1);
         QVERIFY(client->isReconnectPending());
         QCOMPARE(client->lastEndReport().kind, StationEndReport::Kind::None);
         QCOMPARE(controls->stopNotice(), CoreStopNotice::None);
