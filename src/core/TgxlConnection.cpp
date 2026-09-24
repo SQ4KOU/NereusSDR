@@ -26,6 +26,9 @@
 //                 iPhone app Part A fix wave (R-IOS-01): the identity
 //                 failures a station sends an app as the tuner's connection
 //                 error are in operator words; the detail goes to the log.
+//   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code:
+//                 a connect-time socket failure reaches the connection
+//                 error in the Core's own words, not the library's.
 // =================================================================
 #include "TgxlConnection.h"
 #include "AppSettings.h"
@@ -606,7 +609,11 @@ void TgxlConnection::onError(quint64 attemptGeneration)
     qCWarning(lcTgxl) << "TgxlConnection: connect-time socket error:" << err;
     clearIdentityAttempt();
     QPointer<TgxlConnection> self(this);
-    emit connectionFailed(err);
+    // In the Core's own words, not the socket library's: a station sends
+    // this to an app as the connection error (iPhone app Part A fix wave,
+    // R-IOS-01). The library's text is in the log line above.
+    emit connectionFailed(QStringLiteral("The Core could not reach the Tuner Genius at this address. "
+                                         "Check the tuner's address and port, and that it is on."));
     if (!self) {
         return;
     }

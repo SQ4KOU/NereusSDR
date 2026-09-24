@@ -24,6 +24,9 @@
 //                 failures a station sends an app as the amplifier's
 //                 connection error are in operator words; the detail goes
 //                 to the log.
+//   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code:
+//                 a connect-time socket failure reaches the connection
+//                 error in the Core's own words, not the library's.
 // =================================================================
 #include "PgxlConnection.h"
 #include "AppSettings.h"
@@ -641,7 +644,11 @@ void PgxlConnection::onError(quint64 attemptGeneration) {
     qCWarning(lcPgxl) << "connect-time socket error:" << err;
     clearIdentityAttempt();
     QPointer<PgxlConnection> self(this);
-    emit connectionFailed(err);
+    // In the Core's own words, not the socket library's: a station sends
+    // this to an app as the connection error (iPhone app Part A fix wave,
+    // R-IOS-01). The library's text is in the log line above.
+    emit connectionFailed(QStringLiteral("The Core could not reach the Power Genius at this address. "
+                                         "Check the amplifier's address and port, and that it is on."));
     if (!self) {
         return;
     }

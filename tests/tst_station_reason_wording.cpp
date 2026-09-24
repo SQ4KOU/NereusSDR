@@ -60,6 +60,11 @@
 //                                    insertions and out-parameter writers
 //                                    in any file. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Part A re-review (R-IOS-01, R-R3-21):
+//                                    a reason passed on without words of
+//                                    its own is named with its source;
+//                                    forwarding sites; real minimums.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -171,6 +176,12 @@ QStringList statementsOf(const QString& code)
             i = end;
             continue;
         }
+        if (c == QLatin1Char('{') && i + 1 < code.size() && code.at(i + 1) == QLatin1Char('}')) {
+            // An empty brace pair (QString{}, a default {}) ends nothing.
+            current += QStringLiteral("{}");
+            i += 2;
+            continue;
+        }
         if (c == QLatin1Char(';') || c == QLatin1Char('}')) {
             statements.append(current);
             current.clear();
@@ -210,6 +221,7 @@ struct ReasonText {
     QString text;
     QStringList inserts;
     bool positioned = false;  // Found in a reason position, not only by its space.
+    bool forwarded = false;   // Not words: an expression passed on as a reason.
 };
 
 // The calls that send a reason, with the index of their reason argument:
@@ -230,7 +242,7 @@ const QList<ReasonSender>& reasonSenders()
         {"reject", 0},       {"rejectDetail", 1},         {"fail", 0},
         // Text the station sends as a property value (propertyTextSources).
         {"connectionFailed", 0}, {"failIdentityAdmission", 1}, {"setLastLoadError", 0},
-        {"setNnrLastError", 0},
+        {"setNnrLastError", 0}, {"publish", 1},
     };
     return senders;
 }
@@ -292,7 +304,10 @@ QStringList reasonExpressionsIn(const QString& statement)
         "\\b(?:\\w*[Rr]eason|\\w*[Rr]easonText|\\w*[Rr]efusal|m_lastError|m_lastActionError)"
         "\\s*=(?!=)"));
     const QRegularExpressionMatch assigned = assignment.match(statement);
-    if (assigned.hasMatch()) {
+    // A bool named for a reason (`const bool plainReason = ...`) is not one.
+    static const QRegularExpression boolDeclaration(QStringLiteral("\\bbool\\s+$"));
+    if (assigned.hasMatch()
+        && !boolDeclaration.match(statement.left(assigned.capturedStart())).hasMatch()) {
         expressions.append(statement.mid(assigned.capturedEnd()));
     }
     return expressions;
@@ -356,7 +371,27 @@ QList<ReasonText> reasonsIn(const QString& code)
             statement.truncate(logged.capturedStart());
         }
         QStringList positioned;
+        static const QRegularExpression empty(
+            QStringLiteral("^(?:QString\\(\\)|QString\\{\\}|\\{\\}|QStringLiteral\\(\\)|)$"));
         for (const QString& expression : reasonExpressionsIn(statement)) {
+            // An expression with no literal in it passes on words written
+            // elsewhere; it must be named where it is scanned.
+            const QString bare = expression.simplified();
+            // A sender's own declaration (`const QString& reason`) is a
+            // parameter, not a call passing something on.
+            static const QRegularExpression parameter(
+                QStringLiteral("^(?:const\\s+)?QString\\s*&?\\s*\\w+(?:\\s*=.*)?$"));
+            if (parameter.match(bare).hasMatch()) {
+                continue;
+            }
+            if (!bare.contains(QLatin1Char('"')) && !empty.match(bare).hasMatch()) {
+                const bool known = std::any_of(found.cbegin(), found.cend(),
+                    [&bare](const ReasonText& r) { return r.forwarded && r.text == bare; });
+                if (!known) {
+                    found.append({bare, {}, true, true});
+                }
+                continue;
+            }
             QRegularExpressionMatchIterator it = literal.globalMatch(expression);
             while (it.hasNext()) {
                 const QString text = it.next().captured(1);
@@ -469,9 +504,18 @@ QString insertProblemIn(const QString& insert, const QStringList& plainInserts)
 
 // Every wording problem of one reason: its own words, one word standing
 // alone (not a sentence an operator can act on), and what .arg() inserts.
-QStringList problemsOf(const ReasonText& reason, const QStringList& plainInserts)
+QStringList problemsOf(const ReasonText& reason, const QStringList& plainInserts,
+                       const QStringList& forwards = {})
 {
     QStringList problems;
+    if (reason.forwarded) {
+        if (!forwards.contains(reason.text)) {
+            problems.append(QStringLiteral("passes on %1 as a reason; name it in forwards with "
+                                           "where its words come from")
+                                .arg(reason.text));
+        }
+        return problems;
+    }
     QString problem = wordingProblemIn(reason.text);
     static const QRegularExpression letter(QStringLiteral("[A-Za-z]"));
     if (problem.isEmpty() && reason.positioned && letter.match(reason.text).hasMatch()
@@ -509,6 +553,10 @@ struct ReasonSource {
     // .arg() arguments here, by their text inside .arg( ), that insert
     // plain words (numbers, a band, an address, the operator's own label).
     QStringList plainInserts = {};
+    // Reason expressions here with no words of their own (a variable, a
+    // call), by their text, each passing on words scanned where they are
+    // written (named with where, beside the entry).
+    QStringList forwards = {};
     // Only literals in a reason position count: the file also writes
     // device commands with spaces in them (the accessory connections).
     bool positionedOnly = false;
@@ -526,34 +574,94 @@ const QList<ReasonSource>& reasonSources()
           "NereusSDR station", "\\n  ====="},
          30,
          // The other app's network address (WebSocketTransport::peerDescription).
-         {QStringLiteral("description")}},
+         {QStringLiteral("description")},
+         {// listen(): the Core's own setup error (m_lastError), for its
+          // console and log; never sent to an app.
+          QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),
+          QStringLiteral("m_certificates->lastError()"),
+          QStringLiteral("m_wsServer->errorString()"),
+          // dropPeer's and sendRejected's parameter, from this file's calls.
+          QStringLiteral("reason"),
+          // LinkVersion::refusalText, scanned below.
+          QStringLiteral("LinkVersion::refusalText(m_supportedMajors, message.supportedMajors)"),
+          // Each model's readOnlyReason, scanned below.
+          QStringLiteral("IoBoardHl2Facade::readOnlyReason()"),
+          QStringLiteral("AmplifierModel::readOnlyReason()"),
+          QStringLiteral("RfKitModel::readOnlyReason()"),
+          QStringLiteral("StationTciModel::readOnlyReason()"),
+          QStringLiteral("AccessoryDataModel::readOnlyReason()"),
+          // Literals inserted into `refusals` in this file.
+          QStringLiteral("refusals.value(update.name)"),
+          // The attenuator and antenna facades' settle reasons, scanned below.
+          QStringLiteral("m_radioModel->stepAttFacade()->settleReason(update.name)"),
+          QStringLiteral("m_radioModel->alexAntennaFacade()->settleReason(update.name)"),
+          // A constant of this file, its literal scanned here.
+          QStringLiteral("QString::fromLatin1(kReceiveOnlyTransmitReason)"),
+          // StateMirror's and SettingsProxyServer's results, scanned below.
+          QStringLiteral("result.reason"),
+          QStringLiteral("m_settingsServer->otherRadioRefusal(key)"),
+          QStringLiteral("refusal"),
+          // A code windows compare, not a reason (section 17).
+          QStringLiteral("m_displayBudgetReason")}},
         // command.result for every verb.
-        {"src/core/session/SessionCommandDispatcher.cpp", {}, {}, 30},
+        {"src/core/session/SessionCommandDispatcher.cpp", {}, {}, 30, {},
+         {// Out-parameters and results of the scanned model, facade and
+          // allocator functions each verb calls (RadioModel, the PureSignal
+          // facade, SliceModel, AlexAntennaFacade, DspAssetService,
+          // SliceStreamAllocator), and emitResult's own parameter.
+          QStringLiteral("reason"), QStringLiteral("result.reason"),
+          QStringLiteral("refusal"), QStringLiteral("facade->lastActionError()"),
+          QStringLiteral("slice->nnrLastError()"), QStringLiteral("accepted ? QString() : reason"),
+          QStringLiteral("rejectionReason"), QStringLiteral("outcome.reason"),
+          QStringLiteral("receiveOnly ? alex->setRxOnlyAntForBand(Band(band), antenna) : "
+                         "alex->setRxAntForBand(Band(band), antenna)"),
+          // A function of this file, its literal scanned here.
+          QStringLiteral("notRepresentableReason()")}},
         // property.result for a write the mirror refuses.
-        {"src/core/session/StateMirror.cpp", {}, {}, 5},
+        {"src/core/session/StateMirror.cpp", {}, {}, 5, {},
+         {// A function of this file, and a model's applyMirroredValue
+          // (the hook), both scanned.
+          QStringLiteral("writableButOutboundReason( MirrorSchema::shortClassName(className), "
+                         "prop.name)"),
+          QStringLiteral("hookReason")}},
         // PureSignal's command.result and its lastActionError.
-        {"src/core/session/PureSignalSessionFacade.cpp", {}, {}, 15},
+        {"src/core/session/PureSignalSessionFacade.cpp", {}, {}, 15, {},
+         {// finishOperation's parameter and the store's import error, both
+          // from this file; lastActionError as a remote window receives it.
+          QStringLiteral("reason"), QStringLiteral("imported.error"),
+          QStringLiteral("value.toString()")}},
         // Model and correction files; the store's and validator's own
         // messages are detail for the log unless isOperatorMessage says
         // otherwise (DspAssetService::rejectDetail).
         // The operator's own label for a model, and "the bundled small (large)
         // model" (bundledNr3Name).
         {"src/core/dsp/DspAssetService.cpp", {}, {}, 30,
-         {QStringLiteral("label"), QStringLiteral("bundledNr3Name(id)")}},
+         {QStringLiteral("label"), QStringLiteral("bundledNr3Name(id)")},
+         {// rejectDetail's operator message (isOperatorMessage, scanned) or
+          // its plain fallback, and the statuses this file words.
+          QStringLiteral("detail"), QStringLiteral("plain"), QStringLiteral("error"),
+          QStringLiteral("problems.join(QLatin1Char(' '))"), QStringLiteral("problem"),
+          QStringLiteral("none")}},
         {"src/core/dsp/DspAssetValidation.cpp", {QStringLiteral("isOperatorMessage")}, {}, 6},
-        {"src/core/dsp/NnrAdapter.cpp", {}, {}, 6},
-        // NNR tuning and diagnostics refusals pass NnrAdapter's reasons on;
-        // the model paths' refusal reaches nnr.applyModelSelection.
-        {"src/core/RxChannel.cpp",
-         {QStringLiteral("setNnrTuning"), QStringLiteral("setNnrDiagnostics")}, {}, 0},
+        // The explanation it restores is one this file words.
+        {"src/core/dsp/NnrAdapter.cpp", {}, {}, 6, {}, {QStringLiteral("before.explanation")}},
+        // The model paths' refusal reaches nnr.applyModelSelection.
         {"src/core/WdspEngine.cpp", {QStringLiteral("setNnrModelPaths")}, {}, 2},
         // A refused PureSignal settings write (property.result).
         {"src/models/PureSignalSettings.cpp",
-         {QStringLiteral("isValid"), QStringLiteral("apply")}, {}, 5},
-        {"src/core/accessories/AlexAntennaFacade.cpp", {}, {}, 6},
+         {QStringLiteral("isValid"), QStringLiteral("apply")}, {}, 5, {},
+         // The reject lambda's parameter: the literals isValid passes it.
+         {QStringLiteral("message")}},
+        // The link version refusal, sent in session.end.
+        // Version numbers, and "Update the station." or "Update this app."
+        {"src/core/session/LinkVersion.cpp", {QStringLiteral("refusalText")}, {}, 2,
+         {QStringLiteral("stationNewest"), QStringLiteral("clientNewest"),
+          QStringLiteral("update")}},
+        // The window's reason it keeps: its own parameter, from this file.
+        {"src/core/accessories/AlexAntennaFacade.cpp", {}, {}, 6, {}, {QStringLiteral("kept")}},
         // The attenuator's range in dB.
         {"src/core/StepAttenuatorFacade.cpp", {}, {}, 6,
-         {QStringLiteral("lo"), QStringLiteral("hi")}},
+         {QStringLiteral("lo"), QStringLiteral("hi")}, {QStringLiteral("kept")}},
         {"src/core/IoBoardHl2Facade.cpp", {}, {}, 1},
         // A receiver count, and a frequency in MHz.
         {"src/core/SliceStreamAllocator.cpp", {}, {}, 4,
@@ -566,14 +674,32 @@ const QList<ReasonSource>& reasonSources()
         // The SWR limit's range, one decimal.
         {"src/core/settings/SettingsProxyServer.cpp", {}, {}, 3,
          {QStringLiteral("kSwrProtectionLimitMin, 0, 'f', 1"),
-          QStringLiteral("kSwrProtectionLimitMax, 0, 'f', 1")}},
+          QStringLiteral("kSwrProtectionLimitMax, 0, 'f', 1")},
+         {// Functions of this file and SettingsScope's refusal, scanned.
+          QStringLiteral("otherRadioRefusal(key)"), QStringLiteral("refusal"),
+          QStringLiteral("modelOwnedSettingsRefusal(key)")}},
         {"src/core/settings/SettingsScope.cpp", {QStringLiteral("modelOwnedSettingsRefusal")},
          {}, 5},
         // The display refusals and retirements (rejected, allocation-result).
         {"src/core/session/media/DaemonMediaController.cpp", {},
          {// statsSummary(): a log line's text.
           "largestKeyframe="},
-         18},
+         18, {},
+         {// Parameters and fields that carry this file's own reasons.
+          QStringLiteral("reason"), QStringLiteral("prior.reason"),
+          QStringLiteral("admitted.refusal"), QStringLiteral("stream.profileRefusal"),
+          QStringLiteral("m_headphones.profileRefusal"), QStringLiteral("m_audioProfileRefusal"),
+          // Codes, not reasons (section 17): receiver audio off and
+          // profile refusal codes, spectrum limit reasons, retire reasons.
+          QStringLiteral("headphonesBlockedBy().value_or(RemoteAudioOffReason::RadioOffline)"),
+          QStringLiteral("grantReason(grant)"), QStringLiteral("grantReason(reasonGrant)"),
+          QStringLiteral("context.offReason"),
+          QStringLiteral("RemoteAudioProfileRefusal::NotAllowed"),
+          QStringLiteral("RemoteAudioProfileRefusal::Unavailable"),
+          QStringLiteral("RemoteAudioOffReason::EncoderUnavailable"),
+          QStringLiteral("QString::fromLatin1(kRetireReasonSourceRetune)"),
+          QStringLiteral("QString::fromLatin1(kRetireReasonStreamBindingChanged)"),
+          QStringLiteral("QString::fromLatin1(kRetireReasonSliceRemoved)")}},
         {"src/core/session/media/SpectrumEndpoint.h", {}, {}, 3},
         {"src/models/AccessoryDataModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
         {"src/models/AmplifierModel.cpp",
@@ -601,7 +727,14 @@ const QList<ReasonSource>& reasonSources()
          {// This app's own branch in a remote window (role Remote), shown
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},
-         20},
+         20, {},
+         {// The refuse lambdas' parameter (literals of these functions),
+          // the facades' and allocators' results (scanned), and the notch
+          // refusals, constants of this file checked in
+          // notchConstantsArePlain below.
+          QStringLiteral("text"), QStringLiteral("result.reason"),
+          QStringLiteral("outcome.reason"), QStringLiteral("kUnknownNotchReason"),
+          QStringLiteral("kNotchListBusyReason")}},
     };
     return sources;
 }
@@ -653,19 +786,27 @@ const QList<AppSideReason>& appSideReasons()
 const QList<ReasonSource>& propertyTextSources()
 {
     static const QList<ReasonSource> sources{
-        {"src/core/TgxlConnection.cpp", {}, {}, 4, {}, true},
-        {"src/core/PgxlConnection.cpp", {}, {}, 4, {}, true},
+        // failIdentityAdmission's parameter: this file's identity texts,
+        // and the controller's (scanned below) through rejectIdentity.
+        {"src/core/TgxlConnection.cpp", {}, {}, 4, {}, {QStringLiteral("reason")}, true},
+        {"src/core/PgxlConnection.cpp", {}, {}, 4, {}, {QStringLiteral("reason")}, true},
         // The name an amplifier that is not an RF2K-S reports for itself.
-        {"src/core/Rf2ksConnection.cpp", {}, {}, 2, {QStringLiteral("device")}, true},
+        // `reason` is the identity refusal worded just above it.
+        {"src/core/Rf2ksConnection.cpp", {}, {}, 2, {QStringLiteral("device")},
+         {QStringLiteral("reason")}, true},
         // The name the device at the address reports for itself.
         {"src/core/StationTgxlController.cpp", {}, {}, 2, {QStringLiteral("product")}},
         // The name the device at the address reports for itself.
         {"src/core/StationPgxlController.cpp", {}, {}, 2, {QStringLiteral("product")}},
-        {"src/core/StationRfKitController.cpp", {}, {}, 0},
+        // publish's error: Rf2ksConnection's connectionFailed reason, scanned
+        // above.
+        {"src/core/StationRfKitController.cpp", {}, {}, 1, {}, {QStringLiteral("reason")}},
         // Band names ("20m"), one or several joined with " + ".
         {"src/core/accessories/AlexController.cpp", {QStringLiteral("recomputeBpf")}, {}, 3,
          {QStringLiteral("bandLabel(s.currentBpfBand)"),
-          QStringLiteral("bandList.join(QStringLiteral(\" + \"))")}},
+          QStringLiteral("bandList.join(QStringLiteral(\" + \"))")},
+         // One band's name alone: the reason when one band is filtered.
+         {QStringLiteral("bandLabel(s.currentBpfBand)")}},
         {"src/core/dsp/NnrSettings.h", {QStringLiteral("nnrLimitExplanation")}, {}, 4},
         {"src/models/SliceModel.cpp",
          {QStringLiteral("setActiveNr"), QStringLiteral("applyNnrSettings"),
@@ -674,6 +815,24 @@ const QList<ReasonSource>& propertyTextSources()
         {"src/models/PureSignalSettings.cpp", {QStringLiteral("load")}, {}, 1},
     };
     return sources;
+}
+
+// Functions that write a reason only by passing their QString* out-parameter
+// on to a function scanned above: the call must be in the body, with the
+// out-parameter among its arguments.
+struct ForwardingSite {
+    const char* file;
+    const char* function;
+    const char* callee;
+};
+
+const QList<ForwardingSite>& forwardingSites()
+{
+    static const QList<ForwardingSite> sites{
+        {"src/core/RxChannel.cpp", "setNnrTuning", "NnrAdapter::apply"},
+        {"src/core/RxChannel.cpp", "setNnrDiagnostics", "NnrAdapter::setDiagnostics"},
+    };
+    return sites;
 }
 
 QStringList sourceFiles(const QStringList& roots)
@@ -692,6 +851,11 @@ QStringList sourceFiles(const QStringList& roots)
 
 bool scanned(const QString& file, const QString& function)
 {
+    for (const ForwardingSite& site : forwardingSites()) {
+        if (file == QLatin1String(site.file) && function == QLatin1String(site.function)) {
+            return true;
+        }
+    }
     for (const ReasonSource& source : reasonSources()) {
         if (file == QLatin1String(source.file)
             && (source.functions.isEmpty() || source.functions.contains(function))) {
@@ -820,7 +984,8 @@ int checkReasonSources(const QList<ReasonSource>& sources, QStringList* failures
                 continue;
             }
             ++reasons;
-            for (const QString& problem : problemsOf(reason, source.plainInserts)) {
+            for (const QString& problem :
+                 problemsOf(reason, source.plainInserts, source.forwards)) {
                 failures->append(QStringLiteral("%1: %2").arg(QLatin1String(source.file), problem));
             }
         }
@@ -909,6 +1074,63 @@ private slots:
         }
         QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
         QVERIFY2(checked >= 250, qPrintable(QString::number(checked)));
+    }
+
+    void forwardingSitesPassTheirReasonOn()
+    {
+        static const QRegularExpression anyName(QStringLiteral("."));
+        int checked = 0;
+        for (const ForwardingSite& site : forwardingSites()) {
+            const QString code = codeOf(sourcePath(QString::fromLatin1(site.file)));
+            bool passed = false;
+            for (const FunctionBody& function : functionsIn(code, anyName)) {
+                if (function.name != QLatin1String(site.function)) {
+                    continue;
+                }
+                const QString callee = QLatin1String(site.callee) + QLatin1Char('(');
+                const qsizetype call = function.body.indexOf(callee);
+                if (call < 0) {
+                    continue;
+                }
+                const qsizetype open = call + callee.size() - 1;
+                const qsizetype close =
+                    closingOf(function.body, open, QLatin1Char('('), QLatin1Char(')'));
+                for (const QString& argument :
+                     splitTopLevel(function.body.mid(open + 1, close - open - 2))) {
+                    passed = passed || argument.trimmed() == QStringLiteral("reason");
+                }
+            }
+            QVERIFY2(passed, qPrintable(QStringLiteral("%1: %2 does not pass its reason to %3")
+                                            .arg(QLatin1String(site.file),
+                                                 QLatin1String(site.function),
+                                                 QLatin1String(site.callee))));
+            const QString calleeClass =
+                QString::fromLatin1(site.callee).section(QStringLiteral("::"), 0, 0);
+            QVERIFY2(scanned(QStringLiteral("src/core/dsp/%1.cpp").arg(calleeClass), QString()),
+                     site.callee);
+            ++checked;
+        }
+        QCOMPARE(checked, 2);
+    }
+
+    void notchConstantsArePlain()
+    {
+        // RadioModel.cpp's two notch refusals are file-scope constants the
+        // function scan names as forwards; their words are checked here.
+        const QString code = codeOf(sourcePath(QStringLiteral("src/models/RadioModel.cpp")));
+        int checked = 0;
+        for (const char* name : {"kUnknownNotchReason", "kNotchListBusyReason"}) {
+            const QRegularExpression definition(
+                QStringLiteral("\\bconst QString %1\\s*=\\s*QStringLiteral\\(\\s*\"([^\"]*)\"")
+                    .arg(QLatin1String(name)));
+            const QRegularExpressionMatch match = definition.match(code);
+            QVERIFY2(match.hasMatch(), name);
+            const QString problem = wordingProblemIn(match.captured(1));
+            QVERIFY2(problem.isEmpty(), qPrintable(match.captured(1) + QStringLiteral(" [")
+                                                   + problem + QLatin1Char(']')));
+            ++checked;
+        }
+        QCOMPARE(checked, 2);
     }
 
     void everyStationPropertyTextIsPlain()
