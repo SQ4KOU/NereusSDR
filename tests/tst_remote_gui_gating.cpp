@@ -176,6 +176,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#include "fakes/MainWindowTestSettings.h"
 
 using namespace NereusSDR;
 
@@ -3412,8 +3413,7 @@ private slots:
         // The arrangement tst_gui_session_coordinator makes first: no VAX
         // first-run dialog, and no discovery broadcast from the local
         // windows onto the LAN.
-        AppSettings::instance().setValue(QStringLiteral("audio/FirstRunComplete"),
-                                         QStringLiteral("True"));
+        Test::markAudioFirstRunDone();
         RadioDiscovery::clearHoldOffForTest();
         {
             RadioDiscovery discovery;
@@ -3605,8 +3605,7 @@ private slots:
     void localWindowDisconnectStillOpensConnections()
     {
         QFETCH(bool, pickerManaged);
-        AppSettings::instance().setValue(QStringLiteral("audio/FirstRunComplete"),
-                                         QStringLiteral("True"));
+        Test::markAudioFirstRunDone();
         RadioDiscovery::clearHoldOffForTest();
         {
             RadioDiscovery discovery;
@@ -3670,6 +3669,11 @@ private slots:
         // Migrated settings, so the remote window's StationClient does not
         // warn that CoreInit has not run (as the Tools menu case above).
         AppSettings::instance().ensureSettingsAtVersion(6);
+        // The local window below spins the event loop; on Linux with no
+        // audio backend the modal Linux audio first-run dialog would block
+        // it (R-R3-21). audio/FirstRunComplete stays unset, so the VAX
+        // first-run check this case is about still runs.
+        Test::suppressLinuxAudioFirstRun();
         {
             SettingsProxy proxy;
             AppSettings::instance().setRemoteBackend(&proxy);

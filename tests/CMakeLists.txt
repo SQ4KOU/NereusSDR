@@ -258,6 +258,36 @@ function(nereus_add_test name)
         endif()
     endif()
 
+    # Each test gets its own settings location (R-R3-21). TestSandboxInit.cpp
+    # puts every test binary in QStandardPaths test mode, but test mode is one
+    # shared directory under $HOME (~/.qttest/config on Linux,
+    # ~/.qttest/Library/Preferences on macOS), so every test that uses
+    # AppSettings::instance() without its own profile wrote the same
+    # NereusSDR/NereusSDR.settings. Two tests that save, clear and reload it
+    # overwrote each other when ctest ran them side by side:
+    # tst_nnr_settings and tst_ps3_settings_persistence failed 23 of 150
+    # runs that way on Linux (47 of 150 on macOS). Test mode derives that
+    # directory from the home directory: $HOME on Linux, and on macOS
+    # NSHomeDirectory(), which ignores $HOME and follows CFFIXED_USER_HOME
+    # instead. A per-test home therefore gives each test its own settings
+    # file. A test that sets its own profile (AppSettings::setProfileOverride)
+    # keeps it, now under its own home; a child process a test starts
+    # inherits the same environment, so a test and the daemon it spawns
+    # still share one file. Two cases keep the shared location: Windows,
+    # whose test mode resolves the directory from the known-folder API that
+    # no environment variable redirects, and NATIVE_WINDOW tests on macOS,
+    # where CFFIXED_USER_HOME would also hide the operator's appearance and
+    # locale preferences from the native platform those tests exist to use.
+    if(NOT WIN32)
+        set(_test_home "${CMAKE_CURRENT_BINARY_DIR}/test-home/${name}")
+        file(MAKE_DIRECTORY "${_test_home}")
+        set_property(TEST ${name} APPEND PROPERTY ENVIRONMENT "HOME=${_test_home}")
+        if(APPLE AND NOT _nat_NATIVE_WINDOW)
+            set_property(TEST ${name} APPEND PROPERTY ENVIRONMENT
+                "CFFIXED_USER_HOME=${_test_home}")
+        endif()
+    endif()
+
     # Per-label build aggregates, so `ctest -L core` has a matching
     # `tests_core` target that actually builds what it is about to run.
     #
@@ -7134,9 +7164,12 @@ nereus_add_test(tst_remote_audio_clock)
 # the cost is the coverage itself: shortening either hour weakens the drift
 # gate. Measured 2026-09-22 on the M5 Max: 116 s alone (load 7.3), 212 s in a
 # full -j6 run (load 18.8 at start, 8.7 at end). PROCESSORS 2 makes a -jN run
-# start one fewer neighbour while this single-threaded loop runs; TIMEOUT 400
-# is about twice the loaded measurement.
-set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 400 PROCESSORS 2)
+# start one fewer neighbour while this single-threaded loop runs.
+# R-R3-21: each hour is its own data row, so QtTest's 300 s watchdog bounds
+# one hour, not both; on a Linux aarch64 host both hours took 347 s alone
+# and were aborted by that watchdog, and 267 s at the end of a full run.
+# TIMEOUT 700 is about twice the slowest (Linux, alone) measurement.
+set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 700 PROCESSORS 2)
 nereus_add_test(tst_daemon_audio_session fakes/LoopbackTransport.cpp)
 # R-R3-06/07/09: the 48 kHz mixed-audio contract through live radio rate,
 # mode, band and slice-count changes, on a RadioModel genuinely connected to

@@ -865,9 +865,15 @@ private slots:
         connectSession();
         const quint32 offeredEpoch = client.sessionEpoch();
         QTRY_VERIFY(media && media->descriptionClock.isValid());
+        // The recovery this stage waits for stops the media peer, which
+        // deleteLater()s this transport; the event loop QTRY spins runs
+        // that delete, so `media` can be gone by the time the wait returns
+        // (R-R3-21: 3 of 3 SIGSEGV on Linux). The clock starts once and is
+        // never restarted, so a copy taken now measures the same interval.
+        const QElapsedTimer descriptionClock = media->descriptionClock;
         QTRY_COMPARE_WITH_TIMEOUT(recoveries.size(), 2, 5000);
-        QVERIFY2(media->descriptionClock.elapsed() >= kConnectMs - 20,
-                 qPrintable(QString::number(media->descriptionClock.elapsed())));
+        QVERIFY2(descriptionClock.elapsed() >= kConnectMs - 20,
+                 qPrintable(QString::number(descriptionClock.elapsed())));
         QCOMPARE(recoveries.constLast().at(0).toUInt(), offeredEpoch);
         QCOMPARE(recoveries.constLast().at(1).toString(),
                  QStringLiteral("Station media did not connect within 1.5 seconds"));

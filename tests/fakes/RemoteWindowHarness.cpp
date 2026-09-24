@@ -12,6 +12,7 @@
 // =================================================================
 
 #include "RemoteWindowHarness.h"
+#include "MainWindowTestSettings.h"
 
 #include <QAction>
 #include <QCoreApplication>
@@ -198,6 +199,9 @@ bool RemoteWindowHarness::start()
     }
     // The saved operator layout, as a previous run would have left it.
     AppSettings::instance().setValue(QStringLiteral("PanLayoutId"), m_options.panLayout);
+    // The window is remote, which already skips the Linux audio first-run
+    // dialog; seeded anyway, as for every test that builds a MainWindow.
+    suppressLinuxAudioFirstRun();
 
     AppSettings::instance().setRemoteBackend(&m_proxy);
     m_backendInstalled = true;

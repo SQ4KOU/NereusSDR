@@ -37,6 +37,7 @@
 #include "models/SliceModel.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/RemoteAudioSessionHarness.h"
+#include "fakes/MainWindowTestSettings.h"
 
 using namespace NereusSDR;
 
@@ -183,6 +184,9 @@ private slots:
     void init()
     {
         AppSettings::instance().clear();
+        // Every case builds a MainWindow; the Linux audio first-run dialog
+        // is modal and would block the first event-loop turn (R-R3-21).
+        Test::suppressLinuxAudioFirstRun();
         QVERIFY(AppSettings::instance().save());
         RadioDiscovery::clearHoldOffForTest();
     }

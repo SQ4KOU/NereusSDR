@@ -19,6 +19,7 @@
 #include "gui/MainWindow.h"
 #include "gui/StationLanSelection.h"
 #include "models/RadioModel.h"
+#include "fakes/MainWindowTestSettings.h"
 using namespace NereusSDR;
 
 namespace {
@@ -50,7 +51,7 @@ private slots:
     {
         QVERIFY(!AppSettings::instance().remoteBackend());
         AppSettings::instance().clear();
-        AppSettings::instance().setValue(QStringLiteral("audio/FirstRunComplete"), QStringLiteral("True"));
+        Test::markAudioFirstRunDone();
         QVERIFY(AppSettings::instance().save());
         RadioDiscovery::clearHoldOffForTest();
         RadioDiscovery guard;

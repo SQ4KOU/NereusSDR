@@ -23,6 +23,7 @@
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "fakes/LoopbackTransport.h"
+#include "fakes/MainWindowTestSettings.h"
 
 using namespace NereusSDR;
 
@@ -45,7 +46,7 @@ private slots:
     void init()
     {
         AppSettings::instance().clear();
-        AppSettings::instance().setValue(QStringLiteral("audio/FirstRunComplete"), QStringLiteral("True"));
+        Test::markAudioFirstRunDone();
         RadioDiscovery::clearHoldOffForTest();
         RadioDiscovery discovery;
         discovery.holdOffScans(std::chrono::minutes{5});
