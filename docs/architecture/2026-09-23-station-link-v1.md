@@ -76,9 +76,12 @@ The station makes its own certificate the first time it runs and keeps it
 - self-signed, subject and issuer common name `nereusd`;
 - an RSA key of 3072 bits (`kRsaKeyBits`), signed with SHA-256
   (`X509_sign(..., EVP_sha256())`);
-- valid from one day before creation (`kNotBeforeSkewSeconds`) for
-  `60 * 60 * 24 * 365 * 10` seconds, which is 3650 days
-  (`kValiditySeconds`, "10 years");
+- not before: one day before creation (`kNotBeforeSkewSeconds`,
+  `-60 * 60 * 24` seconds);
+- not after: `60 * 60 * 24 * 365 * 10` seconds after creation, which is
+  3650 days (`kValiditySeconds`, "10 years"); both are offsets from the
+  moment of creation (`X509_gmtime_adj`), so the whole validity span is
+  3651 days;
 - a random positive 63-bit serial number.
 
 There is no renewal. A new certificate changes the pin, and every paired
