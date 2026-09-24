@@ -2731,7 +2731,7 @@ StationClient::CommandOutcome StationClient::sendCommand(const QByteArray& verb,
         }
     }
     m_pendingCommands.insert(id, pending);
-    return CommandOutcome{ true, QString() };
+    return CommandOutcome{ true, QString(), id };
 }
 
 StationClient::CommandOutcome StationClient::requestAddSlice(const QString& initialPanId)
@@ -3308,6 +3308,19 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             m_radioModel->pureSignalFacade()->receiveRemoteActionResult(message.commandId,
                 message.commandVerb, phase, message.reason, *values);
         }
+    }
+    // R-R3-22 fix wave: every result by its id, so a sender (the amp
+    // applets) clears its own pending request and shows only its own
+    // refusal. The refusal's words are the same the routing above used.
+    if (!m_radioModel.isNull()) {
+        const QPointer<StationClient> self(this);
+        const QString finishedReason = message.accepted ? QString()
+            : message.reason.isEmpty()
+                ? QStringLiteral("The station refused the request without giving a reason.")
+                : message.reason;
+        m_radioModel->reportStationCommandFinished(message.commandId, message.accepted,
+                                                   finishedReason);
+        if (!self) { return; }
     }
     emit commandResponse(message);
     emit commandResult(message.commandId, message.accepted, message.reason);

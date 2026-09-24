@@ -100,6 +100,11 @@ public:
     struct CommandOutcome {
         bool sent = false;
         QString reason;
+        /// R-R3-22 fix wave: the id the command went out under, when sent
+        /// and the link numbers its commands (0 otherwise). Its result
+        /// arrives as RadioModel::stationCommandFinished with the same id,
+        /// so a sender can tell its own command's result apart.
+        quint32 commandId = 0;
     };
 
     /// SessionCommandDispatcher verb "addSlice", argument initialPanId.

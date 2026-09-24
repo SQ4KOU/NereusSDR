@@ -218,8 +218,8 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
         }
         connect(m_model, &RadioModel::stationLinkStateChanged,
                 this, &AmpApplet::updateStationState);
-        connect(m_model, &RadioModel::accessoryRequestRefused,
-                this, &AmpApplet::onAccessoryRequestRefused);
+        connect(m_model, &RadioModel::stationCommandFinished,
+                this, &AmpApplet::onStationCommandFinished);
         syncFromAmplifier();
         updateStationState();
     }
@@ -283,9 +283,9 @@ void AmpApplet::updateConnectionLine()
         return;
     }
     if (m_amp && m_amp->connectionPhase() != m_lastPhase) {
-        // The Core moved: a request that was waiting has been taken.
+        // The Core moved: its phase replaces an earlier refusal. A request
+        // still waiting stays tied to its own command's result.
         m_lastPhase = m_amp->connectionPhase();
-        m_requestPending = false;
         m_requestReason.clear();
     }
     const IStationLink* link = isRemoteWindow() ? m_model->stationLink() : nullptr;
@@ -301,16 +301,20 @@ void AmpApplet::updateConnectionLine()
     m_connectionLabel->setVisible(true);
 }
 
-// R-R3-22: the Core refused the applet's own Disconnect or Reconnect.
+// R-R3-22: the Core answered the applet's own Disconnect or Reconnect: a
+// refusal shows its reason; either way the request is no longer waiting.
 // Other Power Genius requests (the Setup pages') show where they were sent.
-void AmpApplet::onAccessoryRequestRefused(const QString& device, const QString& reason)
+void AmpApplet::onStationCommandFinished(quint32 commandId, bool accepted,
+                                         const QString& reason)
 {
-    if (device != QLatin1String("pgxl") || !m_requestPending) {
+    if (m_pendingCommandId == 0 || commandId != m_pendingCommandId) {
         return;
     }
-    m_requestPending = false;
-    m_requestReason = OperatorReasonText::forDisplay(reason);
-    updateConnectionLine();
+    m_pendingCommandId = 0;
+    if (!accepted) {
+        m_requestReason = OperatorReasonText::forDisplay(reason);
+        updateConnectionLine();
+    }
 }
 
 void AmpApplet::requestRemoteConnectionToggle()
@@ -323,7 +327,7 @@ void AmpApplet::requestRemoteConnectionToggle()
         ? link->requestDisconnectPgxl()
         : link->requestConfigurePgxl(m_amp->configuredHost(),
                                      static_cast<quint16>(m_amp->configuredPort()));
-    m_requestPending = outcome.sent;
+    m_pendingCommandId = outcome.sent ? outcome.commandId : 0;
     m_requestReason = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
     updateConnectionLine();
 }

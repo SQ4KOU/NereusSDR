@@ -552,6 +552,12 @@ public:
     /// pages that sent the request show, never to the slice toast.
     void reportStationAccessoryRefusal(const QString& device, const QString& reason);
 
+    /// R-R3-22 fix wave: the Core answered command `commandId` (the id in
+    /// IStationLink::CommandOutcome). `reason` is the Core's words for a
+    /// refusal, empty when accepted. Role::Remote only. Routed to
+    /// stationCommandFinished for a sender that waits on its own command.
+    void reportStationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
+
     /// The station refused a sample-rate change, with its own reason.
     /// Role::Remote only. Routed to sliceRetuneRejected, which carries the
     /// slice id and is separately toasted by MainWindow, because that is
@@ -3286,6 +3292,8 @@ signals:
     /// R-R3-47 / R-R3-22: the Core refused a request for an accessory's own
     /// settings (`device` "pgxl" or "tgxl"); `reason` is the Core's words.
     void accessoryRequestRefused(const QString& device, const QString& reason);
+    /// R-R3-22 fix wave: see reportStationCommandFinished.
+    void stationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
 
     /// Phase 3F Sub-Epic I closeout, defect F4: the operator retuned a slice
     /// to a frequency no DDC can reach, and the frequency has been rolled

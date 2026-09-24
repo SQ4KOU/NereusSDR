@@ -257,8 +257,8 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
         }
         connect(m_model, &RadioModel::stationLinkStateChanged,
                 this, &Rf2ksApplet::updateStationState);
-        connect(m_model, &RadioModel::accessoryRequestRefused,
-                this, &Rf2ksApplet::onAccessoryRequestRefused);
+        connect(m_model, &RadioModel::stationCommandFinished,
+                this, &Rf2ksApplet::onStationCommandFinished);
         syncFromRfKit();
         updateStationState();
     }
@@ -355,9 +355,9 @@ void Rf2ksApplet::updateConnectionLine()
         return;
     }
     if (m_rfKit && m_rfKit->connectionPhase() != m_lastPhase) {
-        // The Core moved: a request that was waiting has been taken.
+        // The Core moved: its phase replaces an earlier refusal. A request
+        // still waiting stays tied to its own command's result.
         m_lastPhase = m_rfKit->connectionPhase();
-        m_requestPending = false;
         m_requestReason.clear();
     }
     const IStationLink* link = isRemoteModel() ? m_model->stationLink() : nullptr;
@@ -373,16 +373,20 @@ void Rf2ksApplet::updateConnectionLine()
     m_connectionLabel->setVisible(true);
 }
 
-// R-R3-22: the Core refused the applet's own Disconnect or Reconnect.
+// R-R3-22: the Core answered the applet's own Disconnect or Reconnect: a
+// refusal shows its reason; either way the request is no longer waiting.
 // The RF-Kit page's requests show on the page.
-void Rf2ksApplet::onAccessoryRequestRefused(const QString& device, const QString& reason)
+void Rf2ksApplet::onStationCommandFinished(quint32 commandId, bool accepted,
+                                           const QString& reason)
 {
-    if (device != QLatin1String("rfkit") || !m_requestPending) {
+    if (m_pendingCommandId == 0 || commandId != m_pendingCommandId) {
         return;
     }
-    m_requestPending = false;
-    m_requestReason = OperatorReasonText::forDisplay(reason);
-    updateConnectionLine();
+    m_pendingCommandId = 0;
+    if (!accepted) {
+        m_requestReason = OperatorReasonText::forDisplay(reason);
+        updateConnectionLine();
+    }
 }
 
 void Rf2ksApplet::requestRemoteConnectionToggle()
@@ -395,7 +399,7 @@ void Rf2ksApplet::requestRemoteConnectionToggle()
         ? link->requestDisconnectRfKit()
         : link->requestConfigureRfKit(m_rfKit->configuredHost(),
                                       static_cast<quint16>(m_rfKit->configuredPort()));
-    m_requestPending = outcome.sent;
+    m_pendingCommandId = outcome.sent ? outcome.commandId : 0;
     m_requestReason = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
     updateConnectionLine();
 }

@@ -173,17 +173,30 @@ public:
     int pgxlKeepaliveSec{0};
     int pgxlPingSec{-1};
     bool remotePgxlControlAvailable() const override { return pgxlAvailable; }
+    // R-R3-22 fix wave: each sent command gets its own id, as StationClient
+    // gives it, so an applet can tell its own command's result apart.
+    quint32 nextCommandId{100};
+    quint32 lastPgxlCommandId{0};
+    quint32 lastRfKitCommandId{0};
+    CommandOutcome stamp(CommandOutcome outcome, quint32& last)
+    {
+        if (outcome.sent) {
+            outcome.commandId = nextCommandId++;
+            last = outcome.commandId;
+        }
+        return outcome;
+    }
     CommandOutcome requestConfigurePgxl(const QString& host, quint16 port) override
     {
         ++pgxlConfigureCalls;
         pgxlHost = host;
         pgxlPort = port;
-        return pgxlOutcome;
+        return stamp(pgxlOutcome, lastPgxlCommandId);
     }
     CommandOutcome requestDisconnectPgxl() override
     {
         ++pgxlDisconnectCalls;
-        return pgxlOutcome;
+        return stamp(pgxlOutcome, lastPgxlCommandId);
     }
     CommandOutcome requestPgxlConnectionSettings(bool autoReconnect, int keepaliveSec,
                                                  int pingSec) override
@@ -208,12 +221,12 @@ public:
         ++rfKitConfigureCalls;
         rfKitHost = host;
         rfKitPort = port;
-        return accessoryOutcome;
+        return stamp(accessoryOutcome, lastRfKitCommandId);
     }
     CommandOutcome requestDisconnectRfKit() override
     {
         ++rfKitDisconnectCalls;
-        return accessoryOutcome;
+        return stamp(accessoryOutcome, lastRfKitCommandId);
     }
 };
 
@@ -946,12 +959,22 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     QCOMPARE(link.rfKitHost, QStringLiteral("192.0.2.41"));
     QCOMPARE(link.rfKitPort, quint16{8080});
 
-    // The Core refuses: each applet shows the plain reason on its line.
+    // The Core refuses another request (a Setup page's, another id): not
+    // the applets' business.
+    const QString otherRefusal = QStringLiteral("Choose an output limit from 100 to 2000 W.");
+    model.reportStationAccessoryRefusal(QStringLiteral("pgxl"), otherRefusal);
+    model.reportStationCommandFinished(7, false, otherRefusal);
+    QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Disconnected"));
+    QCOMPARE(rfKit.connectionLineTextForTesting(), QStringLiteral("Disconnected"));
+
+    // The Core refuses the applets' own: each shows the plain reason.
     const QString pgxlRefusal = QStringLiteral("Enable 4O3A on Core before connecting the PGXL.");
     const QString rfKitRefusal =
         QStringLiteral("Turn on the RF-Kit amplifier on the Core before connecting it.");
     model.reportStationAccessoryRefusal(QStringLiteral("pgxl"), pgxlRefusal);
+    model.reportStationCommandFinished(link.lastPgxlCommandId, false, pgxlRefusal);
     model.reportStationAccessoryRefusal(QStringLiteral("rfkit"), rfKitRefusal);
+    model.reportStationCommandFinished(link.lastRfKitCommandId, false, rfKitRefusal);
     QCOMPARE(amp.connectionLineTextForTesting(), OperatorReasonText::forDisplay(pgxlRefusal));
     QCOMPARE(rfKit.connectionLineTextForTesting(), OperatorReasonText::forDisplay(rfKitRefusal));
     QVERIFY2(OperatorWording::isPlain(amp.connectionLineTextForTesting()),
@@ -982,6 +1005,18 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     }
     QCOMPARE(link.pgxlDisconnectCalls, 1);
     QCOMPARE(link.rfKitDisconnectCalls, 1);
+
+    // The Core takes the applets' requests with no phase change yet: their
+    // commands are done, so a later refusal of an unrelated request (a
+    // Setup page's) does not land on the applets' lines.
+    model.reportStationCommandFinished(link.lastPgxlCommandId, true, QString());
+    model.reportStationCommandFinished(link.lastRfKitCommandId, true, QString());
+    model.reportStationAccessoryRefusal(QStringLiteral("pgxl"), otherRefusal);
+    model.reportStationCommandFinished(link.nextCommandId + 50, false, otherRefusal);
+    model.reportStationAccessoryRefusal(QStringLiteral("rfkit"), otherRefusal);
+    model.reportStationCommandFinished(link.nextCommandId + 51, false, otherRefusal);
+    QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Identifying device"));
+    QCOMPARE(rfKit.connectionLineTextForTesting(), QStringLiteral("Connecting at station"));
 
     // Connected, then a drop the Core retries, in user words.
     model.amplifierModel()->setStationConnectionState(

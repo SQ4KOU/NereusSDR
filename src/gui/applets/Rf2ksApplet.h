@@ -129,7 +129,9 @@ private slots:
     // R-R3-22: a remote window's connection line: the Core's phase, or the
     // plain reason its last Disconnect or Reconnect was not taken.
     void updateConnectionLine();
-    void onAccessoryRequestRefused(const QString& device, const QString& reason);
+    // R-R3-22 fix wave: the Core's answer to a command, by id; only the
+    // applet's own Disconnect or Reconnect (m_pendingCommandId) is shown.
+    void onStationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
 
 private:
     QMenu* buildContextMenu(QObject* menuParent);
@@ -164,10 +166,10 @@ private:
     QLabel*     m_staleLabel{nullptr};
     // R-R3-48: the band-follow line.
     QLabel*     m_bandFollowLabel{nullptr};
-    // R-R3-22: a remote window's connection line, whether its own request
-    // is still waiting on the Core, and the reason one was not taken.
+    // R-R3-22: a remote window's connection line, the id of its own request
+    // while it waits on the Core, and the reason one was not taken.
     QLabel*     m_connectionLabel{nullptr};
-    bool        m_requestPending{false};
+    quint32     m_pendingCommandId{0};  // 0: nothing of the applet's own waiting
     QString     m_requestReason;
     TunerModel::ConnectionPhase m_lastPhase{TunerModel::ConnectionPhase::Disabled};
 };

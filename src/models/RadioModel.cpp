@@ -4561,6 +4561,15 @@ void RadioModel::reportStationAccessoryRefusal(const QString& device, const QStr
     emit accessoryRequestRefused(device, reason);
 }
 
+void RadioModel::reportStationCommandFinished(quint32 commandId, bool accepted,
+                                              const QString& reason)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    emit stationCommandFinished(commandId, accepted, reason);
+}
+
 void RadioModel::reportStationRetuneRejected(int sliceId, const QString& reason)
 {
     if (m_role != Role::Remote) {
