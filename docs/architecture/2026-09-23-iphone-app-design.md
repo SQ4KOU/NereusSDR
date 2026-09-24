@@ -3,7 +3,7 @@
 Status: **Approved** by JJ (KG4VCF) on 2026-09-23 ("onward"); D35 to D43
 were added while planning, each his call; he changed D38 later that day and set
 D43's wording rule on 2026-09-24. On 2026-09-24 he also replaced one device at a
-time with several devices at once (§3.9, D44 to D64; D58 to D64 answer the station
+time with several devices at once (§3.9, D44 to D67; D58 to D67 answer the station
 design's questions the same evening), which replaces D21 and carries D22 forward.
 Every decision in §3 is JJ's.
 Plan: [2026-09-23-iphone-app-plan.md](2026-09-23-iphone-app-plan.md)
@@ -165,10 +165,12 @@ On 2026-09-24 JJ asked for several devices on one Core at the same time, in plac
 of one device taking the Core over: "since we have a computer running there,
 whether it be single board or core combined, it makes sense to me to be able to
 have both clients connected." He settled the model one question at a time, then
-kept the drawn screens (§5.8) with the details they needed, marked below as drawn
-details. The station half (the session model, who owns what, the arbitration, and
-the admission rules that replace link §12.4) is the Core/GUI session's design
-document; §4.5 says what the phone needs from it.
+kept the drawn screens (§5.8, and §5.9 for the notices and the states in between) with
+the details they needed, marked below as drawn details. The station half (the session
+model, who owns what, the arbitration, and the admission rules that replace link
+§12.4) is [2026-09-24-several-devices-on-one-core-design.md](2026-09-24-several-devices-on-one-core-design.md),
+written by the Core/GUI session and reviewed against this spec; §4.5 says what the phone
+needs from it, and that design's sections 10.2 to 10.9 give the wire.
 
 | # | Decision | Why | Rejected |
 | --- | --- | --- | --- |
@@ -193,6 +195,9 @@ document; §4.5 says what the phone needs from it.
 | D62 | **A device that drops keeps its place, its slices and transmit for 3 minutes**, unkeyed at once. After that its slices are saved for its return, and its place and transmit are freed; coming back to a full Core then brings the fifth-device question. | The phone's reconnect attempts fall inside it, and a phone left dead in a drawer doesn't hold a place or transmit for ever. JJ chose 3 minutes when offered two or no limit. | Two minutes (recommended); until it comes back. |
 | D63 | **When nobody has transmit, a tap on PTT takes it and keys**, and every device shows who has it. Programs still never take it (D58). | Nobody is on the air to disturb, and it works the way operating the radio alone does today. | Asking "Take transmit?" first. |
 | D64 | **Five narrower rules, kept together:** nobody can take the receiver of a slice someone is transmitting on; while the radio's own mic or footswitch is keyed, the slice it transmits on can't be retuned until the press ends; a fifth device can't take the place of the computer running the Core; sound is never cut when the Core runs short (the other devices' bands slow down, then pause with sound kept, until there is room); the desktop running the Core asks before taking transmit, like any device, while a mic plugged into the radio still takes it at once. | Each follows from JJ's calls or from transmit safety; the station's design for several devices lists them as confirmed. | |
+| D65 | **The phone's name, as the Core lists it, is an editable field at pairing**, filled in with the phone's own name once Apple grants the user-assigned device name entitlement (JJ applies for it from his developer account), and with "iPhone" or "iPad" until then. The short name the Core shows on PTT and markers is the model ("iPhone", "iPad"), numbered by the Core when two collide. | Since iOS 16 an app reads the phone's own name only with that entitlement; nothing waits on Apple's answer. | An editable field with no request to Apple. |
+| D66 | **An older NereusSDR window finding no room is turned away, saying why**: with four devices on, or no receiver free for its slice, it is refused, retryable, with "The Core is full. Update NereusSDR to take a device's place, or try again later." Nobody already connected is disturbed. | An older window can't show the fifth-device question (D55), and letting it past the limit would break D44. Narrows D55 and D59 for older windows. | Letting it in over the limit. |
+| D67 | **Deleting and reinstalling the app keeps its pairings.** The phone keeps its device key and its list of paired Cores (their identity keys, labels and addresses) in the iPhone's secure storage (the Keychain), which survives deleting the app; after reinstalling it connects as before. | Otherwise the key would survive and the list would not, and a reinstalled phone would be stuck: the Core says it's already paired while the phone has forgotten the Core. It also keeps a Core from gaining a second entry for the same phone. | Starting fresh: a new key, pairing again as a new device, the old entry left on each Core until someone removes it. |
 
 ---
 
@@ -271,8 +276,9 @@ Remote design §7.1 has one operator and one session, and a second authenticated
 connection preempts the first. §3.9 replaces that: up to four paired devices hold
 sessions on one Core at the same time. The station half (the session model, who
 owns which slice, pan and receiver, the arbitration of transmit, receivers and
-shared settings, and the admission rules that replace link §12.4) is the Core/GUI
-session's design document for several devices. What the phone needs from it:
+shared settings, and the admission rules that replace link §12.4) is
+[2026-09-24-several-devices-on-one-core-design.md](2026-09-24-several-devices-on-one-core-design.md).
+What the phone needs from it:
 
 1. **Who is on the Core:** every connected device's name, how long it has been
    connected, when it was last active, and what it is doing (listening on which
@@ -298,9 +304,11 @@ session's design document for several devices. What the phone needs from it:
 6. **Notices:** a device is told who took its receiver, transmit or place, and
    when, and who changed a shared setting that reaches its slices, with Take it
    back where D49, D51, D52 and D55 give one.
-7. **Capacity:** when the Core cuts a device's display or audio to fit (D54), it
-   tells that device the frame rate it gets, and the phone shows the "Sharing"
-   chip.
+7. **Capacity:** when the Core's display allowance or an allocation result says the
+   phone's display doesn't fit (D54), the phone lowers its own frame rate, then its
+   pixels, to the budget design's floor (the agreed quality policy), and shows the
+   "Sharing" chip with the rate it settled on. The Core says why: its connection is
+   shared, or its processing is short. Sound is never cut (D64).
 8. **A fifth device and reclaiming:** with four connected, a fifth device takes
    one's place only when its operator confirms (D55), and a device on the air is
    unkeyed first. A device coming back to its own dropped session (the same device
@@ -761,11 +769,53 @@ slice C on 20 m.
     bands, TX on the one with transmit, and Revoke; then Paired. "Up to four
     devices can be connected at once."
 14. **A fifth device:** "Four devices are on KG4VCF/shack", the four with what
-    each is doing, starting on the one idle longest; picking the one on the air
-    turns the button red ("Unkey and take the MacBook's place").
+    each is doing, starting on the one idle longest that can be replaced (a device
+    that's away counts as idle longest; the computer running the Core can't be
+    replaced, D64); picking the one on the air turns the button red ("Unkey and take
+    the MacBook's place").
 15. **Your own session:** after a lost link the phone comes back without asking.
 16. **The device whose place was taken** (an iPad): TAKEN OVER, with who and
     when; its slices and settings kept on the Core; Take it back.
+
+### 5.9 Several devices: states and notices
+
+![Several devices: states and notices](2026-09-23-iphone-app-design/23-several-devices-states-and-notices.jpg)
+
+Drawn the same evening as §5.8 and kept by JJ (board v50 and v51), with the same cast.
+
+**The states in between:**
+
+1. **A device that's away:** the MacBook's link dropped while it had transmit; its
+   label greys with "away", and taking transmit asks "Take transmit from the
+   MacBook?" without the red button, since nobody is on the air.
+2. **Transmit on its way:** right after Unkey and take over, PTT waits with a
+   turning ring and "Wait" while the Core unkeys the other device, then reads Tap.
+3. **Held by the radio's mic:** on a Core with no desktop, the radio's own mic
+   transmits on this phone's slice A; the flag says ON AIR, the frequency greys, and
+   tuning slice A waits until the press ends.
+4. **Away, on Devices:** an amber dot and "away for 1 minute"; it keeps its place and
+   slices for 3 minutes.
+5. **Away, for a fifth device:** a device that's away comes first in the list.
+
+**Notices:**
+
+6. **Back within 3 minutes, without transmit:** "Back on the air. It was this
+   phone's own session, so it didn't ask."
+7. **Back, transmit taken meanwhile:** "The MacBook took transmit while you were
+   away, at 19:55." with Take it back.
+8. **Back after 3 minutes:** "Back after more than 3 minutes. Your slices are back,
+   and transmit was freed while you were away."
+9. **Back after 3 minutes to a full Core:** the fifth-device question, headed "Your
+   place went to another device", saying the phone was away more than 3 minutes.
+10. **A slice that couldn't come back:** "Slice E couldn't come back: every receiver
+    is in use. Its frequency and settings are saved."
+11. **The antenna stays:** "The antenna stays on ANT1 while the MacBook listens on
+    it." (D61)
+12. **The Core is busy:** the Sharing chip with "The Core is busy." when processing
+    runs short, in place of "The Core's connection is full."
+13. **Short, nobody has transmit:** "The Core's connection is full. The devices share
+    it, so this phone's band slows to 12 frames a second until there's room." (also
+    when the radio's mic has transmit)
 
 ---
 
@@ -817,7 +867,7 @@ Hardware evidence stays **pending** until a device or the bench shows it.
 | R-IOS-14 | Locked and in other apps (§5.5 items 1 to 5): locking unkeys; the screen stays awake while keyed; switching apps keeps transmitting with the island; the card as drawn; sound only; the eight-hour last message. | Device: a real iPhone locked, switched and left eight hours. Bench: transmission stops on lock and continues across an app switch. |
 | R-IOS-15 | Hardware PTT through Apple's Push to Talk (§5.5 items 6 to 8): headset button, Bluetooth PTT button, Action button; keying a locked phone; "Keyed by headset". | Device and Bench, with each button. |
 | R-IOS-16 | Connecting (§5.3): first launch, the Local Network question, pairing three ways, the microphone asked after pairing, the station list, link lost and back on the air, the five trouble screens; the version rules of §4.4. | Integration: each failure induced against a real station, including a station one major back and one two majors back. Device: the permission prompts. |
-| R-IOS-17 | The several-devices screens of §5.8 and §5.3 items 12 and 13 (amended 2026-09-24 from the takeover screens). | Integration: four devices on one Core, listening and transmitting, with a fifth device and the radio's own PTT. Device: screenshots compared against the board. |
+| R-IOS-17 | The several-devices screens of §5.8 and §5.9 and §5.3 items 12 and 13 (amended 2026-09-24 from the takeover screens). | Integration: four devices on one Core, listening and transmitting, with a fifth device and the radio's own PTT. Device: screenshots compared against the board. |
 | R-IOS-18 | Tabs and Setup (§5.2): Modes, Tools, Radio, the Setup tree with its tags, Devices; controls in both places (D15). | Software: each control writes to its owner (station or phone). Integration: a station setting changed on the phone shows on the desktop. |
 | R-IOS-19 | Accessories on the phone (§5.4 items 1 to 5): the three pages, the TX panel controls, the interlock refusal with "Operate amp". | Bench with the devices. |
 | R-IOS-20 | Audio on the phone (§5.4 items 6 to 10): routes, the iPhone microphone by default, the band muted while talking, MON in headphones only, voice processing off, the quality choice, the speaker's route menu. | Device: every route, including AirPods; no feedback on the speaker while keyed. Bench: on-air audio shaped by the station's processing. |
@@ -911,10 +961,10 @@ Each has an owner and the moment it is settled.
   unclaimed: R6.
 * **The app's structure and minimum iOS version** (§4.12): proposed in this
   spec; JJ rules on them in his review.
-* **The station's design for several devices** (the session model, ownership,
-  arbitration, and admission replacing link §12.4): the Core/GUI session writes
-  it and the phone session reviews it; §4.5, R-IOS-02, R-IOS-03, R-IOS-30 and
-  R-IOS-31 take their wire form from it.
+* **The station's design for several devices**: written as
+  [2026-09-24-several-devices-on-one-core-design.md](2026-09-24-several-devices-on-one-core-design.md)
+  and reviewed twice against this spec (2026-09-24); §4.5, R-IOS-02, R-IOS-03,
+  R-IOS-30 and R-IOS-31 take their wire form from its sections 10.2 to 10.9.
 
 ---
 
@@ -946,6 +996,7 @@ The pictures, one per board section, in `2026-09-23-iphone-app-design/`:
 | `20-spot-hub.jpg` | Spot Hub on the phone | §5.7 |
 | `21-freedv-reporter.jpg` | FreeDV Reporter | §5.7 |
 | `22-several-devices.jpg` | Several devices at once | §5.8 |
+| `23-several-devices-states-and-notices.jpg` | Several devices: states and notices | §5.9 |
 
 `board.html` in the same folder is the whole interactive board: the knobs
 turn, the PTT keys, the flags fold, and the lock-screen states step through.
