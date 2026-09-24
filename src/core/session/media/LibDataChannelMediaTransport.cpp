@@ -351,7 +351,12 @@ QString opusOfferFormatParameters(int targetBitrate)
     // stereo, useinbandfec omitted (default 0, as OpusAudioEncoder sets
     // OPUS_SET_INBAND_FEC(0)), and maxaveragebitrate equal to the
     // configured encoder target (R-R3-23). The encoder itself is reported to
-    // the GUI by the minor-8 audio context, not by this line. Tying the
+    // the GUI by the minor-8 audio context, not by this line. Receiver
+    // streams (R-R3-43) ride this m-line but run their own 48 kbit/s
+    // (DaemonMediaController::kReceiverAudioOpusBitrate), each reported by
+    // its receiver context; the line stays as it was so a window sees the
+    // same offer as before, and no receiver of the Core's audio reads it
+    // (the Core receives no audio). Tying the
     // receive preferences to the send target must be revisited when the
     // m-line becomes sendrecv (TX audio, R4): then they describe what the
     // Core really wants to receive.

@@ -1547,10 +1547,13 @@ void DaemonMediaController::reconcileReceiverAudio(int sliceId)
     bool actualEnabled = false;
     if (!blockedBy) {
         if (!stream.sender) {
-            // Opus at the main stream's setting (the Core's audio_bitrate),
-            // or lossless: the session's one quality choice.
+            // Opus at the receiver streams' own 48 kbit/s, or lossless: the
+            // session's one quality choice. The rate is fixed here, not
+            // taken from audio_bitrate, so a lossless stream that falls back
+            // (refused, or the window asks for Opus after its link trial)
+            // encodes at 48 kbit/s too; the speakers' mix keeps its own.
             OpusAudioCodecConfig codecConfig;
-            codecConfig.bitrate = m_audioTargetBitrate;
+            codecConfig.bitrate = kReceiverAudioOpusBitrate;
             // Parented, so a sender retired with deleteLater() (see
             // retireReceiverSender) is still reclaimed with this controller.
             stream.sender = std::make_unique<DaemonAudioSender>(
@@ -1794,8 +1797,9 @@ void DaemonMediaController::reconcileHeadphonesAudio()
     bool actualEnabled = false;
     if (!blockedBy) {
         if (!m_headphones.sender) {
-            // Opus at the main stream's setting, or lossless: the session's
-            // one quality choice. Parented, so a sender retired with
+            // Opus at the speakers' mix's setting (audio_bitrate), not the
+            // receiver streams' rate, or lossless: the session's one quality
+            // choice. Parented, so a sender retired with
             // deleteLater() is still reclaimed with this controller.
             OpusAudioCodecConfig codecConfig;
             codecConfig.bitrate = m_audioTargetBitrate;

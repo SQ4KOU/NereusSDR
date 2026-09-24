@@ -165,7 +165,9 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir build-lane-b -R '^(tst_media_transpor
   a receiver stream never restarts the speakers' stream).
 - A stream follows the session's audio profile: Opus at the main stream's current
   bitrate and bandwidth, or lossless when the operator chose lossless and the
-  profile rules admit it.
+  profile rules admit it. (Superseded 2026-09-24 by the R3 completion plan,
+  Task 7: compressed receiver streams run Opus at 48 kbit/s fullband whatever
+  the main stream's bitrate.)
 - Removing the slice, the radio going offline and the session ending each retire
   the stream with its reason; nothing leaks.
 - Goldens for older apps and Cores unchanged.

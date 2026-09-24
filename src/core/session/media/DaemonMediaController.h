@@ -102,11 +102,24 @@ public:
     int activeEndpointCount() const;
     int activeSourceCount() const;
     DaemonAudioDiagnostics audioDiagnostics() const;
-    /// The Opus target, bit/s, for audio this controller sends (R-R3-23:
-    /// nereusd's audio_bitrate). Applies to the next media peer and audio
-    /// sender it creates, so DaemonApp sets it before the listener opens.
-    /// Default is the encoder's own default target.
+    /// The Opus target, bit/s, for the speakers' mix and the headphones mix
+    /// this controller sends (R-R3-23: nereusd's audio_bitrate). Applies to
+    /// the next media peer and audio sender it creates, so DaemonApp sets it
+    /// before the listener opens. Default is the encoder's own default
+    /// target. Receiver streams do not follow it: see
+    /// kReceiverAudioOpusBitrate.
     void setAudioTargetBitrate(int bitsPerSecond);
+    /// R-R3-43, R-R3-44: the Opus target, bit/s, of every receiver stream
+    /// (the audio VAX and TCI apps decode) whenever it is compressed: when
+    /// Opus is the choice and when lossless is refused or falls back. The
+    /// 48 kbit/s fullband profile (bandwidthForBitrate()), whatever
+    /// audio_bitrate says: the operator's decision of 2026-09-24 after the
+    /// FT8 measurement in docs/architecture/2026-09-20-remote-daemon-r3-
+    /// verification/digital-modes-over-opus.md (24 kbit/s lost 13 of 177
+    /// decodes that the untouched audio made, 48 kbit/s lost 2). The
+    /// receiver context's encoder object reports it, so a window never
+    /// assumes it.
+    static constexpr int kReceiverAudioOpusBitrate = 48'000;
     int audioTargetBitrate() const noexcept { return m_audioTargetBitrate; }
     /// R-R3-23: whether a GUI may switch audio to the lossless profile
     /// (nereusd.conf audio_lossless; default allow). With false a request
