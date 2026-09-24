@@ -18,6 +18,7 @@
 #include "models/AmplifierModel.h"
 #include "models/StationTciModel.h"
 #include "core/TciSwitch.h"
+#include "core/TciUpdateGap.h"
 #include "models/RadioModel.h"
 
 #include <QSignalBlocker>
@@ -147,7 +148,7 @@ void CatTciServerPage::buildUI()
 // Controls: Enable / Listen on (address dropdown) / Port + Default button /
 //           Send initial state / Rate limit / Show Log button / Status line.
 // AppSettings: TciServerEnabled, TciServerPort, TciSendInitialFrequencyStateOnConnect,
-//              TciRateLimitMsgsPerSec.
+//              TciRateLimitMs.
 // ---------------------------------------------------------------------------
 void CatTciServerPage::buildServerGroup()
 {
@@ -272,33 +273,39 @@ void CatTciServerPage::buildServerGroup()
     });
     form->addRow(QString(), m_sendInitialStateCheck);
 
-    // Rate limit
-    // From Thetis TCIServer.cs [v2.10.3.13] — per-client outbound rate cap
+    // Rate limit: the gap between frequency updates sent to each app.
+    // Receiver and transmit gaps plan, Task 10 (R-R3-49). Thetis's
+    // udTCIRateLimit is not a limit on incoming messages: it is the shortest
+    // gap in ms between outgoing vfo, dds and tx_frequency updates to each
+    // app (TCIServer.cs:6421-6480 [v2.10.3.15], ported in TciUpdateGap).
+    // From Thetis setup.designer.cs:58629-58664 [v2.10.3.15]: label
+    // "Rate Limit (ms)", Minimum 0, Maximum 1000, Value 100, tooltip
+    // "The maximum rate VFO/IF/DDS messages can be sent to clients"
+    // (reworded in plain words below). Thetis applies a change when the
+    // server is next started (setup.cs:22563-22566 [v2.10.3.15] shows a
+    // "toggle to use" note); here it reaches the running server at once.
     m_rateLimitSpin = new QSpinBox(group);
+    m_rateLimitSpin->setObjectName(QStringLiteral("tciRateLimitSpin"));
     m_rateLimitSpin->setStyleSheet(QString::fromLatin1(Style::kSpinBoxStyle));
-    m_rateLimitSpin->setRange(0, 1000);
-    m_rateLimitSpin->setSuffix(tr(" msg/s"));
-    m_rateLimitSpin->setSpecialValueText(tr("Unlimited"));
-    m_rateLimitSpin->setToolTip(tr("Maximum outbound TCI messages per second per client (0 = unlimited). "
-                                    "Lower values reduce CPU load for slow TCI apps."));
+    m_rateLimitSpin->setRange(NereusSDR::TciUpdateGap::kMinGapMs,
+                              NereusSDR::TciUpdateGap::kMaxGapMs);
+    m_rateLimitSpin->setSuffix(tr(" ms"));
+    m_rateLimitSpin->setSpecialValueText(tr("Off"));
+    m_rateLimitSpin->setToolTip(tr("How long to wait between frequency updates sent to each TCI app. "
+                                    "Changes made faster than this reach the app as the latest "
+                                    "frequency once the time has passed. Off sends every change."));
     m_rateLimitSpin->setValue(
-        s.value(QStringLiteral("TciRateLimitMsgsPerSec"), 60).toInt());
-    connect(m_rateLimitSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [](int v) {
-        AppSettings::instance().setValue(QStringLiteral("TciRateLimitMsgsPerSec"), v);
+        s.value(QString::fromLatin1(NereusSDR::TciUpdateGap::kSettingKey),
+                NereusSDR::TciUpdateGap::kDefaultGapMs).toInt());
+    connect(m_rateLimitSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
+        AppSettings::instance().setValue(QString::fromLatin1(NereusSDR::TciUpdateGap::kSettingKey), v);
+#ifdef HAVE_WEBSOCKETS
+        if (m_tciServerRef) {
+            m_tciServerRef->setUpdateGapMs(v);
+        }
+#endif
     });
     form->addRow(tr("Rate limit:"), m_rateLimitSpin);
-    // R-R3-49: nothing applies the rate limit yet; hidden until it does.
-    // Receiver and transmit gaps plan, Task 4: Thetis has no limit on
-    // incoming TCI messages. Its udTCIRateLimit (setup.designer.cs:58636-58665
-    // [v2.10.3.15], 0..1000 ms, default 100, "The maximum rate VFO/IF/DDS
-    // messages can be sent to clients") is the shortest gap in ms between
-    // outgoing vfo, dds and tx_frequency updates to each app, applied when
-    // the server starts (TCIServer.cs:6420-6480 [v2.10.3.15] VFOChange /
-    // CentreChange / TXFrequencyChange; setup.cs:22517 [v2.10.3.15]).
-    // NereusSDR sends those through TciVfoCoalescer's 5 ms drain only, so
-    // this msg/s spin box would say something the server does not do; it
-    // stays hidden until the Thetis pacing is ported with a ms control.
-    UnbuiltFeatures::hideUnlessBuilt(m_rateLimitSpin, UnbuiltFeature::TciExtras);
 
     // Show Log button — Phase 3J-1 closeout Item 2 (2026-05-12) wires the
     // click through SetupDialog up to MainWindow, which owns the lazy-

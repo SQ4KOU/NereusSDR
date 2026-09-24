@@ -45,6 +45,11 @@
 //                (OnMoxPreChangeHandler); the Core's receive-only station
 //                server named in the seed note. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 10 (R-R3-49): each
+//                app's vfo, dds and tx_frequency updates pass through its
+//                own update gap (Thetis udTCIRateLimit), read at start and
+//                changed live. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -190,6 +195,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         }
     }
 
+    // Task 10 (R-R3-49): the clock every app's update gap reads.
+    m_gapClock.start();
+
     m_pingTimer = new QTimer(this);  // parented — destroyed with server
 
     // From Thetis TCIServer.cs:6001-6003 [v2.10.3.13] — PingFrameTimer callback
@@ -227,10 +235,17 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // Broadcast any drained notifications to all clients.
         // Without this, drainCoalescedNotifications() populates
         // m_pendingNotifications but nothing pumps it to the send queues.
-        while (m_protocol->hasPendingNotification()) {
-            const QString notif = m_protocol->takePendingNotification();
+        broadcastPendingNotifications();
+
+        // Task 10 (R-R3-49): the waiting vfo / dds / tx_frequency lines whose
+        // gap has passed (the Thetis one-shot timers, TCIServer.cs:6436-6439
+        // [v2.10.3.15]), checked on this tick.
+        {
+            const qint64 nowMs = m_gapClock.elapsed();
             for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
-                sit.value()->sendQueue.push(TciSendQueue::Priority::Control, notif);
+                for (const QString& line : sit.value()->updateGap.takeDue(nowMs)) {
+                    sit.value()->sendQueue.push(TciSendQueue::Priority::Control, line);
+                }
             }
         }
 
@@ -1449,6 +1464,19 @@ bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
     // Detects dead clients via Qt's automatic close-on-write-error path.
     m_pingTimer->start(m_pingIntervalMs);
 
+    // Task 10 (R-R3-49): the update gap the operator set (Setup > Network >
+    // TCI Server > Rate limit), applied when the server starts as Thetis
+    // does (setup.cs:22517 [v2.10.3.15]). Default and range from Thetis
+    // udTCIRateLimit (setup.designer.cs:58645-58664 [v2.10.3.15]).
+    {
+        bool ok = false;
+        const int gapMs = AppSettings::instance()
+                              .value(QString::fromLatin1(TciUpdateGap::kSettingKey),
+                                     TciUpdateGap::kDefaultGapMs)
+                              .toInt(&ok);
+        setUpdateGapMs(ok ? gapMs : TciUpdateGap::kDefaultGapMs);
+    }
+
     // Phase 14: start the outbound drain timer (stops again in stop()).
     m_drainTimer->start();
 
@@ -1634,6 +1662,10 @@ void TciServer::onNewConnection()
         // (ws->request() is available after the WebSocket handshake; the
         // User-Agent HTTP header maps to session->userAgent).
         session->connectedAt.start();
+        // Task 10 (R-R3-49): the app's update gap, from Thetis
+        // TCPIPtciSocketListener(..., rateLimit) at TCIServer.cs:792-795
+        // [v2.10.3.15].
+        session->updateGap.setGapMs(m_updateGapMs);
 
         // Phase 26 review finding #3: apply AudioTciPage AppSettings defaults
         // at connect time so that a client that never sends explicit audio
@@ -2810,11 +2842,40 @@ void TciServer::onTextMessageReceived(const QString& msg)
     // broadcast to ALL clients (including the originator), mirroring Thetis's
     // outbound-frame fan-out at TCIServer.cs:1662-1791 [v2.10.3.13].
     // Phase 14: push into each client's queue instead of direct sendTextMessage.
+    broadcastPendingNotifications();
+}
+
+// Task 10 (R-R3-49): every pending notification goes to every app, through
+// that app's own update gap. The protocol queue holds one list for all apps,
+// as before; the gap is per app, as Thetis keeps it per listener
+// (TCIServer.cs:750-758 [v2.10.3.15]).
+void TciServer::broadcastPendingNotifications()
+{
+    QStringList pending;
     while (m_protocol->hasPendingNotification()) {
-        const QString notif = m_protocol->takePendingNotification();
-        for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
-            sit.value()->sendQueue.push(TciSendQueue::Priority::Control, notif);
+        pending << m_protocol->takePendingNotification();
+    }
+    if (pending.isEmpty()) {
+        return;
+    }
+    const qint64 nowMs = m_gapClock.elapsed();
+    for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
+        for (const QString& line : sit.value()->updateGap.offer(pending, nowMs)) {
+            sit.value()->sendQueue.push(TciSendQueue::Priority::Control, line);
         }
+    }
+}
+
+// Task 10 (R-R3-49). Thetis applies udTCIRateLimit when the server starts
+// (setup.cs:22517 [v2.10.3.15] -> console.SetupTCI -> StartServer) and each
+// listener keeps the value it was built with (TCIServer.cs:792-795
+// [v2.10.3.15]). Here a change reaches every connected app at once, so the
+// control does what it says without restarting the server.
+void TciServer::setUpdateGapMs(int ms)
+{
+    m_updateGapMs = std::clamp(ms, TciUpdateGap::kMinGapMs, TciUpdateGap::kMaxGapMs);
+    for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
+        sit.value()->updateGap.setGapMs(m_updateGapMs);
     }
 }
 

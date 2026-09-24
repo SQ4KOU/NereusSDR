@@ -840,6 +840,7 @@ set(CORE_SOURCES
     src/core/TciProtocol.cpp
     src/core/TciSendQueue.cpp
     src/core/TciVfoCoalescer.cpp
+    src/core/TciUpdateGap.cpp
     src/core/TciBinaryFrame.cpp
     src/core/TciServer.cpp
     src/core/codec/AlexFilterMap.cpp

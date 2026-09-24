@@ -5318,6 +5318,16 @@ nereus_add_test(tst_tci_priority_queues)
 # Transport-blind: no Qt6WebSockets dependency.
 nereus_add_test(tst_tci_vfo_coalescer)
 
+# Receiver and transmit gaps plan, Task 10 (R-R3-49): the per-app update gap
+# between outgoing vfo / dds / tx_frequency lines, ported from Thetis
+# TCIServer.cs:6421-6480 [v2.10.3.15] (VFOChange / CentreChange /
+# TXFrequencyChange) into TciUpdateGap. Pure logic with the clock passed in;
+# the TciServer case (live apps through a real server) needs Qt6WebSockets.
+nereus_add_test(tst_tci_update_gap)
+if(Qt6WebSockets_FOUND)
+    target_link_libraries(tst_tci_update_gap PRIVATE Qt6::WebSockets)
+endif()
+
 # ── Phase 3J-1 Task 10: TCI volume dB math (pure logic, no WebSockets) ───────
 # Tests tciLinearToDbVolume / tciDbToLinearVolume from TciVolume.h.
 # Port of Thetis TCIServer.cs:4110-4132 [v2.10.3.13] linearToDbVolume /
@@ -6318,6 +6328,11 @@ nereus_add_test(tst_settings_schema_v6_migration)
 # once, so a value saved while the checkbox did nothing does not come alive.
 # Source: NereusSDR-original (no Thetis upstream).
 nereus_add_test(tst_settings_schema_v7_migration)
+
+# Receiver and transmit gaps plan, Task 10 (R-R3-49): SettingsSchemaVersion
+# v7 -> v8 drops TciRateLimitMsgsPerSec once (the old msg/s unit; the gap is
+# now TciRateLimitMs). Source: NereusSDR-original (no Thetis upstream).
+nereus_add_test(tst_settings_schema_v8_migration)
 
 # Phase 3F Sub-Epic B Task 1: SliceConfig + DdcAssignment shared structs.
 # 2 tests: slice_config_struct_has_required_fields,

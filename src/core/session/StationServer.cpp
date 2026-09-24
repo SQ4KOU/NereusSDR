@@ -544,7 +544,7 @@ QString peerNameForThisProcess()
 // Each side's own AppSettings schema version, read by the key name
 // AppSettings::ensureSettingsAtVersion() writes it under. Read rather than
 // hardcoded: the literal lives at exactly one place today (CoreInit.cpp's
-// ensureSettingsAtVersion(7) call), and duplicating it here would create a
+// ensureSettingsAtVersion(8) call), and duplicating it here would create a
 // second copy free to drift from the migrations that actually ran.
 qint32 settingsSchemaVersionOf(const AppSettings& settings)
 {

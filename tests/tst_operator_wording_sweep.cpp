@@ -22,11 +22,13 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QRegularExpression>
+#include <QSpinBox>
 #include <QTreeWidget>
 #include <QUuid>
 
 #include "OperatorWording.h"
 #include "PanStatusSamples.h"
+#include "core/AppSettings.h"
 #include "core/WdspTypes.h"
 #include "core/dsp/NnrSettings.h"
 #include "core/safety/BandPlanGuard.h"
@@ -1107,6 +1109,26 @@ private slots:
         QVERIFY(listenOn);
         QCOMPARE(listenOn->itemData(0).toString(), QStringLiteral("127.0.0.1"));
         QCOMPARE(listenOn->itemData(1).toString(), QStringLiteral("0.0.0.0"));
+    }
+
+    // Receiver and transmit gaps plan, Task 10 (R-R3-49): the TCI rate
+    // limit is shown in Thetis's unit and default (udTCIRateLimit, ms,
+    // 0..1000, default 100) and says what it does in plain words.
+    void tciRateLimitIsInMillisecondsWithThetisDefault()
+    {
+        AppSettings::instance().remove(QStringLiteral("TciRateLimitMs"));
+        CatTciServerPage page;
+        const auto* spin = page.findChild<QSpinBox*>(QStringLiteral("tciRateLimitSpin"));
+        QVERIFY(spin);
+        QVERIFY(!spin->isHidden());
+        QCOMPARE(spin->minimum(), 0);
+        QCOMPARE(spin->maximum(), 1000);
+        QCOMPARE(spin->value(), 100);
+        QCOMPARE(spin->suffix(), QStringLiteral(" ms"));
+        QVERIFY(OperatorWording::isPlain(spin->toolTip()));
+        QVERIFY(OperatorWording::isPlain(spin->specialValueText()));
+        QVERIFY(!spin->toolTip().contains(QChar(0x2014)));
+        QVERIFY(shownText(page).contains(QStringLiteral("Rate limit:")));
     }
 
     void meterDataSourceWindowsAreInApprovedWords()

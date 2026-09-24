@@ -198,7 +198,7 @@ const QList<Entry>& all()
         {F::FreeDvToPsk, QStringLiteral("freedv-psk"),
          QStringLiteral("Spot Hub report FreeDV decodes to PSK Reporter")},
         {F::TciExtras, QStringLiteral("tci-extras"),
-         QStringLiteral("TCI rate limit, CW to CWU, TX channel, sensor intervals, the three "
+         QStringLiteral("TCI CW to CWU, TX channel, sensor intervals, the three "
                         "RX2 VFO options, stream channels")},
         {F::SmallFilter, QStringLiteral("small-filter"),
          QStringLiteral("Setup > Appearance small filter display on the VFO flag")},
