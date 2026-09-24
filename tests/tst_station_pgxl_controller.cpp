@@ -405,6 +405,22 @@ private slots:
         QCOMPARE(reason, QStringLiteral("Enter a gateway on the same network as the address, "
                                         "or leave it empty."));
         QVERIFY(OperatorWording::isPlain(reason));
+        // Follow-up 7: a /32 netmask, and the subnet's network and broadcast
+        // addresses, cannot be a device's fixed setting.
+        QVERIFY(!model.setPgxlNetworkForStation(false, QStringLiteral("192.168.1.50"),
+                                                QStringLiteral("255.255.255.255"), QString(),
+                                                &reason));
+        QCOMPARE(reason, QStringLiteral("Enter a netmask such as 255.255.255.0."));
+        for (const char* address : {"192.168.1.0", "192.168.1.255"}) {
+            QVERIFY(!model.setPgxlNetworkForStation(false, QString::fromLatin1(address),
+                                                    QStringLiteral("255.255.255.0"), QString(),
+                                                    &reason));
+            QCOMPARE(reason,
+                     QStringLiteral("Enter an address the device can use on your network."));
+        }
+        QVERIFY(StationDeviceSettings::networkProblem(false, QStringLiteral("10.0.0.0"),
+                                                      QStringLiteral("255.255.255.254"),
+                                                      QString()).isEmpty());   // /31 link
         QCOMPARE(frames.count(), sentBefore);
 
         // Network: `ifconf address= netmask= gateway= dhcp=`.

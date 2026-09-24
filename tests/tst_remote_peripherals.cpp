@@ -1915,6 +1915,14 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
             QCOMPARE(p->networkProblemForTesting(),
                      QStringLiteral("Without DHCP, enter an address and a netmask."));
             QVERIFY(OperatorWording::isPlain(p->networkProblemForTesting()));
+            // Follow-up 7: the subnet's broadcast address is refused too.
+            p->ipEditForTesting()->setText(QStringLiteral("192.168.1.255"));
+            p->netmaskEditForTesting()->setText(QStringLiteral("255.255.255.0"));
+            p->applyNetworkButtonForTesting()->click();
+            QCOMPARE(p->networkProblemForTesting(),
+                     QStringLiteral("Enter an address the device can use on your network."));
+            p->ipEditForTesting()->clear();
+            p->netmaskEditForTesting()->clear();
         }
         QCOMPARE(asked.size(), askedBefore);
         QTest::qWait(100);
@@ -2124,6 +2132,14 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
             QCOMPARE(p->networkProblemForTesting(),
                      QStringLiteral("Without DHCP, enter an address and a netmask."));
             QVERIFY(OperatorWording::isPlain(p->networkProblemForTesting()));
+            // Follow-up 7: the subnet's broadcast address is refused too.
+            p->ipEditForTesting()->setText(QStringLiteral("192.168.1.255"));
+            p->netmaskEditForTesting()->setText(QStringLiteral("255.255.255.0"));
+            p->applyNetworkButtonForTesting()->click();
+            QCOMPARE(p->networkProblemForTesting(),
+                     QStringLiteral("Enter an address the device can use on your network."));
+            p->ipEditForTesting()->clear();
+            p->netmaskEditForTesting()->clear();
         }
         QCOMPARE(asked.size(), askedBefore);
         QTest::qWait(100);

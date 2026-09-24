@@ -775,8 +775,8 @@ Commands:
 | `setPgxlNetwork`, `setTgxlNetwork` with other arguments | "The request to change the Power Genius network settings was not understood." (or Tuner Genius) |
 | `setPgxlNetwork`, `setTgxlNetwork` with an address that is not four numbers from 0 to 255 | "Enter each address as four numbers from 0 to 255 separated by dots." |
 | `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and no address or no netmask | "Without DHCP, enter an address and a netmask." |
-| `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and a netmask that is not ones then zeros (or is all zeros) | "Enter a netmask such as 255.255.255.0." |
-| `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and an address a device cannot use (0.0.0.0, 127.x, multicast, 240 and above, 255.255.255.255) | "Enter an address the device can use on your network." |
+| `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and a netmask that is not ones then zeros, is all zeros, or is 255.255.255.255 | "Enter a netmask such as 255.255.255.0." |
+| `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and an address a device cannot use (0.0.0.0, 127.x, multicast, 240 and above, 255.255.255.255, or the subnet's network or broadcast address, except on a 255.255.255.254 link) | "Enter an address the device can use on your network." |
 | `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and a gateway off the address's network (or equal to it) | "Enter a gateway on the same network as the address, or leave it empty." |
 | `savePgxlSettings`, `saveTgxlSettings` with arguments | "The request to save and restart the Power Genius was not understood." (or Tuner Genius) |
 | `readPgxlSettings`, `readTgxlSettings` with arguments | "The request to read the Power Genius settings was not understood." (or Tuner Genius) |
