@@ -239,6 +239,11 @@
             "kind": "i64",
             "name": "stationIdentityVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "deviceAdminVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -1107,6 +1112,48 @@
             "capabilityVersion": 1,
             "minMinor": 5,
             "verb": "notch.delete"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "id",
+                    "optional": false
+                }
+            ],
+            "capability": "deviceAdminVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "devices.revoke"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "label",
+                    "optional": false
+                }
+            ],
+            "capability": "deviceAdminVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.rename"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "deviceAdminVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.acknowledgeKeyBackup"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "deviceAdminVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.retireToken"
         }
     ],
     "limits": {
@@ -4091,6 +4138,52 @@
                 }
             ]
         },
+        "StationDevicesFacade": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "listJson",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "revision",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "stationLabel",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "claimed",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "tokenActive",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "keyBackupAcknowledged",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "keyPath",
+                    "ordinal": 6
+                }
+            ]
+        },
         "StationTciModel": {
             "properties": [
                 {
@@ -4514,6 +4607,10 @@
         {
             "class": "AccessorySettingsModel",
             "key": "accessorySettings"
+        },
+        {
+            "class": "StationDevicesFacade",
+            "key": "devices"
         },
         {
             "class": "PanadapterModel",

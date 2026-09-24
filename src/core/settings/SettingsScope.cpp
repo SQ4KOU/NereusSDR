@@ -147,6 +147,9 @@
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-49: NetworkWatchdogEnabled is Station scope. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 13 (R-IOS-08): StationLabel and
+//                StationKeyBackupAcknowledged are Core-owned. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -585,10 +588,25 @@ bool isModelOwnedAlexAntennaSettingsKey(QStringView rawKey)
         && parts[3] == QStringLiteral("antenna");
 }
 
+bool isCoreOwnedIdentitySettingsKey(QStringView rawKey)
+{
+    // StationLabel (StationLabel::kSettingsKey) changes only through
+    // station.rename, StationKeyBackupAcknowledged only through
+    // station.acknowledgeKeyBackup (StationDevicesFacade).
+    return rawKey.compare(QLatin1String("StationLabel"), Qt::CaseInsensitive) == 0
+        || rawKey.compare(QLatin1String("StationKeyBackupAcknowledged"), Qt::CaseInsensitive)
+               == 0;
+}
+
 bool isModelOwnedDspSettingsKey(QStringView rawKey)
 {
     const QString key = rawKey.toString().toLower();
     if (key.startsWith(QStringLiteral("dspassets/"))) {
+        return true;
+    }
+    // iPhone app Task 13 (R-IOS-08): the Core's name and its key backup
+    // acknowledgement change only through their commands.
+    if (isCoreOwnedIdentitySettingsKey(rawKey)) {
         return true;
     }
     // R-R3-21 / R-R3-09: the Core owns the notch list. An older app's
@@ -648,6 +666,9 @@ QString modelOwnedSettingsRefusal(QStringView rawKey)
     if (isModelOwnedAlexAntennaSettingsKey(rawKey)) {
         return QStringLiteral("This Core keeps its own antenna settings. "
                               "Update this app to change them.");
+    }
+    if (rawKey.compare(QLatin1String("StationLabel"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("This Core keeps its own name. Update this app to rename it.");
     }
     return QStringLiteral("The Core changes these settings only through their own controls.");
 }

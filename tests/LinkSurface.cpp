@@ -34,6 +34,11 @@
 //                                    R-R3-47): the `accessorySettings`
 //                                    class. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08): the
+//                                    `devices` class; the live session's
+//                                    client declares deviceAuth so the
+//                                    object is sent. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -73,6 +78,7 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
+#include "core/session/StationDevicesFacade.h"
 #include "core/session/StationServer.h"
 #include "core/session/StationTelemetry.h"
 #include "core/session/media/DisplayBudget.h"
@@ -323,8 +329,11 @@ std::optional<QList<QByteArray>> liveSessionWire(
     auto* stationEnd = new LoopbackTransport(QStringLiteral("link-surface-station"), &server);
     stationEnd->linkTo(clientEnd.get());
     server.acceptTransport(stationEnd);
+    // Declaring deviceAuth, as a device that signs in by key does, so the
+    // `devices` object (iPhone app Task 13) is among what the Core sends.
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
-        kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"))));
+        kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
+        {kSessionProtocolMajor}, {{"deviceAuth", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -1217,7 +1226,8 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &RfKitModel::staticMetaObject,
             &StationTciModel::staticMetaObject,
             &AccessoryDataModel::staticMetaObject,
-            &AccessorySettingsModel::staticMetaObject};
+            &AccessorySettingsModel::staticMetaObject,
+            &StationDevicesFacade::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

@@ -184,6 +184,13 @@
 //                                    token enrolment; the first-run banner
 //                                    names the identity key. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08): the
+//                                    `devices` object for a device that
+//                                    declares deviceAuth, its verbs, and a
+//                                    connection ended when its device is
+//                                    removed or the token it signed in
+//                                    with is retired. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -195,6 +202,8 @@
 
 #include <memory>
 #include <functional>
+#include <optional>
+#include <utility>
 
 #include "core/session/LinkVersion.h"
 #include "core/session/SessionMessages.h"
@@ -218,6 +227,7 @@ class SessionCommandDispatcher;
 class SessionTransport;
 class SettingsProxyServer;
 class StateMirror;
+class StationDevicesFacade;
 class TokenStore;
 
 class StationServer : public QObject {
@@ -366,6 +376,12 @@ public:
     /// then listen() refuses.
     DeviceStore* deviceStore() const;
     const StationIdentity& stationIdentity() const;
+    /// iPhone app Task 13 (R-IOS-08): the mirrored `devices` object and the
+    /// device administration verbs behind it.
+    StationDevicesFacade* devicesFacade() const;
+    /// 1 when the Core sends `devices` and takes its verbs (its identity
+    /// key is usable), else 0.
+    int deviceAdminVersion() const;
 
     /// The first-run block, exactly as the operator is shown it: the TLS
     /// pin and the identity key's path with the prompt to back it up.
@@ -567,6 +583,9 @@ private:
         /// enrolled nothing).
         QByteArray challenge;
         QByteArray deviceId;
+        /// iPhone app Task 13: signed in with the pairing token (whether or
+        /// not it also enrolled its device key). Retiring the token ends it.
+        bool signedInWithToken = false;
 
         /// Pings sent since the last pong. Reset to 0 by every pong; the
         /// heartbeat tick declares death when it reaches maxMissedPongs().
@@ -626,6 +645,15 @@ private:
     void send(SessionTransport* transport, const SessionMessage& message);
     void sendToSession(const SessionMessage& message);
 
+    /// iPhone app Task 13 (R-IOS-08): ends every authenticated connection
+    /// `matches` picks with session.end, not retryable, `reason` and
+    /// `endCode`. The connection whose command is being dispatched right
+    /// now is ended just after its result has gone out.
+    void endAuthenticatedPeers(const std::function<bool(const Peer&)>& matches,
+                               const QString& reason, const char* endCode);
+    /// Tells the devices object which paired devices are connected.
+    void publishConnectedDevices();
+
     /// Watches the five singleton mirrored models plus every slice
     /// RadioModel already holds. Idempotent.
     void buildMirror();
@@ -650,6 +678,13 @@ private:
     std::unique_ptr<StationIdentity> m_identity;
     std::unique_ptr<DeviceStore> m_devices;
     std::unique_ptr<DeviceAuthenticator> m_deviceAuth;
+    // iPhone app Task 13: after the three it reads, so it goes first.
+    std::unique_ptr<StationDevicesFacade> m_devicesFacade;
+    // The connection whose command.invoke is being dispatched, and the end
+    // it is owed once its result has been sent (a self-revoke, or a token
+    // session retiring the token).
+    SessionTransport* m_dispatchingTransport = nullptr;
+    std::optional<std::pair<QString, QString>> m_pendingEnd;
     QByteArray m_certSha256;
     QByteArray m_certBinding;
     bool m_pairingLanClickAllowed = true;

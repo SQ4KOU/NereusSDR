@@ -734,7 +734,10 @@ private slots:
                                    // settings.
                                    "remoteTgxlControlVersion",
                                    // iPhone app Task 12: device sign-in.
-                                   "stationIdentityVersion"});
+                                   "stationIdentityVersion",
+                                   // iPhone app Task 13: device
+                                   // administration.
+                                   "deviceAdminVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -771,7 +774,8 @@ private slots:
                                            QByteArrayLiteral("stationTciVersion"),
                                            QByteArrayLiteral("accessoryDataVersion"),
                                            QByteArrayLiteral("remoteTgxlControlVersion"),
-                                           QByteArrayLiteral("stationIdentityVersion")}) {
+                                           QByteArrayLiteral("stationIdentityVersion"),
+                                           QByteArrayLiteral("deviceAdminVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

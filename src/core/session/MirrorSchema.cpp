@@ -36,6 +36,9 @@
 //   2026-09-24 - R-R3-47 / R-R3-22: AccessorySettingsModel mirrored
 //                 (`accessorySettings`). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 13 (R-IOS-08): StationDevicesFacade
+//                 mirrored (`devices`). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
@@ -101,6 +104,9 @@ const char* const kMirroredClasses[] = {
     // remoteTgxlControlVersion 1): the amp's and tuner's own settings as the
     // Core last heard them, read-only.
     "NereusSDR::AccessorySettingsModel",
+    // iPhone app Task 13 (R-IOS-08, deviceAdminVersion 1): the Core's paired
+    // devices and its label, read-only, for a device that signs in by key.
+    "NereusSDR::StationDevicesFacade",
 };
 
 // Per-property exclusions, as (class, property).

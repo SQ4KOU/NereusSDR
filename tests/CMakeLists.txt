@@ -7244,6 +7244,12 @@ nereus_add_test(tst_device_store)
 nereus_add_test(tst_device_auth
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# iPhone app Task 13 (R-IOS-08): the `devices` object, rename, the key
+# backup acknowledgement, revoke and token retirement, and the connection a
+# removed device or a retired token loses, over the in-process loopback.
+nereus_add_test(tst_station_devices
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 
 # Remote Daemon R2, Task 18: the wss session. Everything tasks 7 through 17
 # built converges here -- StateMirror, ObjectRegistry,

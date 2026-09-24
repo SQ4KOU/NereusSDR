@@ -18,9 +18,18 @@
 // reading it. A callsign may hold '/' itself (a portable call, KG4VCF/P),
 // so the suffix is what follows the LAST '/'.
 //
+// iPhone app Task 13: a rename stores the label under the Core-owned
+// setting kSettingsKey ("StationLabel"), which no window writes directly
+// (the link document's section 8.2). Until the first rename the setting is
+// empty and the label follows StationCallsign (current()).
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-24: iPhone app Task 13 (R-IOS-08): the Core-owned StationLabel
+//               setting, current() and the rule in plain words. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
 // =================================================================
@@ -36,6 +45,8 @@ class AppSettings;
 struct StationLabel {
     static constexpr int kMaxSuffixLength = 32;
     static constexpr int kMaxCallsignLength = 32;
+    /// iPhone app Task 13: the Core-owned setting a rename writes.
+    static constexpr const char* kSettingsKey = "StationLabel";
 
     /// As typed (trimmed).
     QString callsign;
@@ -57,6 +68,14 @@ struct StationLabel {
     /// The label a Core starts with: its StationCallsign setting, with no
     /// suffix. nullopt when the setting is empty or is not a callsign.
     static std::optional<StationLabel> defaultLabel(const AppSettings& settings);
+
+    /// iPhone app Task 13: the Core's label now: the renamed one stored
+    /// under kSettingsKey when it is set and is a label, else
+    /// defaultLabel(). nullopt when neither gives one.
+    static std::optional<StationLabel> current(const AppSettings& settings);
+
+    /// The label rule in the operator's words, for a refused rename.
+    static QString ruleText();
 };
 
 } // namespace NereusSDR

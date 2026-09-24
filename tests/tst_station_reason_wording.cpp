@@ -650,6 +650,14 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("notRepresentableReason()"),
           // AlexAntennaFacade's filter policy refusal, scanned below.
           QStringLiteral("alex->setBpfModeForChain(chain, mode)")}},
+        // iPhone app Task 13 (R-IOS-08): the device administration verbs'
+        // command.result, forwarded by the dispatcher as result.reason; the
+        // log lines never reach an app.
+        {"src/core/session/StationDevicesFacade.cpp", {},
+         {"Could not save", "A paired device was removed", "The pairing token was retired"},
+         8},
+        // The label rule a refused station.rename gives.
+        {"src/core/security/StationLabel.cpp", {QStringLiteral("ruleText")}, {}, 1},
         // property.result for a write the mirror refuses.
         {"src/core/session/StateMirror.cpp", {}, {}, 5, {},
          {// A function of this file, and a model's applyMirroredValue

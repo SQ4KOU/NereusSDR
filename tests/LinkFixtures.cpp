@@ -27,6 +27,12 @@
 //                                    "$device:<case>" and the runner's own
 //                                    device key, made at run time.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08):
+//                                    stationSetup "otherPairedDevices" and
+//                                    the device ids it records, with the
+//                                    runner's own, for "$ref:device:<n>"
+//                                    and "$ref:device:self".
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -1012,6 +1018,36 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
         if (server.deviceStore() == nullptr || !server.deviceStore()->add(record)) {
             return QStringLiteral("stationSetup.pairedDevice: the device could not be paired");
         }
+        captures.insert(QStringLiteral("device:self"),
+                        StationIdentity::toBase64Url(device->key.fingerprint()));
+    }
+    // iPhone app Task 13: devices besides the runner's own, paired before
+    // the client connects, their keys made here and their ids recorded as
+    // "device:1" to "device:<n>" in the order they were paired.
+    std::vector<std::unique_ptr<ConformanceDevice>> otherDevices;
+    const QJsonValue othersValue = setup.value(QStringLiteral("otherPairedDevices"));
+    const double othersCount = othersValue.toDouble(0.0);
+    if (!othersValue.isUndefined()
+        && (!othersValue.isDouble() || othersCount < 0.0 || othersCount > 16.0
+            || othersCount != static_cast<double>(static_cast<int>(othersCount)))) {
+        return QStringLiteral("stationSetup.otherPairedDevices must be a whole number from 0 "
+                              "to 16");
+    }
+    for (int n = 1; n <= static_cast<int>(othersCount); ++n) {
+        auto other = std::make_unique<ConformanceDevice>();
+        PairedDevice record;
+        record.id = other->key.fingerprint();
+        record.publicKeySpki = other->key.publicKeySpki();
+        record.name = QStringLiteral("Other device %1").arg(n);
+        record.kind = QStringLiteral("tablet");
+        if (!other->key.isValid() || server.deviceStore() == nullptr
+            || !server.deviceStore()->add(record)) {
+            return QStringLiteral("stationSetup.otherPairedDevices: device %1 could not be "
+                                  "paired").arg(n);
+        }
+        captures.insert(QStringLiteral("device:%1").arg(n),
+                        StationIdentity::toBase64Url(record.id));
+        otherDevices.push_back(std::move(other));
     }
     VirtualClock clock(&server);
     int consumed = 0;

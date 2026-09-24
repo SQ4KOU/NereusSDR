@@ -96,6 +96,11 @@
 //                                    unreadable-request reason in plain
 //                                    words.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08):
+//                                    devices.revoke, station.rename,
+//                                    station.acknowledgeKeyBackup and
+//                                    station.retireToken.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -105,6 +110,7 @@
 #include "DspCommandValues.h"
 #include "PureSignalSessionFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
+#include "core/session/StationDevicesFacade.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -294,6 +300,9 @@ QString notRepresentableReason()
 //   ps3.subscribeDisplay   psDisplayVersion 1 with media
 //   ps3.<action>           psAlgorithmVersion 3
 //   notch.*                remoteNotchControlAvailable()
+//   devices.revoke, station.rename, station.acknowledgeKeyBackup,
+//   station.retireToken    deviceAdminVersion 1, to a device whose hello
+//                          declares deviceAuth (the `devices` object)
 //
 // tst_link_surface_manifest keeps this table and the routing in step: a
 // source scan of dispatch() and of each prefix family's handler, and a
@@ -442,6 +451,16 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kDspControlSessionProtocolMinor},
         {"notch.delete", {arg("id", kInt)}, "notchControlVersion", 1,
          kDspControlSessionProtocolMinor},
+        // The Core's paired devices, its name, its key backup and its old
+        // pairing token (iPhone app Task 13, R-IOS-08).
+        {"devices.revoke", {arg("id", kUtf8)}, "deviceAdminVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"station.rename", {arg("label", kUtf8)}, "deviceAdminVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"station.acknowledgeKeyBackup", {}, "deviceAdminVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"station.retireToken", {}, "deviceAdminVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
     };
     return specs;
 }
@@ -496,6 +515,13 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     if (invoke.kind != SessionMessageKind::CommandInvoke) {
         // Not this class's concern -- a caller routing error, not a
         // command failure worth reporting back.
+        return;
+    }
+    // iPhone app Task 13: the Core's device administration needs no radio.
+    if (invoke.commandVerb == "devices.revoke" || invoke.commandVerb == "station.rename"
+        || invoke.commandVerb == "station.acknowledgeKeyBackup"
+        || invoke.commandVerb == "station.retireToken") {
+        handleDeviceAdmin(invoke);
         return;
     }
     if (m_radioModel.isNull()) {
@@ -1331,6 +1357,61 @@ void SessionCommandDispatcher::handleSetRfKitEnabled(const SessionMessage& invok
 }
 
 // R-R3-48: the one TCI switch and port, kept by the Core.
+// iPhone app Task 13 (R-IOS-08, deviceAdminVersion 1). The facade answers in
+// plain words; the connection a revoke or a token retirement ends is
+// StationServer's to end, after this result has gone out.
+void SessionCommandDispatcher::handleDeviceAdmin(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    if (m_deviceAdmin.isNull()) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("This Core cannot manage its paired devices."), {});
+        return;
+    }
+    DeviceAdminResult result;
+    if (verb == "devices.revoke" || verb == "station.rename") {
+        const QByteArray name = verb == "devices.revoke" ? QByteArrayLiteral("id")
+                                                          : QByteArrayLiteral("label");
+        QVariant value;
+        if (!hasExactlyArguments(invoke.arguments, {name})
+            || !hasWireKind(invoke.arguments, name, MirrorWireKind::Utf8)
+            || !findArgument(invoke.arguments, name, &value)
+            || value.typeId() != QMetaType::QString) {
+            if (verb == "devices.revoke") {
+                emitResult(verb, invoke.commandId, false,
+                           QStringLiteral("The request to remove a device was not understood."),
+                           {});
+            } else {
+                emitResult(verb, invoke.commandId, false,
+                           QStringLiteral("The request to rename the Core was not understood."),
+                           {});
+            }
+            return;
+        }
+        result = verb == "devices.revoke" ? m_deviceAdmin->revoke(value.toString())
+                                          : m_deviceAdmin->rename(value.toString());
+    } else {
+        if (!invoke.arguments.isEmpty()) {
+            if (verb == "station.retireToken") {
+                emitResult(verb, invoke.commandId, false,
+                           QStringLiteral("The request to stop accepting the pairing token "
+                                          "was not understood."),
+                           {});
+            } else {
+                emitResult(verb, invoke.commandId, false,
+                           QStringLiteral("The request to confirm the key backup was not "
+                                          "understood."),
+                           {});
+            }
+            return;
+        }
+        result = verb == "station.retireToken" ? m_deviceAdmin->retireToken()
+                                               : m_deviceAdmin->acknowledgeKeyBackup();
+    }
+    emitResult(verb, invoke.commandId, result.accepted, result.reason,
+               result.accepted ? QList<QByteArray>{"devices"} : QList<QByteArray>{});
+}
+
 void SessionCommandDispatcher::handleSetStationTci(const SessionMessage& invoke)
 {
     QVariant enabled;

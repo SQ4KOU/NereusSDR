@@ -177,6 +177,16 @@
 //                                    takeover and version reasons come from
 //                                    SessionEndReasons, which the app parses.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08): the
+//                                    `devices` object and deviceAdminVersion
+//                                    1 for a device at minor 11 whose hello
+//                                    declares deviceAuth; its four verbs; a
+//                                    removed device's connection and every
+//                                    token connection after the token is
+//                                    retired end at once (the requester's
+//                                    own just after its result); the plain
+//                                    refusal of a raw StationLabel remove.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -197,6 +207,7 @@
 #include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/StateMirror.h"
+#include "core/session/StationDevicesFacade.h"
 #include "core/settings/SettingsProxyServer.h"
 #include "core/settings/SettingsScope.h"
 #include "models/NotchModel.h"
@@ -411,6 +422,38 @@ bool isAccessoryDataMessage(const SessionMessage& message)
 // 1): the amp's and tuner's own settings, read-only, for a peer at
 // kRadioIdentitySessionProtocolMinor on a Core that owns its accessories.
 constexpr const char* kAccessorySettingsKey = "accessorySettings";
+
+// iPhone app Task 13 (R-IOS-08, deviceAdminVersion 1): the Core's paired
+// devices and label, read-only, for a device at
+// kRadioIdentitySessionProtocolMinor whose hello declares deviceAuth. Any
+// other peer never sees the object, so its burst is today's.
+constexpr const char* kDevicesKey = "devices";
+
+bool isDevicesMessage(const SessionMessage& message)
+{
+    return message.objectKey == kDevicesKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "StationDevicesFacade");
+}
+
+bool isDeviceAdminVerb(const QByteArray& verb)
+{
+    return verb == "devices.revoke" || verb == "station.rename"
+        || verb == "station.acknowledgeKeyBackup" || verb == "station.retireToken";
+}
+
+// The settings the devices object reads: its label and key backup.
+bool isDevicesSettingsKey(const QString& key)
+{
+    return key.compare(QLatin1String("StationCallsign"), Qt::CaseInsensitive) == 0
+        || isCoreOwnedIdentitySettingsKey(key);
+}
+
+// iPhone app Task 13: why a connection ends when its device is removed, and
+// when the token it signed in with is retired (Task 12's pairing text).
+constexpr const char* kDeviceRemovedReason = "This device was removed from the Core.";
+constexpr const char* kPairingRequiredReason =
+    "This Core uses paired devices. Pair this device first.";
 
 bool isAccessorySettingsMessage(const SessionMessage& message)
 {
@@ -657,6 +700,22 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         StationIdentity::loadOrCreate(m_securityDirectory));
     m_devices = std::make_unique<DeviceStore>(m_securityDirectory, m_tokens.get());
     m_deviceAuth = std::make_unique<DeviceAuthenticator>(*m_devices, *m_identity);
+    // iPhone app Task 13 (R-IOS-08): the `devices` object. A device removed
+    // by anything (devices.revoke, the console, a reset) loses its
+    // connection at once; so does every connection signed in with the token
+    // once it is retired.
+    m_devicesFacade = std::make_unique<StationDevicesFacade>(*m_devices, *m_tokens,
+                                                              *m_identity, m_settings);
+    connect(m_devices.get(), &DeviceStore::deviceRemoved, this, [this](const QByteArray& id) {
+        endAuthenticatedPeers([&id](const Peer& peer) { return peer.deviceId == id; },
+                              QString::fromLatin1(kDeviceRemovedReason),
+                              SessionEndCode::kDeviceRemoved);
+    });
+    connect(m_devicesFacade.get(), &StationDevicesFacade::tokenRetired, this, [this]() {
+        endAuthenticatedPeers([](const Peer& peer) { return peer.signedInWithToken; },
+                              QString::fromLatin1(kPairingRequiredReason),
+                              SessionEndCode::kPairingRequired);
+    });
     if (m_certificates->isValid()) {
         // The pin is the certificate's SHA-256 (CertificateStore), which is
         // exactly the hash a device signs and the binding covers.
@@ -694,6 +753,7 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_mirror = new StateMirror(this);
     m_registry = new ObjectRegistry(radioModel, m_mirror, this);
     m_dispatcher = new SessionCommandDispatcher(radioModel, this);
+    m_dispatcher->setDeviceAdmin(m_devicesFacade.get());
     m_settingsServer = new SettingsProxyServer(settings, this);
     // R-R3-46: the Core applies hardware settings for its connected radio
     // only; a write naming any other radio's MAC is refused.
@@ -746,6 +806,20 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // default too rather than keep the last value it was given. The schema
     // v7 reset is not seen here: it runs in CoreInit before this server
     // exists, and the radio reads the reset value when it connects.
+    // iPhone app Task 13: the devices object's label follows StationCallsign
+    // until a rename, and its key backup follows its setting.
+    connect(m_settingsServer, &SettingsProxyServer::outboundValueChanged, this,
+            [this](const QString& key, const QVariant&, const QString&) {
+                if (isDevicesSettingsKey(key)) {
+                    m_devicesFacade->refresh();
+                }
+            });
+    connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
+            [this](const QString& key) {
+                if (isDevicesSettingsKey(key)) {
+                    m_devicesFacade->refresh();
+                }
+            });
     connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
             [this](const QString& key) {
                 if (key == QLatin1String("NetworkWatchdogEnabled") && m_radioModel) {
@@ -960,6 +1034,51 @@ const StationIdentity& StationServer::stationIdentity() const
     return *m_identity;
 }
 
+StationDevicesFacade* StationServer::devicesFacade() const
+{
+    return m_devicesFacade.get();
+}
+
+int StationServer::deviceAdminVersion() const
+{
+    // The same condition as stationIdentityVersion: a Core that signs
+    // devices in by key can list and administer them.
+    return m_certBinding.isEmpty() ? 0 : 1;
+}
+
+void StationServer::publishConnectedDevices()
+{
+    if (!m_devicesFacade) {
+        return;
+    }
+    QSet<QByteArray> connected;
+    for (const Peer& peer : std::as_const(m_peers)) {
+        if (peer.authenticated && !peer.deviceId.isEmpty()) {
+            connected.insert(peer.deviceId);
+        }
+    }
+    m_devicesFacade->setConnectedDevices(connected);
+}
+
+void StationServer::endAuthenticatedPeers(const std::function<bool(const Peer&)>& matches,
+                                          const QString& reason, const char* endCode)
+{
+    // Copied: dropPeer() erases from m_peers.
+    const QList<SessionTransport*> transports = m_peers.keys();
+    for (SessionTransport* transport : transports) {
+        const auto it = m_peers.constFind(transport);
+        if (it == m_peers.cend() || !it->authenticated || !matches(*it)) {
+            continue;
+        }
+        if (transport == m_dispatchingTransport) {
+            // Its own request did this: the result goes out first.
+            m_pendingEnd = std::make_pair(reason, QString::fromLatin1(endCode));
+            continue;
+        }
+        dropPeer(transport, reason, true, /*retryable=*/false, QString::fromLatin1(endCode));
+    }
+}
+
 QString StationServer::formatFirstRunBanner(const QString& fingerprint,
                                             const QString& identityKeyPath)
 {
@@ -1132,6 +1251,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         send(transport, SessionMessages::sessionEnd(reason, retryable, endCode));
     }
     m_peers.erase(it);
+    publishConnectedDevices();
 
     if (m_session == transport) {
         m_session = nullptr;
@@ -1404,7 +1524,36 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 QStringLiteral("Update this app to use C-Tune on this Core."), {}));
             break;
         }
-        m_dispatcher->dispatch(message);
+        // iPhone app Task 13 (R-IOS-08): the device administration verbs
+        // came with deviceAdminVersion 1, for a device at minor 11 that
+        // declares deviceAuth (the peers the `devices` object goes to).
+        if (isDeviceAdminVerb(message.commandVerb)
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || !peerDeclares(transport, QByteArrayLiteral("deviceAuth"), 1)
+                || deviceAdminVersion() < 1)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                deviceAdminVersion() < 1
+                    ? QStringLiteral("This Core cannot manage its paired devices.")
+                    : QStringLiteral("Update this app to manage this Core's paired devices."),
+                {}));
+            break;
+        }
+        {
+            // A revoke of the requester's own device, or a token session
+            // retiring the token, ends this connection only after its
+            // result (sent synchronously by dispatch()) has gone out.
+            m_dispatchingTransport = transport;
+            m_pendingEnd.reset();
+            m_dispatcher->dispatch(message);
+            m_dispatchingTransport = nullptr;
+            if (m_pendingEnd) {
+                const auto [reason, code] = *m_pendingEnd;
+                m_pendingEnd.reset();
+                dropPeer(transport, reason, true, /*retryable=*/false, code);
+                return;
+            }
+        }
         break;
     case SessionMessageKind::MediaControl:
         if (transport == m_session && mediaAvailable()) {
@@ -1646,10 +1795,17 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
     }
     it->authenticated = true;
     it->deviceId = deviceId;
+    // iPhone app Task 13: a token sign-in, enrolled or not, ends when the
+    // token is retired.
+    it->signedInWithToken = !(message.device && message.token.isEmpty());
+    // One change to the devices object for this sign-in, not two.
+    m_devicesFacade->holdRefresh();
     if (!deviceId.isEmpty()) {
         // lastSeen and lastAddress, on every authenticated connection.
         m_devices->touch(deviceId, address);
     }
+    publishConnectedDevices();
+    m_devicesFacade->resumeRefresh();
     send(transport, SessionMessages::authResult(true, QString(), /*retryable=*/false));
     promoteToSession(transport);
 }
@@ -1779,6 +1935,9 @@ void StationServer::buildMirror()
     // 1): the amp's and tuner's own settings. Sent only to a peer at minor
     // 11 on a Core that owns its accessories.
     m_mirror->watch(QByteArray(kAccessorySettingsKey), m_radioModel->accessorySettingsModel());
+    // iPhone app Task 13 (deviceAdminVersion 1): the Core's paired devices.
+    // Sent only to a device at minor 11 that declares deviceAuth.
+    m_mirror->watch(QByteArray(kDevicesKey), m_devicesFacade.get());
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
     for (int i = 0; i < pans.size(); ++i) {
         m_mirror->watch(panKey(i), pans.at(i));
@@ -2089,7 +2248,8 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
         // R-R3-46: so do the step attenuator and preamp keys.
         const bool plainReason = nr3Path || isModelOwnedNotchSettingsKey(key)
             || isModelOwnedStepAttenuatorSettingsKey(key)
-            || isModelOwnedAlexAntennaSettingsKey(key);
+            || isModelOwnedAlexAntennaSettingsKey(key)
+            || isCoreOwnedIdentitySettingsKey(key);
         sendToSession(SessionMessages::settingsReject(key, value.isValid(), value.toString(),
             plainReason ? modelOwnedSettingsRefusal(key)
                     : QStringLiteral("Change these settings with their own controls on this Core.")));
@@ -2196,6 +2356,14 @@ void StationServer::sendToSession(const SessionMessage& message)
         if (isAccessorySettingsMessage(message)
             && (minor < kRadioIdentitySessionProtocolMinor
                 || (pgxlControlVersion() < 3 && tgxlControlVersion() < 1))) {
+            return;
+        }
+        // iPhone app Task 13: nor the devices object to anyone but a device
+        // that declares deviceAuth (today's desktop declares nothing).
+        if (isDevicesMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor
+                || !peerDeclares(m_session, QByteArrayLiteral("deviceAuth"), 1)
+                || deviceAdminVersion() < 1)) {
             return;
         }
         if (!needsNnrFit(message, minor)) {
@@ -2484,6 +2652,8 @@ StationCapabilities StationServer::buildCapabilities() const
             caps.remoteTgxlControlVersion = tgxlControlVersion();
             // iPhone app Task 12 (R-IOS-08): device sign-in by key, last.
             caps.stationIdentityVersion = m_certBinding.isEmpty() ? 0 : 1;
+            // iPhone app Task 13: the devices object and its verbs, last.
+            caps.deviceAdminVersion = deviceAdminVersion();
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();

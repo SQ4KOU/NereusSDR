@@ -83,6 +83,9 @@
 //   2026-09-24 - iPhone app Task 12 (R-IOS-08): stationIdentityVersion,
 //                last in the minor-11 block. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 13 (R-IOS-08): deviceAdminVersion, last
+//                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -174,6 +177,12 @@ struct StationCapabilities {
     /// `features.deviceAuth`, which it needs before capabilities arrive;
     /// this entry is what a signed-in window reads afterwards.
     int stationIdentityVersion = 0;
+    /// iPhone app Task 13 (R-IOS-08): 1 means the Core sends the `devices`
+    /// object (its paired devices, label, claim, token and key backup) to a
+    /// device whose hello declares `deviceAuth` 1, and takes devices.revoke,
+    /// station.rename, station.acknowledgeKeyBackup and station.retireToken.
+    /// Sent last in the same minor-11 block.
+    int deviceAdminVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

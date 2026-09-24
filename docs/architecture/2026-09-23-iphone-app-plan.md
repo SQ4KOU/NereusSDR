@@ -1506,8 +1506,13 @@ station-key backup prompt), spec §5.2 item 8.
     where `id` is the device's fingerprint as a base64url string), `revision` (`i64`,
     serial-number arithmetic), `stationLabel`, `claimed`, `tokenActive`,
     `keyBackupAcknowledged`, `keyPath`. Task 14 adds `pairingWindowOpen` and
-    `pairingCode`. The `devices` object goes only to peers at minor 11 that declare
-    `deviceAdminVersion`, so older peers see today's wire.
+    `pairingCode`. The `devices` object goes only to a peer at minor 11 whose hello
+    declares `deviceAuth` 1 or later, while the Core's `deviceAdminVersion` is 1, and
+    the four verbs are taken only from such a peer; no new feature name. A window that
+    declares nothing (today's desktop) and an older peer see today's wire, and no
+    existing fixture changes but for the new capability entry. The phone receives the
+    object from its Task 15 on; the desktop once Task 18 declares `deviceAuth: 1`
+    (JJ's ruling, 2026-09-24).
   - Verbs (all in `verbSpecs()`, capability `deviceAdminVersion = 1`):
     `devices.revoke {id}`, `station.rename {label}`, `station.acknowledgeKeyBackup {}`,
     `station.retireToken {}`.
@@ -1549,13 +1554,14 @@ station-key backup prompt), spec §5.2 item 8.
 - `keyBackupAcknowledged` starts false on a new station and becomes true only through
   `station.acknowledgeKeyBackup`.
 - Every change bumps `revision` once.
-- A peer at minor 11 without `deviceAdminVersion`, and an older peer, receive no
-  `devices` object.
+- A peer at minor 11 whose hello does not declare `deviceAuth`, and an older peer,
+  receive no `devices` object; a fixture leg shows each case, with and without.
 - Fixtures: every verb that takes arguments has a wrong leg, as the leg guard in
   `tst_link_conformance_session` requires. A fixture that renames or revokes a device
   other than the caller uses `otherPairedDevices`; the wrong leg comes before a
-  self-revoke. `keyPath`, `pairedAt` and `lastSeen` are written as `"$string"` and join
-  the link document's `connect-connectable` exceptions.
+  self-revoke. `keyPath` and `listJson` (which carries `pairedAt`, `lastSeen` and the
+  run-time ids) are written as `"$string"` in the station-only `devices` fixtures;
+  `connect-connectable` declares no features, so it holds no `devices` object.
 
 **Verification:** authorisation: invariant tests first. Unit and conformance:
 `cmake --build build --target tst_station_devices tst_link_conformance_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_devices|tst_link_conformance_session)$' --output-on-failure`.

@@ -1206,6 +1206,9 @@ list(APPEND CORE_SOURCES
     src/core/security/StationLabel.cpp
     src/core/security/DeviceStore.cpp
     src/core/security/DeviceAuthenticator.cpp
+    # iPhone app Task 13 (R-IOS-08): the mirrored `devices` object and the
+    # device administration verbs behind it.
+    src/core/session/StationDevicesFacade.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the

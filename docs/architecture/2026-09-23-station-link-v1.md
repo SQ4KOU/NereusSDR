@@ -132,7 +132,10 @@ token at first run; the LAN announcement carries it too (section 14).
   working. A window that sends its `device` block with the token enrols its
   key in the same step (section 3.5) and signs in by key from then on.
 - Retiring the token (`TokenStore::retire`: the file is deleted) ends it for
-  good. On a Core with no token (a new one, or one whose token was retired)
+  good. A paired device retires it with `station.retireToken` (section 9.1),
+  which the Core refuses until at least one device is paired; the Core then
+  ends every connection still signed in by token, including one that also
+  enrolled its device key (section 12.4). On a Core with no token (a new one, or one whose token was retired)
   a sign-in with a token, empty or not, is refused with `auth.result`
   accepted false, "This Core uses paired devices. Pair this device first.",
   `retryable` false, `code` `pairingRequired`, and the token's limiter is
@@ -431,7 +434,10 @@ descriptions) is declared here, and asked with
 `StationServer::peerDeclares(peer, feature, minVersion)`; the desktop
 client asks `StationClient::stationDeclares(feature, minVersion)`. The station
 declares `deviceAuth` 1 (section 3.5) when its identity key is usable; the
-desktop client declares none yet and sends `{}`. A client never sends a
+desktop client declares none yet and sends `{}`. A client's `deviceAuth` 1
+(or later) also asks for the `devices` object and its commands (section
+7.1): the station sends them to no other peer, so a window that declares
+nothing sees exactly the wire it was built for. A client never sends a
 message kind or verb the station has not advertised, in `features` or in
 its capabilities.
 
@@ -504,6 +510,7 @@ change shows as surface drift and as a change to this table.
 | `accessoryDataVersion` | 1 |
 | `remoteTgxlControlVersion` | 1 |
 | `stationIdentityVersion` | 1 |
+| `deviceAdminVersion` | 1 |
 
 <!-- /surface -->
 
@@ -545,10 +552,16 @@ When a feature is off, its version is 0:
   transmit interlock and the Power Genius output limit) and accepts
   `setTxInterlockPolicy`, `setPgxlPowerCap` and `clearAccessoryFaults`.
 
-- `stationIdentityVersion`: sent only at agreed minor 11, last. 1 when the
+- `stationIdentityVersion`: sent only at agreed minor 11. 1 when the
   Core has its identity key and signs devices in by key (section 3.5);
   0 when that key is unusable. A client learns the same before
   capabilities from the hello's `features.deviceAuth`.
+- `deviceAdminVersion`: sent only at agreed minor 11, last. 1 when the
+  Core's identity key is usable (the same condition as
+  `stationIdentityVersion`): the `devices` object (section 7.1) and
+  `devices.revoke`, `station.rename`, `station.acknowledgeKeyBackup` and
+  `station.retireToken` (section 9.1), for a peer whose hello declares
+  `deviceAuth`. 0 otherwise.
 
 `txPermitted` is always false today: remote transmit is R4.
 
@@ -616,6 +629,7 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 | 46 | `accessoryDataVersion` | `i64` |
 | 47 | `remoteTgxlControlVersion` | `i64` |
 | 48 | `stationIdentityVersion` | `i64` |
+| 49 | `deviceAdminVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1019,6 +1033,18 @@ An enum property lists the values its domain allows.
 | 142 | `snrDb` | `f64` | outbound |  |
 | 143 | `lastRadeRxCallsign` | `utf8` | outbound |  |
 
+**StationDevicesFacade** (7 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `listJson` | `utf8` | outbound |  |
+| 1 | `revision` | `i64` | outbound |  |
+| 2 | `stationLabel` | `utf8` | outbound |  |
+| 3 | `claimed` | `bool` | outbound |  |
+| 4 | `tokenActive` | `bool` | outbound |  |
+| 5 | `keyBackupAcknowledged` | `bool` | outbound |  |
+| 6 | `keyPath` | `utf8` | outbound |  |
+
 **StationTciModel** (5 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
@@ -1120,6 +1146,7 @@ destroyed during the session.
 | `stationTci` | `StationTciModel` |
 | `accessoryData` | `AccessoryDataModel` |
 | `accessorySettings` | `AccessorySettingsModel` |
+| `devices` | `StationDevicesFacade` |
 | `pan:<i>` | `PanadapterModel` |
 | `slice:<id>` | `SliceModel` |
 
@@ -1142,6 +1169,33 @@ Notes on the keys:
   minor 11 on a Core that runs a station TCI server
   (`StationServer::sendToSession`). An older peer never sees their schema
   either.
+- **`devices`.** Sent only to a peer at agreed minor 11 whose hello
+  declares `deviceAuth` 1 or later, while `deviceAdminVersion` is 1
+  (`StationServer::sendToSession`). A window that declares nothing (today's
+  desktop) and an older peer never see it or its schema. Every property is
+  `outbound`; the object changes only through its four commands (section
+  9.1), and a write to it is refused as any `outbound` write is. Its
+  properties (`StationDevicesFacade`):
+  - `listJson` (`utf8`): a JSON array of the paired devices in pairing
+    order, each `{id, name, kind, pairedAt, lastSeen, connected}`: `id` is
+    the device's key fingerprint (SHA-256 of its public key's DER) in
+    base64url, `kind` is `phone`, `tablet` or `computer`, the two times
+    are ISO 8601 UTC (`""` when never seen), and `connected` says whether
+    that device holds an authenticated connection now.
+  - `revision` (`i64`): moves by one with every change to the object, from
+    0 to 2^32 - 1 and then round to 0; compare by serial-number
+    arithmetic.
+  - `stationLabel` (`utf8`): the Core's label as displayed (section 8.2's
+    `StationLabel`, or `StationCallsign` until the first rename; `""`
+    when neither gives one).
+  - `claimed` (`bool`): a device is paired, or the token is active
+    (`DeviceStore::isClaimed`).
+  - `tokenActive` (`bool`): the old pairing token still signs in (section
+    3.3).
+  - `keyBackupAcknowledged` (`bool`): the operator confirmed a backup of
+    this Core's identity key (`station.acknowledgeKeyBackup`); false on a
+    new Core and again after the key is replaced.
+  - `keyPath` (`utf8`): where the identity key file is on the Core.
 - **Unknown classes.** A client that receives a schema for a class it does
   not know records the difference and drops that class's objects and
   deltas.
@@ -1326,9 +1380,15 @@ They change only through their objects and commands; a raw
 | `Nr3ModelPath` | `dspAssets.selectNr3Model` | "This Core keeps its own NR3 models. Update this app to choose one." |
 | `hardware/<mac>/puresignal/...` | `pureSignalSettings` object, `ps3.*` commands | generic (below) |
 | `hardware/<mac>/slices/<n>/nnr/...` | slice properties, `nnr.*` commands | generic (below) |
+| `StationLabel` | `station.rename` | "This Core keeps its own name. Update this app to rename it." |
+| `StationKeyBackupAcknowledged` | `station.acknowledgeKeyBackup` | generic (below) |
 
 Matching is case-insensitive. The reasons in the table are plain operator
-wording. The generic families give "The Core changes these settings only
+wording. `StationLabel` is empty until the first rename, and while it is
+empty the Core's label follows `StationCallsign` (`StationLabel::current`).
+`StationKeyBackupAcknowledged` holds the fingerprint of the identity key
+that was acknowledged, so a replaced key asks again. A remove of either is
+refused with the table's reason too. The generic families give "The Core changes these settings only
 through their own controls." for a write, and "Change these settings with
 their own controls on this Core." for a remove.
 
@@ -1423,13 +1483,17 @@ refused.
 | `notch.move` | `id` i64, `centreHz` f64, `widthHz` f64 | `notchControlVersion` | 1 | 5 |
 | `notch.setActive` | `id` i64, `active` bool | `notchControlVersion` | 1 | 5 |
 | `notch.delete` | `id` i64 | `notchControlVersion` | 1 | 5 |
+| `devices.revoke` | `id` utf8 | `deviceAdminVersion` | 1 | 11 |
+| `station.rename` | `label` utf8 | `deviceAdminVersion` | 1 | 11 |
+| `station.acknowledgeKeyBackup` | none | `deviceAdminVersion` | 1 | 11 |
+| `station.retireToken` | none | `deviceAdminVersion` | 1 | 11 |
 
 <!-- /surface -->
 
 The table's capability columns are the gate the desktop client applies
 before sending (section 6.2).
 
-Three command groups need a sentence beyond the table:
+Four command groups need a sentence beyond the table:
 
 - **The filter policy.** `setAlexBpfMode` sets one receive filter chain's
   filter policy (`chain` 0 or 1; `mode` 0 Auto, 1 Force filter, 2 Force
@@ -1455,6 +1519,23 @@ Three command groups need a sentence beyond the table:
   same. The Core keeps the switch when the client leaves, so its server
   keeps running for the RF-Kit amplifier and for other apps. The wire is
   unchanged from `stationTciVersion` 1.
+- **The Core's devices.** Taken only from a peer at agreed minor 11 whose
+  hello declares `deviceAuth`, the peers the `devices` object goes to;
+  from any other the station refuses them with "Update this app to manage
+  this Core's paired devices." (`StationServer::onTransportText`).
+  `devices.revoke` removes the paired device whose `id` (as in `listJson`)
+  it names; the Core ends that device's connection (section 12.4), and a
+  device may revoke itself, its connection ending just after the result.
+  `station.rename` stores a label (section 8.2): a callsign of letters,
+  digits and `/`, then optionally `/` and up to 32 letters, digits, `-` or
+  `_`; any other is refused with a reason that states the rule.
+  `station.acknowledgeKeyBackup` records the operator's backup of the
+  identity key. `station.retireToken` retires the token (section 3.3); it
+  is refused, "Pair a device with this Core first, so a device can still
+  sign in once the pairing token stops working.", until a device is paired,
+  and accepted with nothing to do on a Core without a token. Each accepted
+  one names `devices` in `affected`; its change reaches the object in the
+  next `delta`.
 
 ### 9.2 Unknown verbs
 
@@ -1608,12 +1689,16 @@ non-empty string; an empty one is refused like any mistyped key.
 | Connect deadline expired | `session.end` | true | none |
 | Heartbeat timeout | `session.end` | true | none |
 | Station shutting down | `session.end` "The Core is shutting down." | true | none |
+| The connection's device was removed (`devices.revoke`, the Core's console, a reset) | `session.end` "This device was removed from the Core." | false | `deviceRemoved` |
+| A connection signed in by token when the token is retired (`station.retireToken`) | `session.end` "This Core uses paired devices. Pair this device first." | false | `pairingRequired` |
 
-Two codes are defined for ends this revision does not send yet:
-`deviceRemoved`, for a device removed from the Core while connected (the
-device list's revoke), and `identityChanged`, which a client uses for its
-own end when the Core's certificate binding or identity key is not the one
-it paired with; a station never sends it.
+A device's connection ends whatever removed the device
+(`DeviceStore::deviceRemoved`): the command, the Core's console or a reset.
+The connection that asked is ended just after its own `command.result`.
+
+One code is defined for an end the station never sends:
+`identityChanged`, which a client uses for its own end when the Core's
+certificate binding or identity key is not the one it paired with.
 
 The takeover and version reasons are worded in one place,
 `src/core/session/SessionEndReasons.{h,cpp}`: "Another app at
@@ -1799,6 +1884,7 @@ a JSON string:
 | `"$majors"` | only as the `majors` of a `hello`: a non-empty array of whole numbers from 0 to 65535, ascending, without repeats, that holds the same message's `major` | yes, but not in a fixture for the app | yes, filled with `[major]`, the message's own (filled) `major` alone |
 | `"$capture:<name>"` | any value, recorded under `<name>` | yes | no |
 | `"$ref:<name>"` | the value recorded under `<name>`, compared the same way | yes | yes, filled with the recorded value |
+| `"$ref:device:<n>"`, `"$ref:device:self"` | only in a fixture for the station alone: the id (base64url key fingerprint) of a device the station runner paired at run time, `<n>` from 1 to `otherPairedDevices` in the order it paired them, `self` its own (`pairedDevice`); recorded before the client connects | yes | yes, by the station's runner |
 | `"$within:<t>:<v>"` | a number no further than `<t>` from `<v>`; `<t>` and `<v>` are each exactly a JSON number (RFC 8259 section 6: no `+`, no leading `.`, no `inf` or `nan`, no spaces), `<t>` at least 0; any other text is a malformed fixture | yes | no |
 | `"$device:<case>"` | only as `auth.request`'s `device` | no | yes, by the station's runner: the device block (section 3.5) of the runner's own device, whose key it makes at run time, signing the transcript of the challenge recorded as `challenge`; `<case>` is `signed` (that transcript), `otherChallenge` (a challenge of the runner's own in its place) or `otherCertificate` (another certificate's SHA-256 in place of the station's). An app's runner fills none: in a fixture for the app only `"$device:signed"` appears, in a behaviour step, and it is checked (section 16.3) |
 
@@ -2037,6 +2123,7 @@ role.
 | `preemptingClient` | `{"afterStep": i}`: a second client authenticates once step `i` is done | none |
 | `otherConnections` | other clients connected before this one, still connecting and sending nothing; 8 puts the station at its connection limit | 0 |
 | `token` | `"active"`: a Core upgraded from before paired devices, with a pairing token (made at run time) that `"$ref:token"` names; `"none"`: a new Core, without one (section 3.3) | `"active"` |
+| `otherPairedDevices` | that many devices besides the runner's own are paired before the client connects, their keys made at run time and never written in a fixture; their ids are `"$ref:device:1"` onwards; an app's runner ignores it | 0 |
 | `pairedDevice` | the station runner's own device (its key made at run time, the one `"$device:<case>"` signs with) is paired with the station before the client connects; an app's runner ignores it, as it ignores all of `stationSetup`, and accepts its app's key | false |
 
 The station runner starts every fixture from an empty settings profile,
@@ -2051,6 +2138,9 @@ same on every machine.
 | `device-sign-in` | On a new Core, the paired device signs this connection's transcript (`"$capture:challenge"` from the `hello`, then `"$device:signed"`) and is admitted: the whole connect sequence to `snapshot.complete`, summarised; on the app, the app's own device signs and its block is checked |
 | `device-not-paired` | A well-formed device sign-in from a key the Core has not paired: `code` `deviceNotPaired`, then the close; on the app, the app's device signs, its block is checked, and the app handles the refusal |
 | `device-other-challenge`, `device-other-certificate` | The paired device signs another challenge, or another certificate: `code` `deviceProofFailed`, then the close |
+| `devices` | On a new Core with the runner's device and two others paired, a device that declares `deviceAuth` receives the `devices` object in its snapshot (`listJson` and `keyPath` as `"$string"`, since they carry run-time ids, pairing and sign-in times and a path); a rename with a renamed argument and with a label outside the rule is refused, then a rename is stored (`settings.value` `StationLabel`) and the object's next `delta` carries it; raw `settings.write` and `settings.remove` of `StationLabel` are refused; the key backup is acknowledged; another device is revoked; `station.retireToken` with no token is accepted; then the device revokes itself: `command.result`, `session.end` `deviceRemoved`, the close. Runs on the station alone |
+| `devices-not-offered` | A window at minor 11 that declares no features receives no `devices` object, and `station.rename` is refused "Update this app to manage this Core's paired devices." Runs on the station alone |
+| `devices-retire-token-refused`, `devices-retire-token` | On an upgraded Core, a token connection that declares `deviceAuth` receives the object with `tokenActive` true; `station.retireToken` is refused with no device paired, and with one paired it is accepted and the connection ends: `session.end` `pairingRequired`, `retryable` false. Run on the station alone |
 | `connection-limit` | With eight other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
 | `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This Core runs link version 1 and this app runs version 2. Update the Core.", `retryable` false, `code` `linkVersion` |

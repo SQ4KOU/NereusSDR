@@ -632,22 +632,25 @@ private slots:
         for (const SessionMessage& m : current) {
             if (m.kind == SessionMessageKind::Capabilities) {
                 caps = StationCapabilities::fromUpdates(m.updates);
-                QCOMPARE(m.updates.at(m.updates.size() - 6).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 7).name,
                          QByteArrayLiteral("remotePgxlControlVersion"));
-                QCOMPARE(m.updates.at(m.updates.size() - 5).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 6).name,
                          QByteArrayLiteral("remoteRfKitControlVersion"));
                 // R-R3-48: then the station TCI server's version.
-                QCOMPARE(m.updates.at(m.updates.size() - 4).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 5).name,
                          QByteArrayLiteral("stationTciVersion"));
                 // R-R3-47: then the accessory records' version.
-                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 4).name,
                          QByteArrayLiteral("accessoryDataVersion"));
                 // R-R3-47: then the Tuner Genius's own settings.
-                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
                          QByteArrayLiteral("remoteTgxlControlVersion"));
-                // iPhone app Task 12: device sign-in by key travels last.
-                QCOMPARE(m.updates.constLast().name,
+                // iPhone app Task 12: then device sign-in by key.
+                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
                          QByteArrayLiteral("stationIdentityVersion"));
+                // iPhone app Task 13: device administration travels last.
+                QCOMPARE(m.updates.constLast().name,
+                         QByteArrayLiteral("deviceAdminVersion"));
             }
             if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "amplifier") {
                 sawAmplifier = true;

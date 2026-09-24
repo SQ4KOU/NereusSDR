@@ -35,6 +35,11 @@
 //   clientAnswersPings, preemptingClient, pairedDevice   read by the
 //                    player itself (pairedDevice: the runner's own device,
 //                    made at run time, is paired before the client connects)
+//   otherPairedDevices
+//                    devices besides the runner's own paired before the
+//                    client connects (0); their keys are made at run time
+//                    and their ids recorded for "$ref:device:<n>" (the
+//                    runner's own is "$ref:device:self")
 //
 // NEREUS_LINK_TRACE_DIR, when set, receives every message the station sent
 // in each fixture (<id>.jsonl), for writing a fixture to what the code does.
@@ -83,6 +88,9 @@
 //                                    admits the Core hello's own
 //                                    challenge capture and a device
 //                                    sign-in as "$device:signed".
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08):
+//                                    stationSetup "otherPairedDevices".
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -135,7 +143,7 @@ const QStringList kSetupKeys{
     QStringLiteral("media"),           QStringLiteral("priorFailedAuthentications"),
     QStringLiteral("clientAnswersPings"), QStringLiteral("preemptingClient"),
     QStringLiteral("otherConnections"), QStringLiteral("token"),
-    QStringLiteral("pairedDevice"),
+    QStringLiteral("pairedDevice"),    QStringLiteral("otherPairedDevices"),
 };
 
 // The station a fixture's stationSetup describes. Members are declared in

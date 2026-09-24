@@ -5173,7 +5173,8 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     // remotePgxlControlVersion and remoteRfKitControlVersion (R-R3-47), then
     // stationTciVersion (R-R3-48), then accessoryDataVersion (R-R3-47), then
     // remoteTgxlControlVersion (R-R3-47, the Tuner Genius's own settings),
-    // then stationIdentityVersion (iPhone app Task 12).
+    // then stationIdentityVersion (iPhone app Task 12), then
+    // deviceAdminVersion (iPhone app Task 13).
     StationCapabilities sent = g21kCaps();
     sent.radioHardwareVersion = 1;
     sent.remotePgxlControlVersion = 1;
@@ -5182,9 +5183,10 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     sent.accessoryDataVersion = 1;
     sent.remoteTgxlControlVersion = 1;
     sent.stationIdentityVersion = 1;
+    sent.deviceAdminVersion = 1;
     const QList<MirrorUpdate> updates = sent.toUpdates();
     const int model = updateIndexOf(updates, "hpsdrModel");
-    QCOMPARE(model, int(updates.size()) - 10);
+    QCOMPARE(model, int(updates.size()) - 11);
     QCOMPARE(updateIndexOf(updates, "radioProtocol"), model + 1);
     QCOMPARE(updateIndexOf(updates, "radioAddress"), model + 2);
     QCOMPARE(updateIndexOf(updates, "radioHardwareVersion"), model + 3);
@@ -5194,6 +5196,7 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     QCOMPARE(updateIndexOf(updates, "accessoryDataVersion"), model + 7);
     QCOMPARE(updateIndexOf(updates, "remoteTgxlControlVersion"), model + 8);
     QCOMPARE(updateIndexOf(updates, "stationIdentityVersion"), model + 9);
+    QCOMPARE(updateIndexOf(updates, "deviceAdminVersion"), model + 10);
     const StationCapabilities received = StationCapabilities::fromUpdates(updates);
     QVERIFY(received.radioIdentityEntries);
     QCOMPARE(received.radioHardwareVersion, 1);
@@ -5203,6 +5206,7 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     QCOMPARE(received.accessoryDataVersion, 1);
     QCOMPARE(received.remoteTgxlControlVersion, 1);
     QCOMPARE(received.stationIdentityVersion, 1);
+    QCOMPARE(received.deviceAdminVersion, 1);
     QCOMPARE(received.hpsdrModel, HPSDRModel::ANAN_G2_1K);
     QCOMPARE(received.radioProtocol, 2);
     QCOMPARE(received.radioAddress, QStringLiteral("192.168.1.50"));
@@ -5294,17 +5298,17 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
                              "radioHardwareVersion", "remotePgxlControlVersion",
                              "remoteRfKitControlVersion", "stationTciVersion",
                              "accessoryDataVersion", "remoteTgxlControlVersion",
-                             "stationIdentityVersion"}) {
+                             "stationIdentityVersion", "deviceAdminVersion"}) {
         QCOMPARE(updateIndexOf(older, name), -1);
     }
-    // Byte for byte: the minor-11 descriptor without the ten (and the
+    // Byte for byte: the minor-11 descriptor without the eleven (and the
     // display budget reason, which is not sent here) is the minor-10 one.
     QList<MirrorUpdate> stripped = current;
     for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
                              "radioHardwareVersion", "remotePgxlControlVersion",
                              "remoteRfKitControlVersion", "stationTciVersion",
                              "accessoryDataVersion", "remoteTgxlControlVersion",
-                             "stationIdentityVersion"}) {
+                             "stationIdentityVersion", "deviceAdminVersion"}) {
         stripped.removeAt(updateIndexOf(stripped, name));
     }
     QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)),

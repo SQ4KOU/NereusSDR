@@ -8,6 +8,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: iPhone app Task 13 (R-IOS-08): current() and ruleText().
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/StationLabel.h"
@@ -95,6 +98,25 @@ std::optional<StationLabel> StationLabel::defaultLabel(const AppSettings& settin
     StationLabel label;
     label.callsign = callsign;
     return label;
+}
+
+std::optional<StationLabel> StationLabel::current(const AppSettings& settings)
+{
+    const QString stored =
+        settings.value(QLatin1String(kSettingsKey), QString()).toString().trimmed();
+    if (!stored.isEmpty()) {
+        if (const std::optional<StationLabel> renamed = parse(stored)) {
+            return renamed;
+        }
+    }
+    return defaultLabel(settings);
+}
+
+QString StationLabel::ruleText()
+{
+    return QStringLiteral(
+        "Name the Core with a callsign of letters, digits and /, then if you like a / and up "
+        "to 32 letters, digits, dashes or underscores, for example KG4VCF/shack.");
 }
 
 } // namespace NereusSDR
