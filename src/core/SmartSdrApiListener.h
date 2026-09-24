@@ -11,15 +11,25 @@
 //   2026-05-19 - Implemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-22 / R-R3-47: on the Core, listens on the station
+//                 network only (setStationBind). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
+#include "core/StationNetwork.h"
+
 #include <QObject>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QHash>
+#include <QList>
 #include <QTimer>
 #include <QString>
+
+#include <memory>
+#include <optional>
+#include <vector>
 
 namespace NereusSDR {
 
@@ -50,9 +60,20 @@ class SmartSdrApiListener : public QObject {
 public:
     explicit SmartSdrApiListener(QObject* parent = nullptr);
 
-    // Production entry point: binds to AnyIPv4:4992. Equivalent to
-    // start(QHostAddress::AnyIPv4, 4992).
+    // Production entry point: binds to AnyIPv4:4992 (a desktop window), or,
+    // once setStationBind() has been called (the Core), to the station
+    // network's addresses (StationNetwork::StationBind::listenAddresses:
+    // the station address and 127.0.0.1) on port 4992.
     bool start();
+
+    // R-R3-22 / R-R3-47: the Core's rule for where station listeners accept
+    // connections. A running listener whose addresses change (the radio
+    // moved to another network, or it connected at last) restarts on the
+    // new ones; connected amplifiers reconnect. Never called by a desktop
+    // window, which keeps AnyIPv4.
+    void setStationBind(const StationNetwork::StationBind& bind);
+    // The addresses the listener listens on now (empty when stopped).
+    QList<QHostAddress> listenAddresses() const;
 
     // Test seam: bind to a caller-chosen address and port. Used by the
     // PTT-chain unit tests to drive a listener on loopback + ephemeral port
@@ -207,6 +228,13 @@ private:
     QHostAddress m_listenAddress{QHostAddress::AnyIPv4};
     quint16 m_listenPort{4992};
     QString m_lastListenError;
+    // Set on the Core only (setStationBind); a desktop window keeps
+    // m_listenAddress.
+    std::optional<StationNetwork::StationBind> m_stationBind;
+    // Listens on a list of addresses: m_server takes the first, these the
+    // rest, all on the same port.
+    bool startOn(const QList<QHostAddress>& addresses, quint16 port);
+    void closeServers();
     // Per-socket session state.
     struct ClientState {
         QByteArray readBuffer;     // line accumulator (CR-terminated)
@@ -276,6 +304,10 @@ private:
     QString generateHandle() const;
 
     QTcpServer                       m_server;
+    // The station network's further addresses (127.0.0.1 beside the
+    // station address), same port as m_server.
+    std::vector<std::unique_ptr<QTcpServer>> m_extraServers;
+    QList<QHostAddress>              m_listening;
     QHash<QTcpSocket*, ClientState>  m_clients;
     QTimer                           m_periodicTimer;  // 1 Hz S-frame push
 

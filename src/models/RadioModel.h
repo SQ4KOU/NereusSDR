@@ -60,6 +60,16 @@
 //                stationTciModel() / stationTciController(), rfKitEnabled
 //                read-only. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: the Core's accessory records and
+//                settings (`accessoryData`): RF-Kit fault log, the model's
+//                own connection counters, the interlock, power-cap and
+//                fault-history commands, and a window's setting changes
+//                reaching the Core's live objects. NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-22 / R-R3-47: setStationBind (the Core's station
+//                listeners on the station network only) and the FlexRadio
+//                beacon following the 4O3A switch. NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -155,6 +165,7 @@
 #include "core/HardwareProfile.h"
 #include "core/codec/CodecContext.h"  // SliceConfig (Phase 3F Sub-Epic B Task 16)
 #include "core/DdcAssignment.h"       // DdcAssignment (Phase 3F Sub-Epic B Task 16)
+#include "core/StationNetwork.h"  // StationBind (R-R3-22 station listeners)
 #include "core/SkuUiProfile.h"  // issue #257 — setLastBandForTest passes the SKU into refreshAntennasFromAlex
 #include "core/safety/SwrProtectionController.h"
 #include "core/safety/TxInhibitMonitor.h"
@@ -290,6 +301,9 @@ class StationTciModel;
 class RfKitBandFollow;
 class AmplifierModel;
 class RfKitModel;
+class AccessoryDataModel;
+class StationAccessoryData;
+class ConnectionDiagnostics;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -1816,11 +1830,28 @@ public:
 
     // R-R3-48: the Core runs the app's TCI server on the station network
     // (DaemonApp, before radio startup). `bindOverride` is nereusd.conf's
-    // station_tci_bind; empty picks this computer's address on the radio's
-    // subnet once the radio connects.
+    // station_bind (older name station_tci_bind); empty picks this
+    // computer's address on the radio's subnet once the radio connects.
+    // Once setStationBind has run, its rule wins.
     void enableStationTci(const QString& bindOverride);
     /// The station's TCI switch and port, from a window's command.
     bool setStationTciForStation(bool enabled, int port, QString* reason);
+
+    // R-R3-22 / R-R3-47 / R-R3-48: the Core's station network (DaemonApp,
+    // before radio startup). The SmartSDR API listener on TCP 4992, the
+    // Power Genius and Tuner Genius discovery sockets and the station TCI
+    // server then all accept connections there only, by one rule
+    // (StationNetwork::StationBind): `bindOverride` is nereusd.conf's
+    // station_bind (older name station_tci_bind); empty follows the radio's
+    // subnet, with 127.0.0.1 alone until a radio connects; a new radio
+    // address moves every listener. A desktop window never calls this and
+    // binds as it always has. The FlexRadio beacon then announces the
+    // station address.
+    void setStationBind(const QString& bindOverride);
+    /// The rule as it stands (radio address included); unset in a desktop window.
+    std::optional<StationNetwork::StationBind> stationBind() const { return m_stationBind; }
+    /// Test seam: this computer's address entries for the station rule.
+    void setStationInterfaceEntriesForTest(const QList<QNetworkAddressEntry>& entries);
     static constexpr int kPgxlKeepaliveMinSec = 1;
     static constexpr int kPgxlKeepaliveMaxSec = 3600;
     static constexpr int kPgxlPingMaxSec = 3600;
@@ -1914,6 +1945,36 @@ public:
     // Fault History tables reflect live captures.
     FaultLog* pgxlFaultLog() { return m_pgxlFaultLog; }
     FaultLog* tgxlFaultLog() { return m_tgxlFaultLog; }
+    // R-R3-47: the RF-Kit's faults (a lost link, a refused identity, an
+    // interface error), key RfKit_FaultHistory.
+    FaultLog* rfkitFaultLog() { return m_rfkitFaultLog; }
+
+    // R-R3-47 / R-R3-22: the Power Genius and Tuner Genius connection
+    // counters. A Local model's are bound to its own connections for its
+    // whole life; a Remote model's hold the Core's counters. Non-null
+    // from construction.
+    ConnectionDiagnostics* pgxlDiagnostics() const { return m_pgxlDiagnostics; }
+    ConnectionDiagnostics* tgxlDiagnostics() const { return m_tgxlDiagnostics; }
+
+    // R-R3-47 / R-R3-22: the Core's accessory records and settings, as the
+    // Core mirrors them (`accessoryData`). Non-null from construction. A
+    // Local model keeps it current (StationAccessoryData); a Remote model
+    // holds the Core's values and feeds them into its fault logs, counters,
+    // interlock policy and tune memory so the pages show the Core's.
+    AccessoryDataModel* accessoryDataModel() const { return m_accessoryDataModel; }
+    // nullptr in a Remote model.
+    StationAccessoryData* stationAccessoryData() const { return m_stationAccessoryData; }
+
+    // R-R3-47 / R-R3-22: the three commands (accessoryDataVersion 1). The
+    // policy's enforcement stays in MoxController; a change keys nothing.
+    bool setTxInterlockPolicyForStation(int mode, int graceMs, bool swrGateEnabled,
+                                        double swrGateMax, QString* reason);
+    bool setPgxlPowerCapForStation(bool enabled, int watts, QString* reason);
+    bool clearAccessoryFaultsForStation(const QString& device, QString* reason);
+    /// A window changed a station setting (StationServer, after the write
+    /// is stored): the Core's interlock policy, output limit, tune memory,
+    /// antenna names and fault logs follow it at once. Other keys ignored.
+    void applyRemoteAccessorySetting(const QString& key);
 
     // Phase 3G-9b: one-shot profile that sets the 7 smooth-default recipe
     // values on SpectrumWidget. Called from the constructor exactly once
@@ -2192,6 +2253,12 @@ public:
     // setConnectionStateForTest + setLastRadioInfoForTest.
     void applyPeripheralsForTest() { applyPeripheralsForCurrentMac(); }
     void teardownPeripheralsForTest() { teardownPeripherals(); }
+    // R-R3-22: the FlexRadio beacon as connectToRadio leaves it, in a mode
+    // that sends nothing (FlexRadioDiscoveryBroadcaster::setNoSendForTesting),
+    // and whether it runs.
+    void configureFlexBeaconForTest();
+    bool flexBeaconRunningForTest() const;
+    class FlexRadioDiscoveryBroadcaster* flexBroadcasterForTest() const { return m_flexBroadcaster; }
 
 #ifdef NEREUS_BUILD_TESTS
 public:
@@ -5099,6 +5166,12 @@ private:
     // Shared (non-owning) with PgxlAdvancedPage and TgxlAdvancedPage.
     FaultLog* m_pgxlFaultLog{nullptr};
     FaultLog* m_tgxlFaultLog{nullptr};
+    // R-R3-47 / R-R3-22: see the accessors.
+    FaultLog* m_rfkitFaultLog{nullptr};
+    ConnectionDiagnostics* m_pgxlDiagnostics{nullptr};
+    ConnectionDiagnostics* m_tgxlDiagnostics{nullptr};
+    AccessoryDataModel* m_accessoryDataModel{nullptr};
+    StationAccessoryData* m_stationAccessoryData{nullptr};
 
     // Phase 3P-II Phase 4 Task 94: last known PGXL state string.
     // Tracks "previous state" so we capture only on FAULT *transitions*
@@ -5111,6 +5184,14 @@ private:
     // Allows PGXL/TGXL to auto-discover NereusSDR in their FlexRadio dropdown
     // without any manual IP entry.
     class FlexRadioDiscoveryBroadcaster* m_flexBroadcaster{nullptr};
+    // R-R3-22: connectToRadio configured the beacon for this radio. It
+    // runs only while this is set, 4O3A is on and PGXL_BroadcastDiscovery
+    // is True (updateFlexBeacon).
+    bool m_flexBeaconConfigured{false};
+    void updateFlexBeacon();
+    // R-R3-22 / R-R3-47: set by setStationBind on the Core only.
+    std::optional<StationNetwork::StationBind> m_stationBind;
+    void applyStationBind();
 
     // Passive SmartSDR API listener on TCP 4992. Bench-recon stub: logs every
     // line PGXL sends so we can design the response layer in a follow-up.

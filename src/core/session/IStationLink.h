@@ -65,6 +65,11 @@
 //                                    requests, and the station TCI
 //                                    switch. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the accessory
+//                                    records and settings
+//                                    (accessoryDataVersion 1): interlock
+//                                    policy, output limit, fault history.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -175,6 +180,18 @@ public:
     /// TCI here, so the window runs no TCI server of its own. Kept while the
     /// link is down (the Core keeps its server), false for another Core.
     virtual bool coreServesTciOnThisComputer() const { return false; }
+
+    /// R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core shares its
+    /// accessory records and settings (`accessoryData`) and takes these
+    /// three changes. Acceptance means the Core took the request; the
+    /// `accessoryData` object says what it now holds.
+    virtual bool accessoryDataAvailable() const { return false; }
+    virtual CommandOutcome requestTxInterlockPolicy(int, int, bool, double)
+    { return { false, QStringLiteral("This Core does not share its amplifier and tuner settings with this app.") }; }
+    virtual CommandOutcome requestPgxlPowerCap(bool, int)
+    { return { false, QStringLiteral("This Core does not share its amplifier and tuner settings with this app.") }; }
+    virtual CommandOutcome requestClearAccessoryFaults(const QString&)
+    { return { false, QStringLiteral("This Core does not share its amplifier and tuner settings with this app.") }; }
     virtual CommandOutcome requestApplyNnrModels(quint32)
     { return { false, QStringLiteral("NNR model application is not supported by this station link.") }; }
     virtual bool nnrControlAvailable() const { return false; }

@@ -73,6 +73,9 @@
 //   2026-09-24 - R-R3-48: stationTciVersion, last in the
 //                minor-11 block. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: accessoryDataVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -133,9 +136,16 @@ struct StationCapabilities {
     int remoteRfKitControlVersion = 0;
     /// R-R3-48: 1 means the Core runs its own TCI server on the station
     /// network, mirrored as the read-only `stationTci` object and switched
-    /// by the setStationTci command. Sent last in the same block. 0: a
+    /// by the setStationTci command. Sent in the same block. 0: a
     /// window's TCI switch changes only its own server.
     int stationTciVersion = 0;
+    /// R-R3-47 / R-R3-22: 1 means the Core mirrors its accessory records
+    /// and settings as the read-only `accessoryData` object (fault
+    /// history, connection counters, interlock policy, output limit and
+    /// its alert, tune memory, antenna names) and takes the
+    /// setTxInterlockPolicy, setPgxlPowerCap and clearAccessoryFaults
+    /// commands. Sent last in the same block.
+    int accessoryDataVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

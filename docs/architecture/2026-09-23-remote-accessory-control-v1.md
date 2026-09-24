@@ -14,7 +14,7 @@ deltas, `property.write` / `property.result`, `command.invoke` /
 The plan that builds it is
 [2026-09-23-r3-core-owned-accessories-plan.md](2026-09-23-r3-core-owned-accessories-plan.md).
 Each of its tasks extends this document in the same commit that adds what it
-describes. This revision covers Tasks 1 to 3: the read-only `amplifier` and
+describes. This revision covers Tasks 1 to 4: the read-only `amplifier` and
 `rfkit` status objects, everything the Core already serves for its
 accessories (the `tuner` object, the 4O3A fields, and the TGXL and 4O3A
 commands), the Core-owned PGXL (identity before admission, pairing only
@@ -24,7 +24,12 @@ amplifier's and tuner's operate controls), the Core-owned RF2K-S (identity
 from `/info` before admission, its interface, antenna and tuner rows, the
 `configureRfKit`, `disconnectRfKit` and `setRfKitEnabled` commands), band
 follow for both amplifiers, and the Core's own TCI server on the station
-network (the `stationTci` object and the `setStationTci` command).
+network (the `stationTci` object and the `setStationTci` command), and the
+Core's accessory records and settings (the `accessoryData` object: fault
+history for all three devices, connection counters, the transmit interlock
+policy, the Power Genius output limit and its alert, tune memory and
+antenna names; the `setTxInterlockPolicy`, `setPgxlPowerCap` and
+`clearAccessoryFaults` commands).
 
 ## Wire conventions
 
@@ -67,6 +72,7 @@ contract; each feature has its own version.
 | `remoteRfKitControlVersion` | 11 | 1 | The Core mirrors its RF2K-S as the read-only `rfkit` object |
 | `remoteRfKitControlVersion` | 11 | 2 | Also: the interface, antenna, tuner and band-follow rows of `rfkit`; `configureRfKit`, `disconnectRfKit` and `setRfKitEnabled` work, and the Core identifies the RF2K-S itself |
 | `stationTciVersion` | 11 | 1 | The Core runs its own TCI server on the station network: the read-only `stationTci` object, and `setStationTci` works |
+| `accessoryDataVersion` | 11 | 1 | The Core mirrors its accessory records and settings as the read-only `accessoryData` object, and `setTxInterlockPolicy`, `setPgxlPowerCap` and `clearAccessoryFaults` work |
 
 - The Core advertises `remotePgxlControlVersion` and
   `remoteRfKitControlVersion` as 2 and the TGXL and 4O3A versions as 1 when
@@ -77,18 +83,25 @@ contract; each feature has its own version.
 - `stationTciVersion` is 1 on a Core that runs its station TCI server
   (`nereusd` always does; the server itself is on only while the station's
   TCI switch is on), 0 otherwise.
-- `remotePgxlControlVersion`, `remoteRfKitControlVersion` and then
-  `stationTciVersion` travel last in the minor-11 block of the capabilities
-  message, after `hpsdrModel`, `radioProtocol`, `radioAddress` and
-  `radioHardwareVersion`, and only to an app that agreed minor 11. An app
-  below minor 11 receives exactly the capabilities, objects and deltas it
-  received before: none of the three entries, and no `amplifier`, `rfkit` or
-  `stationTci` schema, object or delta.
+- `accessoryDataVersion` is 1 on a Core that owns its accessories (the same
+  condition as `remotePgxlControlVersion` 2), 0 otherwise.
+- `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
+  `stationTciVersion` and then `accessoryDataVersion` travel last in the
+  minor-11 block of the capabilities message, after `hpsdrModel`,
+  `radioProtocol`, `radioAddress` and `radioHardwareVersion`, and only to an
+  app that agreed minor 11. An app below minor 11 receives exactly the
+  capabilities, objects and deltas it received before: none of the four
+  entries, and no `amplifier`, `rfkit`, `stationTci` or `accessoryData`
+  schema, object or delta. A minor-11 app built before `accessoryData`
+  drops its schema, object and deltas as an unknown key (see Wire
+  conventions) and keeps reading the fault history from the settings
+  snapshot as before.
 - An app that sees version 0, or no entry, shows no Power Genius or RF-Kit
   readings from this Core and says so (see Window behaviour).
-- A later task of this plan adds `accessoryDataVersion` (fault history,
-  interlock policy, tune memory). Its section is added here when it is
-  built.
+- An app that sees `accessoryDataVersion` 0, or no entry, shows the
+  accessory records it can read from the settings snapshot, and does not
+  offer to change the interlock policy, the output limit or the fault
+  history on this Core (see Window behaviour).
 
 ## Connection phase
 
@@ -239,7 +252,8 @@ model. So on every dial, before anything else is sent:
    `V` banner and sends only `info` (`identifying`).
 2. It listens for LAN discovery on UDP 9008 and 9010 for three seconds and
    takes the announcement whose address and receiving port are the
-   connection's. Captured from the real amp:
+   connection's, heard only from the station network (see "Where the Core
+   accepts station devices"). Captured from the real amp:
    `PowerGeniusXL ip=192.168.109.235 v=3.8.9 serial=10-200/24-0046 nickname=PowerGeniusXL`
 3. The amp's `info` reply, captured:
    `R<seq>|0|serial=10-200/24-0046  version=3.8.9 protocol=1.0 mains=240`
@@ -383,12 +397,9 @@ The Core runs the app's existing TCI server on its own radio model, so a TCI
 app at the station (the RF2K-S first) hears the Core's radio: the init
 burst, `vfo:` as the Core's slices move, `split_enable:` (always false:
 NereusSDR has no split) and the rest of the protocol a local window's server
-speaks. Where it listens:
-
-- the station network: nereusd.conf's `station_tci_bind` when set, else the
-  Core's address on the radio's subnet once the radio connects;
-- and always the Core's own computer (127.0.0.1), so apps there reach it.
-  A bind to every address (`0.0.0.0`) is used as given and covers it.
+speaks. It listens where every station listener does (see "Where the Core
+accepts station devices"): the station network, and always the Core's own
+computer (127.0.0.1), so apps there reach it.
 
 It transmits for no app until remote transmit: the init burst says
 `receive_only:true` and `tx_enable:<rx>,false`; `trx:<rx>,true` touches no
@@ -402,6 +413,114 @@ The TCI compatibility settings (`TciEmulateExpertSDR3Protocol`,
 Core: the server reads them from the Core's own settings, where no window
 writes them, so it runs on their defaults (the two emulation keys read
 True, as in a fresh window).
+
+## Where the Core accepts station devices
+
+One rule for every listener the Core opens for station devices: the
+SmartSDR API listener on TCP 4992 (the Power Genius and Tuner Genius
+connect there), the Power Genius and Tuner Genius discovery on UDP 9008 and
+9010, and the station TCI server. A desktop window without a Core sets none
+of this and binds as it always has.
+
+- **The station network** is `station_bind` in `nereusd.conf` when set: an
+  address of the Core's computer (another network), or `0.0.0.0` for every
+  network. Empty, it is the network that holds the radio: the Core's
+  address on the radio's subnet. The older name `station_tci_bind` (which
+  covered the TCI server alone) is still read when `station_bind` is empty
+  or absent; `packaging/nereusd.conf.sample` documents only `station_bind`.
+- **The Core's own computer** (127.0.0.1) is always accepted as well, so an
+  app or amplifier program on that computer reaches it. `0.0.0.0` already
+  covers it.
+- **Before a radio connects** (and with no `station_bind`), only the Core's
+  own computer is accepted.
+- **When the radio's address changes** every listener moves to the new
+  network: a running listener restarts on the new addresses, and a device
+  connected on the old network is dropped and reconnects.
+- **TCP listeners** (4992 and the TCI server) listen on those addresses
+  only. A station address the Core's computer does not have is a failed
+  listen (`fourO3AListenerError`, `stationTci.error`), never a quiet
+  fallback to the Core's computer alone.
+- **Discovery sockets** still open on every address, because the Power
+  Genius and Tuner Genius announce by broadcast and a socket bound to one
+  address hears no broadcast. The Core ignores any announcement whose
+  sender, or whose announced address, is not on the station network or the
+  Core's own computer, so a device on another network is never identified
+  or admitted.
+
+The FlexRadio discovery beacon (UDP 4992, which lets a Power Genius or Tuner
+Genius find the station) runs only while the radio's 4O3A switch is on and
+`PGXL_BroadcastDiscovery` is `True`: with 4O3A off nothing listens on 4992,
+so nothing is announced. This holds for a desktop window too. On the Core
+the beacon announces the station network address, where 4992 listens
+(with `station_bind = 0.0.0.0` it finds its own address as a desktop
+window's does).
+
+## The `accessoryData` object
+
+Class `AccessoryDataModel`, key `accessoryData`, `accessoryDataVersion` 1.
+Read-only: a window changes the policy, the output limit and a fault history
+only through the commands below. The properties are grouped by change
+notice: a delta carries every property of the group that changed, so a
+fault list is not resent when a counter moves.
+
+| Property | Kind | Meaning |
+| --- | --- | --- |
+| `faultRevision` | i64 | Moves by one each time any of the three fault lists changes on the Core. Compare only within one connection: it starts again when the Core restarts |
+| `pgxlFaults`, `tgxlFaults`, `rfkitFaults` | utf8 | Each device's fault history: a JSON array of up to 10 fault records, newest first (see "The fault record"); `[]` when empty |
+| `pgxlConnectedSinceMs`, `tgxlConnectedSinceMs` | i64 | When the Core's connection to the amp (tuner) started, ms since 1970 UTC on the Core's clock; 0 while not connected. A window works the uptime out from its own clock |
+| `pgxlLastRttMs`, `tgxlLastRttMs` | i64 | The last measured response time, ms; 0 before any |
+| `pgxlKeepaliveMissed`, `tgxlKeepaliveMissed` | i64 | Response checks that went unanswered |
+| `pgxlReconnectCount`, `tgxlReconnectCount` | i64 | Automatic retries the Core has made |
+| `pgxlFramesIn`, `pgxlFramesOut`, `tgxlFramesIn`, `tgxlFramesOut` | i64 | Lines received from and sent to the device |
+| `pgxlBytesIn`, `pgxlBytesOut`, `tgxlBytesIn`, `tgxlBytesOut` | i64 | Bytes received and sent |
+| `pgxlLastFrameMs`, `tgxlLastFrameMs` | i64 | When the last line arrived, ms since 1970 UTC; 0 before any |
+| `pgxlFaultsSession`, `tgxlFaultsSession` | i64 | Fault state lines seen on this connection (the Tuner Genius has none) |
+| `interlockMode` | enum | The transmit interlock mode (table below) |
+| `interlockGraceMs` | i64 | Milliseconds after the amp enters operate during which the SWR check is skipped, 0 to 30000 |
+| `interlockSwrGateEnabled` | bool | The SWR check is on |
+| `interlockSwrGateMax` | f64 | The SWR ratio above which the check acts, 1.0 to 10.0 |
+| `powerCapEnabled` | bool | The Power Genius output limit is on |
+| `powerCapW` | i64 | The limit, W, 100 to 2000 |
+| `powerCapExceeded` | bool | The amp's peak forward power is above the limit now |
+| `powerCapAlertText` | utf8 | The last alert in user words, for example "Power Genius output 1600 W is above the 1500 W limit."; empty before any |
+| `powerCapAlertCount` | i64 | Moves by one each time the output passes the limit (again, after it was back at or below it). It follows `powerCapAlertText` in the delta |
+| `tuneMemory` | utf8 | The Tuner Genius tune memory: a JSON array, sorted by band then antenna, of `{"antenna":1-3,"band":"20m","c1":0-255,"l":0-255,"c2":0-255,"savedAtMs":...}` (`band` is the app's band key: `160m` to `6m`, `GEN`, `WWV`, `XVTR` and the broadcast bands) |
+| `autoTuneMemoryRecall` | bool | The Core recalls the memory on a band or antenna change (the recall itself is a tune and waits for remote transmit on a receive-only Core) |
+| `tgxlAntenna1Label` to `tgxlAntenna3Label` | utf8 | The Tuner Genius antenna names; empty means the default "ANT N" |
+| `rfkitAntenna1Label` to `rfkitAntenna4Label` | utf8 | The RF-Kit antenna names; empty means the default |
+
+`interlockMode`:
+
+| Value | Name | Meaning |
+| --- | --- | --- |
+| 0 | `disabled` | The interlock never holds back transmit |
+| 1 | `warn` | Transmit goes ahead; the operator is warned when the amp is present but not operating, or the SWR check trips |
+| 2 | `block` | Transmit is refused in those cases |
+
+**The interlock is enforced on the Core.** The Core evaluates the policy
+on every transmit request, with its own amp state and SWR
+(`MoxController`, unchanged). A window views and changes the policy only;
+a change is applied by the Core, saved there, takes effect from the next
+transmit request, and comes back to every window on `accessoryData`. A
+change never keys anything. While a Core is receive-only it transmits for
+nobody, so the policy has nothing to act on until remote transmit; it is
+kept and shown so the station is set up when it does. Who may change it:
+the window connected to the Core (the Core serves one window at a time and
+the newest connection takes over, until remote transmit brings asking
+first).
+
+**The power-cap alert is raised on the Core.** From each Power Genius
+status line with a peak forward power, while the limit is on: above the
+limit raises one alert (`powerCapExceeded` true, a new
+`powerCapAlertText`, `powerCapAlertCount` up by one); at or below it
+re-arms (`powerCapExceeded` false). A window shows the alert when the count
+moves while `powerCapExceeded` is true, and not for the count it finds when
+it first attaches. A local window runs the same code in process.
+
+**Counters.** The Core counts on its own connection to each device for as
+long as it runs (a local window counts on its own connection the same way).
+A remote window shows the Core's counters and never its own: its accessory
+connections stay idle.
 
 ## The 4O3A and RF-Kit fields on the `radio` object
 
@@ -432,6 +551,9 @@ the Core took the request (see "Accepted is not connected").
 | `configureRfKit` | `host` (utf8), `port` (i64, 1 to 65535) | minor 11, `remoteRfKitControlVersion` 2 | Saves the RF2K-S address for the Core's radio and starts connecting and identifying (see "How the Core identifies the RF2K-S") |
 | `disconnectRfKit` | none | minor 11, `remoteRfKitControlVersion` 2 | Cancels an attempt or closes the connection in any phase; nothing is redialled; the address and the switch stay |
 | `setStationTci` | `enabled` (bool), `port` (i64, 1024 to 65535) | minor 11, `stationTciVersion` 1 | Saves the station's TCI switch and port on the Core and starts or stops its station TCI server. The Core keeps them across window sessions, other apps connecting and restarts |
+| `setTxInterlockPolicy` | `mode` (i64, the `interlockMode` value 0 to 2), `graceMs` (i64, 0 to 30000), `swrGateEnabled` (bool), `swrGateMax` (f64, 1.0 to 10.0) | minor 11, `accessoryDataVersion` 1 | Sets the whole transmit interlock policy on the Core, which saves it and enforces it from the next transmit request. Keys nothing |
+| `setPgxlPowerCap` | `enabled` (bool), `watts` (i64, 100 to 2000) | minor 11, `accessoryDataVersion` 1 | Sets the Power Genius output limit on the Core, which saves it and raises the alert from then on |
+| `clearAccessoryFaults` | `device` (utf8: `pgxl`, `tgxl` or `rfkit`) | minor 11, `accessoryDataVersion` 1 | Empties that device's fault history on the Core (and in its settings) |
 
 ## Refusals
 
@@ -451,6 +573,7 @@ Property writes:
 | `fourO3AEnabled`, `fourO3AListening`, `fourO3AListenerError` on `radio` | Refused with a diagnostic reason; use `setFourO3AEnabled` |
 | `rfKitEnabled` on `radio` (what every app before this contract sent) | "Update this app to turn the RF-Kit amplifier on or off on this Core." The Core's switch stays |
 | Any property of `stationTci` | "The Core reports its TCI server here. Turn it on or off with this app's TCI switch." |
+| Any property of `accessoryData` | "The Core keeps the amplifier and tuner records and settings. Change them from this app's Setup pages." |
 | `operate` on `amplifier`, on a receive-only Core (every `nereusd` today) | "Operating the station's amplifier or tuner waits for remote transmit. This station is receive-only." |
 | `tuner` telemetry (everything except the three below) | "TunerModel::<name> is hardware telemetry TunerModel only learns from the tuner itself; there is no remote-write path" |
 | `tuner` `isOperate`, `isBypass`, `antennaA`, on a receive-only Core | "Operating the station's amplifier or tuner waits for remote transmit. This station is receive-only." Nothing changes on the Core and nothing is sent to the tuner |
@@ -482,6 +605,13 @@ Commands:
 | `setStationTci` on a Core without a station TCI server | "This Core has no TCI server for the station." |
 | `setStationTci` with other arguments | "The request to turn the station's TCI server on or off was not understood." |
 | `setStationTci` with a port outside 1024 to 65535 | "Choose a TCI port from 1024 to 65535." |
+| `setTxInterlockPolicy`, `setPgxlPowerCap`, `clearAccessoryFaults` below minor 11 | "Update this app to change the station's amplifier and tuner settings on this Core." |
+| `setTxInterlockPolicy`, `setPgxlPowerCap`, `clearAccessoryFaults` on a Core that does not own its accessories | "Station accessory configuration is unavailable." |
+| `setTxInterlockPolicy` with other arguments | "The request to change the transmit interlock was not understood." |
+| `setTxInterlockPolicy` out of range | "Choose an interlock mode, a grace period of 0 to 30000 ms and an SWR limit from 1.0 to 10.0." |
+| `setPgxlPowerCap` with other arguments | "The request to change the Power Genius output limit was not understood." |
+| `setPgxlPowerCap` out of range | "Choose an output limit from 100 to 2000 W." |
+| `clearAccessoryFaults` with other arguments, or another device | "The request to clear the fault history was not understood." |
 | `setFourO3AEnabled` below minor 4 | "Remote 4O3A control requires a newer station protocol." |
 | `configureTgxl` with other arguments | "invalid host or port argument" |
 | `disconnectTgxl` with arguments | "disconnectTgxl takes no arguments" |
@@ -491,13 +621,14 @@ Commands:
 | `configureTgxl` with 4O3A off | "Enable 4O3A on Core before connecting the TGXL." |
 | `configureTgxl` with a bad address | "Enter a valid TGXL IP address or hostname and TCP port 1–65535." |
 | `setFourO3AEnabled` with no radio | "Connect Core to a radio before changing its 4O3A integration." |
-| Any refusal without its own reason | "TGXL configuration was refused", "TGXL disconnect was refused", "4O3A master change was refused", "PGXL configuration was refused", "PGXL disconnect was refused", "PGXL settings change was refused", "The Core did not set up the RF-Kit amplifier.", "The Core did not disconnect the RF-Kit amplifier.", "The Core did not change its RF-Kit amplifier switch.", "The Core did not change its TCI server." |
+| Any refusal without its own reason | "TGXL configuration was refused", "TGXL disconnect was refused", "4O3A master change was refused", "PGXL configuration was refused", "PGXL disconnect was refused", "PGXL settings change was refused", "The Core did not set up the RF-Kit amplifier.", "The Core did not disconnect the RF-Kit amplifier.", "The Core did not change its RF-Kit amplifier switch.", "The Core did not change its TCI server.", "The Core did not change the transmit interlock.", "The Core did not change the Power Genius output limit.", "The Core did not clear the fault history." |
 
 The desktop app does not send a command its Core did not offer. It shows
 "The station does not support remote TGXL configuration.", "The station
 does not support remote PGXL configuration.", "The station does not
 support remote 4O3A control.", "This Core does not offer RF-Kit amplifier
-setup to this app." or "This Core has no TCI server for the station."
+setup to this app.", "This Core has no TCI server for the station." or
+"This Core does not share its amplifier and tuner settings with this app."
 instead.
 
 PGXL identity reasons in `amplifier`.`connectionError` (diagnostic text; an
@@ -531,51 +662,83 @@ Per radio, under `hardware/<mac>/peripherals/`:
 
 Station-wide, behind `setStationTci`: `StationTci_Enabled` (`True` /
 `False`, default `False`) and `StationTci_Port` (default 50001). Where the
-server listens on the station network is `station_tci_bind` in
-`nereusd.conf` (empty: the Core's address on the radio's subnet).
+server listens on the station network is `station_bind` in `nereusd.conf`
+(older name `station_tci_bind`; empty: the Core's address on the radio's
+subnet), the same for every station listener (see "Where the Core accepts
+station devices").
 
 Station-wide, behind `setPgxlConnectionSettings`: `PGXL_AutoReconnect`
 (`True` / `False`, default `True`), `PGXL_KeepaliveSec` (default 30),
 `PGXL_PingSec` (default 0 on the Core, off: the amp's reply to `ping` has
 never been captured).
 
-Station-wide, not yet behind a command: `PGXL_BroadcastDiscovery`, `PGXL_BroadcastNickname`,
-`PGXL_FlexRadioSerial`, `PGXL_FlexAmpSlice`, `PGXL_TxAnt`, `PGXL_AntMap`,
-`PGXL_PairModel`, `PGXL_DiscoveryModel`, `PGXL_Nickname`, `PGXL_FanMode`,
-`PGXL_BiasMode`, `PGXL_LedIntensity`, `PGXL_PowerCapEnabled`,
-`PGXL_PowerCapW`, `PGXL_TxInterlockMode` (`Disabled`, `Warn`, `Block`),
-`PGXL_TxInterlockGraceMs`, `PGXL_TxSwrGate`, `PGXL_TxSwrGateMax`,
+Station-wide, behind `setTxInterlockPolicy`: `PGXL_TxInterlockMode`
+(`Disabled`, `Warn`, `Block`), `PGXL_TxInterlockGraceMs`, `PGXL_TxSwrGate`
+(`True` / `False`), `PGXL_TxSwrGateMax`. Behind `setPgxlPowerCap`:
+`PGXL_PowerCapEnabled`, `PGXL_PowerCapW`. Behind `clearAccessoryFaults`
+(and written by the Core as it records faults): `PGXL_FaultHistory`,
+`TGXL_FaultHistory`, `RfKit_FaultHistory`. All mirrored on `accessoryData`.
+
+Station-wide, mirrored on `accessoryData` and changed by the desktop app as
+station settings: `TGXL_Ant1_Label` to `TGXL_Ant3_Label`,
+`RfKit_Ant1_Label` to `RfKit_Ant4_Label`, `TGXL_TuneMemory_Ant<N>_Band<B>`
+(one compact JSON object per memory), `TGXL_AutoTuneMemoryRecall`. A
+settings write of any key in this section (or the three above) from a
+window reaches the Core's live objects at once (the interlock policy is
+reloaded, the output limit and the object are refreshed, a fault history
+written by an app that predates `clearAccessoryFaults` is reloaded), so an
+older app's change is not held back until the Core restarts. Version 1 has
+no command for the names and the tune memory: an app without station
+settings shows them read-only.
+
+Station-wide, not yet behind a command: `PGXL_BroadcastDiscovery`,
+`PGXL_BroadcastNickname`, `PGXL_FlexRadioSerial`, `PGXL_FlexAmpSlice`,
+`PGXL_TxAnt`, `PGXL_AntMap`, `PGXL_PairModel`, `PGXL_DiscoveryModel`,
+`PGXL_Nickname`, `PGXL_FanMode`, `PGXL_BiasMode`, `PGXL_LedIntensity`,
 `TGXL_AutoReconnect`, `TGXL_KeepaliveSec`, `TGXL_Nickname`,
-`TGXL_AutoTuneMemoryRecall`, `TGXL_Ant1_Label` to `TGXL_Ant3_Label`,
-`TGXL_TuneMemory_Ant<N>_Band<B>`, `RfKit_AutoReconnect`,
-`RfKit_PollIntervalMs`, `RfKit_Ant1_Label` to `RfKit_Ant4_Label`,
-`PGXL_FaultHistory`, `TGXL_FaultHistory`. Tasks 2 to 4 put the connection,
-interlock, fault, label and tune-memory settings behind commands and
-mirrored objects.
+`RfKit_AutoReconnect`, `RfKit_PollIntervalMs`. The amp's and tuner's own
+settings (name, hardware, network) are read and written over a connection
+to the device, which a remote window never opens.
 
 ## The fault record
 
-The Core records each PGXL fault edge (a state word beginning `FAULT` after
-one that did not). The TGXL and RF2K-S are added by Task 4. Each device keeps
-its last 10 faults, newest first, in its settings key (`PGXL_FaultHistory`,
-`TGXL_FaultHistory`) as a compact JSON array of:
+The Core records every accessory's faults and keeps each device's last 10,
+newest first, in its settings key (`PGXL_FaultHistory`,
+`TGXL_FaultHistory`, `RfKit_FaultHistory`), so the history survives a Core
+restart. The same JSON array travels in `accessoryData` (`pgxlFaults`,
+`tgxlFaults`, `rfkitFaults`); a window shows a new fault as soon as the
+Core records it.
+
+What the Core records:
+
+| Device | `state` | When | `text` |
+| --- | --- | --- | --- |
+| PGXL | the amp's word, for example `FAULT` | A state word beginning `FAULT` after one that did not | "The Power Genius reported a fault." plus " Likely cause: high SWR." / " Likely cause: the amplifier was too hot." / " Likely cause: too much drive from the radio." when the readings point to one |
+| TGXL | `link` | A connection the Core had admitted drops (never an operator's disconnect) | "The Tuner Genius stopped answering." |
+| TGXL | `connection` | An attempt ends at an error (for example another device answering at the address) | "The Core could not connect to the Tuner Genius." |
+| RF2K-S | `link` | The admitted amp stops answering | "The RF-Kit amplifier stopped answering." |
+| RF2K-S | `identity` | `/info` names another device, or none | the identity reason (see "How the Core identifies the RF2K-S") |
+| RF2K-S | `interface` | The amp reports a new error on its operating interface | "The RF-Kit amplifier reported a problem with how it follows the radio." |
 
 ```json
-{"whenMs":1790000000000,"state":"FAULT","fwdAtFaultW":1000.0,"swrAtFault":1.13,"tempAtFaultC":78.0,"likelyCause":"Unknown"}
+{"whenMs":1790000000000,"device":"pgxl","state":"FAULT","text":"The Power Genius reported a fault. Likely cause: high SWR.","detail":"","fwdAtFaultW":1820.0,"swrAtFault":2.85,"tempAtFaultC":78.0,"likelyCause":"SWR trip"}
 ```
 
 | Field | Meaning |
 | --- | --- |
 | `whenMs` | When the Core saw it, milliseconds since 1970 UTC |
-| `state` | The amp's word, for example `FAULT` |
-| `fwdAtFaultW` | Forward power at the fault, W (from the amp's `fwd`, dBm) |
-| `swrAtFault` | SWR ratio at the fault (from the amp's return loss) |
-| `tempAtFaultC` | Temperature at the fault, degrees C |
-| `likelyCause` | `SWR trip`, `Overtemp`, `Drive too high` or `Unknown` |
+| `device` | `pgxl`, `tgxl` or `rfkit` |
+| `state` | The amp's word, or the kind of problem (table above) |
+| `text` | What happened, in user words; show this |
+| `detail` | What the device or its connection said, as sent (the Tuner Genius connection reason, the RF-Kit interface error); may be empty. For a log or a details view, not a headline |
+| `fwdAtFaultW` | PGXL: forward power at the fault, W (from the amp's `fwd`, dBm); 0 otherwise |
+| `swrAtFault` | PGXL: SWR ratio at the fault (from the amp's return loss); 0 otherwise |
+| `tempAtFaultC` | PGXL: temperature at the fault, degrees C; 0 otherwise |
+| `likelyCause` | PGXL: `SWR trip`, `Overtemp`, `Drive too high` or `Unknown`; empty otherwise |
 
-Version 1 does not mirror the list; a window reads it only through the
-settings snapshot at connect. Task 4 mirrors it with a revision under
-`accessoryDataVersion`.
+Records saved before this revision carry no `device`, `text` or `detail`;
+the Core fills `device` from the key and `text` from `state` and
+`likelyCause` when it reads them.
 
 ## What waits for remote transmit
 
@@ -593,9 +756,11 @@ transmit, the Core refuses or does not offer:
   frequency from and keys nothing.)
 - Transmit over the Core's station TCI server (see "The `stationTci`
   object").
-- Enforcement of the interlock policy, and the MOX RF-flow gate (these stay
-  on the Core; only viewing and changing the policy comes before remote
-  transmit, in Task 4).
+- Enforcement of the interlock policy, and the MOX RF-flow gate. These stay
+  on the Core and are unchanged; viewing and changing the policy
+  (`setTxInterlockPolicy`) comes before remote transmit and keys nothing.
+- Tune-memory recall on a band change (a tune); the memory itself and its
+  switch are readable and kept on the Core.
 
 A `property.write` of `tuner` `isOperate`, `isBypass` or `antennaA` is
 refused on a receive-only Core with the receive-only reason, before it can
@@ -663,6 +828,28 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   here, port <port>."
 - A local window's RF-Kit band follow is worked out from its own TCI server
   the same way.
+- With `accessoryDataVersion` 1 the desktop remote window's 4O3A page
+  shows the Core's records and changes them through the Core. The General
+  tab's interlock section shows the Core's policy and sends
+  `setTxInterlockPolicy` with the whole policy on each change; a refusal
+  puts the Core's policy back and shows the reason. The Power Genius tab
+  adds the output limit (`setPgxlPowerCap`), the Core's counters and the
+  fault history (Clear All sends `clearAccessoryFaults`; each row's tooltip
+  is its `text`). The Tuner Genius tab shows the Core's antenna names,
+  tune memory, counters and fault history (When, What happened; the
+  `detail` in the tooltip; Clear All through the Core); a name or memory
+  changed there is written as a station setting and comes back on
+  `accessoryData`. The amp's and tuner's own settings (name, hardware,
+  network, pairing, save and reboot) are not offered in a remote window.
+  Without `accessoryDataVersion` the interlock section, the output limit
+  and Clear All are shown unchangeable with "This Core does not share its
+  transmit interlock with this app. Updating the Core may help." (or its
+  Power Genius or Tuner Genius records), and the Tuner Genius tab stays
+  closed with "This Core does not share its Tuner Genius records with this
+  app."
+- Every window (local or remote) shows the power-cap alert as a five-second
+  notice when `powerCapAlertCount` moves while `powerCapExceeded` is true;
+  a remote window's applet antenna names follow the Core's.
 
 ## Fixtures
 
@@ -678,10 +865,17 @@ load:
   at 60 dBm with -24.5 dB return loss, then standby, then band follow
   `following`; RF2K-S standby with an idle `/power`, then a `/tuner`
   reading, TCI mode, antenna 2 and band follow `waiting` with an address).
-- `enums.json`: the `connectionPhase`, `amplifierState`, `bandFollow` and
-  `rfkitTunerMode` tables and the three read-only refusal texts.
+- `accessoryData.jsonl`: the `accessoryData` object as the Core sends it:
+  the `schema`, the `object.create` with a Power Genius fault (the captured
+  fault line's readings), the interlock policy `block`, the output limit,
+  one tune memory and two antenna names, `snapshot.complete`, then deltas
+  (a Tuner Genius `link` fault, the output going over the limit, the Power
+  Genius counters).
+- `enums.json`: the `connectionPhase`, `amplifierState`, `bandFollow`,
+  `rfkitTunerMode` and `interlockMode` tables and the four read-only
+  refusal texts.
 
-`tst_station_accessory_state` regenerates the two `.jsonl` files from the
+`tst_station_accessory_state` regenerates the three `.jsonl` files from the
 objects and fails if they differ, parses them, applies them to a window's
 objects, and checks `enums.json` against the enums. After a deliberate
 contract change, run it once with `NEREUS_WRITE_ACCESSORY_FIXTURES=1` to
@@ -739,6 +933,47 @@ rewrite the fixtures, and update this document in the same commit.
   servers (none of the window's own when the Core is on this computer), and
   the TCI page's line.
 - `tst_tci_tx_mutex`: the station server's transmit refusal on the wire.
+- `tst_smartsdr_api_listener_bind`: the one station rule on a Core with two
+  networks (the radio's network, the override, every address, this computer
+  only before a radio, a move when the radio moves); the 4992 listener on
+  the station address and this computer only, a missing station address
+  refused rather than narrowed, the move dropping the old connection; the
+  Core's model applying the rule to 4992 and the TCI server alike; a
+  desktop window's listener binding as before.
+- `tst_lan_discovery_regex`: the Core hears Power Genius and Tuner Genius
+  announcements only from the station network (sender and announced
+  address), this computer only before a radio, the override; a desktop
+  window hears every one.
+- `tst_station_pgxl_controller`: an announcement from another network
+  admits nothing; the same from the station network admits the amp.
+- `tst_flex_radio_discovery_broadcaster`: no FlexRadio beacon with 4O3A
+  off, on and off with the switch and with a radio's saved switch, off with
+  its own setting off; on the Core it announces the station address.
+- `tst_daemon_config`: `station_bind`, the older `station_tci_bind` read
+  beneath it, and a value that is not an address refused.
+- `tst_fault_log`: every record names its device and says what happened in
+  plain words, older records read with both, a window's copy is replaced
+  from the Core's list without saving, and a fault the Core recorded is
+  there after the Core restarts from its settings file.
+- `tst_tx_interlock_policy`: the Core reloads the policy when a window
+  writes its settings, a remote window holds the Core's policy without
+  saving it, and `setTxInterlockPolicy` is applied and enforced on the
+  Core, mirrored on `accessoryData`, and refused in user words out of range.
+- `tst_station_accessory_state`: `accessoryData` only to a current app on a
+  Core that owns its accessories, read-only, its fixture, the
+  `interlockMode` table; the Tuner Genius faults the Core records (a drop,
+  an attempt that ends at an error, never an operator's disconnect); the
+  power-cap alert raised once per time over the limit, re-armed, and
+  following a window's settings write.
+- `tst_remote_peripherals`: over the loopback, faults raised on the Core
+  appear in a remote window's pages without a reconnect and are cleared
+  through the Core; the counters are the Core's, not the window's; the
+  output limit is set through the Core and its alert reaches the window;
+  names and tune memory are the Core's; the interlock policy changed from a
+  remote window takes effect on the Core (which refuses to transmit), is
+  shown by that window and by one connecting later, and a request out of
+  range changes nothing and is shown in user words; an older Core leaves
+  the section unchangeable with the reason.
 - `tst_remote_peripherals`: the RF-Kit set up, switched and disconnected
   from a remote window through the Core over the loopback, its rows reaching
   the applet, a raw `rfKitEnabled` write refused, the Power Genius's
@@ -753,5 +988,9 @@ and pairing with the real PGXL on the Core (the discovery announcement and
 2026-05-20 in `captures/`); the real RF2K-S admitted by its `/info`, put in
 TCI mode by the Core, and following band changes made from the remote
 window and from the iPhone app through the Core's station TCI server (the
-RF2K-S pointed at the Rock); the station server bound on the Rock's station
-network.
+RF2K-S pointed at the Rock); the station server, the 4992 listener and the
+accessory discovery bound on the Rock's station network and not its other
+network, and the FlexRadio beacon announcing the station address there; a real Power Genius fault, a Tuner Genius drop and an RF-Kit
+interface error reaching a remote window and the iPhone app from the Rock,
+and the Rock's fault history after a restart; the power-cap alert from a
+real transmit through the Power Genius (with remote transmit).

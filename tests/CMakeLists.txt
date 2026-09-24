@@ -1561,6 +1561,11 @@ nereus_add_test(tst_capture_helper_locator)
 nereus_add_test(tst_audio_engine_speakers_live_reconfig)
 target_compile_definitions(tst_audio_engine_speakers_live_reconfig PRIVATE NEREUS_BUILD_TESTS)
 
+# R-R3-21, R-R3-23: a test run never initialises PortAudio. An AudioEngine
+# and a RadioModel built in test mode make no Pa_Initialize or Pa_Terminate
+# call, and the PortAudio device lists come back empty.
+nereus_add_test(tst_audio_engine_no_portaudio)
+
 # ── Phase 3O Sub-Phase 12 Task 12.2 Step 0: MasterOutputWidget signal refresh ──
 # Verifies that speakersConfigChanged → onSpeakersConfigChanged syncs the widget's
 # device-name anchor without emitting outputDeviceChanged (sync-from-engine path,
@@ -6045,6 +6050,12 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tst_station_tci_server PRIVATE Qt6::WebSockets Qt6::Network)
 endif()
 
+# R-R3-22 / R-R3-47: the Core's station listeners (the SmartSDR API listener
+# on 4992, the accessory discovery filter, the station TCI server) accept
+# connections on the station network only, one rule for all; a desktop
+# window binds as before. Loopback binds and injected interface lists only.
+nereus_add_test(tst_smartsdr_api_listener_bind)
+
 # Task 59: auto-reconnect exponential backoff (1/2/5/10/30/60 s, cap at 60 s).
 # Test: backoffSequence verifies 8 calls to testForceDisconnect() produce
 # reconnectAttempt signals with delays 1000/2000/5000/10000/30000/60000/
@@ -7317,6 +7328,15 @@ nereus_add_test(tst_daemon_telemetry fakes/LoopbackTransport.cpp)
 # R-R3-32/33: Core host sampler against fixture procfs/sysfs trees.
 nereus_add_test(tst_host_telemetry_sampler EXTRA_LABELS core)
 nereus_add_test(tst_remote_audio_receiver)
+# R-R3-23, R-R3-07, R-R3-21: playsOnEverySpeakerFormat plays through the
+# real receiver worker against a speaker that plays on the wall clock, and
+# asserts the speaker never ran short once playing. The worker keeps two
+# 10 ms blocks queued, so that is a real-time guarantee: a loaded -j4 Linux
+# run starved the 192 kHz row for one 1 ms callback (1461 dry frames against
+# 1269) while it passed every run alone. About 35 s. RUN_SERIAL (as for
+# tst_receiver_dsp_load_frames, R-R3-40): ctest never runs it beside another
+# test that would take the worker's processor away.
+set_tests_properties(tst_remote_audio_receiver PROPERTIES RUN_SERIAL TRUE)
 nereus_add_test(tst_remote_audio_session fakes/LoopbackTransport.cpp)
 # R-R3-44 (R3 receiver audio plan, Task 5): VAX in a remote window. The
 # feed contract (two 10-minute runs of the harness clock at +/-200 ppm

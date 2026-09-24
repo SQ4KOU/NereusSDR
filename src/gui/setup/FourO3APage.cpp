@@ -29,6 +29,13 @@
 //   2026-09-24 -- R-R3-48: the Power Genius's band-follow line, local and
 //                 remote. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-24 -- R-R3-47 / R-R3-22: in a remote window the Power Genius
+//                 tab adds the Core's output limit, counters and fault
+//                 history, the Tuner Genius tab shows the Core's antenna
+//                 names, tune memory, counters and faults, and the General
+//                 tab's interlock section shows and changes the Core's
+//                 policy. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "FourO3APage.h"
@@ -83,8 +90,10 @@ FourO3APage::FourO3APage(RadioModel* model, QWidget* parent)
         // Genius tab is a view of the Core's amp plus the Core's commands;
         // the Tuner Genius tab stays visibly unavailable.
         m_tabs->addTab(buildRemotePgxlTab(), tr("PowerGenius XL"));
-        m_tabs->addTab(new QWidget(m_tabs), tr("Tuner Genius XL"));
-        m_tabs->setTabToolTip(2, tr("Remote accessory administration is not available yet."));
+        // R-R3-47: the Core's Tuner Genius records (names, tune memory,
+        // counters, faults); the tuner's connection is on the General tab.
+        m_tgxlAdvancedPage = new TgxlAdvancedPage(m_model);
+        m_tabs->addTab(m_tgxlAdvancedPage, tr("Tuner Genius XL"));
     } else {
         m_pgxlAdvancedPage = new PgxlAdvancedPage(m_model);
         m_tabs->addTab(m_pgxlAdvancedPage, tr("PowerGenius XL"));
@@ -131,6 +140,7 @@ FourO3APage::FourO3APage(RadioModel* model, QWidget* parent)
             connect(m_model, &RadioModel::stationLinkStateChanged, this, [this] {
                 loadRemotePgxlSettings();
                 refreshRemotePgxlTab();
+                applyMasterGateToTabs(m_model->fourO3AEnabled());
             });
             loadRemotePgxlSettings();
             refreshRemotePgxlTab();
@@ -227,10 +237,10 @@ QWidget* FourO3APage::buildGeneralTab()
     }
 
     // ── PGXL Interlock ────────────────────────────────────────────
-    if (!m_model || m_model->role() != RadioModel::Role::Remote) {
-        m_pgxlInterlockPage = new PgxlInterlockPage(m_model, tab);
-        layout->addWidget(m_pgxlInterlockPage);
-    }
+    // R-R3-47: in a remote window too; there it shows the Core's policy and
+    // changes it through the Core.
+    m_pgxlInterlockPage = new PgxlInterlockPage(m_model, tab);
+    layout->addWidget(m_pgxlInterlockPage);
 
     layout->addStretch();
     return tab;
@@ -305,6 +315,11 @@ void FourO3APage::applyMasterGateToTabs(bool enabled)
         if (m_remotePgxlTab) {
             const auto* const link = m_model->stationLink();
             m_tabs->setTabEnabled(1, link && link->remotePgxlControlAvailable());
+            // R-R3-47: the Tuner Genius tab reads the Core's records.
+            const bool tgxlData = link && link->accessoryDataAvailable();
+            m_tabs->setTabEnabled(2, tgxlData);
+            m_tabs->setTabToolTip(2, tgxlData ? QString()
+                : tr("This Core does not share its Tuner Genius records with this app."));
         }
         // Core refuses configure when its master is off. The row still needs
         // to show that reason and let an operator cancel existing work.
@@ -477,7 +492,9 @@ QWidget* FourO3APage::buildRemotePgxlTab()
     m_remotePgxlResult->setWordWrap(true);
     settingsForm->addRow(m_remotePgxlResult);
     layout->addWidget(settingsBox);
-    layout->addStretch();
+    // R-R3-47 / R-R3-22: the Core's output limit, counters and fault history.
+    m_pgxlAdvancedPage = new PgxlAdvancedPage(m_model, tab);
+    layout->addWidget(m_pgxlAdvancedPage, 1);
     return tab;
 }
 

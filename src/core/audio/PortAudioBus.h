@@ -113,10 +113,20 @@ public:
     };
 
     // Enumeration helpers require Pa_Initialize() to have been called
-    // (owned by the application lifecycle, not this class).
+    // (owned by the application lifecycle, not this class). In a test run
+    // (portAudioBarredForTestRun) they return empty lists and make no
+    // PortAudio call.
     static QVector<HostApiInfo> hostApis();
     static QVector<DeviceInfo>  outputDevicesFor(int hostApiIndex);
     static QVector<DeviceInfo>  inputDevicesFor(int hostApiIndex);
+
+    // R-R3-21: true in a test run (QStandardPaths test mode, which every
+    // test binary enables before main, the same decision AudioEngine's
+    // makeBus uses to open no real device). A test run then never
+    // initialises PortAudio: AudioEngine skips Pa_Initialize and
+    // Pa_Terminate, and the enumeration helpers above answer empty lists.
+    // Always false in a build without NEREUS_BUILD_TESTS.
+    static bool portAudioBarredForTestRun();
 
     bool open(const AudioFormat& format) override;
     void close() override;

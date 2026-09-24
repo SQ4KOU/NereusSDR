@@ -32,9 +32,15 @@
     "autoTuning": 3,
     "auto": 4
   },
+  "interlockMode": {
+    "disabled": 0,
+    "warn": 1,
+    "block": 2
+  },
   "refusals": {
     "amplifierReadOnly": "The Core reports the amplifier's readings. They cannot be changed from this app.",
     "rfkitReadOnly": "The Core reports the RF-Kit amplifier's readings. They cannot be changed from this app.",
-    "stationTciReadOnly": "The Core reports its TCI server here. Turn it on or off with this app's TCI switch."
+    "stationTciReadOnly": "The Core reports its TCI server here. Turn it on or off with this app's TCI switch.",
+    "accessoryDataReadOnly": "The Core keeps the amplifier and tuner records and settings. Change them from this app's Setup pages."
   }
 }

@@ -36,6 +36,8 @@
 //   2026-09-24 - Merge: lane B's headphones Task 2 makes outputRoute
 //                 two-way; the Outbound entry is removed. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: AccessoryDataModel, all Outbound. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -463,6 +465,53 @@ const MirrorPolicy::Entry kEntries[] = {
     { "StationTciModel", "listening", MirrorDirection::Outbound },
     { "StationTciModel", "stationAddress", MirrorDirection::Outbound },
     { "StationTciModel", "error", MirrorDirection::Outbound },
+
+    // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory
+    // records and settings, read-only. A window changes the interlock
+    // policy, the output limit and a fault history only through
+    // setTxInterlockPolicy, setPgxlPowerCap and clearAccessoryFaults.
+    { "AccessoryDataModel", "faultRevision", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlFaults", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlFaults", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitFaults", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlConnectedSinceMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlLastRttMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlKeepaliveMissed", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlReconnectCount", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlFramesIn", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlFramesOut", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlBytesIn", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlBytesOut", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlLastFrameMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlFaultsSession", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlConnectedSinceMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlLastRttMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlKeepaliveMissed", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlReconnectCount", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlFramesIn", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlFramesOut", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlBytesIn", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlBytesOut", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlLastFrameMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlFaultsSession", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "interlockMode", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "interlockGraceMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "interlockSwrGateEnabled", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "interlockSwrGateMax", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "powerCapEnabled", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "powerCapW", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "powerCapExceeded", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "powerCapAlertText", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "powerCapAlertCount", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tuneMemory", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "autoTuneMemoryRecall", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlAntenna1Label", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlAntenna2Label", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlAntenna3Label", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitAntenna1Label", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitAntenna2Label", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitAntenna3Label", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitAntenna4Label", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

@@ -17,6 +17,9 @@
 //   RfKitModel too; the band-follow line; a remote window's
 //   Disconnect/Reconnect asks the Core. J.J. Boyd (KG4VCF), AI-assisted
 //   via Anthropic Claude Code.
+//   2026-09-24  R-R3-47 / R-R3-22: an empty antenna name shows "ANT N" (a
+//   remote window takes the Core's names). J.J. Boyd (KG4VCF), AI-assisted
+//   via Anthropic Claude Code.
 // =================================================================
 
 #include "Rf2ksApplet.h"
@@ -447,8 +450,11 @@ void Rf2ksApplet::setAntennas(const QList<RfKitAntenna>& list)
         if (!btn) {
             continue;
         }
-        const QString label = m_antennaLabels.value(a.number,
-            QStringLiteral("ANT %1").arg(a.number));
+        // R-R3-47: an empty name (the Core's default) shows "ANT N" too.
+        QString label = m_antennaLabels.value(a.number);
+        if (label.isEmpty()) {
+            label = QStringLiteral("ANT %1").arg(a.number);
+        }
         btn->setText(label);
         // R-R3-21: an amplifier report never re-enables a remote window's
         // antenna buttons.

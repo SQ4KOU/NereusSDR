@@ -1,10 +1,19 @@
 // no-port-check: NereusSDR-original. R-R3-22 station-owned TGXL identity.
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via OpenAI Codex.
+// 2026-09-24: R-R3-47 / R-R3-22: faultObserved for the Core's fault record
+// (the tuner dropping a live connection, or a connection that ends at an
+// error). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-22 / R-R3-47: identity announcements from the station
+// network only (setStationBind). J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 #pragma once
 
 #include "core/TgxlConnection.h"
 #include "models/TunerModel.h"
+#include "core/StationNetwork.h"
 #include <QPointer>
+
+#include <optional>
 
 namespace NereusSDR {
 class LanDiscovery;
@@ -21,6 +30,17 @@ public:
     void resetScope(const QString& host, quint16 port, bool enabled);
     void start(const QString& host, quint16 port);
     void cancel(bool disabled = false);
+    /// R-R3-22 / R-R3-47: the Core hears identity announcements from the
+    /// station network only (LanDiscovery::setStationBind). Unset (a
+    /// desktop window, or a test) hears every announcement.
+    void setStationBind(const StationNetwork::StationBind& bind) { m_stationBind = bind; }
+
+signals:
+    /// R-R3-47: a Tuner Genius fault for the Core's record. `kind` is
+    /// "link" (a live connection dropped) or "connection" (an attempt
+    /// ended at an error); `text` is plain words; `detail` what the
+    /// connection said.
+    void faultObserved(const QString& kind, const QString& text, const QString& detail);
 
 private:
     void identify(quint64 attempt, const QString& peer, quint16 port);
@@ -33,6 +53,7 @@ private:
     QPointer<TgxlConnection> m_connection;
     QPointer<TunerModel> m_model;
     QPointer<LanDiscovery> m_discovery;
+    std::optional<StationNetwork::StationBind> m_stationBind;
     TunerModel::StationConnectionState m_state;
     TgxlIdentityInfo m_nativeInfo;
     QString m_discoveredModel;

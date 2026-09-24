@@ -313,6 +313,10 @@ struct SessionMessage {
     ///   disconnectRfKit        -- {}
     ///   setRfKitEnabled        -- {"enabled": Bool}
     ///   setStationTci          -- {"enabled": Bool, "port": Int64}
+    ///   setTxInterlockPolicy   -- {"mode": Int64, "graceMs": Int64,
+    ///                               "swrGateEnabled": Bool, "swrGateMax": Double}
+    ///   setPgxlPowerCap        -- {"enabled": Bool, "watts": Int64}
+    ///   clearAccessoryFaults   -- {"device": Utf8}
     ///   requestStreamCentre     -- {"sliceId": Int64, "centreHz": Double}
     QList<MirrorUpdate> arguments;
 

@@ -11,6 +11,19 @@
 //   section 5.7 and footer.
 //
 // AI tooling: Anthropic Claude Code.
+//
+// Modification history (NereusSDR):
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the counters are the
+//                                    model's (the Core's in a remote
+//                                    window); in a remote window the page is
+//                                    a view of the Core's antenna names,
+//                                    tune memory, counters and Tuner Genius
+//                                    fault history (restored there: the Core
+//                                    now records them), cleared through
+//                                    clearAccessoryFaults. The fault table
+//                                    shows when and what happened in plain
+//                                    words. AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "TgxlAdvancedPage.h"
@@ -29,6 +42,7 @@
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QTableView>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -39,7 +53,10 @@
 #include "../../core/TgxlConnection.h"
 #include "../../core/TuneMemoryStore.h"
 #include "../../models/Band.h"
+#include "../../core/session/IStationLink.h"
+#include "../../models/AccessoryDataModel.h"
 #include "../../models/RadioModel.h"
+#include "../OperatorReasonText.h"
 #include "../PgxlSaveRebootDialog.h"
 
 namespace NereusSDR {
@@ -48,7 +65,9 @@ namespace NereusSDR {
 // TgxlFaultLogTableModel (private inline class)
 // ---------------------------------------------------------------------------
 // Maps FaultLog::events() into a QAbstractTableModel for the QTableView.
-// 6 columns: When, State, FWD W, SWR, Temp C, Likely cause.
+// R-R3-47: 2 columns, When and What happened (plain words); the detail the
+// connection gave is the row's tooltip. A Tuner Genius fault carries no
+// power readings.
 // Named with Tgxl prefix to avoid duplicate symbol with PgxlAdvancedPage's
 // identically-shaped model.
 // ---------------------------------------------------------------------------
@@ -76,7 +95,7 @@ public:
         if (parent.isValid()) {
             return 0;
         }
-        return 6;
+        return 2;
     }
 
     QVariant headerData(int section, Qt::Orientation orientation,
@@ -87,18 +106,15 @@ public:
         }
         switch (section) {
         case 0: return QStringLiteral("When");
-        case 1: return QStringLiteral("State");
-        case 2: return QStringLiteral("FWD W");
-        case 3: return QStringLiteral("SWR");
-        case 4: return QStringLiteral("Temp C");
-        case 5: return QStringLiteral("Likely Cause");
+        case 1: return QStringLiteral("What happened");
         default: return QVariant();
         }
     }
 
     QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override
     {
-        if (!index.isValid() || role != Qt::DisplayRole) {
+        if (!index.isValid()
+            || (role != Qt::DisplayRole && role != Qt::ToolTipRole)) {
             return QVariant();
         }
         const auto events = m_faultLog->events();
@@ -106,16 +122,15 @@ public:
             return QVariant();
         }
         const FaultEvent& ev = events.at(index.row());
+        if (role == Qt::ToolTipRole) {
+            return ev.detail.isEmpty() ? ev.text : ev.text + QStringLiteral("\n") + ev.detail;
+        }
         switch (index.column()) {
         case 0: {
             QDateTime dt = QDateTime::fromMSecsSinceEpoch(ev.whenMs);
             return dt.toLocalTime().toString(QStringLiteral("yyyy-MM-dd hh:mm:ss"));
         }
-        case 1: return ev.state;
-        case 2: return QString::number(static_cast<double>(ev.fwdAtFaultW), 'f', 1);
-        case 3: return QString::number(static_cast<double>(ev.swrAtFault), 'f', 2);
-        case 4: return QString::number(static_cast<double>(ev.tempAtFaultC), 'f', 1);
-        case 5: return ev.likelyCause;
+        case 1: return ev.text;
         default: return QVariant();
         }
     }
@@ -240,7 +255,9 @@ private:
 TgxlAdvancedPage::TgxlAdvancedPage(RadioModel* model, QWidget* parent)
     : QWidget(parent)
     , m_model(model)
-    , m_diagnostics(new ConnectionDiagnostics(this))
+    // R-R3-47 / R-R3-22: the model's counters (its own connection in a
+    // local window, the Core's in a remote one).
+    , m_diagnostics(model ? model->tgxlDiagnostics() : new ConnectionDiagnostics(this))
     // Phase 3P-II Phase 4 Task 94: FaultLog is now owned by RadioModel (shared instance).
     // Use m_model->tgxlFaultLog() when m_model is non-null; fall back to a local instance
     // (same key) when m_model is null (unit-test construction without a live RadioModel).
@@ -269,6 +286,37 @@ TgxlAdvancedPage::TgxlAdvancedPage(RadioModel* model, QWidget* parent)
     auto* topLay = new QVBoxLayout(inner);
     topLay->setContentsMargins(12, 12, 12, 12);
     topLay->setSpacing(16);
+
+    if (isRemote()) {
+        // R-R3-47 / R-R3-22: the Core's antenna names, tune memory,
+        // counters and fault history. The tuner's own settings (name,
+        // network) are read and written over a connection to the tuner,
+        // which a remote window never opens.
+        m_remoteNote = new QLabel;
+        m_remoteNote->setObjectName(QStringLiteral("tgxlAdvancedRemoteNote"));
+        m_remoteNote->setWordWrap(true);
+        topLay->addWidget(m_remoteNote);
+        buildAntennaLabelsSection(topLay);
+        buildTuneMemorySection(topLay);
+        buildDiagnosticsSection(topLay);
+        buildFaultHistorySection(topLay);
+        topLay->addStretch();
+        connect(m_diagnostics, &ConnectionDiagnostics::changed,
+                this, &TgxlAdvancedPage::onDiagnosticsChanged);
+        connect(m_model->accessoryDataModel(), &AccessoryDataModel::labelsChanged,
+                this, &TgxlAdvancedPage::refreshRemote);
+        connect(m_model, &RadioModel::stationLinkStateChanged,
+                this, &TgxlAdvancedPage::refreshRemote);
+        connect(m_model->accessoryDataModel(), &AccessoryDataModel::tuneMemoryChanged, this,
+                [this] {
+            const QSignalBlocker block(m_autoRecallCheck);
+            m_autoRecallCheck->setChecked(
+                m_model->accessoryDataModel()->autoTuneMemoryRecall());
+        });
+        onDiagnosticsChanged();
+        refreshRemote();
+        return;
+    }
 
     buildIdentitySection(topLay);
     buildAntennaLabelsSection(topLay);
@@ -317,13 +365,14 @@ TgxlAdvancedPage::TgxlAdvancedPage(RadioModel* model, QWidget* parent)
                 tgxl->sendCommand(QStringLiteral("info"));
             }
 
-            // Bind diagnostics helper to the TGXL connection
-            m_diagnostics->bindTo(tgxl);
+            // R-R3-47: RadioModel binds its counters to this connection
+            // for its whole life (StationAccessoryData publishes them).
         }
     }
 
     connect(m_diagnostics, &ConnectionDiagnostics::changed,
             this, &TgxlAdvancedPage::onDiagnosticsChanged);
+    onDiagnosticsChanged();
 
     connect(m_tuneMemoryStore, &TuneMemoryStore::changed,
             this, &TgxlAdvancedPage::onTuneMemoryChanged);
@@ -574,6 +623,111 @@ void TgxlAdvancedPage::buildDiagnosticsSection(QVBoxLayout* topLay)
 // declarations are kept as no-op state in case 4O3A publishes a TGXL
 // fault taxonomy later; restoring the UI would just need to re-add the
 // build method and the buildFaultHistorySection(topLay) call.
+//
+// R-R3-47 / R-R3-22: restored for a remote window. The Core records the
+// Tuner Genius's faults (a live connection dropping, a connection ending
+// at an error; StationTgxlController::faultObserved), so there the table
+// has a producer. A local window still records none and keeps the section
+// out.
+void TgxlAdvancedPage::buildFaultHistorySection(QVBoxLayout* topLay)
+{
+    auto* box = new QGroupBox(QStringLiteral("Fault History"));
+    auto* lay = new QVBoxLayout(box);
+
+    m_faultTable = new QTableView;
+    m_faultTable->setModel(m_faultTableModel);
+    m_faultTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_faultTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_faultTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_faultTable->setAlternatingRowColors(true);
+    m_faultTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_faultTable->verticalHeader()->setVisible(false);
+    m_faultTable->setMinimumHeight(120);
+    lay->addWidget(m_faultTable);
+
+    auto* btnRow = new QHBoxLayout;
+    btnRow->addStretch();
+    m_clearFaultsBtn = new QPushButton(QStringLiteral("Clear All"));
+    btnRow->addWidget(m_clearFaultsBtn);
+    lay->addLayout(btnRow);
+    topLay->addWidget(box);
+
+    connect(m_clearFaultsBtn, &QPushButton::clicked, this, [this]() {
+        IStationLink* link = isRemote() ? m_model->stationLink() : nullptr;
+        if (!isRemote()) {
+            m_faultLog->clear();
+            return;
+        }
+        const IStationLink::CommandOutcome outcome = link
+            ? link->requestClearAccessoryFaults(QStringLiteral("tgxl"))
+            : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        if (!outcome.sent && m_remoteNote) {
+            m_remoteNote->setText(OperatorReasonText::forDisplay(outcome.reason));
+        }
+    });
+}
+
+bool TgxlAdvancedPage::isRemote() const
+{
+    return m_model && m_model->role() == RadioModel::Role::Remote;
+}
+
+void TgxlAdvancedPage::refreshRemote()
+{
+    if (!isRemote()) {
+        return;
+    }
+    const IStationLink* link = m_model->stationLink();
+    const bool available = link && link->accessoryDataAvailable();
+    if (m_clearFaultsBtn) {
+        m_clearFaultsBtn->setEnabled(available);
+    }
+    // The Core's names, unless the operator is typing one.
+    if (available) {
+        const QStringList labels = m_model->accessoryDataModel()->tgxlAntennaLabels();
+        QLineEdit* edits[] = { m_ant1Label, m_ant2Label, m_ant3Label };
+        for (int i = 0; i < 3; ++i) {
+            if (edits[i] && !edits[i]->hasFocus()) {
+                edits[i]->setText(labels.value(i));
+            }
+        }
+    }
+    if (m_remoteNote) {
+        m_remoteNote->setText(available
+            ? tr("The Core keeps these for the station's Tuner Genius. Changes here take effect "
+                 "there and show in every window.")
+            : tr("This Core does not share its Tuner Genius records with this app. Updating the "
+                 "Core may help."));
+    }
+}
+
+int TgxlAdvancedPage::faultRowCountForTesting() const
+{
+    return m_faultTableModel ? m_faultTableModel->rowCount() : 0;
+}
+
+QString TgxlAdvancedPage::faultTextForTesting(int row) const
+{
+    return m_faultTableModel
+        ? m_faultTableModel->data(m_faultTableModel->index(row, 1), Qt::DisplayRole).toString()
+        : QString();
+}
+
+QString TgxlAdvancedPage::reconnectCountTextForTesting() const
+{
+    return m_reconnectCountLabel ? m_reconnectCountLabel->text() : QString();
+}
+
+QString TgxlAdvancedPage::antennaLabelForTesting(int index) const
+{
+    QLineEdit* edits[] = { m_ant1Label, m_ant2Label, m_ant3Label };
+    return index >= 1 && index <= 3 && edits[index - 1] ? edits[index - 1]->text() : QString();
+}
+
+int TgxlAdvancedPage::tuneMemoryRowCountForTesting() const
+{
+    return m_tuneMemoryStore ? m_tuneMemoryStore->listAll().size() : 0;
+}
 
 void TgxlAdvancedPage::buildFooter(QVBoxLayout* topLay)
 {

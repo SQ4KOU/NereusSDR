@@ -215,6 +215,11 @@ private:
     void handleSetRfKitEnabled(const NereusSDR::SessionMessage& invoke);
     // R-R3-48 (stationTciVersion 1): the station's TCI switch and port.
     void handleSetStationTci(const NereusSDR::SessionMessage& invoke);
+    // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory
+    // records and settings.
+    void handleSetTxInterlockPolicy(const NereusSDR::SessionMessage& invoke);
+    void handleSetPgxlPowerCap(const NereusSDR::SessionMessage& invoke);
+    void handleClearAccessoryFaults(const NereusSDR::SessionMessage& invoke);
     void handleRequestIoBoardProbe(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 fix wave (radioHardwareVersion 3): one band's RX or RX-only
     // antenna, applied through the Core's AlexAntennaFacade.

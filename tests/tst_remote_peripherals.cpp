@@ -18,9 +18,19 @@
 // Core's station TCI server on and off, which keeps running when the window
 // goes and another connects. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 // Claude Code.
+// 2026-09-24: R-R3-47 / R-R3-22: a remote window's Advanced pages are views
+// of the Core's records (they open no accessory connection): faults raised
+// on the Core appear without a reconnect and are cleared through the Core,
+// the counters are the Core's and not the window's, the output limit is
+// set through the Core and its alert reaches the window, the antenna names
+// and tune memory are the Core's; the interlock policy is changed from a
+// remote window, applied and enforced on the Core, and shown by every
+// window; an older Core leaves the interlock section saying why. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include <QtTest>
 
+#include <QDateTime>
 #include <QTemporaryDir>
 #include <cmath>
 #include <memory>
@@ -30,6 +40,8 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QTabWidget>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -38,6 +50,10 @@
 
 #include "OperatorWording.h"
 #include "core/PgxlConnection.h"
+#include "core/ConnectionDiagnostics.h"
+#include "core/FaultLog.h"
+#include "core/TuneMemoryStore.h"
+#include "core/TxInterlockPolicy.h"
 #include "core/TgxlConnection.h"
 #include "core/SmartSdrApiListener.h"
 #include "core/StationPgxlController.h"
@@ -55,8 +71,10 @@
 #include "gui/setup/FourO3APage.h"
 #include "gui/setup/RfKitPage.h"
 #include "gui/setup/PgxlAdvancedPage.h"
+#include "gui/setup/PgxlInterlockPage.h"
 #include "gui/setup/TgxlAdvancedPage.h"
 #include "gui/SetupDialog.h"
+#include "models/AccessoryDataModel.h"
 #include "models/AmplifierModel.h"
 #include "models/RadioModel.h"
 #include "models/RfKitModel.h"
@@ -264,6 +282,10 @@ private slots:
     void rawRfKitSwitchWriteIsRefused();
     void pgxlBandFollowLineLocalAndRemote();
     void oneTciSwitchDrivesTheCoresStationServer();
+    // R-R3-47 / R-R3-22
+    void remoteWindowShowsTheCoresRecords();
+    void remoteWindowChangesTheInterlockOnTheCore();
+    void olderCoreLeavesTheInterlockSayingWhy();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -275,8 +297,14 @@ void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
     auto* peripherals = page.findChild<PeripheralsPage*>();
     QVERIFY(peripherals);
     QVERIFY(peripherals->isEnabled());
-    QVERIFY(!page.findChild<PgxlAdvancedPage*>());
-    QVERIFY(!page.findChild<TgxlAdvancedPage*>());
+    // R-R3-47: the Advanced pages are views of the Core's records; they
+    // open no connection to an accessory and send it nothing.
+    QVERIFY(page.findChild<PgxlAdvancedPage*>());
+    QVERIFY(page.findChild<TgxlAdvancedPage*>());
+    QVERIFY(page.findChild<PgxlInterlockPage*>());
+    QVERIFY(!model.pgxlConnection()->isConnected());
+    QVERIFY(!model.tgxlConnection()->isConnected());
+    QVERIFY(model.pgxlConnection()->peerAddress().isEmpty());
     // R-R3-47: the Power Genius tab has check boxes of its own now.
     auto* master = page.findChild<QCheckBox*>(QStringLiteral("fourO3AMasterToggle"));
     QVERIFY(master);
@@ -1326,6 +1354,239 @@ void RemotePeripheralsTest::oneTciSwitchDrivesTheCoresStationServer()
     QTRY_VERIFY(!second.stationTciModel()->listening());
     stationEnd2->closeLink(QStringLiteral("test done"));
     AppSettings::instance().clear();
+}
+
+namespace {
+
+// R-R3-47: a Core that owns its accessories and a remote window on it, over
+// the in-process loopback.
+struct CoreAndWindow {
+    QTemporaryDir dir;
+    RadioModel station;
+    AppSettings stationSettings;
+    StationServer server;
+    RadioModel window{RadioModel::Role::Remote};
+    SettingsProxy proxy;
+    StationClient client{&window, &proxy};
+    CoreAndWindow()
+        : stationSettings(dir.filePath(QStringLiteral("station.settings")))
+        , server((prepareStation(station), &station), stationSettings, dir.path())
+    {
+        window.attachStation(&client);
+    }
+    static void prepareStation(RadioModel& core)
+    {
+        AppSettings::instance().setValue(QStringLiteral("PeripheralsMigrationDone"),
+                                         QStringLiteral("True"));
+        core.enableStationAccessoryIdentity();
+        core.setReceiveOnlyStationPolicy(true);
+        RadioInfo radio;
+        radio.macAddress = QStringLiteral("aa:bb:cc:dd:ee:47");
+        core.setLastRadioInfoForTest(radio);
+        core.setConnectionStateForTest(ConnectionState::Connected);
+    }
+    LoopbackTransport* connect(QObject* owner)
+    {
+        auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), owner);
+        auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), owner);
+        stationEnd->linkTo(clientEnd);
+        client.startSession(clientEnd, server.token());
+        server.acceptTransport(stationEnd);
+        return stationEnd;
+    }
+};
+
+} // namespace
+
+// R-R3-47 / R-R3-22: a remote window's Power Genius and Tuner Genius pages
+// show what the Core keeps, live, and change it only through the Core.
+void RemotePeripheralsTest::remoteWindowShowsTheCoresRecords()
+{
+    AppSettings::instance().clear();
+    CoreAndWindow cw;
+    RadioModel& station = cw.station;
+    RadioModel& window = cw.window;
+    PgxlAdvancedPage pgxlPage(&window);
+    TgxlAdvancedPage tgxlPage(&window);
+    QVERIFY(OperatorWording::isPlain(pgxlPage.remoteNoteForTesting()));
+    QVERIFY(!pgxlPage.powerCapCheckForTesting()->isEnabled());   // no Core yet
+
+    LoopbackTransport* stationEnd = cw.connect(this);
+    QTRY_VERIFY(cw.client.accessoryDataAvailable());
+    QCOMPARE(cw.server.accessoryDataVersion(), 1);
+    window.reportStationLinkStateChanged();
+    QTRY_VERIFY(pgxlPage.powerCapCheckForTesting()->isEnabled());
+    QVERIFY(OperatorWording::isPlain(pgxlPage.remoteNoteForTesting()));
+
+    // A Power Genius fault on the Core appears without a reconnect, with
+    // its time, device and plain words. (The Core's amp connection takes
+    // status lines only from an admitted amp, so the fault is recorded as
+    // RadioModel::onPgxlStatus records it, with the captured readings.)
+    station.pgxlFaultLog()->capture(FaultEvent{QDateTime::currentMSecsSinceEpoch(),
+                                               QStringLiteral("FAULT"), 1820.0f, 2.85f, 78.0f,
+                                               FaultLog::likelyCauseFor(1820.0f, 2.85f, 78.0f)});
+    QCOMPARE(station.pgxlFaultLog()->events().size(), 1);
+    QTRY_COMPARE(window.pgxlFaultLog()->events().size(), 1);
+    const FaultEvent pgxlFault = window.pgxlFaultLog()->events().first();
+    QCOMPARE(pgxlFault.device, QStringLiteral("pgxl"));
+    QCOMPARE(pgxlFault.whenMs, station.pgxlFaultLog()->events().first().whenMs);
+    QVERIFY(pgxlFault.text.startsWith(QStringLiteral("The Power Genius reported a fault.")));
+    QCOMPARE(pgxlPage.faultRowCountForTesting(), 1);
+    QCOMPARE(pgxlPage.faultTextForTesting(0), pgxlFault.text);
+    QVERIFY(OperatorWording::isPlain(pgxlPage.faultTextForTesting(0)));
+
+    // An RF-Kit fault (the amp's interface error) and a Tuner Genius one.
+    station.rfKitConnection()->injectJsonForTesting(
+        QStringLiteral("/operational-interface"),
+        R"({"operational_interface":"UDP","error":"CAT timeout"})");
+    QTRY_COMPARE(window.rfkitFaultLog()->events().size(), 1);
+    QCOMPARE(window.rfkitFaultLog()->events().first().detail, QStringLiteral("CAT timeout"));
+    QVERIFY(OperatorWording::isPlain(window.rfkitFaultLog()->events().first().text));
+    station.tgxlFaultLog()->captureNotice(QStringLiteral("link"),
+                                          QStringLiteral("The Tuner Genius stopped answering."),
+                                          QString());
+    QTRY_COMPARE(tgxlPage.faultRowCountForTesting(), 1);
+    QCOMPARE(tgxlPage.faultTextForTesting(0), QStringLiteral("The Tuner Genius stopped answering."));
+    QVERIFY(window.accessoryDataModel()->faultRevision() >= 3);
+
+    // Cleared from the remote page: the Core's history goes, and the window's.
+    pgxlPage.clearFaultsButtonForTesting()->click();
+    QTRY_VERIFY(station.pgxlFaultLog()->events().isEmpty());
+    QTRY_COMPARE(pgxlPage.faultRowCountForTesting(), 0);
+    tgxlPage.clearFaultsButtonForTesting()->click();
+    QTRY_VERIFY(station.tgxlFaultLog()->events().isEmpty());
+    QTRY_COMPARE(tgxlPage.faultRowCountForTesting(), 0);
+    QCOMPARE(station.rfkitFaultLog()->events().size(), 1);   // only the one asked for
+
+    // The counters are the Core's: a retry the Core's amp connection counts
+    // shows here; one on the window's own (idle) connection does not count.
+    emit window.pgxlConnection()->reconnectAttempt(1, 1000);
+    window.pgxlDiagnostics()->testFlushCoalesceTimer();
+    QCOMPARE(pgxlPage.reconnectCountTextForTesting(), QStringLiteral("0"));
+    emit station.pgxlConnection()->reconnectAttempt(1, 1000);
+    emit station.pgxlConnection()->reconnectAttempt(2, 2000);
+    station.pgxlDiagnostics()->testFlushCoalesceTimer();
+    QTRY_COMPARE(pgxlPage.reconnectCountTextForTesting(), QStringLiteral("2"));
+    QCOMPARE(window.accessoryDataModel()->pgxlReconnectCount(), 2);
+    emit station.tgxlConnection()->reconnectAttempt(1, 1000);
+    station.tgxlDiagnostics()->testFlushCoalesceTimer();
+    QTRY_COMPARE(tgxlPage.reconnectCountTextForTesting(), QStringLiteral("1"));
+
+    // The output limit is set through the Core; the Core raises the alert
+    // and the window sees it.
+    pgxlPage.powerCapSpinForTesting()->setValue(800);   // limit off: not sent yet
+    pgxlPage.powerCapCheckForTesting()->setChecked(true);
+    QTRY_VERIFY(station.accessoryDataModel()->powerCapEnabled());
+    QCOMPARE(station.accessoryDataModel()->powerCapW(), 800);
+    QTRY_VERIFY(window.accessoryDataModel()->powerCapEnabled());
+    // The amp's peak forward power as the Core reads it (onPgxlStatus).
+    emit station.ampMetersChanged(1000.0f, 1.13f);
+    QTRY_COMPARE(window.accessoryDataModel()->powerCapAlertCount(), 1);
+    QVERIFY(window.accessoryDataModel()->powerCapExceeded());
+    QCOMPARE(window.accessoryDataModel()->powerCapAlertText(),
+             QStringLiteral("Power Genius output 1000 W is above the 800 W limit."));
+
+    // Antenna names and tune memory are the Core's. (A window's own edit
+    // reaches the Core as a station setting; the Core then publishes it.)
+    AppSettings::instance().setValue(QStringLiteral("TGXL_Ant1_Label"), QStringLiteral("Dipole"));
+    station.applyRemoteAccessorySetting(QStringLiteral("TGXL_Ant1_Label"));
+    QTRY_COMPARE(window.accessoryDataModel()->tgxlAntenna1Label(), QStringLiteral("Dipole"));
+    QTRY_COMPARE(tgxlPage.antennaLabelForTesting(1), QStringLiteral("Dipole"));
+    station.tuneMemoryStore()->store(TuneMemory{2, Band::Band40m, 10, 20, 30, 1790000000000});
+    QTRY_COMPARE(window.tuneMemoryStore()->listAll().size(), 1);
+    QCOMPARE(window.tuneMemoryStore()->listAll().first().band, Band::Band40m);
+    QCOMPARE(tgxlPage.tuneMemoryRowCountForTesting(), 1);
+
+    // The window opened no accessory connection of its own.
+    QVERIFY(!window.pgxlConnection()->isConnected());
+    QVERIFY(!window.tgxlConnection()->isConnected());
+    QVERIFY(!window.rfKitConnection()->isConnected());
+    stationEnd->closeLink(QStringLiteral("test done"));
+    AppSettings::instance().clear();
+}
+
+// R-R3-47 / R-R3-22: the interlock policy changed from a remote window takes
+// effect on the Core at once, where the refusal to transmit happens; the
+// window that changed it and a window that connects later show it; a
+// request the Core cannot take changes nothing and says why.
+void RemotePeripheralsTest::remoteWindowChangesTheInterlockOnTheCore()
+{
+    AppSettings::instance().clear();
+    CoreAndWindow cw;
+    RadioModel& station = cw.station;
+    PgxlInterlockPage page(&cw.window);
+    QVERIFY(!page.modeComboForTesting()->isEnabled());
+    LoopbackTransport* stationEnd = cw.connect(this);
+    QTRY_VERIFY(cw.client.accessoryDataAvailable());
+    cw.window.reportStationLinkStateChanged();
+    QTRY_VERIFY(page.modeComboForTesting()->isEnabled());
+    QVERIFY(OperatorWording::isPlain(page.remoteNoteForTesting()));
+    QVERIFY(station.txInterlockPolicy()->evaluateTxRequest(true, false, 1.0f));
+
+    page.modeComboForTesting()->setCurrentIndex(2);   // Block
+    QTRY_COMPARE(station.txInterlockPolicy()->mode(), TxInterlockPolicy::Block);
+    QCOMPARE(AppSettings::instance().value(QStringLiteral("PGXL_TxInterlockMode")).toString(),
+             QStringLiteral("Block"));
+    // The Core refuses to transmit now; the window's copy is the Core's.
+    QVERIFY(!station.txInterlockPolicy()->evaluateTxRequest(true, false, 1.0f));
+    QTRY_COMPARE(cw.window.txInterlockPolicy()->mode(), TxInterlockPolicy::Block);
+    QCOMPARE(cw.window.accessoryDataModel()->interlockMode(),
+             AccessoryDataModel::InterlockMode::Block);
+    QCOMPARE(page.modeComboForTesting()->currentIndex(), 2);
+
+    page.swrGateCheckboxForTesting()->setChecked(true);
+    page.graceSpinboxForTesting()->setValue(1250);
+    page.swrGateMaxSpinboxForTesting()->setValue(2.4);
+    QTRY_COMPARE(station.txInterlockPolicy()->graceMs(), 1250);
+    QTRY_VERIFY(qFuzzyCompare(station.txInterlockPolicy()->swrGateMax(), 2.4f));
+    QVERIFY(station.txInterlockPolicy()->swrGateEnabled());
+    QTRY_COMPARE(cw.window.txInterlockPolicy()->graceMs(), 1250);
+
+    // A request the Core cannot take: nothing changes; the window says why.
+    QSignalSpy refused(&cw.window, &RadioModel::sliceAddRejected);
+    QVERIFY(cw.client.requestTxInterlockPolicy(1, 99999, false, 2.0).sent);
+    QTRY_COMPARE(refused.count(), 1);
+    QVERIFY(OperatorWording::isPlain(refused.first().first().toString()));
+    QCOMPARE(station.txInterlockPolicy()->mode(), TxInterlockPolicy::Block);
+    QCOMPARE(page.modeComboForTesting()->currentIndex(), 2);
+
+    // A window that connects later shows the Core's policy.
+    stationEnd->closeLink(QStringLiteral("first window gone"));
+    RadioModel second(RadioModel::Role::Remote);
+    SettingsProxy secondProxy;
+    StationClient secondClient(&second, &secondProxy);
+    second.attachStation(&secondClient);
+    PgxlInterlockPage secondPage(&second);
+    auto* stationEnd2 = new LoopbackTransport(QStringLiteral("station-end-2"), this);
+    auto* clientEnd2 = new LoopbackTransport(QStringLiteral("client-end-2"), this);
+    stationEnd2->linkTo(clientEnd2);
+    secondClient.startSession(clientEnd2, cw.server.token());
+    cw.server.acceptTransport(stationEnd2);
+    QTRY_COMPARE(second.txInterlockPolicy()->mode(), TxInterlockPolicy::Block);
+    QCOMPARE(second.txInterlockPolicy()->graceMs(), 1250);
+    QTRY_COMPARE(secondPage.modeComboForTesting()->currentIndex(), 2);
+    QCOMPARE(secondPage.graceSpinboxForTesting()->value(), 1250);
+    stationEnd2->closeLink(QStringLiteral("test done"));
+    AppSettings::instance().clear();
+}
+
+// R-R3-47: a Core that does not share its interlock (an older Core) leaves
+// the section showing, unchangeable, with the reason in user words.
+void RemotePeripheralsTest::olderCoreLeavesTheInterlockSayingWhy()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    RecordingTgxlLink link;
+    link.linkReady = true;
+    model.attachStation(&link);
+    PgxlInterlockPage page(&model);
+    QVERIFY(!page.modeComboForTesting()->isEnabled());
+    QVERIFY(!page.graceSpinboxForTesting()->isEnabled());
+    QVERIFY(page.remoteNoteForTesting().contains(QStringLiteral("does not share")));
+    QVERIFY(OperatorWording::isPlain(page.remoteNoteForTesting()));
+    PgxlAdvancedPage advanced(&model);
+    QVERIFY(!advanced.powerCapCheckForTesting()->isEnabled());
+    QVERIFY(!advanced.clearFaultsButtonForTesting()->isEnabled());
+    QVERIFY(OperatorWording::isPlain(advanced.remoteNoteForTesting()));
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

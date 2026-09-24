@@ -1810,7 +1810,6 @@ private slots:
         const qint64 sourceOriginNs = clock.nsecsElapsed();
         int packet = 0;
         QVector<float> toneHeard;
-        qint64 dryAtToneEnd = -1;
         QTimer source;
         source.setTimerType(Qt::PreciseTimer);
         source.setInterval(1);
@@ -1832,7 +1831,6 @@ private slots:
             if (toneHeard.isEmpty()
                 && qint64(packet) * PcmAudioCodecConfig::kPacketFrames >= kToneEndFrame) {
                 toneHeard = bus->heard; // the source has just sent its last tone
-                dryAtToneEnd = bus->playedDryFramesForTesting();
             }
             if (qint64(packet) * PcmAudioCodecConfig::kPacketFrames < kOnsetFrame
                 || roughHeardFrame >= 0) {
@@ -1878,8 +1876,22 @@ private slots:
         }
 
         // Once playing, the speaker never ran short: any silence it played
-        // for want of audio came before the first packet.
-        QCOMPARE(bus->playedDryFramesForTesting(), dryAtToneEnd);
+        // for want of audio came before the receiver's first write to it.
+        // R-R3-21: the baseline is the count at that first write, so the
+        // check covers the tones as well as what follows them.
+        QVERIFY(bus->playedDryFramesAtFirstPushForTesting() >= 0);
+        if (bus->playedDryFramesForTesting() != bus->playedDryFramesAtFirstPushForTesting()) {
+            QStringList events;
+            for (const auto& e : bus->dryEventsForTesting()) {
+                events << QStringLiteral("%1 dry at %2 ms")
+                              .arg(e.frames)
+                              .arg(double(e.atFrame) * 1000.0 / rate, 0, 'f', 1);
+            }
+            qInfo().noquote() << QStringLiteral("first push at %1 ms; dry events: %2")
+                .arg(double(bus->firstPushDueFrameForTesting()) * 1000.0 / rate, 0, 'f', 1)
+                .arg(events.join(QStringLiteral(", ")));
+        }
+        QCOMPARE(bus->playedDryFramesForTesting(), bus->playedDryFramesAtFirstPushForTesting());
 
         // The delay readout at the moment the onset was first heard.
         QVERIFY(atOnset && atOnset->playout);

@@ -529,6 +529,11 @@ public:
     {
         m_deviceBusFactoryForTest = std::move(factory);
     }
+    // R-R3-21: how many times any AudioEngine in this process has called
+    // Pa_Initialize / Pa_Terminate. A test run calls neither
+    // (PortAudioBus::portAudioBarredForTestRun).
+    static int paInitializeCallsForTest();
+    static int paTerminateCallsForTest();
 #endif
 
 #ifdef NEREUS_BUILD_TESTS
@@ -1246,6 +1251,9 @@ private:
     // AudioEngine without a real audio subsystem don't hit a spurious
     // terminate.
     bool m_paInitialized{false};
+    // The device paths may run: PortAudio came up, or this is a test run,
+    // where makeBus supplies only the test's fake devices (R-R3-21).
+    bool m_deviceLayerReady{false};
     bool m_running{false};
     // High-water mark of slice ids registered with MasterMixer: ids
     // [0, m_preregisteredSlices) have an entry. Startup-only invariant per

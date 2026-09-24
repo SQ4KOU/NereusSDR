@@ -60,25 +60,25 @@ TciServer* StationTciController::server() const
 void StationTciController::setBindOverride(const QString& address)
 {
     const QString trimmed = address.trimmed();
-    if (trimmed == m_bindOverride) {
+    if (trimmed == m_bind.bindOverride) {
         return;
     }
-    m_bindOverride = trimmed;
+    m_bind.bindOverride = trimmed;
     apply();
 }
 
 void StationTciController::setRadioAddress(const QHostAddress& radio)
 {
-    if (radio == m_radioAddress) {
+    if (radio == m_bind.radio) {
         return;
     }
-    m_radioAddress = radio;
+    m_bind.radio = radio;
     apply();
 }
 
 void StationTciController::setInterfaceEntriesForTest(const QList<QNetworkAddressEntry>& entries)
 {
-    m_entriesForTest = entries;
+    m_bind.entriesForTest = entries;
     apply();
 }
 
@@ -116,27 +116,8 @@ bool StationTciController::setEnabled(bool enabled, int port, QString* reason)
 
 QList<QHostAddress> StationTciController::wantedAddresses() const
 {
-    QList<QHostAddress> addresses;
-    QHostAddress station;
-    if (!m_bindOverride.isEmpty()) {
-        station = QHostAddress(m_bindOverride);
-    } else if (!m_radioAddress.isNull()) {
-        const QList<QNetworkAddressEntry> entries =
-            m_entriesForTest ? *m_entriesForTest : StationNetwork::localEntries();
-        station = StationNetwork::addressFacing(m_radioAddress, entries);
-    }
-    const bool everyAddress = station == QHostAddress(QHostAddress::AnyIPv4)
-        || station == QHostAddress(QHostAddress::Any)
-        || station == QHostAddress(QHostAddress::AnyIPv6);
-    if (!station.isNull()) {
-        addresses.append(station);
-    }
-    // This computer too, unless every address already covers it.
-    const QHostAddress loopback(QHostAddress::LocalHost);
-    if (!everyAddress && !addresses.contains(loopback)) {
-        addresses.append(loopback);
-    }
-    return addresses;
+    // The one station listener rule (StationNetwork::StationBind).
+    return m_bind.listenAddresses();
 }
 
 void StationTciController::apply()

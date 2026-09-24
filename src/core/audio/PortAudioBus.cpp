@@ -37,6 +37,8 @@
 
 #include <portaudio.h>
 
+#include <QStandardPaths>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -998,8 +1000,18 @@ int PortAudioBus::downmixToMono(const float* interleaved, int frames,
     return n;
 }
 
+bool PortAudioBus::portAudioBarredForTestRun()
+{
+#ifdef NEREUS_BUILD_TESTS
+    return QStandardPaths::isTestModeEnabled();
+#else
+    return false;
+#endif
+}
+
 QVector<PortAudioBus::HostApiInfo> PortAudioBus::hostApis() {
     QVector<HostApiInfo> out;
+    if (portAudioBarredForTestRun()) { return out; }
     const int n = Pa_GetHostApiCount();
     for (int i = 0; i < n; ++i) {
         const PaHostApiInfo* h = Pa_GetHostApiInfo(i);
@@ -1010,6 +1022,7 @@ QVector<PortAudioBus::HostApiInfo> PortAudioBus::hostApis() {
 
 QVector<PortAudioBus::DeviceInfo> PortAudioBus::outputDevicesFor(int hostApiIndex) {
     QVector<DeviceInfo> out;
+    if (portAudioBarredForTestRun()) { return out; }
     const int n = Pa_GetDeviceCount();
     for (int i = 0; i < n; ++i) {
         const PaDeviceInfo* d = Pa_GetDeviceInfo(i);
@@ -1026,6 +1039,7 @@ QVector<PortAudioBus::DeviceInfo> PortAudioBus::outputDevicesFor(int hostApiInde
 
 QVector<PortAudioBus::DeviceInfo> PortAudioBus::inputDevicesFor(int hostApiIndex) {
     QVector<DeviceInfo> out;
+    if (portAudioBarredForTestRun()) { return out; }
     const int n = Pa_GetDeviceCount();
     for (int i = 0; i < n; ++i) {
         const PaDeviceInfo* d = Pa_GetDeviceInfo(i);

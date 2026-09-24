@@ -76,6 +76,10 @@
 //                 configurePgxl, disconnectPgxl and setPgxlConnectionSettings
 //                 requests. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: accessoryDataVersion 1 (the
+//                 `accessoryData` object and the setTxInterlockPolicy,
+//                 setPgxlPowerCap and clearAccessoryFaults requests). J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -90,6 +94,7 @@
 #include "models/NotchModel.h"
 #include "models/RfKitModel.h"
 #include "models/StationTciModel.h"
+#include "models/AccessoryDataModel.h"
 
 #include <QHostAddress>
 #include <QNetworkInterface>
@@ -1715,6 +1720,10 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         { "stationTci", m_radioModel->stationTciModel(),
           m_agreedMinor >= kRadioIdentitySessionProtocolMinor
               && m_capabilities.stationTciVersion >= 1 },
+        // R-R3-47 / R-R3-22: the Core's accessory records and settings.
+        { "accessoryData", m_radioModel->accessoryDataModel(),
+          m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+              && m_capabilities.accessoryDataVersion >= 1 },
     };
     for (const auto& accessory : accessories) {
         const QByteArray key(accessory.key);
@@ -1785,6 +1794,11 @@ void StationClient::handleSettingsSnapshot(const SessionMessage& message)
         }
         if (m_radioModel->tgxlFaultLog() != nullptr) {
             m_radioModel->tgxlFaultLog()->reload();
+        }
+        // R-R3-47: and the RF-Kit's. A Core that offers `accessoryData`
+        // then sends its live lists, which replace these.
+        if (m_radioModel->rfkitFaultLog() != nullptr) {
+            m_radioModel->rfkitFaultLog()->reload();
         }
     }
 }
@@ -2369,6 +2383,11 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
         auto* tci = qobject_cast<StationTciModel*>(target);
         return tci != nullptr && tci->applyStationValue(propertyName, native);
     }
+    // R-R3-47 / R-R3-22: a plain state apply; changes only by command.
+    if (className == "AccessoryDataModel") {
+        auto* data = qobject_cast<AccessoryDataModel*>(target);
+        return data != nullptr && data->applyStationValue(propertyName, native);
+    }
     if (className != "SliceModel") {
         return false;
     }
@@ -2883,6 +2902,41 @@ StationClient::CommandOutcome StationClient::requestStationTci(bool enabled, qui
                        QStringLiteral("the station's TCI server switch"));
 }
 
+// R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory records
+// and settings.
+StationClient::CommandOutcome StationClient::requestTxInterlockPolicy(int mode, int graceMs,
+                                                                      bool swrGateEnabled,
+                                                                      double swrGateMax)
+{
+    if (!accessoryDataAvailable()) {
+        return IStationLink::requestTxInterlockPolicy(mode, graceMs, swrGateEnabled, swrGateMax);
+    }
+    return sendCommand("setTxInterlockPolicy", -1,
+                       { intArgument("mode", mode), intArgument("graceMs", graceMs),
+                         boolArgument("swrGateEnabled", swrGateEnabled),
+                         doubleArgument("swrGateMax", swrGateMax) },
+                       QStringLiteral("the transmit interlock"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlPowerCap(bool enabled, int watts)
+{
+    if (!accessoryDataAvailable()) {
+        return IStationLink::requestPgxlPowerCap(enabled, watts);
+    }
+    return sendCommand("setPgxlPowerCap", -1,
+                       { boolArgument("enabled", enabled), intArgument("watts", watts) },
+                       QStringLiteral("the Power Genius output limit"));
+}
+
+StationClient::CommandOutcome StationClient::requestClearAccessoryFaults(const QString& device)
+{
+    if (!accessoryDataAvailable()) {
+        return IStationLink::requestClearAccessoryFaults(device);
+    }
+    return sendCommand("clearAccessoryFaults", -1, { stringArgument("device", device) },
+                       QStringLiteral("the fault history"));
+}
+
 StationClient::CommandOutcome StationClient::requestDisconnectTgxl()
 {
     if (!remoteTgxlConfigAvailable()) {
@@ -3084,6 +3138,12 @@ bool StationClient::remoteRfKitControlAvailable() const
 {
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.remoteRfKitControlVersion >= 2;
+}
+
+bool StationClient::accessoryDataAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.accessoryDataVersion >= 1;
 }
 
 bool StationClient::stationTciAvailable() const

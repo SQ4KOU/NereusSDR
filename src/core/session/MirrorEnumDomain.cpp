@@ -25,6 +25,8 @@
 //   2026-09-24 - R-R3-47 / R-R3-48: TunerModel::BandFollow and
 //                RfKitModel::TunerMode. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: AccessoryDataModel::InterlockMode.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  Merge: lane B already declared
 //                                    SliceModel::OutputRoute; the
 //                                    duplicate declaration is removed.
@@ -35,6 +37,7 @@
 #include "core/session/MirrorEnumDomain.h"
 
 #include "core/WdspTypes.h"
+#include "models/AccessoryDataModel.h"
 #include "models/AmplifierModel.h"
 #include "models/RfKitModel.h"
 #include "models/Band.h"
@@ -157,6 +160,13 @@ const DomainTable& table()
             RfKitModel::TunerMode::Manual,
             RfKitModel::TunerMode::AutoTuning,
             RfKitModel::TunerMode::Auto,
+        });
+
+        // R-R3-47 / R-R3-22: the transmit interlock mode on `accessoryData`.
+        declare<AccessoryDataModel::InterlockMode>(&t, {
+            AccessoryDataModel::InterlockMode::Disabled,
+            AccessoryDataModel::InterlockMode::Warn,
+            AccessoryDataModel::InterlockMode::Block,
         });
 
         // From src/models/Band.h. Count is deliberately ABSENT: it is an

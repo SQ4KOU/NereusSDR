@@ -435,6 +435,10 @@ public:
     // R-R3-48: stationTciVersion. 1 on a Core that runs its own station
     // TCI server (the `stationTci` object and the setStationTci verb).
     int stationTciVersion() const;
+    // R-R3-47 / R-R3-22: accessoryDataVersion. 1 on a Core that owns its
+    // accessories (the `accessoryData` object and the setTxInterlockPolicy,
+    // setPgxlPowerCap and clearAccessoryFaults verbs); 0 otherwise.
+    int accessoryDataVersion() const;
 
     // ---- Subsystem accessors, non-owning, for tests and diagnostics ----
     StateMirror* stateMirror() const { return m_mirror; }
