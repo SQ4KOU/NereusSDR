@@ -124,6 +124,10 @@
 //                live whether the Core's receiver streams are Opus, so it
 //                can say what that costs digital modes. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 / R-R3-21: a test run never auto-opens the
+//                blocking Linux audio first-run dialog
+//                (firstRunPromptsBarredForTestRun). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -537,6 +541,7 @@ warren@wpratt.com
 #include <QPixmap>
 #include <QProgressDialog>
 #include <QMessageBox>
+#include <QStandardPaths>
 #include <QTimer>
 #include <QThread>
 #include <QFile>          // /proc/stat reader for Linux system-CPU path
@@ -1024,7 +1029,12 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
     // be shown a first-run dialog about a local sound card that R2 never
     // uses -- with the "seen" flag then set, hiding the real prompt if that
     // same machine is later run in local direct mode.
-    if (m_radioModel->ownsLocalDsp()
+    //
+    // R-R3-49 / R-R3-21: nor in a test run. The dialog is modal (exec()),
+    // so a window built by a test on a host with no Linux sound server
+    // waited forever for a click.
+    if (!firstRunPromptsBarredForTestRun()
+        && m_radioModel->ownsLocalDsp()
         && m_radioModel->audioEngine()->linuxBackend() == LinuxAudioBackend::None
         && AppSettings::instance().value(QStringLiteral("Audio/LinuxFirstRunSeen"),
                                           QStringLiteral("False")).toString()
@@ -1180,6 +1190,9 @@ void MainWindow::retireForSessionSwitch()
 void MainWindow::setConnectionPickerManaged(bool managed)
 {
     m_connectionPickerManaged = managed;
+    // R-R3-38: Choose another Core opens Connections, which only a window
+    // the picker manages has.
+    if (m_coreStopBanner) { m_coreStopBanner->setChooseAnotherCoreAvailable(managed); }
     if (managed && m_actConnect) {
         m_actConnect->setEnabled(true);
         m_actConnect->setToolTip(tr("Choose a Core/radio pair or a radio for this computer"));
@@ -1247,6 +1260,28 @@ void MainWindow::ensureRemoteSession()
             m_stationClient, m_radioModel, m_station, this);
         connect(m_remoteConnection, &RemoteConnectionController::changed,
                 this, &MainWindow::refreshRemoteConnectionUi);
+        // R-R3-38: when the Core ends this window for good (another app
+        // took over, the link versions do not match, or any end the Core
+        // marks not retryable), the window stays as it is and a message
+        // over its content says why and offers the next steps. Nothing
+        // retries by itself; a dropped link still retries as before.
+        m_coreStopBanner = new CoreStopBanner(m_remoteConnection, this);
+        m_coreStopBanner->setChooseAnotherCoreAvailable(m_connectionPickerManaged);
+        m_coreStopBanner->setCheckForUpdatesAvailable(true);
+        connect(m_coreStopBanner, &CoreStopBanner::contentChanged,
+                this, &MainWindow::placeCoreStopBanner);
+        // R-R3-38: place it again when the content area changes size or
+        // moves without the window resizing (a dock); see eventFilter.
+        if (QWidget* content = centralWidget()) {
+            content->installEventFilter(this);
+        }
+        connect(m_coreStopBanner, &CoreStopBanner::chooseAnotherCoreRequested, this, [this] {
+            if (m_shuttingDown || m_retiringSession) { return; }
+            if (m_connectionPickerManaged) { emit connectionsRequested(); }
+        });
+        connect(m_coreStopBanner, &CoreStopBanner::checkForUpdatesRequested,
+                this, &MainWindow::checkForUpdates);
+        placeCoreStopBanner();
         // R-R3-16 / R-R3-38: Connections opens only after the operator's
         // own Disconnect (Radio > Disconnect, the Connections window, the
         // Core panel), never on link loss or an offline radio: the window
@@ -1420,6 +1455,13 @@ void MainWindow::ensureRemoteSession()
                 return;
             }
             qCWarning(lcConnection) << "Station session ended:" << reason;
+            // R-R3-38: an end that stops the window for good is said by the
+            // stop message over the content, with its buttons; a toast
+            // would say the same thing twice.
+            if (m_remoteConnection
+                && m_remoteConnection->stopNotice() != CoreStopNotice::None) {
+                return;
+            }
             // R-R3-17: a redial that keeps failing reports the same reason
             // at every backoff step, up to once a minute for as long as the
             // Core stays away. The reason is already shown persistently
@@ -1540,6 +1582,21 @@ void MainWindow::showRemoteConnectionPanel()
     m_remoteConnectionPanel->show();
     m_remoteConnectionPanel->raise();
     m_remoteConnectionPanel->activateWindow();
+}
+
+void MainWindow::placeCoreStopBanner()
+{
+    if (!m_coreStopBanner || !m_coreStopBanner->isVisibleTo(this)) { return; }
+    const QWidget* content = centralWidget();
+    const QRect area = content ? content->geometry() : rect();
+    const int width = std::max(0, std::min(560, area.width() - 32));
+    m_coreStopBanner->setFixedWidth(width);
+    QLayout* const layout = m_coreStopBanner->layout();
+    const int height = layout && layout->hasHeightForWidth()
+        ? layout->totalHeightForWidth(width) : m_coreStopBanner->sizeHint().height();
+    m_coreStopBanner->setFixedHeight(height);
+    m_coreStopBanner->move(area.x() + (area.width() - width) / 2, area.y() + 16);
+    m_coreStopBanner->raise();
 }
 
 void MainWindow::refreshRemoteConnectionUi()
@@ -10980,10 +11037,19 @@ void MainWindow::resizeEvent(QResizeEvent* event)
     if (m_chromeBar && m_chromeBarWidget) {
         m_chromeBar->relayout(m_chromeBarWidget->width());
     }
+    placeCoreStopBanner();
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
+    // R-R3-38: the stop message sits over the content area, which moves
+    // and resizes on its own when a dock opens or closes; follow it so the
+    // message never sits over a dock. Observe only.
+    if (m_coreStopBanner && watched == centralWidget()
+     && (event->type() == QEvent::Resize || event->type() == QEvent::Move)) {
+        placeCoreStopBanner();
+    }
+
     // Phase 3Q Sub-PR-4 D.3: TitleBar ConnectionSegment hover tooltip.
     // The segment has installEventFilter(this) in the D.2 wiring block.
     // We intercept QHelpEvent (ToolTip) and delegate to RadioModel for the
@@ -12073,6 +12139,19 @@ void MainWindow::updatePsaIndicatorVisibility()
     }
 }
 
+// R-R3-49 / R-R3-21: the rule PortAudioBus::portAudioBarredForTestRun
+// applies to audio devices, applied to first-run prompts. Test mode is
+// switched on before main() in every test binary (tests/TestSandboxInit.cpp)
+// and never in the app, so the app's behaviour is unchanged.
+bool MainWindow::firstRunPromptsBarredForTestRun()
+{
+#ifdef NEREUS_BUILD_TESTS
+    return QStandardPaths::isTestModeEnabled();
+#else
+    return false;
+#endif
+}
+
 void MainWindow::showAudioDiagnoseDialog()
 {
 #if defined(Q_OS_LINUX)
@@ -12915,24 +12994,53 @@ void MainWindow::closeEvent(QCloseEvent* event)
 // showFeatureRequestDialogImpl()
 // =============================================================================
 
-void MainWindow::showFeatureRequestDialog()
+void MainWindow::fetchLatestReleaseVersion(std::function<void(const QString&)> done)
 {
-    // Version check gate — warn if not on latest release before filing
     auto* nam = new QNetworkAccessManager(this);
     QNetworkRequest req(QUrl(QStringLiteral(
         "https://api.github.com/repos/boydsoftprez/NereusSDR/releases/latest")));
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("NereusSDR"));
     auto* reply = nam->get(req);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, nam] {
+    connect(reply, &QNetworkReply::finished, this, [reply, nam, done = std::move(done)] {
         reply->deleteLater();
         nam->deleteLater();
-
+        QString latest;
         if (reply->error() == QNetworkReply::NoError) {
             QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
-            QString latest = doc.object().value(QStringLiteral("tag_name")).toString();
+            latest = doc.object().value(QStringLiteral("tag_name")).toString();
             if (latest.startsWith(QLatin1Char('v'))) {
                 latest = latest.mid(1);
             }
+        }
+        done(latest);
+    });
+}
+
+void MainWindow::checkForUpdates()
+{
+    fetchLatestReleaseVersion([this](const QString& latest) {
+        const QString current = QCoreApplication::applicationVersion();
+        const QVersionNumber latestVer = QVersionNumber::fromString(latest);
+        if (latestVer.isNull()) {
+            showToast(tr("Could not check for updates. Check this computer's internet "
+                         "connection and try again."), ToastSeverity::Warning, 6000);
+            return;
+        }
+        if (QVersionNumber::fromString(current) < latestVer) {
+            showToast(tr("NereusSDR %1 is available. This computer has %2.")
+                          .arg(latest, current), ToastSeverity::Info, 8000);
+            return;
+        }
+        showToast(tr("This computer has the newest NereusSDR, %1.").arg(current),
+                  ToastSeverity::Info, 6000);
+    });
+}
+
+void MainWindow::showFeatureRequestDialog()
+{
+    // Version check gate: warn if not on latest release before filing
+    fetchLatestReleaseVersion([this](const QString& latest) {
+        if (!latest.isEmpty()) {
             QVersionNumber latestVer = QVersionNumber::fromString(latest);
             QVersionNumber currentVer = QVersionNumber::fromString(
                 QCoreApplication::applicationVersion());

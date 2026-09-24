@@ -18,6 +18,8 @@ using namespace NereusSDR;
 namespace {
 const QString kVersionKey = QStringLiteral("SettingsSchemaVersion");
 const QString kWatchdogKey = QStringLiteral("NetworkWatchdogEnabled");
+const QString kOtherKey = QStringLiteral("RxOnly");
+const QString kOtherNestedKey = QStringLiteral("hardware/aa:bb:cc:dd:ee:ff/radioInfo/sampleRate");
 } // namespace
 
 class TestSettingsSchemaV7Migration : public QObject {
@@ -27,6 +29,8 @@ private slots:
     {
         AppSettings::instance().remove(kVersionKey);
         AppSettings::instance().remove(kWatchdogKey);
+        AppSettings::instance().remove(kOtherKey);
+        AppSettings::instance().remove(kOtherNestedKey);
     }
 
     void v6_to_v7_resets_a_stale_watchdog_value()
@@ -50,6 +54,23 @@ private slots:
 
         QVERIFY(!s.contains(kWatchdogKey));
         QCOMPARE(s.value(kVersionKey, QString()).toString(), QStringLiteral("7"));
+    }
+
+    void v6_to_v7_leaves_other_keys_alone()
+    {
+        // The step removes the watchdog key only: every other setting, flat
+        // or per-radio, comes through the upgrade with its value.
+        auto& s = AppSettings::instance();
+        s.setValue(kVersionKey, QStringLiteral("6"));
+        s.setValue(kWatchdogKey, QStringLiteral("False"));
+        s.setValue(kOtherKey, QStringLiteral("True"));
+        s.setValue(kOtherNestedKey, QStringLiteral("192000"));
+
+        s.ensureSettingsAtVersion(7);
+
+        QVERIFY(!s.contains(kWatchdogKey));
+        QCOMPARE(s.value(kOtherKey, QString()).toString(), QStringLiteral("True"));
+        QCOMPARE(s.value(kOtherNestedKey, QString()).toString(), QStringLiteral("192000"));
     }
 
     void v7_keeps_a_value_saved_after_the_reset()

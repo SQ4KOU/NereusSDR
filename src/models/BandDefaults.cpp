@@ -103,6 +103,22 @@ BandSeed seedFor(Band b)
         // transverters. Handler must no-op on XVTR first-visit until
         // the XVTR epic lands.
         case Band::XVTR:     return { Band::XVTR,     0.0,         DSPMode::USB, false };
+        // The SWL bands (see Band.h) have no seed yet: like the GEN
+        // sub-bands above, their stacks come with the Phase 3H port. They
+        // take the no-seed answer below, as before this list existed.
+        case Band::Band120m:
+        case Band::Band90m:
+        case Band::Band61m:
+        case Band::Band49m:
+        case Band::Band41m:
+        case Band::Band31m:
+        case Band::Band25m:
+        case Band::Band22m:
+        case Band::Band19m:
+        case Band::Band16m:
+        case Band::Band14m:
+        case Band::Band13m:
+        case Band::Band11m:
         case Band::Count:    break;
     }
     return { Band::GEN, 0.0, DSPMode::USB, false };

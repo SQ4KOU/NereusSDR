@@ -281,7 +281,7 @@ AudioEngine::AudioEngine(QObject* parent)
         const PaError err = Pa_Initialize();
         if (err != paNoError) {
             qCWarning(lcAudio) << "Pa_Initialize failed:" << Pa_GetErrorText(err)
-                               << "— audio subsystem will be inert.";
+                               << "(the audio subsystem will be inert)";
             m_paInitialized = false;
         } else {
             m_paInitialized = true;

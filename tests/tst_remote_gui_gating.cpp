@@ -3378,7 +3378,7 @@ private slots:
         std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
         QAction* toggle = nullptr;
         for (QAction* a : menu->actions()) {
-            if (a->text() == QStringLiteral("Reconnect")
+            if (a->text() == QStringLiteral("Connect")
                 || a->text() == QStringLiteral("Disconnect")) {
                 toggle = a;
             }
@@ -3397,7 +3397,7 @@ private slots:
         std::unique_ptr<QMenu> localMenu(localApplet.buildContextMenuForTesting());
         QSignalSpy localToggles(&localApplet, &AmpApplet::connectionToggleRequested);
         for (QAction* a : localMenu->actions()) {
-            if (a->text() == QStringLiteral("Reconnect")) {
+            if (a->text() == QStringLiteral("Connect")) {
                 QVERIFY(a->isEnabled());
                 a->trigger();
             }
@@ -3702,7 +3702,7 @@ private slots:
         std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
         QAction* toggle = nullptr;
         for (QAction* a : menu->actions()) {
-            if (a->text() == QStringLiteral("Reconnect")
+            if (a->text() == QStringLiteral("Connect")
                 || a->text() == QStringLiteral("Disconnect")) {
                 toggle = a;
             }
@@ -3730,7 +3730,7 @@ private slots:
         QCOMPARE(localAntenna.count(), 1);
         std::unique_ptr<QMenu> localMenu(localApplet.buildContextMenuForTesting());
         for (QAction* a : localMenu->actions()) {
-            if (a->text() == QStringLiteral("Reconnect")) {
+            if (a->text() == QStringLiteral("Connect")) {
                 QVERIFY(a->isEnabled());
                 a->trigger();
             }

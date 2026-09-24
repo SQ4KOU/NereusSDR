@@ -142,6 +142,7 @@
 #include <QCryptographicHash>
 #include <QHostAddress>
 #include <QLoggingCategory>
+#include <QRegularExpression>
 #include <QSslCertificate>
 #include <QSslError>
 #include <QStringList>
@@ -267,6 +268,59 @@ bool isLocalNetworkAddress(const QString& host)
         }
     }
     return false;
+}
+
+// R-R3-38: reads a session end the Core marked not retryable into what the
+// window offers next. The link carries only a reason and the retryable
+// flag (station link section 12.4), so the two ends that need their own
+// buttons are told apart by the Core's reason as StationServer writes it:
+//   StationServer::promoteToSession:
+//     "Displaced by a newer authenticated connection from %1"
+//     where %1 is WebSocketTransport::peerDescription(), "address:port".
+//   StationServer::handleHello:
+//     "Protocol major version mismatch: station speaks %1.%2, client
+//     speaks %3.%4. ..."
+// OperatorReasonText matches the same two reasons for its wording. A Core
+// that rewords either still ends the session and is still not retried; the
+// window then shows it as a plain refusal with the Core's reason.
+StationEndReport stationEndReport(const QString& reason)
+{
+    StationEndReport report;
+    report.kind = StationEndReport::Kind::Refused;
+    report.reason = reason;
+
+    static const QRegularExpression takenOver(
+        QStringLiteral("^Displaced by a newer authenticated connection from (.*)$"));
+    if (const QRegularExpressionMatch match = takenOver.match(reason); match.hasMatch()) {
+        report.kind = StationEndReport::Kind::TakenOver;
+        // "address:port"; the port says nothing to the operator. The Core
+        // writes "<unknown>" or "<detached>" when it has no address, which
+        // does not parse as one and leaves the name empty.
+        static const QRegularExpression withPort(QStringLiteral("^(.+):([0-9]+)$"));
+        const QRegularExpressionMatch parts = withPort.match(match.captured(1).trimmed());
+        if (parts.hasMatch()) {
+            QHostAddress address(parts.captured(1));
+            bool mapped = false;
+            const quint32 v4 = address.toIPv4Address(&mapped);
+            if (mapped) {
+                address = QHostAddress(v4);
+            }
+            if (!address.isNull()) {
+                report.takenOverBy = address.toString();
+            }
+        }
+        return report;
+    }
+
+    static const QRegularExpression version(QStringLiteral(
+        "^Protocol major version mismatch: station speaks ([0-9]+)\\.[0-9]+, "
+        "client speaks ([0-9]+)\\.[0-9]+"));
+    if (const QRegularExpressionMatch match = version.match(reason); match.hasMatch()) {
+        report.kind = StationEndReport::Kind::VersionRefused;
+        report.coreMajor = match.captured(1).toInt();
+        report.appMajor = match.captured(2).toInt();
+    }
+    return report;
 }
 
 } // namespace
@@ -800,6 +854,9 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     transport->setParent(this);
     m_transport = transport;
     m_token = token;
+    // R-R3-38: a new link starts with no end recorded, so the report never
+    // describes an older one.
+    m_lastEndReport = StationEndReport{};
     m_pingsAwaitingPong = 0;
     m_linkUp = false;
     m_sessionActive = true;
@@ -1420,6 +1477,11 @@ void StationClient::onTransportText(const QByteArray& wire)
         qCWarning(lcStationClient) << "Station ended the session:" << message.reason
                                    << (message.retryable ? "(retryable)" : "(permanent)");
         m_lastError = message.reason;
+        // R-R3-38: an end that will not fix itself is what the window shows
+        // and offers buttons for; a retryable one retries as before.
+        if (!message.retryable) {
+            m_lastEndReport = stationEndReport(message.reason);
+        }
         // The station's own classification, not this end's guess at one
         // and not a match against its English prose. Every station-sent
         // refusal used to take disconnectFromStation()'s default of false,
@@ -1455,6 +1517,16 @@ void StationClient::handleHello(const SessionMessage& message)
         qCWarning(lcStationClient) << "No link major shared with the station (it supports"
                                    << message.supportedMajors << "; this client supports"
                                    << m_supportedMajors << "):" << m_lastError;
+        // R-R3-38: this app refused the Core, for good, for the same
+        // reason the Core would have refused it.
+        m_lastEndReport = StationEndReport{};
+        m_lastEndReport.kind = StationEndReport::Kind::VersionRefused;
+        m_lastEndReport.reason = m_lastError;
+        m_lastEndReport.appMajor = m_supportedMajors.isEmpty()
+            ? -1 : int(*std::max_element(m_supportedMajors.cbegin(), m_supportedMajors.cend()));
+        m_lastEndReport.coreMajor = message.supportedMajors.isEmpty()
+            ? -1 : int(*std::max_element(message.supportedMajors.cbegin(),
+                                         message.supportedMajors.cend()));
         disconnectFromStation(m_lastError);
         return;
     }

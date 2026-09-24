@@ -11326,8 +11326,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
 
     // R-R3-49: the Network Watchdog setting reaches the connection before
     // it starts, as Thetis applies the checkbox at startup, before any
-    // SendStart: P2 carries it in the first general packet, P1 uses it for
-    // the wait for data.
+    // SendStart. On both protocols it sets only how long the connection
+    // waits for data; the radio's own safety timer is not tied to it
+    // (operator decision 2026-09-24).
     // From Thetis setup.cs:2195 [v2.10.3.15]:
     //   chkNetworkWDT_CheckedChanged(this, e);
     QMetaObject::invokeMethod(m_connection, [conn = m_connection,

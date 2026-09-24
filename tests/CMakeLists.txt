@@ -343,8 +343,9 @@ if(TARGET wdsp_static)
     nereus_add_test(tst_wdsp_nnr EXTRA_LABELS core)
     nereus_add_test(tst_nnr_model_assets EXTRA_LABELS core)
     if(NOT WIN32)
+        # wdsp_static arrives through the core library, as for tst_wdsp_nnr;
+        # linking it again here made the linker warn about a duplicate library.
         nereus_add_test(tst_linux_port_wait EXTRA_LABELS core)
-        target_link_libraries(tst_linux_port_wait PRIVATE wdsp_static)
         target_compile_definitions(tst_linux_port_wait PRIVATE WDSP_STATIC_BUILD)
     endif()
     # R-R3-39: a real RX channel with an overloaded worker still gives
@@ -7026,6 +7027,8 @@ nereus_add_test(tst_settings_proxy)
 nereus_add_test(tst_remote_gui_gating)
 target_compile_definitions(tst_remote_gui_gating PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_remote_connection_controls fakes/LoopbackTransport.cpp)
+# R-R3-38 (R3 completion Task 5): the stop message of a remote window.
+nereus_add_test(tst_remote_core_stop_notice)
 nereus_add_test(tst_remote_tx_widgets)
 nereus_add_test(tst_remote_tx_presentation fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_remote_tx_presentation PRIVATE NEREUS_BUILD_TESTS)
@@ -7065,6 +7068,10 @@ target_compile_definitions(tst_other_button_item PRIVATE NEREUS_BUILD_TESTS)
 # including the surfaces hidden until their feature is built.
 nereus_add_test(tst_no_placeholder_marks)
 target_compile_definitions(tst_no_placeholder_marks PRIVATE NEREUS_BUILD_TESTS)
+# Linux sweep hang fix (R-R3-49, R-R3-21): a window built in a test run
+# opens no first-run dialog that blocks for a click.
+nereus_add_test(tst_first_run_prompts_test_run)
+target_compile_definitions(tst_first_run_prompts_test_run PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_connection_selector)
 nereus_add_test(tst_station_lan_cache)
 nereus_add_test(tst_station_lan_transport)

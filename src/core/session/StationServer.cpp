@@ -704,9 +704,11 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             [this](const QString& key) {
                 sendToSession(SessionMessages::settingsValueAbsent(key, QString()));
             });
-    // R-R3-49: a removal (a settings reset on the Core, or the schema v7
-    // reset) leaves the settings reading the default, so the radio takes
-    // the default too rather than keep the last value it was given.
+    // R-R3-49: a removal (a settings reset on the Core while it runs)
+    // leaves the settings reading the default, so the radio takes the
+    // default too rather than keep the last value it was given. The schema
+    // v7 reset is not seen here: it runs in CoreInit before this server
+    // exists, and the radio reads the reset value when it connects.
     connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
             [this](const QString& key) {
                 if (key == QLatin1String("NetworkWatchdogEnabled") && m_radioModel) {

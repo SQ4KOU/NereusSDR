@@ -42,6 +42,7 @@
 
 #include "SpotModel.h"
 #include <QDateTime>
+#include <QTimeZone>
 #include <cmath>
 
 namespace NereusSDR {
@@ -109,7 +110,7 @@ void SpotModel::applySpotStatus(int index, const QMap<QString, QString>& kvs)
             bool ok;
             qint64 ts = val.toLongLong(&ok);
             if (ok)
-                spot.timestamp = QDateTime::fromSecsSinceEpoch(ts, Qt::UTC);
+                spot.timestamp = QDateTime::fromSecsSinceEpoch(ts, QTimeZone::UTC);
         }
         else if (key == "lifetime_seconds")
             spot.lifetimeSeconds = val.toInt();

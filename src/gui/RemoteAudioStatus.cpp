@@ -271,9 +271,17 @@ QString remoteReceiverAudioStateText(const RemoteReceiverAudioStatus& receiver)
     case State::Waiting:
         return QStringLiteral("Waiting for the Core");
     case State::Receiving:
-        return receiver.runningProfile
-            ? QStringLiteral("Receiving, %1").arg(remoteAudioProfileName(*receiver.runningProfile))
-            : QStringLiteral("Receiving");
+        if (!receiver.runningProfile) {
+            return QStringLiteral("Receiving");
+        }
+        if (*receiver.runningProfile == RemoteAudioProfile::Opus && receiver.encoder
+            && receiver.encoder->targetBitrate > 0) {
+            // The rate the Core reports for this stream, never one assumed
+            // here. U+00A0 keeps the number and its unit on one line.
+            return QStringLiteral("Receiving, Opus %1\u00A0kbit/s")
+                .arg(receiver.encoder->targetBitrate / 1000);
+        }
+        return QStringLiteral("Receiving, %1").arg(remoteAudioProfileName(*receiver.runningProfile));
     case State::Stopped:
         return QStringLiteral("Stopped. %1")
             .arg(OperatorReasonText::forDisplay(receiver.stopReason));

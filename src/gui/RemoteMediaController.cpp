@@ -1447,6 +1447,9 @@ void RemoteMediaController::refreshAudioStatus()
         } else if (stream.receiver->isRunning()) {
             receiver.state = RemoteReceiverAudioStatus::State::Receiving;
             receiver.runningProfile = stream.runningProfile;
+            if (stream.runningProfile == RemoteAudioProfile::Opus && stream.context) {
+                receiver.encoder = stream.context->encoder;
+            }
         }
         status.receivers.append(receiver);
     }

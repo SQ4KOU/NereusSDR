@@ -615,7 +615,7 @@ private slots:
         page.setReceiverAudioNote(RemoteReceiverAudioNote::OpusChosen);
         const QString opusText = page.compressedAudioNoteText();
         QCOMPARE(opusText, QStringLiteral(
-            "Receiver audio from the Core is compressed (Opus), so the weakest "
+            "Receiver audio from the Core is compressed (Opus), so a few of the weakest "
             "digital-mode signals may not decode. Set Audio quality to Lossless "
             "in Core connection if your network can carry it."));
 
@@ -624,7 +624,7 @@ private slots:
         const QString fallbackText = page.compressedAudioNoteText();
         QCOMPARE(fallbackText, QStringLiteral(
             "Receiver audio from the Core is compressed (Opus): Lossless is chosen, "
-            "but this connection cannot carry it right now. The weakest "
+            "but this connection cannot carry it right now. A few of the weakest "
             "digital-mode signals may not decode."));
         QVERIFY(!fallbackText.contains(QLatin1String("Set Audio quality")));
 

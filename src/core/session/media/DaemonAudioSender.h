@@ -91,7 +91,8 @@ public:
 
     explicit DaemonAudioSender(AudioEngine* audioEngine, QObject* parent = nullptr);
     /// Encodes with `codecConfig` (R-R3-23: the Core's configured
-    /// audio_bitrate). An unsupported bitrate leaves the encoder unready, so
+    /// audio_bitrate for the speakers' and headphones mixes; R-R3-43: 48
+    /// kbit/s for a receiver stream). An unsupported bitrate leaves the encoder unready, so
     /// start() fails and encoderProfile() is empty, as for any encoder that
     /// cannot initialise.
     DaemonAudioSender(AudioEngine* audioEngine, const OpusAudioCodecConfig& codecConfig,
