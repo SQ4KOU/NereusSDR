@@ -24,7 +24,9 @@
 //                                  removed it. The last device is refused
 //                                  while no token is active (the Core would
 //                                  be unclaimed again; only the console's
-//                                  reset does that).
+//                                  reset does that), and so is a computer
+//                                  enrolled through the token while the
+//                                  token works (it would enrol again).
 //   station.rename {label}         store the label under the Core-owned
 //                                  StationLabel setting.
 //   station.acknowledgeKeyBackup   the operator has backed up the Core's
@@ -70,6 +72,10 @@
 //   2026-09-24: Part C fix wave (R1-I1): the last device is not
 //               revoked while no token is active. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R1-I3): a computer enrolled
+//               through the token is not revoked while the token works. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QByteArray>

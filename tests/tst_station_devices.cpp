@@ -40,6 +40,10 @@
 //   2026-09-24: Part C fix wave (R1-I1): the last device is not
 //               revoked while no token is active. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R1-I3): a computer enrolled
+//               through the token is not revoked while the token works. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -517,6 +521,41 @@ private slots:
         verifyEnded(app, kRemoved, QStringLiteral("deviceRemoved"));
         QVERIFY(core.devices().claimed());
         QCOMPARE(core.server->pairingWindow()->state(), PairingWindow::State::ClosedClaimed);
+    }
+
+    void aComputerEnrolledThroughTheTokenIsNotRevokedWhileTheTokenWorks()
+    {
+        // Fix wave R1-I3: the token would enrol it again at its next
+        // sign-in, so removing it while the token works keeps no one out.
+        Core core(/*upgradedWithToken=*/true);
+        Device computer;
+        LoopbackTransport* window = core.tokenSession({{"deviceAuth", 1}}, kSessionProtocolMinor,
+                                                      &computer);
+        QVERIFY(window != nullptr);
+        const std::optional<PairedDevice> enrolled =
+            core.server->deviceStore()->find(computer.key.fingerprint());
+        QVERIFY(enrolled && enrolled->enrolledThroughToken);
+
+        Device phone;
+        QVERIFY(core.server->deviceStore()->add(phone.record()));
+        LoopbackTransport* app = core.deviceSession(phone);
+        QVERIFY(app != nullptr);
+        QJsonObject result = core.invoke(app, "devices.revoke", {utf8("id", computer.id())});
+        QCOMPARE(result.value(QStringLiteral("accepted")).toBool(true), false);
+        const QString reason = result.value(QStringLiteral("reason")).toString();
+        QCOMPARE(reason, QStringLiteral("Stop accepting the pairing token first, then remove "
+                                        "this computer."));
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        QVERIFY(core.server->deviceStore()->find(computer.key.fingerprint()));
+
+        // With the token retired, it goes.
+        result = core.invoke(app, "station.retireToken");
+        QVERIFY2(result.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(result.value(QStringLiteral("reason")).toString()));
+        result = core.invoke(app, "devices.revoke", {utf8("id", computer.id())});
+        QVERIFY2(result.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(result.value(QStringLiteral("reason")).toString()));
+        QVERIFY(!core.server->deviceStore()->find(computer.key.fingerprint()));
     }
 
     void revokeRefusesWhatItCannotDo()

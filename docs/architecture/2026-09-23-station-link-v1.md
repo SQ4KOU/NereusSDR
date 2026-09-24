@@ -1710,7 +1710,10 @@ Four command groups need a sentence beyond the table:
   The last paired device is refused while no token is active, "Pair
   another device first, or reset this Core from its own computer.": its
   removal would leave the Core unclaimed, and only the console's reset
-  does that (section 3.6).
+  does that (section 3.6). A device enrolled through the token
+  (section 3.5) is refused while the token is active, "Stop accepting the
+  pairing token first, then remove this computer.": the token would enrol
+  it again at its next sign-in.
   `station.rename` stores a label (section 8.2): a callsign of letters,
   digits and `/`, then optionally `/` and up to 32 letters, digits, `-` or
   `_`; any other is refused with a reason that states the rule.

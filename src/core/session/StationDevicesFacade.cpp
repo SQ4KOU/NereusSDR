@@ -21,6 +21,10 @@
 //               lasts 10 minutes, five burned codes in a row close any window,
 //               and reopening starts afresh. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R1-I3): a computer enrolled
+//               through the token is not revoked while the token works. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationDevicesFacade.h"
@@ -208,6 +212,13 @@ DeviceAdminResult StationDevicesFacade::revoke(const QString& id)
     if (!m_tokens.isActive() && m_devices.list().size() <= 1) {
         return {false, QStringLiteral("Pair another device first, or reset this Core from its "
                                       "own computer.")};
+    }
+    // Fix wave R1-I3: a computer that enrolled through the token would be
+    // enrolled again at its next token sign-in, so removing it while the
+    // token works keeps no one out.
+    if (device->enrolledThroughToken && m_tokens.isActive()) {
+        return {false, QStringLiteral("Stop accepting the pairing token first, then remove this "
+                                      "computer.")};
     }
     // DeviceStore emits deviceRemoved (StationServer ends that device's
     // connection) and devicesChanged (refresh) on success.
