@@ -30,6 +30,8 @@ directory alongside NereusSDR's own `LICENSE`.
 | libsrtp | SRTP implementation for libdatachannel | BSD-3-Clause | `libsrtp.txt`, `libsrtp-notices.txt` | `libsrtp.txt` |
 | OpenSSL 3 | certificate, DTLS, and application cryptography | Apache-2.0 | `openssl.txt` | `Apache-2.0.txt` |
 | Opus | audio codec (RADE on the desktop; receive audio and the microphone in the iPhone and iPad app) | BSD-3-Clause | `opus.txt` | `opus.txt` |
+| libsodium 1.0.22 | the cryptography under the pairing code's key exchange (password hashing, the exchange's curve arithmetic, the confirmation boxes), in the desktop, the Core, and the iPhone and iPad app | ISC | `libsodium.txt` | `libsodium.txt` |
+| SPAKE2+EE (spake2-ee fd3ea61f) | the pairing code's key exchange, in the desktop, the Core, and the iPhone and iPad app | BSD-2-Clause | `spake2-ee.txt` | `spake2-ee.txt` |
 
 ## Upstream projects whose code is ported into the binary
 
@@ -65,6 +67,8 @@ directory, or when a text file here is named by no row.
 | usrsctp | FetchContent `nereus_usrsctp` | fec583d54493f879d2ae44a743423bf8a04371ab | desktop packages and the Core | `usrsctp.txt`, `usrsctp-notices.txt` |
 | libsrtp | FetchContent `nereus_libsrtp` | 24b3bf8f19b6f5ab4cd2bcceb4f4064efca86fd5 | desktop packages and the Core | `libsrtp.txt`, `libsrtp-notices.txt` |
 | nlohmann json | FetchContent `nereus_json` | 55f93686c01528224f448c19128836e7df245f72 | desktop packages and the Core | `nlohmann-json.txt` |
+| libsodium | FetchContent `nereus_libsodium` in `cmake/NereusPairing.cmake`: the release archive `libsodium-1.0.22.tar.gz` of tag 1.0.22-RELEASE, pinned by SHA-256; the iPhone and iPad app vendors the same archive | 1.0.22 (1.0.22-RELEASE) | desktop packages, the Core, and the iPhone and iPad app | `libsodium.txt` |
+| SPAKE2+EE (spake2-ee) | FetchContent `nereus_spake2ee` in `cmake/NereusPairing.cmake`, the commit's archive pinned by SHA-256; the iPhone and iPad app vendors the same commit | fd3ea61f27a75ff63b0f192c9e619b5a494d048e | desktop packages, the Core, and the iPhone and iPad app | `spake2-ee.txt` |
 | OpenSSL 3 | vcpkg on Windows; Homebrew, or 3.0.21 built from source for Intel, on macOS; system package on Linux | the release workflow's OpenSSL | desktop packages and the Core | `openssl.txt` |
 | libASPL | FetchContent `libASPL` in `hal-plugin/CMakeLists.txt` | v3.1.2 | the macOS audio driver package | `libaspl.txt` |
 
@@ -177,6 +181,9 @@ the §6(b) fallback.
 - plog, usrsctp and libsrtp: permissive MIT or BSD dependencies whose full
   notices are reproduced here.
 - OpenSSL 3: Apache-2.0, compatible with this GPLv3 combined work.
+- libsodium (ISC) and SPAKE2+EE (BSD-2-Clause): permissive dependencies
+  whose full notices are reproduced here; both are also licences the
+  iPhone and iPad app may bundle.
 
 ## File inventory
 
@@ -195,6 +202,8 @@ the §6(b) fallback.
 - `usrsctp.txt`         — usrsctp full BSD-3-Clause notice
 - `libsrtp.txt`         — libsrtp full BSD-3-Clause notice
 - `openssl.txt`         — OpenSSL dependency notice
+- `libsodium.txt`       libsodium full ISC notice
+- `spake2-ee.txt`       SPAKE2+EE (spake2-ee) full BSD-2-Clause notice
 - `thetis.txt`          — Thetis upstream-port notice
 - `mi0bot-thetis.txt`   — mi0bot/Thetis-HL2 upstream-port notice
 - `aethersdr.txt`       — AetherSDR upstream-port notice

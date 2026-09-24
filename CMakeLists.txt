@@ -399,6 +399,12 @@ message(STATUS "OpenSSL ${OPENSSL_VERSION} found at ${OPENSSL_INCLUDE_DIR}")
 include(cmake/NereusRemoteMedia.cmake)
 nereus_add_remote_media_dependency()
 
+# iPhone app Task 14 (R-IOS-08, D37): libsodium 1.0.22 and SPAKE2+EE for the
+# pairing code's key exchange, both fetched by SHA-256-pinned archive and
+# built as static libraries (cmake/NereusPairing.cmake).
+include(cmake/NereusPairing.cmake)
+nereus_add_pairing_dependency()
+
 # Fix round 3: broadened from WIN32-only to any platform, since the same
 # "assert what was explicitly requested is what was actually found"
 # principle now also applies to release.yml's macOS x86_64 cross-compile
@@ -1209,6 +1215,11 @@ list(APPEND CORE_SOURCES
     # iPhone app Task 13 (R-IOS-08): the mirrored `devices` object and the
     # device administration verbs behind it.
     src/core/session/StationDevicesFacade.cpp
+    # iPhone app Task 14 (R-IOS-08, D37): the pairing window, its code and
+    # the SPAKE2+EE exchange (libsodium, cmake/NereusPairing.cmake).
+    src/core/security/PairingCode.cpp
+    src/core/security/PairingWindow.cpp
+    src/core/security/SpakeExchange.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the
@@ -1567,7 +1578,10 @@ qt_add_resources(RESOURCES resources.qrc)
 # the same five files: it loads NereusCore too. BandPlanManager.cpp also
 # calls Q_INIT_RESOURCE(bandplans) so the resource stays reachable from a
 # Core-only link of any kind.
-qt_add_resources(CORE_RESOURCES resources/bandplans.qrc)
+# iPhone app Task 14 (R-IOS-08): the pairing code's word list belongs to the
+# Core too (PairingCode, which calls Q_INIT_RESOURCE(pairing) likewise). The
+# iPhone app carries a byte-for-byte copy of the same file.
+qt_add_resources(CORE_RESOURCES resources/bandplans.qrc resources/pairing.qrc)
 
 # --------------------------------------------------------------------------
 # App icon (per-platform) — from main (PR #11)
@@ -1931,6 +1945,10 @@ function(nereus_apply_core_deps target)
     # build Opus, so RADE's existing Opus remains the sole codec copy.
     target_link_libraries(${target} PRIVATE
         LibDataChannel::LibDataChannelStatic)
+
+    # iPhone app Task 14: SPAKE2+EE on libsodium, reached only through
+    # src/core/security/SpakeExchange.cpp, so no consumer needs its headers.
+    target_link_libraries(${target} PRIVATE nereus_spake2ee)
 
     # libpipewire-0.3, gated by the pkg_check_modules block above. Only links on
     # Linux when the dev package is present; NEREUS_HAVE_PIPEWIRE lets follow-up

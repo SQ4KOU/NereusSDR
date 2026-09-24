@@ -7260,6 +7260,14 @@ nereus_add_test(tst_device_auth
 nereus_add_test(tst_station_devices
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# iPhone app Task 14 (R-IOS-08, D37): the pairing code and its word list,
+# the pairing window (injected clock), and the SPAKE2+EE exchange with its
+# confirmation boxes.
+nereus_add_test(tst_pairing_code EXTRA_LABELS core)
+target_compile_definitions(tst_pairing_code PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+nereus_add_test(tst_pairing_window EXTRA_LABELS core)
+nereus_add_test(tst_spake_exchange EXTRA_LABELS core)
 
 # Remote Daemon R2, Task 18: the wss session. Everything tasks 7 through 17
 # built converges here -- StateMirror, ObjectRegistry,

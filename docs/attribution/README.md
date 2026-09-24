@@ -27,3 +27,5 @@ is compatible with Thetis's GPLv2-or-later terms.
 - [WDSP-PROVENANCE.md](WDSP-PROVENANCE.md) — WDSP v1.29 vendored at `third_party/wdsp/`
 - [FFTW3-PROVENANCE.md](FFTW3-PROVENANCE.md) — FFTW3 3.3.5 binaries vendored at `third_party/fftw3/` (Windows only)
 - [THETIS-PROVENANCE.md](THETIS-PROVENANCE.md) — NereusSDR files derived from Thetis
+- [LIBSODIUM-PROVENANCE.md](LIBSODIUM-PROVENANCE.md): libsodium 1.0.22, fetched by `cmake/NereusPairing.cmake` for the pairing code
+- [SPAKE2EE-PROVENANCE.md](SPAKE2EE-PROVENANCE.md): SPAKE2+EE (spake2-ee fd3ea61f), fetched by `cmake/NereusPairing.cmake` for the pairing code
