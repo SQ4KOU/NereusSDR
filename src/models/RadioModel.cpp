@@ -332,6 +332,7 @@ warren@wpratt.com
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
+#include "core/IoBoardHl2Facade.h"
 #include "core/PureSignal.h"
 #include "core/PsFeedbackChannel.h"
 #include "core/StepAttenuatorController.h"
@@ -674,6 +675,15 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_alexAntennaFacade = new AlexAntennaFacade(this);
     if (role == Role::Local) {
         m_alexAntennaFacade->bindController(&m_alexController);
+    }
+    // R-R3-46 (radioHardwareVersion 3): the HL2 I/O board, read-only. The
+    // Core follows its own board; a remote window writes the Core's values
+    // into its board, which Setup's HL2 I/O board tab shows.
+    m_ioBoardFacade = new IoBoardHl2Facade(this);
+    if (role == Role::Local) {
+        m_ioBoardFacade->bindBoard(&m_ioBoard);
+    } else {
+        m_ioBoardFacade->setTargetBoard(&m_ioBoard);
     }
     if (role == Role::Local) {
         m_pureSignalSettings->load(AppSettings::instance().lastConnected());
@@ -17590,6 +17600,42 @@ void RadioModel::flushRemoteHardwareApply()
         m_hl2Options.setMacAddress(mac);
         m_hl2Options.load();
         observe(QStringLiteral("hl2"));
+    }
+}
+
+// R-R3-46: a remote window keeps a copy of the Core's OC pin matrix
+// (OcOutputsTab, the SWL tab and the N2ADR switch read and save it). It
+// was loaded only when the Core's radio changed, and OcMatrix::save writes
+// every cell that differs from the store, so after the Core changed a pin
+// (another window, the N2ADR preset) the window's next click sent its stale
+// cells back and reverted the Core. The window now reloads the copy when a
+// key of the Core's radio's OC matrix arrives, once per burst.
+void RadioModel::scheduleRemoteOcReload(const QString& key)
+{
+    if (ownsLocalDsp()) {
+        return;
+    }
+    // The Core's radio, as its capabilities named it (a remote model has
+    // no connection of its own).
+    const QString mac = m_lastRadioInfo.macAddress;
+    if (mac.isEmpty()
+        || !key.startsWith(QStringLiteral("hardware/%1/oc/").arg(mac), Qt::CaseInsensitive)) {
+        return;
+    }
+    if (m_remoteOcReloadTimer == nullptr) {
+        m_remoteOcReloadTimer = new QTimer(this);
+        m_remoteOcReloadTimer->setSingleShot(true);
+        connect(m_remoteOcReloadTimer, &QTimer::timeout, this, [this]() {
+            const QString current = m_lastRadioInfo.macAddress;
+            if (current.isEmpty()) {
+                return;
+            }
+            m_ocMatrix.setMacAddress(current);
+            m_ocMatrix.load();
+        });
+    }
+    if (!m_remoteOcReloadTimer->isActive()) {
+        m_remoteOcReloadTimer->start(kHardwareApplyCoalesceMs);
     }
 }
 

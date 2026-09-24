@@ -84,6 +84,9 @@
 #include "core/StepAttenuatorFacade.h"
 #include "core/CalibrationController.h"
 #include "core/OcMatrix.h"
+#include "core/IoBoardHl2.h"
+#include "core/IoBoardHl2Facade.h"
+#include "core/session/MirrorPolicy.h"
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/accessories/AlexController.h"
 #include "gui/setup/HardwarePage.h"
@@ -384,6 +387,9 @@ private slots:
     void coreAppliesHardwareConfigWritesLive();
     void receiveOnlyCoreRefusesTransmitHardwareKeys();
     void ioBoardProbeIsAskedOfTheCore();
+    void windowBandAntennaEditKeepsTheCoresNewerBands();
+    void windowShowsTheCoresIoBoard();
+    void windowOcMatrixFollowsTheCore();
     void hardwareConfigRx1RateGoesToTheCoresFirstReceiver();
 
     // ---- Fix round 1 ----
@@ -5408,6 +5414,18 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
         }
         return count;
     };
+    // R-R3-46 fix wave: so does the read-only `ioBoard` object.
+    const auto aboutIoBoard = [](const QList<QByteArray>& wires) {
+        int count = 0;
+        for (const QByteArray& wire : wires) {
+            const SessionMessage m = decodeOrFail(wire);
+            if (m.objectKey == "ioBoard"
+                || (m.kind == SessionMessageKind::Schema && m.className == "IoBoardHl2Facade")) {
+                ++count;
+            }
+        }
+        return count;
+    };
     const auto run = [this, aboutStepAtt](quint16 minor, QList<QByteArray>* wires,
                             QList<SessionPropertyResult>* results) {
         QTemporaryDir dir;
@@ -5462,14 +5480,16 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
     QList<QByteArray> current;
     QList<SessionPropertyResult> currentResults;
     run(kRadioIdentitySessionProtocolMinor, &current, &currentResults);
-    // R-R3-46: 2, since the Core's Alex antennas and the hardware apply
-    // step are behind it too.
-    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 2);
+    // R-R3-46: 3, since the Core's Alex antennas and the hardware apply
+    // step (2), and its I/O board and the per-band antenna verb (3, fix
+    // wave) are behind it too.
+    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 3);
     // Schema, object, the Core's change and the accepted write's echo.
     QVERIFY(aboutStepAtt(current) >= 3);
     QCOMPARE(currentResults.size(), 1);
     QVERIFY(currentResults.first().accepted);
     QVERIFY(aboutAlex(current) >= 2);  // its schema and object
+    QVERIFY(aboutIoBoard(current) >= 2);  // its schema and object
 
     QList<QByteArray> older;
     QList<SessionPropertyResult> olderResults;
@@ -5477,6 +5497,7 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
     QCOMPARE(updateIndexOf(capabilitiesIn(older), "radioHardwareVersion"), -1);
     QCOMPARE(aboutStepAtt(older), 0);
     QCOMPARE(aboutAlex(older), 0);
+    QCOMPARE(aboutIoBoard(older), 0);
     QCOMPARE(olderResults.size(), 1);
     QVERIFY(!olderResults.first().accepted);
     QCOMPARE(olderResults.first().reason,
@@ -5678,7 +5699,10 @@ void TstStationSession::windowAntennaEditsWaitForACoreThatOffersThem()
     // R-R3-46. Against a Core below radioHardwareVersion 2 (an attenuator
     // only Core, or none) the window's antenna object refuses an edit in
     // plain words and sends nothing; with it, the edit is a property write.
-    for (const int version : {0, 1, 2}) {
+    // R-R3-46 fix wave: from radioHardwareVersion 3 a band's edit is the
+    // setAlexRxAntenna command, not a whole-list property write, and the
+    // window's value follows the Core's answer.
+    for (const int version : {0, 1, 2, 3}) {
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);
@@ -5717,10 +5741,16 @@ void TstStationSession::windowAntennaEditsWaitForACoreThatOffersThem()
             QCOMPARE(alex->rxAnt(Band::Band40m), 1);
             QTest::qWait(50);
             QVERIFY(!station->receivedKinds().contains(QByteArrayLiteral("property.write")));
-        } else {
+        } else if (version == 2) {
             QCOMPARE(refused.count(), 0);
             QCOMPARE(alex->rxAnt(Band::Band40m), 2);
             QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("property.write")));
+        } else {
+            QCOMPARE(refused.count(), 0);
+            QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+            QTest::qWait(50);
+            QVERIFY(!station->receivedKinds().contains(QByteArrayLiteral("property.write")));
+            QCOMPARE(alex->rxAnt(Band::Band40m), 1);  // until the Core's delta
         }
     }
 }
@@ -6001,6 +6031,124 @@ void TstStationSession::ioBoardProbeIsAskedOfTheCore()
     QCOMPARE(reason,
              QStringLiteral("The radio is not connected, so there is no I/O board to probe."));
     QVERIFY(OperatorWording::isPlain(reason));
+}
+
+void TstStationSession::windowBandAntennaEditKeepsTheCoresNewerBands()
+{
+    // R-R3-46 fix wave (radioHardwareVersion 3). A window's antenna click
+    // used to send all 14 bands as the window last saw them, so a change
+    // the Core made to another band in between (the VFO flag, another
+    // window) was put back. The window now sends only the band clicked.
+    AppSettings& coreStore = AppSettings::instance();
+    coreStore.clearHardwareValues(kHardwareMac);
+    const auto cleanStore = qScopeGuard([&coreStore] { coreStore.clearHardwareValues(kHardwareMac); });
+    HardwareSession s;
+    joinHardwareWindow(s, coreStore, this, m_securityDir.path());
+    const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
+    if (QTest::currentTestFailed()) { return; }
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 3);
+    s.core->alexControllerMutable().setMacAddress(kHardwareMac);
+    AlexAntennaFacade* window = s.window->alexAntennaFacade();
+    QVERIFY(window->hasBandEditSender());
+    QCOMPARE(window->rxAnt(Band::Band20m), 1);
+
+    // The Core moves 20 m to Ant 3; before that reaches the window, the
+    // window's operator picks Ant 2 on 40 m.
+    s.core->alexControllerMutable().setRxAnt(Band::Band20m, 3);
+    QCOMPARE(window->rxAnt(Band::Band20m), 1);
+    window->setRxAnt(Band::Band40m, 2);
+    QTRY_COMPARE(s.core->alexController().rxAnt(Band::Band40m), 2);
+    QTest::qWait(150);
+    QCOMPARE(s.core->alexController().rxAnt(Band::Band20m), 3);
+    QTRY_COMPARE(window->rxAnt(Band::Band20m), 3);
+    QTRY_COMPARE(window->rxAnt(Band::Band40m), 2);
+
+    // The receive-only input the same way.
+    s.core->alexControllerMutable().setRxOnlyAnt(Band::Band15m, 2);
+    window->setRxOnlyAnt(Band::Band10m, 3);
+    QTRY_COMPARE(s.core->alexController().rxOnlyAnt(Band::Band10m), 3);
+    QTest::qWait(150);
+    QCOMPARE(s.core->alexController().rxOnlyAnt(Band::Band15m), 2);
+
+    // A value the Core cannot take is refused in plain words and the
+    // window's view re-reads the Core's value.
+    QSignalSpy resync(window, &AlexAntennaFacade::bandEditRefused);
+    QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
+    window->setRxAnt(Band::Band17m, 7);
+    QTRY_COMPARE(resync.count(), 1);
+    QTRY_COMPARE(toast.count(), 1);
+    QVERIFY(OperatorWording::isPlain(toast.last().at(0).toString()));
+    QCOMPARE(s.core->alexController().rxAnt(Band::Band17m), 1);
+    QCOMPARE(window->rxAnt(Band::Band17m), 1);
+}
+
+void TstStationSession::windowShowsTheCoresIoBoard()
+{
+    // R-R3-46 fix wave (radioHardwareVersion 3). The HL2 I/O board's
+    // readings come back from the radio after a probe, over later frames,
+    // on the Core. The Core mirrors its board (detected, hardware version,
+    // registers) as `ioBoard`, and the window writes them into its own
+    // board, which Setup's HL2 I/O board tab shows. Read only.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    AppSettings settings(dir.filePath(QStringLiteral("ioboard.settings")));
+    HardwareSession s;
+    joinHardwareWindow(s, settings, this, m_securityDir.path());
+    const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
+    if (QTest::currentTestFailed()) { return; }
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 3);
+    const IoBoardHl2& windowBoard = s.window->ioBoard();
+    QVERIFY(!windowBoard.isDetected());
+
+    // The radio answers the probe on the Core.
+    IoBoardHl2& coreBoard = s.core->ioBoardMutable();
+    coreBoard.setRegisterValue(IoBoardHl2::Register::REG_FIRMWARE_MAJOR, 0x02);
+    coreBoard.setRegisterValue(IoBoardHl2::Register::REG_FIRMWARE_MINOR, 0x07);
+    coreBoard.setRegisterValue(IoBoardHl2::Register::REG_ANTENNA, 0x03);
+    coreBoard.setHardwareVersion(IoBoardHl2::kHardwareVersion1);
+    coreBoard.setDetected(true);
+
+    QTRY_VERIFY(windowBoard.isDetected());
+    QCOMPARE(windowBoard.hardwareVersion(), IoBoardHl2::kHardwareVersion1);
+    QCOMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_FIRMWARE_MAJOR), quint8(0x02));
+    QCOMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_FIRMWARE_MINOR), quint8(0x07));
+    QCOMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_ANTENNA), quint8(0x03));
+
+    // A later register reading follows.
+    coreBoard.setRegisterValue(IoBoardHl2::Register::REG_FAULT, 0x01);
+    QTRY_COMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_FAULT), quint8(0x01));
+
+    // The window never writes the Core's board: every property is the
+    // Core's to report, and a write is refused in plain words.
+    for (const char* name : {"detected", "hardwareVersion", "registers"}) {
+        QVERIFY2(!MirrorPolicy::inboundAllowed(QByteArrayLiteral("IoBoardHl2Facade"),
+                                               QByteArray(name)), name);
+    }
+    QVERIFY(OperatorWording::isPlain(IoBoardHl2Facade::readOnlyReason()));
+}
+
+void TstStationSession::windowOcMatrixFollowsTheCore()
+{
+    // R-R3-46 fix wave. The window keeps a copy of the Core's OC pin
+    // matrix; OcMatrix::save writes every cell that differs from the store.
+    // When the Core changed a pin (another window, the N2ADR preset) the
+    // window's copy stayed old, and its next pin click sent the old cell
+    // back. The window now reloads its copy when the Core's OC keys arrive.
+    AppSettings& coreStore = AppSettings::instance();
+    coreStore.clearHardwareValues(kHardwareMac);
+    const auto cleanStore = qScopeGuard([&coreStore] { coreStore.clearHardwareValues(kHardwareMac); });
+    HardwareSession s;
+    joinHardwareWindow(s, coreStore, this, m_securityDir.path());
+    const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
+    if (QTest::currentTestFailed()) { return; }
+    OcMatrix& windowOc = s.window->ocMatrixMutable();
+    QVERIFY(!windowOc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
+
+    // The Core sets 40 m pin 3 (as another window's click would).
+    const QString pin = QStringLiteral("hardware/%1/oc/rx/40m/pin3").arg(kHardwareMac);
+    coreStore.setValue(pin, QStringLiteral("True"));
+    QTRY_VERIFY(windowOc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
+    QCOMPARE(s.proxy->value(pin, QString()).toString(), QStringLiteral("True"));
 }
 
 void TstStationSession::hardwareConfigRx1RateGoesToTheCoresFirstReceiver()

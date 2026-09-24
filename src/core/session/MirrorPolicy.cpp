@@ -18,6 +18,8 @@
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-23 - R-R3-46: AlexAntennaFacade directions. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 fix wave: IoBoardHl2Facade, all Outbound. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-23 - R-R3-47 / R-R3-22: AmplifierModel and RfKitModel, all
 //                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
@@ -369,6 +371,12 @@ const MirrorPolicy::Entry kEntries[] = {
     { "AlexAntennaFacade", "ext1OutOnTx", MirrorDirection::Outbound },
     { "AlexAntennaFacade", "ext2OutOnTx", MirrorDirection::Outbound },
     { "AlexAntennaFacade", "rxOutOverride", MirrorDirection::Outbound },
+
+    // R-R3-46 (radioHardwareVersion 3): the Core's HL2 I/O board, as the
+    // Core reads it; a window asks for a probe with a command.
+    { "IoBoardHl2Facade", "detected", MirrorDirection::Outbound },
+    { "IoBoardHl2Facade", "hardwareVersion", MirrorDirection::Outbound },
+    { "IoBoardHl2Facade", "registers", MirrorDirection::Outbound },
 
     // R-R3-47 / R-R3-22 (remotePgxlControlVersion 1): the Core's Power
     // Genius XL status. Every property is the Core's to report; a window

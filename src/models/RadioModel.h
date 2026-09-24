@@ -45,6 +45,9 @@
 //   2026-09-23 - R-R3-46: alexAntennaFacade(),
 //                 scheduleRemoteHardwareApply(), requestIoBoardProbe(). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 fix wave: ioBoardFacade(), the `ioBoard` object;
+//                 scheduleRemoteOcReload(). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 //   2026-09-23 - R-R3-47 / R-R3-22: amplifierModel() and rfKitModel(), the
 //                 Power Genius and RF-Kit status objects. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -219,6 +222,7 @@ class DspAssetService;
 class PureSignalSessionFacade;
 class StepAttenuatorFacade;
 class AlexAntennaFacade;
+class IoBoardHl2Facade;
 class PsccPump;
 // Phase 4 Agent 4A of issue #167: PaProfileManager forward declaration.
 // RadioModel owns the per-MAC PA gain profile bank (parallel to
@@ -1434,6 +1438,18 @@ public:
     /// AlexController; a Remote model leaves it unbound and it holds the
     /// Core's values (and the window's Hardware Config availability).
     AlexAntennaFacade* alexAntennaFacade() const { return m_alexAntennaFacade; }
+    /// R-R3-46 (radioHardwareVersion 3): the HL2 I/O board's detected state,
+    /// hardware version and registers as the read-only mirrored `ioBoard`
+    /// object. A Local model binds it to its own IoBoardHl2; a Remote model
+    /// writes the Core's values into its own IoBoardHl2, which Setup's HL2
+    /// I/O board tab shows.
+    IoBoardHl2Facade* ioBoardFacade() const { return m_ioBoardFacade; }
+
+    /// R-R3-46: a remote window's copy of the Core's OC pin matrix is
+    /// reloaded from the Core's settings when one of its keys arrives
+    /// (`key` is the settings key), coalesced, so the window never saves a
+    /// stale cell back over a newer Core value. A no-op on a Local model.
+    void scheduleRemoteOcReload(const QString& key);
 
     /// R-R3-46: ask the radio's HL2 I/O board to identify itself (three
     /// I2C reads). Locally the P1 connection enqueues them; a remote window
@@ -4729,6 +4745,9 @@ private:
     PureSignalSessionFacade* m_pureSignalFacade{nullptr};
     StepAttenuatorFacade* m_stepAttFacade{nullptr};
     AlexAntennaFacade* m_alexAntennaFacade{nullptr};
+    IoBoardHl2Facade* m_ioBoardFacade{nullptr};
+    // R-R3-46: coalesces a remote window's OC matrix reloads.
+    QTimer* m_remoteOcReloadTimer{nullptr};
     std::unique_ptr<PureSignal> m_pureSignal;
 
     // 3M-4 Task 17 chunk C: pscc() driver — pairs per-DDC IQ streams

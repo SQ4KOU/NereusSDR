@@ -80,7 +80,9 @@
 #include "gui/applets/RxApplet.h"
 #include "gui/setup/DeviceCard.h"
 #include "gui/setup/GeneralOptionsPage.h"
+#include "core/IoBoardHl2.h"
 #include "gui/setup/HardwarePage.h"
+#include "gui/setup/hardware/Hl2IoBoardTab.h"
 #include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
 #include "gui/setup/hardware/OcOutputsHfTab.h"
 #include "core/accessories/AlexAntennaFacade.h"
@@ -1077,6 +1079,27 @@ private slots:
         const QString key = QStringLiteral("hardware/%1/oc/rx/20m/pin4").arg(mac);
         QTRY_COMPARE(h.stationSettings().value(key).toString(), QStringLiteral("True"));
         QTRY_VERIFY(reloads.contains(QStringLiteral("oc")));
+
+        // R-R3-46 fix wave (radioHardwareVersion 3): the HL2 I/O board tab
+        // shows the Core's board, whose readings arrive on the Core after a
+        // probe.
+        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 3);
+        auto* ioTab = hardware->findChild<Hl2IoBoardTab*>();
+        QVERIFY(ioTab);
+        const auto statusText = [ioTab]() {
+            for (QLabel* label : ioTab->findChildren<QLabel*>()) {
+                if (label->text().startsWith(QStringLiteral("mi0bot custom I/O board"))) {
+                    return label->text();
+                }
+            }
+            return QString();
+        };
+        QCOMPARE(statusText(), QStringLiteral("mi0bot custom I/O board (0x41): Not detected"));
+        IoBoardHl2& coreBoard = h.station().ioBoardMutable();
+        coreBoard.setRegisterValue(IoBoardHl2::Register::REG_FIRMWARE_MAJOR, 0x02);
+        coreBoard.setHardwareVersion(IoBoardHl2::kHardwareVersion1);
+        coreBoard.setDetected(true);
+        QTRY_COMPARE(statusText(), QStringLiteral("mi0bot custom I/O board (0x41): Active"));
     }
 
     // R-R3-46 / R-R3-21: a Core that does not offer its attenuator

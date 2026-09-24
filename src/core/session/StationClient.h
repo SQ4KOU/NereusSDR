@@ -235,6 +235,7 @@
 #include <QUrl>
 
 #include "core/session/IStationLink.h"
+#include "models/Band.h"
 #include "core/session/MirrorSchema.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StateMirror.h"
@@ -563,6 +564,10 @@ public:
     QString hardwareConfigUnavailableReason() const;
     /// Verb "requestIoBoardProbe": probe the Core's radio's HL2 I/O board.
     CommandOutcome requestIoBoardProbe() override;
+    /// R-R3-46 fix wave (radioHardwareVersion 3). Verb "setAlexRxAntenna":
+    /// one band's RX antenna (rxOnly false, 1..3) or RX-only antenna
+    /// (rxOnly true, 0..3) on the Core.
+    CommandOutcome requestAlexRxAntenna(Band band, int antenna, bool rxOnly);
     CommandOutcome requestNnrDiagnostics(int sliceId, int testMode, int outputMode) override;
     /// R-R3-40: the station can clear a runtime NNR limit on request
     /// (negotiated minor 11 and NNR control).

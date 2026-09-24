@@ -38,6 +38,10 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46: requestIoBoardProbe, the HL2
 //                                    I/O board probe for a remote window.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 fix wave (radioHardwareVersion
+//                                    3): setAlexRxAntenna, one band's RX or
+//                                    RX-only antenna. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -46,6 +50,7 @@
 #include "core/dsp/DspAssetService.h"
 #include "DspCommandValues.h"
 #include "PureSignalSessionFacade.h"
+#include "core/accessories/AlexAntennaFacade.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -333,6 +338,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetFourO3AEnabled(invoke);
     } else if (invoke.commandVerb == "requestIoBoardProbe") {
         handleRequestIoBoardProbe(invoke);
+    } else if (invoke.commandVerb == "setAlexRxAntenna") {
+        handleSetAlexRxAntenna(invoke);
     } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning"
                || invoke.commandVerb == "nnr.tryAgain") {
         handleNnrAction(invoke);
@@ -949,6 +956,44 @@ void SessionCommandDispatcher::handleRequestIoBoardProbe(const SessionMessage& i
     }
     const RadioModel::IoBoardProbeOutcome outcome = m_radioModel->requestIoBoardProbe();
     emitResult(invoke.commandVerb, invoke.commandId, outcome.sent, outcome.reason, {});
+}
+
+// R-R3-46 fix wave (radioHardwareVersion 3): one band's receive antenna
+// from a remote window. The window used to send the whole 14-band list, so
+// a list built before a change the Core made to another band (the VFO
+// flag, another window) put that band back. The Core changes only the band
+// named, through its own AlexAntennaFacade and AlexController, and every
+// window follows the `alexAntennas` delta.
+void SessionCommandDispatcher::handleSetAlexRxAntenna(const SessionMessage& invoke)
+{
+    int band = 0;
+    int antenna = 0;
+    QVariant rxOnly;
+    if (!hasExactlyArguments(invoke.arguments, { "band", "antenna", "rxOnly" })
+        || findIntArgument(invoke.arguments, "band", &band) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "antenna", &antenna) != ArgumentStatus::Ok
+        || !findArgument(invoke.arguments, "rxOnly", &rxOnly)
+        || rxOnly.typeId() != QMetaType::Bool) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("setAlexRxAntenna requires band and antenna whole numbers "
+                                  "and an rxOnly boolean"), {});
+        return;
+    }
+    AlexAntennaFacade* const alex = m_radioModel->alexAntennaFacade();
+    if (alex == nullptr || !alex->isBound()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core has no antenna settings ready."), {});
+        return;
+    }
+    if (band < 0 || band >= AlexAntennaFacade::kBandCount) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core keeps antennas for 14 bands."), {});
+        return;
+    }
+    const bool receiveOnly = rxOnly.toBool();
+    const QString reason = receiveOnly ? alex->setRxOnlyAntForBand(Band(band), antenna)
+                                       : alex->setRxAntForBand(Band(band), antenna);
+    emitResult(invoke.commandVerb, invoke.commandId, reason.isEmpty(), reason, {});
 }
 
 void SessionCommandDispatcher::handleSetFourO3AEnabled(const SessionMessage& invoke)

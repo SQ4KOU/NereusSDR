@@ -78,6 +78,9 @@
 //                                    transmit-side hardware keys
 //                                    (isTransmitHardwareKey). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 fix wave: radioHardwareVersion
+//                                    3, the read-only `ioBoard` object.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -102,6 +105,7 @@
 #include "core/PureSignal.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
+#include "core/IoBoardHl2Facade.h"
 #include <QScopeGuard>
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -242,6 +246,17 @@ bool isAlexAntennasMessage(const SessionMessage& message)
     return message.objectKey == kAlexAntennasKey
         || (message.kind == SessionMessageKind::Schema
             && message.className == "AlexAntennaFacade");
+}
+
+// R-R3-46 (radioHardwareVersion 3): the Core's HL2 I/O board, read-only,
+// for a peer at kRadioIdentitySessionProtocolMinor.
+constexpr const char* kIoBoardKey = "ioBoard";
+
+bool isIoBoardMessage(const SessionMessage& message)
+{
+    return message.objectKey == kIoBoardKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "IoBoardHl2Facade");
 }
 
 // R-R3-47 / R-R3-22: the Core's Power Genius XL and RF-Kit RF2K-S status,
@@ -1237,6 +1252,9 @@ void StationServer::buildMirror()
     // R-R3-46 (radioHardwareVersion 2): the Core's Alex antenna settings.
     // Sent only to a peer at minor 11 (sendToSession).
     m_mirror->watch(QByteArray(kAlexAntennasKey), m_radioModel->alexAntennaFacade());
+    // R-R3-46 (radioHardwareVersion 3): the Core's HL2 I/O board, read-only.
+    // Sent only to a peer at minor 11 (sendToSession).
+    m_mirror->watch(QByteArray(kIoBoardKey), m_radioModel->ioBoardFacade());
     m_mirror->watch("pureSignal", m_radioModel->pureSignalFacade());
     m_mirror->watch(QByteArray(kTransmitKey), &m_radioModel->transmitModel());
     if (m_radioModel->tunerModel() != nullptr) {
@@ -1347,6 +1365,9 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             QStringLiteral("Update this app to change the radio's antennas on this Core.");
     } else if (alexWrite && radioHardwareVersion() < 2) {
         stepAttRefusal = QStringLiteral("The Core has no antenna settings ready.");
+    } else if (message.objectKey == kIoBoardKey) {
+        // R-R3-46: the I/O board's readings are the Core's to report.
+        stepAttRefusal = IoBoardHl2Facade::readOnlyReason();
     } else if (message.objectKey == kAmplifierKey) {
         // R-R3-47: the amp's readings are the Core's to report.
         stepAttRefusal = AmplifierModel::readOnlyReason();
@@ -1587,6 +1608,10 @@ void StationServer::sendToSession(const SessionMessage& message)
             && (minor < kRadioIdentitySessionProtocolMinor || radioHardwareVersion() < 2)) {
             return;
         }
+        if (isIoBoardMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor || radioHardwareVersion() < 3)) {
+            return;
+        }
         // R-R3-47: a Core that does not own its accessories does not offer
         // the amplifier and RF-Kit objects, so it does not send them either.
         if ((isAmplifierMessage(message) || isRfKitMessage(message))
@@ -1788,7 +1813,12 @@ int StationServer::radioHardwareVersion() const
     if (m_radioModel.isNull() || !m_radioModel->stepAttFacade()->isBound()) {
         return 0;
     }
-    return m_radioModel->alexAntennaFacade()->isBound() ? 2 : 1;
+    if (!m_radioModel->alexAntennaFacade()->isBound()) {
+        return 1;
+    }
+    // 3: the `ioBoard` object and the per-band antenna verb
+    // (setAlexRxAntenna), R-R3-46 fix wave.
+    return m_radioModel->ioBoardFacade()->isBound() ? 3 : 2;
 }
 
 StationCapabilities StationServer::buildCapabilities() const
@@ -1821,7 +1851,8 @@ StationCapabilities StationServer::buildCapabilities() const
             // R-R3-46 / R-R3-11: 1 once the Core's controller is behind the
             // `stepAtt` object (DaemonApp binds it before the server starts);
             // 2 once its Alex antennas are behind `alexAntennas` too, with
-            // the hardware apply step and the I/O board probe.
+            // the hardware apply step and the I/O board probe; 3 with the
+            // read-only `ioBoard` object and the per-band antenna verb.
             caps.radioHardwareVersion = radioHardwareVersion();
             // R-R3-47 / R-R3-22: 1 on a Core that owns its accessories: the
             // read-only `amplifier` and `rfkit` objects.

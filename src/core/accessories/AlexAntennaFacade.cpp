@@ -13,6 +13,9 @@
 // Modification history (NereusSDR):
 //   2026-09-23  J.J. Boyd / KG4VCF  Created. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 fix wave: one band's antenna at
+//                                    a time. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/accessories/AlexAntennaFacade.h"
@@ -306,10 +309,75 @@ void AlexAntennaFacade::setUseTxAntennaForRx(bool on)
     publish(next);
 }
 
+QString AlexAntennaFacade::setRxAntForBand(Band band, int antenna)
+{
+    AlexController* c = m_controller.data();
+    const int b = static_cast<int>(band);
+    if (!c) {
+        return QStringLiteral("The Core has no antenna settings ready.");
+    }
+    if (b < 0 || b >= kBandCount) {
+        return malformedListReason();
+    }
+    if (antenna < kAntFirst || antenna > kAntLast) {
+        return antennaRangeReason();
+    }
+    if (c->rxAnt(band) != antenna) {
+        c->setRxAnt(band, antenna);
+    }
+    refresh();
+    return c->rxAnt(band) == antenna
+        ? QString() : QStringLiteral("The Core kept this band's antenna.");
+}
+
+QString AlexAntennaFacade::setRxOnlyAntForBand(Band band, int antenna)
+{
+    AlexController* c = m_controller.data();
+    const int b = static_cast<int>(band);
+    if (!c) {
+        return QStringLiteral("The Core has no antenna settings ready.");
+    }
+    if (b < 0 || b >= kBandCount) {
+        return malformedListReason();
+    }
+    if (antenna < kRxOnlyFirst || antenna > kAntLast) {
+        return rxOnlyRangeReason();
+    }
+    if (c->rxOnlyAnt(band) != antenna) {
+        c->setRxOnlyAnt(band, antenna);
+    }
+    refresh();
+    return c->rxOnlyAnt(band) == antenna
+        ? QString() : QStringLiteral("The Core kept this band's receive-only input.");
+}
+
+bool AlexAntennaFacade::sendBandEdit(const char* property, Band band, int ant, bool rxOnly)
+{
+    if (isBound() || !m_bandEditSender) {
+        return false;
+    }
+    if (!beginEdit(property)) {
+        emit bandEditRefused();
+        return true;
+    }
+    QString reason;
+    if (!m_bandEditSender(band, ant, rxOnly, &reason)) {
+        if (reason.isEmpty()) {
+            reason = QStringLiteral("The antennas cannot be changed from here right now.");
+        }
+        emit editRejected(reason);
+        emit bandEditRefused();
+    }
+    return true;
+}
+
 void AlexAntennaFacade::setRxAnt(Band band, int ant)
 {
     const int b = static_cast<int>(band);
     if (b < 0 || b >= kBandCount) {
+        return;
+    }
+    if (sendBandEdit("rxAntennas", band, ant, false)) {
         return;
     }
     BandList list = m_values.rxAnt;
@@ -321,6 +389,9 @@ void AlexAntennaFacade::setRxOnlyAnt(Band band, int ant)
 {
     const int b = static_cast<int>(band);
     if (b < 0 || b >= kBandCount) {
+        return;
+    }
+    if (sendBandEdit("rxOnlyAntennas", band, ant, true)) {
         return;
     }
     BandList list = m_values.rxOnlyAnt;
