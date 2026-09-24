@@ -221,7 +221,15 @@ version refusal, other refusal, dropped link), by exact name, offscreen.
 
 **Execution note (advisory):** opus (small).
 
-- [ ] **Step 1:** The message, the buttons, no retry for permanent ends, tests; commit.
+- [x] **Step 1:** The message, the buttons, no retry for permanent ends, tests; commit.
+  Landed: commits `49f18542`, `e0728d00`, `181f8b6a`, `9f558658`, `6fdc4216` (the
+  re-review's five Minors), `ae11dd6c` (a remote window that loses its Core for good
+  stays, says why and offers Take it back / Choose another Core / Check for updates; no
+  retry), all G; 13 named tests 13/13 including new `tst_remote_core_stop_notice` (8
+  cases). Carried into the iPhone plan's Part C: the window recognises a takeover and a
+  link-version refusal from the Core's reason wording; fixed at the carry into
+  integration with a `SessionEndReasons` helper (commit `b21be899`) once lane B's
+  reworded reasons landed.
 
 ## Task 6: The TCI and MMIO pages in plain words
 
@@ -259,7 +267,12 @@ words, their tests, `tests/tst_operator_wording_sweep.cpp`.
 
 **Execution note (advisory):** opus (small; strings and their tests).
 
-- [ ] **Step 1:** The wording, the tests; commit.
+- [x] **Step 1:** The wording, the tests; commit.
+  Landed: commit `5e9f58b7` (lane A on integration), G; 5 targets 5/5 including
+  `tst_operator_wording_sweep` and `tst_remote_peripherals`. The approved wording
+  applied across the TCI Server page and the MMIO dialogs. Follow-up commits
+  `aa133903` (comments name the new labels) and `74b89f88` (the sweep row asserts the
+  real text; the listen box found by object name) closed the review's M8 and M9.
 
 ## Task 7: Receiver streams use Opus at 48 kbit/s whenever they are compressed
 
@@ -294,7 +307,13 @@ receiver audio tests, `docs/architecture/2026-09-20-remote-daemon-r3-verificatio
 
 **Execution note (advisory):** opus (small).
 
-- [ ] **Step 1:** Profile choice, reporting, tests, measurement record; commit.
+- [x] **Step 1:** Profile choice, reporting, tests, measurement record; commit.
+  Landed: commit `8a9e8060`, G; 9 exact targets 9/9; the confirming FT8 run recorded in
+  the measurement write-up. Receiver streams use the 48 kbit/s fullband Opus profile
+  whenever compressed; the speaker mix and the headphones mix keep the Core's
+  `audio_bitrate`. Carried into integration with `75623170` (the link document
+  updated) and `93a5708e` (the P2 wire baseline fixed for byte 38, needed by the same
+  carry's watchdog change). Hardware pending: the live side-by-side decode.
 
 ## Task 8: "Core" in every user-visible text that means the Core
 
@@ -325,7 +344,16 @@ offscreen.
 
 **Execution note (advisory):** opus (mechanical but wide).
 
-- [ ] **Step 1:** Reword, tests, fixtures; commit.
+- [x] **Step 1:** Reword, tests, fixtures; commit.
+  Landed: commit `831a6010` (lane A on integration), G; 17 executables by exact name
+  17/17, including `tst_operator_wording_sweep` (28 cases, new
+  `noUserTextCallsTheCoreAStation`), `tst_station_reason_wording` (11 cases) and the
+  conformance runners; `render-link-tables.py --check` clean. "Station" reworded to
+  "Core" everywhere it means the Core; ham-sense uses kept. The Setup page renamed
+  Remote Access; its "Run a Core on this computer" switch is not built yet (the iPhone
+  plan's Remote Access page task builds it), so this task shipped complete with
+  concerns. Follow-up sent to the same implementer: the Mon Vol tooltip is wrong the
+  same way the old MON tooltip was.
 
 ## Task 9: Small leftovers from the R3 work
 
@@ -366,4 +394,170 @@ warning count.
 
 **Execution note (advisory):** opus (small items).
 
-- [ ] **Step 1:** Each item, its test where it is behaviour; commits.
+- [x] **Step 1:** Each item, its test where it is behaviour; commits.
+  Landed: merge `0f1221e9` of integration (no conflicts) plus commits `36790074`
+  (item 6), `dbfc0e6c` (item 1: warnings 5 to 0 fixed at their causes), `aa4754ca`
+  (item 4), `0c151638` (item 5), `f861c643` (item 7: "Connect" everywhere, including
+  the Tuner Genius applet), `061cd230` (item 8: an amp applet's own refused request
+  claims its connection line and is toasted only when that line is not visible),
+  `fc8ef0c0` (item 2), `28ed73ef` (item 3: real-device cases behind
+  `NEREUS_TEST_REAL_AUDIO_DEVICES=1`, 7 cases), all G; 17 executables 17/17. FINDING
+  from this task: `tst_daemon_media_controller`'s readiness wait failed under heavy
+  load. Follow-up commits `aa64dace`, `cabeb5aa`, `4ede0a8d`, `8849c471`, `1e0b5330`,
+  all G, 6 binaries 6/6, closed that finding plus the Tasks 5-7 review's M2, M3, M5
+  and M6.
+
+## Task 10: The transmit monitor gets its own speakers or headphones choice
+
+**Requirements:** R-R3-45, R-R3-21.
+
+Operator decision of 2026-09-24: MON (hearing your own transmitted audio) gets its own
+speakers-or-headphones choice next to the MON control, independent of the slices,
+default speakers, saved locally. This corrects the task's original brief, which asked
+MON to follow the transmitting slice's output; the operator withdrew that mid-task.
+
+**Files:** `src/core/AudioEngine.{h,cpp}`, `src/gui/applets/TxApplet.{h,cpp}`,
+`src/gui/widgets/VfoWidget.cpp`, their tests.
+
+**Acceptance:**
+- MON has its own SPEAKERS | PHONES pair on the TX applet's MON row, default speakers,
+  saved locally (`audio/TxMonitor/Output`); the VFO flag's own output buttons read
+  SPEAKERS and PHONES.
+- A live change moves MON into the chosen mix with a ramp, never both mixes at once;
+  the anti-VOX reference never carries MON, on either output.
+- An amber notice shows under the MON row when PHONES is chosen and no headphones
+  output is open.
+- Levels and the MON button's state are unchanged.
+- Local window only; a remote window holds the pair off together with MON (remote
+  transmit is R4), with a seam left for R4 named in the report.
+
+**Verification:** `tst_audio_engine_tx_monitor_output`, `tst_tx_applet_mon_output`,
+`tst_audio_engine_reset_audio_settings`, `tst_settings_scope`,
+`tst_vfo_widget_output_route`, offscreen.
+
+**Execution note (advisory):** opus (small).
+
+- [x] **Step 1:** MON's own output choice, the flag's captions, tests; commit.
+  Landed: commits `689217dd` (MON's own SPEAKERS | PHONES choice on the TX applet's
+  MON row; `AudioEngine::txMonitorBlockReady` feeds the chosen mix only, a ramp on a
+  change, never both, never in the anti-VOX mixer; the amber notice) and `5840b99b`
+  (the flag's output buttons read SPEAKERS and PHONES), both G; 20 test executables, 0
+  failures, including new `tst_audio_engine_tx_monitor_output` (9 cases) and
+  `tst_tx_applet_mon_output` (8 cases). MON's old tooltip ("mix received audio into
+  headphones during TX") is misleading now that there is a real output choice; the
+  wording fix was carried into Task 8.
+
+## Task 11: Real-time tests are labelled and run alone on a busy machine
+
+**Requirements:** R-R3-21, R-R3-40.
+
+From the Tasks 5-7 review's triage: three tests measure real-time behaviour and misread
+when other processes load the machine (`tst_receiver_dsp_load_frames`,
+`tst_remote_audio_receiver`'s `playsOnEverySpeakerFormat`, the timing cases of
+`tst_remote_audio_session`). `RUN_SERIAL` keeps other tests of the same ctest run away,
+not other programs; a failure was being rerun by hand as an unwritten habit.
+
+**Files:** `tests/CMakeLists.txt`, `tests/RealtimeTestLoad.h` (new), the labelled tests,
+`docs/development/fast-test-loop.md`.
+
+**Acceptance:**
+- Every test that measures wall-clock real-time behaviour carries a ctest label
+  `realtime` (found seven: the three named plus `tst_wdsp_dsp_turn_taking`,
+  `tst_wdsp_channel_shutdown`, `tst_rx_dsp_worker_input_delay`,
+  `tst_daemon_audio_source`); `RUN_SERIAL` unchanged.
+- `fast-test-loop.md` says, in plain words, that the `realtime` tests are valid only on
+  a machine without other heavy work; on a shared or busy machine run `-LE realtime`
+  then `-L realtime` alone; a `realtime` failure under load is a rerun-alone item,
+  never background noise; CI keeps running them in its normal suite (its machine is
+  dedicated).
+- Each `realtime` test prints the machine's load average when it fails.
+- No test's assertions changed.
+
+**Verification:** `ctest -N -L realtime` lists the seven; `ctest -LE realtime -N`
+excludes them; the seven pass alone by exact name, offscreen.
+
+**Execution note (advisory):** opus (small code and docs).
+
+- [x] **Step 1:** The `REALTIME` label option, `RealtimeTestLoad.h`, the doc section,
+  tests; commit.
+  Landed: commit `13317677`, G. Seven tests carry the `realtime` label
+  (`tst_receiver_dsp_load_frames`, `tst_remote_audio_receiver`,
+  `tst_remote_audio_session`, `tst_wdsp_dsp_turn_taking`, `tst_wdsp_channel_shutdown`,
+  `tst_rx_dsp_worker_input_delay`, `tst_daemon_audio_source`); the report lists the
+  tests considered and left out. `nereus_add_test()` gained a `REALTIME` option; a
+  `tests_realtime` build target follows the existing per-label loop;
+  `RealtimeTestLoad.h` prints the load average from each labelled test's `cleanup()`;
+  `fast-test-loop.md` gained the "Real-time tests" section. The seven pass alone,
+  229.8 sec (load 4.1 to 3.0). Standard from now on for a full run on this shared Mac:
+  `ctest -LE realtime -j6`, then `ctest -L realtime` alone.
+
+## Task 12: Every shipped library carries its licence text
+
+**Requirements:** R-R3-50 (new).
+
+Gap found 2026-09-24 from the iPhone session's Opus licence note:
+`packaging/third-party-licenses/` (installed whole with every desktop package and the
+Core) had no text for several libraries compiled into or shipped with those artifacts:
+RADE (radae_nopy), r8brain, libspecbleach, PortAudio, nlohmann json, zlib (Windows) and
+others the audit found. DeepFilterNet and rnnoise ship their texts through separate
+`release.yml` copy steps, not through the folder, so a plain `cmake --install` missed
+them.
+
+Added **R-R3-50** to the requirement table in
+`docs/architecture/2026-09-20-remote-daemon-r3-plan.md`, directly after R-R3-49:
+
+> Every library compiled into or shipped with a NereusSDR desktop package or a Core
+> package has its licence text and a row in `packaging/third-party-licenses/README.md`,
+> and CI fails when a vendored or fetched library has none.
+
+**Files:** `packaging/third-party-licenses/README.md` and new text files,
+`docs/architecture/2026-09-20-remote-daemon-r3-plan.md` (the R-R3-50 row),
+`CMakeLists.txt` (the Core's `nereusd` install component), `src/gui/AboutDialog.cpp`,
+`scripts/check-third-party-licenses.py` (new), `scripts/collect-source-notices.py`
+(new), `scripts/collect-crate-notices.py` (new),
+`tests/compliance/test_third_party_licenses.py`,
+`tests/compliance/test_source_notices.py`, `tests/compliance/test_crate_notices.py`
+(new), `.github/workflows/ci.yml`, `scripts/git-hooks/pre-commit`,
+`setup-deepfilter.sh`, `setup-deepfilter.ps1`, `CHANGELOG.md`.
+
+**Acceptance:**
+- Every vendored (`third_party/`) and fetched (`FetchContent_Declare` /
+  `ExternalProject_Add`) library that ends up in a shipped artifact has a licence text
+  byte for byte from its pinned upstream source, and a row in the README's tables.
+- The Core's `nereusd` install component carries the folder too, not only the desktop
+  `licenses` component.
+- A CI script fails the build when a `third_party/` directory or a fetched library has
+  no row, when a row's file is missing, or when a text file in the folder is named by
+  no row; wired into `ci.yml` and the local pre-commit hook.
+- The About dialog names the other shipped libraries in plain words, with no source
+  cites in the string.
+- Follow-up closed two further gaps: notices inside compiled vendored and fetched
+  sources (copyright blocks a library's own top-level text does not already carry)
+  ship as `<library>-notices.txt`; the Opus neural-model weights' licence is recorded
+  from the nearest upstream statement, with no text invented.
+- DeepFilterNet's Rust crate notices are generated from `cargo metadata` when the
+  library is built from source, wired into `setup-deepfilter.sh`/`.ps1`, and ship
+  through the same folder; the generated file itself waits on the operator's decision
+  to allow the download it needs.
+
+**Verification:** `python3 scripts/check-third-party-licenses.py`,
+`python3 -m pytest tests/compliance -q`, the install listing
+(`cmake --install --component licenses`).
+
+**Execution note (advisory):** opus.
+
+- [x] **Step 1:** Inventory, texts, README rows, the Core install rule, the About
+  dialog, the CI check, tests, hook wiring; commit.
+  Landed: commits `51351538`, `48ea1c0c`, `10d3fb08` (the main pass: 19 libraries, 30
+  named files, all present; the Core's `nereusd` install component now installs the
+  folder; the About dialog names the rest; `scripts/check-third-party-licenses.py`
+  with 9 new pytest cases wired into CI and the pre-commit hook), `dedc2096`,
+  `e25cdc04`, `7853728b`, `311729a7`, `03c9875f`, `5c6b581e` (the follow-up: per-file
+  notices inside compiled vendored and fetched sources, the Opus model-data licence
+  note, the DeepFilterNet crate-notice generator wired into the setup scripts), all G,
+  merged into integration as `b5ac8b9a`. Final check: 19 libraries, 41 named files,
+  all present; `pytest tests/compliance` 59 passed, 1 skipped.
+  Open: DeepFilterNet's crate notice file (`deepfilternet-crates.txt`) is not yet
+  generated. It needs a DeepFilterNet checkout at `d375b2d8` and roughly 150-250 Rust
+  crates (an estimated 100-250 MB) that were not on the build machine; it waits on the
+  operator's decision to allow that download.
