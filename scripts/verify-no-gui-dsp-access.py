@@ -58,6 +58,13 @@ engine for this computer's devices and nothing else. A call anywhere else in
 src/ fails; a new caller has to come here and say why the engine is live for
 it on a remote model. RadioModel.h, where it is defined, is not a caller.
 
+The allow-list pins a call COUNT per file, as check 2 does (R3 Setup fix
+wave, final review I3): a whole-file entry let SetupDialog.cpp or
+MainWindow.cpp hand the engine to a Core or Mixed page unnoticed. An extra
+call in a listed file fails, and so does a listed file whose count drops.
+Text inside a string literal (a log message naming the accessor) is not a
+call and is not counted.
+
 Usage: verify-no-gui-dsp-access.py [--root PATH]. --root checks another
 checkout (or a copy of one), which is how a check is shown to fail.
 """
@@ -100,20 +107,24 @@ FOR_SLICE_INVENTORY = {
 # site is listed separately: it declares the accessor, it does not call it.
 LOCAL_AUDIO_PATTERN = re.compile(r"\blocalAudioDevices\s*\(")
 LOCAL_AUDIO_DEFINITION = "src/models/RadioModel.h"
+# Repo-relative path -> number of localAudioDevices() CALLS in it.
 LOCAL_AUDIO_ALLOWLIST = {
     # wrapWithAudioBackendStrip(): the backend strip (backend name, Rescan,
     # Open logs) above every Setup > Audio page.
-    "src/gui/SetupDialog.cpp",
+    "src/gui/SetupDialog.cpp": 1,
     # Setup > Audio > Devices: Speakers, Headphones and Microphone cards.
-    "src/gui/setup/AudioDevicesPage.cpp",
+    "src/gui/setup/AudioDevicesPage.cpp": 1,
     # Setup > Audio > TX Input: PC microphone device, backend, buffer and
     # Test Mic.
-    "src/gui/setup/AudioTxInputPage.cpp",
-    # The title-bar master output (volume, mute, output device picker).
-    "src/gui/MainWindow.cpp",
-    # Remote playback through this computer's speakers.
-    "src/gui/RemoteMediaController.cpp",
+    "src/gui/setup/AudioTxInputPage.cpp": 1,
+    # The title-bar master output (volume, mute, output device picker):
+    # the TitleBar's engine and the speaker-change wiring beside it.
+    "src/gui/MainWindow.cpp": 2,
 }
+
+# A double-quoted C++ string literal, escapes included. Removed from a line
+# before check 3 counts calls in it.
+STRING_LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"')
 
 
 def _is_comment_line(stripped: str) -> bool:
@@ -205,9 +216,9 @@ def check_rx_channel_for_slice_inventory() -> int:
 
 
 def check_local_audio_devices_allowlist() -> int:
-    """Check 3: localAudioDevices() is called only from LOCAL_AUDIO_ALLOWLIST."""
-    failures = []
-    calls = 0
+    """Check 3: localAudioDevices() calls match LOCAL_AUDIO_ALLOWLIST's counts."""
+    found = {}
+    sites = {}
     src = ROOT / "src"
     for pattern in ("*.cpp", "*.h", "*.mm"):
         for path in sorted(src.rglob(pattern)):
@@ -218,25 +229,45 @@ def check_local_audio_devices_allowlist() -> int:
                 stripped = line.strip()
                 if _is_comment_line(stripped):
                     continue
-                hits = len(LOCAL_AUDIO_PATTERN.findall(line))
+                hits = len(LOCAL_AUDIO_PATTERN.findall(STRING_LITERAL.sub('""', line)))
                 if not hits:
                     continue
-                calls += hits
-                if rel not in LOCAL_AUDIO_ALLOWLIST:
-                    failures.append(f"{rel}:{num}: {stripped}")
+                found[rel] = found.get(rel, 0) + hits
+                sites.setdefault(rel, []).append(f"{rel}:{num}: {stripped}")
+
+    failures = []
+    for rel in sorted(set(found) | set(LOCAL_AUDIO_ALLOWLIST)):
+        actual = found.get(rel, 0)
+        expected = LOCAL_AUDIO_ALLOWLIST.get(rel)
+        if expected is None:
+            failures.append(
+                f"{rel}: {actual} call(s) to localAudioDevices(), but this "
+                f"file is not in the allow-list")
+            failures.extend(f"    {s}" for s in sites[rel])
+        elif actual == 0:
+            failures.append(
+                f"{rel}: allow-list expects {expected} call(s) to "
+                f"localAudioDevices() but the file has none; remove the entry")
+        elif actual != expected:
+            failures.append(
+                f"{rel}: allow-list says {expected} call(s) to "
+                f"localAudioDevices(), found {actual}")
+            failures.extend(f"    {s}" for s in sites[rel])
 
     if failures:
-        print("[gui-dsp-access] RadioModel::localAudioDevices() is called outside")
-        print("its allow-list in scripts/verify-no-gui-dsp-access.py. It hands out")
-        print("the audio engine without the local-DSP audit, so the Setup gate")
-        print("cannot see a page that uses it. Use audioEngine() instead, or add")
-        print("the file to LOCAL_AUDIO_ALLOWLIST with the reason the engine is")
-        print("live for it in a remote window (this computer's own devices).")
+        print("[gui-dsp-access] RadioModel::localAudioDevices() calls no longer")
+        print("match the allow-list in scripts/verify-no-gui-dsp-access.py. It")
+        print("hands out the audio engine without the local-DSP audit, so the")
+        print("Setup gate cannot see a page that uses it. Use audioEngine()")
+        print("instead, or update LOCAL_AUDIO_ALLOWLIST (file and count) with the")
+        print("reason the engine is live for it in a remote window (this")
+        print("computer's own devices).")
         for f in failures:
             print(f"  {f}")
         return 1
-    print(f"[gui-dsp-access] OK: {calls} localAudioDevices() call(s) in src/, "
-          f"all in allow-listed files")
+    total = sum(found.values())
+    print(f"[gui-dsp-access] OK: {total} localAudioDevices() call(s) in src/ "
+          f"across {len(found)} file(s), all allow-listed")
     return 0
 
 
