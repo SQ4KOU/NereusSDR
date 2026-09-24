@@ -19,9 +19,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
-//   2026-09-24 : setVaxEnabled emits vaxBusOpenChanged (R-R3-49, R-R3-21)
-//                 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
-//                 Code.
+//   2026-09-24 : setVaxEnabled, setVaxConfig, openVaxOutputSlots,
+//                 resetAudioSettings and stop() emit vaxBusOpenChanged
+//                 (R-R3-49, R-R3-21) by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-23 : R-R3-45 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code. Speakers or headphones per receiver (VAX
 //                 design 6.2): the master mixer builds both sums, the
@@ -562,8 +563,15 @@ void AudioEngine::stop()
     // RX taps come down.
     m_vaxTxBus.reset();
     for (int idx = 0; idx < 4; ++idx) {
-        std::lock_guard<std::mutex> lock(m_vaxBusMutex[idx]);
-        m_vaxBus[idx].reset();
+        bool wasOpen = false;
+        {
+            std::lock_guard<std::mutex> lock(m_vaxBusMutex[idx]);
+            wasOpen = m_vaxBus[idx] && m_vaxBus[idx]->isOpen();
+            m_vaxBus[idx].reset();
+        }
+        // R-R3-21: an output that was open is closed; announced once the
+        // bus lock is released.
+        if (wasOpen) { emit vaxBusOpenChanged(idx + 1); }
     }
 
     if (!m_running) {
@@ -1228,6 +1236,9 @@ void AudioEngine::setVaxConfig(int channel, const AudioDeviceConfig& cfg)
     if (channel < 1 || channel > 4) {
         return;
     }
+    // R-R3-21: the output is replaced (or closed) on every path below;
+    // announced once the bus lock is released, whichever branch returns.
+    const auto announce = qScopeGuard([this, channel] { emit vaxBusOpenChanged(channel); });
     const int idx = channel - 1;
     // R-R3-44: a remote window's VAX feeder writes this slot from its own
     // worker; it waits while the output is replaced.
@@ -1344,18 +1355,24 @@ void AudioEngine::openVaxOutputSlots()
 {
     for (int channel = 1; channel <= 4; ++channel) {
         const int idx = channel - 1;
-        std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
-        if (m_vaxBus[idx]) {
-            // Caller wired an explicit device via setVaxConfig() before
-            // start() ran — honour that and don't clobber it with the
-            // platform-native bus.
-            continue;
+        bool opened = false;
+        {
+            std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
+            if (m_vaxBus[idx]) {
+                // Caller wired an explicit device via setVaxConfig() before
+                // start() ran — honour that and don't clobber it with the
+                // platform-native bus.
+                continue;
+            }
+            m_vaxBus[idx] = makeVaxBus(channel);
+            if (m_vaxBus[idx]) {
+                qCInfo(lcAudio) << "VAX" << channel << "bus opened (eager)"
+                                << "[" << m_vaxBus[idx]->backendName() << "]";
+                opened = true;
+            }
         }
-        m_vaxBus[idx] = makeVaxBus(channel);
-        if (m_vaxBus[idx]) {
-            qCInfo(lcAudio) << "VAX" << channel << "bus opened (eager)"
-                            << "[" << m_vaxBus[idx]->backendName() << "]";
-        }
+        // R-R3-21: announced once the bus lock is released.
+        if (opened) { emit vaxBusOpenChanged(channel); }
     }
 }
 
@@ -2603,6 +2620,7 @@ void AudioEngine::resetAudioSettings()
             }
 #endif
         }
+        emit vaxBusOpenChanged(ch);  // R-R3-21: the output was rebuilt or closed
         emit vaxConfigChanged(ch, AudioDeviceConfig{});
     }
 

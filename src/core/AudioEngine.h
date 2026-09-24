@@ -861,9 +861,10 @@ signals:
     void vaxRxGainChanged(int channel, float gain);
     void vaxMutedChanged(int channel, bool muted);
     void vaxTxGainChanged(float gain);
-    /// R-R3-21 (R3 unfinished controls fix wave M3): setVaxEnabled() ran
-    /// for `channel`; isVaxBusOpen(channel) may have changed. A container's
-    /// VAX button lights from it at once.
+    /// R-R3-21 (R3 unfinished controls fix wave M3): isVaxBusOpen(channel)
+    /// may have changed (setVaxEnabled, setVaxConfig, openVaxOutputs,
+    /// resetAudioSettings, stop). A container's VAX button and Setup >
+    /// Audio > VAX's channel card follow it at once.
     void vaxBusOpenChanged(int channel);
 
     // (Phase 3M-1c D.1 added a micBlockReady(const float*, int) signal

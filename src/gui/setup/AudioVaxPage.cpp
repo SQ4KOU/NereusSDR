@@ -18,6 +18,11 @@
 // VAX channels are this computer's in a remote window as in a local one,
 // so the page works there. The "Consumers:" row shows whether an app is
 // reading each channel where the platform reports it.
+//
+// 2026-09-24 (R-R3-49, R-R3-21): J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code. The channel cards follow
+// AudioEngine::vaxBusOpenChanged (open state and "On" switch), so the page
+// matches a container's VAX toggle.
 // =================================================================
 
 #include "AudioVaxPage.h"
@@ -357,16 +362,7 @@ void VaxChannelCard::loadFromSettings()
     // Load the DeviceCard's 10 fields + hidden enable checkbox.
     m_deviceCard->loadFromSettings();
 
-    // Sync visible enable toggle from AppSettings (same key the hidden
-    // DeviceCard uses: audio/VaxN/Enabled).
-    if (m_enableChk) {
-        const bool on = AppSettings::instance()
-                            .value(m_prefix + QStringLiteral("/Enabled"),
-                                   QStringLiteral("False"))
-                            .toString() == QStringLiteral("True");
-        QSignalBlocker blk(m_enableChk);
-        m_enableChk->setChecked(on);
-    }
+    syncEnabledFromSettings();
 
     // Refresh node description label from persisted NodeDescription key.
     updateNodeDescLabel();
@@ -390,6 +386,20 @@ QString VaxChannelCard::currentDeviceName() const
     return AppSettings::instance()
                .value(m_prefix + QStringLiteral("/DeviceName"), QString())
                .toString();
+}
+
+void VaxChannelCard::syncEnabledFromSettings()
+{
+    // Sync visible enable toggle from AppSettings (same key the hidden
+    // DeviceCard uses: audio/VaxN/Enabled).
+    if (m_enableChk) {
+        const bool on = AppSettings::instance()
+                            .value(m_prefix + QStringLiteral("/Enabled"),
+                                   QStringLiteral("False"))
+                            .toString() == QStringLiteral("True");
+        QSignalBlocker blk(m_enableChk);
+        m_enableChk->setChecked(on);
+    }
 }
 
 bool VaxChannelCard::isChannelEnabled() const
@@ -996,6 +1006,16 @@ void AudioVaxPage::wirePillFeedback()
     if (!m_engine) {
         return;
     }
+
+    // R-R3-21: the open state and the "On" switch follow every change to a
+    // VAX output, including a container's VAX toggle and a remote window
+    // opening its outputs.
+    connect(m_engine, &AudioEngine::vaxBusOpenChanged, this, [this](int channel) {
+        if (auto* card = channelCard(channel)) {
+            card->setBusOpen(m_engine->isVaxBusOpen(channel));
+            card->syncEnabledFromSettings();
+        }
+    });
 
     connect(m_engine, &AudioEngine::vaxConfigChanged, this,
             [this](int channel, AudioDeviceConfig cfg) {

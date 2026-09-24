@@ -152,6 +152,10 @@ public:
     // or the user toggles the channel off (setVaxEnabled(false) closes
     // the bus).
     void setBusOpen(bool open);
+    bool busOpenForTest() const { return m_busOpen; }
+    // R-R3-21: the "On" switch from audio/VaxN/Enabled (a container's VAX
+    // toggle writes it too). Emits nothing.
+    void syncEnabledFromSettings();
 
     // R-R3-21: the channel's audio level, linear 0..1, as the VAX applet's
     // meters read it (AudioEngine::vaxRxLevel). Shown in dB, -60..0.

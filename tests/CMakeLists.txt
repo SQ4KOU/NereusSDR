@@ -1582,6 +1582,12 @@ nereus_add_test(tst_device_card)
 nereus_add_test(tst_audio_vax_page_auto_detect)
 target_compile_definitions(tst_audio_vax_page_auto_detect PRIVATE NEREUS_BUILD_TESTS)
 
+# R3 unfinished controls fix wave follow-up (R-R3-49, R-R3-21): every path
+# that changes AudioEngine::isVaxBusOpen emits vaxBusOpenChanged, and
+# Setup > Audio > VAX's channel cards follow it.
+nereus_add_test(tst_audio_engine_vax_open_signal)
+target_compile_definitions(tst_audio_engine_vax_open_signal PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3O Sub-Phase 12 Task 12.4: AudioEngine::resetAudioSettings ───────────
 # Verifies the clear-vs-preserve boundary from addendum §2.5:
 #   Cleared: audio/Speakers/*, Headphones/*, TxInput/*, Vax<1..4>/*,
