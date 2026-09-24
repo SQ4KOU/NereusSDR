@@ -16,6 +16,7 @@
 //                 SessionMessages::decode) and the keys it may carry
 //   capabilities  every entry StationCapabilities::toUpdates() emits for a
 //                 fully populated descriptor, in order, with its wire kind
+//                 and the value a live station with every feature on sends
 //   mirrorClasses every MirrorSchema class: each property's ordinal, wire
 //                 kind, MirrorPolicy direction and MirrorEnumDomain values
 //   objectKeys    the object keys a station's snapshot creates, as
@@ -36,6 +37,10 @@
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 1 (R-IOS-01): link
 //                                    surface capture. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 3 (R-IOS-01):
+//                                    capability values. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
 // =================================================================

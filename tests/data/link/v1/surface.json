@@ -2,183 +2,228 @@
     "capabilities": [
         {
             "kind": "utf8",
-            "name": "stationName"
+            "name": "stationName",
+            "value": ""
         },
         {
             "kind": "utf8",
-            "name": "radioModel"
+            "name": "radioModel",
+            "value": ""
         },
         {
             "kind": "utf8",
-            "name": "firmwareVersion"
+            "name": "firmwareVersion",
+            "value": ""
         },
         {
             "kind": "utf8",
-            "name": "macAddress"
+            "name": "macAddress",
+            "value": "AA:BB:CC:DD:EE:01"
         },
         {
             "kind": "i64",
-            "name": "board"
+            "name": "board",
+            "value": 6
         },
         {
             "kind": "bool",
-            "name": "radioConnected"
+            "name": "radioConnected",
+            "value": true
         },
         {
             "kind": "i64",
-            "name": "effectiveMaxSlices"
+            "name": "effectiveMaxSlices",
+            "value": 5
         },
         {
             "kind": "i64",
-            "name": "boardMaxSlices"
+            "name": "boardMaxSlices",
+            "value": 5
         },
         {
             "kind": "i64",
-            "name": "userDdcCount"
+            "name": "userDdcCount",
+            "value": 2
         },
         {
             "kind": "bool",
-            "name": "pureSignalPresent"
+            "name": "pureSignalPresent",
+            "value": true
         },
         {
             "kind": "bool",
-            "name": "txPermitted"
+            "name": "txPermitted",
+            "value": false
         },
         {
             "kind": "i64",
-            "name": "remoteMediaVersion"
+            "name": "remoteMediaVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "remoteWidebandDisplayVersion"
+            "name": "remoteWidebandDisplayVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "remoteAudioStatusVersion"
+            "name": "remoteAudioStatusVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "spectrumGrantVersion"
+            "name": "spectrumGrantVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "remoteDisplayBudgetVersion"
+            "name": "remoteDisplayBudgetVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "remoteCtunVersion"
+            "name": "remoteCtunVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "stationTelemetryVersion"
+            "name": "stationTelemetryVersion",
+            "value": 3
         },
         {
             "kind": "i64",
-            "name": "remoteTgxlConfigVersion"
+            "name": "remoteTgxlConfigVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "remoteFourO3AControlVersion"
+            "name": "remoteFourO3AControlVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "wdspVersion"
+            "name": "wdspVersion",
+            "value": 210
         },
         {
             "kind": "i64",
-            "name": "wdspCompatibilityVersion"
+            "name": "wdspCompatibilityVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "nnrVersion"
+            "name": "nnrVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "psAlgorithmVersion"
+            "name": "psAlgorithmVersion",
+            "value": 3
         },
         {
             "kind": "i64",
-            "name": "propertyResultVersion"
+            "name": "propertyResultVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "dspAssetVersion"
+            "name": "dspAssetVersion",
+            "value": 2
         },
         {
             "kind": "i64",
-            "name": "psDisplayVersion"
+            "name": "psDisplayVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "notchControlVersion"
+            "name": "notchControlVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "audioProfileVersion"
+            "name": "audioProfileVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "audioClockVersion"
+            "name": "audioClockVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "receiverAudioVersion"
+            "name": "receiverAudioVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "headphonesMixVersion"
+            "name": "headphonesMixVersion",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "settingsSchemaVersion"
+            "name": "settingsSchemaVersion",
+            "value": 0
         },
         {
             "kind": "i64",
-            "name": "displayApplicationBytesPerSecond"
+            "name": "displayApplicationBytesPerSecond",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "spectrumSampleUnitsPerSecond"
+            "name": "spectrumSampleUnitsPerSecond",
+            "value": 1
         },
         {
             "kind": "i64",
-            "name": "displayBudgetGeneration"
+            "name": "displayBudgetGeneration",
+            "value": 1
         },
         {
             "kind": "bool",
-            "name": "remotePs3DisplaySubscribed"
+            "name": "remotePs3DisplaySubscribed",
+            "value": false
         },
         {
             "kind": "utf8",
-            "name": "displayBudgetReason"
+            "name": "displayBudgetReason",
+            "value": "coreBusy"
         },
         {
             "kind": "i64",
-            "name": "hpsdrModel"
+            "name": "hpsdrModel",
+            "value": 14
         },
         {
             "kind": "i64",
-            "name": "radioProtocol"
+            "name": "radioProtocol",
+            "value": 1
         },
         {
             "kind": "utf8",
-            "name": "radioAddress"
+            "name": "radioAddress",
+            "value": ""
         },
         {
             "kind": "i64",
-            "name": "radioHardwareVersion"
+            "name": "radioHardwareVersion",
+            "value": 3
         },
         {
             "kind": "i64",
-            "name": "remotePgxlControlVersion"
+            "name": "remotePgxlControlVersion",
+            "value": 2
         },
         {
             "kind": "i64",
-            "name": "remoteRfKitControlVersion"
+            "name": "remoteRfKitControlVersion",
+            "value": 2
         },
         {
             "kind": "i64",
-            "name": "stationTciVersion"
+            "name": "stationTciVersion",
+            "value": 1
         }
     ],
     "commands": [

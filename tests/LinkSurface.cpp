@@ -27,6 +27,7 @@
 
 #include <QCoreApplication>
 #include <QDeadlineTimer>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonValue>
@@ -37,6 +38,7 @@
 #include <QTemporaryDir>
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -215,19 +217,140 @@ QJsonObject captureMessageKinds()
 
 // ── capabilities ─────────────────────────────────────────────────────────
 
+// ── A live station session ───────────────────────────────────────────────
+
+// Every message a real StationServer sends a peer at this build's minor,
+// through snapshot.complete, read off the wire. The station model is
+// tst_station_session's (makeStationRadioModel) set up as DaemonApp sets up a
+// Core, so every object a Core can offer is there: the accessory identity
+// (enableStationAccessoryIdentity, for `amplifier` and `rfkit`), the station
+// TCI server (enableStationTci, for `stationTci`; it stays off, so nothing
+// listens) and a step attenuator controller (for `stepAtt`; `alexAntennas`
+// and `ioBoard` bind to a Local model's own controllers). One panadapter as
+// well: StationServer watches every pan the model holds, though nereusd
+// itself adds none. `configure` runs on the server before the peer connects.
+// nullopt when the session does not complete; `error` then says why.
+std::optional<QList<QByteArray>> liveSessionWire(
+    const std::function<void(StationServer&)>& configure, QString* error)
+{
+    QTemporaryDir dir;
+    if (!dir.isValid()) {
+        *error = QStringLiteral("no scratch directory");
+        return std::nullopt;
+    }
+    AppSettings stationSettings(dir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    // Declared before the model so it outlives it.
+    auto stepAtt = std::make_unique<StepAttenuatorController>();
+    stepAtt->setTickTimerEnabled(false);
+    auto model = std::make_unique<RadioModel>();
+    const auto unbind = qScopeGuard([&model] { model->setStepAttController(nullptr); });
+    model->enableStationAccessoryIdentity();
+    model->enableStationTci(QStringLiteral("127.0.0.1"));
+    model->setStepAttController(stepAtt.get());
+    model->setBoardForTest(HPSDRHW::HermesLite);
+    RadioInfo info;
+    info.macAddress = QStringLiteral("AA:BB:CC:DD:EE:01");
+    info.name = QStringLiteral("Link surface");
+    info.boardType = HPSDRHW::HermesLite;
+    model->setLastRadioInfoForTest(info);
+    model->setConnectionStateForTest(ConnectionState::Connected);
+    model->addSlice(QStringLiteral("pan-0"));
+    model->addPanadapter();
+
+    // Provision the throwaway token first, so the server loads it rather
+    // than generating one and printing its first-run pairing banner.
+    { TokenStore provision(dir.path()); }
+
+    // Declared before the server so it outlives it; the server owns the
+    // station end once it accepts it.
+    auto clientEnd = std::make_unique<LoopbackTransport>(QStringLiteral("link-surface-client"));
+    StationServer server(model.get(), stationSettings, dir.path());
+    if (configure) {
+        configure(server);
+    }
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("link-surface-station"), &server);
+    stationEnd->linkTo(clientEnd.get());
+    server.acceptTransport(stationEnd);
+    clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"))));
+    clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+
+    // The loopback delivers on later event-loop turns, as a socket would.
+    const QDeadlineTimer deadline(10000);
+    while (!clientEnd->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"))
+           && !deadline.hasExpired()) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    }
+    if (!clientEnd->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"))) {
+        *error = QStringLiteral("the station snapshot did not complete");
+        return std::nullopt;
+    }
+    return clientEnd->received();
+}
+
 QJsonArray captureCapabilities()
 {
     // Every conditional block toUpdates() has switched on: a usable display
-    // budget with its reason, and the R-R3-46 radio identity block.
+    // budget with its reason, and the R-R3-46 radio identity block. This
+    // fixes the order and the wire kinds.
     StationCapabilities caps;
     caps.remoteDisplayBudgetVersion = 1;
     caps.displayBudget = DisplayBudgetLimits{1, 1, 1};
     caps.displayBudgetReason = DisplayBudgetReason::CoreBusy;
     caps.radioIdentityEntries = true;
+
+    // The values come from a live station with every feature a Core can
+    // switch on: media, telemetry, an enforced display budget with its
+    // reason, the accessories, the station TCI server and the radio
+    // hardware objects (liveSessionWire). They are what
+    // StationServer::buildCapabilities() emits, so the per-feature versions
+    // the link document's section 6.3 renders are pinned here and a version
+    // bump shows as surface drift. The budget numbers are this capture's
+    // own, not a Core's computed ones.
+    QString error;
+    const std::optional<QList<QByteArray>> wire = liveSessionWire(
+        [](StationServer& server) {
+            server.setMediaEnabled(true);
+            server.setTelemetryEnabled(true);
+            server.setDisplayBudgetEnforcementEnabled(true);
+            server.setDisplayBudgetLimits(DisplayBudgetLimits{1, 1, 1},
+                                          DisplayBudgetReason::CoreBusy);
+        },
+        &error);
+    QHash<QString, QJsonObject> live;
+    if (wire) {
+        for (const QByteArray& message : *wire) {
+            const QJsonObject o = QJsonDocument::fromJson(message).object();
+            if (o.value(QStringLiteral("type")).toString() != QStringLiteral("capabilities")) {
+                continue;
+            }
+            for (const QJsonValue& entry : o.value(QStringLiteral("properties")).toArray()) {
+                const QJsonObject e = entry.toObject();
+                live.insert(e.value(QStringLiteral("name")).toString(), e);
+            }
+            break;
+        }
+    }
+
     QJsonArray entries;
     for (const MirrorUpdate& u : caps.toUpdates()) {
-        entries.append(QJsonObject{{QStringLiteral("name"), QString::fromUtf8(u.name)},
-                                   {QStringLiteral("kind"), wireKind(u.kind)}});
+        const QString name = QString::fromUtf8(u.name);
+        QJsonObject entry{{QStringLiteral("name"), name},
+                          {QStringLiteral("kind"), wireKind(u.kind)}};
+        const auto found = live.constFind(name);
+        if (!wire) {
+            entry.insert(QStringLiteral("error"), error);
+        } else if (found == live.cend()) {
+            entry.insert(QStringLiteral("error"),
+                         QStringLiteral("the live station did not send this capability"));
+        } else if (found->value(QStringLiteral("kind")).toString() != wireKind(u.kind)) {
+            entry.insert(QStringLiteral("error"),
+                         QStringLiteral("the live station sent another wire kind"));
+        } else {
+            entry.insert(QStringLiteral("value"), found->value(QStringLiteral("value")));
+        }
+        entries.append(entry);
     }
     return entries;
 }
@@ -281,81 +404,28 @@ QJsonObject captureMirrorClasses()
 
 // ── objectKeys ───────────────────────────────────────────────────────────
 
-// The keys a station's connect-time snapshot creates, read off the wire of
-// a real StationServer and a peer at this build's minor, so every
-// minor-gated object is sent. The station model is tst_station_session's
-// (makeStationRadioModel) set up as DaemonApp sets up a Core, so every
-// object a Core can offer is there: the accessory identity
-// (enableStationAccessoryIdentity, for `amplifier` and `rfkit`), the
-// station TCI server (enableStationTci, for `stationTci`; it stays off, so
-// nothing listens) and a step attenuator controller (for `stepAtt`; `alexAntennas` and `ioBoard` bind
-// to a Local model's own controllers). One panadapter as well: StationServer
-// watches every pan the model holds, though nereusd itself adds none.
+// The keys a station's connect-time snapshot creates (liveSessionWire), as
+// patterns, so every minor-gated object is sent.
 QJsonArray captureObjectKeys()
 {
     QJsonArray keys;
-    QTemporaryDir dir;
-    if (!dir.isValid()) {
-        keys.append(QJsonObject{{QStringLiteral("error"), QStringLiteral("no scratch directory")}});
-        return keys;
-    }
-    AppSettings stationSettings(dir.filePath(QStringLiteral("NereusSDR.settings")));
-
-    // Declared before the model so it outlives it.
-    auto stepAtt = std::make_unique<StepAttenuatorController>();
-    stepAtt->setTickTimerEnabled(false);
-    auto model = std::make_unique<RadioModel>();
-    const auto unbind = qScopeGuard([&model] { model->setStepAttController(nullptr); });
-    model->enableStationAccessoryIdentity();
-    model->enableStationTci(QStringLiteral("127.0.0.1"));
-    model->setStepAttController(stepAtt.get());
-    model->setBoardForTest(HPSDRHW::HermesLite);
-    RadioInfo info;
-    info.macAddress = QStringLiteral("AA:BB:CC:DD:EE:01");
-    info.name = QStringLiteral("Link surface");
-    info.boardType = HPSDRHW::HermesLite;
-    model->setLastRadioInfoForTest(info);
-    model->setConnectionStateForTest(ConnectionState::Connected);
-    model->addSlice(QStringLiteral("pan-0"));
-    model->addPanadapter();
-
-    // Provision the throwaway token first, so the server loads it rather
-    // than generating one and printing its first-run pairing banner.
-    { TokenStore provision(dir.path()); }
-
-    // Declared before the server so it outlives it; the server owns the
-    // station end once it accepts it.
-    auto clientEnd = std::make_unique<LoopbackTransport>(QStringLiteral("link-surface-client"));
-    StationServer server(model.get(), stationSettings, dir.path());
-    auto* stationEnd = new LoopbackTransport(QStringLiteral("link-surface-station"), &server);
-    stationEnd->linkTo(clientEnd.get());
-    server.acceptTransport(stationEnd);
-    clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
-        kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"))));
-    clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-
-    // The loopback delivers on later event-loop turns, as a socket would.
-    const QDeadlineTimer deadline(10000);
-    while (!clientEnd->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"))
-           && !deadline.hasExpired()) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
-    }
-    if (!clientEnd->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"))) {
-        keys.append(QJsonObject{{QStringLiteral("error"),
-                                 QStringLiteral("the station snapshot did not complete")}});
+    QString error;
+    const std::optional<QList<QByteArray>> wire = liveSessionWire({}, &error);
+    if (!wire) {
+        keys.append(QJsonObject{{QStringLiteral("error"), error}});
         return keys;
     }
 
     static const QRegularExpression kPan(QStringLiteral("^pan:[0-9]+$"));
     static const QRegularExpression kSlice(QStringLiteral("^slice:[0-9]+$"));
     QSet<QString> seen;
-    for (const QByteArray& wire : clientEnd->received()) {
-        SessionMessage message;
-        if (!SessionMessages::decode(wire, &message)
-            || message.kind != SessionMessageKind::ObjectCreate) {
+    for (const QByteArray& message : *wire) {
+        SessionMessage decoded;
+        if (!SessionMessages::decode(message, &decoded)
+            || decoded.kind != SessionMessageKind::ObjectCreate) {
             continue;
         }
-        QString pattern = QString::fromUtf8(message.objectKey);
+        QString pattern = QString::fromUtf8(decoded.objectKey);
         if (kPan.match(pattern).hasMatch()) {
             pattern = QStringLiteral("pan:<i>");
         } else if (kSlice.match(pattern).hasMatch()) {
@@ -366,7 +436,7 @@ QJsonArray captureObjectKeys()
         }
         seen.insert(pattern);
         keys.append(QJsonObject{{QStringLiteral("key"), pattern},
-                                {QStringLiteral("class"), QString::fromUtf8(message.className)}});
+                                {QStringLiteral("class"), QString::fromUtf8(decoded.className)}});
     }
     return keys;
 }
