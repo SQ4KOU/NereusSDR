@@ -102,6 +102,11 @@ goes.
 | fm-dev | Setup > DSP > FM deviation and de-emphasis | Hide; after R4 |
 | mic-acc | Phone/CW applet microphone source: the ACC item | Hide (with acc) |
 | dxcc-colour | DXCC spot colouring: the country table loads, but nothing switches the colouring on and no log import exists | After R4 (nothing visible claims it today) |
+| export-radio | Setup > Diagnostics > Export / Import: Export Connected Radio (the button only says it is not available) | Hide (added 2026-09-24 under the operator's decision-page rule, until built = hide) |
+| fm-tx | Setup > DSP > FM: the greyed FM transmit group | Hide until FM transmit is built (added 2026-09-24, same rule; asked 2026-09-24, the operator may override) |
+| fm-repeater | The VFO flag's FM repeater buttons (minus, simplex, plus): they store a transmit direction and FM transmit is not built | Hide until FM transmit is built (added 2026-09-24, same rule) |
+| ddc-routing | Setup > Hardware > DDC Routing: its choices do not steer the radio's receivers yet | Hide until multi-panadapter receiver routing is built (added 2026-09-24, same rule) |
+| remote-filter-policy | The filter policy dialog in a remote window says editing is not available; a local window edits it | Build (added 2026-09-24: remote parity, the operator's standing rule) |
 
 ## Global Constraints
 
