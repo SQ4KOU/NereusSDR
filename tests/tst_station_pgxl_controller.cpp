@@ -23,6 +23,7 @@
 #include "core/LanDiscovery.h"
 #include "core/PgxlConnection.h"
 #include "core/SmartSdrApiListener.h"
+#include "core/StationDeviceSettings.h"
 #include "core/StationPgxlController.h"
 #include "models/AccessorySettingsModel.h"
 #include "models/AmplifierModel.h"
@@ -468,6 +469,48 @@ private slots:
 
     // A Tuner Genius answering at the amp's address: never admitted, never
     // paired, asked for nothing but `info`.
+    // M5 (R-R3-47): a request the amp never answers is given up after
+    // kAnswerTimeoutMs with a plain answer, on the Core's clock (injected
+    // here); a late answer to it changes nothing.
+    void unansweredDeviceSettingTimesOut()
+    {
+        AccessorySettingsModel model;
+        StationDeviceSettings::Wire wire;
+        QStringList sentCommands;
+        wire.connected = [] { return true; };
+        wire.writeSetup = [&](const QMap<QString, QString>& fields) {
+            sentCommands.append(QStringLiteral("setup ") + fields.firstKey());
+            return quint32(41);
+        };
+        StationDeviceSettings settings(StationDeviceSettings::Device::Pgxl, std::move(wire));
+        settings.setModel(&model);
+        qint64 now = 1'000'000;
+        settings.setClockForTesting([&now] { return now; });
+        QString reason;
+        QVERIFY(settings.setName(QStringLiteral("Shack PGXL"), &reason));
+        QCOMPARE(sentCommands, QStringList{QStringLiteral("setup nickname")});
+        QCOMPARE(model.pgxlAnswer(),
+                 QStringLiteral("Sent to the Power Genius. Waiting for its answer."));
+
+        now += StationDeviceSettings::kAnswerTimeoutMs - 1;
+        settings.checkTimeouts();
+        QCOMPARE(model.pgxlAnswer(),
+                 QStringLiteral("Sent to the Power Genius. Waiting for its answer."));
+
+        now += 1;
+        settings.checkTimeouts();
+        QCOMPARE(model.pgxlAnswer(),
+                 QStringLiteral("The Power Genius did not answer. Try again."));
+        QVERIFY(!model.pgxlAnswerAccepted());
+        QVERIFY(OperatorWording::isPlain(model.pgxlAnswer()));
+
+        // The late answer is ignored: the name was never confirmed.
+        settings.onReply(41, true, QString());
+        QCOMPARE(model.pgxlAnswer(),
+                 QStringLiteral("The Power Genius did not answer. Try again."));
+        QVERIFY(model.pgxlNickname().isEmpty());
+    }
+
     void tunerGeniusAtAmpAddressIsNeverAdmitted()
     {
         AppSettings::instance().setValue(QStringLiteral("PGXL_AutoReconnect"), QStringLiteral("False"));

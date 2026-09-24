@@ -12,12 +12,16 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  A fixed network setting needs an address
 //                                    and a netmask (R-R3-47). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  A request with no answer times out
+//                                    (R-R3-47). AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/StationDeviceSettings.h"
 
 #include "core/AppSettings.h"
 
+#include <QDateTime>
 #include <QHostAddress>
 #include <QRegularExpression>
 
@@ -48,7 +52,33 @@ const QStringList& fanModes()
 
 StationDeviceSettings::StationDeviceSettings(Device device, Wire wire, QObject* parent)
     : QObject(parent), m_device(device), m_wire(std::move(wire))
+    , m_now([] { return QDateTime::currentMSecsSinceEpoch(); })
 {
+    m_timeoutTimer.setInterval(1000);
+    connect(&m_timeoutTimer, &QTimer::timeout, this, &StationDeviceSettings::checkTimeouts);
+}
+
+void StationDeviceSettings::checkTimeouts()
+{
+    const qint64 now = m_now();
+    bool expired = false;
+    for (auto it = m_pending.begin(); it != m_pending.end();) {
+        if (now - it.value().sentAtMs >= kAnswerTimeoutMs) {
+            it = m_pending.erase(it);
+            expired = true;
+        } else {
+            ++it;
+        }
+    }
+    if (m_pending.isEmpty()) {
+        m_timeoutTimer.stop();
+    }
+    if (expired) {
+        AccessorySettingsModel::Device next = current();
+        answer(&next, QStringLiteral("The %1 did not answer. Try again.").arg(deviceName()),
+               false);
+        publish(next);
+    }
 }
 
 void StationDeviceSettings::setModel(AccessorySettingsModel* model)
@@ -158,7 +188,12 @@ bool StationDeviceSettings::sent(quint32 seq, const Pending& pending, QString* r
         }
         return false;
     }
-    m_pending.insert(seq, pending);
+    Pending timed = pending;
+    timed.sentAtMs = m_now();
+    m_pending.insert(seq, timed);
+    if (!m_timeoutTimer.isActive()) {
+        m_timeoutTimer.start();
+    }
     AccessorySettingsModel::Device next = current();
     answer(&next,
            QStringLiteral("Sent to the %1. Waiting for its answer.").arg(deviceName()), true);

@@ -617,6 +617,7 @@ Answers (`<device>` is "Power Genius" or "Tuner Genius"):
 | Save acknowledged, or not | "The `<device>` is saving its settings and restarting." / "The `<device>` did not save its settings." | true / false |
 | Revert read answered, or not | "The `<device>` sent its settings." then "The `<device>` sent its network settings." / "... did not send its settings." / "... did not send its network settings." | true / false |
 | The device went away with a request waiting | "The `<device>` went offline before it answered." | false |
+| No answer within 10 seconds of the request (the Core's clock; a later answer to it is ignored) | "The `<device>` did not answer. Try again." | false |
 
 **Asking first.** A window asks before it sends a network change or Save &
 Reboot, and sends nothing without a yes. Save & Reboot asks the local

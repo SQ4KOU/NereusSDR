@@ -36,10 +36,19 @@
 // PGXL_BiasMode, PGXL_FanMode, PGXL_LedIntensity, TGXL_Nickname) are saved
 // on the Core the same way.
 //
+// M5: a request the device has not answered within kAnswerTimeoutMs is
+// given up with a plain answer ("The <device> did not answer. Try
+// again."), so "Waiting for its answer." never stays forever; a late
+// answer to it is ignored.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-47, R-R3-22). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  A fixed network setting needs an address
+//                                    and a netmask; a request with no answer
+//                                    times out (R-R3-47). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "models/AccessorySettingsModel.h"
@@ -49,6 +58,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QTimer>
 
 #include <functional>
 
@@ -70,7 +80,15 @@ public:
         std::function<quint32()> save;
     };
 
+    /// M5: how long the Core waits for the device's answer to a request.
+    static constexpr qint64 kAnswerTimeoutMs = 10000;
+
     StationDeviceSettings(Device device, Wire wire, QObject* parent = nullptr);
+
+    /// M5, tests: the clock (ms) the Core reads to time requests, and the
+    /// check its timer runs once a second while a request waits.
+    void setClockForTesting(std::function<qint64()> now) { m_now = std::move(now); }
+    void checkTimeouts();
 
     /// Where the Core publishes the device's settings and answers.
     void setModel(AccessorySettingsModel* model);
@@ -119,6 +137,7 @@ private:
         QString address;
         QString netmask;
         QString gateway;
+        qint64 sentAtMs{0};
     };
 
     QString deviceName() const;
@@ -135,6 +154,8 @@ private:
     Wire m_wire;
     QPointer<AccessorySettingsModel> m_model;
     QHash<quint32, Pending> m_pending;
+    std::function<qint64()> m_now;
+    QTimer m_timeoutTimer;
 };
 
 } // namespace NereusSDR
