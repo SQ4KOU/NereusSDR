@@ -108,7 +108,7 @@ struct TciClientSession {
     // R-R3-42 fix wave: one resampler per channel, created and destroyed
     // together. A single one run over interleaved L/R mixed the channels at
     // every rate other than 48 kHz.
-    // From Thetis TCIServer.cs:702-708 [v2.10.3.15] — TCIRxAudioResamplerState
+    // From Thetis TCIServer.cs:702-708 [v2.10.3.15]: TCIRxAudioResamplerState
     // holds a LeftResampler and a RightResampler per receiver.
     struct RxAudioResamplers {
         void* left = nullptr;

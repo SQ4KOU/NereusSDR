@@ -1663,10 +1663,10 @@ QWebSocket* TciServer::activeTxAudioClient() const
 //
 // R-R3-42 fix wave: one resampler per channel, created and destroyed
 // together, so stereo keeps its left and right apart at every client rate.
-// From Thetis TCIServer.cs:1022-1023 [v2.10.3.15] — resampleRxAudioSamples:
+// From Thetis TCIServer.cs:1022-1023 [v2.10.3.15], resampleRxAudioSamples:
 //   state.LeftResampler = (IntPtr)WDSP.create_resampleFV(inputRate, targetRate);
 //   state.RightResampler = (IntPtr)WDSP.create_resampleFV(inputRate, targetRate);
-// and TCIServer.cs:945-962 [v2.10.3.15] — destroyRxAudioResamplerState
+// and TCIServer.cs:945-962 [v2.10.3.15]: destroyRxAudioResamplerState
 // destroys both.
 // create_resampleFV(in_rate, out_rate) — from resample.c:342-344 [WDSP v1.29]:
 //   return (void *)create_resampleF(1, 0, 0, 0, in_rate, out_rate);
@@ -2097,7 +2097,7 @@ void TciServer::stopUnavailableReceiver(int rx)
         // The app whose audio_start is being answered right now was never
         // told the stream started; every other one was.
         if (session.get() != m_subscribingSession) {
-            // From Thetis TCIServer.cs:5891-5906 [v2.10.3.13] — the stop
+            // From Thetis TCIServer.cs:5891-5906 [v2.10.3.13]: the stop
             // notice an app gets for audio_stop (sendAudioStartStop).
             session->sendQueue.push(TciSendQueue::Priority::Control,
                                     QStringLiteral("audio_stop:%1;").arg(rx));

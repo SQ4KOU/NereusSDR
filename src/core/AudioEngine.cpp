@@ -1711,7 +1711,7 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
 
     if (vaxValid) {
         const int vaxIdx = vaxCh - 1;
-        // Distinct from `mix` scratch below — that one is reserved for the
+        // Distinct from `mix` scratch below: that one is reserved for the
         // master-mix accumulate path. Grows once per thread via resize(),
         // zero-alloc thereafter.
         static thread_local std::vector<float> vaxScratch;
@@ -1720,7 +1720,7 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
             vaxScratch.resize(static_cast<size_t>(stereoFloats));
         }
         // Mute wins over gain: when muted the channel's block is taken and
-        // not pushed — spec says "tags / level UI still reflect routing,
+        // not pushed; spec says "tags / level UI still reflect routing,
         // but no downstream audio". Taking it keeps the mix in step.
         const bool muted = m_vaxMuted[vaxIdx].load(std::memory_order_acquire);
         // Snapshot the bus pointer into a local so the isOpen() check
