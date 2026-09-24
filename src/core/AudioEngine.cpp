@@ -1588,6 +1588,18 @@ std::optional<bool> AudioEngine::vaxOutputHasReader(int channel)
     return bus->outputHasReader();
 }
 
+void AudioEngine::configureSpeakersConverter()
+{
+    // Caller holds m_speakersBusMutex. A closed or missing bus leaves the
+    // converter passing through (nothing is pushed to it anyway).
+    if (m_speakersBus) {
+        const AudioFormat format = m_speakersBus->negotiatedFormat();
+        m_speakersConverter.configure(format.sampleRate, format.channels);
+    } else {
+        m_speakersConverter.configure(0, 0);
+    }
+}
+
 #ifdef NEREUS_BUILD_TESTS
 void AudioEngine::setVaxBusForTest(int channel, std::unique_ptr<IAudioBus> bus)
 {
@@ -1603,18 +1615,6 @@ void AudioEngine::setSpeakersBusForTest(std::unique_ptr<IAudioBus> bus)
     std::lock_guard<std::mutex> lk(m_speakersBusMutex);
     m_speakersBus = std::move(bus);
     configureSpeakersConverter();
-}
-
-void AudioEngine::configureSpeakersConverter()
-{
-    // Caller holds m_speakersBusMutex. A closed or missing bus leaves the
-    // converter passing through (nothing is pushed to it anyway).
-    if (m_speakersBus) {
-        const AudioFormat format = m_speakersBus->negotiatedFormat();
-        m_speakersConverter.configure(format.sampleRate, format.channels);
-    } else {
-        m_speakersConverter.configure(0, 0);
-    }
 }
 
 void AudioEngine::setHeadphonesBusForTest(std::unique_ptr<IAudioBus> bus)
