@@ -144,7 +144,7 @@ void CatTciServerPage::buildUI()
 
 // ---------------------------------------------------------------------------
 // Group 1: Server
-// Controls: Enable / Bind IP (read-only 127.0.0.1) / Port + Default button /
+// Controls: Enable / Listen on (address dropdown) / Port + Default button /
 //           Send initial state / Rate limit / Show Log button / Status line.
 // AppSettings: TciServerEnabled, TciServerPort, TciSendInitialFrequencyStateOnConnect,
 //              TciRateLimitMsgsPerSec.
@@ -183,14 +183,14 @@ void CatTciServerPage::buildServerGroup()
     });
     form->addRow(QString(), m_enableCheck);
 
-    // ── Bind address dropdown ───────────────────────────────────────────────
+    // ── "Listen on:" address dropdown ───────────────────────────────────────
     //
     // Phase 3J-1 closeout Item 1 (2026-05-12): replaces the read-only
     // "127.0.0.1" label with an interface-aware dropdown.  Operator can
-    // pick:
-    //   - "Loopback only (127.0.0.1)" — default; safest
-    //   - "Any IPv4 interface (0.0.0.0)" — exposes server to LAN
-    //   - A specific detected NIC (e.g. "en0 — 192.168.1.50")
+    // pick (labels reworded 2026-09-24, R-R3-21):
+    //   - "This computer only (127.0.0.1)": default; safest
+    //   - "Any IPv4 address (0.0.0.0), open to your network"
+    //   - A specific detected NIC (e.g. "en0 (192.168.1.50)")
     //   - IPv6 equivalents
     //
     // Functional parity with Thetis Setup.cs:22410-22473 [v2.10.3.13]
@@ -734,11 +734,11 @@ void CatTciServerPage::buildVfoQuirksGroup()
 // Phase 3J-1 closeout Item 1 (2026-05-12): enumerate bindable interfaces
 // via QNetworkInterface::allInterfaces() and add one combo entry per
 // detected non-loopback IPv4 (and IPv6) NIC, plus the well-known options:
-//   - Loopback only (127.0.0.1)         ← default
-//   - Any IPv4 interface (0.0.0.0)
+//   - This computer only (127.0.0.1)                     ← default
+//   - Any IPv4 address (0.0.0.0), open to your network
 //   - <detected non-loopback IPv4 NICs>
-//   - Loopback IPv6 (::1)
-//   - Any IPv6 interface (::)
+//   - This computer only, IPv6 (::1)
+//   - Any IPv6 address (::), open to your network
 //   - <detected non-loopback IPv6 NICs>
 //
 // Each entry's data() carries the bindable address string used by
