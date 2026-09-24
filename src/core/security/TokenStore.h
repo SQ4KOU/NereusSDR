@@ -123,6 +123,10 @@ public:
     // Empty when isValid() is false.
     QString token() const { return m_token; }
 
+    // iPhone app Task 12: true while a token is loaded and not retired, so
+    // a window can still sign in with it (DeviceStore::isClaimed()).
+    bool isActive() const { return m_valid && !m_token.isEmpty(); }
+
     // Absolute path this instance loads from / writes to. Always
     // populated, derived from the constructor's directory argument,
     // regardless of isValid().

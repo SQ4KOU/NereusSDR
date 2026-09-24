@@ -1195,6 +1195,15 @@ list(APPEND CORE_SOURCES src/core/security/TokenStore.cpp)
 # available to compile.
 list(APPEND CORE_SOURCES src/core/security/CertificateStore.cpp)
 
+# iPhone app Task 12 (R-IOS-08): the Core's own P-256 identity key, its
+# label, its paired devices and device sign-in. OpenSSL libcrypto, as
+# CertificateStore above.
+list(APPEND CORE_SOURCES
+    src/core/security/StationIdentity.cpp
+    src/core/security/StationLabel.cpp
+    src/core/security/DeviceStore.cpp
+)
+
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the
 # NereusSDRVAX HAL plugin via POSIX shared memory. The header is
 # cross-platform-safe (falls through to error stubs off macOS) but the .cpp

@@ -7192,6 +7192,13 @@ nereus_add_test(tst_notch_visual_does_not_perturb_noise_floor_or_maxbin)
 # runner that happened to lack OpenSSL.
 nereus_add_test(tst_certificate_store)
 
+# iPhone app Task 12 (R-IOS-08, R-IOS-02): the Core's identity key (created
+# once, mode 0600, reused), its label rules, and the paired-device store
+# (well-formed records only, 0600, failing closed on a damaged file).
+nereus_add_test(tst_station_identity)
+nereus_add_test(tst_station_label)
+nereus_add_test(tst_device_store)
+
 # Remote Daemon R2, Task 18: the wss session. Everything tasks 7 through 17
 # built converges here -- StateMirror, ObjectRegistry,
 # SessionCommandDispatcher and SettingsProxyServer on a socket, behind Task
