@@ -18,6 +18,10 @@
 //                GEN/WWV/XVTR slots default to Ant 1. Block-TX safety
 //                (blockTxAnt2/3) added as NereusSDR-native UI contract
 //                on top of the core Thetis model.
+//   2026-09-24 : R-R3-46 / R-R3-21: bpfModeChanged, so a filter policy
+//                change is saved for the radio at once. NereusSDR-original
+//                (the per-ADC BPF policy has no Thetis equivalent). J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Alex.cs header (lines 1-23) ===
@@ -178,6 +182,10 @@ public:
 
 signals:
     void bpfStateChanged(int adc, const AlexController::AlexAdcState& state);
+    /// R-R3-46 / R-R3-21: setBpfMode changed `adc`'s operator policy. Fires
+    /// even when the effective state did not change (a wideband chain), so
+    /// the policy is saved and published whatever it does to the filter.
+    void bpfModeChanged(int adc);
     void antennaChanged(Band band);  // fires on any per-band assignment mutation
     void blockTxChanged();           // fires when blockTxAnt2 or blockTxAnt3 changes
     void rxOutOnTxChanged(bool on);

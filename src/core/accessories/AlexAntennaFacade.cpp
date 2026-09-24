@@ -377,7 +377,6 @@ QString AlexAntennaFacade::setBpfModeForChain(int chain, int mode)
     if (c->bpfMode(chain) != wanted) {
         return QStringLiteral("The Core kept this chain's filter policy.");
     }
-    emit bpfModeApplied(chain);
     return {};
 }
 

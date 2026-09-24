@@ -414,7 +414,7 @@ private slots:
         local.notifySlicesOnAdc(0, slices);
         AlexAntennaFacade f;
         f.bindController(&core);
-        QSignalSpy applied(&f, &AlexAntennaFacade::bpfModeApplied);
+        QSignalSpy applied(&core, &AlexController::bpfModeChanged);
 
         for (const auto mode : {AlexController::BpfMode::ForceBypass,
                                 AlexController::BpfMode::ForceBand,
@@ -440,7 +440,7 @@ private slots:
         QCOMPARE(applied.last().at(0).toInt(), 1);
 
         // A wideband chain stays bypassed, but its policy still changes and
-        // is still announced (so the Core saves and publishes it).
+        // is still announced (so the Core saves it).
         core.setWidebandActive(1, true);
         const int before = applied.count();
         QCOMPARE(f.setBpfModeForChain(1, int(AlexController::BpfMode::ForceBand)), QString());
@@ -456,7 +456,7 @@ private slots:
         AlexController core;
         AlexAntennaFacade f;
         f.bindController(&core);
-        QSignalSpy applied(&f, &AlexAntennaFacade::bpfModeApplied);
+        QSignalSpy applied(&core, &AlexController::bpfModeChanged);
         for (const auto& [chain, mode] : {std::pair{2, 1}, std::pair{-1, 1},
                                            std::pair{0, 3}, std::pair{0, -1}}) {
             const QString reason = f.setBpfModeForChain(chain, mode);

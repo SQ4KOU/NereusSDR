@@ -1814,6 +1814,11 @@ nereus_add_test(tst_alex_per_adc_bpf_wire)
 # NereusSDR-original: no Thetis port.
 nereus_add_test(tst_alex_bpf_policy_push)
 
+# R-R3-46 / R-R3-21: a local window's filter policy change is saved for its
+# radio at once, read back from a private settings file.
+# NereusSDR-original: no Thetis port.
+nereus_add_test(tst_local_filter_policy_persistence)
+
 # ── RF-safety: the Alex TX low-pass is selected from the TRANSMIT frequency ───
 # P2RadioConnection::setReceiverFrequency used to recompute the LPF from the
 # receive frequency it was handed, and both Alex words read that one mask, so
