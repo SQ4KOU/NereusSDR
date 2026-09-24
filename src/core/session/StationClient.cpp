@@ -2728,7 +2728,7 @@ StationClient::CommandOutcome StationClient::sendCommand(const QByteArray& verb,
         }
     }
     m_pendingCommands.insert(id, pending);
-    return CommandOutcome{ true, QString() };
+    return CommandOutcome{ true, QString(), id };
 }
 
 StationClient::CommandOutcome StationClient::requestAddSlice(const QString& initialPanId)
@@ -3217,7 +3217,7 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             // L1 (R-R3-47, R-R3-22, R-R3-48): an accessory refusal has its
             // own route (the pages that sent it show it; MainWindow says
             // it), never the slice one.
-            m_radioModel->reportStationAccessoryRefusal(device, reason);
+            m_radioModel->reportStationAccessoryRefusal(device, reason, message.commandId);
         } else {
             m_radioModel->reportStationSliceCommandRejected(reason);
         }
@@ -3228,6 +3228,12 @@ void StationClient::handleCommandResult(const SessionMessage& message)
                 alex->reportBandEditRefused();
             }
         }
+    }
+
+    // Follow-up 3: an accepted accessory request no page needs to claim.
+    if (message.accepted && !m_radioModel.isNull()
+        && !accessoryRefusalDevice(pending.verb, pending.faultsDevice).isEmpty()) {
+        m_radioModel->forgetAccessoryRequest(message.commandId);
     }
 
     const bool isCtunCommand = pending.verb == "requestStreamCtunPinned"

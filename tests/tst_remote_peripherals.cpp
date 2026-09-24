@@ -1886,9 +1886,14 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     // and a request says why in the Core's words.
     QVERIFY(!page.applyNetworkButtonForTesting()->isEnabled());
     QVERIFY(!page.revertButtonForTesting()->isEnabled());
+    QSignalSpy offlineRefused(&window, &RadioModel::accessoryRequestRefused);
     editName(page.nicknameEditForTesting(), QStringLiteral("Offline"));
     QTRY_COMPARE(page.deviceAnswerForTesting(),
                  QStringLiteral("The Core is not connected to the Power Genius."));
+    // Follow-up 3: shown on the page that sent it, so not toasted too.
+    QCOMPARE(offlineRefused.count(), 1);
+    QCOMPARE(offlineRefused.first().size(), 3);
+    QVERIFY(offlineRefused.first().at(2).toBool());
     QVERIFY(OperatorWording::isPlain(page.deviceAnswerForTesting()));
 
     QVERIFY(admitCoreAmp(station, amp));
@@ -2297,6 +2302,9 @@ void RemotePeripheralsTest::accessoryRefusalsNeverReachTheSliceToast()
         QVERIFY(one.send().sent);
         QTRY_COMPARE(refused.count(), 1);
         QCOMPARE(refused.first().at(0).toString(), QString::fromLatin1(one.device));
+        // Follow-up 3: sent by no page, so MainWindow toasts it.
+        QCOMPARE(refused.first().size(), 3);
+        QVERIFY(!refused.first().at(2).toBool());
         QVERIFY(OperatorWording::isPlain(
             OperatorReasonText::forDisplay(refused.first().at(1).toString())));
     }
@@ -2337,9 +2345,14 @@ void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
 
     // Reset amp error with no amp at the Core: the Core's words, nothing sent.
     QSignalSpy sliceToast(&window, &RadioModel::sliceAddRejected);
+    QSignalSpy accessoryRefused(&window, &RadioModel::accessoryRequestRefused);
     page.resetErrorButtonForTesting()->click();
     QTRY_VERIFY(page.liveStatusTextForTesting().contains(
         QStringLiteral("The Core is not connected to the RF-Kit amplifier.")));
+    // Follow-up 3: the page that sent it shows it, so it is not toasted too.
+    QCOMPARE(accessoryRefused.count(), 1);
+    QCOMPARE(accessoryRefused.first().size(), 3);
+    QVERIFY(accessoryRefused.first().at(2).toBool());
     QVERIFY(OperatorWording::isPlain(page.liveStatusTextForTesting()));
     QCOMPARE(sliceToast.count(), 0);
 

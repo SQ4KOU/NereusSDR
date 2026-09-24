@@ -154,7 +154,8 @@
 //                (resetRfKitErrorForStation) and a window's RF-Kit
 //                auto-reconnect and poll interval applied at once; the
 //                station TCI controller and RF-Kit band follow owned by
-//                std::unique_ptr, not raw delete.
+//                std::unique_ptr, not raw delete; a refusal the page that
+//                sent it shows is marked shownOnPage.
 //                NereusSDR-original; no Thetis logic. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
 // =================================================================
@@ -4530,12 +4531,26 @@ void RadioModel::reportStationSliceCommandRejected(const QString& reason)
     emit sliceAddRejected(reason);
 }
 
-void RadioModel::reportStationAccessoryRefusal(const QString& device, const QString& reason)
+void RadioModel::reportStationAccessoryRefusal(const QString& device, const QString& reason,
+                                               quint32 commandId)
 {
     if (m_role != Role::Remote) {
         return;
     }
-    emit accessoryRequestRefused(device, reason);
+    const bool shownOnPage = commandId != 0 && m_pageShownAccessoryRequests.remove(commandId);
+    emit accessoryRequestRefused(device, reason, shownOnPage);
+}
+
+void RadioModel::noteAccessoryRequestShownOnPage(quint32 commandId)
+{
+    if (commandId != 0) {
+        m_pageShownAccessoryRequests.insert(commandId);
+    }
+}
+
+void RadioModel::forgetAccessoryRequest(quint32 commandId)
+{
+    m_pageShownAccessoryRequests.remove(commandId);
 }
 
 void RadioModel::reportStationRetuneRejected(int sliceId, const QString& reason)

@@ -478,6 +478,8 @@ void TgxlAdvancedPage::buildIdentitySection(QVBoxLayout* topLay)
             const IStationLink::CommandOutcome outcome = link
                 ? link->requestTgxlName(m_nickname->text().trimmed())
                 : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+            // Follow-up 3: this page shows the Core's refusal; no toast too.
+            m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
             showRemoteOutcome(outcome.sent, outcome.reason);
             return;
         }
@@ -730,6 +732,8 @@ void TgxlAdvancedPage::buildFaultHistorySection(QVBoxLayout* topLay)
         const IStationLink::CommandOutcome outcome = link
             ? link->requestClearAccessoryFaults(QStringLiteral("tgxl"))
             : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
         if (!outcome.sent && m_remoteNote) {
             m_remoteNote->setText(OperatorReasonText::forDisplay(outcome.reason));
         }
@@ -1120,6 +1124,8 @@ void TgxlAdvancedPage::onSaveAndReboot()
         const IStationLink::CommandOutcome outcome = link
             ? link->requestTgxlSaveAndRestart()
             : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
         if (!outcome.sent) {
             showRemoteOutcome(false, outcome.reason);
             return;
@@ -1164,6 +1170,8 @@ void TgxlAdvancedPage::onRevert()
         const IStationLink::CommandOutcome outcome = link
             ? link->requestTgxlReadSettings()
             : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
         showRemoteOutcome(outcome.sent, outcome.reason);
         setPendingState(false);
         return;
@@ -1245,6 +1253,8 @@ void TgxlAdvancedPage::onApplyIfconf()
                                        m_netmaskEdit->text().trimmed(),
                                        m_gatewayEdit->text().trimmed())
             : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
         if (!outcome.sent) {
             showRemoteOutcome(false, outcome.reason);
             return;

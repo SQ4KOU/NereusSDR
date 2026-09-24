@@ -97,6 +97,10 @@ public:
     struct CommandOutcome {
         bool sent = false;
         QString reason;
+        // The request's id when sent (0 otherwise), so the page that sent
+        // it can claim the Core's refusal (RadioModel::
+        // noteAccessoryRequestShownOnPage).
+        quint32 commandId = 0;
     };
 
     /// SessionCommandDispatcher verb "addSlice", argument initialPanId.

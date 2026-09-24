@@ -76,6 +76,10 @@
 //                their own for the Core's refusals (accessoryRequestRefused).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 fix wave: resetRfKitErrorForStation; the station
+//                TCI objects owned by std::unique_ptr; accessory refusals
+//                say whether the page that sent them shows them. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -547,7 +551,14 @@ public:
     /// the device it names ("faults" for any other). Role::Remote only.
     /// Routed to accessoryRequestRefused, which MainWindow toasts and the
     /// pages that sent the request show, never to the slice toast.
-    void reportStationAccessoryRefusal(const QString& device, const QString& reason);
+    void reportStationAccessoryRefusal(const QString& device, const QString& reason,
+                                       quint32 commandId = 0);
+    /// Follow-up 3: the page that sent request `commandId` shows the Core's
+    /// refusal of it itself, so accessoryRequestRefused says shownOnPage
+    /// and MainWindow does not toast it too. 0 is ignored.
+    void noteAccessoryRequestShownOnPage(quint32 commandId);
+    /// The request was accepted: nothing to claim.
+    void forgetAccessoryRequest(quint32 commandId);
 
     /// The station refused a sample-rate change, with its own reason.
     /// Role::Remote only. Routed to sliceRetuneRejected, which carries the
@@ -3265,7 +3276,8 @@ signals:
     void sliceAddRejected(QString reason);
     /// R-R3-47 / R-R3-22: the Core refused a request for an accessory's own
     /// settings (`device` "pgxl" or "tgxl"); `reason` is the Core's words.
-    void accessoryRequestRefused(const QString& device, const QString& reason);
+    void accessoryRequestRefused(const QString& device, const QString& reason,
+                                 bool shownOnPage);
 
     /// Phase 3F Sub-Epic I closeout, defect F4: the operator retuned a slice
     /// to a frequency no DDC can reach, and the frequency has been rolled
@@ -5115,6 +5127,8 @@ private:
     // model's slices and receivers), not through Qt parenting.
     std::unique_ptr<StationTciController> m_stationTci;
     std::unique_ptr<RfKitBandFollow>      m_rfKitBandFollow;
+    // Follow-up 3: accessory requests whose refusal their page shows.
+    QSet<quint32> m_pageShownAccessoryRequests;
 
     // Phase 3P-III: RF-Kit RF2K-S connection. unique_ptr with Qt parent=this
     // so destruction order is deterministic and QObject hierarchy is intact.

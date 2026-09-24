@@ -306,6 +306,8 @@ void PgxlAdvancedPage::buildIdentitySection(QVBoxLayout* topLay)
             const IStationLink::CommandOutcome outcome = link
                 ? link->requestPgxlName(m_nickname->text().trimmed())
                 : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+            // Follow-up 3: this page shows the Core's refusal; no toast too.
+            m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
             showRemoteOutcome(outcome.sent, outcome.reason);
             return;
         }
@@ -639,6 +641,8 @@ void PgxlAdvancedPage::buildFaultHistorySection(QVBoxLayout* topLay)
             const IStationLink::CommandOutcome outcome = link
                 ? link->requestClearAccessoryFaults(QStringLiteral("pgxl"))
                 : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+            // Follow-up 3: this page shows the Core's refusal; no toast too.
+            m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
             if (!outcome.sent && m_remoteNote) {
                 m_remoteNote->setText(OperatorReasonText::forDisplay(outcome.reason));
             }
@@ -917,6 +921,8 @@ void PgxlAdvancedPage::sendRemotePowerCap()
     const IStationLink::CommandOutcome outcome = link
         ? link->requestPgxlPowerCap(m_powerCapCheck->isChecked(), m_powerCapSpin->value())
         : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+    // Follow-up 3: this page shows the Core's refusal; no toast too.
+    m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
     if (!outcome.sent) {
         refreshRemote();
         m_remoteNote->setText(OperatorReasonText::forDisplay(outcome.reason));
@@ -1118,6 +1124,8 @@ void PgxlAdvancedPage::onSaveAndReboot()
         const IStationLink::CommandOutcome outcome = link
             ? link->requestPgxlSaveAndRestart()
             : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
         if (!outcome.sent) {
             showRemoteOutcome(false, outcome.reason);
             return;
@@ -1155,6 +1163,8 @@ void PgxlAdvancedPage::onRevert()
         const IStationLink::CommandOutcome outcome = link
             ? link->requestPgxlReadSettings()
             : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
         showRemoteOutcome(outcome.sent, outcome.reason);
         setPendingState(false);
         return;
@@ -1307,6 +1317,8 @@ void PgxlAdvancedPage::onApplyIfconf()
                                        m_netmaskEdit->text().trimmed(),
                                        m_gatewayEdit->text().trimmed())
             : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
         if (!outcome.sent) {
             showRemoteOutcome(false, outcome.reason);
             return;
@@ -1393,6 +1405,8 @@ void PgxlAdvancedPage::sendRemoteHardware(const QString& setting, const QString&
     const IStationLink::CommandOutcome outcome = link
         ? link->requestPgxlHardware(setting, value)
         : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+    // Follow-up 3: this page shows the Core's refusal; no toast too.
+    m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
     if (!outcome.sent) {
         showRemoteOutcome(false, outcome.reason);
         return;

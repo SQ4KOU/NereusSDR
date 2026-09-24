@@ -707,10 +707,13 @@ its log.
 The desktop app shows the Core's refusal of any accessory command in this
 document (the Power Genius, Tuner Genius and RF-Kit commands, the
 interlock, output limit and fault history commands, `setStationTci` and
-`setFourO3AEnabled`) as an accessory notice, never as a slice notice; the
-page that sent it (the Advanced pages, the interlock page) also shows it
-and keeps the Core's values. An unrelated slice refusal does not touch
-those pages.
+`setFourO3AEnabled`) on its own accessory route, never as a slice notice.
+A refusal of a request sent by the Power Genius, Tuner Genius or RF-Kit
+page shows on that page only (with the Core's values kept); any other
+accessory refusal (from the interlock page, the Peripherals and 4O3A
+pages, an applet, the TCI switch) shows as a notice, and the interlock
+page also reloads the Core's policy. An unrelated slice refusal does not
+touch those pages.
 
 Property writes:
 

@@ -366,6 +366,8 @@ void RfKitPage::onResetErrorClicked()
         IStationLink* link = m_model->stationLink();
         const auto outcome = link ? link->requestResetRfKitError()
             : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
         m_remoteResult = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
         refreshLiveStatus();
         return;
@@ -383,6 +385,8 @@ void RfKitPage::onConnectClicked()
         if (!link) { return; }
         const auto outcome = link->requestConfigureRfKit(
             m_hostEdit->text().trimmed(), static_cast<quint16>(m_portSpin->value()));
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
         m_remoteResult = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
         refreshLiveStatus();
         return;
@@ -401,6 +405,8 @@ void RfKitPage::onDisconnectClicked()
         IStationLink* link = m_model->stationLink();
         if (!link) { return; }
         const auto outcome = link->requestDisconnectRfKit();
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
         m_remoteResult = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
         refreshLiveStatus();
         return;
@@ -602,6 +608,8 @@ void RfKitPage::onMasterToggled(bool checked)
         IStationLink* link = m_model->stationLink();
         const auto outcome = link ? link->requestRfKitEnabled(checked)
             : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId);
         m_remoteResult = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
         if (!outcome.sent && m_master) {
             const QSignalBlocker block(m_master);
