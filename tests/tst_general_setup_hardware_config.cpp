@@ -93,12 +93,13 @@ void TestGeneralSetupHardwareConfig::chkNetworkWDT_present_defaultChecked()
     QVERIFY2(chk, "chkNetworkWDT not found");
     QCOMPARE(chk->text(), QString("Network Watchdog"));
     // R-R3-49: the tooltip says what the box does in NereusSDR (the wait
-    // before the radio is treated as lost), not Thetis's wording, since the
-    // radio's own safety timer stays on either way.
+    // before the radio is treated as lost), not Thetis's wording, and claims
+    // the safety timer only where it is established (P2 radios and HL2).
     QCOMPARE(chk->toolTip(),
              QString("How long NereusSDR waits for data from the radio before it treats "
-                     "the radio as lost. On: three seconds. Off: it keeps waiting. The "
-                     "radio's own safety timer stays on either way."));
+                     "the radio as lost. On: three seconds. Off: it keeps waiting. On a "
+                     "Hermes Lite 2, or a radio on the newer network link, the radio's "
+                     "own safety timer stays on either way."));
     QVERIFY(OperatorWording::isPlain(chk->toolTip()));
     QVERIFY2(chk->isChecked(), "chkNetworkWDT must default to checked");
 }

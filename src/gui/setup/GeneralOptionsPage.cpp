@@ -366,10 +366,15 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
     // inactive." (setup.designer.cs:8442 [v2.10.3.15]). NereusSDR keeps the
     // radio's own safety timer on whatever this box says (operator decision
     // 2026-09-24, R-R3-49), so the tooltip says what the box does here.
+    // That is shown only for P2 radios (byte 38 is always 1) and the Hermes
+    // Lite 2 (its start packet never turns the timer off), so the tooltip
+    // names only those; "protocol" is not an operator word, so P2 is "the
+    // newer network link".
     m_chkNetworkWDT->setToolTip(
         tr("How long NereusSDR waits for data from the radio before it treats "
-           "the radio as lost. On: three seconds. Off: it keeps waiting. The "
-           "radio's own safety timer stays on either way."));
+           "the radio as lost. On: three seconds. Off: it keeps waiting. On a "
+           "Hermes Lite 2, or a radio on the newer network link, the radio's "
+           "own safety timer stays on either way."));
     // Default ON — first-launch loads "True"
     m_chkNetworkWDT->setChecked(
         s.value(QStringLiteral("NetworkWatchdogEnabled"), QStringLiteral("True")).toString() == QStringLiteral("True"));
