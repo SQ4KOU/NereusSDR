@@ -2185,9 +2185,9 @@ private slots:
     // ====================================================================
     // R-R3-21: Setup leaves declared unavailable in a remote session.
     //
-    // Hardware Config and DDC Routing act on this computer's own radio
-    // connection: on a remote model currentRadioChanged never fires, so
-    // HardwarePage never learns a MAC and drops every edit. RF-Kit
+    // Hardware Config and DDC Routing change the radio's hardware settings,
+    // which a remote window cannot do yet (HardwarePage drops every edit
+    // there, R-R3-46). RF-Kit
     // connects this computer's own amplifier socket. None reaches local
     // DSP, so the resource audit does not catch them; they are declared.
     // ====================================================================

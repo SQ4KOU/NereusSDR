@@ -989,10 +989,11 @@ void SetupDialog::buildTree()
     // SetupDialog so MainWindow's wireSetupDialog() can connect it to
     // setVoltsAmpsVisible().
     //
-    // R-R3-21: both Hardware leaves act on this computer's own radio
-    // connection. On a remote model currentRadioChanged never fires, so the
-    // tabs never learn a MAC and HardwarePage::onTabSettingChanged drops
-    // every edit; the DDC Routing keys are per-MAC too.
+    // R-R3-21: both Hardware leaves act on the radio's hardware settings.
+    // R-R3-46: a remote window's tabs now show the Core's radio, but
+    // HardwarePage::onTabSettingChanged still drops every edit there (the
+    // Core applies hardware changes through its own controllers, not raw
+    // keys); the DDC Routing keys are per-MAC too.
     const QString hardwareReason = tr(
         "The radio's hardware settings cannot be changed from a remote window yet.");
     QTreeWidgetItem* const hardwareConfigLeaf =
