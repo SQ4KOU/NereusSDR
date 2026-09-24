@@ -8,6 +8,13 @@
 // is involved; the thresholds are first estimates to revisit with
 // measurements on the Core hardware.
 //
+// Modification history (NereusSDR):
+//   2026-09-23 - Late blocks no longer keep a reading from counting as
+//                 calm: frame-based noise reduction makes them as a normal
+//                 part of its work. By J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code (R-R3-37,
+//                 R-R3-40).
+//
 // =================================================================
 
 #pragma once
@@ -26,10 +33,14 @@ namespace NereusSDR {
 struct DisplayLoadReading {
     qint64 nowMs = 0;
     /// Highest load among receivers that processed input in their latest
-    /// interval (a block's time over its period). Idle receivers are left
-    /// out: idle is not proof of no load. nullopt: no receiver measured.
+    /// interval (the share of wall time the worker spent inside blocks,
+    /// ReceiverDspLoad::load). Idle receivers are left out: idle is not
+    /// proof of no load. nullopt: no receiver measured.
     std::optional<double> highestReceiverLoad;
     /// Late blocks summed over the measured receivers' latest intervals.
+    /// A diagnostic only: frame-based noise reduction makes late blocks as
+    /// a normal part of its work, so they neither make a reading busy nor
+    /// keep it from being calm.
     qint64 lateBlocks = 0;
     /// Longest input wait among the measured receivers' latest batches.
     qint64 highestInputDelayMs = 0;
@@ -56,8 +67,9 @@ struct DisplayLoadDecision {
 /// Busy (highest receiver load >= kBusyReceiverLoad or system CPU >=
 /// kBusySystemCpuPercent) held for kBusyHoldMs steps the limits down to
 /// kStepDownScale of what is accepted now, never below floorCharge(). Calm
-/// (every measurement under the calm thresholds, no late block, input wait
-/// under kCalmInputDelayMs) held for kCalmHoldMs undoes one step. Readings
+/// (every measurement under the calm thresholds, input wait under
+/// kCalmInputDelayMs; late blocks do not count) held for kCalmHoldMs undoes
+/// one step. Readings
 /// in between hold. Every change carries the next limits generation; the
 /// reason is CoreBusy while any step is in force.
 ///

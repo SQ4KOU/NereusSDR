@@ -301,6 +301,13 @@ if(TARGET wdsp_static)
         # R-R3-41: linux_port.c's thread-start hook fires once per channel
         # worker and flush thread, on that thread, with its kind and channel.
         nereus_add_test(tst_wdsp_thread_hook EXTRA_LABELS core)
+        # R-R3-40, R-R3-37: a real receive channel at the Core's settings,
+        # fed in real time, reads its load as busy time over wall time: a
+        # frame-like load (one long block in 12) reads its CPU share and
+        # never trips the NNR step-back; a real overload still does. Needs
+        # the thread-start hook for the worker's CPU clock, so not on
+        # Windows. Real time, about 45 s.
+        nereus_add_test(tst_receiver_dsp_load_frames EXTRA_LABELS core)
     endif()
     nereus_add_test(tst_wdsp210_cfc_compat WdspCfcProbe.c EXTRA_LABELS core)
     set_source_files_properties(WdspCfcProbe.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

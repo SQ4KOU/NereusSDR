@@ -6002,6 +6002,7 @@ void RadioModel::sampleReceiverDspLoad()
             reading.lifetimeMaxBlockUs = counters.maxBlockUs;
             reading.blockPeriodUs      = counters.blockPeriodUs;
             reading.currentBlockNs     = counters.currentBlockNs;
+            reading.readNs             = counters.readNs;
             reading.intervalMaxBlockUs = channel->takeDspIntervalMaxBlockUs();
             if (m_dspWorker) {
                 const RxDspWorker::InputDelayStats input =

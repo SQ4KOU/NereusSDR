@@ -22,6 +22,8 @@
 //                 NereusSDR-original; no Thetis counterpart. Later the same
 //                 day: the block in progress and the per-interval longest
 //                 block (takeDspIntervalMaxBlockUs).
+//                 Later the same day: the read time (readNs), so a load
+//                 reads busy time over wall time (R-R3-40, R-R3-37).
 // =================================================================
 
 //=================================================================
@@ -901,6 +903,10 @@ public:
         // How long the block in progress has run so far; 0 when the worker
         // is not inside a block. Not cumulative.
         qint64 currentBlockNs{0};
+        // When the read was taken (WDSP's monotonic clock, the same read
+        // that gave currentBlockNs). busyNs + currentBlockNs is the worker's
+        // time inside blocks up to readNs.
+        qint64 readNs{0};
     };
 
     // Reads the counters without the channel's DSP lock, so it never waits

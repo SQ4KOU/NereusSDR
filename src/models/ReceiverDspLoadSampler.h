@@ -18,6 +18,10 @@
 //                 implementation via Anthropic Claude Code.
 //                 Later the same day: the first reading for a slice only
 //                 seeds its baseline, and forget() drops a removed slice.
+//                 Later the same day: the load is busy time over wall time
+//                 between two reads (readNs), so a long block in progress
+//                 counts only for the time it has run (R-R3-40, R-R3-37;
+//                 docs/architecture/2026-09-23-r3-receiver-load-hotfix-plan.md).
 // =================================================================
 
 #pragma once
@@ -31,11 +35,15 @@ namespace NereusSDR {
 
 // One receiver's DSP load over the latest sampling interval.
 struct ReceiverDspLoad {
-    // Mean WDSP worker block time / block period over the interval.
-    // 1.0 = cannot keep up. When the worker is still inside a block that has
-    // run longer than one block period, or finished no block while inside
-    // one, it is at least that block's time so far / block period, so a
-    // worker stuck in one long block never reads as unloaded.
+    // The share of wall time the WDSP worker spent inside blocks over the
+    // interval: the change in busyNs + currentBlockNs over the change in
+    // readNs between two readings. A block still running counts only for
+    // the time it has run, so a worker stuck in one long block reads about
+    // 1.0 (never unloaded, never more), and frame-based work that makes one
+    // long block in several reads its real share, not that block's length
+    // over one period. 1.0 = the worker never left its blocks: it cannot
+    // keep up. Uniform blocks read mean block time / block period, as
+    // before.
     double load{0.0};
     // True when the worker finished no block in the interval and is not
     // inside one. load is 0.0 then.
@@ -46,7 +54,9 @@ struct ReceiverDspLoad {
     // like a receiver with no input. A reader deciding whether processing
     // is too heavy must treat idle as "not measured", never as "unloaded".
     bool idle{false};
-    // Worker blocks longer than their block period, finished in the interval.
+    // Worker blocks longer than their block period, finished in the
+    // interval. A diagnostic only: frame-based noise reduction makes late
+    // blocks as a normal part of its work, so they are not overload.
     qint64 lateBlocks{0};
     // Longest block finished in the interval, or the block still in progress
     // if it has already run longer.
@@ -77,6 +87,8 @@ public:
         int    blockPeriodUs{0};
         // The block in progress so far; 0 between blocks.
         qint64 currentBlockNs{0};
+        // When the counters were read (RxChannel::DspLoadCounters::readNs).
+        qint64 readNs{0};
         // Longest block finished since the previous sample
         // (RxChannel::takeDspIntervalMaxBlockUs).
         qint64 intervalMaxBlockUs{0};
@@ -111,6 +123,10 @@ private:
         qint64 blocks{0};
         qint64 busyNs{0};
         qint64 lateBlocks{0};
+        // busyNs + currentBlockNs at readNs: the worker's time inside
+        // blocks up to that read.
+        qint64 busyToReadNs{0};
+        qint64 readNs{0};
     };
 
     static ReceiverDspLoad compute(const Reading& now, const Baseline& previous);

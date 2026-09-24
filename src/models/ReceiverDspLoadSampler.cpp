@@ -8,6 +8,10 @@
 //   2026-09-23 - Created by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code (R-R3-40).
 //                 Later the same day: first-reading baseline and forget().
+//                 Later the same day: busy time over wall time between two
+//                 reads replaces mean block / period and the "time so far
+//                 over one period" rule for a late block in progress
+//                 (R-R3-40, R-R3-37).
 // =================================================================
 
 #include "models/ReceiverDspLoadSampler.h"
@@ -22,7 +26,6 @@ ReceiverDspLoad ReceiverDspLoadSampler::compute(const Reading& now,
     ReceiverDspLoad out;
     const qint64 blocks = now.blocks - previous.blocks;
     const qint64 currentBlockUs = now.currentBlockNs / 1000;
-    const double periodUs = static_cast<double>(now.blockPeriodUs);
 
     out.lateBlocks = now.lateBlocks - previous.lateBlocks;
     out.maxBlockUs = std::max(now.intervalMaxBlockUs, currentBlockUs);
@@ -34,21 +37,17 @@ ReceiverDspLoad ReceiverDspLoadSampler::compute(const Reading& now,
         out.idle = true;
         return out;
     }
-    if (periodUs <= 0.0) {
+    // Busy time over wall time. Each read's busyNs + currentBlockNs is the
+    // worker's time inside blocks up to its readNs (dsplock.c reads them as
+    // one instant's pair), so the difference is the time it spent inside
+    // blocks during the interval, counting a block still running only for
+    // the part of it that fell in the interval.
+    const qint64 wallNs = now.readNs - previous.readNs;
+    if (wallNs <= 0) {
         return out;
     }
-
-    if (blocks > 0) {
-        const double meanBlockUs =
-            static_cast<double>(now.busyNs - previous.busyNs) / 1000.0 / blocks;
-        out.load = meanBlockUs / periodUs;
-    }
-    // A block still running counts once it is already late, or when it is
-    // the only work in the interval: its time so far is a floor on its
-    // length, so a stuck worker reads as overloaded, never as unloaded.
-    if (currentBlockUs > 0 && (blocks <= 0 || currentBlockUs > now.blockPeriodUs)) {
-        out.load = std::max(out.load, currentBlockUs / periodUs);
-    }
+    const qint64 busyNs = (now.busyNs + now.currentBlockNs) - previous.busyToReadNs;
+    out.load = static_cast<double>(std::max<qint64>(0, busyNs)) / static_cast<double>(wallNs);
     return out;
 }
 
@@ -61,7 +60,8 @@ void ReceiverDspLoadSampler::update(const QHash<int, Reading>& readings)
 
     for (auto it = readings.constBegin(); it != readings.constEnd(); ++it) {
         const Reading& now = it.value();
-        const Baseline current{now.blocks, now.busyNs, now.lateBlocks};
+        const Baseline current{now.blocks, now.busyNs, now.lateBlocks,
+                               now.busyNs + now.currentBlockNs, now.readNs};
         baselines.insert(it.key(), current);
         const auto previous = m_baselines.constFind(it.key());
         // The first reading for a slice seeds its baseline and publishes
@@ -74,7 +74,7 @@ void ReceiverDspLoadSampler::update(const QHash<int, Reading>& readings)
         // never resets them. Should one ever do so, the interval is unknown:
         // start again from this reading rather than report a guess.
         if (now.blocks < previous->blocks || now.busyNs < previous->busyNs
-            || now.lateBlocks < previous->lateBlocks) {
+            || now.lateBlocks < previous->lateBlocks || now.readNs < previous->readNs) {
             continue;
         }
         snapshots.insert(it.key(), compute(now, *previous));

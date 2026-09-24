@@ -74,6 +74,11 @@ boydsoftprez@gmail.com
 //   2026-09-23 - Test-only WDSPGetTestLastWorkerExitWaitUs added by J.J.
 //                 Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code (R-R3-39).
+//   2026-09-23 - WdspChannelLoad::readNs, busyNs and currentBlockNs read as
+//                 one instant's pair, and the test-only periodic delay
+//                 (WDSPSetTestPeriodicDelayUs) added by J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code
+//                 (R-R3-40, R-R3-37).
 // =================================================================
 
 #ifndef _dsplock_h
@@ -98,7 +103,8 @@ void WdspWorkerStarted (int channel, int started);
 
 // The channel worker calls this at the start of a block it processes, after
 // its exec_bypass check (main.c). It runs the test-only process delay set by
-// WDSPSetTestProcessDelayUs and otherwise returns after one relaxed load.
+// WDSPSetTestProcessDelayUs and the test-only periodic delay set by
+// WDSPSetTestPeriodicDelayUs, and otherwise returns after two relaxed loads.
 void WdspWorkerTestProcessDelay (int channel);
 
 // Channel teardown (pre_main_destroy): returns once the channel's worker has
@@ -117,6 +123,12 @@ void WdspWaitWorkerExit (int channel);
 //   maxBlockUs     - longest single block
 //   currentBlockNs - how long the block in progress has run so far, 0 when
 //                    the worker is not inside a block
+//   readNs         - when this read was taken, on the monotonic clock the
+//                    worker times its blocks with; the same clock read gives
+//                    currentBlockNs
+// busyNs + currentBlockNs is the worker's total time inside blocks up to
+// readNs, so between two reads the change in that sum over the change in
+// readNs is the share of wall time the worker spent inside blocks.
 // src/core/wdsp_api.h declares the same struct; the guard lets a file include
 // both headers.
 #ifndef NEREUS_WDSP_CHANNEL_LOAD_DEFINED
@@ -129,13 +141,16 @@ typedef struct
 	long long maxBlockUs;
 	int blockPeriodUs;
 	long long currentBlockNs;
+	long long readNs;
 } WdspChannelLoad;
 #endif
 
 // Copies the channel's load counters into *out without taking csDSP, so it
 // never waits for the worker. Returns 0 on success, -1 for an invalid
-// channel or a null out. The fields are read one by one, so a block that
-// completes during the read may be counted in some fields and not others.
+// channel or a null out. busyNs, currentBlockNs and readNs are one instant's
+// values: a block that completes during the read is counted in exactly one
+// of busyNs and currentBlockNs. The other fields are read one by one, so such
+// a block may be counted in some of them and not others.
 PORT int GetChannelDspLoad (int channel, WdspChannelLoad* out);
 
 // Returns the longest block (microseconds) the channel's worker completed
@@ -157,6 +172,14 @@ PORT void WDSPSetTestBlockDelayUs (int channel, int microseconds);
 // Default 0 (off); when off the worker pays one relaxed load per processed
 // block. Not for production use.
 PORT void WDSPSetTestProcessDelayUs (int channel, int microseconds);
+
+// Test-only: like WDSPSetTestProcessDelayUs, but the busy-wait runs only in
+// every everyBlocks-th block the worker processes, like a stage that works in
+// frames longer than one block (neural noise reduction: a 768-sample hop at
+// 48 kHz is one heavy block in 12 at a 64-sample buffer). Runs after the
+// process delay, if both are set. 0 for either value turns it off. Not for
+// production use.
+PORT void WDSPSetTestPeriodicDelayUs (int channel, int microseconds, int everyBlocks);
 
 // Test-only: how long, in microseconds, the channel's latest teardown spent
 // waiting for its worker to leave its loop (WdspWaitWorkerExit alone, not

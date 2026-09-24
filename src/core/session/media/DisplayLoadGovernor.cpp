@@ -4,6 +4,11 @@
 //
 // no-port-check: NereusSDR-original. See DisplayLoadGovernor.h.
 //
+// Modification history (NereusSDR):
+//   2026-09-23 - The calm test no longer requires zero late blocks. By J.J.
+//                 Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code (R-R3-37, R-R3-40).
+//
 // =================================================================
 
 #include "core/session/media/DisplayLoadGovernor.h"
@@ -147,9 +152,12 @@ std::optional<DisplayLoadDecision> DisplayLoadGovernor::update(const DisplayLoad
     const bool hasCpu = reading.systemCpuPercent.has_value()
         && std::isfinite(*reading.systemCpuPercent);
     const bool busy = isBusy(reading);
+    // Late blocks are not in the test: frame-based noise reduction makes one
+    // long block in several as a normal part of its work, and a receiver
+    // really falling behind shows in its input wait.
     const bool calm = (!hasLoad || *reading.highestReceiverLoad < kCalmReceiverLoad)
         && (!hasCpu || *reading.systemCpuPercent < kCalmSystemCpuPercent)
-        && reading.lateBlocks == 0 && reading.highestInputDelayMs < kCalmInputDelayMs;
+        && reading.highestInputDelayMs < kCalmInputDelayMs;
 
     if (next.settle) {
         const std::optional<DisplayLoadReading> judged = judgeable(*next.settle, reading);

@@ -25,6 +25,8 @@
 //                 Later the same day: setActiveNr(NNR) no longer re-applies
 //                 a stale cached NNR tuning; requestNnrLimit and nnrLimit
 //                 (runtime NNR limit, carried across a rebuild).
+//                 Later the same day: the read time (readNs), so a load
+//                 reads busy time over wall time (R-R3-40, R-R3-37).
 // =================================================================
 
 //=================================================================
@@ -1969,6 +1971,7 @@ bool RxChannel::dspLoad(DspLoadCounters& out) const
     out.maxBlockUs    = load.maxBlockUs;
     out.blockPeriodUs = load.blockPeriodUs;
     out.currentBlockNs = load.currentBlockNs;
+    out.readNs        = load.readNs;
     return true;
 #else
     return false;
