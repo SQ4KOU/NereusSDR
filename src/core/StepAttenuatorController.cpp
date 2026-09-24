@@ -21,6 +21,11 @@
 //                 setting, settingsReloaded(), the opt-in debounced save and
 //                 the RX1 preamp.  NereusSDR-original; no new Thetis logic.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23: R-R3-46 fix wave: loadSettings clears the band memory,
+//                 setBand stores the old band only once a radio is loaded,
+//                 restored attenuation stays within the radio's range, and
+//                 the ATT-on-TX value follows its own transmit band.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -80,6 +85,8 @@
 #include "P2RadioConnection.h"
 #include "ReceiverManager.h"
 #include "WdspTypes.h"
+
+#include <algorithm>
 
 #include <QDateTime>
 #include <QMetaObject>
@@ -255,12 +262,18 @@ void StepAttenuatorController::setStepAttEnabled(bool on)
 
 void StepAttenuatorController::setBand(Band band)
 {
+    m_txBand = band;
     if (m_currentBand == band) {
         return;
     }
 
-    // Save current ATT/preamp to old band.
-    m_bandState[static_cast<int>(m_currentBand)] = { m_attDb, m_preampMode };
+    // Save current ATT/preamp to old band. R-R3-46: only once a radio's
+    // settings are loaded; before that the values are the starting
+    // defaults, not what the operator used on that band, and storing them
+    // would become that band's memory (then saved for the radio).
+    if (!m_loadedMac.isEmpty()) {
+        m_bandState[static_cast<int>(m_currentBand)] = { m_attDb, m_preampMode };
+    }
 
     m_currentBand = band;
 
@@ -277,8 +290,11 @@ void StepAttenuatorController::setBand(Band band)
     // radio.)  NereusSDR's ATT-on-TX side is handled on MOX, not here.
     auto it = m_bandState.find(static_cast<int>(band));
     if (it != m_bandState.end()) {
-        if (it->second.attDb != m_attDb) {
-            m_attDb = it->second.attDb;
+        // R-R3-46: within this radio's range (a band remembered at 45 dB
+        // reads 31 on a radio that stops at 31, as the radio clamps it).
+        const int restoredDb = std::clamp(it->second.attDb, m_minAttDb, m_maxAttDb);
+        if (restoredDb != m_attDb) {
+            m_attDb = restoredDb;
             if (m_bandRestoreToRadio && !m_isMox && m_connection) {
                 RadioConnection* conn = m_connection.get();
                 const int dBcopy = m_attDb;
@@ -483,7 +499,7 @@ void StepAttenuatorController::setAttOnTxValue(int dB)
     // setTxAttenuationForBand() hard-clamps negatives to 0, which would
     // strip the HL2 signed range.  Bypassing the clamp here is correct:
     // the value above is already validated against [m_minAttDb, 31].
-    int idx = static_cast<int>(m_currentBand);
+    int idx = static_cast<int>(m_txBand);
     int oldValue = 0;
     if (idx >= 0 && idx < static_cast<int>(Band::SwlFirst)) {
         oldValue = m_txAttByBand[static_cast<size_t>(idx)];
@@ -531,7 +547,7 @@ int StepAttenuatorController::attOnTxValue() const
     //         else return -1; }
     // NereusSDR: return the current band's stored TX ATT value (the
     // setter wrote the same value here on its last invocation).
-    return applyTxAttenuationForBand(m_currentBand);
+    return applyTxAttenuationForBand(m_txBand);
 }
 
 // Private helper — used by onMoxHardwareFlipped and the test seam.
@@ -646,7 +662,7 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
             //       (CWL || CWU)) txAtt = 31; // reset when PS is OFF or in CW mode
             //   SetupForm.ATTOnRX1 = getRX1stepAttenuatorForBand(rx1_band); //[2.10.3.6]MW0LGE att_fixes
             //   SetupForm.ATTOnTX = txAtt; //[2.10.3.6]MW0LGE att_fixes NOTE: this will eventually call Display.TXAttenuatorOffset with the value
-            int txAtt = applyTxAttenuationForBand(m_currentBand);
+            int txAtt = applyTxAttenuationForBand(m_txBand);
             const bool psOff = !m_psActive;
             if (shouldForce31Db(m_currentDspMode, psOff)) {
                 txAtt = 31; // reset when PS is OFF or in CW mode
@@ -1175,6 +1191,10 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     // save would re-emit our just-read state which is at worst identical
     // to disk.
     m_loadedMac = mac;
+    // R-R3-46: the band memory is this radio's alone. A controller that
+    // switches radios would otherwise restore the previous radio's values
+    // on this one and save them under this MAC.
+    m_bandState.clear();
 
     auto& s = AppSettings::instance();
 
@@ -1229,6 +1249,9 @@ void StepAttenuatorController::loadSettings(const QString& mac)
         m_attDb = it->second.attDb;
         m_preampMode = it->second.preamp;
     }
+    // R-R3-46: a restored value is kept within this radio's range, as the
+    // radio itself clamps it (setBand does the same).
+    m_attDb = std::clamp(m_attDb, m_minAttDb, m_maxAttDb);
 
     // Adaptive floor.
     m_adaptiveFloorDb = s.hardwareValue(mac, QStringLiteral("options/autoAtt/rx1AdaptiveFloor"),

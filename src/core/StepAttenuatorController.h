@@ -234,7 +234,18 @@ public:
     void setStepAttEnabled(bool on);
 
     // Current band — for per-band ATT/preamp storage.
+    // R-R3-46: the receive band (Thetis rx1_band); it also sets the transmit
+    // band below, which a caller with a separate transmit slice then moves
+    // with setTxBand.
     void setBand(Band band);
+    Band currentBand() const noexcept { return m_currentBand; }
+
+    // R-R3-46: the transmit band (Thetis _tx_band), whose per-band ATT-on-TX
+    // value is applied on MOX and edited by setAttOnTxValue. Thetis keeps it
+    // apart from rx1_band: console.cs:17325 [v2.10.3.15] restores the
+    // receive attenuator for rx1_band and ATTOnTX for _tx_band.
+    void setTxBand(Band band) noexcept { m_txBand = band; }
+    Band txBand() const noexcept { return m_txBand; }
 
     // Set ATT value (e.g. from UI or persistence restore).
     void setAttenuation(int dB, int rx = 0);
@@ -515,6 +526,8 @@ private:
 
     // Per-band RX ATT/preamp storage.
     Band m_currentBand = Band::GEN;
+    // R-R3-46: the transmit band for the per-band ATT-on-TX value.
+    Band m_txBand = Band::GEN;
     struct BandAttState {
         int attDb = 0;
         PreampMode preamp = PreampMode::Off;

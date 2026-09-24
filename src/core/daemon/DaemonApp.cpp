@@ -23,6 +23,10 @@
 //               after it is made and sends a band's restored attenuation
 //               to the radio (R-R3-46, R-R3-11), by J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23: the step attenuator uses RadioModel's feed (slice A's
+//               receive band, as Thetis rx1_band) instead of a copy of it
+//               (R-R3-46, R-R3-11), by J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -364,22 +368,11 @@ void DaemonApp::configureStepAttenuatorController(const QString& mac)
         return;
     }
 
-    for (SliceModel* const slice : m_radioModel->slices()) {
-        wireStepAttenuatorSlice(slice);
-    }
-    connect(m_radioModel.get(), &RadioModel::sliceAdded, this,
-            [this](int index) {
-        if (!m_radioModel) {
-            return;
-        }
-        if (SliceModel* const slice = m_radioModel->sliceById(index)) {
-            wireStepAttenuatorSlice(slice);
-        }
-    });
-    if (TxSliceArbiter* const arbiter = m_radioModel->txSliceArbiter()) {
-        connect(arbiter, &TxSliceArbiter::txBoundSliceChanged, this,
-                [this](int, int) { syncStepAttenuatorBandAndMode(); });
-    }
+    // R-R3-46: the same feed a local window uses (RadioModel::
+    // followReceiveSliceWithStepAttenuator): slice A's receive band for the
+    // attenuator and preamp memory, the transmit slice's band and mode for
+    // ATT-on-TX, on every change of either and when the binding moves.
+    m_radioModel->followReceiveSliceWithStepAttenuator();
 
     m_stepAttControllerConfigured = true;
     applyStepAttenuatorConnection(mac);
@@ -405,39 +398,9 @@ void DaemonApp::applyStepAttenuatorConnection(const QString& mac)
 
     // Select the current band before loading, because loadSettings restores
     // the per-band RX attenuation and preamp slot for m_currentBand.
-    syncStepAttenuatorBandAndMode();
+    m_radioModel->syncStepAttenuatorToReceiveSlice();
     if (!mac.isEmpty()) {
         m_stepAttController->loadSettings(mac);
-    }
-}
-
-void DaemonApp::wireStepAttenuatorSlice(SliceModel* slice)
-{
-    if (!slice) {
-        return;
-    }
-    connect(slice, &SliceModel::bandChanged, this,
-            [this, slice](Band) {
-        if (m_radioModel && slice == m_radioModel->txBoundSlice()) {
-            syncStepAttenuatorBandAndMode();
-        }
-    });
-    connect(slice, &SliceModel::dspModeChanged, this,
-            [this, slice](DSPMode) {
-        if (m_radioModel && slice == m_radioModel->txBoundSlice()) {
-            syncStepAttenuatorBandAndMode();
-        }
-    });
-}
-
-void DaemonApp::syncStepAttenuatorBandAndMode()
-{
-    if (!m_radioModel || !m_stepAttController) {
-        return;
-    }
-    if (SliceModel* const slice = m_radioModel->txBoundSlice()) {
-        m_stepAttController->setBand(slice->band());
-        m_stepAttController->setCurrentDspMode(slice->dspMode());
     }
 }
 
