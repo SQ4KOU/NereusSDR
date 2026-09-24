@@ -19367,6 +19367,11 @@ NereusSDR::CodecContext RadioModel::currentCodecContext() const
     // 1-ADC SKU is never handed an ADC1 selector.
     ctx.adcCtrl = NereusSDR::defaultRxAdcCtrl(boardCapabilities().adcCount);
 
+    // The model decides which Protocol 1 models keep slice B's DDC while
+    // PureSignal transmits (P1CodecStandard::applyDdcAssignment). Seeded
+    // before the test seam for the same reason as adcCtrl.
+    ctx.model = m_hardwareProfile.model;
+
     if (m_ddcCtxForTest) {
         ctx.mox           = m_ddcCtxMoxForTest;
         ctx.puresignalRun = m_ddcCtxPsForTest;

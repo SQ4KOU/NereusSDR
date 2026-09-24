@@ -2006,6 +2006,15 @@ diversity PS-MOX shapes. `P1CodecStandard::applyDdcAssignment` no longer leaves 
 -1 in that branch, so slice B no longer reads as PS HOLD while a P1 Hermes-class radio transmits
 with PureSignal on.
 
+That mapping is keyed on the model and covers only the four `nddc == 4` models of Thetis's
+`UpdateDDCs` Hermes case: HERMES, ANAN10, ANAN100 and ANAN_G2E (`console.cs:8386-8391
+[v2.10.3.15]`). Every other Protocol 1 model `P1CodecStandard` serves keeps slice B unassigned
+(`streamDdc[1] = -1`) under PureSignal transmit, as before Task 3. That covers ANAN10E and
+ANAN100B, where DDC1 carries the TX monitor (HermesII `GetDDC` cases 5 and 7: `psrx = 0; pstx =
+1`, `console.cs:8746-8779 [v2.10.3.15]`), and the Orion/G2-class models on Protocol 1, whose read
+loop routes RX2 from DDC2 (`networkproto1.c:385-388 [v2.10.3.15]`). Their own receiver layouts are
+ported separately; until then slice B reads as PS HOLD on them while PureSignal transmits.
+
 The HL2 is left as documented above: `P1CodecHl2::applyDdcAssignment` still suppresses stream 1
 (`streamDdc[1] = -1`) under PS-MOX, even though mi0bot's `GetDDC` (`console.cs:8733-8762
 [@c26a8a4]`) shows the same `rx2 = 1` shape for cases 5 and 7. This is pending a careful mi0bot

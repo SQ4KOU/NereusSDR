@@ -938,8 +938,29 @@ DdcAssignment P1CodecStandard::applyDdcAssignment(
         // streams keep their DDCs. DDC1 still carries RX2's frequency here,
         // because the bank 3 PureSignal override applies to nddc == 2 only
         // (composeCcForBank, frequency banks, above).
+        //
+        // That holds only for the four nddc == 4 models of that UpdateDDCs
+        // case. From Thetis console.cs:8386-8391 [v2.10.3.15]:
+        //   case HPSDRModel.HERMES:
+        //   case HPSDRModel.ANAN_G2E: //N1GP G2E added
+        //   case HPSDRModel.ANAN10:
+        //   case HPSDRModel.ANAN100:
+        //       P1_rxcount = 4;                     // RX4 used for puresignal feedback
+        //       nddc = 4;
+        // This class serves other models too. HermesII (ANAN10E, ANAN100B)
+        // puts the pair on DDC0 + DDC1 (GetDDC cases 5 and 7 there give
+        // psrx = 0; pstx = 1 and no rx2, console.cs:8746-8779), so DDC1 is
+        // the TX monitor and slice B must not read it. The Orion/G2-class
+        // models route DDC2 to RX2 in the read loop (networkproto1.c
+        // case 5), not DDC1. Until their own layouts are ported, every
+        // model but these four keeps stream 1 unassigned here, as it was
+        // before the Hermes mapping was added.
         if (slices[0].live) { a.streamDdc[0] = 0; }
-        if (slices[1].live) { a.streamDdc[1] = 1; }
+        const bool hermesClassNddc4 = ctx.model == HPSDRModel::HERMES
+                                   || ctx.model == HPSDRModel::ANAN_G2E
+                                   || ctx.model == HPSDRModel::ANAN10
+                                   || ctx.model == HPSDRModel::ANAN100;
+        if (slices[1].live && hermesClassNddc4) { a.streamDdc[1] = 1; }
 
         // The read loop pairs the same two slots for nddc == 4.
         // From Thetis ChannelMaster/networkproto1.c:380-384 [v2.10.3.15]:

@@ -21,6 +21,8 @@
 #include <QMetaType>
 #include <cstdint>
 
+#include "../HpsdrModel.h"
+
 namespace NereusSDR {
 
 /// Operator-driven configuration that the codec consumes to produce a
@@ -371,6 +373,16 @@ struct CodecContext {
     // steering set in P1CodecHl2::applyPureSignalDdcConfig from mi0bot
     // console.cs:8486 [v2.10.3.13-beta2].
     int     p1PsNDdc{2};
+
+    // The radio model the operator connected, as Setup names it. Thetis's
+    // UpdateDDCs switches on HardwareSpecific.Model, and P1CodecStandard
+    // serves several of its cases with one class, so the DDC assignment
+    // reads the model to tell them apart. Seeded by
+    // RadioModel::currentCodecContext() and P1RadioConnection::
+    // buildCodecContext() from HardwareProfile::model. The default FIRST
+    // names no model, so a bare CodecContext{} in a test never takes a
+    // model-keyed branch it did not ask for.
+    HPSDRModel model{HPSDRModel::FIRST};
 
     // User digital outputs — prn->user_dig_out, low 4 bits (0-15).
     // Source: Thetis ChannelMaster/networkproto1.c:601 [v2.10.3.13+501e3f51]

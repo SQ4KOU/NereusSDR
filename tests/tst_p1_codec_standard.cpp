@@ -204,9 +204,21 @@ private slots:
     // The PureSignal pair sits on DDC2 + DDC3, so neither user stream
     // loses its DDC while PureSignal transmits. This is the opposite of
     // Protocol 2 Hermes, whose tot=5 body is empty.
+    //
+    // Only the four nddc == 4 models of UpdateDDCs's Hermes case share this
+    // layout (console.cs:8386-8391 [v2.10.3.15]), so each one is a row.
+    void ps_mox_keeps_stream0_on_ddc0_and_stream1_on_ddc1_data() {
+        QTest::addColumn<int>("model");
+        QTest::newRow("HERMES")   << int(HPSDRModel::HERMES);
+        QTest::newRow("ANAN10")   << int(HPSDRModel::ANAN10);
+        QTest::newRow("ANAN100")  << int(HPSDRModel::ANAN100);
+        QTest::newRow("ANAN_G2E") << int(HPSDRModel::ANAN_G2E);
+    }
     void ps_mox_keeps_stream0_on_ddc0_and_stream1_on_ddc1() {
+        QFETCH(int, model);
         P1CodecStandard codec;
         CodecContext ctx{};
+        ctx.model = static_cast<HPSDRModel>(model);
         ctx.mox = true;
         ctx.puresignalRun = true;
 
@@ -241,6 +253,7 @@ private slots:
     void ps_mox_leaves_a_dormant_stream0_unassigned() {
         P1CodecStandard codec;
         CodecContext ctx{};
+        ctx.model = HPSDRModel::HERMES;
         ctx.mox = true;
         ctx.puresignalRun = true;
 
@@ -259,6 +272,7 @@ private slots:
     void ps_mox_gives_streams_2_and_3_no_ddc() {
         P1CodecStandard codec;
         CodecContext ctx{};
+        ctx.model = HPSDRModel::HERMES;
         ctx.mox = true;
         ctx.puresignalRun = true;
 
@@ -282,6 +296,7 @@ private slots:
     void ps_mox_with_diversity_matches_case_7() {
         P1CodecStandard codec;
         CodecContext ctx{};
+        ctx.model = HPSDRModel::HERMES;
         ctx.mox = true;
         ctx.puresignalRun = true;
         ctx.diversity = true;
@@ -299,6 +314,43 @@ private slots:
         QCOMPARE(a.streamDdc[1], 1);
         QCOMPARE(a.psFwdDdc, 2);
         QCOMPARE(a.psRevDdc, 3);
+    }
+
+    // The other models this codec serves do not share the Hermes layout.
+    // HermesII (ANAN10E, ANAN100B) carries the PureSignal pair on DDC0 +
+    // DDC1 while it transmits. From Thetis console.cs:8746-8779
+    // [v2.10.3.15] GetDDC(), P1 branch:
+    //   case HPSDRHW.HermesII: // ANAN-10E ANAN-100B HeremesII (2 adc)
+    //   ...
+    //   case 5: // on off on    psrx = 0; pstx = 1;
+    //   case 7: // on on on     psrx = 0; pstx = 1;
+    // so DDC1 is the TX monitor and slice B must not demodulate it. The
+    // Orion/G2-class models (ANAN7000D here) are not ported yet either.
+    // Each keeps stream 1 unassigned under PureSignal transmit, as before
+    // the Hermes mapping was added.
+    void ps_mox_leaves_stream1_unassigned_off_the_hermes_models_data() {
+        QTest::addColumn<int>("model");
+        QTest::newRow("ANAN10E")   << int(HPSDRModel::ANAN10E);
+        QTest::newRow("ANAN100B")  << int(HPSDRModel::ANAN100B);
+        QTest::newRow("ANAN7000D") << int(HPSDRModel::ANAN7000D);
+    }
+    void ps_mox_leaves_stream1_unassigned_off_the_hermes_models() {
+        QFETCH(int, model);
+        P1CodecStandard codec;
+        CodecContext ctx{};
+        ctx.model = static_cast<HPSDRModel>(model);
+        ctx.mox = true;
+        ctx.puresignalRun = true;
+
+        std::array<SliceConfig, 5> slices{};
+        slices[0].live = true;
+        slices[0].sampleRateHz = 192000;
+        slices[1].live = true;
+        slices[1].sampleRateHz = 192000;
+
+        const DdcAssignment a = codec.applyDdcAssignment(ctx, slices);
+
+        QCOMPARE(a.streamDdc[1], -1);
     }
 
     // PureSignal armed but not transmitting is plain receive: no pair.
