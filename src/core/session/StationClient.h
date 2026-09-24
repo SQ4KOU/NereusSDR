@@ -432,6 +432,10 @@ public:
     bool remoteCtunAvailable() const;
     bool remoteTgxlConfigAvailable() const override;
     bool remoteFourO3AControlAvailable() const override;
+    // R-R3-47 / R-R3-22: see IStationLink.
+    bool stationLinkReady() const override;
+    bool remoteAmplifierStatusAvailable() const override;
+    bool remoteRfKitStatusAvailable() const override;
     bool telemetryAvailable() const;
     std::optional<SessionTransportTelemetry> transportTelemetry() const;
     bool sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch);

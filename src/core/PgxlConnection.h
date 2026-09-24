@@ -12,6 +12,9 @@
 //   2026-05-18  Ported in C++20/Qt6 for NereusSDR by J.J. Boyd (KG4VCF),
 //                 with AI-assisted transformation via Anthropic Claude Code.
 //                 Layout from AetherSDR src/core/PgxlConnection.{h,cpp} [@0cd4559].
+//   2026-09-23  configuredHost()/configuredPort() for the Core's
+//                 `amplifier` object (R-R3-47). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -34,6 +37,10 @@ public:
     QString version()     const { return m_version; }
     QString peerAddress() const { return m_socket.peerAddress().toString(); }
     quint16 peerPort()    const { return m_socket.peerPort(); }
+    // R-R3-47: the address and port last dialled (connectToPgxl), for the
+    // Core's `amplifier` object. Empty and 9008 before any dial.
+    QString configuredHost() const { return m_lastHost; }
+    quint16 configuredPort() const { return m_lastPort; }
 
     // Read-only metric accessors for ConnectionDiagnostics polling (1 Hz).
     quint64 framesIn()         const noexcept { return m_framesIn; }

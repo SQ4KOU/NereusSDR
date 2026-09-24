@@ -18,6 +18,9 @@
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-23 - R-R3-46: AlexAntennaFacade directions. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-47 / R-R3-22: AmplifierModel and RfKitModel, all
+//                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -366,6 +369,48 @@ const MirrorPolicy::Entry kEntries[] = {
     { "AlexAntennaFacade", "ext1OutOnTx", MirrorDirection::Outbound },
     { "AlexAntennaFacade", "ext2OutOnTx", MirrorDirection::Outbound },
     { "AlexAntennaFacade", "rxOutOverride", MirrorDirection::Outbound },
+
+    // R-R3-47 / R-R3-22 (remotePgxlControlVersion 1): the Core's Power
+    // Genius XL status. Every property is the Core's to report; a window
+    // connects, configures and operates the amp only through commands.
+    { "AmplifierModel", "connectionPhase", MirrorDirection::Outbound },
+    { "AmplifierModel", "configuredHost", MirrorDirection::Outbound },
+    { "AmplifierModel", "configuredPort", MirrorDirection::Outbound },
+    { "AmplifierModel", "connectionError", MirrorDirection::Outbound },
+    { "AmplifierModel", "deviceModel", MirrorDirection::Outbound },
+    { "AmplifierModel", "deviceSerial", MirrorDirection::Outbound },
+    { "AmplifierModel", "deviceVersion", MirrorDirection::Outbound },
+    { "AmplifierModel", "deviceNickname", MirrorDirection::Outbound },
+    { "AmplifierModel", "present", MirrorDirection::Outbound },
+    { "AmplifierModel", "state", MirrorDirection::Outbound },
+    { "AmplifierModel", "deviceState", MirrorDirection::Outbound },
+    { "AmplifierModel", "operate", MirrorDirection::Outbound },
+    { "AmplifierModel", "transmitting", MirrorDirection::Outbound },
+    { "AmplifierModel", "forwardPowerW", MirrorDirection::Outbound },
+    { "AmplifierModel", "swr", MirrorDirection::Outbound },
+    { "AmplifierModel", "temperatureC", MirrorDirection::Outbound },
+    { "AmplifierModel", "mainsVoltageV", MirrorDirection::Outbound },
+    { "AmplifierModel", "drainCurrentA", MirrorDirection::Outbound },
+    { "AmplifierModel", "efficiencyText", MirrorDirection::Outbound },
+
+    // R-R3-47 / R-R3-22 (remoteRfKitControlVersion 1): the Core's RF-Kit
+    // RF2K-S status, read-only for the same reason.
+    { "RfKitModel", "connectionPhase", MirrorDirection::Outbound },
+    { "RfKitModel", "configuredHost", MirrorDirection::Outbound },
+    { "RfKitModel", "configuredPort", MirrorDirection::Outbound },
+    { "RfKitModel", "connectionError", MirrorDirection::Outbound },
+    { "RfKitModel", "deviceModel", MirrorDirection::Outbound },
+    { "RfKitModel", "deviceSerial", MirrorDirection::Outbound },
+    { "RfKitModel", "deviceVersion", MirrorDirection::Outbound },
+    { "RfKitModel", "deviceNickname", MirrorDirection::Outbound },
+    { "RfKitModel", "present", MirrorDirection::Outbound },
+    { "RfKitModel", "operate", MirrorDirection::Outbound },
+    { "RfKitModel", "forwardPowerW", MirrorDirection::Outbound },
+    { "RfKitModel", "reflectedPowerW", MirrorDirection::Outbound },
+    { "RfKitModel", "swr", MirrorDirection::Outbound },
+    { "RfKitModel", "temperatureC", MirrorDirection::Outbound },
+    { "RfKitModel", "voltageV", MirrorDirection::Outbound },
+    { "RfKitModel", "currentA", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

@@ -65,6 +65,12 @@
 //                 Anthropic Claude Code. The step attenuator facade
 //                 (`stepAtt`), bound to the controller on a Local model.
 //                 NereusSDR-original; no Thetis logic.
+//   2026-09-23 : R-R3-47 / R-R3-22 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The Power Genius and RF-Kit status
+//                 objects (`amplifier`, `rfkit`), bound on a Local model;
+//                 the Power Genius dBm and return-loss conversions shared
+//                 with them through PgxlStatusGauges. NereusSDR-original;
+//                 no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -406,6 +412,9 @@ warren@wpratt.com
 // line PGXL sends so we can design the response layer in a follow-up.
 #include "core/SmartSdrApiListener.h"
 #include "core/StationTgxlController.h"
+#include "core/PgxlStatusGauges.h"
+#include "models/AmplifierModel.h"
+#include "models/RfKitModel.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1308,6 +1317,24 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // RfKit_ManualIp / RfKit_ManualPort from per-MAC peripherals scope at
     // that point).
     m_rfKitConnection = std::make_unique<Rf2ksConnection>(this);
+
+    // R-R3-47 / R-R3-22: the Power Genius and RF-Kit status the Core mirrors
+    // as `amplifier` and `rfkit`. A Local model (the Core, a local window)
+    // follows its own connections and the station's switches for them; a
+    // Remote model's objects hold only what the Core sends and never touch
+    // this computer's accessory connections.
+    m_amplifierModel = new AmplifierModel(this);
+    m_rfKitModel = new RfKitModel(this);
+    if (m_role == Role::Local) {
+        m_amplifierModel->bindConnection(m_pgxlConnection);
+        m_rfKitModel->bindConnection(m_rfKitConnection.get());
+        m_amplifierModel->setAccessoryEnabled(fourO3AEnabled());
+        m_rfKitModel->setAccessoryEnabled(rfKitEnabled());
+        connect(this, &RadioModel::fourO3AEnabledChanged,
+                m_amplifierModel, &AmplifierModel::setAccessoryEnabled);
+        connect(this, &RadioModel::rfKitEnabledChanged,
+                m_rfKitModel, &RfKitModel::setAccessoryEnabled);
+    }
 
     // Per-radio peripherals refactor (2026-05-26): the ctor-time RF-Kit
     // auto-connect from globals was removed.  The lifecycle now runs in
@@ -17623,11 +17650,7 @@ void RadioModel::onPgxlStatus(const QMap<QString, QString>& kvs)
     // 2. Operate-state parse.
     if (kvs.contains(QStringLiteral("state"))) {
         const QString& st = kvs.value(QStringLiteral("state"));
-        const bool nowOperate =
-            (st == QStringLiteral("IDLE")        ||
-             st == QStringLiteral("OPERATE")     ||
-             st == QStringLiteral("TRANSMIT_A")  ||
-             st == QStringLiteral("TRANSMIT_B"));
+        const bool nowOperate = pgxlStateIsOperate(st);
         // Surface PGXL state edges in the log so the autotune
         // standby/restore cycle and the TX-engagement (OPERATE ->
         // TRANSMIT_A) handshake are visible without a debugger.
@@ -17664,18 +17687,10 @@ void RadioModel::onPgxlStatus(const QMap<QString, QString>& kvs)
             const float fwdDbm   = kvs.value(QStringLiteral("fwd")).toFloat();
             const float rlDbWire = kvs.value(QStringLiteral("swr")).toFloat();
             const float temp     = kvs.value(QStringLiteral("temp")).toFloat();
-            const float fwdW     = std::pow(10.0f, fwdDbm / 10.0f) / 1000.0f;
-            float swrRatio;
-            if (rlDbWire >= 0.0f) {
-                // RL >= 0 dB is physically open/short or measurement
-                // glitch; cap to 99 for display.
-                swrRatio = 99.0f;
-            } else {
-                const float gamma = std::pow(10.0f, rlDbWire / 20.0f);
-                swrRatio = (gamma >= 0.999f)
-                    ? 99.0f
-                    : (1.0f + gamma) / (1.0f - gamma);
-            }
+            // R-R3-47: the one Power Genius conversion (PgxlStatusGauges);
+            // RL >= 0 dB (open/short or a glitch) still caps at 99.
+            const float fwdW     = pgxlDbmToWatts(fwdDbm);
+            const float swrRatio = pgxlReturnLossToSwr(rlDbWire);
             FaultEvent ev{
                 QDateTime::currentMSecsSinceEpoch(),
                 st,
@@ -17697,16 +17712,9 @@ void RadioModel::onPgxlStatus(const QMap<QString, QString>& kvs)
     if (hasFwd && hasSwr) {
         const float dbm      = kvs.value(QStringLiteral("peakfwd")).toFloat();
         const float rlDbWire = kvs.value(QStringLiteral("swr")).toFloat();
-        const float watts    = std::pow(10.0f, dbm / 10.0f) / 1000.0f;
-        float ratio;
-        if (rlDbWire >= 0.0f) {
-            ratio = 99.0f;  // RL=0 -> infinite SWR; cap for display
-        } else {
-            const float gamma = std::pow(10.0f, rlDbWire / 20.0f);
-            ratio = (gamma >= 0.999f)
-                ? 99.0f
-                : (1.0f + gamma) / (1.0f - gamma);
-        }
+        // R-R3-47: the one Power Genius conversion (PgxlStatusGauges).
+        const float watts    = pgxlDbmToWatts(dbm);
+        const float ratio    = pgxlReturnLossToSwr(rlDbWire);
         emit ampMetersChanged(watts, ratio);
     }
 }

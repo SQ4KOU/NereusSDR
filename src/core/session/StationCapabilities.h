@@ -65,6 +65,11 @@
 //                                    protocol and address. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22:
+//                                    remotePgxlControlVersion and
+//                                    remoteRfKitControlVersion, in the same
+//                                    minor-11 block. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -113,6 +118,14 @@ struct StationCapabilities {
     /// last in the same block as the three above, so only at minor 11. 0: a
     /// window keeps today's behaviour and does not write `stepAtt`.
     int radioHardwareVersion = 0;
+    /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
+    /// status as the read-only `amplifier` object. Sent after
+    /// radioHardwareVersion in the same minor-11 block. 0: a window shows
+    /// no Power Genius readings from this Core.
+    int remotePgxlControlVersion = 0;
+    /// R-R3-47 / R-R3-22: 1 means the Core mirrors its RF-Kit RF2K-S status
+    /// as the read-only `rfkit` object. Sent last in the same block.
+    int remoteRfKitControlVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

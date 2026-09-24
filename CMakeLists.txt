@@ -924,6 +924,7 @@ set(CORE_SOURCES
     src/core/DxccColorProvider.cpp
     # Phase 3P-II PGXL/TGXL accessories
     src/core/PgxlConnection.cpp
+    src/core/PgxlStatusGauges.cpp
     src/core/TgxlConnection.cpp
     src/core/StationTgxlController.cpp
     # Phase 3P-III RF-Kit RF2K-S amplifier
@@ -933,6 +934,9 @@ set(CORE_SOURCES
     src/core/ConnectionDiagnostics.cpp
     # Phase 3P-II TGXL tuner model
     src/models/TunerModel.cpp
+    # R-R3-47: the Core's Power Genius and RF-Kit status objects
+    src/models/AmplifierModel.cpp
+    src/models/RfKitModel.cpp
     # Phase 3P-II Phase 4 (Advanced UI + helpers)
     src/core/FaultLog.cpp
     src/core/TuneMemoryStore.cpp

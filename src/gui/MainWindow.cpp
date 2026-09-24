@@ -11,6 +11,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-47 / R-R3-22: the Power Genius
+//                 gauge conversion moved to the Core side
+//                 (PgxlStatusGauges); AmpApplet and Rf2ksApplet read
+//                 RadioModel's AmplifierModel and RfKitModel. AI-assisted
+//                 via Anthropic Claude Code.
 //   2026-09-23 - J.J. Boyd (KG4VCF). R3 Setup fix wave (R-R3-21, R-R3-10):
 //                 while connected to a Core whose settings have not
 //                 arrived, Setup says "The Core has not sent its
@@ -6370,36 +6375,16 @@ void MainWindow::populateDefaultMeter()
         // Connection -> applet data flow.
         Rf2ksConnection* rfKitConn = m_radioModel->rfKitConnection();
         if (rfKitConn) {
-            connect(rfKitConn, &Rf2ksConnection::powerUpdated,
-                    m_rfKitApplet, &Rf2ksApplet::setPower);
+            // R-R3-47 / R-R3-22: power, OPERATE, the connection dot and
+            // the name and version come from RadioModel's RfKitModel, which
+            // Rf2ksApplet reads itself (the Core's `rfkit` object in a
+            // remote window). The tuner and antenna rows stay wired here.
             connect(rfKitConn, &Rf2ksConnection::tunerUpdated,
                     m_rfKitApplet, &Rf2ksApplet::setTuner);
             connect(rfKitConn, &Rf2ksConnection::antennasUpdated,
                     m_rfKitApplet, &Rf2ksApplet::setAntennas);
             connect(rfKitConn, &Rf2ksConnection::activeAntennaUpdated,
                     m_rfKitApplet, &Rf2ksApplet::setActiveAntenna);
-            connect(rfKitConn, &Rf2ksConnection::operateModeUpdated,
-                    m_rfKitApplet, &Rf2ksApplet::setOperateMode);
-            connect(rfKitConn, &Rf2ksConnection::connected,
-                    this, [this]() {
-                if (m_rfKitApplet) {
-                    m_rfKitApplet->setConnectedState(true);
-                }
-            });
-            connect(rfKitConn, &Rf2ksConnection::disconnected,
-                    this, [this]() {
-                if (m_rfKitApplet) {
-                    m_rfKitApplet->setConnectedState(false);
-                }
-            });
-            connect(rfKitConn, &Rf2ksConnection::infoUpdated,
-                    this, [this](const QString& /*deviceName*/,
-                                 const QString& softwareVersion,
-                                 const QString& nicknameFromAmp) {
-                if (m_rfKitApplet) {
-                    m_rfKitApplet->setNicknameAndVersion(nicknameFromAmp, softwareVersion);
-                }
-            });
 
             // Applet -> connection (antenna click, operate toggle).
             connect(m_rfKitApplet, &Rf2ksApplet::antennaRequested,
@@ -11353,80 +11338,15 @@ void MainWindow::onConnectionStateChanged()
                                 : QStringLiteral("operate=0"));
             });
 
-            connect(m_radioModel->pgxlConnection(),
-                    &PgxlConnection::statusUpdated,
-                    this, [this](const QMap<QString, QString>& kvs) {
-                if (kvs.contains(QStringLiteral("temp")))
-                    m_ampApplet->setTemp(kvs.value(QStringLiteral("temp")).toFloat());
-                if (kvs.contains(QStringLiteral("id")))
-                    m_ampApplet->setDrainCurrent(kvs.value(QStringLiteral("id")).toFloat());
-                if (kvs.contains(QStringLiteral("vac")))
-                    m_ampApplet->setMainsVoltage(kvs.value(QStringLiteral("vac")).toInt());
-                if (kvs.contains(QStringLiteral("state")))
-                    m_ampApplet->setState(kvs.value(QStringLiteral("state")));
-                if (kvs.contains(QStringLiteral("meffa")))
-                    m_ampApplet->setMeff(kvs.value(QStringLiteral("meffa")));
-
-                // 2026-05-22 bench fix: PGXL's `peakfwd` and `swr`
-                // status fields are HOLD values that latch the last TX
-                // peak and DO NOT decay back to 0 when the amp leaves
-                // TRANSMIT_A/B (PGXL's intent is "show the last QSO's
-                // peak on the front panel"). For our applet gauges we
-                // want the live keyed value during TX and a clean zero
-                // between cycles, so we gate the peakfwd / swr writes
-                // on the transmitting state. Without this gate the
-                // previous bench-fix at this site (which forced fwd=0
-                // / swr=1 when state changed to IDLE) was overwritten
-                // 30 ms later by the next status response carrying the
-                // stale latched peakfwd.
-                //
-                // Inferred transmitting state: if the status update
-                // includes state=, use it; otherwise fall back to the
-                // last cached state (m_ampApplet tracks it via
-                // setState).
-                bool transmitting = false;
-                if (kvs.contains(QStringLiteral("state"))) {
-                    const QString st = kvs.value(QStringLiteral("state"));
-                    transmitting =
-                        (st == QStringLiteral("TRANSMIT_A")
-                         || st == QStringLiteral("TRANSMIT_B"));
-                    if (!transmitting) {
-                        m_ampApplet->setFwdPower(0.0f);
-                        m_ampApplet->setSwr(1.0f);
-                    }
-                } else {
-                    transmitting = m_ampApplet->isTransmitting();
-                }
-
-                // 2026-05-20 bench fix: peakfwd is dBm (not watts) and swr
-                // is signed dB return loss (not an SWR ratio). Convert
-                // here so the AmpApplet gauges read the same numbers
-                // the SMeterWidget already gets via
-                // RadioModel::ampMetersChanged.
-                // 2026-05-22 bench fix: only forward the converted
-                // peakfwd / swr when the amp is actually transmitting;
-                // otherwise the stale latched peak would overwrite the
-                // zero set by the state-edge block above.
-                if (transmitting && kvs.contains(QStringLiteral("peakfwd"))) {
-                    const float dbm   = kvs.value(QStringLiteral("peakfwd")).toFloat();
-                    const float watts = std::pow(10.0f, dbm / 10.0f) / 1000.0f;
-                    m_ampApplet->setFwdPower(watts);
-                }
-                if (transmitting && kvs.contains(QStringLiteral("swr"))) {
-                    const float rlDbWire =
-                        kvs.value(QStringLiteral("swr")).toFloat();
-                    float ratio;
-                    if (rlDbWire >= 0.0f) {
-                        ratio = 99.0f;  // RL>=0 -> open/short, cap display
-                    } else {
-                        const float gamma = std::pow(10.0f, rlDbWire / 20.0f);
-                        ratio = (gamma >= 0.999f)
-                            ? 99.0f
-                            : (1.0f + gamma) / (1.0f - gamma);
-                    }
-                    m_ampApplet->setSwr(ratio);
-                }
-            });
+            // R-R3-47 / R-R3-22: the gauges no longer come from here. The
+            // Power Genius conversion (dBm peak forward power to W, signed
+            // return loss to an SWR ratio, the transmit-only gate on those
+            // two latched values, temperature, drain current, mains volts
+            // and the efficiency label) moved to the Core side as
+            // applyPgxlStatus() (src/core/PgxlStatusGauges.cpp), which feeds
+            // RadioModel's AmplifierModel; AmpApplet reads that model, here
+            // in-process and in a remote window as the Core's `amplifier`
+            // object.
 
             // Phase 3P-II Phase 4 Task 88: track PGXL connected state for the
             // context menu Disconnect/Reconnect label.

@@ -5926,8 +5926,17 @@ nereus_add_test(tst_tgxl_connection_ping)
 nereus_add_test(tst_tgxl_connection_reconnect)
 nereus_add_test(tst_tgxl_connection_identity)
 nereus_add_test(tst_tgxl_station_identity)
-nereus_add_test(tst_station_accessory_state)
-nereus_add_test(tst_remote_peripherals)
+# R-R3-47 / R-R3-22: the Core's `amplifier` and `rfkit` status objects, the
+# one Power Genius gauge conversion, and the accessory control document's
+# fixtures (tests/fixtures/accessories, read through NEREUS_SOURCE_DIR).
+nereus_add_test(tst_station_accessory_state
+    fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_station_accessory_state PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# R-R3-47: a remote window's Power Genius and RF-Kit applets read the Core's
+# objects over the in-process loopback.
+nereus_add_test(tst_remote_peripherals
+    fakes/LoopbackTransport.cpp)
 
 # Task 59: auto-reconnect exponential backoff (1/2/5/10/30/60 s, cap at 60 s).
 # Test: backoffSequence verifies 8 calls to testForceDisconnect() produce

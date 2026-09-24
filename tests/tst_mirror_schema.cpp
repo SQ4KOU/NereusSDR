@@ -57,6 +57,8 @@
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "models/TunerModel.h"
+#include "models/AmplifierModel.h"
+#include "models/RfKitModel.h"
 
 using namespace NereusSDR;
 
@@ -858,7 +860,9 @@ private:
                  &DspAssetService::staticMetaObject,
                  &NotchModel::staticMetaObject,
                  &StepAttenuatorFacade::staticMetaObject,
-                 &AlexAntennaFacade::staticMetaObject };
+                 &AlexAntennaFacade::staticMetaObject,
+                 &AmplifierModel::staticMetaObject,
+                 &RfKitModel::staticMetaObject };
     }
 };
 

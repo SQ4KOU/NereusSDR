@@ -66,6 +66,13 @@
 //                                    refused for any radio but the
 //                                    connected one. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the read-only
+//                                    `amplifier` and `rfkit` objects with
+//                                    remotePgxlControlVersion 1 and
+//                                    remoteRfKitControlVersion 1 for a peer
+//                                    at minor 11, and the plain refusal of a
+//                                    write to either. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -94,6 +101,8 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#include "models/AmplifierModel.h"
+#include "models/RfKitModel.h"
 #include "models/TunerModel.h"
 
 #include <QLoggingCategory>
@@ -228,6 +237,26 @@ bool isAlexAntennasMessage(const SessionMessage& message)
     return message.objectKey == kAlexAntennasKey
         || (message.kind == SessionMessageKind::Schema
             && message.className == "AlexAntennaFacade");
+}
+
+// R-R3-47 / R-R3-22: the Core's Power Genius XL and RF-Kit RF2K-S status,
+// read-only, for a peer at kRadioIdentitySessionProtocolMinor on a Core
+// that owns its accessories. An older peer never sees either object.
+constexpr const char* kAmplifierKey = "amplifier";
+constexpr const char* kRfKitKey = "rfkit";
+
+bool isAmplifierMessage(const SessionMessage& message)
+{
+    return message.objectKey == kAmplifierKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "AmplifierModel");
+}
+
+bool isRfKitMessage(const SessionMessage& message)
+{
+    return message.objectKey == kRfKitKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "RfKitModel");
 }
 
 // The one reason a receive-only Core gives for every transmit
@@ -1146,6 +1175,11 @@ void StationServer::buildMirror()
     if (m_radioModel->tunerModel() != nullptr) {
         m_mirror->watch(QByteArray(kTunerKey), m_radioModel->tunerModel());
     }
+    // R-R3-47 / R-R3-22 (remotePgxlControlVersion 1,
+    // remoteRfKitControlVersion 1): the Core's amplifier and RF-Kit status.
+    // Sent only to a peer at minor 11 (sendToSession).
+    m_mirror->watch(QByteArray(kAmplifierKey), m_radioModel->amplifierModel());
+    m_mirror->watch(QByteArray(kRfKitKey), m_radioModel->rfKitModel());
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
     for (int i = 0; i < pans.size(); ++i) {
         m_mirror->watch(panKey(i), pans.at(i));
@@ -1246,6 +1280,11 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             QStringLiteral("Update this app to change the radio's antennas on this Core.");
     } else if (alexWrite && radioHardwareVersion() < 2) {
         stepAttRefusal = QStringLiteral("The Core has no antenna settings ready.");
+    } else if (message.objectKey == kAmplifierKey) {
+        // R-R3-47: the amp's readings are the Core's to report.
+        stepAttRefusal = AmplifierModel::readOnlyReason();
+    } else if (message.objectKey == kRfKitKey) {
+        stepAttRefusal = RfKitModel::readOnlyReason();
     }
     const bool receiveOnlyTransmitWrite = message.objectKey == QByteArray(kTransmitKey)
         && !m_radioModel.isNull() && m_radioModel->receiveOnlyStationPolicy();
@@ -1479,6 +1518,13 @@ void StationServer::sendToSession(const SessionMessage& message)
             && (minor < kRadioIdentitySessionProtocolMinor || radioHardwareVersion() < 2)) {
             return;
         }
+        // R-R3-47: a Core that does not own its accessories does not offer
+        // the amplifier and RF-Kit objects, so it does not send them either.
+        if ((isAmplifierMessage(message) || isRfKitMessage(message))
+            && (minor < kRadioIdentitySessionProtocolMinor
+                || accessoryStatusVersion() < 1)) {
+            return;
+        }
         if (!needsNnrFit(message, minor)) {
             // Most messages carry no NNR field: send them as they are.
             if (worthSendingAfterNnrFit(message)) {
@@ -1663,6 +1709,11 @@ void StationServer::setSustainableSliceLimit(int slices)
     m_sustainableSliceLimit = slices;
 }
 
+int StationServer::accessoryStatusVersion() const
+{
+    return !m_radioModel.isNull() && m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
+}
+
 int StationServer::radioHardwareVersion() const
 {
     if (m_radioModel.isNull() || !m_radioModel->stepAttFacade()->isBound()) {
@@ -1703,6 +1754,10 @@ StationCapabilities StationServer::buildCapabilities() const
             // 2 once its Alex antennas are behind `alexAntennas` too, with
             // the hardware apply step and the I/O board probe.
             caps.radioHardwareVersion = radioHardwareVersion();
+            // R-R3-47 / R-R3-22: 1 on a Core that owns its accessories: the
+            // read-only `amplifier` and `rfkit` objects.
+            caps.remotePgxlControlVersion = accessoryStatusVersion();
+            caps.remoteRfKitControlVersion = accessoryStatusVersion();
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();

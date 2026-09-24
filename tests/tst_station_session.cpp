@@ -5136,18 +5136,25 @@ StationCapabilities g21kCaps()
 void TstStationSession::radioIdentityEntriesRoundTrip()
 {
     // The three entries travel last and together, and come back as sent;
-    // radioHardwareVersion (R-R3-46, Task 2) closes the same block.
+    // radioHardwareVersion (R-R3-46, Task 2) follows in the same block, then
+    // remotePgxlControlVersion and remoteRfKitControlVersion (R-R3-47).
     StationCapabilities sent = g21kCaps();
     sent.radioHardwareVersion = 1;
+    sent.remotePgxlControlVersion = 1;
+    sent.remoteRfKitControlVersion = 1;
     const QList<MirrorUpdate> updates = sent.toUpdates();
     const int model = updateIndexOf(updates, "hpsdrModel");
-    QCOMPARE(model, int(updates.size()) - 4);
+    QCOMPARE(model, int(updates.size()) - 6);
     QCOMPARE(updateIndexOf(updates, "radioProtocol"), model + 1);
     QCOMPARE(updateIndexOf(updates, "radioAddress"), model + 2);
     QCOMPARE(updateIndexOf(updates, "radioHardwareVersion"), model + 3);
+    QCOMPARE(updateIndexOf(updates, "remotePgxlControlVersion"), model + 4);
+    QCOMPARE(updateIndexOf(updates, "remoteRfKitControlVersion"), model + 5);
     const StationCapabilities received = StationCapabilities::fromUpdates(updates);
     QVERIFY(received.radioIdentityEntries);
     QCOMPARE(received.radioHardwareVersion, 1);
+    QCOMPARE(received.remotePgxlControlVersion, 1);
+    QCOMPARE(received.remoteRfKitControlVersion, 1);
     QCOMPARE(received.hpsdrModel, HPSDRModel::ANAN_G2_1K);
     QCOMPARE(received.radioProtocol, 2);
     QCOMPARE(received.radioAddress, QStringLiteral("192.168.1.50"));
@@ -5158,7 +5165,8 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     older.radioIdentityEntries = false;
     const QList<MirrorUpdate> olderUpdates = older.toUpdates();
     for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
-                             "radioHardwareVersion"}) {
+                             "radioHardwareVersion", "remotePgxlControlVersion",
+                             "remoteRfKitControlVersion"}) {
         QCOMPARE(updateIndexOf(olderUpdates, name), -1);
     }
     const StationCapabilities fromOlder = StationCapabilities::fromUpdates(olderUpdates);
@@ -5167,6 +5175,8 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     QCOMPARE(fromOlder.radioProtocol, 0);
     QVERIFY(fromOlder.radioAddress.isEmpty());
     QCOMPARE(fromOlder.radioHardwareVersion, 0);
+    QCOMPARE(fromOlder.remotePgxlControlVersion, 0);
+    QCOMPARE(fromOlder.remoteRfKitControlVersion, 0);
 
     // Values this build cannot use read as not reported, never as a guess.
     QList<MirrorUpdate> odd = olderUpdates;
@@ -5233,14 +5243,16 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
     const QList<MirrorUpdate> older = capture(quint16(kRadioIdentitySessionProtocolMinor - 1));
     QVERIFY(!older.isEmpty());
     for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
-                             "radioHardwareVersion"}) {
+                             "radioHardwareVersion", "remotePgxlControlVersion",
+                             "remoteRfKitControlVersion"}) {
         QCOMPARE(updateIndexOf(older, name), -1);
     }
-    // Byte for byte: the minor-11 descriptor without the four (and the
+    // Byte for byte: the minor-11 descriptor without the six (and the
     // display budget reason, which is not sent here) is the minor-10 one.
     QList<MirrorUpdate> stripped = current;
     for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
-                             "radioHardwareVersion"}) {
+                             "radioHardwareVersion", "remotePgxlControlVersion",
+                             "remoteRfKitControlVersion"}) {
         stripped.removeAt(updateIndexOf(stripped, name));
     }
     QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)),

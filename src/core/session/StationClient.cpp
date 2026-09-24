@@ -57,6 +57,10 @@
 //                 radioHardwareVersion 2, its edit gate and reason, and the
 //                 requestIoBoardProbe verb. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-47 / R-R3-22: the Core's read-only `amplifier` and
+//                 `rfkit` objects, applied as plain state, and whether they
+//                 are live. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -67,7 +71,9 @@
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionTransport.h"
 #include "core/settings/SettingsProxy.h"
+#include "models/AmplifierModel.h"
 #include "models/NotchModel.h"
+#include "models/RfKitModel.h"
 #include "models/PanadapterModel.h"
 #include "models/PureSignalSettings.h"
 #include "core/dsp/DspAssetService.h"
@@ -1635,6 +1641,33 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         watchForOutbound(tunerKey, m_radioModel->tunerModel());
     }
 
+    // R-R3-47 / R-R3-22: the Core's Power Genius and RF-Kit status, read
+    // only. Registered against a Core that offers them; otherwise the key
+    // is not held and an object for it is dropped as skew. Nothing on
+    // either is ever written back.
+    const struct {
+        const char* key;
+        QObject* object;
+        bool offered;
+    } accessories[] = {
+        { "amplifier", m_radioModel->amplifierModel(),
+          m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+              && m_capabilities.remotePgxlControlVersion >= 1 },
+        { "rfkit", m_radioModel->rfKitModel(),
+          m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+              && m_capabilities.remoteRfKitControlVersion >= 1 },
+    };
+    for (const auto& accessory : accessories) {
+        const QByteArray key(accessory.key);
+        if (accessory.object != nullptr && accessory.offered) {
+            m_objects.insert(key, accessory.object);
+            watchForOutbound(key, accessory.object);
+        } else {
+            m_objects.remove(key);
+            m_outboundMirror->unwatch(key);
+        }
+    }
+
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
     for (int i = 0; i < pans.size(); ++i) {
         const QByteArray key = QByteArray(kPanKeyPrefix) + QByteArray::number(i);
@@ -2240,6 +2273,15 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
         auto* tuner = qobject_cast<TunerModel*>(target);
         return tuner != nullptr && tuner->applyStationValue(propertyName, native);
     }
+    // R-R3-47 / R-R3-22: plain state applies; never a command to an amp.
+    if (className == "AmplifierModel") {
+        auto* amp = qobject_cast<AmplifierModel*>(target);
+        return amp != nullptr && amp->applyStationValue(propertyName, native);
+    }
+    if (className == "RfKitModel") {
+        auto* rfKit = qobject_cast<RfKitModel*>(target);
+        return rfKit != nullptr && rfKit->applyStationValue(propertyName, native);
+    }
     if (className != "SliceModel") {
         return false;
     }
@@ -2835,6 +2877,24 @@ bool StationClient::remoteTgxlConfigAvailable() const
         && m_transport && m_transport->isOpen()
         && m_agreedMinor >= kRemoteTgxlConfigSessionProtocolMinor
         && m_capabilities.remoteTgxlConfigVersion >= 1;
+}
+
+bool StationClient::stationLinkReady() const
+{
+    return m_sessionActive && m_authenticated && m_handshakeComplete
+        && m_transport && m_transport->isOpen();
+}
+
+bool StationClient::remoteAmplifierStatusAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remotePgxlControlVersion >= 1;
+}
+
+bool StationClient::remoteRfKitStatusAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remoteRfKitControlVersion >= 1;
 }
 
 bool StationClient::remoteFourO3AControlAvailable() const

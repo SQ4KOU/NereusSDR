@@ -45,6 +45,9 @@
 //   2026-09-23 - R-R3-46: alexAntennaFacade(),
 //                 scheduleRemoteHardwareApply(), requestIoBoardProbe(). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-47 / R-R3-22: amplifierModel() and rfKitModel(), the
+//                 Power Genius and RF-Kit status objects. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -267,6 +270,8 @@ class RadeChannel;
 // I/Q wire rate before m_connection->sendTxIq.  Lives in core/Resampler.h.
 class Resampler;
 class StationTgxlController;
+class AmplifierModel;
+class RfKitModel;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -1700,6 +1705,12 @@ public:
     Rf2ksConnection* rfKitConnection() const { return m_rfKitConnection.get(); }
     TgxlConnection* tgxlConnection() { return m_tgxlConnection; }
     TunerModel*     tunerModel()     { return m_tunerModel;     }
+    // R-R3-47 / R-R3-22: the Power Genius XL and RF-Kit RF2K-S status, as
+    // the Core mirrors them (`amplifier`, `rfkit`). Non-null from
+    // construction. A Local model binds them to its own connections; a
+    // Remote model's hold the Core's values only.
+    AmplifierModel* amplifierModel() const { return m_amplifierModel; }
+    RfKitModel*     rfKitModel()     const { return m_rfKitModel; }
     // SmartSDR API server on TCP 4992. Owned by RadioModel; lifetime matches.
     // Used by MainWindow to push slice/transmit state so PGXL/TGXL pull the
     // current band/freq via the SmartSDR API rather than from a stale cache.
@@ -4891,6 +4902,8 @@ private:
     TgxlConnection* m_tgxlConnection{nullptr};
     StationTgxlController* m_stationTgxl{nullptr};
     TunerModel*     m_tunerModel{nullptr};
+    AmplifierModel* m_amplifierModel{nullptr};
+    RfKitModel*     m_rfKitModel{nullptr};
 
     // Phase 3P-III: RF-Kit RF2K-S connection. unique_ptr with Qt parent=this
     // so destruction order is deterministic and QObject hierarchy is intact.
