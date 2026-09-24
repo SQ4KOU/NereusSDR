@@ -2007,7 +2007,7 @@ diversity PS-MOX shapes. `P1CodecStandard::applyDdcAssignment` no longer leaves 
 with PureSignal on.
 
 That mapping is keyed on the model and covers only the four `nddc == 4` models of Thetis's
-`UpdateDDCs` Hermes case: HERMES, ANAN10, ANAN100 and ANAN_G2E (`console.cs:8386-8391
+`UpdateDDCs` Hermes case: HERMES, ANAN10, ANAN100 and ANAN_G2E (`console.cs:8387-8392
 [v2.10.3.15]`). Every other Protocol 1 model `P1CodecStandard` serves keeps slice B unassigned
 (`streamDdc[1] = -1`) under PureSignal transmit, as before Task 3. That covers ANAN10E and
 ANAN100B, where DDC1 carries the TX monitor (HermesII `GetDDC` cases 5 and 7: `psrx = 0; pstx =

@@ -20065,9 +20065,11 @@ void RadioModel::publishDdcAssignment(const NereusSDR::DdcAssignment& assignment
     // rx2 = 1; psrx = 2; pstx = 3). Every other Protocol 1 model it serves
     // (ANAN10E, ANAN100B, and the Orion/G2 class) leaves stream 1
     // unassigned while PureSignal transmits, so slice B is suspended here
-    // until those models' own layouts are ported. Under diversity stream 1
-    // is unassigned on every model the codec serves: DDC1 is DDC0's sync
-    // partner.
+    // until those models' own layouts are ported. Under diversity without
+    // PureSignal transmit, stream 1 is unassigned on every model the codec
+    // serves: DDC1 is DDC0's sync partner. Diversity with PureSignal
+    // transmitting (P1 GetDDC case 7) takes the PureSignal branch instead,
+    // so on those four Hermes-class models stream 1 keeps DDC1 there too.
     //
     // What Thetis does NOT do is tell the operator. Nothing unchecks RX2,
     // nothing greys it, and the only trace is a label that quietly fails to

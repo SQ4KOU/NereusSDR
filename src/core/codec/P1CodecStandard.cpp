@@ -940,7 +940,7 @@ DdcAssignment P1CodecStandard::applyDdcAssignment(
         // (composeCcForBank, frequency banks, above).
         //
         // That holds only for the four nddc == 4 models of that UpdateDDCs
-        // case. From Thetis console.cs:8386-8391 [v2.10.3.15]:
+        // case. From Thetis console.cs:8387-8392 [v2.10.3.15]:
         //   case HPSDRModel.HERMES:
         //   case HPSDRModel.ANAN_G2E: //N1GP G2E added
         //   case HPSDRModel.ANAN10:
