@@ -51,6 +51,10 @@
 //                 reason a receiver on the headphones is silent. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-45: the output buttons read SPEAKERS and PHONES, in
+//                 capitals like the flag's other buttons (operator's
+//                 captions). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1283,7 +1287,7 @@ void VfoWidget::buildAudioTab()
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
-        m_speakersBtn = new QPushButton(QStringLiteral("Speakers"), audioWidget);
+        m_speakersBtn = new QPushButton(QStringLiteral("SPEAKERS"), audioWidget);
         m_speakersBtn->setObjectName(QStringLiteral("outputSpeakersButton"));
         m_speakersBtn->setCheckable(true);
         m_speakersBtn->setChecked(true);
@@ -1291,7 +1295,7 @@ void VfoWidget::buildAudioTab()
         m_speakersBtn->setToolTip(QStringLiteral("Play this receiver on the speakers"));
         row->addWidget(m_speakersBtn);
 
-        m_headphonesBtn = new QPushButton(QStringLiteral("Headphones"), audioWidget);
+        m_headphonesBtn = new QPushButton(QStringLiteral("PHONES"), audioWidget);
         m_headphonesBtn->setObjectName(QStringLiteral("outputHeadphonesButton"));
         m_headphonesBtn->setCheckable(true);
         m_headphonesBtn->setStyleSheet(vfoDspToggleStyle());

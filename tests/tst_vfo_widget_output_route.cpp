@@ -43,6 +43,19 @@ private slots:
     void init() { AppSettings::instance().clear(); }
     void cleanup() { AppSettings::instance().clear(); }
 
+    // The operator's captions (2026-09-24), in capitals like the flag's
+    // other buttons, with the tooltips in full plain words.
+    void captionsAndTooltips()
+    {
+        VfoWidget flag;
+        const Parts p = partsOf(flag);
+        QVERIFY(p.speakers && p.headphones);
+        QCOMPARE(p.speakers->text(), QStringLiteral("SPEAKERS"));
+        QCOMPARE(p.headphones->text(), QStringLiteral("PHONES"));
+        QCOMPARE(p.speakers->toolTip(), QStringLiteral("Play this receiver on the speakers"));
+        QCOMPARE(p.headphones->toolTip(), QStringLiteral("Play this receiver on the headphones"));
+    }
+
     void buttonsAreExclusiveAndDriveTheSlice()
     {
         SliceModel slice;
