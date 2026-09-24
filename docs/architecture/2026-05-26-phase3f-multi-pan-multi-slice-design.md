@@ -2045,6 +2045,25 @@ for all sixteen PureSignal / diversity / MOX / RX2 states and checks that `psDdc
   (`Protocol1DDCConfig` stores the configuration and nothing reads it, `netInterface.c:1249-1255`).
 - The Atlas (HPSDR) keeps the Hermes layout: `UpdateDDCs` gives it nothing at all.
 
+**Four streams and routing by slot (same day, the operator's ruling, option A).** On Protocol 1
+slices C and D take the PureSignal pair's slots in plain receive (slots 2 + 3 on the Hermes
+class, 3 + 4 on the Orion class) and suspend while PureSignal transmits or diversity is on. Those
+slots carry the TX frequency while PureSignal transmits and slices C and D's frequencies
+otherwise; Thetis sends the TX frequency there always, so plain receive diverges from it, as the
+Hermes class already did on banks 5 and 6. `BoardCapsTable::userDdcCountFor` gives four streams
+on Protocol 1 (the row's count on Protocol 2) and `RadioModel::userStreamCount()` is the one
+reader, so a fifth slice shares a stream, as on the HL2. `RadioModel::publishDdcAssignment` now
+routes Protocol 1 by the codec's frame slots too; issue #263 cannot return because every
+Protocol 1 codec publishes slot 0 for slice A.
+
+| Model (Protocol 1) | Streams before | Streams after | Slices (maxSlices) |
+| --- | --- | --- | --- |
+| HL2 | 2 | 2 | 5 |
+| ANAN-10E, ANAN-100B | 2 | 2 | 2 |
+| HERMES, ANAN-10, ANAN-100 | 4 | 4 | 4 |
+| ANAN-G2E | 4 | 4 | 5 |
+| ANAN-100D, ANAN-200D, ORIONMKII, ANAN-7000D, ANAN-8000D, ANVELINAPRO3, REDPITAYA, ANAN-G2, ANAN-G2-1K | 5 (slice B on slice A's frequency; D, E on the pair's slots by position) | 4 | 5 |
+
 The HL2 is left as documented above: `P1CodecHl2::applyDdcAssignment` still suppresses stream 1
 (`streamDdc[1] = -1`) under PS-MOX, even though mi0bot's `GetDDC` (`console.cs:8733-8762
 [@c26a8a4]`) shows the same `rx2 = 1` shape for cases 5 and 7. This is pending a careful mi0bot
