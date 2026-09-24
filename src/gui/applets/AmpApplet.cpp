@@ -270,6 +270,17 @@ bool AmpApplet::stationConnectionActive(TunerModel::ConnectionPhase phase)
         || phase == Phase::Retrying;
 }
 
+// R-R3-22 fix wave: the remote toggle's words, as the Peripherals row
+// says them: Disconnect when connected, Cancel while the Core is still
+// trying (the same command cancels the attempt), Reconnect otherwise.
+QString AmpApplet::stationConnectionToggleText(TunerModel::ConnectionPhase phase)
+{
+    if (phase == TunerModel::ConnectionPhase::Connected) {
+        return tr("Disconnect");
+    }
+    return stationConnectionActive(phase) ? tr("Cancel") : tr("Reconnect");
+}
+
 bool AmpApplet::isRemoteWindow() const
 {
     return m_model && !m_model->ownsLocalDsp();
@@ -532,8 +543,8 @@ QMenu* AmpApplet::buildContextMenu(QObject* menuParent)
         // (or cancel an attempt) and Reconnect to its saved address go to
         // the Core; nothing here opens a connection of this computer's own.
         const bool active = m_amp && stationConnectionActive(m_amp->connectionPhase());
-        auto* toggleAction = menu->addAction(active ? QStringLiteral("Disconnect")
-                                                    : QStringLiteral("Reconnect"));
+        auto* toggleAction = menu->addAction(stationConnectionToggleText(
+            m_amp ? m_amp->connectionPhase() : TunerModel::ConnectionPhase::Disabled));
         const IStationLink* link = m_model->stationLink();
         QString unavailable;
         if (link && !link->stationLinkReady()) {

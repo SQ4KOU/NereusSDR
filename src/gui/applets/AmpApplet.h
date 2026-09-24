@@ -89,6 +89,10 @@ public:
     // R-R3-22: the phases in which the Core is connected to, or trying to
     // reach, the accessory; Disconnect then cancels or closes it.
     static bool stationConnectionActive(TunerModel::ConnectionPhase phase);
+    // R-R3-22 fix wave: the remote toggle's words for a phase, as the
+    // Peripherals row says them: Disconnect when connected, Cancel while
+    // the Core is still trying, Reconnect otherwise.
+    static QString stationConnectionToggleText(TunerModel::ConnectionPhase phase);
 
     // Test seams (R-R3-47).
     double  fwdGaugeValueForTesting() const;

@@ -401,7 +401,8 @@ TunerModel::StationConnectionState state(TunerModel::ConnectionPhase phase,
 QAction* connectionToggle(QMenu* menu)
 {
     for (QAction* a : menu->actions()) {
-        if (a->text() == QStringLiteral("Reconnect") || a->text() == QStringLiteral("Disconnect")) {
+        if (a->text() == QStringLiteral("Reconnect") || a->text() == QStringLiteral("Disconnect")
+            || a->text() == QStringLiteral("Cancel")) {
             return a;
         }
     }
@@ -994,12 +995,13 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
                                         QStringLiteral("Choose an output limit from 100 to 2000 W."));
     QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Identifying device"));
 
-    // While the Core is trying, Disconnect cancels the attempt.
+    // While the Core is trying, the item says Cancel (the word the
+    // Peripherals row uses) and cancels the attempt.
     {
         std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
         std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
-        checkToggle(ampMenu.get(), QStringLiteral("Disconnect"), true, QString());
-        checkToggle(rfKitMenu.get(), QStringLiteral("Disconnect"), true, QString());
+        checkToggle(ampMenu.get(), QStringLiteral("Cancel"), true, QString());
+        checkToggle(rfKitMenu.get(), QStringLiteral("Cancel"), true, QString());
         connectionToggle(ampMenu.get())->trigger();
         connectionToggle(rfKitMenu.get())->trigger();
     }
@@ -1029,7 +1031,11 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     QVERIFY2(OperatorWording::isPlain(rfKit.connectionLineTextForTesting()),
              qPrintable(rfKit.connectionLineTextForTesting()));
     {
+        // Connected: Disconnect. Retrying: Cancel again.
         std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
+        std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
+        checkToggle(ampMenu.get(), QStringLiteral("Disconnect"), true, QString());
+        checkToggle(rfKitMenu.get(), QStringLiteral("Cancel"), true, QString());
         connectionToggle(ampMenu.get())->trigger();
     }
     QCOMPARE(link.pgxlDisconnectCalls, 2);

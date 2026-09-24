@@ -630,15 +630,17 @@ QMenu* Rf2ksApplet::buildContextMenu(QObject* menuParent)
     auto* openAdv = menu->addAction(QStringLiteral("Open RF-Kit Advanced..."));
     menu->addSeparator();
     // R-R3-22 / R-R3-47: in a remote window the toggle follows the Core's
-    // phase (Disconnect also cancels an attempt) and asks the Core, which
+    // phase (Cancel while it is still trying) and asks the Core, which
     // owns the amp; a Core that does not offer it keeps the item off.
     const bool remote = isRemoteModel();
     const bool active = remote
         ? (m_rfKit && AmpApplet::stationConnectionActive(m_rfKit->connectionPhase()))
         : m_connected;
-    auto* disco = menu->addAction(active
-                                    ? QStringLiteral("Disconnect")
-                                    : QStringLiteral("Reconnect"));
+    // Remote: Cancel while the Core is still trying (R-R3-22 fix wave).
+    auto* disco = menu->addAction(remote
+        ? AmpApplet::stationConnectionToggleText(
+              m_rfKit ? m_rfKit->connectionPhase() : TunerModel::ConnectionPhase::Disabled)
+        : (active ? QStringLiteral("Disconnect") : QStringLiteral("Reconnect")));
     auto* diag  = menu->addAction(QStringLiteral("Copy diagnostics to clipboard"));
 
     connect(openAdv, &QAction::triggered, this, [this] {
