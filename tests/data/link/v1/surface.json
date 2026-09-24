@@ -224,6 +224,11 @@
             "kind": "i64",
             "name": "stationTciVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "accessoryDataVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -477,6 +482,65 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "setStationTci"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "mode",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "graceMs",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "swrGateEnabled",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "swrGateMax",
+                    "optional": false
+                }
+            ],
+            "capability": "accessoryDataVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "setTxInterlockPolicy"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "enabled",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "watts",
+                    "optional": false
+                }
+            ],
+            "capability": "accessoryDataVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "setPgxlPowerCap"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "device",
+                    "optional": false
+                }
+            ],
+            "capability": "accessoryDataVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "clearAccessoryFaults"
         },
         {
             "arguments": [
@@ -1586,6 +1650,267 @@
         }
     },
     "mirrorClasses": {
+        "AccessoryDataModel": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "faultRevision",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "pgxlFaults",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "tgxlFaults",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "rfkitFaults",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "pgxlConnectedSinceMs",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "pgxlLastRttMs",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "pgxlKeepaliveMissed",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "pgxlReconnectCount",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "pgxlFramesIn",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "pgxlFramesOut",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "pgxlBytesIn",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "pgxlBytesOut",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "pgxlLastFrameMs",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "pgxlFaultsSession",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tgxlConnectedSinceMs",
+                    "ordinal": 14
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tgxlLastRttMs",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tgxlKeepaliveMissed",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tgxlReconnectCount",
+                    "ordinal": 17
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tgxlFramesIn",
+                    "ordinal": 18
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tgxlFramesOut",
+                    "ordinal": 19
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tgxlBytesIn",
+                    "ordinal": 20
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tgxlBytesOut",
+                    "ordinal": 21
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tgxlLastFrameMs",
+                    "ordinal": 22
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tgxlFaultsSession",
+                    "ordinal": 23
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2
+                    ],
+                    "kind": "enum",
+                    "name": "interlockMode",
+                    "ordinal": 24
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "interlockGraceMs",
+                    "ordinal": 25
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "interlockSwrGateEnabled",
+                    "ordinal": 26
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "interlockSwrGateMax",
+                    "ordinal": 27
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "powerCapEnabled",
+                    "ordinal": 28
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "powerCapW",
+                    "ordinal": 29
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "powerCapExceeded",
+                    "ordinal": 30
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "powerCapAlertText",
+                    "ordinal": 31
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "powerCapAlertCount",
+                    "ordinal": 32
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "tuneMemory",
+                    "ordinal": 33
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "autoTuneMemoryRecall",
+                    "ordinal": 34
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "tgxlAntenna1Label",
+                    "ordinal": 35
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "tgxlAntenna2Label",
+                    "ordinal": 36
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "tgxlAntenna3Label",
+                    "ordinal": 37
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "rfkitAntenna1Label",
+                    "ordinal": 38
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "rfkitAntenna2Label",
+                    "ordinal": 39
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "rfkitAntenna3Label",
+                    "ordinal": 40
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "rfkitAntenna4Label",
+                    "ordinal": 41
+                }
+            ]
+        },
         "AlexAntennaFacade": {
             "properties": [
                 {
@@ -3752,6 +4077,10 @@
         {
             "class": "StationTciModel",
             "key": "stationTci"
+        },
+        {
+            "class": "AccessoryDataModel",
+            "key": "accessoryData"
         },
         {
             "class": "PanadapterModel",

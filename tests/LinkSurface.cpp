@@ -21,6 +21,11 @@
 //                                    object after the RF-Kit merge.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): the
+//                                    accessory records' class after the
+//                                    accessories merge. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -70,6 +75,7 @@
 #include "core/session/media/RemoteSpectrumContext.h"
 #include "core/session/media/SpectrumEndpoint.h"
 #include "core/settings/SettingsScope.h"
+#include "models/AccessoryDataModel.h"
 #include "models/AmplifierModel.h"
 #include "models/NotchModel.h"
 #include "models/PanadapterModel.h"
@@ -1164,7 +1170,8 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &IoBoardHl2Facade::staticMetaObject,
             &AmplifierModel::staticMetaObject,
             &RfKitModel::staticMetaObject,
-            &StationTciModel::staticMetaObject};
+            &StationTciModel::staticMetaObject,
+            &AccessoryDataModel::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

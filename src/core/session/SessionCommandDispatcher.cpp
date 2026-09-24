@@ -65,6 +65,10 @@
 //                                    setPgxlPowerCap and clearAccessoryFaults
 //                                    (accessoryDataVersion 1). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): the
+//                                    accessory record verbs in
+//                                    verbSpecs(). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -252,6 +256,8 @@ QString notRepresentableReason(const QByteArray& name)
 //   *Pgxl*                 remotePgxlControlAvailable() (version 2)
 //   *RfKit*                remoteRfKitControlAvailable() (version 2)
 //   setStationTci          stationTciAvailable() (version 1)
+//   setTxInterlockPolicy, setPgxlPowerCap, clearAccessoryFaults
+//                          accessoryDataAvailable() (version 1)
 //   requestIoBoardProbe    remoteHardwareConfigAvailable() (version 2)
 //   setAlexRxAntenna       radioHardwareVersion 3 (requestAlexRxAntenna)
 //   nnr.*                  nnrControlAvailable(); nnr.tryAgain adds
@@ -309,6 +315,15 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"setRfKitEnabled", {arg("enabled", kBool)}, "remoteRfKitControlVersion", 2,
          kRadioIdentitySessionProtocolMinor},
         {"setStationTci", {arg("enabled", kBool), arg("port", kInt)}, "stationTciVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        // The Core's accessory records and settings (R-R3-47, R-R3-22).
+        {"setTxInterlockPolicy",
+         {arg("mode", kInt), arg("graceMs", kInt), arg("swrGateEnabled", kBool),
+          arg("swrGateMax", kDouble)},
+         "accessoryDataVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"setPgxlPowerCap", {arg("enabled", kBool), arg("watts", kInt)},
+         "accessoryDataVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"clearAccessoryFaults", {arg("device", kUtf8)}, "accessoryDataVersion", 1,
          kRadioIdentitySessionProtocolMinor},
         // The Core's radio hardware (R-R3-46).
         {"requestIoBoardProbe", {}, "radioHardwareVersion", 2,
