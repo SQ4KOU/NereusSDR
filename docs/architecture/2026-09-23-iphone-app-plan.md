@@ -49,7 +49,8 @@ read for this plan at `4bb89b5d`.
     run in the Core/GUI session's lanes and reach `codex/integrate-r2-main`. Their build
     directory is the lane's (`build-integration` or `build-lane-b`), and `build` in a
     verification command means that directory.
-  * **Phone tasks** (5 to 11, 15, 16a, 27a, 28a, 29a, 51 to 69, and 70 with JJ) run in
+  * **Phone tasks** (5 to 11, 11a, 15, 15b, 16a, 27a, 28a, 29a, 51 to 69 with their
+    lettered tasks, and 70 with JJ) run in
     the phone session on `claude/iphone-app`, cut from `codex/integrate-r2-main` (see
     "Before Task 1"). Its controller merges `codex/integrate-r2-main` into
     `claude/iphone-app` only between tasks and never commits to
@@ -405,8 +406,8 @@ order as the station tasks they consume land, except for the first usable build 
 iPhone connects to the Pi 4 Core with the Hermes Lite 2 over the Pi's public IPv6
 address, pairs by code, shows the band and plays the sound. The phone tasks on that path
 run first, in this order, as the station tasks they need land: 51, 55a (which needs no
-station work), 15, 15b, 52, 53, 54a, 56a, then the check on his iPhone, 56b. Their station path is Part C (12 to 16) in
-integration, then 19 and 20; the Core/GUI session puts the build on the Pi 4 with JJ's
+station work), 15, 15b, 11a, 52, 53, 54a, 56a, then the check on his iPhone, 56b. Their station path is Part C (12 to 16) in
+integration, then 19 and 20 with their follow-up; the Core/GUI session puts the build on the Pi 4 with JJ's
 go-ahead, and JJ reads the pairing code there himself. Finding Cores by Bonjour (16a)
 joins the path when its station half is in. Several devices on the phone (56c) follows
 as soon as the station's several-devices tasks are in, before transmit. The transmit and
@@ -1347,6 +1348,152 @@ and `ios/scripts/interop-test.sh`.
 - [ ] **Step 2:** Jitter buffer, resampler and playback core with tests; the sound-only
       interop case.
 
+## Task 11a: The Core's catalogue and display extras in the app
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
+**Requirements:** R-IOS-27 (the app draws each radio's controls from the values the Core
+advertises and has no radio tables of its own), R-IOS-06 (the app's half of the
+catalogue), R-IOS-11 (the band shows the Core's peak blobs, active peak hold, noise-floor
+line and waterfall levels), D4 and spec §4.11 (the app carries none of the display
+computations the desktop ports; the Core runs them), link sections 6.3 and 7.4 and
+`docs/architecture/2026-09-23-display-extras-v1.md` as Tasks 19 and 20 leave them.
+
+**Files:**
+- Step 0: merge the integration branch once station Tasks 19 and 20 are in it, with
+  their follow-up (the catalogue's `receive` key and `waterfallAverageTimeMs`), and
+  recount the conformance counts at the merge. On lane D at `da52e2b0` they brought the
+  session fixtures `catalog-anan-g2` and `catalog-hermes-lite-2` (`runs` includes `app`;
+  the app's runner ignores their `stationSetup.board`), the five `nsdx1` media vectors,
+  and 33 changed minor-11 fixtures whose capabilities now end with
+  `stationCatalogVersion` then `displayExtrasVersion` (0 where media is off).
+- Create: `ios/NereusKit/Sources/NereusModels/StationCatalog.swift` (the parsed
+  catalogue and its types), `ios/NereusKit/Sources/NereusMirror/CatalogFeed.swift`
+- Create: `ios/NereusKit/Sources/NereusMedia/DisplayExtras.swift` (the request and the
+  decoded datagram), `DisplayExtrasDecoder.swift` (NSDX v1)
+- Modify: `ios/NereusKit/Sources/NereusMedia/MediaFeatureGates.swift` (the
+  `displayExtras` gate), `DisplayEndpointRequest.swift` (the optional extras),
+  `MediaControlClient.swift` (NSDX datagrams to the decoder; today it drops every
+  datagram that isn't NSDC), `DisplayFrameDecoder.swift` (an absolute-only plane decode
+  the peak hold section uses, where a residual block is malformed, as the station's
+  `decodeDisplayCodecAbsolutePlane` in `DisplayCodec.h` does)
+- Test: `ios/NereusKit/Tests/NereusModelsTests/StationCatalogTests.swift`,
+  `ios/NereusKit/Tests/NereusMirrorTests/CatalogFeedTests.swift`,
+  `ios/NereusKit/Tests/NereusMediaTests/DisplayExtrasDecoderTests.swift` (the `nsdx1`
+  runner), `MediaControlClientTests.swift`, and the count tests
+  (`LinkConformanceSessionTests.swift` and the others the merge moves)
+
+**Interfaces:**
+- Consumes: `DisplayFrameDecoder` and `DisplayFrame` (Task 7), `MirrorStore` and
+  `MirrorObject` (Task 9), `MediaControlClient`, `DisplayEndpointRequest` and
+  `MediaFeatureGates` (Task 11); station Task 19 (object key `catalog`, class
+  `StationCatalog`, properties `json` and `revision`, capability `stationCatalogVersion`
+  1; link section 7.4 is the authority for names and shapes) and Task 20 (capability
+  `displayExtrasVersion` 1; the extras document's sections 1 to 4 are the wire).
+- Produces:
+  - `struct StationCatalog: Equatable, Sendable` with
+    `static func parse(json: String) -> StationCatalog?`, holding link section 7.4's
+    keys, the twelve Task 19 built and `receive`, its follow-up (the Core/GUI session,
+    2026-09-24, still `stationCatalogVersion` 1):
+    - `receive`: one `{min, max, step}` for each receive setting, named after the setting
+      it bounds: `afGain` (the AF slider's own units), `ssqlThresh` (slider units),
+      `amsqThresh` and `fmsqThresh` (dB);
+    - `modes` (`id`, `label`, `sideband`);
+    - `filterPresets`, keyed by the mode's label (`USB` and so on), not its id; slot 0 is
+      `F1`, a mode has 1 to 10 presets, and the edges are signed like `filterLow` and
+      `filterHigh`;
+    - `tuneSteps`, smallest first, read and never assumed (today six on both radios: 1,
+      10, 100 and 500 Hz, 1 and 10 kHz);
+    - `agc`: `modes` whose ids are the slice's `agcMode` 0 to 4 (Off, Long, Slow, Med,
+      Fast), and `thresholdDb` (-160 to +2 step 1 today); a later range arrives as another
+      `{min, max, step}` key named after the setting it bounds, and the parser keeps
+      every such key by name;
+    - `meters`, `board`, `tools` and `radioItems` (only `offered` items are listed, D41);
+    - `bandPlans`, whose default is the entry with `default` true (today `arrl-us`, "ARRL
+      (US)");
+    - `palettes`, `id` the desktop's palette number and each stop's `at` 0 to 1;
+    - `sliceColours`, one for each slice the radio allows, in slice order, read and never
+      assumed;
+    - `audio`, `{}` until Task 23.
+    Colours are upper-case `#RRGGBB`. Unknown keys and members are ignored; an empty
+    `json` is no catalogue yet (the session fixtures' stand-in) and parses to `nil`
+    without an error; malformed JSON is `nil`, logged without its content.
+  - `CatalogFeed` (NereusMirror): the latest `StationCatalog` from the mirror's `catalog`
+    object, on the main actor. `revision` travels as an i64 holding a u32 that wraps: a
+    new one replaces the held catalogue only when it is newer by serial arithmetic. On a
+    Core at minor 10, or with `stationCatalogVersion` 0, there is none, and the screens
+    that need it say "Needs a newer Core" (D23).
+  - `struct DisplayExtrasRequest: Equatable, Sendable` with the document's section 2
+    fields and ranges: `peakBlobs {count 1 to 20, holdMs 0 or 100 to 60000,
+    fallDbPerSec 0 or 1 to 60, insideOnly}`, `activePeakHold {enabled, holdMs 100 to
+    60000, fallDbPerSec 0.1 to 120}`, `noiseFloor {enabled, shiftDb -12 to 12}`,
+    `waterfallLevels {mode "manual"|"agc"|"noiseFloorAgc"|"clarity", lowDbm and highDbm
+    -400 to 100, offsetDb -60 to 60}`, `normalize`, `calibrationOffsetDb` -30 to 30,
+    `averageTimeMs` 10 to 9999 (the spectrum's), and `waterfallAverageTimeMs` (the
+    waterfall's own, the follow-up of 2026-09-24; when it is absent the waterfall uses
+    `averageTimeMs`), with the ranges the extras document gives it. A value out of range
+    is refused before anything is sent.
+    `worstCaseBytesPerFrame(traceSamples:)` is `20 + 121·[blobs] + A(n)·[hold] +
+    4·[floor] + 8·[levels]` with `A(n) = 3 + 5·ceil(n/128) + n` (section 3.3); with one
+    message a frame more, it is what the Core charges for the extras, and what Task 52's
+    allocator adds to its fit test.
+  - `MediaFeatureGates.displayExtras`: open when the agreed minor is at least 11 and the
+    Core advertised `displayExtrasVersion` 1 or more. `DisplayEndpointRequest` gains
+    `extras: DisplayExtrasRequest?`, written into the `subscribe` operation only while
+    the gate is open; with it closed, a request carrying extras fails locally with a named
+    error, since the Core would refuse it as one it can't read.
+  - `struct DisplayExtras: Equatable, Sendable`: `endpointId`, `contextGeneration`,
+    `encoderSequence`, and the sections the datagram carried: `peakBlobs` (strongest
+    first, each a `traceSample` below the context's trace length, not a view pixel, and
+    its dBm); `peakHoldDbm` (the trace's length; a sample the hold hasn't reached yet is
+    the context's `minDbm`); `noiseFloorDbm` (where the line is drawn: the smoothed
+    estimate plus `shiftDb`; not the `noise-floor` operation's full-source floor, which
+    feeds Clarity); `waterfallLevels` (low and high dBm for the latest waterfall line).
+    Calibration and normalise are already in every dBm the frame and the datagram carry:
+    the app adds nothing.
+  - `DisplayExtrasDecoder.decode(_ datagram: Data, context:)`, checking in the document's
+    order: over 16 KiB `oversized`; the magic `badMagic`; the version
+    `unsupportedVersion`; the rest of the header `truncated`; unknown section bits
+    `unknownSections`; no section, or a header size other than 20, `malformed`; the
+    endpoint and generation against the accepted context `contextMismatch`; each section
+    (`truncated` when bytes run out, `malformed` for more than 20 blobs, a blob past the
+    trace, a float that isn't finite, or a peak hold plane that isn't an absolute plane of
+    the trace's length); and nothing after the last section (`malformed`). A refused
+    datagram changes nothing.
+  - `MediaControlClient` hands each NSDX datagram on the display channel to the decoder
+    against its endpoint's accepted context and delivers the accepted extras with their
+    frame's endpoint, generation and encoder sequence. A frame that arrives without its
+    datagram leaves the last extras in place.
+
+**Acceptance:**
+- The `nsdx1` runner passes the five vectors (`nsdx1-full`, `nsdx1-noise-floor`,
+  `nsdx1-other-generation`, `nsdx1-unknown-section`, `nsdx1-truncated`): each decoded
+  against its `expect.context`, `accepted` and `reason` compared exactly, exactly the
+  listed keys present, every number within `tolerance.dbm`.
+- Both catalogue fixtures parse, and differ only in `board` and `meters.rfPower`; an
+  unknown top-level key and an unknown member are ignored; an empty `json` is no
+  catalogue; a `revision` of 5 after 4294967295 is newer, and an older one is ignored.
+- With the gate closed, a request carrying extras is refused locally and nothing is sent;
+  with it open, `subscribe` carries exactly the fields asked for, and a value out of range
+  is refused locally.
+- An NSDX datagram reaches the decoder against its endpoint's context and is delivered
+  beside its frame; one for an endpoint with no accepted context is refused
+  `contextMismatch`; the NSDC path is unchanged, its runner still passing.
+- No catalogue value or palette stop is written into the app's sources: the tests read
+  them from the fixtures at run time (D4).
+
+**Verification:** a parser and a codec against the Core's own vectors: tests first.
+`ios/scripts/swift-test.sh` with no filter on both toolchains,
+`python3 scripts/verify-ios-provenance.py`, `python3 -m pytest -q tests/compliance`.
+
+**Execution note (advisory):** opus. Requires Tasks 7, 9 and 11, and station Tasks 19 and
+20 with their follow-up in the integration branch. On the listening path, before Task 52.
+
+- [ ] **Step 0:** Merge the integration branch with Tasks 19 and 20; recount.
+- [ ] **Step 1:** `StationCatalog` and `CatalogFeed` with their tests.
+- [ ] **Step 2:** The extras request and gate, the NSDX decoder and its runner, and the
+      client's routing.
+
 ---
 
 # Part C: Identity and pairing
@@ -1742,7 +1889,9 @@ C leaves them.
 **Files:**
 - Step 0: merge the integration branch once Part C (Tasks 12, 13, 14 and 16, with the
   group review's fix round) is in it. `tests/CMakeLists.txt` conflicts (the media offerer
-  and the pairing peer): keep both.
+  and the pairing peer): keep both. The same carry brings station Tasks 17 and 18 (lane B
+  carries them) beside integration's TGXL controls; lane B was at `72666796` (the fix
+  wave's R2-M6) at the phone session's last check, so take whatever the carry holds.
 - Modify: `ios/NereusKit/Sources/NereusLink/LinkMessage.swift`, `LinkCodec.swift`,
   `StationSession.swift`, `StationTrust.swift`, `WebSocketLinkTransport.swift`,
   `Refusal.swift`, `StationAuthenticator.swift`, `LinkFeatures.swift` (`deviceAuth: 1`)
@@ -1772,11 +1921,19 @@ C leaves them.
     publicKey, name, kind, signature}` with the optional `shortName`; `auth.result` and
     `session.end` gain `code`. It checks shapes as the station does (an `identity` object
     of two strings; a non-empty `challenge`; a `device` of five strings plus the optional
-    one; `pair.start`'s `mode` `lan` or `code`; `pair.spake`'s `step` 0 to 3 and a
-    non-empty `data`; a non-empty `box`; `pair.fail`'s `reason` and `retryAfterMs` 0 to
-    2147483647), with no base64url or length checks: the fixtures' stand-ins are literal
-    strings. It ignores keys it doesn't know (`session.end`'s `takenOverBy`,
-    `takenOverById` and `secondsAgo`; `devices` entries' `shortName`; the rest).
+    `shortName`, a string, written only when it isn't empty; `pair.start`'s `mode` `lan`
+    or `code` and its `device` an object of three strings (`publicKey`, `name`, `kind`);
+    `pair.accept`'s `identity` an object of two strings and its `label` a string;
+    `pair.spake`'s `step` 0 to 3 and a non-empty `data`; a non-empty `box`; `pair.fail`'s
+    `reason` and `retryAfterMs` 0 to 2147483647; `code`, where `auth.result` or
+    `session.end` carries one, a non-empty string (fixture `session-end-code-empty`)),
+    with no base64url or length checks: the fixtures' stand-ins are literal strings
+    (`SessionMessages.cpp` on the merged tree is the station's copy of these rules). It
+    ignores keys it doesn't know; the several-devices station tasks add some to
+    `session.end` and to the `devices` entries later, and Task 56c reads them.
+  - `StationSession` never holds more than one connection to a Core that is still
+    connecting: one address may have at most 2 (`kMaxHandshakesPerAddress`, link section
+    12.3), and the Core ends a third with `session.end` `retryable` true.
   - `StationTrust.identity(publicKey:)` holds the Core's 91-byte SubjectPublicKeyInfo DER.
     Under it the transport accepts any certificate and reports its SHA-256; the session
     checks that `hello.identity.publicKey` is the trusted key and that `certBinding`
@@ -1805,7 +1962,9 @@ C leaves them.
   - The device's `name` is the one the operator confirmed at pairing (D65), not blank, at
     most 64 bytes of UTF-8, with no Cc, Cf, Zl or Zp characters; `kind` is `phone` on an
     iPhone and `tablet` on an iPad; `shortName` is the model, "iPhone" or "iPad" (at most
-    32 bytes; the Core numbers duplicates).
+    32 bytes of UTF-8, `shortNameMaxBytes`; outside the signed transcript and not held to
+    the Core's wording rules, but not blank and with no Cc, Cf, Zl or Zp characters, link
+    section 3.5).
   - `Refusal` carries the link's end `code`: `takenOver`, `linkVersion`,
     `pairingRequired`, `wrongToken`, `deviceNotPaired`, `deviceProofFailed`,
     `deviceRemoved`, `identityChanged` (client-side only), `protocolError`; a code it
@@ -1816,16 +1975,21 @@ C leaves them.
 
 **Acceptance:**
 - After the merge every suite passes against Part C's fixtures, with the counts recounted
-  at the merge (on lane B: 51 control fixtures, 11 client kinds and 20 station kinds; 44
-  session fixtures, 28 of them the app's; 7 NSDC vectors; plus whatever the catalogue work
-  brings in the same merge). Every control fixture round-trips, the new ones included.
+  at the merge (on lane B at `72666796`: 53 control fixtures, 25 from the client and 28
+  from the station, 11 client kinds and 20 station kinds; 44 session fixtures, 28 of them
+  the app's; 7 NSDC vectors; integration adds `verbs-tgxl-control`, which the app runs
+  too, and lane D, if it comes in the same merge, two catalogue sessions and five `nsdx1`
+  vectors). `surface.json` then lists 15 limits, `shortNameMaxBytes` and
+  `kMaxHandshakesPerAddress` among them. Every control fixture round-trips, the new ones
+  included.
 - The runners (the session player, FakeStation and the mirror support share one fill):
   every station `hello` carries a run-time P-256 test identity whose `certBinding` signs
   the digest the scripted transport reports; `challenge` is 32 fresh random bytes,
   base64url, recorded as `challenge` when the fixture writes `"$capture:challenge"`;
   `"$device:signed"` is checked, not filled (five strings, `id` the fingerprint of
   `publicKey`, a canonical 91-byte P-256 key, the signature verifying over this
-  connection's transcript); a fixture whose `auth.request` carries a `device` block signs
+  connection's transcript, and a `shortName`, when present, a usable short name: not
+  blank, at most 32 bytes, no Cc, Cf, Zl or Zp characters); a fixture whose `auth.request` carries a `device` block signs
   in with the device key under `.identity` trust, the rest by token under certificate
   trust. `device-sign-in`, `device-not-paired` and `pairing-required` pass on the app's
   side, and the station-only fixtures stay filtered by `runs`.
@@ -1866,9 +2030,12 @@ anywhere), R-IOS-16 (pairing three ways; the code text), spec §5.3 items 3 and 
   - `ios/NereusKit/Sources/CSodium/`: libsodium's release archive, only its `.c` and `.h`
     files (SwiftPM would compile the archive's x86 `.S` files); `sodium/version.h`
     written from `builds/msvc/version.h` (the archive ships only `version.h.in`); the
-    Apple defines from `cmake/NereusPairing.cmake`; the whole library, not the minimal
-    build (spake2-ee uses the ed25519 core functions); a module map exposing `sodium.h`
-    only.
+    settings `cmake/NereusPairing.cmake` gives every platform (the public
+    `SODIUM_STATIC=1`; `CONFIGURED=1`, `HAVE_INTTYPES_H=1`, `HAVE_STDINT_H=1`,
+    `NATIVE_LITTLE_ENDIAN=1`, and `HAVE_TI_MODE=1` on a 64-bit target) plus its Apple
+    defines, with `-fno-strict-aliasing -fno-strict-overflow -fwrapv` beside the warnings
+    flag; the whole library, not the minimal build (spake2-ee uses the ed25519 core
+    functions); a module map exposing `sodium.h` only.
   - `ios/NereusKit/Sources/CSpake2EE/`: `src/crypto_spake.c`, `src/crypto_spake.h`,
     `src/pushpop.h` and `LICENSE`, with a shim header target like `COpusShim`, since
     `crypto_spake.h` uses `size_t` with no includes.
@@ -1879,11 +2046,14 @@ anywhere), R-IOS-16 (pairing three ways; the code text), spec §5.3 items 3 and 
 - Modify: `ios/NereusKit/Package.swift` (`CSodium` and `CSpake2EE`, NereusLink depending
   on them, the word list as a NereusLink resource),
   `ios/NereusKit/Sources/NereusKitTesting/FakeStation.swift` (pairing by code and one tap,
-  and device-key checks), `ios/scripts/interop-test.sh` (builds `nereus_pairing_peer` with
-  `cmake --build build --target nereus_pairing_peer`, exports `NEREUS_PAIRING_PEER`, and
-  runs `'MediaPeerInteropTests|PairingInteropTests'`), `.github/workflows/ios.yml`
-  (trigger paths: `tests/tools/nereus_pairing_peer.cpp`, `src/core/security/**`,
-  `cmake/NereusPairing.cmake`, `resources/pairing-words-v1.txt`),
+  and device-key checks), `ios/scripts/interop-test.sh` (builds `nereus_pairing_peer` and
+  `nereusd` with `cmake --build build --target nereus_pairing_peer nereusd`, exports
+  `NEREUS_PAIRING_PEER` and `NEREUS_NEREUSD` with their paths, and runs
+  `'MediaPeerInteropTests|PairingInteropTests|CorePairingSignInTests'`),
+  `.github/workflows/ios.yml` (trigger paths: `tests/tools/nereus_pairing_peer.cpp`,
+  `src/core/security/**`, `src/core/session/StationServer.cpp`,
+  `src/core/session/SessionMessages.cpp`, `src/core/daemon/StationControlCommands.cpp`,
+  `src/server_main.cpp`, `cmake/NereusPairing.cmake`, `resources/pairing-words-v1.txt`),
   `scripts/verify-ios-provenance.py` (the word list copy equals the original; a library's
   `-notices` text is shown with its licence) with cases in
   `tests/compliance/test_verify_ios_provenance.py`,
@@ -1913,16 +2083,27 @@ anywhere), R-IOS-16 (pairing three ways; the code text), spec §5.3 items 3 and 
     its own step 3 fails; parses the Core's box (never compares bytes; `label` may be
     empty) and checks that its identity equals the `hello`'s and its binding verifies over
     the certificate's SHA-256. Success is `pair.accept` or the Core's `pair.confirm`, then
-    the close; a refusal is `pair.fail`, then the close; a `session.end` or a bare close
-    is a failure. A `pair.*` send on a signed-in session is refused locally (a
-    `LinkSendError` case), since the Core would end the connection. After success the
-    caller connects the normal way and signs in with the device key.
+    the close; a refusal is `pair.fail`, then the close, and it may come at any step,
+    including after the device's `pair.confirm` (the window closed since step 1, which
+    burns the code; the box could not be read; the device could not be saved; link
+    section 3.6); a `session.end` or a bare close is a failure. A `pair.*` send on a
+    signed-in session is refused locally (a `LinkSendError` case), since the Core would end
+    the connection. After success the caller connects the normal way and signs in with the
+    device key, on a new connection: the pairing connection is never more than one of the
+    two an address may have still connecting (link section 12.3).
+  - The connect deadline (link section 12.2) covers a pairing connection too: the Core
+    sends step 0 only after its own Argon2id hash has run, then the device runs its own
+    (64 MiB) before step 1, and both fit inside it; the device hashes off the caller's
+    actor.
   - `enum PairingError`: `notACode`; `cannotPair` (the Core didn't declare pairing);
     `weakHashSettings` (step 0 failed its check); `wrongCode(retryAfter:reason:)`;
     `refused(reason:retryAfter:)` (the Core's reason, shown as sent, including a closed
     pairing window: a reopened window closes after 10 minutes, and every window closes
     after 5 consecutive failed codes, reopened only from the Core's console or a paired
-    device); `identityMismatch`; `ended(reason:)`.
+    device); `identityMismatch`; `ended(reason:)`. The fifth wrong code in a row arrives
+    as `wrongCode` with `retryAfter` 0, because it closed the window; the closed-window
+    reason comes only with the next `pair.start`, so the app says plainly that a new code
+    needs the window opened again.
   - `enum PairingCodeText { static func normalise(_:) -> String?; static func suggestions(forPrefix:) -> [String] }`:
     lowercase; split on runs of anything outside ASCII `[a-z0-9]`; exactly three parts;
     the number all digits, at most 9 of them, value 1 to 999999, with leading zeros
@@ -1944,7 +2125,9 @@ anywhere), R-IOS-16 (pairing three ways; the code text), spec §5.3 items 3 and 
   `"nereussdr-station-v1"` (20 bytes), with no trailing NUL; the password is the
   normalised code as UTF-8; `crypto_pwhash_alg_default()` (2, Argon2id),
   `crypto_pwhash_OPSLIMIT_INTERACTIVE` (2), `crypto_pwhash_MEMLIMIT_INTERACTIVE`
-  (67108864); `sodium_init()` first. The device calls
+  (67108864); `sodium_init()` first. The Core's role, for FakeStation and the tests,
+  checks that step 1 is a valid point (`crypto_core_ed25519_is_valid_point`) before step
+  2, and a bad step 1 burns the code, as the station does. The device calls
   `crypto_spake_validate_public_data(pd, alg_default, OPSLIMIT_INTERACTIVE, MEMLIMIT_INTERACTIVE)`,
   `crypto_spake_step1(&st, r1, pd, pw, len)` and
   `crypto_spake_step3(&st, r3, &keys, cid, 19, sid, 20, r2)`. Step 0 is 36 bytes
@@ -1964,7 +2147,8 @@ anywhere), R-IOS-16 (pairing three ways; the code text), spec §5.3 items 3 and 
   `{"identity":{"certBinding","publicKey"},"label"}` with `server_sk` (Qt compact JSON,
   keys sorted).
 - Waits: `pair.fail`'s `retryAfterMs` 0 to 2147483647; the first burned code waits 5000
-  ms, doubling up to 300000; "Another device is pairing" waits 5000 ms.
+  ms, then 10000, 20000 and 40000, and the fifth burn in a row closes the window (link
+  section 3.6); "Another device is pairing" waits 5000 ms.
 - The word list, `resources/pairing-words-v1.txt`: 256 lines of `[a-z]{4,7}`, LF with a
   trailing LF, sorted, 1697 bytes, SHA-256
   `dd319f6966664521e3a1253ad98d6b548e8a7b28ccef1d864d990f91a7513054`; `anvil` and
@@ -1987,12 +2171,20 @@ anywhere), R-IOS-16 (pairing three ways; the code text), spec §5.3 items 3 and 
   (4) one tap refused, in three runs: `--claimed`, `--lan-deny`, `--address 192.0.2.7`;
   (5) `--claimed`, then code pairing: 2 devices.
   No test message prints the scratch code.
-- Against a real `nereusd` with a scratch profile and config: the test reads the code
-  with `nereusd pairing show` against that config (the code never goes to standard output
-  or a log), pairs by code over real TLS, then signs in with the device key, the Core
-  checking the signature.
-- `normalise` and `suggestions` pass the station's own table
-  (`tests/tst_pairing_code.cpp:187-214` on the merged tree) plus
+- Against a real `nereusd` (`NEREUS_NEREUSD`) with a scratch profile and config: the test
+  reads the code from the `Pairing code:` line that `nereusd pairing show --config
+  <scratch> --profile <scratch>` prints on its own standard output, never echoing it (the
+  Core itself never prints or logs it), pairs by code over real TLS, then signs in with
+  the device key, the Core checking the signature. The scratch config sets
+  `remote_port` and `remote_bind` together (either alone leaves the other off or on
+  127.0.0.1), turns `status_page` off or gives it a free port (it is on at 47911 by
+  default, which a Core already running on the Mac holds), and a short
+  `state_directory` under `/tmp`; every console command takes the same `--config` and
+  `--profile` as the running Core, and one exits 1 when no Core answers and 2 for a
+  config file it can't read or validate.
+- `normalise` passes the station's own table (`tests/tst_pairing_code.cpp:187-214` on
+  the merged tree: joining at 187-204, refusing at 206-214; `suggestions` has no station
+  counterpart) plus
   `normalise("7 Anvil  harbor") == "7-anvil-harbor"`, `normalise("007-anvil-harbor") == "7-anvil-harbor"`,
   `normalise("7-anvil-harbour") == nil` and `suggestions(forPrefix: "harb")` containing
   `"harbor"`.
@@ -2005,7 +2197,8 @@ integration. `ios/scripts/swift-test.sh` on both toolchains, `ios/scripts/intero
 simulator test run.
 
 **Execution note (advisory):** opus. Secrets: the code and the keys never reach a log or a
-test message. Requires Task 15. On the listening path.
+test message. Requires Task 15, and station Task 17 (`nereusd pairing show`, which the
+Part C carry brings). On the listening path.
 
 - [ ] **Step 1:** Vendor libsodium and spake2-ee; the word list and the code text.
 - [ ] **Step 2:** The exchange, the boxes, the pairing client and FakeStation's pairing.
@@ -6441,57 +6634,116 @@ the dBm scale), D7, spec §5.1 item 4 (the dBm scale a little larger for fingers
 plan strip on, ARRL by default).
 
 **Files:**
-- Create: `ios/NereusKit/Sources/NereusBand/BandGeometry.swift` (frequency and dBm to
-  points), `WaterfallHistory.swift`, `BandPlanStrip.swift`, `BandRenderer.swift` (Metal,
-  offscreen-capable), `Shaders/Band.metal` (shipped as a resource)
+- Modify: `ios/NereusKit/Package.swift` (a `NereusBand` target in the `NereusKit`
+  product, depending on NereusModels and NereusMedia, with `resources:
+  [.copy("Shaders")]`; a `NereusBandTests` test target)
+- Create: `ios/NereusKit/Sources/NereusBand/BandGeometry.swift` (frequency, dBm and trace
+  samples to points), `WaterfallHistory.swift`, `BandPlanStrip.swift`,
+  `BandDisplaySettings.swift` (the phone's own display settings), `BandRenderer.swift`
+  (Metal, offscreen-capable), `Shaders/Band.metal`
+- Create: `ios/NereusKit/Sources/NereusMedia/DisplayQualityAllocator.swift`
 - Create: `ios/NereusApp/Band/BandView.swift` (a `MTKView` wrapper)
 - Create: `ios/NereusKit/Tests/NereusBandTests/BandGeometryTests.swift`,
-  `BandRendererTests.swift` (offscreen renders on macOS compared at chosen pixels)
+  `BandRendererTests.swift` (offscreen renders on macOS compared at chosen pixels),
+  `BandDisplaySettingsTests.swift`,
+  `ios/NereusKit/Tests/NereusMediaTests/DisplayQualityAllocatorTests.swift`
 
 **Interfaces:**
-- Consumes: `DisplayFrame` (Task 7), the display endpoint requests (Task 11), the
-  catalogue's band plans, palettes and display defaults (Task 19), the display extras
-  (Task 20).
-- Produces: `BandGeometry(centerHz:, spanHz:, size:, dbmRange:)` with `x(forHz:)`,
-  `hz(forX:)`, `y(forDbm:)`; `BandRenderer.draw(frame:history:overlays:into:)`; the
-  endpoint width requested equals the view's width in pixels (1 to 4096).
-  - `DisplayQualityAllocator` (in NereusMedia), the phone's half of the display budget:
-    when the Core's budget (with several devices, this device's share, Task 76) or an
-    `allocation-result` says the requested display doesn't fit, it follows the budget
+- Consumes: `DisplayFrame` (Task 7), the display endpoint requests (Task 11),
+  `StationCatalog` and `CatalogFeed` (Task 11a: `bandPlans`, whose default is the entry
+  with `default` true, today `arrl-us` "ARRL (US)", and `palettes`),
+  `DisplayExtrasRequest`, `DisplayExtras`, the `displayExtras` gate and
+  `worstCaseBytesPerFrame(traceSamples:)` (Task 11a), `ShaderLibrary`'s approach (Task
+  51: the shader source ships as it is and compiles at run time with
+  `makeLibrary(source:options:)`, so building needs no Metal toolchain; if SwiftPM tries
+  to compile a `.metal` file under `.copy`, the source takes another extension).
+- Produces:
+  - `BandGeometry(centerHz:, spanHz:, size:, dbmRange:)` with `x(forHz:)`, `hz(forX:)`,
+    `y(forDbm:)` and `x(forTraceSample:traceSamples:)`: a blob sits at a trace sample
+    below the context's `traceSamples`, which the spectrum grant can make smaller than
+    the width requested. `BandRenderer.draw(frame:history:extras:overlays:into:)`. The
+    endpoint width requested equals the view's width in pixels (1 to 4096).
+  - `BandDisplaySettings`, kept per pan. Display keys are each device's own (the Display
+    rule in `src/core/settings/SettingsScope.cpp`; the Core owns only FFT size and
+    window, Hz per bin and the frame rate), so the phone starts from the desktop's
+    defaults, read from the desktop's own loaders on the merged tree
+    (`src/gui/SpectrumWidget.cpp`, `src/gui/setup/SpectrumPeaksPage.cpp`,
+    `src/gui/MainWindow.cpp`'s `ClarityEnabled`): the waterfall's levels from the Core in
+    Clarity (`ClarityEnabled` defaults to true), with the manual levels -122 and -62 dBm
+    until Clarity first speaks; the noise-floor line off, shift 0; normalise off;
+    calibration offset 0; spectrum averaging 30 ms and waterfall averaging 120 ms; peak
+    blobs off (3 of them, a 500 ms hold off, falling at 6 dB a second off, inside the
+    filter off); the active peak hold off (2000 ms, 6 dB a second). Beside those, the
+    renderer's own: the waterfall palette from the catalogue by id, the grid, the trace
+    colour and fill, the band plan. What the Core computes goes into each endpoint's
+    subscription as `DisplayExtrasRequest` while the gate is open; the renderer draws the
+    rest itself. Setup's Display pages (Task 46's descriptions and the phone's Setup
+    task) later edit these same settings.
+  - The band draws the Core's extras: each waterfall row coloured against the levels its
+    datagram carries (the app adds nothing: calibration and normalise are already in
+    every dBm); the noise-floor line at the datagram's floor; the active peak hold trace;
+    the peak blobs at their trace samples. A frame without its datagram keeps the extras
+    last drawn. With the gate closed (a Core without the extras) the waterfall uses the
+    manual levels, and the peak features are greyed "Needs a newer Core" where Setup
+    shows them (D23).
+  - `DisplayQualityAllocator` (NereusMedia), the phone's half of the display budget:
+    when the Core's budget (capabilities `displayApplicationBytesPerSecond`,
+    `spectrumSampleUnitsPerSecond` and `displayBudgetGeneration`, and each
+    `allocation-result`) says the requested display doesn't fit, it follows the budget
     design's agreed quality policy
     (`docs/architecture/2026-09-22-session-display-budget-design.md`, "Agreed GUI quality
-    policy"): background frame rate first, then background pixels, then the active
-    band's frame rate and pixels, never below `min(requestedPixels, 256)` by
-    `min(requestedFps, 10)`; past the floor it suspends the display with the capacity
-    reason, keeps the band's slice and sound, and marks the frozen band as paused. It
-    recomputes on every focus, layout, geometry or limit change, so quality comes back
-    when there's room. The frame rate it settles on is what the Sharing chip shows (Task
-    54), and `displayBudgetReason` (`sharedConnection` or `sharedProcessing`, Task 76)
-    picks the chip note's first words.
+    policy") as written: background frame rate first, then background pixels, then the
+    active band's frame rate and pixels, one unit per pane at a time in stable pan-ID
+    order, never below `min(requestedPixels, 256)` by `min(requestedFps, 10)`. When the
+    floors don't fit, it suspends background endpoints first, in reverse pan-ID order,
+    and the active band only when its own floor doesn't fit, with the capacity reason;
+    the band's slice and sound stay, and the frozen band is marked paused. It never
+    drops a requested wide or waterfall plane, keeps the FFT size, crop, detectors and
+    averaging, and recomputes `framesPerLine = ceil(periodMs × fps / 1000)`. Its fit test
+    counts the extras each endpoint asks for (`worstCaseBytesPerFrame` and one message a
+    frame more). It recomputes on every focus, layout, geometry or limit change, so
+    quality comes back when there's room. The frame rate it settles on is what the
+    Sharing chip shows (Task 54). `displayBudgetReason` passes through as the Core sends
+    it, for the chip note's first words (Task 54): `none` or `coreBusy` today; Task 76
+    adds `sharedConnection` and `sharedProcessing` and makes the budget this device's
+    share, carried in the same capabilities; an unknown value passes through as unknown.
 
 **Acceptance:**
 - Geometry round trips: `hz(forX: x(forHz: f)) == f` within one hertz across the span;
-  zoom changes the span about the chosen point.
+  zoom changes the span about the chosen point; a trace sample maps to the same x as the
+  frequency at its centre.
 - An offscreen render of a fixture frame puts the trace's peak at the fixture bin's x and
-  dBm's y within one pixel; the waterfall scrolls one row per frame; the band-plan strip
-  shows the station's ARRL segments with their labels at their frequencies.
-- The phone's display settings (waterfall palette from the catalogue, grid, trace colour
-  and fill, band plan choice) change the render as expected (one render test each).
+  dBm's y within one pixel; the waterfall scrolls one row per frame, each row coloured
+  against the levels a synthetic `DisplayExtras` carries; the band-plan strip shows a
+  synthetic plan's segments with their labels at their frequencies.
+- A synthetic `DisplayExtras` with a floor, a hold row and two blobs draws the line at the
+  floor's y, the hold trace, and the blobs at their trace samples' x (within one pixel); a
+  frame with no datagram keeps them.
+- The phone's display settings (waterfall palette, grid, trace colour and fill, band plan
+  choice) change the render as expected (one render test each). The render tests use
+  synthetic palettes and plans: no stop or segment from the fixtures is written into the
+  sources (D4).
+- The default settings produce exactly the `subscribe` fields the desktop's defaults imply
+  (`waterfallLevels` in Clarity with -122 and -62, `averageTimeMs` 30,
+  `waterfallAverageTimeMs` 120, nothing for the features that are off), and none while
+  the gate is closed.
 - The renderer draws in under 8 ms per frame for a 1179-pixel-wide band at 30 frames a
   second on the simulator's Metal device (logged); on an iPhone the device check repeats
   it (pending until observed).
 - The allocator, fed a budget that fits, changes nothing; fed tighter budgets, it lowers
-  the frame rate before the pixels, stops at the 256-pixel, 10-frames-a-second floor,
-  then suspends and reports paused; a larger budget later restores the requested
-  quality. No allocation step sends a network request of its own.
+  the frame rate before the pixels, one unit per pane in pan-ID order, stops at the
+  256-pixel, 10-frames-a-second floor, then suspends background endpoints in reverse
+  pan-ID order before the active band and reports paused; asking for extras makes the
+  same budget fit fewer frames; a larger budget later restores the requested quality. No
+  allocation step sends a network request of its own.
 
 **Verification:** UI rendering: offscreen render tests plus simulator screenshots
 compared with `01-on-the-band.jpg` and `02-sideways.jpg`.
-`ios/scripts/swift-test.sh --filter NereusBandTests` and the simulator test run.
+`ios/scripts/swift-test.sh --filter 'NereusBandTests|DisplayQualityAllocatorTests'` on
+both toolchains and the simulator test run.
 
-**Execution note (advisory):** opus. Requires Tasks 7, 11, 19, 20 and 51. On the
-listening path (JJ, 2026-09-24). Metal sources ship as a folder reference, as Task 51's
-shaders do.
+**Execution note (advisory):** opus. Requires Tasks 7, 11, 11a and 51 (and through Task
+11a, station Tasks 19 and 20). On the listening path (JJ, 2026-09-24).
 
 - [ ] **Step 1:** Geometry, history and the band-plan strip with tests.
 - [ ] **Step 2:** The Metal renderer, the display settings and the render tests.
@@ -6513,8 +6765,11 @@ devices' slices on the band (D46, D47) are Task 56's.
   `SliceMarkersTests.swift`, `TuneGesturesTests.swift`
 
 **Interfaces:**
-- Consumes: the slices from the mirror, the catalogue's slice colours and step list,
-  `BandGeometry` (Task 52).
+- Consumes: the slices from the mirror, `BandGeometry` (Task 52), and from
+  `StationCatalog` (Task 11a) `sliceColours` (one for each slice the radio allows, in slice
+  order, read and never assumed: slice E's colour changes when the desktop's slice-E fix
+  reaches the Core) and `tuneSteps` (smallest first; today six on both radios, 1, 10, 100
+  and 500 Hz, 1 and 10 kHz; the list is read, never written into the app).
 - Produces:
   - `FlagLayout.layout(slices:activeSliceId:geometry:flagSize:) -> [FlagPlacement]`
     where each placement is `.full(rect)` or `.folded(rect)`: every slice keeps its full
@@ -6568,13 +6823,19 @@ D11), spec §5.2 item 2 (the tab bar as the board draws it), JJ's listening-firs
 **Interfaces:**
 - Consumes: `BandView`, `BandGeometry` (Task 52), the flags, markers and gestures (Task
   53), `MirrorStore`, `SettingsProxyClient` and `CommandClient` (Task 9), `AppModel` (Task
-  51), `AudioSessionController` and `RouteMenu` (Task 55a).
+  51), `AudioSessionController` and `RouteMenu` (Task 55a), and `StationCatalog` (Task
+  11a) for every range and list the RX panel shows (R-IOS-27): `agc.modes` (ids are the
+  slice's `agcMode` 0 to 4: Off, Long, Slow, Med, Fast) and `agc.thresholdDb` for AGC-T;
+  `filterPresets` keyed by the mode's label (`USB` and so on), slot 0 `F1`, 1 to 10 a
+  mode, the edges signed like `filterLow` and `filterHigh`; and `receive` (Task 19's
+  follow-up) for `afGain`, `ssqlThresh`, `amsqThresh` and `fmsqThresh`.
 - Produces:
   - `MainScreen`: the toolbar left to right: RX panel, speaker mute, Slice A, Pan 1,
     Display, the link dot with its round-trip time (the TX panel's button arrives with
     Task 54); the band edge to edge with zoom at the bottom right of the waterfall; the
     RX panel with AF gain, AGC, filter presets, the noise buttons and squelch, each
-    writing to its owner and showing the Core's value; the speaker button mutes on a tap
+    writing to its owner and showing the Core's value, with its range and choices from
+    the catalogue and none written into the app; the speaker button mutes on a tap
     and opens Task 55a's `RouteMenu` on press and hold, without leaving the band.
   - The tab bar as the board draws it: NereusSDR's flat bar and its own glyphs (the
     panadapter trace, the RX/TX box, the wrench, the radio, the gear), in place of the
@@ -6665,8 +6926,10 @@ taking it, having it taken, the radio's own PTT, the "Sharing" chip).
     during this phone's grace; "The radio's own PTT took transmit at <time>" with Take it
     back; and, when this device's display is slowed (D54), a "Sharing · <n> fps" chip with
     a note in the words kept on board v51: "The Core's connection is full." or "The Core is
-    busy." (`displayBudgetReason`), then "<device> has transmit, so it keeps its full band
-    and sound." when a device holds transmit, or "The devices share it" otherwise.
+    busy." (`displayBudgetReason` as Task 52's allocator passes it through:
+    `sharedConnection` is the first, `sharedProcessing` and `coreBusy` the second, Task
+    76), then "<device> has transmit, so it keeps its full band and sound." when a device
+    holds transmit, or "The devices share it" otherwise.
 
 **Acceptance:**
 - PTT: one tap keys (sends `tx.key {trigger:"screen"}`), a second unkeys; a refusal shows
@@ -6696,7 +6959,7 @@ screenshots. `ios/scripts/swift-test.sh --filter PttControllerTests` and the sim
 test run. Bench: Task 70 (keying on air from the phone).
 
 **Execution note (advisory):** opus. The phone's transmit control: flag for earlier
-review. Requires Tasks 34, 39, 40, 42, 53, 54a and 77.
+review. Requires Tasks 34, 39, 40, 42, 53, 54a, 76 and 77.
 
 - [ ] **Step 1:** The PTT state machine and keepalive with tests.
 - [ ] **Step 2:** The TX panel, the keyed view and the pills with screenshots.
