@@ -1047,8 +1047,12 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   too). The page adds "Also at the station: <address>, port <port>" while
   the Core's server listens ("The station's TCI server is not running."
   while it is on and not listening), or "The Core on this computer serves
-  TCI apps here, port <port>." on the Core's computer. With an older Core
-  (or none) the window's own server follows the switch as it always has.
+  TCI apps here, port <port>." on the Core's computer. With the link to
+  the Core down the switch shows the last known state and the page says
+  nothing about the Core; on the Core's computer the window starts no
+  server (there is no radio there to serve), and on another computer its
+  server follows the switch. With an older Core (or none) the window's own
+  server follows the switch as it always has.
 - A local window's RF-Kit band follow is worked out from its own TCI server
   the same way.
 - With `accessoryDataVersion` 1 the desktop remote window's 4O3A page

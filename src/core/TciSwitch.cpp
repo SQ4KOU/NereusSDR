@@ -33,12 +33,6 @@ TciSwitch::TciSwitch(TciServer* local, RadioModel* model, QObject* parent)
     }
 }
 
-bool TciSwitch::linkUp() const
-{
-    const IStationLink* link = m_model ? m_model->stationLink() : nullptr;
-    return link && link->stationLinkReady();
-}
-
 void TciSwitch::onStationTciChanged()
 {
     // A change arrives one property at a time; read the whole state once
@@ -136,7 +130,11 @@ QString TciSwitch::stationLine(const RadioModel* model)
     }
     const IStationLink* link = model->stationLink();
     const StationTciModel* station = model->stationTciModel();
-    if (!link || !station
+    // Rework part 4: nothing to say about a Core the link cannot reach.
+    if (!link || !link->stationLinkReady()) {
+        return {};
+    }
+    if (!station
         || (!link->coreServesTciOnThisComputer() && !link->stationTciAvailable())) {
         return {};
     }
@@ -198,8 +196,11 @@ void TciSwitch::applyLocal()
     if (!m_local) {
         return;
     }
-    // On the Core's own computer the Core's server serves apps here.
-    const bool wanted = m_on && !(coreServesThisComputer() && linkUp());
+    // On the Core's own computer the Core's server serves apps here; with
+    // the link down there is no radio here to serve either, so the window
+    // starts none (rework part 4). On another computer the window's server
+    // follows the switch, link or not.
+    const bool wanted = m_on && !coreServesThisComputer();
     if (wanted && !m_local->isRunning()) {
         m_local->start(m_bind, m_port);
     } else if (!wanted && m_local->isRunning()) {

@@ -37,6 +37,10 @@ class TciServer;
 // the Core's server also listens on this computer and serves apps here.
 // Without a Core that offers a station server (a local window, an older
 // Core) the window's own server follows the switch as it always has.
+//
+// With the link down the switch shows the last known state; on the Core's
+// computer the window still starts no server (there is no radio here to
+// serve), and on another computer its server follows the switch.
 class TciSwitch : public QObject {
     Q_OBJECT
 public:
@@ -78,7 +82,6 @@ private:
     void onStationTciChanged();
     void followCore();
     void syncAtConnect();
-    bool linkUp() const;
 
     QPointer<TciServer> m_local;
     QPointer<RadioModel> m_model;

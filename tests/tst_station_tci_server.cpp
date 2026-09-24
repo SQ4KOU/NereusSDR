@@ -506,6 +506,42 @@ private slots:
         QCOMPARE(link.requests, 1);
     }
 
+    // Rework part 4 (R-R3-48): with the link to the Core down the switch
+    // shows the last known state. On the Core's computer the window starts
+    // no server (there is no radio here to serve); on another computer its
+    // server follows the switch as before. The TCI page's line says
+    // nothing about a Core it cannot reach.
+    void linkDownKeepsTheLastSwitch()
+    {
+        const quint16 port = freePort();
+        for (const bool coreHere : {true, false}) {
+            RadioModel window(RadioModel::Role::Remote);
+            FakeStationLink link;
+            link.coreHere = coreHere;
+            window.attachStation(&link);
+            TciServer local(&window);
+            TciSwitch tci(&local, &window);
+            StationTciModel::State serving;
+            serving.enabled = true;
+            serving.listening = true;
+            serving.port = port;
+            window.stationTciModel()->setState(serving);
+            tci.setSwitch(true, port, QHostAddress(QHostAddress::LocalHost), /*tellCore=*/false);
+            QCoreApplication::processEvents();
+            QCOMPARE(local.isRunning(), !coreHere);
+            QVERIFY(!TciSwitch::stationLine(&window).isEmpty());
+
+            link.ready = false;
+            window.reportStationLinkStateChanged();
+            QCoreApplication::processEvents();
+            QVERIFY(tci.switchOn());
+            QCOMPARE(tci.port(), port);
+            QCOMPARE(local.isRunning(), !coreHere);
+            QVERIFY(TciSwitch::stationLine(&window).isEmpty());
+            local.stop();
+        }
+    }
+
     // Follow-up 1b: the Core retries a station listener that could not
     // start (another program had its port), with a plain reason while it
     // cannot listen, and listens once the port is free.
