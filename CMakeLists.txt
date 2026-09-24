@@ -1210,6 +1210,7 @@ set(GUI_SOURCES
     src/gui/RemoteDisplayAllocator.cpp
     src/gui/PanStatusText.cpp
     src/gui/OperatorReasonText.cpp
+    src/gui/ReceiverStopNotices.cpp
     src/gui/RemoteTelemetryController.cpp
     src/gui/RemoteDiagnosticsDialog.cpp
     src/gui/RemoteConnectionController.cpp

@@ -11,6 +11,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 - J.J. Boyd (KG4VCF). R3 receiver audio fix wave (R-R3-42,
+//                 R-R3-44): a receiver's audio stopping raises one plain
+//                 toast (ReceiverStopNotices), not one from TCI and another
+//                 per VAX channel; none for what the window's status
+//                 already shows. AI-assisted implementation via Anthropic
+//                 Claude Code.
 //   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-42: the TCI server asks the Core
 //                 for a receiver's audio while an app listens, and its
 //                 refusals and stops reach a toast and the TCI log window
@@ -396,6 +402,7 @@ warren@wpratt.com
 #include "RemoteConnectionController.h"
 #include "gui/RemoteMediaController.h"
 #include "gui/RemoteVaxRouter.h"
+#include "gui/ReceiverStopNotices.h"
 #include "core/session/media/IReceiverPcmSink.h"
 #include "core/settings/SettingsProxy.h"
 #include "setup/DspSetupPages.h"   // NrAnfSetupPage::selectSubtab
@@ -571,10 +578,20 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
         connect(m_tciServer, &TciServer::operatorNotice, this,
                 [this](const QString& peer, const QString& reason, bool raiseToast) {
             qCInfo(lcConnection) << "TCI notice" << peer << ":" << reason;
-            if (raiseToast) {
-                showToast(tr("TCI: %1").arg(OperatorReasonText::forDisplay(reason)),
-                          ToastSeverity::Warning, 5000);
+            if (!raiseToast) { return; }
+            if (ReceiverStopNotices::isReceiverStop(reason)) {
+                // R-R3-42 fix wave: a receiver's audio stopping is one
+                // notice for this computer, however many apps (TCI, VAX
+                // channels) hear that receiver.
+                const QString text =
+                    m_receiverStopNotices.toastFor(reason, QDateTime::currentMSecsSinceEpoch());
+                if (!text.isEmpty()) {
+                    showToast(text, ToastSeverity::Warning, 5000);
+                }
+                return;
             }
+            showToast(tr("TCI: %1").arg(OperatorReasonText::forDisplay(reason)),
+                      ToastSeverity::Warning, 5000);
         });
         connect(m_tciServer, &TciServer::txAudioActiveClientChanged,
                 this, [this](QWebSocket* owner) {
@@ -1216,9 +1233,14 @@ void MainWindow::ensureRemoteSession()
             connect(m_remoteVax, &RemoteVaxRouter::notice, this,
                     [this](int channel, const QString& reason) {
                 qCInfo(lcConnection) << "VAX" << channel << "notice:" << reason;
-                showToast(tr("VAX %1: %2").arg(channel)
-                              .arg(OperatorReasonText::forDisplay(reason)),
-                          ToastSeverity::Warning, 5000);
+                // R-R3-44 fix wave: one notice per stop, shared with TCI
+                // and the other VAX channels carrying the same receiver;
+                // none for what the window's own status already says.
+                const QString text =
+                    m_receiverStopNotices.toastFor(reason, QDateTime::currentMSecsSinceEpoch());
+                if (!text.isEmpty()) {
+                    showToast(text, ToastSeverity::Warning, 5000);
+                }
             });
         }
 

@@ -1379,6 +1379,9 @@ nereus_add_test(tst_audio_engine_vax_tee)
 # channel count (44.1 to 192 kHz, stereo and mono). No real device opened.
 nereus_add_test(tst_audio_engine_speaker_format)
 
+# ── R3 receiver audio fix wave (R-R3-42, R-R3-44): one notice per stop ───────
+nereus_add_test(tst_receiver_stop_notices)
+
 # ── Phase 3O Sub-Phase 10 Task 10a: AudioEngine master-mute API ──────────────
 # Covers setMasterMuted / masterMuted / masterMutedChanged. Verifies the
 # rxBlockReady mute check gates ONLY the speakers push (VAX taps must keep

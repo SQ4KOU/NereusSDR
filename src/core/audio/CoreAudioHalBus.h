@@ -28,6 +28,11 @@
 //                 HAL's "device is running somewhere" for the plugin's
 //                 NereusSDR VAX N device). J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-23: R-R3-44 fix wave: outputHasReader() reads a flag kept by
+//                 CoreAudio property listeners instead of walking every
+//                 device with IPC round trips on each call (the GUI thread
+//                 asked every 500 ms). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -37,6 +42,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 
 namespace NereusSDR {
@@ -146,7 +152,10 @@ public:
     // R-R3-44 (Role::Vax1..4 only): whether an app has this channel's
     // NereusSDR VAX device running, from CoreAudio's
     // kAudioDevicePropertyDeviceIsRunningSomewhere. nullopt when the
-    // plugin's device is not installed or CoreAudio does not answer.
+    // plugin's device is not installed, CoreAudio does not answer, or the
+    // bus is closed. Any thread; reads a flag CoreAudio listeners keep
+    // (on a queue of their own) while the bus is open, so a call makes no
+    // IPC round trip.
     std::optional<bool> outputHasReader() const override;
 
     float rxLevel() const override { return m_rxLevel.load(std::memory_order_acquire); }
@@ -189,6 +198,11 @@ private:
     // R-R3-44: outputPacing()'s readPos extension. Reset by open().
     mutable std::atomic<uint32_t> m_pacingLastReadPos{0};
     mutable std::atomic<quint64>  m_pacingConsumedSamples{0};
+
+    // R-R3-44 fix wave: watches the plugin's device for this channel while
+    // the bus is open (producers only). Defined in the .cpp.
+    struct ReaderWatch;
+    std::unique_ptr<ReaderWatch> m_readerWatch;
 };
 
 } // namespace NereusSDR
