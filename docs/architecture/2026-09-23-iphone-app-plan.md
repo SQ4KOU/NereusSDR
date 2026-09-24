@@ -45,8 +45,8 @@ read for this plan at `4bb89b5d`.
   wrong or silent on something material, stop and report NEEDS_CONTEXT.
 * **Who runs which task** (JJ's decision, 2026-09-24): one plan, one owner per task,
   and each task opens with a **Runs in** line that says which.
-  * **Station tasks** (1 to 4, 12 to 14, and 16 to 50 without the lettered ones) run in
-    the Core/GUI session's lanes and reach `codex/integrate-r2-main`. Their build
+  * **Station tasks** (1 to 4, 12 to 14, 16 to 50 without the lettered ones, and 71 to 78)
+    run in the Core/GUI session's lanes and reach `codex/integrate-r2-main`. Their build
     directory is the lane's (`build-integration` or `build-lane-b`), and `build` in a
     verification command means that directory.
   * **Phone tasks** (5 to 11, 15, 16a, 27a, 28a, 29a, 51 to 69, and 70 with JJ) run in
@@ -393,9 +393,10 @@ The Core/GUI session's controller:
 the app's foundation. C (12 to 18): identity and pairing (15 and 16a phone, the rest
 station). D (19 to 25, station): what the phone shows. E (26 to 29 station, 27a to 29a
 phone): reaching the station from anywhere (R5). F (30 to 40, station): remote transmit
-(R4). G (41, 42, station): sessions and accessories. H (43 to 46, station): Setup,
-described by the station. I (47 to 50, station): the desktop's station. J (51 to 67,
-phone): the app. K (68 to 70, phone; 70 with JJ): proof and release. The station tasks
+(R4). G (41, 42 and 71 to 78, station): sessions and accessories, with several devices
+on one Core. H (43 to 46, station): Setup, described by the station. I (47 to 50,
+station): the desktop's station. J (51 to 67, phone): the app. K (68 to 70, phone; 70
+with JJ): proof and release. The station tasks
 follow JJ's saved order (R3 follow-ons, then R5, then R4, then R6), with identity first
 because remote access and transmit both depend on it; the phone tasks run in number
 order as the station tasks they consume land, except for the first usable build below.
@@ -414,14 +415,14 @@ not the scope.
 **Tasks flagged for an earlier independent review** (they touch authorisation, secrets,
 networking that could expose or strand the station, or the transmit boundary): 4, 12, 13,
 14, 17, 18, 25, 26, 27, 27a, 28, 28a, 29, 29a, 30, 31, 32, 33, 34, 35, 36, 37, 38, 41, 42, 45, 47, 48,
-54, 64, 65. JJ decides whether any of them gets one. For the six phone tasks among them
+54, 64, 65, 71, 73, 74, 75, 77, 78. JJ decides whether any of them gets one. For the six phone tasks among them
 (27a, 28a, 29a, 54, 64, 65) he decided on 2026-09-24: each gets its own independent
 review as soon as it is finished. For the station tasks he decided the same day, through
 the Core/GUI session: one independent review per group, each when its group finishes:
 identity and pairing (12, 13, 14, 16, 17, 18); remote access (26 to 29); remote
 transmit's safety net (30 to 38, before any real on-air test); several devices at once
-(41, as the Core/GUI session rewrites it) and the transmit-coupled accessory commands
-(41, 42). The other flagged station tasks (25,
+(41 and 71 to 78, as the Core/GUI session's design for several devices sets them) and the
+transmit-coupled accessory commands (42). The other flagged station tasks (25,
 45, 47, 48) fall under their part's end review; Task 4 was reviewed with the rest of
 Part A.
 
@@ -2397,7 +2398,7 @@ measured profile; otherwise greyed), R-R3-23, spec §5.4 item 9.
 **Verification:** media protocol change: unit plus the transport loopback.
 `cmake --build build --target tst_audio_quality_offer tst_daemon_media_controller tst_media_transport && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_audio_quality_offer|tst_daemon_media_controller|tst_media_transport)$' --output-on-failure`.
 
-**Execution note (advisory):** opus. Requires Task 19.
+**Execution note (advisory):** opus. Requires Tasks 19 and 76 (its bitrate is per device).
 
 - [ ] **Step 1:** The measured table and the catalogue section.
 - [ ] **Step 2:** The per-session bitrate, the context and the documents.
@@ -2432,7 +2433,7 @@ readings keep flowing), R-R3-08, R-R3-13.
 `cmake --build build --target tst_sound_only_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^tst_sound_only_session$' --output-on-failure`.
 Measurement: Task 68 records the data rate with the band off.
 
-**Execution note (advisory):** opus. Requires Part A.
+**Execution note (advisory):** opus. Requires Part A and Task 76 (media per device).
 
 - [ ] **Step 1:** The test, and any fix it forces.
 
@@ -2524,7 +2525,8 @@ what to connect to) and put it in the brief.
 `cmake --build build --target tst_station_radios tst_station_tools tst_support_bundle tst_this_core_page && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_radios|tst_station_tools|tst_support_bundle|tst_this_core_page)$' --output-on-failure`.
 
 **Execution note (advisory):** opus. Choosing the station's radio: flag for earlier
-review (it can leave a station without a radio). Requires Tasks 19 and 21.
+review (it can leave a station without a radio). Requires Tasks 19, 21 and 75
+(`station.selectRadio` touches every slice, so it goes through Task 75's confirm step).
 
 - [ ] **Step 1:** The station's radios, the choice order, `selectRadio` and the waiting
       state.
@@ -3000,7 +3002,8 @@ network), and an upgrade from relay to direct is heard without a glitch.
 
 **Execution note (advisory):** opus. Networking and the transmit safety boundary: flag
 for earlier review. Step 1 is a measurement spike whose result goes to JJ; Step 2 waits
-for his choice. Requires Task 28.
+for his choice. Requires Tasks 28 and 71 (the same-device rule, for a path race that
+signs in twice).
 
 - [ ] **Step 1:** Prototype the three options far enough to measure them; run the
       measurement; write the comparison; the controller brings JJ the recommendation.
@@ -3341,100 +3344,262 @@ review. Requires Task 32.
 - [ ] **Step 1:** The gate and the direct MOX-off write with the timing tests.
 - [ ] **Step 2:** The Thetis `StopAllTx` port with its cite, provenance and the warning.
 
-## Task 34: Transmit gates and refusals
+## Task 34: Transmit gates, refusals and the transmit holder
 
 **Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** remote design §12.2 (transmit disabled until snapshot-complete; the
 interlocks stay authoritative; the unkey-confirmed handoff gate) and §7.1, spec §4.6
 items 4, 5 and 7, R-IOS-13 (refusals shown with the station's reason and fix),
-R-IOS-03 (the unkey-confirmed gate).
+R-IOS-03 (the unkey-confirmed gate), R-IOS-02 (one holder of transmit, known to every
+session), D51, D56, D58, D60, D62, D63; the several-devices design (Part G) rulings 7.4,
+8.1, 8.2, 8.3 (the refusals), 8.4, 8.5, 8.8, 8.13 (its `MoxController` half) and 8.15;
+design IDs R-MC-11, R-MC-13, R-MC-14, R-MC-15 (provisional, Part G).
+
+**Before this task (controller):** the receiver and transmit gaps plan
+(`docs/architecture/2026-09-24-receiver-and-transmit-gaps-plan.md` on
+`codex/receiver-tx-gaps`, read at `512f289f`) has merged its Task 7 (every keying source
+sets, clears and guards its PTT mode as Thetis does) and its Task 4 (a second TCI app's
+`trx` does what Thetis does) into `codex/integrate-r2-main`. Its Task 7 is flagged there
+for a review of its own, which JJ decides. If either has not merged, stop and ask JJ.
 
 **Files:**
 - Create: `src/core/safety/StationTxGate.{h,cpp}`, `src/core/safety/UnkeyGate.{h,cpp}`,
-  `src/core/safety/TxRefusal.{h,cpp}`
-- Modify: `src/core/MoxController.{h,cpp}` (refusals as `TxRefusal`),
-  `src/core/TxInterlockPolicy.{h,cpp}`, `src/core/TxSliceArbiter.{h,cpp}` (the remote
-  handoff waits for the unkey gate; the stale header comment at `TxSliceArbiter.h:46-47`
-  corrected), `src/models/RadioModel.{h,cpp}` (the station's blanket receive-only policy
-  becomes the gate's `remote_transmit` setting),
-  `src/core/session/StationServer.{h,cpp}` (per-session `txPermitted`),
-  `src/core/session/SessionCommandDispatcher.{h,cpp}` (`tx.setTxSlice`),
-  `src/core/daemon/DaemonConfig.{h,cpp}`, `src/core/daemon/DaemonApp.cpp`,
-  `packaging/nereusd.conf.sample` (`remote_transmit = allow|deny`, default allow)
-- Modify: `tests/data/link/v1/`, `surface.json`, the link document (a Transmit section)
+  `src/core/safety/TxRefusal.{h,cpp}`, `src/core/safety/TransmitHolder.{h,cpp}`
+- Modify: `src/core/MoxController.{h,cpp}` (refusals as `TxRefusal`; the keying gate
+  `setKeyingGate(...)`; `setMox(bool on, const KeyerIdentity& keyer)` and
+  `KeyerIdentity`, declared in `MoxController.h`; a release unkeys only its keyer's
+  key), `src/core/TxInterlockPolicy.{h,cpp}`, `src/core/TxSliceArbiter.{h,cpp}` (the
+  remote handoff waits for the unkey gate; the gaps plan's Task 4 has already corrected
+  the stale header comment at `TxSliceArbiter.h:46-47`), `src/models/RadioModel.{h,cpp}`
+  (the station's blanket receive-only policy becomes the gate's `remote_transmit`
+  setting; the radio's PTT, reported as a level on every status frame at
+  `RadioModel.cpp:1307-1311` and wired at `11755-11758`, reaches the gate as edges),
+  `src/core/session/StationServer.{h,cpp}` (per-session `txPermitted`; a dropped holder;
+  releases), `src/core/session/SessionCommandDispatcher.{h,cpp}` (`tx.setTxSlice`; the
+  on-air refusals), `src/core/session/ConnectedDevicesFacade.cpp` (Task 71's object:
+  `holdsTransmit` and `state` `transmitting`), `src/core/daemon/DaemonConfig.{h,cpp}`,
+  `src/core/daemon/DaemonApp.cpp`, `packaging/nereusd.conf.sample`
+  (`remote_transmit = allow|deny`, default allow)
+- Modify: `tests/data/link/v1/`, `surface.json`, the link document (a Transmit section,
+  with the refusal codes and texts below)
 - Test: `tests/tst_station_tx_gate.cpp`, `tests/tst_unkey_gate.cpp`, `tests/tst_tx_refusal.cpp`,
-  `tests/tst_tx_slice_arbiter.cpp`
+  `tests/tst_tx_slice_arbiter.cpp`, `tests/tst_transmit_holder.cpp`,
+  `tests/tst_keying_gate.cpp`, `tests/tst_on_air_refusals.cpp`,
+  `tests/tst_station_multi_session.cpp` (Task 71's harness), the existing
+  `tst_mox_controller_*` tests
 
 **Interfaces:**
-- Consumes: `stopTransmitNow`, `stopAllTx` (Task 33); device identity (Task 12).
+- Consumes: `stopTransmitNow`, `stopAllTx` (Task 33); device identity (Task 12);
+  `DeviceSessionRegistry`: sessions by device, the away state and its 180 s, the same
+  device signing in again, `session.leave`, revocation (Task 71); the PTT modes per
+  source of the gaps plan's Task 7; `DisplayBudgetSplit` (Task 76), if it has landed.
 - Produces:
   - `struct TxRefusal { QByteArray code; QString text; QByteArray fix; };` with codes
     `notReady` (snapshot not complete), `stationReceiveOnly`, `bandPlan`, `interlock`,
-    `ampStandby` (fix `operateAmp`), `paProtection`, `swr`, `otherDeviceKeyed`,
-    `micNotReady` (Task 36); every
-    `text` passes `OperatorWording::isPlain` (for example "The amplifier is in standby.
-    Operate it, or change the interlock in Setup.").
+    `ampStandby` (fix `operateAmp`), `paProtection`, `swr`, `otherDeviceHolds` (renamed
+    from `otherDeviceKeyed`; text "<holder> has the transmitter.", fix `takeTransmit`;
+    it names an away holder the same way), `programNeedsTransmit` (new; text "A program
+    can transmit only while this device has transmit. Take transmit here first.", fix
+    `takeTransmit`; used from Task 35), `micNotReady` (Task 36). "<holder>" is the
+    holder's name as the Core sends it (numbered by Task 71's rule), or "Radio" after
+    the radio's own PTT took transmit. The design gives two more texts without codes:
+    "Transmit is changing hands. Try again in a moment." and "The radio did not confirm
+    it stopped transmitting."; the implementer gives each a code and records it in the
+    link document's Transmit section. Every `text` passes `OperatorWording::isPlain`
+    (for example "The amplifier is in standby. Operate it, or change the interlock in
+    Setup."), tested with names such as "Grant's iPhone" embedded.
   - `TxDecision StationTxGate::decide(const SessionPeerInfo&) const`: permitted only when
     the peer declared `remoteTx` in its `hello` features (Task 4), its snapshot is
-    complete, `remote_transmit = allow`, and its device is paired. An older desktop that
-    reads the transmit flag without understanding it therefore never sees it true.
+    complete, `remote_transmit = allow`, its device is paired, and its device holds
+    transmit or transmit is unheld. An older desktop that reads the transmit flag
+    without understanding it therefore never sees it true.
   - `class UnkeyGate : public QObject` with
     `void unkey(const QString& reason, QObject* context, std::function<void(UnkeyOutcome)> done)`,
     `UnkeyOutcome` being `Confirmed` (MOX reached receive: `MoxController::rxReady`) or
     `TimedOut` (2000 ms without it, after which `stopTransmitNow` has still been applied).
-  - Capability `txPermitted` true per permitted session (sent again when it changes);
-    verb `tx.setTxSlice {sliceId}` routed to `RadioModel::requestTxHandoffToSlice`,
-    passing through the unkey gate when keyed.
+  - **`TransmitHolder`** (ruling 8.1), in `src/core/safety/` beside `StationTxGate` and
+    `UnkeyGate`: the holder's device id, name, short name and kind; its source
+    (`device`, or `radioPtt` when the radio's own PTT took it); since when; whether it is
+    keyed; and an epoch that advances with every change of holder. Three states:
+    **unheld**; **held** (one device holds it, keyed or not, or away in its grace period,
+    never keyed); **transferring**. It starts unheld. Its method names are the
+    implementer's; the design names the class and its fields.
+  - **The transfer** (ruling 8.2). Every change of holder and every release runs it:
+    1. Enter transferring. Until step 3 ends every key from every source is refused
+       with "Transmit is changing hands. Try again in a moment.": the old holder's
+       `tx.key`, `tx.tune` and `tx.twoTone` (Task 35), the radio's PTT, VOX, TCI, any
+       other device. Unkeying is never refused.
+    2. If the old holder is keyed, run `UnkeyGate::unkey` and wait for `Confirmed` or
+       `TimedOut`. Keyed or not, then read MOX. While MOX reads on, assign no holder:
+       call `stopAllTx` again and wait up to another 2000 ms. If MOX still reads on,
+       the transfer ends with transmit unheld, every key refused with "The radio did
+       not confirm it stopped transmitting." until MOX reads off.
+    3. With MOX off, assign the new holder, unkeyed, or leave transmit unheld; disarm
+       VOX; advance the epoch; publish the change (`txPermitted` to every session,
+       `connectedDevices`, and `txState` once Task 39 exists). Binding the transmit
+       slice to the new holder (ruling 8.10) is Task 77's; until then the arbiter's
+       binding stays as today.
+    A new holder always starts unkeyed.
+  - **When the holder leaves** (ruling 8.15), with Task 71's events:
+    - A dropped holder (its session ends without `session.leave`: a lost link, the
+      heartbeat, a closed socket) is unkeyed at once through step 2's fence (keys
+      refused until MOX reads off), and transmit then stays held for it, away and
+      unkeyed, with VOX disarmed. Other devices' keys are refused with
+      `otherDeviceHolds` naming it. This is the stop Task 37 describes for a dropped
+      peer, made through the fence.
+    - The same device signing in again within its 180 s (Task 71's same-device rule)
+      still holds transmit, unkeyed, and keys with its next press; the hold carries
+      over to the new connection, and a key on the older connection is stopped through
+      the fence.
+    - Its 180 s ending, `session.leave`, revocation (Task 13), and replacement by a
+      fifth device (Task 41 calls it) each release transmit through a transfer to
+      nobody: unheld.
+  - **VOX follows the holder** (ruling 8.4): the Core disarms VOX at every change of
+    holder, when the holder goes away, and whenever transmit becomes unheld. (Refusing
+    to arm VOX from a device that does not hold transmit is Task 77's, with the
+    transmitter's own settings.)
+  - **The keying gate** (rulings 8.8, 8.13): `MoxController::setKeyingGate(...)`,
+    beside the band-plan check (`MoxController.h:272-273`) and the interlock
+    (`MoxController.cpp:502-517`), is asked on every press edge and every remote key,
+    with the source (`PttMode`) and the keyer, before the PTT mode or MOX changes.
+    `TransmitHolder` answers: admit; refuse with a reason (including "changing hands"
+    while transferring); or take, then key if still pressed (the take arm is used from
+    Tasks 35 and 77). `setMox(bool)` stays for the Core's local callers, which key as the
+    station device; the new `setMox(bool on, const KeyerIdentity& keyer)` serves remote
+    keying. `KeyerIdentity` carries the keyer's device and source; its other fields are
+    the implementer's. A release names its keyer and unkeys only that keyer's key;
+    unkeying stays ungated (`MoxController.h:256-257`). The radio's PTT is acted on
+    only at a change from released to pressed and from pressed to released, never on the
+    level every status frame repeats. A refused press leaves the PTT mode unchanged; a
+    release unkeys only the station device's own key.
+  - **The station device's own keys until Task 77.** The station device is the
+    operating position at the radio (the radio's PTT, and the Core's local callers of
+    `setMox(bool)`). With transmit unheld, or held by the station device, its key is
+    admitted: on unheld transmit it makes the station device the holder (source
+    `radioPtt` for the radio's PTT, `device` otherwise; nothing to unkey) and then keys,
+    as D63 has a person's key do. While another device holds transmit, its key is
+    refused with `otherDeviceHolds` until Task 77 turns that press into the take of
+    ruling 8.9. Marked for the controller's review: the design assigns the take to
+    Task 77 and gives no rule for this interval.
+  - **On-air refusals** (ruling 7.4, D60), built here so transmit never exists without
+    them. While the holder is keyed, these changes from any session other than the
+    holder's are refused, never asked, with "<holder's short name> is on the air. Try
+    again when they stop." ("The radio is on the air." while the radio's own PTT holds
+    transmit):
+    - a change to the transmit path: the amplifier (`configurePgxl` and its settings
+      verbs), the tuner (`configureTgxl`), an antenna, receive or transmit (a slice's
+      `rxAntenna` or `txAntenna`, `alexAntennas`, `setAlexRxAntenna`), PureSignal
+      (`pureSignalSettings`, `transmit.pureSig`, `ps3.*` except two-tone), the interlock
+      (`setTxInterlockPolicy`) and the power cap (`setPgxlPowerCap`); Task 42 applies the
+      same refusal to its verbs;
+    - a Protocol 1 sample-rate change (`requestSliceSampleRate` on a Protocol 1 radio),
+      which stops the radio's data flow;
+    - a change that would move or close the holder's transmit slice, for every such
+      change that exists when this task lands (today, a C-Tune centre change on its
+      receiver, `requestStreamCentre`). The pan moves, band changes and takes of Task 74
+      and the Protocol 2 rate changes of Task 75 are wired by whichever of those tasks
+      and this one lands second.
+    A change the holder makes itself is not refused by this rule. The refusal's function
+    name is the implementer's.
+  - Capability `txPermitted` true per permitted session, sent again whenever the holder
+    or the gate's answer changes; verb `tx.setTxSlice {sliceId}` routed to
+    `RadioModel::requestTxHandoffToSlice`, passing through the unkey gate when keyed.
+    `tx.setTxSlice` is the holder's (ruling 8.10): from another device, while transmit
+    is held, it is refused with `otherDeviceHolds`. With transmit unheld the design does
+    not say; this task refuses it with fix `takeTransmit`, marked for the controller's
+    review. Refusing a slice the requester does not own is Task 73's and Task 77's.
+  - `connectedDevices` (Task 71): `holdsTransmit` true for the holder, keyed or not;
+    `state` `transmitting` while its device is on the air.
+  - `DisplayBudgetSplit` (Task 76) gets the holder from here, wired, with Task 76's
+    `sharing-budget` fixture, by whichever of this task and Task 76 lands second.
   - Capability `remoteTxVersion = 1`.
 
 **Acceptance:**
 - `txPermitted` is false until `snapshot.complete` has been sent to that peer, false for
-  a peer that did not declare `remoteTx`, and false for every peer when
-  `remote_transmit = deny`, whose `TxRefusal` says so.
+  a peer that did not declare `remoteTx`, false for every peer when
+  `remote_transmit = deny` (whose `TxRefusal` says so), and false for a device while
+  another device holds transmit; it is true for the holder and, with transmit unheld,
+  for every permitted device, and each change is sent again.
 - Each refusal path in `MoxController` (`MoxController.cpp:494-523`) produces its
   `TxRefusal` code; the amplifier-standby interlock gives fix `operateAmp`.
-- `tx.setTxSlice` while keyed unkeys first, waits for `Confirmed`, then moves the TX
-  flag; while unkeyed it moves at once; a list position is never accepted (the argument
-  is a `sliceIndex`).
+- `tx.setTxSlice` from the holder while keyed unkeys first, waits for `Confirmed`, then
+  moves the TX flag; while unkeyed it moves at once; a list position is never accepted
+  (the argument is a `sliceIndex`); from another device it is refused as above.
 - `UnkeyGate` confirms after `rxReady`; with `rxReady` suppressed it reports `TimedOut`
   at 2000 ms and transmit is already stopped.
-- Local operation at the desktop is unchanged (existing MOX tests pass).
+- `TransmitHolder`, with injected clocks: a transfer from a keyed holder runs the unkey
+  gate and assigns nothing before `Confirmed`; during the transfer a key from each
+  source (the old holder, the radio's PTT, VOX, TCI) is refused with the changing-hands
+  text and an unkey is accepted; `TimedOut` with MOX still on calls `stopAllTx`, waits
+  2000 ms more, and with MOX still on ends unheld with every key refused until MOX
+  reads off; a new holder starts unkeyed; the epoch advances once per change; VOX is
+  disarmed at every change and when the holder goes away.
+- A dropped holder that was keyed is unkeyed at once and holds transmit, away and
+  unkeyed; another device's key is refused `otherDeviceHolds` naming it; the same
+  device back within 180 s holds transmit unkeyed and keys only on its next press; at
+  180 s, on `session.leave` and on revocation transmit becomes unheld through the
+  transfer.
+- The keying gate: a refused press leaves the PTT mode as it was (red check: a gate
+  placed inside `setMox`, after the mode is set, fails this test); a release by keyer X
+  never unkeys keyer Y's key; a PTT level repeated on every status frame acts once per
+  edge.
+- On-air refusals: with a holder keyed, an antenna, PureSignal, interlock or power-cap
+  change from another session, a Protocol 1 rate change, and a C-Tune move that would
+  move the transmit slice are each refused with the holder's short name in the text; the holder's own change is not refused; with the
+  holder unkeyed none of them is refused by this rule.
+- `connectedDevices` shows `holdsTransmit` and `state` `transmitting` as above.
+- Local operation at the desktop is unchanged (the existing MOX tests pass).
 
-**Verification:** authorisation and the transmit boundary: invariant tests first.
-`cmake --build build --target tst_station_tx_gate tst_unkey_gate tst_tx_refusal tst_tx_slice_arbiter tst_link_conformance_session tst_station_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_tx_gate|tst_unkey_gate|tst_tx_refusal|tst_tx_slice_arbiter|tst_link_conformance_session|tst_station_session)$' --output-on-failure`.
+**Verification:** authorisation, who holds transmit, and the transmit boundary:
+invariant tests first (every refusal and the transfer's fence before any admit path).
+`cmake --build build --target tst_station_tx_gate tst_unkey_gate tst_tx_refusal tst_tx_slice_arbiter tst_transmit_holder tst_keying_gate tst_on_air_refusals tst_station_multi_session tst_mox_controller_basic tst_mox_controller_ptt_source_dispatch tst_mox_controller_mic_ptt_extraction tst_link_conformance_session tst_station_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_tx_gate|tst_unkey_gate|tst_tx_refusal|tst_tx_slice_arbiter|tst_transmit_holder|tst_keying_gate|tst_on_air_refusals|tst_station_multi_session|tst_mox_controller_basic|tst_mox_controller_ptt_source_dispatch|tst_mox_controller_mic_ptt_extraction|tst_link_conformance_session|tst_station_session)$' --output-on-failure`.
+Bench (controller and JJ, pending until observed, run once Tasks 35 to 37 are in): the
+design's row 12 on the Hermes Lite 2 at the Pi 4 Core (the phone keyed into a dummy load
+goes into airplane mode for 30 s: the radio unkeys at once, VOX is disarmed, the phone
+shows away holding transmit and comes back holding it, unkeyed, keying only on the next
+press; after 3 minutes away transmit is released), and row 10's second half (while A is
+keyed, B's rate change is refused with the on-air reason).
 
-**Execution note (advisory):** opus. The transmit safety boundary: flag for earlier
-review. Requires Task 33.
+**Execution note (advisory):** opus. The transmit safety boundary, who holds transmit,
+and keying: flag for earlier review. Requires Tasks 33 and 71, and the gaps plan's Tasks
+4 and 7.
 
-- [ ] **Step 1:** Refusals and the gate with tests.
-- [ ] **Step 2:** The unkey gate, the handoff verb, per-session permission, the config
-      key, fixtures and the document.
+- [ ] **Step 1:** Refusals, the gate and `TransmitHolder` with its transfer, tests first.
+- [ ] **Step 2:** The keying gate on edges, `KeyerIdentity` and releases by keyer in
+      `MoxController`, with tests.
+- [ ] **Step 3:** The dropped holder and the releases, the on-air refusals, the unkey
+      gate, the handoff verb, per-session permission, the config key, fixtures and the
+      document.
 
 ## Task 35: Keying from a remote device
 
 **Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-13 (the toggle PTT keys through the station; transmit never
-resumes after a reconnect), spec §4.6 item 7.
+resumes after a reconnect), spec §4.6 item 7, R-IOS-02 (one holder), D51, D58, D63; the
+several-devices design (Part G) section 2.2 and rulings 8.3, 8.5 and 8.14; design IDs
+R-MC-14, R-MC-15 (provisional, Part G).
 
 **Files:**
 - Modify: `src/core/session/SessionCommandDispatcher.{h,cpp}`, `src/core/session/MirrorPolicy.cpp`
   (`mox` and `tune` become station-to-client for remote writers; a write is refused with
   "Use the transmit button."), `src/core/PttSource.h` (`Remote`),
   `src/models/RadioModel.{h,cpp}` (who keyed, the keying epoch),
-  `src/core/TciServer.{h,cpp}` and `src/core/TciProtocol.{h,cpp}` (transmit requests key
-  through the gates instead of being refused: on the station's own server as a
-  station-local source, and in a remote window, whose TCI server R-R3-42 built on
-  `codex/lane-b` at `c5ac13cc`, forwarded to the Core as `tx.key {trigger:"tci"}`;
-  `tests/tst_tci_tx_mutex.cpp` changes from "refused" to "keys through the gates")
+  `src/core/TciServer.{h,cpp}` and `src/core/TciProtocol.{h,cpp}` (a remote window's TCI
+  server, which R-R3-42 built on `codex/lane-b` at `c5ac13cc`, forwards an app's
+  transmit to the Core as `tx.key {trigger:"tci"}` under the holder rule; the Core's own
+  TCI server stays receive-only)
 - Modify: `tests/data/link/v1/`, `surface.json`, the link document
-- Test: `tests/tst_remote_keying.cpp`, `tests/tst_tci_tx_mutex.cpp`,
-  `tests/tst_tci_remote_window.cpp`
+- Test: `tests/tst_remote_keying.cpp`, `tests/tst_tci_remote_window.cpp`,
+  `tests/tst_station_tci_server.cpp` (the Core's own TCI server still never keys),
+  `tests/tst_station_multi_session.cpp`
 
 **Interfaces:**
-- Consumes: `StationTxGate`, `TxRefusal` (Task 34); the remote window's TCI server
-  (R-R3-42, merged into `codex/integrate-r2-main` before this task; the controller checks).
+- Consumes: `StationTxGate`, `TxRefusal`, `TransmitHolder`, the keying gate and
+  `setMox(bool on, const KeyerIdentity&)` (Task 34); the remote window's TCI server
+  (R-R3-42, merged into `codex/integrate-r2-main` before this task; the controller
+  checks); the gaps plan's Task 4 (what a second TCI app's `trx` does, as Thetis does).
 - Produces:
   - Verbs under `remoteTxVersion = 1`: `tx.key {trigger}`, `tx.unkey {epoch}`,
     `tx.tune {on}`, `tx.twoTone {on}`, where `trigger` is `"screen"`, `"headset"`,
@@ -3443,19 +3608,46 @@ resumes after a reconnect), spec §4.6 item 7.
     `code`, `text`, `fix` from `TxRefusal`. Key and unkey events are sent three times,
     and the station acts once per epoch, so a single lost packet never stalls them
     (pairing design §9.6); after a safety stop the station refuses anything carrying the
-    old epoch, so a stale key can never re-key.
+    old epoch, so a stale key can never re-key. The keying epoch stays per key.
+  - **A person's key on unheld transmit takes it and keys** (D63, ruling 8.3): a
+    device's `tx.key`, `tx.tune` or `tx.twoTone` with any `trigger` but `"tci"`, while
+    transmit is unheld, makes that device the holder through the transfer (nothing to
+    unkey), unkeyed, and then keys. Nobody is asked. If MOX still reads on after a
+    failed transfer, the key is refused until it reads off.
+  - The holder keys as above. **Another device's key while transmit is held** (keyed or
+    not, present or away) is refused with `otherDeviceHolds` ("<holder> has the
+    transmitter.", fix `takeTransmit`).
+  - **A program never takes transmit** (D58, ruling 8.3): `tx.key {trigger:"tci"}` (and
+    CAT's own trigger once CAT is built) keys only while its device already holds
+    transmit. Otherwise it is refused: with transmit held by another device,
+    `otherDeviceHolds`; with transmit unheld, `programNeedsTransmit`. The window the
+    program runs through shows the refusal (Task 78).
+  - **`tx.unkey` is the holder's** (ruling 8.5): from a device that does not hold
+    transmit it is refused with "<holder> has the transmitter. Take it to stop the
+    transmission." and the transmission continues. A release unkeys only the keyer's
+    own key (`setMox(false, keyer)`). The Core's safety stops (the watchdog, starvation,
+    the time-out, the interlock, `stopAllTx`) unkey whoever is keyed.
   - `tx.unkey` is a release: the station stops transmitting now, except that once the
     RADE end-of-over (built after R4) exists it may finish that tail (at most 1 s, shown
     as `txEnding`, Task 39).
-  - VOX: a device may arm the station's VOX (`voxEnabled`, Task 40); VOX keying is
-    attributed to it and covered by the same watchdog, starvation and time-out.
-  - TCI transmit: the station's own TCI server (R-R3-48) keys as a station-local source
-    (`PttSource`'s existing TCI value, the station's own time-out setting); a remote
-    window's TCI server forwards an app's transmit as `tx.key {trigger:"tci"}` with its
-    audio on the mic line (Task 36).
+  - VOX: VOX keying is attributed to the holder and covered by the same watchdog,
+    starvation and time-out (ruling 8.4; Task 34 disarms it at every change of holder,
+    and Task 77 refuses arming it from a device that does not hold transmit).
+  - **TCI** (ruling 8.14): the Core's own TCI server stays receive-only
+    (`StationTciController.cpp:44-45`), so on a Core with no NereusSDR window programs
+    never key; the station-local TCI keying this task once planned is withdrawn (D58). A
+    remote window's TCI server forwards an app's transmit as `tx.key {trigger:"tci"}`,
+    with its audio on the mic line (Task 36). Two rules apply in order: the holder rule
+    above, then, among the programs of one TCI server (which all act as the same
+    device), the gaps plan's Task 4 behaviour decides whether a second program's `trx`
+    keys. Where they differ, the holder rule wins. The TCI audio lock
+    (`m_txAudioActiveClient`, `TciServer.cpp:2676-2719`) is taken only after the holder
+    rule admits the key; a program's `trx:N,false` releases only its own device's key;
+    a refused key is answered to the program as the gaps plan's Task 4 answers a refused
+    `trx`.
   - `PttSource::Remote`, and `RadioModel::keyedBy()` returning
-    `{deviceId, deviceName, deviceKind, trigger, epoch}` (empty when keyed at the
-    station).
+    `{deviceId, deviceName, deviceKind, trigger, epoch}`, which always names the holder
+    (for the station device, its name and kind `station`).
 
 **Acceptance:**
 - `tx.key` before `snapshot.complete` is refused with `notReady`; after it, it keys the
@@ -3463,21 +3655,41 @@ resumes after a reconnect), spec §4.6 item 7.
 - A property write of `mox` or `tune` from a remote peer is refused with the text above.
 - After a lost link and a reconnect the station is unkeyed and stays so until a new
   `tx.key` (no replay, no resume).
-- A second device cannot key while another device holds the session (it has no session;
-  the takeover rules of Task 41 apply).
+- With transmit unheld, device A's `tx.key` makes A the holder and keys, with no
+  question; B's `tx.key` is then refused `otherDeviceHolds` naming A, keyed or not; B's
+  `tx.unkey` is refused with the text above and A stays keyed; A's `tx.unkey` unkeys.
 - A key or unkey sent three times acts once; a `tx.unkey` or keepalive carrying an epoch
   older than the current one is ignored; after a watchdog stop, a delayed key from the
   lost connection is refused.
-- A TCI transmit request to the station's own TCI server keys through the same gates;
-  one arriving through a remote window is attributed to that window's device.
+- A program's key: `tx.key {trigger:"tci"}` on unheld transmit is refused
+  `programNeedsTransmit` and makes nobody the holder; after the device takes transmit
+  with a person's key and unkeys, the same program's key keys; while another device
+  holds, it is refused `otherDeviceHolds`. Through a remote window's TCI server a refused
+  key takes no audio lock and is answered to the app as the gaps plan's Task 4 refuses;
+  `trx:N,false` releases only that window's device's key.
+- The Core's own TCI server never keys, held or unheld (`tst_station_tci_server`).
+- `keyedBy` names the holder.
+- Fixtures (the runner of Task 71): `unheld-key` (`runs` station and app: a device's key
+  on unheld transmit takes and keys; a program's key refused `programNeedsTransmit`, then
+  keying once its device holds; Task 77 adds the `tuner.tune` and `ps3.twoTone` legs);
+  `grace-transmit-held` (station and app: the holder drops while keyed, is unkeyed at
+  once and holds transmit away; it comes back holding transmit, unkeyed; Task 77 adds
+  `take-during-grace`); `on-air-refusals` (station: Task 34's transmit-path and
+  Protocol 1 rate legs against a keyed holder, each refused with the on-air reason
+  naming it; Tasks 42, 74 and 75 add their legs).
 
-**Verification:** the transmit boundary: invariant tests first.
-`cmake --build build --target tst_remote_keying tst_link_conformance_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_remote_keying|tst_link_conformance_session)$' --output-on-failure`.
+**Verification:** keying and who holds transmit: invariant tests first.
+`cmake --build build --target tst_remote_keying tst_tci_remote_window tst_station_tci_server tst_station_multi_session tst_link_conformance_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_remote_keying|tst_tci_remote_window|tst_station_tci_server|tst_station_multi_session|tst_link_conformance_session)$' --output-on-failure`.
+Bench (controller and JJ, pending until observed): the design's row 16 on either Core (a
+Core with no NereusSDR window: a program through the Core's own TCI server never keys).
 
-**Execution note (advisory):** opus. Flag for earlier review. Requires Task 34.
+**Execution note (advisory):** opus. Keying and who holds transmit: flag for earlier
+review. Requires Task 34.
 
-- [ ] **Step 1:** The verbs, the refusal values and the outbound-only `mox` and `tune`.
-- [ ] **Step 2:** Attribution, the reconnect case, fixtures and the document.
+- [ ] **Step 1:** The verbs, the refusal values, the take on unheld transmit and the
+      outbound-only `mox` and `tune`.
+- [ ] **Step 2:** Programs and TCI under the holder rule, attribution, the reconnect
+      case, fixtures and the document.
 
 ## Task 36: The microphone uplink
 
@@ -3769,83 +3981,1557 @@ item 1, the Tools tab's TX Equalizer.
 
 # Part G: Sessions and accessories
 
-## Task 41: Asking before taking over
+**Several devices on one Core.** The Core/GUI session's design for several devices
+(`docs/architecture/2026-09-24-several-devices-on-one-core-design.md`, final, lane B
+`e45ffef5`; "the several-devices design" in this plan) replaces preemption with up to
+four device sessions on one Core (spec §3.9, D44 to D64). Its section 13 maps it onto
+this plan: Tasks 34, 35, 41 and 48 are rewritten for it, and Tasks 71 to 78 are new.
+Each task carries the names, values and cases it needs, and cites the design's sections
+and rulings so a reader can check them. Line cites taken from the design are at lane B
+`0c9e10ab`, or `aa6c5505` where the design stamps them; lines move, so an implementer
+finds the named function first. Words a user reads stay provisional where the phone's
+screens own them.
+
+**How these tasks depend on each other** (design section 13.3):
+
+* **Listening with several devices** needs Tasks 71 to 76 and nothing from Part E or
+  Part F: 71 after Part C (Tasks 12, 13, 14 and 16), then 72, 73, 74 and 75 in a line, and
+  76 after 72 and 73. Until Task 34 exists there is no holder of transmit, the display
+  split gives equal shares, and `txSlice` goes on the wire as today until Task 77. A phone
+  build that listens on Wi-Fi with other devices on the Core needs these six and its own
+  phone tasks, not remote access or transmit.
+* **Remote access** (Part E) needs from this design only ruling 4.9 (the path race signs
+  in on one path only) and Task 71's same-device rule.
+* **Transmit:** the receiver and transmit gaps plan's Tasks 4 and 7 come before Task 34,
+  which also needs Task 71; then 35, 36 to 40, and 77 after 34, 35, 39 and 75. D60's
+  on-air refusals exist from Task 34 on; the refusal that guards the transmit slice
+  against moves, takes and rate changes is wired by whichever of Task 34 and Task 74
+  (moves, takes) or Task 75 (rate changes) lands second.
+* **The fifth device** (Task 41) needs 71, 73 and 34. Task 42 needs 34.
+* **Part H** (43 to 46) needs 75. **The desktop:** 48 needs 71 to 77; 78 comes after 48
+  and 49; 50 after 48. Part D's 23 and 24 need 76, and 25 needs 75.
+
+The phone session sets the plan's overall order; JJ wants the phone's first build to
+listen on Wi-Fi before transmit and remote access.
+
+**Tracing.** Commit subjects name the R-IOS IDs each task lists. The design's Appendix A
+gives provisional IDs R-MC-01 to R-MC-21 and leaves their prefix to the controller; each
+task lists them so the design can be traced, and they go into commit subjects only once
+the controller confirms the prefix.
+
+**Conformance and the bench.** Task 71 builds the runner that plays several clients; each
+later task adds the fixtures of the design's section 14.2 that it can make pass, with the
+`runs` the design gives them. The bench rows of the design's section 14.3 run on the
+ANAN-G2 (Protocol 2, 2 ADCs) at the Rock Core and the Hermes Lite 2 (Protocol 1, 1 ADC)
+at the Pi 4 Core, by the controller and JJ, and stay pending until observed; Task 70
+gathers them. Transmit rows key into a dummy load.
+
+## Task 41: A fifth device takes a place
 
 **Runs in:** the Core/GUI session's lanes (a station task).
 
-**Replaced by spec §3.9 (JJ, 2026-09-24).** Up to four devices now share a Core, each
-owning its slices, with one transmit holder, and asking before taking a place applies
-only to a fifth device. The Core/GUI session rewrites this task, and adds the tasks it
-needs, from its design document for several devices (spec §4.5 lists what the phone
-needs from it); the text below is the superseded takeover design, kept until that
-rewrite lands, and nothing in it is built.
+**Requirements:** R-IOS-02 (a fifth device takes a place only on its operator's
+confirmation; a device reclaiming its own session is admitted without asking), R-IOS-03
+(a place taken from a device on the air unkeys it first), R-IOS-17 (the Core's half), D22,
+D55, D56, D59, D62, D64; the several-devices design sections 4.2, 4.3 and 10.7, rulings
+4.6, 4.7 and 10.1, section 10.5's changes to the link's sections 5.1, 6.2, 12.4 and 15;
+design IDs R-MC-02, R-MC-19 (provisional).
 
-**Requirements:** R-IOS-02 (the holder report; preempt only on confirmation; the same
-device reclaims without being asked), R-IOS-03 ("Unkey and take over" unkeys through the
-unkey-confirmed gate before the new session is admitted), R-IOS-17 (the station's half),
-D21, D22, spec §4.5.
+This replaces the takeover task that stood here (JJ replaced it with spec §3.9 on
+2026-09-24; nothing of it was built). The messages keep the names it planned, and change
+shape.
 
 **Files:**
 - Modify: `src/core/session/SessionMessages.{h,cpp}` (kinds `session.held` and
-  `session.takeover`; `session.end` gains `takenOverBy` and `at`),
-  `src/core/session/StationServer.{h,cpp}` (the question, its deadline, reclaim,
-  unkey-before-admit), `src/core/session/StationClient.{h,cpp}` (the desktop answers the
-  question with a dialog, and shows who took over)
-- Modify: `tests/data/link/v1/` (session fixtures for each path), `surface.json`, the link
-  document (a Sessions section that amends remote design §7.1 as spec §4.5 does)
-- Test: `tests/tst_station_takeover.cpp`, `tests/tst_link_conformance_session.cpp`
+  `session.takeover`; `session.end` gains `takenOverBy`, `takenOverById` and
+  `secondsAgo`; `SessionEndCode` gains `coreFull`), `src/core/session/StationServer.{h,cpp}`
+  (the question, its deadlines, the first-asked rule, the replacement),
+  `src/core/session/DeviceSessionRegistry.{h,cpp}` (Task 71's: the list and its order,
+  the records of who took a place and whose time ran out)
+- Modify: `tests/data/link/v1/sessions/` (the fixtures below), `surface.json`, the link
+  document (section 5.1: a full Core sends `session.held` in place of `capabilities`;
+  section 6.2: the two kinds are gated by the hello feature alone; section 12.4's rows;
+  section 15: `takeoverAnswerMs` 60000)
+- Test: `tests/tst_station_fifth_device.cpp`, `tests/tst_device_session_registry.cpp`,
+  `tests/tst_station_multi_session.cpp`, the conformance runners
 
 **Interfaces:**
-- Consumes: device identity (Task 12), `UnkeyGate` and `keyedBy` (Tasks 34, 35).
+- Consumes: `DeviceSessionRegistry`, the away state and its 180 s, the record that a
+  device's time ran out, the hello feature `sessionHolder` and its gate (Task 71);
+  `SliceOwnership` and `DeviceLayoutStore` (Task 73: a replaced device's slices close and
+  are saved); `TransmitHolder`'s release through a transfer to nobody (Task 34);
+  `notice` (Task 74) for `placeTaken` on admission, if it has landed.
 - Produces:
-  - Hello feature `sessionHolder = 1`, declared by both ends.
-  - After a device authenticates while a **different** device holds the session, the
-    station sends
-    `session.held {holder: {name, kind, connectedForSeconds, lastActivitySeconds, from, transmitting, transmittingForSeconds}}`
-    (`from` is the holder's address on a direct connection and `"relay"` through the
-    relay; `lastActivitySeconds` counts from the holder's last command, property write
-    or keepalive, not heartbeats), and waits for `session.takeover {confirm: true|false}`.
-    The 30 s connect deadline pauses while the question is open; the answer deadline is
-    60 s.
-  - Confirm: when the holder is transmitting the station runs `UnkeyGate::unkey` for it
-    and waits for the outcome; then it ends the holder's connection with
-    `session.end {reason: "<taker> took over the Core.", takenOverBy: "<taker>", at: "<ISO 8601 UTC>", retryable: false}`
-    and continues the taker's connect sequence; the taker's `txPermitted` is true only
-    after the unkey is confirmed (or timed out with transmit stopped).
-  - Cancel, or no answer in 60 s: the taker's connection ends with
-    `session.end {reason: "The other device keeps the Core.", retryable: false}`.
-  - The same device key reconnecting is admitted at once, preempting its own old
-    connection as today (MOX drops across the change).
-  - A peer that did not declare `sessionHolder` and finds a different device holding the
-    session is refused with "Another device is using this station. Update NereusSDR on
-    this device to ask to take over." (`retryable: false`).
+  - **The question** (section 4.3). When a paired, authenticated device that declared
+    `sessionHolder` 1 with `deviceAuth` 1 signs in to a full Core (Task 71's count), the
+    Core sends `session.held` in place of `capabilities`:
+    `{devices: [{deviceId, name, shortName, kind, state, holdsTransmit, lastActivitySeconds, connectedForSeconds, awayForSeconds, transmittingForSeconds, listeningOn, transmittingOn, from, replaceable}], revision}`,
+    plus `placeTaken {byName, byId, secondsAgo}` when this device's own place was taken
+    while it was away, or `placeFreed {secondsAgo}` when its own 3 minutes ran out.
+    - The entry has the same keys, with the same meanings and numbered names, as an entry
+      of Task 71's `connectedDevices.listJson`, less `paired`, `hostsCore` and
+      `revocable`, plus `from` and `replaceable`. `listeningOn` lists each of the
+      device's slices as `{sliceId, letter, frequencyHz, mode, band}` (the frequency is
+      sent here because the list is sent once); `transmittingOn` is its transmit slice in
+      the same shape while it transmits, else absent.
+    - `state` is `transmitting` while the device is on the air, `away` in its grace
+      period, `listening` otherwise; `holdsTransmit` is true for the holder, keyed or
+      not.
+    - `lastActivitySeconds` counts from the device's last command, property write or
+      settings write; heartbeats do not count, and a device counts as active for as long
+      as it is on the air. `from` is the device's address on a direct connection and
+      `"relay"` through the relay. The durations follow the one clock convention (Task
+      71).
+    - `replaceable` is false only for a hosting desktop's own window, which runs the Core
+      (D64).
+  - **The order** (ruling 4.6): away devices first, the one away longest first; then
+    present devices by `lastActivitySeconds`, idle longest first; a device on the air is
+    never idle, so it comes last. A hosting desktop keeps its place in the order, shown
+    and not selectable. The app's choice starts on the first entry whose `replaceable` is
+    true; with four places taken there are always at least three.
+  - **The answer:** `session.takeover {deviceId, revision}`; an empty `deviceId` cancels.
+    A `deviceId` whose entry is not `replaceable`, or an answer carrying an old
+    `revision`, is not acted on: the Core sends the current list again (ruling 4.7).
+  - **Deadlines and silence:** the 30 s connect deadline pauses while the question is
+    open; the answer deadline is 60 s (`takeoverAnswerMs` 60000). The waiting device
+    learns nothing but the list: no snapshot, settings, objects or media. Only a paired,
+    authenticated device receives `session.held`.
+  - **Several waiting** (ruling 4.7): when a place frees while questions are open, the
+    device asked first is admitted at once (the arrival of `capabilities` ends its
+    question), and every other waiting device gets the new list.
+  - **On a choice:** if the chosen device holds transmit, the Core first releases it
+    through a transfer to nobody (Task 34): every key refused, the unkey confirmed if it
+    was keyed, MOX read off. Then it ends that device's session with `session.end`,
+    reason "<taker's name> took this device's place on the Core.", `retryable` false,
+    code `takenOver`, `takenOverBy` (the taker's name), `takenOverById` (the taker's
+    device id) and `secondsAgo` (in place of the planned `at`). The reason carries no
+    time. The replaced device gets no grace period: its slices close at once and are
+    saved for its return (Task 73). The taker then continues its connect sequence.
+  - **Cancel, or no answer in 60 s:** `session.end` "The Core already has four devices
+    connected.", `retryable` false, new code `coreFull`.
+  - **An away device chosen:** it has no connection to end. Its place, its slices
+    (closed and saved) and any hold on transmit go at once, and the Core keeps who took
+    its place and when until that device next signs in, is revoked, or the Core
+    restarts. It learns it from `session.held`'s `placeTaken` when the Core is full again,
+    or from a `notice` of kind `placeTaken` (no Take it back) sent after its
+    `snapshot.complete` when it is admitted; that notice is wired by whichever of this
+    task and Task 74 lands second.
+  - **A device whose 3 minutes ran out** and which comes back to a full Core finds
+    `placeFreed {secondsAgo}` in its `session.held`: nobody took its place.
+  - **Take it back** is the client's: the replaced device connects again, meets the full
+    Core, and preselects the entry whose `deviceId` is the `takenOverById` it was given
+    (or `placeTaken.byId`), when that entry is still there and replaceable.
+  - **Older windows** (no `sessionHolder`) keep Task 71's refusal at a full Core:
+    `session.end` "The Core already has four devices connected.", `retryable` true, no
+    code (design 10.7).
+  - **Gates** (ruling 10.1): `session.held` and `session.takeover` are gated by the hello
+    feature alone: `sessionHolder` 1 in both ends' `hello`, with `deviceAuth` 1, at
+    agreed minor 11. A `session.takeover` from a peer that was not asked is refused as an
+    undecodable message is.
+  - Section 12.4's rows: "Replaced by a fifth device" (`takenOver`, not retryable, with
+    the three keys) and "The fifth device cancelled or did not answer" (`coreFull`, not
+    retryable).
 
 **Acceptance:**
-- Session fixtures cover: ask and confirm while the holder listens; ask and confirm while
-  the holder transmits (the fixture's station log shows the holder's unkey confirmed
-  before the taker's `snapshot.complete`); ask and cancel; no answer; silent reclaim; an
-  older client refused; an older holder taken over by a new device.
-- A device waiting on the question never learns anything but the holder report: no
-  snapshot, no settings, no media, until it confirms.
-- Only a paired, authenticated device ever receives `session.held`.
-- A holder stopped by a takeover sees `txState.stopReason` `takenOver`, with the taker's
-  name in `stopText`, before its connection ends.
-- The desktop remote window shows the question, the "took over" notice with the taker's
-  name and time, and Take it back, which asks the same question the other way; this
-  replaces the R3 behaviour where any authenticated peer preempts and the displaced
-  window gets a permanent refusal. Screenshots per `ui-verification`.
+- Unit (`DeviceSessionRegistry`, injected clock): the list is ordered away longest
+  first, then idle longest first, with a keyed device last; a hosting desktop is listed,
+  never chosen, and refused if named; activity moves on commands and writes and not on
+  heartbeats; `placeTaken` is kept for a device replaced while away and `placeFreed` for
+  one whose time ran out, each until it next signs in; a stale `revision` and a
+  non-replaceable `deviceId` each get the current list again; the device asked first is
+  admitted when a place frees and the others get the new list.
+- A waiting device receives nothing but `session.held` until it is admitted.
+- Choosing a device on the air: the station log shows its unkey confirmed and MOX off
+  before its `session.end` and before the taker's `snapshot.complete`.
+- Fixtures (`runs` as design section 14.2): `fifth-device`, `fifth-device-cancel` and
+  `fifth-device-no-answer` (station and app: the list idle longest first with each
+  device's short name, state, slices and TX clock; a non-replaceable entry refused; the
+  replace, with `takenOverBy`, `takenOverById` and `secondsAgo`; `coreFull` on cancel and
+  at 60 s; a client without the hello feature gets the retryable refusal instead);
+  `fifth-device-away` (station: an away device replaced; at its next sign-in,
+  `placeTaken` with who and when); and the `placeFreed` leg of `grace-expired` (station
+  and app), created here if Task 74 has not yet created that file.
+- Every reason passes `OperatorWording::isPlain`, tested with names such as "Grant's
+  iPhone" embedded.
 
 **Verification:** authorisation and the transmit boundary: invariant tests first.
-`cmake --build build --target tst_station_takeover tst_link_conformance_session tst_station_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_takeover|tst_link_conformance_session|tst_station_session)$' --output-on-failure`.
-Integration and bench: Task 70 (two devices; the holder keyed on air; the carrier stops
-before the handover).
+`cmake --build build --target tst_station_fifth_device tst_device_session_registry tst_station_multi_session tst_link_conformance_session tst_station_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_fifth_device|tst_device_session_registry|tst_station_multi_session|tst_link_conformance_session|tst_station_session)$' --output-on-failure`.
+Bench (controller and JJ, pending until observed): the design's row 8 on the ANAN-G2 at
+the Rock Core (four connected, one keyed; the fifth's list starts on the device idle
+longest that can be replaced; the fifth replaces the keyed one, which is unkeyed first
+and told, and its Take it back preselects the taker), using desktop windows started with
+their own profiles, each paired as its own device, or a test client; and a fifth device
+replacing an idle one on the Hermes Lite 2 at the Pi 4 Core.
 
-**Execution note (advisory):** opus. Authorisation and the transmit boundary: flag for
-earlier review. Requires Tasks 12, 34 and 35.
+**Execution note (advisory):** opus. Authorisation (who holds a place) and the transmit
+boundary (a keyed holder replaced): flag for earlier review. Requires Tasks 71, 73 and 34.
+The desktop's fifth-device dialog is Task 78's.
 
-- [ ] **Step 1:** The messages, the question, its deadlines and the reclaim rule.
-- [ ] **Step 2:** Unkey before admit, the older-client refusal, the desktop dialog,
-      fixtures and the document.
+- [ ] **Step 1:** The list, its order and revision, the answer, the deadlines and the
+      first-asked rule, with tests.
+- [ ] **Step 2:** The replacement through the transfer, `coreFull`, the away case with
+      `placeTaken`, `placeFreed`, fixtures and the document.
+
+## Task 71: Device sessions and admission
+
+**Runs in:** the Core/GUI session's lanes (a station task).
+
+**Requirements:** R-IOS-02 (up to four sessions; who is on the Core, sent to every
+session; a device reclaiming its own session admitted without asking), D35 (a hosting
+desktop's window counts as one of the four), D44, D56, D57, D59, D62; the several-devices
+design sections 4.1 to 4.6, 10.1, 10.3 (`connectedDevices`, and `devices`' names), 10.4,
+10.5, 10.6 and 11, rulings 4.1 to 4.5, 4.8 to 4.12, 10.1, 10.3 and 10.4; design IDs R-MC-01,
+R-MC-03, R-MC-18, R-MC-21 (provisional).
+
+**Before this task (controller):** confirm that `auth.request`'s `device` block carries
+the optional string `shortName`, decoded by the Core. The design (ruling 4.3; section
+13.1's row for Task 14) lands that key with Part C, not here: it is outside the signed
+device-auth transcript, as `name` is, and pairing's `device` block and the code-mode
+confirmation box stay `{"publicKey","name","kind"}`. If it has not landed, stop and ask
+JJ and the phone session; this task does not add it.
+
+**Files:**
+- Create: `src/core/session/DeviceSessionRegistry.{h,cpp}` (sessions by device, places,
+  the away state and its 180 s, names and short names) and
+  `src/core/session/ConnectedDevicesFacade.{h,cpp}` (the mirrored `connectedDevices`
+  object). The design names both classes; the paths are this plan's, beside
+  `StationDevicesFacade`.
+- Modify: `src/core/session/StationServer.{h,cpp}` (the one `m_session` becomes the
+  registry's sessions; preemption removed; `kMaxConcurrentPeers` 24 and
+  `kMaxDeviceSessions` 4; the same-device rule; the away state; `session.leave`; the
+  topology note at `StationServer.h:40-60`, the `Peer` comment at `548-552`,
+  `hasAuthenticatedSession` at `429-430`, `sessionPreempted` at `537-541` and the
+  `kMaxConcurrentPeers` comment at `254-260` rewritten, as design section 11 says),
+  `src/core/session/SessionMessages.{h,cpp}` (`SessionEndCode` gains `sameDevice`), the
+  Core's `hello` in `StationServer.cpp` (declares `sessionHolder` 1),
+  `src/core/session/StationCapabilities.{h,cpp}`
+  (`sessionHolderVersion`), `src/core/session/SessionCommandDispatcher.{h,cpp}`
+  (`session.leave`), `src/core/session/StationDevicesFacade.{h,cpp}` (numbered names and
+  `shortName`), `src/core/security/DeviceStore.{h,cpp}` (the stored short name),
+  `src/core/session/MirrorSchema.cpp`, `src/core/session/MirrorPolicy.cpp`
+- Modify: `src/core/session/StationLanAnnouncement.{h,cpp}`,
+  `src/core/session/StationLanAnnouncer.{h,cpp}` and
+  `src/core/session/StationLanDiscovery.{h,cpp}` (the count byte),
+  `src/core/session/DnsSdAdvertiser.{h,cpp}` and its three backends (the `devices` TXT
+  entry)
+- Modify: `tests/LinkFixtures.{h,cpp}` and `tests/tst_link_conformance_session.cpp` (the
+  several-client runner; the `preemptingClient` setup key withdrawn),
+  `tests/data/link/v1/sessions/` (`preempted.json` removed, `connection-limit.json` opens
+  twenty-four other connections, the new fixtures below), `tests/data/link/v1/media/`
+  (`lan-announcement-2-devices.bin` with its `.expect.json`; `dnssd-txt.bin` and its
+  expect rewritten), `tests/data/link/v1/manifest.json`, `surface.json`, the link
+  document (sections 3.5, 5.1, 6.2, 6.4, 7.1, 12.3, 12.4, 14.1, 14.2 and 15 as design
+  section 10.5 lists them, and the Conformance section's several-client format)
+- Modify: `docs/architecture/2026-07-28-remote-daemon-architecture-design.md` (section
+  7.1 and its summary row: up to four devices, the control operator is the transmit
+  holder, admission and the same-device rule in place of preemption, every paired device
+  keeps the role of owner) and
+  `docs/architecture/2026-08-02-remote-station-identity-and-pairing-design.md` (its
+  decisions row "Concurrent sessions" becomes "Up to four; a fifth asks to take one's
+  place"; section 7's "one may be connected" becomes "up to four may be connected"; its
+  non-goal keeps guest sessions out and drops "multi-operator access"), as design
+  section 11 words each
+- Test: `tests/tst_device_session_registry.cpp`, `tests/tst_station_multi_session.cpp`
+  (the integration harness later tasks extend), `tests/tst_station_session.cpp`,
+  `tests/tst_station_devices.cpp`, `tests/tst_station_lan_transport.cpp`,
+  `tests/tst_dns_sd_advertiser.cpp`, `tests/tst_station_reason_wording.cpp`, the
+  conformance runners
+
+**Interfaces:**
+- Consumes: `DeviceStore`, `PairedDevice`, `DeviceStore::isValidName` and `kMaxNameBytes`
+  (Task 12); the `devices` object, `otherPairedDevices` and revoke (Task 13); pairing
+  connections (Task 14); the announcement and Bonjour (Task 16); the hello `features`
+  object (Task 4); `auth.request`'s `device.shortName` (Part C).
+- Produces:
+  - **What a device is** (ruling 4.1): a paired device, identified by its device id; a
+    window signed in with the older token without a key, a device for the life of its
+    session, with an id the Core makes (`token:<n>`) and the name "Computer at <peer
+    address>" (for example "Computer at 192.168.1.20"), never recognised when it comes
+    back; and the station device, kind `station`, the operating position at the radio.
+    On a desktop that hosts the Core the station device is that desktop's own window: it
+    has no network session, counts as one of the four, and carries the hosting desktop's
+    device name and id (Task 48 registers it; the registry takes it now). On a Core with
+    no desktop it does not count. One session per device (ruling 4.2).
+  - **Names and short names** (ruling 4.3). Every device has a name (the paired name, or
+    the token window's) and a short name. The short name arrives in
+    `auth.request`'s `device.shortName` at every sign-in; the Core stores it with the
+    device in `DeviceStore` and replaces it at each sign-in that carries a usable one.
+    Both are validated as `DeviceStore::isValidName` validates a name: not empty after
+    trimming; no control, format, line-separator or paragraph-separator characters; valid
+    UTF-8; a name at most `kMaxNameBytes` (64) bytes of UTF-8, a short name at most
+    `kMaxShortNameBytes` = 32 bytes. Neither is held to `OperatorWording::isPlain`. A
+    missing, empty or unusable short name is the device's kind in plain words ("Phone",
+    "Tablet", "Computer"); a token window's is "Computer"; the station device's is the
+    hosting desktop's, and "Radio" after the radio's own PTT (Task 77). Numbering: when
+    two devices carry the same name, the one paired later gets a number ("iPhone 2");
+    short names are numbered on their own collisions by the same rule, whether or not the
+    names collide ("Phone", "Phone 2"); token windows are numbered after the paired
+    devices, in the order they connected. The numbered names go in everything the Core
+    sends: `devices` (whose entries also gain `shortName`), `connectedDevices`, and, as
+    later tasks build them, `session.held`, markers, `txState`, `confirm.request` and
+    `notice`.
+  - **Admission** (rulings 4.4, 4.5). `kMaxDeviceSessions` = 4 counts admitted sessions,
+    devices in their grace period and a hosting desktop's own window. It does not count
+    connections still connecting, a fifth device while it is being asked (Task 41),
+    pairing connections, or the station device of a Core with no desktop.
+    `kMaxConcurrentPeers` becomes 24, a cap on sockets of every kind; the next socket
+    gets today's retryable end before any hello. After `auth.result` accepted:
+    1. a device that already has a session, live or away, goes to the same-device rule;
+    2. with a place free, today's connect sequence (capabilities, settings, schemas,
+       objects, `snapshot.complete`);
+    3. with the Core full, `session.end` "The Core already has four devices connected.",
+       `retryable` true, no code. From Task 41 a device that declared `sessionHolder` is
+       asked the fifth-device question instead; an older window keeps this refusal.
+  - **The same device again** (ruling 4.8): the new connection is admitted at once, with
+    no question, and the older one ends with `session.end` "This device connected
+    again.", `retryable` false, new code `sameDevice`. The device keeps its place (and,
+    from Task 73, its slices, pans and active slice; from Task 34, its hold on transmit).
+    The same holds for a device whose old connection the Core has not yet noticed is
+    dead. Preemption is gone: no other device's sign-in ever ends a session.
+  - **Away** (rulings 4.10, 4.11). A session that ends without `session.leave` (a lost
+    link, the heartbeat's end, a closed socket, the app stopped by its system) leaves its
+    device away for 180 s (`graceMs` 180000), keeping its place. Signing in again within
+    them is the same-device rule. When the 180 s end the place is freed, and the registry
+    records that the device's time ran out, kept until it next signs in, is revoked, or
+    the Core restarts (read by Task 74's `graceEnded` and Task 41's `placeFreed`). Token
+    windows and devices replaced by a fifth device get no grace period. Revoking a device
+    (Task 13) ends its grace at once. What the away state and its end do to slices is
+    Task 73's, and to transmit, Task 34's.
+  - **Leaving on purpose** (ruling 4.12): verb `session.leave {}` under
+    `sessionHolderVersion` 1, minimum minor 11. After the accepted result the client
+    closes the connection, and the device leaves with no away state, freeing its place at
+    once.
+  - **The feature and its gates** (ruling 10.1). Hello feature `sessionHolder` 1 (the
+    name Task 41 planned and the phone's Task 8 declares): the Core declares it; a client
+    declares it only together with `deviceAuth` 1 or later, and the Core treats
+    `sessionHolder` without `deviceAuth` as not declared. Capability
+    `sessionHolderVersion` 1, sent at agreed minor 11 to a peer that declared the
+    feature, 0 otherwise; `kSessionProtocolMinor` stays 11. `session.held` and
+    `session.takeover` (Task 41) are gated by the hello feature alone, in both ends'
+    `hello`; everything else from the design uses the link's two-key gate (agreed minor 11
+    and `sessionHolderVersion` at least 1). A new kind from a peer that did not declare
+    the feature is refused as an undecodable message is today.
+  - **`connectedDevices`** (design 10.3): object key `connectedDevices`, class
+    `ConnectedDevicesFacade`, every property outbound, sent only at agreed minor 11 to a
+    view with `sessionHolderVersion` 1:
+    - `listJson` (`utf8`): a JSON array, one entry per device with a session, live or
+      away, in admission order:
+      `{deviceId, name, shortName, kind, paired, hostsCore, revocable, state, holdsTransmit, lastActivitySeconds, connectedForSeconds, awayForSeconds, transmittingForSeconds, listeningOn, transmittingOn}`.
+      `deviceId` is Task 13's `id` for a paired device and `token:<n>` for a token window
+      (`paired` false). `hostsCore` is true for a hosting desktop's own window;
+      `revocable` is false for it and for a token window. `state` is `listening` or
+      `away` in this task; Task 34 adds `transmitting` and `holdsTransmit`. `listeningOn`
+      is `[]` until Task 73 fills it (`[{sliceId, letter, band, mode}]`, every slice the
+      device owns, an away device's included); `transmittingOn` is absent until Task 77.
+      Durations are `0` where they do not apply. `lastActivitySeconds` counts from the
+      device's last command, property write or settings write, never a heartbeat, and is
+      re-measured at most once a minute per device. The list is re-sent only when
+      something in it changes.
+    - `revision` (`i64`): moves by one with every change, compared by serial-number
+      arithmetic.
+    - `deviceLimit` (`i64`): 4.
+    An older view never receives it.
+  - **One clock convention** (ruling 10.3): every duration the Core sends about a
+    session, a device, transmit, a notice or an end is measured on the Core's monotonic
+    clock when the message is encoded, in whole seconds, named `...ForSeconds`,
+    `...Seconds` or `secondsAgo`; no wall-clock time reaches these screens. A duration
+    inside an object is re-measured whenever that object or property is sent, and not
+    otherwise. Task 13's `pairedAt` and `lastSeen` stay ISO 8601 dates. The link
+    document's section 7.1 states the convention once.
+  - **The count before connecting** (ruling 10.4). The LAN announcement gains one byte
+    after Pairing, "Devices connected", 0 to 4, counted as `kMaxDeviceSessions` counts;
+    the datagram stays schema 2 and grows to at most 480 bytes
+    (`kStationLanMaxSchema2DatagramBytes`, 479 today, `StationLanAnnouncement.h:41`);
+    a reader that never sees the byte treats the count as unknown and shows none. The
+    Bonjour TXT record gains a sixth entry after `name`, `devices` (`0` to `4`); `v`
+    stays `1`, and the record is updated in place when the count changes. A Core that is
+    not claimed sends 0. A Core reached through the rendezvous or the relay has no
+    announcement; its count shows after sign-in, from `connectedDevices`. New vector
+    `media/lan-announcement-2-devices.bin` (the `lan-announcement-2` datagram with the
+    byte); `media/dnssd-txt.bin` is written again with the sixth entry;
+    `lan-announcement-2-trailing` keeps proving that bytes beyond are ignored. Tell the
+    iPhone session (its Task 16a parses the TXT record).
+  - **The several-client runner** (design 10.6): `stationSetup.otherClients`:
+    `[{"name": "b", "device": 1, "features": {...}}]`, each signing in as paired device n
+    (Task 13's `otherPairedDevices` and its `$ref:device:<n>`). Client steps may carry
+    `"client"`, and `"from": "station"` steps `"to"`; absent means the fixture's own
+    client. New steps `{"connect": "<name>"}` (that client's whole connect sequence, its
+    messages up to `snapshot.complete` taken without matching) and
+    `{"close": "<name>"}`; `expectClosed` may name a client. The Core's messages are
+    matched per client, in that client's own arrival order. `otherConnections`
+    (`tests/tst_link_conformance_session.cpp:280-290`) stays for sockets that never sign
+    in. An app's runner plays only its own client and skips other clients' steps and
+    the messages sent to them. Per the Global Constraints, the format change goes to the
+    iPhone session before it lands.
+  - **Limits** in the link document's section 15: `maxPeers` 24, `maxDeviceSessions` 4,
+    `graceMs` 180000, `shortNameMaxBytes` 32, `kStationLanMaxSchema2DatagramBytes` 480.
+    Section 12.4: the preemption row and the "Only one session is authenticated at a
+    time" paragraph go; new rows "The same device connected again" (`sameDevice`, not
+    retryable) and "An older window meets a full Core" (retryable, no code); the
+    heartbeat-timeout row stays retryable, since that end starts a device's 3 minutes.
+    Sections 14.1 and 14.2: the connected-device count.
+  - **Until Tasks 72 and 76.** The Core keeps one mirror path and one media session
+    until Task 72 gives each device a view and Task 76 a media controller. How a second
+    admitted session is served mirror traffic and media in between is the implementer's
+    choice, stated in its report, within three limits: nothing a single connected device
+    sees changes, no media goes to two sessions at once, and this task's tests assert
+    nothing about a second device's mirror or media. The design gives no rule for this
+    interval; the controller does not put a build with this task but without Tasks 72
+    to 76 on a Core that several devices use.
+
+**Acceptance:**
+- Four paired devices sign in and are all admitted, none ending another; each receives
+  its own connect sequence; `connectedDevices` on each lists four entries in admission
+  order.
+- A fifth paired device, after `auth.result`, gets `session.end` "The Core already has
+  four devices connected.", `retryable` true, no code, and so does an older window. A
+  pairing connection is not counted; a device away in its 180 s is.
+- `connection-limit`: with twenty-four other sockets open, the next gets the retryable
+  end before any hello.
+- The same device signing in again ends its older connection with `sameDevice`,
+  `retryable` false, and is admitted with no question; no other session is touched. A
+  sign-in by a different device never ends a session (red check: restoring the old
+  preemption fails this test).
+- Away, with an injected clock: a device whose link drops is `away` in every other
+  device's `connectedDevices`, with `awayForSeconds` counting, and keeps its place; it is
+  admitted with no question at 179 s; at 180 s its place frees, the list drops it, and
+  the registry records that its time ran out. A token window's drop frees its place at
+  once. Revoking an away device frees its place at once.
+- `session.leave`: the accepted result, then no away state and the place freed at once.
+  From a peer without `sessionHolderVersion` 1 the verb is refused as an unknown verb is.
+- The redial arithmetic, as a table test over an injected clock: the Core pings every
+  20 s and ends a session at a tick where two pings are unanswered; the client redials
+  after 1, 2, 5, 10, 30 and 60 s, then every 60 s. With both ends noticing at the same
+  tick the attempts come at 1, 3, 8, 18, 48, 108 and 168 s, all inside 180 s; with the
+  device noticing 20 s after the Core they come 21, 23, 28, 38, 68, 128 and 188 s into the
+  Core's 180 s, six inside. In both, every attempt up to the sixth is inside 180 s.
+- Names: two devices paired as "iPhone" show as "iPhone" and "iPhone 2" (the later one
+  numbered) in `devices` and `connectedDevices` alike; two devices without short names
+  show "Phone" and "Phone 2"; a token window is "Computer at <address>", numbered after
+  the paired devices; a new `shortName` at sign-in replaces the stored one everywhere; a
+  short name of 33 bytes, one with a control character and one blank after trimming each
+  fall back to the kind's word; "Grant's iPhone" is accepted as a name.
+- `sessionHolder` without `deviceAuth` is treated as not declared: that peer gets
+  `sessionHolderVersion` 0 and no `connectedDevices`. A peer at minor 11 that did not
+  declare the feature, and an older peer, see today's wire (golden comparison where a
+  test exists).
+- Durations in `connectedDevices` are measured at send and never from the wall clock (the
+  test moves the wall clock and sees no change); heartbeats do not move
+  `lastActivitySeconds`, which is re-sent at most once a minute per device.
+- Discovery: the announcement carries the count byte within 480 bytes; a datagram
+  without it decodes with the count unknown; the TXT record's `devices` entry follows the
+  count; an unclaimed Core sends 0.
+- Fixtures, `runs` as design section 14.2: `preempted` and `preemptingClient` are gone;
+  `same-device-again` (station: the older connection ends `sameDevice`); `short-name`
+  (station and app: the short name in `connectedDevices` and `devices`, replaced by a new
+  sign-in; Task 73 adds its marker leg); `connected-devices` (station and app: each
+  session with short name, state and durations, names numbered as in `devices`, a token
+  window marked, an older view never receiving it; Tasks 73, 34 and 77 add slices and
+  transmit); `grace-return` (station and app: a device away within 180 s kept and back
+  with no question; Task 73 adds its slice legs); `older-window` (station: its full-Core
+  leg; Tasks 73, 74 and 75 add theirs).
+- The remote design, the pairing design and `StationServer.h`'s comments carry design
+  section 11's amendments.
+- Every new sentence the Core sends passes `OperatorWording::isPlain`, tested with names
+  such as "Grant's iPhone" embedded.
+
+**Verification:** authorisation (admission, one session per device, revocation's reach):
+invariant tests first, refusals before the admit paths. Unit, integration and
+conformance, offscreen:
+`cmake --build build --target tst_device_session_registry tst_station_multi_session tst_station_session tst_station_devices tst_station_lan_transport tst_dns_sd_advertiser tst_station_reason_wording tst_link_conformance_session tst_link_conformance_media && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_device_session_registry|tst_station_multi_session|tst_station_session|tst_station_devices|tst_station_lan_transport|tst_dns_sd_advertiser|tst_station_reason_wording|tst_link_conformance_session|tst_link_conformance_media)$' --output-on-failure`.
+Bench (controller and JJ, pending until observed): on the ANAN-G2 at the Rock Core and
+the Hermes Lite 2 at the Pi 4 Core, a second device connects beside the first without
+ending it, and `avahi-browse -rt _nereus-station._tcp` shows the `devices` count; the
+design's row 14 in part (an older desktop window refused, retryable, while the Core is
+full).
+
+**Execution note (advisory):** opus. Authorisation (admission, a session per device,
+what revocation reaches): flag for earlier review with the several-devices group.
+Requires Tasks 12, 13, 14 and 16.
+
+- [ ] **Step 1:** `DeviceSessionRegistry` with its unit tests (the four, the same device,
+      away and its 180 s, leaving, names and short names, the redial table), then
+      `StationServer` admission on it with the multi-session harness, preemption removed.
+- [ ] **Step 2:** The feature and capability, `connectedDevices`, the discovery count and
+      its vectors, the several-client runner and fixtures (the format to the iPhone
+      session first), the link document and the two designs.
+
+## Task 72: A mirror view per device
+
+**Runs in:** the Core/GUI session's lanes (a station task).
+
+**Requirements:** R-IOS-02 (who is on the Core, whose each slice is and who has transmit,
+sent to every session), D44, D45; the several-devices design section 5.5, rulings 5.6,
+5.7 and 5.8; design ID R-MC-04 (provisional).
+
+**Files:**
+- Create: `src/core/session/MirrorView.{h,cpp}` (the design names the class; the path is
+  this plan's)
+- Modify: `src/core/session/StateMirror.{h,cpp}` (echo per writer, replacing the single
+  `m_applying` guard at `StateMirror.h:54-84`), `src/core/session/StationServer.{h,cpp}`
+  (a view per admitted session; routing per session), `src/core/session/SessionCommandDispatcher.{h,cpp}`
+  (the owner string per session), `src/core/settings/SettingsProxyServer.{h,cpp}`
+  (`settings.value` to every view holding the key; `settings.reject` to the writer)
+- Modify: the link document (routing per session)
+- Test: `tests/tst_mirror_view.cpp`, `tests/tst_mirror_inbound.cpp`,
+  `tests/tst_mirror_forwarder.cpp`, `tests/tst_station_multi_session.cpp`,
+  `tests/tst_station_session.cpp`, the conformance runners
+
+**Interfaces:**
+- Consumes: `DeviceSessionRegistry` and several admitted sessions (Task 71).
+- Produces:
+  - `StateMirror` keeps its one set of watches. Each admitted session gets a `MirrorView`
+    (ruling 5.6): its own outbound coalescer (a shared one would lose another session's
+    pending deltas on attach, `StationServer.h:44-47`), its own attach burst, and a
+    filter. In this task the filter is today's per-peer filter by minor and capabilities
+    (`sendToSession`, `StationServer.cpp:2151-2218`); Task 73 adds ownership. The
+    view's own method names are the implementer's.
+  - **Echo per writer** (ruling 5.7): a change made while applying device A's write is
+    withheld from A's view only, as today, and reaches every other view, side effects on
+    other objects included (a shared receiver's blanker, a shared setting). A change
+    applied on `confirm.proceed` (Task 74) counts as the requester's write.
+  - **Routing** (ruling 5.8): `command.result`, `property.result`, `settings.reject`,
+    `confirm.request` and `notice` go to one session: the requester, or the device a
+    notice is for. `delta`, `object.create`, `object.destroy` and `settings.value` go to
+    every view that holds the object or key; `settings.value` keeps its writer's origin
+    (the link, lines 1292-1297), so the writer still recognises its own echo. A change of
+    an object's owner reaches each view as `object.destroy` of the old form and
+    `object.create` of the new one (used from Task 73). A write's readback of side
+    effects on the written object still goes to the writer only
+    (`StationServer.cpp:2009-2032`).
+  - Capabilities are per peer, as today; `txPermitted` (Task 34) and the display
+    allowance (Task 76) are per device.
+  - The dispatcher's owner string (`SessionCommandDispatcher.cpp:480-491`) becomes
+    `station:<sessionId>`, so one device leaving cancels only its own DSP-asset jobs.
+
+**Acceptance:**
+- Two devices A and B with slices on one receiver: A changes the noise blanker; B
+  receives the delta, A does not, and A's own `property.result` carries the readback as
+  today. Red check: with the echo made global again, B misses A's change.
+- A attaches while B has deltas pending: all of B's arrive, and A's attach burst holds
+  the current values.
+- A `command.result` and a `property.result` go only to the device that asked; a
+  `settings.value` reaches every view with its writer's origin.
+- A DSP-asset job started by A continues when B leaves and is cancelled when A leaves.
+- One device alone sees exactly today's wire (the existing session tests and goldens
+  pass).
+
+**Verification:** what every session receives: invariant tests first.
+`cmake --build build --target tst_mirror_view tst_mirror_inbound tst_mirror_forwarder tst_mirror_lifecycle tst_station_multi_session tst_station_session tst_link_conformance_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_mirror_view|tst_mirror_inbound|tst_mirror_forwarder|tst_mirror_lifecycle|tst_station_multi_session|tst_station_session|tst_link_conformance_session)$' --output-on-failure`.
+Bench: none of its own; Task 73's rows cover it.
+
+**Execution note (advisory):** opus. Requires Task 71.
+
+- [ ] **Step 1:** `MirrorView` and echo per writer, with the unit tests.
+- [ ] **Step 2:** Routing per session, the dispatcher's owner, settings values and
+      rejections, the harness cases and the document.
+
+## Task 73: Slice ownership, markers and the active slice
+
+**Runs in:** the Core/GUI session's lanes (a station task).
+
+**Requirements:** R-IOS-02 (each device owns its slices and pans; one pool of letters;
+whose each slice is), D45, D46, D47, D56, D58 (TCI and VAX act as their window's device),
+D59 (an older window works with its own slices), D62; the several-devices design sections
+5.1 to 5.4, 5.6, 5.7, 5.8 and 5.9, with the slice consequences of rulings 4.11 and 4.12;
+rulings 5.1 to 5.5, 5.9 to 5.14; design IDs R-MC-05, R-MC-06, R-MC-07, R-MC-21
+(provisional).
+
+**Files:**
+- Create: `src/core/SliceOwnership.{h,cpp}` (the design places it in `src/core/`),
+  `src/core/DeviceLayoutStore.{h,cpp}` (beside `ReceiveLayoutStore`; the path is this
+  plan's), `src/core/session/SliceMarker.{h,cpp}` (the mirrored marker class; the path is
+  this plan's)
+- Modify: `src/core/ReceiveLayoutStore.{h,cpp}` (an owner or a held-for device on each
+  entry), `src/core/daemon/DaemonApp.cpp` (restore with owners, `DaemonApp.cpp:266-273`;
+  the slices made at first start, `967-1013`, have no owner),
+  `src/models/RadioModel.{h,cpp}` (the active slice per owner, `8510-8527`; the
+  station-level active slice for the duties at `12776-12826`),
+  `src/core/session/MirrorView.{h,cpp}` (the ownership filter),
+  `src/core/session/StationServer.{h,cpp}` (admission's slices, ruling 5.2),
+  `src/core/session/SessionCommandDispatcher.{h,cpp}` (refusals for another device's
+  slice), `src/core/session/MirrorSchema.cpp`, `src/core/session/MirrorPolicy.cpp`,
+  `src/core/session/ConnectedDevicesFacade.cpp` (`listeningOn`),
+  `src/core/TciServer.{h,cpp}` and `src/core/StationTciController.{h,cpp}` (ruling 5.13),
+  `src/core/AudioEngine.{h,cpp}` (the Core computer's VAX carries the station device's
+  slices, ruling 5.14)
+- Modify: `tests/data/link/v1/`, `surface.json`, the link document (section 7.1: the
+  `SliceMarker` class and the `marker:<id>` key; section 7.3: the refusal for another
+  device's object)
+- Test: `tests/tst_slice_ownership.cpp`, `tests/tst_device_layout_store.cpp`,
+  `tests/tst_receive_layout_store.cpp`, `tests/tst_station_multi_session.cpp`,
+  `tests/tst_station_tci_server.cpp`, `tests/tst_daemon_app.cpp`, the conformance runners
+
+**Interfaces:**
+- Consumes: `MirrorView` and routing per session (Task 72); the registry's admissions,
+  away state, the end of the 180 s, `session.leave` and revocation (Task 71);
+  `SliceStreamAllocator` (`placeSlice` joins any active window covering a frequency, else
+  claims a free receiver, else refuses); `ReceiveLayoutStore`; the board's `maxSlices`.
+- Produces:
+  - **`SliceOwnership`** (ruling 5.1): every slice's owner (a device id, `token:<n>`, the
+    station device, or none); a second mark, **held for** a device, on a slice the
+    station device runs for an absent device; and each owner's active slice. Task 74 adds
+    each receiver's anchor. Owner marks live at the Core: on the wire they show only as
+    which `slice:` objects a device receives and as markers' owner fields. No `slice:`
+    property changes.
+  - **Where a device's slices come from** (ruling 5.2), at admission, in this order:
+    1. slices held for it become its own again;
+    2. its saved slices are restored where they fit: each joins a window that covers it or
+       claims a free receiver, and takes its old slice id when that id is free; its
+       per-slice settings come back from the copy its store kept; what does not fit is
+       recorded for the `slicesNotRestored` notice (or the `graceEnded` notice) Task 74
+       sends after `snapshot.complete`;
+    3. the first device admitted while no other device is connected adopts every slice
+       with no owner (on a Core with no desktop, the slices made at first start or
+       restored from a manifest written before owners existed); slices held for another
+       device are never adopted; on a hosting desktop the window is that first device, at
+       start, and never gives its slices away;
+    4. a device that still owns no slice gets one at the station-level active slice's
+       frequency, which joins that slice's receiver and costs no receiver; with the slice
+       cap full it starts with none (Task 74's chooser offers a take).
+    Slices held for an absent device keep running and keep their receivers.
+  - **Two stores** (ruling 5.3): the restart manifest (`ReceiveLayoutStore`, per radio)
+    keeps only live slices, within its limit of five with unique ids
+    (`ReceiveLayoutStore.cpp:101-119`); each entry gains its owner or the device it is
+    held for, and an entry without one (an older manifest) restores with no owner. A new
+    **`DeviceLayoutStore`**, per device and per radio, keeps each device's closed slices
+    for its return: id, pan, frequency, mode, and a copy of the slice's own settings (its
+    `Slice` keys, every band) taken when the slice closes. A slice restored under another
+    letter gets its copy written to that letter's keys, so a slice a take closed comes
+    back with its settings and a taker's new slice never keeps them. At most the board's
+    `maxSlices` entries per paired device; removed when the device is revoked. A token
+    window's slices are not saved, since it cannot be recognised when it comes back.
+  - **When a device goes** (rulings 4.11, 4.12): at the end of its 180 s, or on
+    `session.leave`, its slices close and are saved, unless no other device is connected:
+    then they pass to the station device, held for their owner, and keep running, as a
+    Core with one client keeps its slices today. The same device signing in again keeps
+    its slices, pans and active slice. Revocation ends its grace, closes its slices, held
+    ones included, and forgets its saved layout.
+  - **Markers** (ruling 5.4): class `SliceMarker`, key `marker:<sliceId>`, one per slice,
+    sent to every view except its owner's (for a held slice, the device it is held for).
+    All properties go Core to client: `sliceId` (`i64`, in `object.create` only; the
+    letter is 'A' + id), `ownerDeviceId` (`utf8`: the owner's id, or the id of the device
+    it is held for), `ownerName` and `ownerShortName` (`utf8`, numbered by Task 71's
+    rule), `ownerKind` (`utf8`: `phone`, `tablet`, `computer` or `station`), `ownerAway`
+    (`bool`: the owner is in its grace period or the slice is held for it), `frequency`
+    (`f64`), `dspMode` (`enum`, the slice's domain), `filterLow` and `filterHigh`
+    (`i64`), `txSlice` (`bool`), `band` (`enum`, as the slice's `band`), `streamIndex`
+    (`i64`, the receiver it sits on, -1 when none) and `psPaused` (`bool`, as the
+    slice's). `txSlice` goes on the wire as the arbiter binds it today until Task 77
+    applies ruling 5.4a. A marker's colour is its letter's (the palette indexed by slice
+    id, `VfoWidget::sliceColor`); no colour goes on the wire. Older windows never receive
+    a marker.
+  - **Letters** (ruling 5.5): one pool across the Core, the slice id handed out lowest
+    free first (`RadioModel.cpp:7061-7091`), shown as 'A' + id on every device; a slice
+    keeps its letter for its whole life, and a restored slice takes its old letter when
+    it is free.
+  - **Views** (ruling 5.6): a view with the feature receives its own `slice:` objects, a
+    `marker:` for every other slice, and every Core object its minor and capabilities
+    allow; an older view receives its own `slice:` objects and the Core objects. A change
+    of owner (adoption, a slice passed to the station device, a slice returned) reaches
+    each view as `object.destroy` of the old form and `object.create` of the new one.
+  - **Refusals** (ruling 5.9), with "That slice belongs to <owner's name>. It can be
+    changed only there.": a `property.write` to a `slice:` key outside the writer's
+    view, or to any `marker:` key; `removeSlice`, `setActiveSliceById`, `nnr.*` and
+    `notch.add` naming another device's slice; and `tx.setTxSlice` naming another
+    device's slice, wired by whichever of this task and Task 34 lands second. These are
+    routes, not refusals: a sample-rate change (Task 75), a C-Tune centre change or pin
+    and the anchor's band change (Task 74).
+  - **The active slice** (rulings 5.10, 5.11): `setActiveSliceById` sets the requester's
+    active slice among its own; a slice's `active` now means "its owner's active slice",
+    so each device sees exactly one active slice among its own objects. The
+    **station-level active slice** is the transmit holder's active slice while transmit
+    is held (from Task 34), otherwise the most recent active-slice change by any device.
+    It drives the duties that exist once per radio: the FreeDV Reporter frequency, the
+    simplex transmit-follows-receive push, band tracking and the settings save
+    (`RadioModel.cpp:12776-12826`), and TCI's per-slice broadcasts
+    (`TciServer.cpp:1024-1041`). A hosting desktop's window reads its own active slice.
+  - **Pans** (ruling 5.12): a pan is a pair (device, pan key) at the Core; pans are not
+    mirrored, and the `pan:<i>` key stays unused.
+  - **TCI and VAX** (rulings 5.13, 5.14): a hosting desktop's TCI server maps its
+    receivers to the station device's own slices, in id order; a remote window's already
+    holds only its own. The Core's own TCI server reads every slice as today (`trx:N` is
+    slice N) and changes only the station device's own; it stays receive-only, and its
+    transmit broadcasts (`tx_frequency`) describe the transmitter, whoever holds it. VAX
+    on the Core's computer carries only the station device's slices; a remote window's
+    VAX carries its own.
+  - `connectedDevices.listeningOn` for every device, an away device's included.
+
+**Acceptance:**
+- Unit: held slices return to their owner; adoption takes only unowned slices; a Core
+  restart keeps owners and held-for marks (manifest round trip), and a manifest from
+  before owners restores unowned slices that the first device alone adopts; a restored
+  slice takes its old id when free, else the lowest free, and its settings copy is
+  written to the new letter's keys; `DeviceLayoutStore` keeps at most `maxSlices`
+  entries per device and forgets a revoked device; a device with no slice gets one on the
+  station-level active slice's receiver, costing no receiver, and none when the cap is
+  full; a saved slice that does not fit is recorded, not dropped.
+- The active slice: A sets its active slice and B's is unchanged; each device sees
+  `active` true on exactly one of its own slices; the station-level active slice follows
+  the most recent change, and the FreeDV Reporter frequency follows it.
+- The Core's own TCI server reads `trx:N` as slice N, changes only the station device's
+  own slices, and never keys.
+- Fixtures, `runs` as design section 14.2: `two-devices` (station and app: each device
+  receives its own slices and the other's markers); `foreign-write-refused` (station and
+  app: a write and a verb on another device's slice refused with the plain reason naming
+  its owner, nothing changed); `held-for-device` (station and app: the last device leaves,
+  its slices pass to the station device held for it, another device admitted meanwhile
+  does not adopt them, and they are its own again when it signs in); the marker leg of
+  `short-name`; `listeningOn` in `connected-devices`; the slice legs of `grace-return`
+  (slices kept through the 180 s; at their end, closed and saved, or held when it was the
+  last device); the "own objects only" leg of `older-window`.
+- Red check: with the owner filter removed, the foreign-write test fails.
+
+**Verification:** authorisation (refusals for another device's objects): invariant tests
+first.
+`cmake --build build --target tst_slice_ownership tst_device_layout_store tst_receive_layout_store tst_station_multi_session tst_station_tci_server tst_daemon_app tst_link_conformance_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_slice_ownership|tst_device_layout_store|tst_receive_layout_store|tst_station_multi_session|tst_station_tci_server|tst_daemon_app|tst_link_conformance_session)$' --output-on-failure`.
+Bench (controller and JJ, pending until observed): the design's row 1 on the ANAN-G2 at
+the Rock Core (two devices, each on its own receiver: markers on both; a write to the
+other's slice refused), and the same on the Hermes Lite 2 at the Pi 4 Core.
+
+**Execution note (advisory):** opus. Authorisation (who may change which slice): flag for
+earlier review with the several-devices group. Requires Task 72.
+
+- [ ] **Step 1:** `SliceOwnership`, the two stores, where a device's slices come from and
+      what happens when it goes, with the unit tests.
+- [ ] **Step 2:** Markers, letters, the view filter and refusals, the active slice and
+      the station-level one, TCI and VAX, fixtures and the document.
+
+## Task 74: Receivers: anchors, moving a pan, taking a receiver
+
+**Runs in:** the Core/GUI session's lanes (a station task).
+
+**Requirements:** R-IOS-30 (a take and a pan move are confirmed requests; the Core says
+beforehand what they reach; every affected device is told who, what and when, with Take it
+back where D49 gives one), R-IOS-02 (shared receivers), D48, D49, D50, D59, D60, D64; the
+several-devices design sections 6.1 to 6.4, 7.3, 7.4 and 10.7, rulings 6.2 to 6.10, design
+ruling 6.5a, rulings 7.4 (the transmit-slice part), 7.4a and 10.2; design IDs R-MC-08,
+R-MC-09, R-MC-10, R-MC-11, R-MC-19 (provisional).
+
+**Files:**
+- Modify: `src/core/SliceOwnership.{h,cpp}` (each receiver's anchor),
+  `src/models/RadioModel.{h,cpp}` (`requestStreamCentre`, `RadioModel.cpp:6148-6206`;
+  `requestStreamCtunPinned`; the retune that leaves a window; the take),
+  `src/core/session/SessionMessages.{h,cpp}` (kinds `confirm.request` and `notice`),
+  `src/core/session/SessionCommandDispatcher.{h,cpp}` (verbs `confirm.proceed`,
+  `confirm.cancel`, `notice.takeBack`), `src/core/session/StationServer.{h,cpp}` (the
+  confirm step: a held change, the check again, the readback; notices, and those waiting
+  for an away device). The design names no class for the confirm step; whether it gets
+  its own class, and its name, is the implementer's.
+- Modify: `tests/data/link/v1/`, `surface.json`, the link document (section 7.3: the
+  "Waiting for you to confirm." answer; section 8.1; section 9: the verbs; section 17:
+  the `reason` of `confirm.request` and `notice` and the three strings of `change` join
+  the wording rule)
+- Test: `tests/tst_confirm_step.cpp`, `tests/tst_receiver_anchor.cpp`,
+  `tests/tst_slice_stream_allocator.cpp`, `tests/tst_station_multi_session.cpp`,
+  `tests/tst_station_reason_wording.cpp`, the conformance runners
+
+**Interfaces:**
+- Consumes: `SliceOwnership`, markers, `DeviceLayoutStore` and the record of saved slices
+  that did not fit (Task 73); the registry's away state and the record that a device's
+  time ran out (Task 71); `SliceStreamAllocator`: `placeSlice`, its own-window path
+  (`preferOwnStream`, `SliceStreamAllocator.cpp:119-124`) and `retuneSlice`'s outcomes;
+  `RadioModel::adcForStream`; `TransmitHolder`'s keyed state and transmit slice (Task 34),
+  if it has landed.
+- Produces:
+  - **The anchor** (ruling 6.2): the pan of the device whose slice claimed a receiver
+    (the allocator's `NewStream` outcome) anchors that receiver's window. When the
+    anchor's last slice leaves the receiver, the anchor passes to the device whose slice
+    has been on it longest; nobody is asked or told. When the last slice leaves, the
+    receiver is free. Sharing itself needs no allocator change: `placeSlice` already
+    joins any window covering a frequency. A shared window stops following its anchor's
+    tuning, since a slice that is not its receiver's only occupant moves only its shift.
+  - **The pin** (ruling 6.3): a shared receiver's C-Tune pin is its anchor's;
+    `requestStreamCtunPinned` from a device that does not anchor it is refused with
+    "This panadapter shows <anchor's name>'s receiver. Its C-Tune setting is <anchor's
+    name>'s."
+  - **The anchor moves its pan** (ruling 6.4): a C-Tune centre change from the anchor
+    that would leave only other devices' slices outside the new window goes through the
+    confirm step as `panMove`, naming those devices. On proceed the Core moves the
+    window; each other device's slice outside it goes to a free receiver (`placeSlice`)
+    or, with none free, closes; each device is told (`sliceMoved` or `sliceClosed`, no
+    Take it back). A move that would leave the anchor's own slice outside stays refused,
+    as today.
+  - **The anchor changes band** (ruling 6.5): a write to one of the anchor's slices that
+    leaves its receiver's window (a band change, or any retune outside the window):
+    - with another device's slice on the receiver, it is a pan move: nothing is applied,
+      the answer is "Waiting for you to confirm.", and the `confirm.request` (`panMove`)
+      carries `change {label, from, to}` in bands ("40 m", "20 m") and `affected` naming
+      each other device with each of its slices' `effect` (`moves` when a free receiver
+      would take it, `closes` otherwise). On proceed the receiver follows the anchor's
+      slice, re-centred on its new frequency as a lone slice's receiver is today
+      (`retuneSlice`'s `RetunedStream` outcome); each other device's slice outside the
+      new window moves or closes and is told; a slice the new window still covers stays.
+      Cancel changes nothing.
+    - with nobody else on it, as today: a lone slice takes its receiver with it; a slice
+      sharing only with the anchor's own other slices leaves for a free receiver; with
+      none free, the chooser below, the anchor's own receiver among the others.
+    - **Design ruling 6.5a:** when the anchor has another slice of its own on the shared
+      receiver that the new window would not cover, the band change follows the second
+      bullet, not a pan move. In that case's chooser the shared receiver is listed with
+      `takeable` false and `why` naming the anchor's own slice that would be stranded
+      ("Your slice E would close.").
+  - **A device that does not anchor moves its pan** (ruling 6.6) by taking the pan, with
+    its slices, to a free receiver centred where it asked, through the allocator's
+    own-window path; its slices must fit the new window, as the C-Tune rule requires.
+    Nobody is asked and nothing is refused. With no free receiver it gets the chooser.
+  - **Taking a receiver** (section 6.4, rulings 6.7 to 6.9). The trigger is a request
+    that needs a receiver (add a slice, add a pan, retune out of a window, move a pan
+    without anchoring it) refused because every receiver is in use:
+    - an older window gets today's refusal, its words naming the devices that hold the
+      receivers;
+    - a device with the feature gets the refusal and a `confirm.request` of kind
+      `takeReceiver` with one choice per receiver:
+      `{choice, streamIndex, adc, centreHz, rateHz, anchorName, slices: [{sliceId, letter, deviceId, deviceName, frequencyHz, mode, band, txSlice}], devices: [{deviceId, name, shortName, state, lastActivitySeconds}], takeable, why}`;
+    - the operator picks one and the client sends `confirm.proceed {id, choice}`; the
+      Core checks again, closes every other device's slice on that receiver (ruling 6.7:
+      even one that would still fit), tells each owner (`receiverTaken`, with Take it
+      back), and then applies the stored request on the freed receiver, so nobody can
+      claim it in between. The taker's own slices on it stay if the new window covers
+      them and are otherwise placed like any retune.
+    - Ruling 6.8: a receiver carrying the transmit slice of a holder on the air is listed
+      with `takeable` false and `why` saying it is on the air (D64). When its holder is
+      not keyed, taking it closes the transmit slice; what then happens to transmit is
+      ruling 8.12, Task 77's.
+    - Ruling 6.9: when the slice cap (the board's `maxSlices`, within WDSP's five
+      channels), not the receivers, is full, the chooser lists slices (kind `takeSlice`)
+      and taking one closes only that slice, with the same confirmation and notice
+      (`sliceTaken`).
+    - Ruling 6.10: when a take would close an older window's last slice, the Core ends
+      that window's session with "<taker's name> took the receiver this app was using.
+      Update NereusSDR to share the Core.", not retryable, code `takenOver`.
+    - **Take it back** (`notice.takeBack {id}`) asks the same question the other way: a
+      `confirm.request` of kind `takeReceiver` whose first choice is the receiver the
+      taker now holds, followed by any receiver free by then; on proceed the Core
+      recreates the device's closed slices at their frequencies, modes and pans, with
+      their settings (Task 73's store).
+    - An away device's slices can be taken like any other; its notice waits for its
+      return.
+  - **An older window's slice at admission** (ruling 10.2): it gets a slice when the slice
+    cap allows; otherwise it is refused, retryable, with "All the radio's slices are in
+    use. Try again when another device closes one." when the cap is full, or "All the
+    radio's receivers are in use. Try again when another device frees one." when no
+    receiver is free for its slice.
+  - **The confirm step** (section 7.3):
+    1. The change arrives as today: `command.invoke`, `property.write` with a `writeId`,
+       or `settings.write`.
+    2. An empty disturbed set applies it as today.
+    3. Otherwise, for a device with the feature, nothing is applied. The change's own
+       answer refuses it with the reason "Waiting for you to confirm.": a
+       `command.result` also carries `phase` `needsConfirmation` in `values`; a
+       `property.result` or `settings.reject` carries the reason. The Core then sends
+       `confirm.request {id, kind, reason, affected, expiresInMs}` with optional
+       `change {label, from, to}`, `choices`, `holder`, `forCommandId`, `forWriteId` or
+       `forSettingsKey`. Kinds here: `panMove`, `takeReceiver`, `takeSlice`; Task 75 adds
+       `sharedSetting` and Task 77 `takeTransmit`. `affected` has one entry per disturbed
+       device, `{deviceId, deviceName, deviceShortName, state, holdsTransmit, slices: [{sliceId, letter, frequencyHz, band, mode, adc, streamIndex, effect}]}`,
+       where `state` is `listening`, `transmitting` or `away`, `mode` the slice's
+       `dspMode` value, `adc` its receiver's ADC from 0 (`adcForStream`), `streamIndex`
+       its receiver, and `effect` `changes`, `moves`, `closes` or
+       `pausesWhileTransmitting`. `expiresInMs` is 60000 (Task 75 enforces it). A screen
+       shows `streamIndex` + 1 ("Receiver 2") and `adc` + 1 ("ADC 1" for ADC0), and the
+       Core words `change.label` with the same numbering.
+    4. The client answers `confirm.proceed {id, choice}` (`choice` -1 when the kind has
+       none) or `confirm.cancel {id}`. Nothing the client sent before this answer changes
+       anything.
+    5. On proceed the Core computes the set again. If it names a device or an effect the
+       operator was not shown, it sends a new `confirm.request` instead of acting.
+       Otherwise it applies the stored change exactly as the original request would have,
+       answers `confirm.proceed` with the outcome, the `affected` keys and the readback,
+       and tells the disturbed devices.
+  - **The readback** (ruling 7.4a): the proceed's `command.result` carries in `values`
+    what the original answer would have carried had it applied at once: for a property
+    write, `objectKey` and the settled value of every property the write named, with its
+    side effects on the written object sent to the requester as today's correction
+    `delta`; for a settings write, `settingsKey` and `value`; for a command, the original
+    command's result values. The change still reaches every other view as a `delta` or
+    `settings.value`. A refused proceed carries no readback.
+  - **Notices** (section 7.4): `notice {id, kind, reason, secondsAgo, takeBack}` with
+    optional `byDeviceId`, `byName`, `byShortName`, `byKind`, `bySource` (`device`, or
+    `radioPtt` from Task 77), `slices` (`[{sliceId, letter, frequencyHz, mode, band}]`,
+    closed ones included) and `change`, sent to one device. A notice about the device's
+    own state has no `by` keys. Kinds here: `sliceMoved`, `sliceClosed` (no Take it
+    back), `receiverTaken`, `sliceTaken` (Take it back), `graceEnded` and
+    `slicesNotRestored` (no Take it back). `graceEnded` ("You were away for more than 3
+    minutes. Your slices are back, and transmit was freed.", the last clause only when it
+    held transmit) goes after `snapshot.complete` to a device admitted after its 3
+    minutes ran out, its `slices` listing any saved slice that could not be restored.
+    `slicesNotRestored` ("<n> of your slices could not be restored: all the radio's
+    receivers are in use.") reports the saved slices that did not fit otherwise. An away
+    device's notices wait and are sent right after its `snapshot.complete`; after its 3
+    minutes ended they still arrive, after `graceEnded` and without Take it back; the
+    Core keeps them until the device returns, is revoked, or the Core restarts.
+    `secondsAgo` is measured from when it happened.
+  - **The on-air refusal on the transmit slice** (ruling 7.4, D60): while the holder is
+    keyed, a pan move, a band change that moves a shared receiver, or a take that would
+    move or close its transmit slice, from another device, is refused, never asked, with
+    "<holder's short name> is on the air. Try again when they stop." ("The radio is on the
+    air." while the radio's own PTT holds transmit). Wired by whichever of this task and
+    Task 34 lands second.
+  - Verbs under `sessionHolderVersion` 1, minimum minor 11: `confirm.proceed {id: i64,
+    choice: i64}`, `confirm.cancel {id: i64}`, `notice.takeBack {id: i64}` (for a
+    receiver or a slice here; Task 77 adds transmit).
+  - An older window gets the refusal only, never a question (design 10.7).
+
+**Acceptance:**
+- Unit: the anchor passes to the device whose slice has been on the receiver longest; a
+  non-anchor's pin request is refused with the plain reason; the anchor's band change on
+  a shared receiver is a `panMove` with each other slice's `moves` or `closes`, alone it is
+  today's retune, and with the anchor's own other slice left outside it is today's retune
+  with the shared receiver `takeable` false in the chooser; a keyed holder's transmit
+  receiver is `takeable` false; the proceed carries the readback for a property write and
+  a command; a proceed whose set grew sends a new request and applies nothing; notices
+  wait for an away device and arrive after its `snapshot.complete` with `secondsAgo` from
+  when they happened.
+- Fixtures, `runs` as design section 14.2: `share-receiver` (station and app: B's slice
+  joins A's receiver; A's C-Tune move asks, naming B; on proceed B's slice moves or
+  closes and B is told); `anchor-band-change` (station and app: B shares A's receiver; A
+  retunes to another band; `panMove` with the bands in `change`, naming B; on proceed the
+  receiver follows A and B's slice moves or closes; on cancel nothing changes);
+  `non-anchor-pan-move` (station and app: B moves its pan on A's receiver to a free one,
+  nobody asked; with none free, the chooser); `take-receiver` (station and app: every
+  receiver held; the chooser with each receiver's slices and devices; proceed closes
+  every other device's slice on it and the owners are told with Take it back; Take it
+  back asks the other way); `take-slice` (station: the slice cap full with receivers
+  free: the slice chooser); `grace-expired` (station and app: a device back after its
+  180 s gets `graceEnded`; Task 41 adds the `placeFreed` leg); the `older-window` legs
+  (a take of its last slice ends it `takenOver`; no slice free at admission refuses it,
+  retryable, in the words above); and the `on-air-refusals` legs for a pan move, a band
+  change on a shared receiver and a take against a keyed holder's transmit slice, if
+  Task 34 has landed (otherwise Task 34 adds them).
+- Every `reason` and `change` string passes `OperatorWording::isPlain`, tested with names
+  such as "Grant's iPhone" embedded.
+
+**Verification:** closing other devices' slices, and the transmit-slice guard: invariant
+tests first.
+`cmake --build build --target tst_confirm_step tst_receiver_anchor tst_slice_stream_allocator tst_station_multi_session tst_station_reason_wording tst_link_conformance_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_confirm_step|tst_receiver_anchor|tst_slice_stream_allocator|tst_station_multi_session|tst_station_reason_wording|tst_link_conformance_session)$' --output-on-failure`.
+Bench (controller and JJ, pending until observed): on the ANAN-G2 at the Rock Core, the
+design's rows 2 (B joins A's receiver; A drags its pan and is asked, naming B; B's slice
+moves, or closes with all five held, and B is told; B drags its own pan to a free
+receiver and A is not asked), 3 (all five receivers held; the phone adds a slice: the
+chooser; the taken device is told and takes it back) and 9's first half (B shares A's
+receiver on 40 m; A taps 20 m and is asked, naming B, "Go to 20 m" and "Stay on 40 m"; on
+Go, A's receiver moves and B's slice moves or closes); on the Hermes Lite 2 at the Pi 4
+Core, a take with both receivers held.
+
+**Execution note (advisory):** opus. It closes other devices' slices and guards the
+transmit slice: flag for earlier review with the several-devices group. Requires Task 73.
+
+- [ ] **Step 1:** Anchors, the pin, the anchor's move and band change, the non-anchor's
+      move, with tests.
+- [ ] **Step 2:** The confirm step, its readback and the notices, with tests.
+- [ ] **Step 3:** Taking a receiver or a slice, Take it back, the older window's cases,
+      the on-air refusal where Task 34 has landed, fixtures and the document.
+
+## Task 75: Settings that affect every device
+
+**Runs in:** the Core/GUI session's lanes (a station task).
+
+**Requirements:** R-IOS-30 (a shared setting that would disturb another device's slices
+is a confirmed request; the devices it reaches are told), D53, D60, D61, D64; the
+several-devices design sections 7.1 to 7.4, ruling 5.11a, and ruling 6.1 with section
+6.3's last paragraph (a shared receiver's blanker, antenna and rate); rulings 6.1, 7.1 to
+7.6; design IDs R-MC-11, R-MC-12 (provisional).
+
+**Files:**
+- Create: `src/core/DisturbanceCheck.{h,cpp}` (the design names the class, a pure Core
+  class; the path is this plan's)
+- Modify: `src/core/session/SessionCommandDispatcher.{h,cpp}` and
+  `src/core/session/StationServer.{h,cpp}` (every change in the list below through the
+  check and Task 74's confirm step), `src/core/settings/SettingsProxyServer.{h,cpp}`
+  (settings writes), `src/models/RadioModel.{h,cpp}` (band tracking's antenna switch,
+  `RadioModel.cpp:12817-12826`; a rate change simulated with
+  `planStreamSampleRateChange`, `6264-6324`)
+- Modify: `tests/data/link/v1/`, `surface.json`, the link document (section 8.1: a
+  disturbing `settings.write` gets `settings.reject` and a `confirm.request`)
+- Test: `tests/tst_disturbance_check.cpp`, `tests/tst_confirm_step.cpp`,
+  `tests/tst_antenna_kept.cpp`, `tests/tst_station_multi_session.cpp`,
+  `tests/tst_station_reason_wording.cpp`, the conformance runners
+
+**Interfaces:**
+- Consumes: the confirm step, `confirm.request`, the readback and notices (Task 74);
+  `SliceOwnership` (Task 73); `RadioModel::adcForStream`, `planStreamSampleRateChange`;
+  `TransmitHolder`'s holder, keyed state and transmit slice (Task 34), if it has landed.
+- Produces:
+  - **`DisturbanceCheck`** (ruling 7.3): given a change's scope (the radio, ADC n,
+    receiver r, a frequency range, the transmitter) and the Core's topology (every
+    slice's owner, receiver, ADC and passband; the holder, whether it is keyed, and its
+    transmit slice), it returns, for each device other than the requester, its affected
+    slices and what happens to each (`changes`, `moves`, `closes` or
+    `pausesWhileTransmitting`), plus the holder when the transmitter is touched. The
+    requester's own slices never count. A rate change is simulated with today's plan
+    (`planStreamSampleRateChange`): another device's slice the plan would refuse becomes
+    `closes`; the requester's own refused slice still refuses the whole change, as today.
+  - **The list** (ruling 7.1), each through the check, with what it touches:
+    - sample rate, Protocol 1 (`requestSliceSampleRate`; Core scope
+      `hardware/<mac>/radioInfo/sampleRate`): every receiver, and it stops the radio's
+      data flow;
+    - sample rate, Protocol 2 (the same verb and key): that receiver; slices that no
+      longer fit the narrower window move to a free receiver or close;
+    - attenuator and preamp (`stepAtt`: `attenuationDb`, `preampMode`, `enabled`,
+      auto-attenuate; Core-owned `hardware/<mac>/options/stepAtt/...`, `.../autoAtt/...`,
+      `.../preamp/...`): ADC0; the ADC1 preamp (`stepAtt.rx1Preamp`): ADC1;
+    - receive antenna (a slice's `rxAntenna`, `alexAntennas`, `setAlexRxAntenna`;
+      Core-owned `hardware/<mac>/alex/antenna/...`): the ADC the relay feeds (every
+      receiver on a 1-ADC board) and the receiver's other slices;
+    - receive filter policy (`setAlexBpfMode`): its chain's ADC;
+    - PureSignal (`pureSignalSettings`, `transmit.pureSig`, `ps3.*` except two-tone;
+      Core-owned `hardware/<mac>/puresignal/...`): on a 1-ADC board every user receiver
+      while the holder transmits (`pausesWhileTransmitting`), and the transmitter;
+    - diversity (a slice's `diversityEnabled`; the `Slice` keys): receiver 0 on a 2-ADC
+      board, every receiver on a 1-ADC board;
+    - a shared receiver's noise blanker (a slice's `nbMode` and its NB1 and NB2 knobs;
+      the `Slice` and `Nb` keys): that receiver's slices (ruling 6.1);
+    - notches (`notch.*`, `notches.globalEnabled`, `notches.autoIncrease`; Core-owned
+      `NotchCount`, `Notch<N>...`): every slice whose passband holds the notch;
+    - receive DSP options (`settings.write` of the `DspOptions...Rx` keys): every
+      receiver;
+    - transmit antenna (a slice's `txAntenna`, `alexAntennas`): the transmitter;
+    - the amplifier (`amp.operate`, `amp.standby` from Task 42; `configurePgxl` and its
+      settings verbs; `PGXL_...`): the transmitter;
+    - the tuner and the RF-Kit amplifier's antenna (`tuner.operate`, `tuner.bypass`,
+      `tuner.antenna`, `rfkit.antenna` from Task 42; `configureTgxl`; `TGXL_...`,
+      `RfKit_...`): ADC0's receivers on a 2-ADC board (ruling 7.2), every receiver on a
+      1-ADC board, and the transmitter;
+    - transmit interlock and power cap (`setTxInterlockPolicy`, `setPgxlPowerCap`;
+      `PGXL_TxInterlockMode` and its three siblings, `PGXL_PowerCapEnabled`,
+      `PGXL_PowerCapW`): the transmitter;
+    - the radio (`station.selectRadio`, Task 25): every slice.
+    A change that touches nothing beyond the requester's own slices applies at once: a
+    slice's own settings on a receiver it does not share, display defaults, spot and
+    reporter settings. On a 2-ADC board a receiver's antenna picks its ADC: ANT1 to ANT3
+    on ADC0, EXT1 and EXT2 on ADC1. Task 42's verbs join the list when that task lands
+    (whichever of the two lands second wires them). This design adds no settings scope.
+  - **Through the confirm step** as kind `sharedSetting`, for commands, property writes
+    and settings writes alike: `change {label, from, to}` in plain words ("Attenuator,
+    ADC 1", "0 dB", "20 dB"), `affected` with each device's `state` and each slice's
+    `mode`, `adc`, `streamIndex` and `effect`; for a settings write, `settings.reject`
+    with "Waiting for you to confirm." and `forSettingsKey`; the proceed's readback
+    carries `settingsKey` and `value`. A holder counted only because the transmitter is
+    touched is listed with `holdsTransmit` true and no slices. Afterwards each disturbed
+    device gets a `notice` of kind `settingChanged` with `change`, who and `secondsAgo`,
+    and no Take it back.
+  - **The receive antenna stays put** (ruling 5.11a, D61): band tracking's per-band
+    antenna switch re-applies the new band's receive antenna only when no other device
+    listens through that antenna input (no other device has a slice on a receiver fed by
+    the ADC that relay feeds: every receiver on a 1-ADC board; on a 2-ADC board, ADC0's
+    receivers for ANT1 to ANT3). Otherwise the antenna stays, tuning goes ahead at once
+    with no question, and the person tuning gets a `notice` of kind `antennaKept`: "The
+    antenna stays on <antenna> while <other device's short name> listens on it." It
+    stays, too, when a transmission ends. The new band's transmit antenna still applies
+    at key-down (every MOX change re-routes the Alex antennas). Once the other device's
+    slices leave that ADC, the next band crossing switches as today; the Core does not
+    switch on its own when they leave.
+  - **The target rules** (rulings 7.5, 7.6): a request expires 60 s after it is sent, and
+    a later proceed is refused with "That question has expired. Make the change again."
+    A device has at most one open request; a new disturbing change from it replaces the
+    old one. Open requests are dropped when the requester's session ends. A stored change
+    remembers its target's value when asked; on proceed, if that value has changed since,
+    whoever changed it, the proceed is refused with "That setting changed since you
+    asked. Make the change again." A new write from the requester to the same target
+    cancels its open request.
+  - **Older windows:** the refusal only, "This change would affect <device's name>.
+    Update NereusSDR to confirm changes that affect other devices."
+  - **On-air refusals** (ruling 7.4): a Protocol 2 rate change that would move or close a
+    keyed holder's transmit slice is refused with the on-air reason, wired by whichever of
+    this task and Task 34 lands second. (Task 34 refuses the transmit-path changes and the
+    Protocol 1 rate change.)
+
+**Acceptance:**
+- `DisturbanceCheck`, table-driven: a Protocol 1 rate change; a Protocol 2 rate change on
+  a shared receiver; the ADC0 preamp on a 2-ADC board with slices on both ADCs; PureSignal
+  on a 1-ADC board (`pausesWhileTransmitting`); diversity; a shared blanker; a notch
+  inside another device's passband; the tuner's antenna; the radio choice; each with
+  `affected` carrying `mode`, `adc`, `streamIndex` and `state`; the requester's own
+  slices never counted.
+- The antenna on a band crossing: kept, with `antennaKept` to the person tuning, while
+  another device listens through that input; switched when nobody does; the transmit
+  antenna applied at key-down either way.
+- The confirm step: a request expires at 60 s; a second disturbing change replaces the
+  first; a request is dropped at session end; the proceed's readback for a settings
+  write.
+- Fixtures, `runs` as design section 14.2: `shared-setting-confirm` (station and app: a
+  preamp change with another device on ADC0: `confirm.request` with `change`, each
+  device's `state` and each slice's `mode`, `adc`, `streamIndex` and `effect`; proceed,
+  its result carrying the readback; `settingChanged` with who, what and `secondsAgo`);
+  `confirm-grew` and `confirm-target-changed` (station: the set grows, or the target
+  changes, before proceed: a new request or a refusal, nothing applied); `antenna-kept`
+  (station: A crosses a band edge while B listens on the same ADC; the antenna stays and
+  A gets `antennaKept`; with B gone the next crossing switches); the `older-window` leg (a
+  disturbing change refused); and the `on-air-refusals` rate-change leg, if Task 34 has
+  landed.
+- Every new string passes `OperatorWording::isPlain`, tested with names such as "Grant's
+  iPhone" embedded.
+
+**Verification:** every shared setting, and the transmit-path guard: invariant tests
+first.
+`cmake --build build --target tst_disturbance_check tst_confirm_step tst_antenna_kept tst_station_multi_session tst_station_reason_wording tst_link_conformance_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_disturbance_check|tst_confirm_step|tst_antenna_kept|tst_station_multi_session|tst_station_reason_wording|tst_link_conformance_session)$' --output-on-failure`.
+Bench (controller and JJ, pending until observed): on the ANAN-G2 at the Rock Core, the
+design's rows 6 (B on EXT1 only; A changes the ADC0 preamp and B is not asked; with B on
+ANT1, B is asked and told), 7 (PureSignal while A transmits: B's receivers keep running)
+and 9's second half (with B's slice on ANT1 and A crossing onto a band whose antenna is
+ANT2, A is told the antenna stays on ANT1); on the Hermes Lite 2 at the Pi 4 Core, rows 10
+(A changes the sample rate while B has a slice: asked, naming B; B told; B's slice placed
+again or closed) and 11 (PureSignal while A transmits: B's receivers pause, shown on B's
+markers, and come back).
+
+**Execution note (advisory):** opus. Shared settings, and changes to the transmit path:
+flag for earlier review with the several-devices group. Requires Task 74.
+
+- [ ] **Step 1:** `DisturbanceCheck` and its table test.
+- [ ] **Step 2:** The list through the confirm step, the target rules, `settingChanged`
+      and the older window's refusal.
+- [ ] **Step 3:** The receive antenna kept, the on-air rate refusal where Task 34 has
+      landed, fixtures and the document.
+
+## Task 76: Media and capacity per device
+
+**Runs in:** the Core/GUI session's lanes (a station task).
+
+**Requirements:** R-IOS-31 (the transmit holder keeps its full display and audio; the
+others' frame rates drop first; each slowed session is told), D54, D64 (sound is never
+cut); the several-devices design sections 9.1 to 9.4, rulings 9.1 to 9.4, design ruling
+9.3a, and section 10.5's changes to the link's sections 6.4 and 11; design IDs R-MC-16,
+R-MC-17 (provisional).
+
+**Files:**
+- Create: `src/core/session/media/DisplayBudgetSplit.{h,cpp}` (the design names the
+  class, a pure one; the path is this plan's, beside `DisplayBudget`)
+- Modify: `src/core/session/media/DaemonMediaController.{h,cpp}` (one per admitted
+  session), `src/core/session/StationServer.{h,cpp}` (a controller per session;
+  `media.control` from each session for its own media; each device's share in its
+  capabilities; telemetry per session), `src/core/AudioEngine.{h,cpp}` (one mix per owner
+  in place of the one master tap, `AudioEngine.cpp:2161-2191`),
+  `src/core/session/media/DisplayBudget.{h,cpp}` (`DisplayBudgetReason` gains
+  `sharedConnection` and `sharedProcessing`), `src/core/daemon/DaemonApp.cpp`
+- Modify: `tests/data/link/v1/`, `surface.json`, the link document (section 6.4: the two
+  reason values; section 11: media control from each admitted session, for its own
+  media)
+- Test: `tests/tst_display_budget_split.cpp`, `tests/tst_display_budget.cpp`,
+  `tests/tst_daemon_media_controller.cpp`, `tests/tst_audio_engine_owner_mix.cpp`,
+  `tests/tst_station_multi_session.cpp`, `tests/tst_station_telemetry.cpp`, the
+  conformance runners
+
+**Interfaces:**
+- Consumes: a view per session (Task 72); `SliceOwnership` (Task 73); the Core's total
+  from `DisplayLoadGovernor` (`computedCeiling`) or `DaemonConfig::displayBudgetLimits`;
+  `TransmitHolder`'s holder (Task 34), if it has landed.
+- Produces:
+  - **A media controller per device** (ruling 9.1): one `DaemonMediaController` per
+    admitted session, each with its own media peer, display endpoints (at most 8),
+    receiver streams (at most 4) for its own slices only, headphones mix and audio clock;
+    each session's `media.control` reaches its own controller. A receiver's FFT stays
+    shared between everyone watching it; a device subscribes a display only for its own
+    slices. A hosting desktop's own window draws locally and has no media controller.
+    Telemetry (`station.metrics.v1`) goes to every session that negotiated it.
+  - **Each device hears its own slices** (ruling 9.2): AudioEngine's mixer builds one mix
+    per owner, each summing that owner's slices with their gain, pan and mute; a device's
+    main audio (the speakers' mix) and headphones mix come from its own. The Core's local
+    output plays the station device's mix: a hosting desktop window's slices, or the
+    slices a headless Core holds for absent devices. Receiver streams are offered only
+    for the device's own slices. Slice audio settings (`afGain`, `muted`, `audioPan`,
+    `outputRoute`) stay slice properties, each belonging to one device. The holder's mix
+    carries the transmit monitor (Task 36) once it exists.
+  - **`DisplayBudgetSplit`** (ruling 9.3): takes the Core's total limits, the admitted
+    network devices, each one's requested charge and the holder, and returns one
+    `DisplayBudgetLimits` per device, each with its own generation, advertised in that
+    device's capabilities (the existing entries `displayApplicationBytesPerSecond`,
+    `spectrumSampleUnitsPerSecond`, `displayBudgetGeneration`):
+    1. a network holder gets its whole request, up to the Core's total;
+    2. what is left is shared among the other network devices equally, and a device
+       asking for less than its share leaves the difference to the rest (max-min fair);
+    3. with transmit unheld, held by the station device, or held by a device that is
+       away, every network device gets an equal, max-min fair share of the total;
+    4. PureSignal's display is charged once, to the device that subscribes to it.
+    Until `TransmitHolder` exists the split treats transmit as unheld (rule 3); Task 34
+    gives it the holder, wired by whichever of the two lands second. A change of holder
+    or of devices publishes new generations.
+  - **The reason** (design ruling 9.3a): `displayBudgetReason` gains `sharedConnection`
+    (the devices share what the Core sends and the governor has cut nothing; the total is
+    the configured display allowance or the Core's computed ceiling) and
+    `sharedProcessing` (the governor has cut the total because the Core computer is short
+    of processing time). They replace `coreBusy` while another device is admitted and the
+    device's share is below its request; alone on the Core a device still sees `coreBusy`
+    or `none`. Only devices with the feature receive the new values.
+  - The Core hands each device a share, never a frame rate: each client plans its own
+    displays inside its share. A share too small even for one pan at 256 pixels and 10
+    frames a second suspends that device's display as the budget design already does,
+    pane and slice kept and the band marked paused.
+  - **Audio is not split** (ruling 9.4): sound is never cut when the Core runs short.
+
+**Acceptance:**
+- `DisplayBudgetSplit`, table-driven: the holder whole up to the total; the rest shared
+  max-min fair; equal shares with no holder, with the station device holding and with an
+  away holder; PureSignal charged once; `sharedConnection` without a governor cut and
+  `sharedProcessing` with one, only while another device is admitted.
+- Two devices, each with its own slices: each media controller streams only its own
+  slices' audio and receiver streams (checked by injecting distinct tones per slice and
+  reading each device's mix); A's `media.control` reaches A's controller only; B leaving
+  ends only B's media; two devices watching one receiver share one FFT.
+- The Core's local output plays only the station device's slices.
+- Telemetry reaches every session that negotiated it.
+- Fixture `sharing-budget` (station: a holder and another device over the Core's total:
+  the holder's share is its whole request; the other's reason is `sharedConnection`, or
+  `sharedProcessing` with the governor's cut in force), created by whichever of this task
+  and Task 34 lands second, since it needs a holder; until then the unit tests cover the
+  split.
+- One device alone sees today's media wire (the existing media tests pass).
+
+**Verification:** media for several sessions: unit plus the transport loopback.
+`cmake --build build --target tst_display_budget_split tst_display_budget tst_daemon_media_controller tst_audio_engine_owner_mix tst_station_multi_session tst_station_telemetry tst_media_transport tst_link_conformance_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_display_budget_split|tst_display_budget|tst_daemon_media_controller|tst_audio_engine_owner_mix|tst_station_multi_session|tst_station_telemetry|tst_media_transport|tst_link_conformance_session)$' --output-on-failure`.
+Bench and measurement (controller and JJ, pending until observed): on the ANAN-G2 at the
+Rock Core, two devices each hearing only their own slices; the design's row 13 on the
+Hermes Lite 2 at the Pi 4 Core (the holder with two pans at 30 frames a second and two
+other devices: the others' frame rates drop first and their bands show Sharing with the
+rate they get, the holder's band stays whole, and sound is never cut; host CPU, receiver
+load and uplink recorded with the load average, from the Core's telemetry and `top`).
+
+**Execution note (advisory):** opus. Requires Tasks 72 and 73.
+
+- [ ] **Step 1:** `DisplayBudgetSplit` and the two reasons, with the table test.
+- [ ] **Step 2:** A media controller per session, one mix per owner and the local
+      output, telemetry per session, the fixture where a holder exists, and the document.
+
+## Task 77: Taking transmit
+
+**Runs in:** the Core/GUI session's lanes (a station task).
+
+**Requirements:** R-IOS-02 (who has transmit, known to every device), R-IOS-03 ("Unkey
+and take over" unkeys through the unkey-confirmed gate before transmit moves; the radio's
+own PTT takes transmit, unkeying a holder on the air first), R-IOS-13, D22, D51, D52, D58,
+D63, D64; the several-devices design sections 8.1 (the holder's names), 8.4 to 8.9 and
+7.5, rulings 5.4a, 7.7, 7.8, 8.3 (the carrier actions), 8.6, 8.7, 8.9, 8.9a, 8.10 to 8.12,
+8.13 (its `TxSliceArbiter` half) and 8.14; design IDs R-MC-12, R-MC-13, R-MC-14, R-MC-15
+(provisional).
+
+**Before this task (controller):** Task 39 has landed, and the gaps plan's Tasks 4 and 7
+(merged before Task 34).
+
+**Files:**
+- Modify: `src/core/safety/TransmitHolder.{h,cpp}` (takes by a device and by the radio's
+  PTT), `src/core/MoxController.{h,cpp}` (the take-then-key rule on the PTT edge),
+  `src/core/TxSliceArbiter.{h,cpp}` (an owner lookup beside `setSliceList`;
+  `requestHandoff(sliceId)`; `bindForHolder(holder, preferredSliceId)`; the first bind;
+  the freeze), `src/models/RadioModel.{h,cpp}` (the transmit slice's freeze),
+  `src/core/session/SessionCommandDispatcher.{h,cpp}` (`tx.take`; `notice.takeBack` for
+  transmit; the transmitter's own settings), `src/core/session/StationServer.{h,cpp}`,
+  `src/core/session/MirrorPolicy.cpp` and `src/core/session/SliceMarker.cpp` (`txSlice`
+  by ruling 5.4a), `src/core/session/TransmitStateFacade.{h,cpp}` (Task 39's; see the
+  note under Produces), `src/core/session/ConnectedDevicesFacade.cpp` (`transmittingOn`),
+  `src/core/TciServer.{h,cpp}` (the holder rule, then the gaps plan's Task 4 rule)
+- Modify: `tests/data/link/v1/`, `surface.json`, the link document (the Transmit section;
+  section 7.1: `txState`'s holder properties and `txSlice`'s meaning)
+- Test: `tests/tst_transmit_holder.cpp`, `tests/tst_keying_gate.cpp`,
+  `tests/tst_tx_slice_arbiter.cpp`, `tests/tst_transmit_state_facade.cpp`,
+  `tests/tst_tci_remote_window.cpp`, `tests/tst_station_multi_session.cpp`, the
+  conformance runners
+
+**Interfaces:**
+- Consumes: `TransmitHolder`, the transfer, the keying gate, `KeyerIdentity` and the
+  refusals (Task 34); `tx.key`, `tx.unkey`, `tx.tune`, `tx.twoTone` and the take on unheld
+  transmit (Task 35); `txState` (Task 39); the transmit controls (Task 40); the confirm
+  step and notices (Task 74); `DisturbanceCheck` (Task 75); `SliceOwnership` (Task 73);
+  the gaps plan's Tasks 4 and 7.
+- Produces:
+  - **`tx.take {holderEpoch, shownKeyed}`** (both optional), under
+    `sessionHolderVersion` 1 and `remoteTxVersion` 1. It never keys (ruling 8.6); the
+    device keys with its next `tx.key`, which an app may send straight after a confirmed
+    take.
+    - With transmit unheld it takes at once.
+    - With another device holding: the refusal and a `confirm.request` of kind
+      `takeTransmit` whose `holder` is the holder's entry in the shape of
+      `session.held`'s (Task 41): name, short name, kind, how long connected, when last
+      active, `state`, and `transmittingForSeconds` while on the air.
+    - **Asked on the device first** (ruling 8.7): with `holderEpoch` and `shownKeyed`, the
+      Core takes at once when `holderEpoch` still names the holder that was shown and the
+      holder is not on the air now unless `shownKeyed` is true; otherwise it answers with
+      a `confirm.request`. On a proceed, likewise, if the holder was not keyed when asked
+      and is keyed now, the Core sends a new `confirm.request`. The operator always sees
+      the red question before a carrier is cut.
+    - Then the transfer (Task 34). The result, of the `tx.take` or of the proceed,
+      arrives when the transfer ends, with the new holder unkeyed, the old holder told
+      with a `notice` of kind `transmitTaken` (Take it back), and `txState` showing the
+      new holder on every device.
+    - **A take during grace** (settled detail S4): while the holder is away nobody is on
+      the air, so the take asks without the red button, naming the away device (its
+      `state` `away` and `awayForSeconds` in the request); there is nothing to unkey. The
+      away device does not get transmit back when it returns; its `transmitTaken`
+      notice, with Take it back, waits for it and arrives after its `snapshot.complete`.
+  - **Take it back** for transmit (section 8.6): `notice.takeBack` is `tx.take` with its
+    usual confirmation, red when the taker is on the air, a person on the radio's
+    microphone included.
+  - **The radio's own PTT** (rulings 8.8, 8.9; D52 as D58 amended it): the radio's mic
+    PTT and a footswitch on its PTT input, both arriving as the radio's PTT bit, key as
+    the station device on any Core. At a press edge (released to pressed):
+    - with the station device already holding transmit, the press keys (not a take;
+      the names and source stay);
+    - otherwise the press takes transmit without a question: the transfer to the station
+      device, which unkeys a holder on the air first. The press keys nothing while the
+      transfer runs. When it ends with MOX off, the station device holds transmit,
+      unkeyed; if the PTT is still down, the press that asked for the take then keys, as
+      a new key by the station device through the gate. A PTT released during the
+      transfer keys nothing. A PTT still held after another device takes transmit back
+      does not take it again; the next press does.
+    This replaces Task 34's interim refusal of a station-device key while another device
+    holds.
+  - **The holder's names** (ruling 8.1): after a take by the radio's own PTT, on any Core,
+    `holderName` and `holderShortName` are "Radio", `holderKind` is `station` and
+    `holderSource` is `radioPtt`; on a hosting desktop, a take by its own MOX or TUNE
+    shows the desktop's name and short name, kind `station`, source `device`; otherwise
+    the device's numbered name and short name, source `device`. A program never takes
+    transmit, so no take is named after one. A device the operator called "Radio" still
+    has `holderSource` `device`. `stopReason` `takenOver` covers transmit taken by
+    another device or by the radio's PTT.
+  - **The hosting desktop's MOX and TUNE ask** (ruling 8.9a, D64): a station-device key
+    from the hosting desktop's MOX or TUNE button (and its space bar, once wired), while
+    another device holds transmit, takes only through `tx.take`'s rules (ruling 8.7),
+    never at once, and keys after the take; with transmit unheld it takes and keys at
+    once, as any person's key does (D63). The desk microphone is the radio's own PTT and
+    still takes at once. `TransmitHolder` and the keying gate tell these sources apart by
+    `KeyerIdentity`'s source. Task 48 wires the desktop's buttons to this rule, and Task
+    78 draws the question.
+  - **The transmit slice** (rulings 8.10 to 8.12, 8.13):
+    - When a transfer assigns a new holder, the Core binds the transmit slice to the new
+      holder's chosen transmit slice if it still exists, otherwise to its active slice
+      (`TxSliceArbiter::bindForHolder(holder, preferredSliceId)`). `tx.setTxSlice` is the
+      holder's, for its own slices only (`requestHandoff(sliceId)` refuses a slice its
+      requester does not own). `syncToSliceList`'s first bind picks among the holder's
+      slices when there is one. A remote window's arbiter still does nothing
+      (`setRemote`).
+    - On a Core with no desktop the station device owns no slice while devices are
+      connected; when the radio's PTT takes transmit there, the transmit slice stays where
+      it is, on another device's slice. While the station device is keyed that slice is
+      frozen: its owner's retune, mode or filter change and closing it are refused with
+      "The radio is on the air.", and no take, move or rate change may touch it; the flag
+      never moves while the station device is keyed. The freeze ends with the press.
+    - When the holder's transmit slice closes (its owner closed it, or a take while
+      unkeyed), the transmit slice moves to another of the holder's slices; with none
+      left, transmit is released through a transfer to nobody. With transmit unheld the
+      binding stays where it was.
+  - **TX marks only the holder's slice** (ruling 5.4a): the Core sends `txSlice` true, on
+    a `slice:` object and on a `marker:`, only while the slice is the transmit slice and
+    its owner is `txState.holderDeviceId`; otherwise false, whatever the arbiter binds. A
+    change of holder sends the changed `txSlice` values to every view. The owner of a
+    slice frozen by the radio's PTT sees no TX on it and reads the freeze from `txState`
+    (`keyed` true, `holderSource` `radioPtt`, `txSliceId` its own slice's id).
+  - **The transmitter's own settings** (ruling 7.7): while transmit is held, the
+    `transmit` object's controls (Task 40) and `txProfile.select` are the holder's;
+    another device's change is refused with "<holder> has the transmitter." With
+    transmit unheld any device may change them. Arming VOX (`transmit.voxEnabled`) from a
+    device that does not hold transmit is refused; its client takes transmit first
+    (ruling 8.4).
+  - **Carrier actions take transmit first** (rulings 7.7, 8.3): `ps3.twoTone` and
+    `tuner.tune` (the tuner's tune keys the radio at its tune power) are keys for these
+    rules: from a person on unheld transmit they take it and key, from another device
+    while held they are refused `otherDeviceHolds`, so a carrier never goes on with
+    nobody holding transmit.
+  - **Changes that touch the transmitter** (ruling 7.8): the transmit antenna, the
+    amplifier, the tuner, the RF-Kit antenna, PureSignal, the interlock and the power cap
+    follow D53 through Task 75's check with the holder counted as disturbed, so asked
+    for, named and told, when the requester is not the holder; while the holder is on the
+    air they wait (Task 34's refusal). For Task 42's accessory verbs, whichever of Task 42
+    and this task lands second applies rulings 7.7, 7.8 and 8.3 to them.
+  - **TCI** (ruling 8.14): Task 35's holder rule stays first and the gaps plan's Task 4
+    rule second; the TCI audio lock is taken only after the holder rule admits a key.
+  - `connectedDevices.transmittingOn` (the transmit slice as `{sliceId, letter, band,
+    mode}` while its device transmits).
+  - **`txState`'s holder properties** (ruling 8.1), sent to every session:
+    `holderDeviceId`, `holderName`, `holderShortName`, `holderKind`, `holderSource`
+    (`device` or `radioPtt`), `holderForSeconds`, `holderEpoch`, `holderAway` and
+    `holderTransferring`, beside `keyed`, which says whether the holder is on the air;
+    Task 39's `keyedSinceMs` becomes `keyedForSeconds` (Task 71's clock convention);
+    `keyedByName` and `keyedByKind` name the holder. Marked for the controller's review:
+    the design's section 13.1 changes Task 39 in place for these, and the pass that wrote
+    this task was confined to Tasks 34, 35, 41 and 48. Until Task 39 is amended, this
+    task adds them to the `txState` object Task 39 created.
+
+**Acceptance:**
+- Unit (`TransmitHolder`, injected clocks): take unheld; take held, asked; a keyed holder
+  unkeyed through the unkey gate before the new holder is assigned, and the new holder
+  unkeyed; `tx.take {holderEpoch, shownKeyed}` taking at once only while both still hold,
+  and asked again when the holder keyed since; a take during the 180 s asked without the
+  red button, and the returning device holding again only if nobody took it; the names
+  "Radio" and `holderSource` `radioPtt` after a take by the radio's PTT, and `device` for
+  a device named "Radio".
+- Unit (the keying gate on edges): releasing a station microphone held through a remote
+  take-back does not unkey the remote holder; the station's pending press keys only after
+  the transfer and only if still down; a hosting desktop's MOX asks while another device
+  holds and takes and keys while unheld. Red checks: with the press rule taken out, a held
+  PTT takes transmit straight back; with the transfer's key refusal dropped, the old
+  holder's re-press keys during the unkey.
+- `txSlice` on the wire: true only while the owner holds transmit; false on a slice the
+  radio's PTT transmits on; a change of holder sends the changed values.
+- The frozen slice: while the radio's PTT is keyed, its owner's retune is refused with the
+  on-air reason and a take of its receiver lists it `takeable` false.
+- The transmitter's settings: a non-holder's `transmit` write and `voxEnabled` arming are
+  refused while held; with transmit unheld the write is accepted and arming VOX is
+  refused until the device takes transmit.
+- Fixtures, `runs` as design section 14.2: `take-transmit` and `take-transmit-keyed`
+  (station and app: the holder named; red when keyed; the unkey before the change; the
+  new holder unkeyed; `tx.take {holderEpoch, shownKeyed}` taking at once, and asked again
+  when the holder keyed since); `transfer-refuses-keys` (station: the old holder's key
+  during the transfer is refused); `radio-ptt-takes-transmit` (station: an injected PTT
+  press takes transmit and every session's `txState` names "Radio" with `holderSource`
+  `radioPtt`; the frozen slice's owner sees `txSlice` false; a held PTT does not take it
+  back; a release does not unkey the remote holder); `tx-mark` (station and app: `txSlice`
+  true only on the holder's own transmit slice, on `slice:` and `marker:` alike);
+  `take-during-grace` (station and app: asked without the red button; the returning device
+  gets transmit only by taking it, and its `transmitTaken` arrives after
+  `snapshot.complete`); the `unheld-key` legs for `tuner.tune` (where Task 42 has landed)
+  and `ps3.twoTone`; the `connected-devices` transmit legs.
+
+**Verification:** who holds transmit and keying: invariant tests first.
+`cmake --build build --target tst_transmit_holder tst_keying_gate tst_tx_slice_arbiter tst_transmit_state_facade tst_tci_remote_window tst_station_multi_session tst_link_conformance_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_transmit_holder|tst_keying_gate|tst_tx_slice_arbiter|tst_transmit_state_facade|tst_tci_remote_window|tst_station_multi_session|tst_link_conformance_session)$' --output-on-failure`.
+Bench (controller and JJ, into a dummy load, pending until observed): on the ANAN-G2 at
+the Rock Core, the design's rows 4 (A keyed; B takes with "Unkey and take over": the
+carrier stops before B holds; A re-pressing PTT during the unkey keys nothing; A is told;
+B starts unkeyed) and 5 (the radio's mic PTT pressed while the phone holds and is keyed:
+the phone is unkeyed first and told; the station keys only after the change; every device
+shows "Radio"; the phone takes transmit back while the mic is still held, and releasing
+the mic does not unkey the phone); on the Hermes Lite 2 at the Pi 4 Core, row 12's second
+half (the iPad takes transmit while the phone is away: asked without the red button; the
+phone comes back without transmit and finds the notice).
+
+**Execution note (advisory):** opus. Who holds transmit, keying and the radio's PTT:
+flag for earlier review with the several-devices group, and before any on-air test.
+Requires Tasks 34, 35, 39 and 75, and the gaps plan's Tasks 4 and 7.
+
+- [ ] **Step 1:** `tx.take` and its confirmation, on the Core and first on the device;
+      the take during grace; Take it back; the holder's names and the `txState`
+      properties; tests first.
+- [ ] **Step 2:** The radio's PTT on edges with take-then-key, and the hosting desktop's
+      MOX and TUNE rule, with the red checks.
+- [ ] **Step 3:** The transmit slice on a transfer, its freeze and its closing; TX only on
+      the holder's slice; the transmitter's settings and carrier actions; TCI; fixtures
+      and the document.
+
+## Task 78: The desktop's screens for several devices
+
+**Runs in:** the Core/GUI session's lanes (a station task).
+
+**Requirements:** R-IOS-07 (the Remote Access page gains who is connected now),
+R-IOS-02 and R-IOS-30 (the desktop's half of who is on the Core, whose slices are where,
+who has transmit, the questions and the notices), D35, D46, D49, D50, D51, D53, D55, D57,
+D58, D64; the several-devices design section 12; design ID R-MC-20 (provisional).
+
+**Files:**
+- Modify: `src/gui/SpectrumWidget.{h,cpp}` (a second kind of marker beside
+  `drawVfoMarker` and `drawSliceMarker`, `SpectrumWidget.cpp:6620-6633`),
+  `src/gui/chrome/ChromeBarController.{h,cpp}` (the TX badge names the holder),
+  `src/gui/widgets/SpectrumStatusOverlay.{h,cpp}` (the pan's TX pill offers Take
+  transmit), `src/gui/widgets/VfoWidget.{h,cpp}` (TX by ruling 5.4a; a slice frozen by
+  the radio's PTT), `src/gui/applets/RxApplet.{h,cpp}` (only the window's own slices),
+  `src/gui/RemoteConnectionController.{h,cpp}` (the stop panel,
+  `RemoteConnectionController.cpp:165-210`), `src/core/session/StationClient.{h,cpp}`
+  (declares `sessionHolder` 1; decodes `session.held`, `confirm.request`, `notice`,
+  `connectedDevices` and markers; sends `session.takeover`, `confirm.proceed`,
+  `confirm.cancel`, `notice.takeBack`, `tx.take`, `session.leave`),
+  `src/models/RadioModel.cpp` (a remote window with the feature accepts the Core
+  destroying its last slice, `RadioModel.cpp:7562-7567`), `src/gui/MainWindow.{h,cpp}`,
+  `src/gui/setup/RemoteStationPage.{h,cpp}` (Task 49's page), `src/gui/setup/ThisCorePage.{h,cpp}`
+  (Task 25's page)
+- Create: the dialogs and the notice card under `src/gui/multidevice/` (the directory is
+  this plan's; the design names no classes, so their names are the implementer's)
+- Test: `tests/tst_multi_device_screens.cpp`, `tests/tst_chrome_bar_controller.cpp`,
+  `tests/tst_spectrum_overlays.cpp`, `tests/tst_remote_core_stop_notice.cpp`,
+  `tests/tst_remote_window_harness.cpp`, `tests/tst_station_host.cpp`
+
+**Interfaces:**
+- Consumes: in a remote window, `connectedDevices`, `devices`, markers (Tasks 71, 73),
+  `confirm.request` and `notice` (Tasks 74, 75), `session.held` and the `takenOver` end
+  (Task 41), `txState`'s holder and `tx.take` (Task 77); on a hosting desktop, the same
+  facts from `StationHost`'s `DeviceSessionRegistry`, `SliceOwnership` and
+  `TransmitHolder` (Task 48); the Remote Access page (Task 49) and the This Core page
+  (Task 25).
+- Produces (design section 12; the words follow the phone's screens and stay
+  provisional):
+  1. **Other devices' markers on the panadapter** (D46): drawn as the phone draws them, a
+     dashed centre line in the slice's colour with a hollow triangle, dashed grey passband
+     edges with no fill, and a label at the foot of the spectrum with the slice letter and
+     the device's short name, plus TX by ruling 5.4a; no flag, not draggable. A click on
+     the label says whose slice it is and that only that device can tune it or close it.
+     In a remote window they come from `SliceMarker` objects; on a hosting desktop, from
+     `SliceOwnership`. The fifth letter, E, shares A's cyan (`VfoWidget.cpp:3403-3409`);
+     the label's letter tells them apart, and a fifth colour is JJ's call, not built
+     here.
+  2. **The transmit holder:** the bottom banner's TX badge names the holder by its short
+     name when it is another device, or "Radio" when `holderSource` is `radioPtt`, in red
+     while it is on the air, marked away while its holder is away, and shows "changing
+     hands" during a transfer. The pan's TX pill offers Take transmit. The window's own
+     VFO flags show TX only while the window's device holds transmit, and a slice the
+     radio's PTT has frozen shows as in use by the radio ("The radio is transmitting on
+     this frequency."). A refused program key shows on the window in plain words
+     ("WSJT-X can transmit only while this window has transmit.").
+  3. **Notices with Take it back:** a card on the band for each notice; `graceEnded`,
+     `slicesNotRestored` and `antennaKept` use the same card, with nothing to answer.
+     Ends of the whole session stay in the remote window's stop panel, whose Take it back
+     now reconnects into the fifth-device list rather than preempting
+     (`RemoteConnectionController.cpp:205-210`) and preselects `takenOverById`; the panel
+     shows the end's time from `secondsAgo`.
+  4. **The take-a-receiver chooser:** a dialog listing the receivers (or slices, for
+     `takeSlice`), each with its devices, slices and frequencies, "Receiver
+     `streamIndex` + 1"; one pick; entries with `takeable` false show their `why`.
+  5. **Confirmations for shared settings:** one dialog shape for every
+     `confirm.request`, showing `change` and naming each device and what happens to its
+     slices; Confirm sends `confirm.proceed`, Cancel `confirm.cancel`; a drag that opened a
+     question sends only its final value.
+  6. **Taking transmit:** "Take transmit from <short name>?", or the red "Unkey and take
+     over" when that device is on the air. On a hosting desktop its own MOX and TUNE ask
+     this way too (ruling 8.9a), replacing Task 48's plain question with this shared
+     shape.
+  7. **The fifth-device choice:** a dialog at connect in a remote window listing the four,
+     idle longest first, the choice starting on the first that can be replaced: name, how
+     long connected, when last active, and what each is doing (listening on which slices,
+     transmitting with its TX clock, or away); the hosting desktop shown and not
+     selectable; picking the one on the air turns the button red. With `placeFreed`, it
+     says the window's own place was freed after 3 minutes away.
+  8. **Who is connected:** on a hosting desktop's Remote Access page and on a remote
+     window's This Core page, the devices connected now, each with its short name and
+     name, how long, when last active, slice letters and bands, TX on the holder, and
+     away, then the paired ones; from the session registry on a hosting desktop, from
+     `connectedDevices` and `devices` in a remote window. No new action; Revoke already
+     drops a device.
+  Underneath: `RxApplet`'s slice buttons (`RxApplet.h:203`) and the VFO flags show only
+  the window's own slices; a remote window with the feature accepts the Core destroying
+  its last slice, showing an empty band that offers to take a receiver.
+
+**Acceptance:**
+- Functional checks drive each item in a remote window (the remote-window harness with a
+  second test client on the Core) and on a hosting desktop (Task 48's harness): the marker
+  is drawn in the foreign style (render test sampling the dashed line, the hollow triangle
+  and the unfilled passband) and never moves on a drag; the badge names the holder,
+  "Radio" after the radio's PTT, "changing hands" during a transfer; a notice card's Take
+  it back sends `notice.takeBack`; the chooser and the confirmation send
+  `confirm.proceed` with the pick, or `confirm.cancel`; the fifth-device dialog preselects
+  `takenOverById`; the connected list shows each device once, under the name the Core
+  numbered.
+- A remote window that loses its last slice to a take shows an empty band that offers a
+  take, and stays connected.
+- Screenshots of every state rendered offscreen per `ui-verification` (markers; the badge
+  held elsewhere, on the air, away and changing hands; each dialog; the notice card; both
+  connected lists), looked at before they are reported.
+
+**Verification:** UI and the questions in front of keying: functional checks and
+screenshots.
+`cmake --build build --target tst_multi_device_screens tst_chrome_bar_controller tst_spectrum_overlays tst_remote_core_stop_notice tst_remote_window_harness tst_station_host && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_multi_device_screens|tst_chrome_bar_controller|tst_spectrum_overlays|tst_remote_core_stop_notice|tst_remote_window_harness|tst_station_host)$' --output-on-failure`.
+Bench (controller and JJ, pending until observed): on the ANAN-G2 at the Rock Core, the
+Mac's remote window beside the iPhone through rows 1 to 9's desktop halves; the design's
+rows 14 (an older desktop window admitted with its own slices, its disturbing change
+refused in plain words, refused retryable when the Core is full) and 15 (a desktop hosting
+the Core with the phone connected: MOX asks "Take transmit from the iPhone?", red when the
+phone is keyed; the desk microphone takes at once; WSJT-X through the desktop's TCI keys
+only while the desktop holds transmit and is refused with the window saying why
+otherwise; a fifth device cannot pick the desktop).
+
+**Execution note (advisory):** opus. UI whose questions sit in front of keying and of
+closing other devices' slices: flag for earlier review with the several-devices group.
+Requires Tasks 48 and 49 (and so Tasks 41, 75 and 77) and Task 25.
+
+- [ ] **Step 1:** Markers, the TX badge and pill, the flags and `RxApplet`, the last-slice
+      case, with functional checks.
+- [ ] **Step 2:** The notice card, the chooser, the confirmation, the transmit question,
+      the fifth-device dialog and the connected lists, with functional checks and
+      screenshots.
 
 ## Task 42: Transmit-coupled accessory commands
 
@@ -3878,8 +5564,11 @@ reached, stop and ask JJ, since that plan belongs to the other agent's lane.
 - Test: `tests/tst_accessory_tx_commands.cpp`
 
 **Interfaces:**
-- Consumes: `StationTxGate`, `TxRefusal` (Task 34); the accessories plan's controllers
-  and objects.
+- Consumes: `StationTxGate`, `TxRefusal` and `TransmitHolder`'s on-air refusal (Task 34:
+  while the holder is keyed, these verbs from another device are refused with the
+  on-air reason); the accessories plan's controllers and objects; and Task 77's rules
+  for these verbs (rulings 7.7, 7.8 and 8.3 of the several-devices design, Part G),
+  applied by whichever of this task and Task 77 lands second.
 - Produces verbs under capability `accessoryTxVersion = 1`: `amp.operate {}`,
   `amp.standby {}`, `tuner.tune {}`, `tuner.operate {on}`, `tuner.bypass {on}`,
   `tuner.antenna {port}` (1 to 3), `rfkit.operate {}`, `rfkit.standby {}`,
@@ -4023,7 +5712,8 @@ names, each marked), R-IOS-18 (each control writes to its owner), R-IOS-27.
 `cmake --build build --target tst_setup_description_parity tst_setup_description_live tst_setup_description_service && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^tst_setup_description_(parity|live|service)$' --output-on-failure`;
 the three verifier scripts pass.
 
-**Execution note (advisory):** opus. Requires Task 19.
+**Execution note (advisory):** opus. Requires Tasks 19 and 75 (any Setup write may
+answer "Waiting for you to confirm.").
 
 - [ ] **Step 1:** The format document, the service and the two test harnesses.
 - [ ] **Step 2:** The four categories' descriptions, the desktop ids, the apply steps,
@@ -4204,29 +5894,41 @@ network access: flag for earlier review. Requires Task 17.
 
 **Requirements:** D35 (while NereusSDR is open it runs the station and serves the phone;
 when it closes the background station takes the radio; when it opens again it takes the
-radio back; at the desktop and on a phone both can operate), D20, remote design §4.4 (the
-two must never hold the radio at once; no two writers of one settings file).
+radio back; at the desktop and on a phone both can operate, the desktop's window as one of
+the devices on its Core), D20, D58, D64, remote design §4.4 (the two must never hold the
+radio at once; no two writers of one settings file); the several-devices design sections
+4.1 (the station device), 5.9 and 8.5, rulings 5.4a, 5.10, 5.13, 8.9a, 8.14 and 9.2; design
+ID R-MC-20 (provisional, Part G).
 
 **Files:**
 - Create: `src/core/station/StationHost.{h,cpp}` (assembles the station's parts around a
-  given `RadioModel`: the server, media, telemetry, announcement and Bonjour, rendezvous,
-  pairing, devices, the transmit gates, watchdog and time-out, spot sources, status
-  page), `src/core/station/StationHandover.{h,cpp}`
+  given `RadioModel`: the server with its session registry, media, telemetry,
+  announcement and Bonjour, rendezvous, pairing, devices, the transmit holder and gates,
+  watchdog and time-out, spot sources, status page), `src/core/station/StationHandover.{h,cpp}`
 - Modify: `src/core/daemon/DaemonApp.{h,cpp}` (uses `StationHost`),
   `src/main.cpp` (the handover before `AppSettings` loads), `src/gui/MainWindow.{h,cpp}`
-  (runs `StationHost` on the desktop's own radio while the switch is on; quits through
-  the handover)
+  (runs `StationHost` on the desktop's own radio while the switch is on; the window as the
+  station device; its MOX and TUNE through the keying gate; quits through the handover),
+  `src/gui/widgets/VfoWidget.{h,cpp}` (flags for the window's own slices only, TX by
+  ruling 5.4a), `src/core/TciServer.{h,cpp}` (the desktop's TCI server under the holder
+  rule)
 - Modify: `src/server_main.cpp` and `src/core/daemon/StationControlCommands.{h,cpp}`
   (the `nereusd release` subcommand, beside Task 17's other subcommands)
-- Test: `tests/tst_station_host.cpp`, `tests/tst_station_handover.cpp`,
+- Test: `tests/tst_station_host.cpp` (also the hosting-desktop harness: `StationHost` on a
+  local model with the local window as a device), `tests/tst_station_handover.cpp`,
   `tests/tst_station_control_socket.cpp`
 
 **Interfaces:**
 - Consumes: Tasks 12 to 17 (the control socket `nereusd-control` and its subcommands,
-  Task 17), 33 (stopping transmission at once), 34 to 41, 47.
+  Task 17), 33 (stopping transmission at once), 34 to 42, 47, and 71 to 77: the session
+  registry and the station device (Task 71), views (Task 72), ownership and the
+  station-level active slice (Task 73), the confirm step (Task 74), shared settings (Task
+  75), one mix per owner (Task 76), and the take rules, including the hosting desktop's
+  MOX and TUNE (Task 77).
 - Produces:
   - `class StationHost : public QObject` with `StationHost(RadioModel*, const StationHostOptions&)`,
     `bool start()`, `void stop()`; the daemon and the desktop use the same class.
+    `StationHost` runs the session registry (`DeviceSessionRegistry`, Task 71).
   - One station, whichever process runs it: the identity key, device list and settings
     live in the desktop's profile directory, and a `QLockFile` named `station.lock` there
     is held by whichever process runs the station, so only one ever does.
@@ -4247,9 +5949,37 @@ two must never hold the radio at once; no two writers of one settings file).
   - `StationHandover::handToBackground()`: at desktop quit with "Keep it running" on,
     stops transmitting if keyed, stops `StationHost`, saves, disconnects the radio,
     releases the lock and starts the background station.
-  - While the desktop runs the station, its own operator is not a remote session:
-    both the operator at the desktop and the connected phone operate, and `txState`
-    reports keying at the desktop as `keyedByKind: "station"`.
+  - **The desktop window is the station device** (ruling 4.1, D35): while the desktop
+    runs the station, its own window has no network session and is one of the four
+    devices, registered with the hosting desktop's device name and id, kind `station`,
+    `hostsCore` true, `revocable` false and, in a fifth device's list, `replaceable`
+    false (Task 41). At start it is the first device, so it adopts the slices with no
+    owner, and it never gives its slices away (Task 73). Both the operator at the desktop
+    and the connected devices operate, each on its own slices.
+  - **Its own slices only:** the window's VFO flags show only its own slices, and show TX
+    on one only while the window holds transmit and it is the transmit slice (ruling
+    5.4a); the window reads its own active slice, not the station-level one (ruling
+    5.11). Other devices' markers and the rest of the screens are Task 78's.
+  - **Its audio:** the Core's local output plays the station device's mix, the window's
+    own slices (ruling 9.2, Task 76).
+  - **Its MOX and TUNE ask** (ruling 8.9a, D64): the MOX and TUNE buttons (and the space
+    bar, once wired) key as the station device through the keying gate. With transmit
+    unheld a press takes it and keys (D63). While another device holds transmit, a press
+    opens a question and keys only after a confirmed take through `tx.take`'s rules (Task
+    77): "Take transmit from <holder's short name>?", or the red "Unkey and take over"
+    when that device is on the air. Task 78 gives this question the dialog shape it shares
+    with the remote window; this task shows it as a plain confirmation with those words.
+    The desk microphone, which is the radio's own PTT, still takes transmit at once (Task
+    77). `txState` reports the window's keying with the desktop's name and kind
+    `station`.
+  - **Its programs** (D58, rulings 5.13, 8.14): the desktop's TCI server (and its CAT
+    server, once built) maps its receivers to the station device's own slices, in id
+    order, and a program's key through it keys only while the window holds transmit. It
+    never takes transmit, held or unheld; otherwise the key is refused, answered to the
+    program as the gaps plan's Task 4 answers a refused `trx`, with `otherDeviceHolds` or
+    `programNeedsTransmit` as its reason (Task 34's codes); Task 78 shows it on the
+    window. The TCI audio lock is taken only after the holder rule admits the key, and a
+    program's `trx:N,false` releases only the window's own key.
 
 **Acceptance:**
 - With the switch on, a phone (the app's test client) connects to the desktop's own
@@ -4257,7 +5987,7 @@ two must never hold the radio at once; no two writers of one settings file).
   listens.
 - Quit with "Keep it running": the background station holds the radio within 15 s and
   the test client reconnects to it as the same station (same identity) without being
-  asked about a takeover; reopening the desktop takes the radio back the same way.
+  asked anything; reopening the desktop takes the radio back the same way.
 - At no moment do two processes hold `station.lock`, and a test that starts both at once
   shows the second waiting.
 - Quitting while keyed stops transmitting before anything else.
@@ -4268,21 +5998,37 @@ two must never hold the radio at once; no two writers of one settings file).
   says so in plain words and changes nothing.
 - `nereusd` on a small computer behaves as before (the daemon's tests pass through
   `StationHost`).
+- The hosting-desktop harness (`StationHost` on a local model, the local window as a
+  device): the window counts as one of the four, so three test clients fill the Core and
+  a fourth is refused (or, after Task 41, asked, with the desktop listed and not
+  selectable); the window's flags and local audio carry only its own slices; its MOX with
+  transmit unheld takes and keys; its MOX while a test client holds transmit asks, keys
+  nothing until the take is confirmed, and shows red "Unkey and take over" when that
+  client is keyed; an injected radio PTT press takes transmit at once; a TCI test client
+  on the desktop's TCI server keys only while the window holds transmit and is otherwise
+  refused, taking no audio lock.
 
-**Verification:** reachability of the station and the two-writer rule: invariant tests
-first; integration with two processes.
+**Verification:** reachability of the station, the two-writer rule, and keying at the
+desktop: invariant tests first; integration with two processes.
 `cmake --build build --target tst_station_host tst_station_handover tst_station_control_socket nereusd && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_host|tst_station_handover|tst_station_control_socket)$' --output-on-failure`.
 Device (JJ, pending until observed): on his Mac with the ANAN-G2, quit and reopen
 NereusSDR while the phone listens; the phone drops for a few seconds each time and
-comes back on its own with transmit off.
+comes back on its own with transmit off. Bench (controller and JJ, pending until
+observed): the design's row 15 with the desktop hosting the Core and the phone connected
+(the desktop counts as one of the four; its MOX while the phone holds transmit asks, red
+when the phone is keyed; the desk microphone takes at once; WSJT-X through the desktop's
+TCI keys only while the desktop holds transmit; a fifth device cannot pick the desktop).
 
 **Execution note (advisory):** opus. Architecture (the desktop hosts the station), the
-radio connection and settings safety: flag for earlier review. Requires Task 47 and
-Parts C, F and G.
+radio connection and settings safety, and keying at the desktop: flag for earlier
+review. Requires Task 47, Parts C and F, and Tasks 41, 42 and 71 to 77.
 
 - [ ] **Step 1:** `StationHost`, with the daemon moved onto it and its tests passing.
 - [ ] **Step 2:** The desktop hosting it, the lock, `nereusd release` with its
       control-socket tests, and the two-way handover.
+- [ ] **Step 3:** The window as the station device: its own slices, flags and audio, its
+      MOX and TUNE through the take rules, and its TCI programs under the holder rule,
+      with the hosting-desktop harness.
 
 ## Task 49: The Remote Access page
 
