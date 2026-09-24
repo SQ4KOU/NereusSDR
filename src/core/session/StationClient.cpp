@@ -93,7 +93,8 @@
 //   2026-09-24 - R-R3-47: remoteRfKitControlVersion 3 (the resetRfKitError
 //                 request, the RF-Kit page's settings from a remote window);
 //                 a Core setting's change is reported to the window's pages
-//                 (stationSettingChanged).
+//                 (stationSettingChanged); whether the Core keeps a TCI
+//                 switch is read from this link's settings snapshot only.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -806,6 +807,7 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     // first session is epoch 1; 0 means "never attached"). See
     // sessionEpoch()'s doc comment.
     ++m_sessionEpoch;
+    m_settingsSnapshotThisLink = false;
     m_lastTelemetrySequence = 0;
     m_lastTelemetrySampleElapsedMs = -1;
     m_capabilities.remoteDisplayBudgetVersion = 0;
@@ -896,6 +898,7 @@ void StationClient::onTransportClosed()
     if (sender() != nullptr && sender() != m_transport) {
         return;
     }
+    m_settingsSnapshotThisLink = false;   // rework follow-up 4
     // Task 19: a plain transport close with no station-sent reason is
     // exactly the case automatic reconnect exists for -- "kill the
     // daemon" (a clean TCP close) is the bench scenario the parent task
@@ -1782,6 +1785,8 @@ void StationClient::handleSettingsSnapshot(const SessionMessage& message)
 
     const bool firstSnapshot = !m_settingsProxy->hasReceivedSnapshot();
     m_settingsProxy->applySnapshot(data);
+    m_settingsSnapshotThisLink = true;
+    m_coreKeepsTciSwitch = data.contains(QStringLiteral("StationTci_Enabled"));
     // R-R3-46: the window's copy of the Core's OC pin matrix follows the
     // Core's settings (RadioModel::scheduleRemoteOcReload, coalesced).
     if (!m_radioModel.isNull()) {
@@ -1838,6 +1843,9 @@ void StationClient::handleSettingsValue(const SessionMessage& message)
     // it, so the client reported contains() true and value(key, default)
     // "" for a key the station did not have.
     const QString key = QString::fromUtf8(message.objectKey);
+    if (key == QLatin1String("StationTci_Enabled")) {
+        m_coreKeepsTciSwitch = !message.updates.isEmpty();   // rework follow-up 4
+    }
     if (message.updates.isEmpty()) {
         m_settingsProxy->applyRemoteRemoval(key);
     } else {
@@ -3379,10 +3387,12 @@ int StationClient::coreStationTciStored() const
     // The Core's station switch is its StationTci_Enabled station setting
     // (StationTciController), which reaches this window in the settings
     // snapshot; absent there, the Core has none yet.
-    if (m_settingsProxy.isNull() || !m_settingsProxy->hasReceivedSnapshot()) {
+    // Rework follow-up 4: this link's snapshot, not one from a Core this
+    // window used before.
+    if (m_settingsProxy.isNull() || !m_settingsSnapshotThisLink) {
         return -1;
     }
-    return m_settingsProxy->contains(QStringLiteral("StationTci_Enabled")) ? 1 : 0;
+    return m_coreKeepsTciSwitch ? 1 : 0;
 }
 
 bool StationClient::coreServesTciOnThisComputer() const

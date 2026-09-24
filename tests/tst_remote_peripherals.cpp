@@ -395,6 +395,7 @@ private slots:
     void coreHereServesThisComputersApps();
     void upgradeKeepsTciOnTheCoresComputer();
     void coresStoredSwitchWinsOverTheLink();
+    void connectRuleReadsTheCurrentCore();
     // R-R3-47 / R-R3-22
     void remoteWindowShowsTheCoresRecords();
     void remoteWindowChangesTheInterlockOnTheCore();
@@ -1669,6 +1670,45 @@ void RemotePeripheralsTest::coresStoredSwitchWinsOverTheLink()
     QTest::qWait(100);
     QVERIFY(!cw.station.stationTciModel()->enabled());
     QVERIFY(!cw.station.stationTciModel()->listening());
+    AppSettings::instance().clear();
+}
+
+// Rework follow-up 4 (R-R3-48): moving to another Core in the same
+// process, the connect-time rule reads that Core's settings, not the last
+// Core's: whether a Core keeps a TCI switch is unknown between links.
+void RemotePeripheralsTest::connectRuleReadsTheCurrentCore()
+{
+    AppSettings::instance().clear();
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    AppSettings::instance().setValue(QStringLiteral("StationTci_Enabled"), QStringLiteral("False"));
+    RadioModel coreA;   // keeps a switch (the process's settings are its store)
+    StationServer serverA(&coreA, AppSettings::instance(), dir.path());
+    RadioModel coreB;   // keeps none
+    AppSettings storeB(dir.filePath(QStringLiteral("b.settings")));
+    StationServer serverB(&coreB, storeB, dir.path());
+
+    RadioModel window(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&window, &proxy);
+    window.attachStation(&client);
+    const auto linkTo = [&](StationServer& server, const QString& name) {
+        auto* stationEnd = new LoopbackTransport(name + QStringLiteral("-station"), this);
+        auto* clientEnd = new LoopbackTransport(name + QStringLiteral("-client"), this);
+        stationEnd->linkTo(clientEnd);
+        QSignalSpy completed(&client, &StationClient::handshakeComplete);
+        client.startSession(clientEnd, server.token());
+        server.acceptTransport(stationEnd);
+        [&] { QVERIFY(completed.wait(5000) || !completed.isEmpty()); }();
+        return stationEnd;
+    };
+    LoopbackTransport* endA = linkTo(serverA, QStringLiteral("a"));
+    QTRY_COMPARE(client.coreStationTciStored(), 1);
+    endA->closeLink(QStringLiteral("moving to another Core"));
+    QTRY_COMPARE(client.coreStationTciStored(), -1);
+    LoopbackTransport* endB = linkTo(serverB, QStringLiteral("b"));
+    QTRY_COMPARE(client.coreStationTciStored(), 0);
+    endB->closeLink(QStringLiteral("test done"));
     AppSettings::instance().clear();
 }
 

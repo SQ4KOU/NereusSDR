@@ -909,6 +909,15 @@ private:
     /// has EVER fully established, not that one is established now.
     bool m_everConnected = false;
 
+    /// Rework follow-up 4 (R-R3-48): this link has applied a settings
+    /// snapshot (reset on every attach and link loss), so a rule about the
+    /// Core's settings reads this Core's, not a previous one's.
+    bool m_settingsSnapshotThisLink = false;
+    /// Whether this link's Core keeps StationTci_Enabled (from its snapshot
+    /// and later changes; the proxy's cache may still hold a previous
+    /// Core's keys).
+    bool m_coreKeepsTciSwitch = false;
+
     /// See sessionEpoch(). Bumped in attachTransport().
     quint32 m_sessionEpoch = 0;
     quint32 m_lastTelemetrySequence = 0;

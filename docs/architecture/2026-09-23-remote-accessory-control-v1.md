@@ -1050,7 +1050,8 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   stored station switch yet (no `StationTci_Enabled` in its settings, as
   after the upgrade on a computer that ran the window with TCI on) takes
   the window's switch and port instead, so apps there keep TCI. Until
-  the Core's settings arrive the window decides nothing. The window reads the Core's
+  this link's settings snapshot arrives the window decides nothing (a
+  previous Core's settings, from earlier in the same run, do not count). The window reads the Core's
   change only once all its properties have arrived, and after sending a
   change it waits for the Core to report that same switch and port before
   following again, so it never flips back to a stale value. That wait
