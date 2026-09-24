@@ -141,31 +141,48 @@ Each follows from the spec, the designs or the code; none reopens a decision of 
   design's first-run workflow (§11) needs it reachable without configuration.
   `remote_port = 0` still turns it off.
 * **Device keys are ECDSA P-256** on every client (the phone's lives in the Secure
-  Enclave); the station's identity key is P-256 too. An upgraded station's existing
-  token stays as one revocable device entry; a new station creates no token (Task 12).
+  Enclave); the station's identity key is P-256 too, and it signs the station's TLS
+  certificate so a replaced certificate never breaks a saved station. An upgraded
+  station stays claimed through its existing token: each window that signs in with it
+  enrols its own key, and the token is retired by an explicit command; a new station
+  creates no token (Tasks 12, 13).
 * **Remote transmit is allowed for paired devices by default** (`remote_transmit = allow`
   in `nereusd.conf`), since D5 puts transmit in the first release.
 * **The transmit numbers:** keepalive 100 ms, link-loss deadline 400 ms, starvation
   250 ms, transmit buffer 60 ms target and 120 ms maximum, first reconnect 1000 ms; the
-  per-mode starvation action of Part F.
+  per-mode starvation action of Part F, with TUNE and two-tone exempt. Keepalives travel
+  on their own unreliable channel on remote paths, key and unkey events are sent three
+  times under a keying epoch, and the uplink is rate-matched to the radio's clock
+  (Tasks 35 to 37).
 * **The time-out applies by device kind** (D29): phones and tablets use new station
   settings, on at 180 s; keying at the station and from computers uses Thetis's own
   settings, off by default. The whole Thetis Time Out Timers group is ported (MOX and
   ping), since a port takes the whole upstream function.
 * **No path change while keyed** (Task 29): a path that fails while keyed is covered by
   the watchdog, whose deadline is shorter than the first reconnect.
-* **The relay floor carries the same encrypted ICE, DTLS and SRTP datagrams inside a
-  WebSocket** (Part E), because the pinned libjuice rejects TURN over TCP and TLS and the
-  alternative, libnice, needs GLib (LGPL) that cannot go into the App Store app.
+* **The web-only relay floor is chosen by measurement** (Task 29) among the options the
+  App Store app can use: a patched libjuice speaking TURN over TCP and TLS, a local shim
+  carrying TURN/UDP to coturn's TLS listener, or our own relay over a WebSocket. libnice
+  is excluded because it needs GLib, which is LGPL and cannot go into the App Store app.
+  JJ chooses from the measured comparison.
+* **The rendezvous service is a small Python service** (Task 26), simpler to deploy and to
+  self-host than a Qt build; the C++ and Swift clients run the same conformance vectors.
+* **The station's radio choice follows the rules JJ gave the Core/GUI session:** a radio
+  chosen from an app first, then the configuration file, automatic only when exactly one
+  radio is visible, otherwise the station waits; the desktop manages a remote Core on a
+  This Core page (Task 25).
 * **The desktop remote window gains microphone transmit** (Task 36), for parity with the
-  phone.
+  phone, through the existing capture helper and the microphone chosen in Audio >
+  Devices, with the lossless format when the link can carry it; TCI transmit and VOX
+  work remotely too (Tasks 35, 36).
 * **Spot sources run at the station** (Task 21); a desktop remote window still runs its
   own WSJT-X and SpotCollector listeners for programs on its own computer (remote design
   §6.4).
 * **Setup reaches the phone as station-supplied descriptions** (Part H), with a desktop
   parity test and a station live-apply test for every station control described.
 * **D41 and D42 apply throughout:** an item the desktop has not built is left out and
-  appears once it exists; VAX Audio and Antenna Setup are offered from the start; MIDI
+  appears once it exists, using the same single list of unbuilt features the desktop
+  hides by (R-R3-49); VAX Audio and Antenna Setup are offered from the start; MIDI
   Mapping and Macro Buttons are not built.
 
 ## What already exists
@@ -219,6 +236,12 @@ All paths are on `codex/integrate-r2-main` (read at `4bb89b5d`).
   `src/gui/setup/` (the Remote Station stub at `CatNetworkSetupPages.h:201-212`),
   `src/gui/spectrum/PeakBlobDetector` and `ActivePeakHoldTrace` (Thetis ports),
   `src/gui/applets/VaxApplet`.
+* **Remote-window pieces from the R3 lanes:** `src/gui/CoreTargetStore` (saved Cores,
+  `ConnectionTargets/V1`), `src/gui/StationLanSelection`, `src/gui/ConnectionSelector`,
+  `SetupScope` in `src/gui/SetupDialog.h` (Core or this computer, per page),
+  `src/core/audio/CaptureSupervisor` (the capture helper, local sessions only today),
+  `src/core/session/media/RemoteAudioRateMatcher`, and on `codex/lane-b` the remote
+  window's own TCI server (R-R3-42, `c5ac13cc`).
 * **Test fakes and helpers:** `tests/fakes/LoopbackTransport`, `LoopbackStationLink`,
   `ConnectableRadioModel`, `P1FakeRadio` and the P2 fake; `tests/OperatorWording.h`; the
   golden-and-regenerate precedent `tst_tci_init_burst_regen`; `NEREUS_TEST_DATA_DIR`.
@@ -239,8 +262,20 @@ not, the controller stops and asks JJ.
 * `2026-09-23-r3-remote-radio-hardware-plan.md` Tasks 1, 2 and 4 (the Core's radio
   identity, the `stepAtt` object, Hardware Config's receive settings through the Core with
   a live apply step and the Alex receive object): needed by Tasks 45 and 57.
-* The Thetis step-list port a separate session is doing in `SliceModel`: the catalogue
-  (Task 19) carries whatever list `SliceModel` holds, so nothing waits on it.
+* `2026-09-23-r3-unfinished-controls-plan.md` (R-R3-49): its single list of unbuilt
+  features decides what the phone offers (Tasks 25 and 43), so both hide the same
+  things. The R3 plan's "Built after R4" list names the new features JJ scheduled after
+  R5 and R4 (receive EQ, SAM options and DC block, meter options, the logging page, local
+  connection history and network diagnostics, spot filters, the RBN limit, muting VAX
+  during transmit, RADE callsigns with the end-of-over tail, FreeDV to PSK Reporter, TCI
+  settings); this plan builds none of them and leaves room for the RADE tail (Tasks 33,
+  35, 37, 39, 54).
+* The Core/GUI session's R5 and R4 scouting of 2026-09-23 (its notes
+  `r5-scout-identity-pairing`, `r5-scout-transport`, `r5-scout-rendezvous-relay`,
+  `r4-core-tx-scout` and `r4-gui-protocol-scout` in `~/.config/nereus/work/`) is folded
+  into Parts C, E and F; implementers of those tasks read the matching note.
+* The Thetis step-list port a separate session is doing in `SliceModel` (PR #325): the
+  catalogue (Task 19) carries whatever list `SliceModel` holds, so nothing waits on it.
 
 ## File Structure
 
@@ -252,18 +287,18 @@ not, the controller stops and asks JJ.
 | `docs/architecture/2026-09-23-rendezvous-v1.md`, `2026-09-23-setup-description-v1.md`, `2026-09-23-display-extras-v1.md` | The rendezvous wire, the Setup description format, the display extras datagram |
 | `tests/data/link/v1/` | The conformance fixtures both ends run: `manifest.json`, `surface.json`, `control/`, `sessions/`, `media/` |
 | `tests/LinkSurface.*`, `tests/LinkFixtures.*`, `tests/tst_link_*` | The surface capture, the fixture player, the drift guard and the conformance runners |
-| `src/core/session/{LinkVersion,StationCatalog,RecordStream,StationDevicesFacade,TransmitStateFacade,DnsSdAdvertiser*,RendezvousClient,IceConfiguration,DataChannelTransport,RelayTransport,PathRacer}.*` | Versions, the catalogue, record streams, the devices and transmit-state objects, Bonjour, remote access |
+| `src/core/session/{LinkVersion,StationCatalog,RecordStream,StationDevicesFacade,TransmitStateFacade,DnsSdAdvertiser*,RendezvousClient,IceConfiguration,DataChannelTransport,PathRacer}.*`, and the chosen relay floor's pieces (Task 29) | Versions, the catalogue, record streams, the devices and transmit-state objects, Bonjour, remote access |
 | `src/core/security/{StationIdentity,DeviceStore,DeviceAuthenticator,StationLabel,PairingWindow,PairingCode,SpakeExchange,ClientDeviceIdentity}.*` | Identity, devices, pairing |
 | `src/core/{DspControlThread,WdspThreadCheck}.*` | The DSP control lanes and the caller check |
 | `src/core/safety/{StationTxGate,UnkeyGate,TxRefusal,RemoteTxWatchdog,StarvationPolicy,TxTimeOutTimer}.*` | Remote transmit safety |
-| `src/core/meters/TxMeterPump.*`, `src/core/session/media/RemoteMicReceiver.*`, `src/core/audio/RemoteMicSource.*` | Transmit meters and the microphone uplink |
+| `src/core/meters/TxMeterPump.*`, `src/core/session/media/RemoteMicReceiver.*` | Transmit meters and the microphone uplink |
 | `src/core/spectrum/{PeakBlobDetector,ActivePeakHoldTrace,DisplayFollowers}.*` | Display computations moved to core for the station to run |
 | `src/core/setup/SetupDescriptionService.*`, `resources/setup/*.json`, `resources/setup/HEADERS.md` | The Setup descriptions |
 | `src/core/SpotSourceHost.*`, `src/core/station/{StationRadios,StationHost,StationHandover}.*`, `src/core/StationBinaryLocator.*` | Spot sources at the station, the station's radios, the station host and the handover |
 | `src/core/daemon/{StationStatusPage,StationControlSocket,StationControlCommands}.*` | The status page and console commands |
-| `src/gui/StationServiceManager.*`, `src/gui/setup/RemoteStationPage.*` | Starting the background station; the Remote Station page |
+| `src/gui/StationServiceManager.*`, `src/gui/setup/RemoteStationPage.*`, `src/gui/setup/ThisCorePage.*` | Starting the background station; the Remote Station page; managing a remote Core |
 | `resources/pairing-words-v1.txt`, `cmake/NereusPairing.cmake` | The pairing word list; libsodium and SPAKE2+EE |
-| `tools/nereus-rendezvous/`, `packaging/rendezvous/` | The rendezvous and relay service and its deployment (D38) |
+| `rendezvous/` | The rendezvous service (Python), its conformance vectors, coturn configuration and deployment (D38) |
 | `packaging/deb/`, `packaging/station-image/` | The station's Debian packages and the card image |
 | `ios/` | The app: `LICENSE`, `README.md`, `THIRD-PARTY.md`, `project.yml`, `NereusKit/`, `NereusApp/`, `NereusActivity/`, `Shared/`, `AppStore/`, `scripts/` |
 | `scripts/verify-ios-provenance.py`, `scripts/render-link-tables.py` | The app's provenance check; the link document's generated tables |
@@ -278,11 +313,11 @@ not, the controller stops and asks JJ.
 | `src/core/session/{StationLanAnnouncement,StationLanAnnouncer,StationLanDiscovery}.*` | Announcement schema 2 |
 | `src/core/session/media/{LibDataChannelMediaTransport,DaemonMediaController,OpusAudioCodec}.*` | Traversal, the mic line, per-session audio quality, display extras |
 | `src/core/settings/SettingsScope.cpp`, `src/models/FilterPresetStore.*` | Presets, spot and reporter settings and time-out keys in Station scope |
-| `src/core/{RxChannel,TxChannel,TxWorkerThread,WdspEngine,NbFamily,PureSignal,PsccPump,TwoToneController,TxAnalyzer,MoxController,TxSliceArbiter,TxInterlockPolicy,PttSource}.*`, `src/core/dsp/NnrAdapter.*` | DSP off the event loop, the stop path, gates, refusals, attribution |
+| `src/core/{RxChannel,TxChannel,TxWorkerThread,WdspEngine,NbFamily,PureSignal,PsccPump,TwoToneController,TxAnalyzer,MoxController,TxSliceArbiter,TxInterlockPolicy,PttSource,TciServer,TciProtocol}.*`, `src/core/dsp/NnrAdapter.*`, `src/core/audio/CaptureSupervisor.*` | DSP off the event loop, the stop path, gates, refusals, attribution, the remote mic ring, TCI and remote capture |
 | `src/models/{RadioModel,TransmitModel,TunerModel,SpotModel,FreeDVStationModel}.*`, `src/core/MicProfileManager.*` | `stopAllTx`, the time-out, transmit properties, spot and reporter streams |
 | `third_party/wdsp/src/{dsplock.c,dsplock.h,channel.c}`, `src/core/wdsp_api.h` | The caller check |
 | `src/core/daemon/{DaemonApp,DaemonConfig}.*`, `src/server_main.cpp`, `packaging/nereusd.conf.sample` | Identity, pairing, listener defaults, subcommands, the station host |
-| `src/main.cpp`, `src/gui/MainWindow.*`, `src/gui/RemoteMediaController.*`, `src/gui/setup/*`, `src/gui/SetupDialog.cpp`, `src/gui/FreeDVReporterDialog.*`, `src/gui/SpectrumWidget.cpp` | The handover, the desktop station, the mic uplink, the dialogs, the Setup ids, the moved display computations |
+| `src/main.cpp`, `src/gui/MainWindow.*`, `src/gui/RemoteMediaController.*`, `src/gui/CoreTargetStore.*`, `src/gui/setup/*`, `src/gui/SetupDialog.cpp`, `src/gui/FreeDVReporterDialog.*`, `src/gui/SpectrumWidget.cpp` | The handover, the desktop station, the mic uplink, saved Cores keyed by identity, the dialogs, the page scopes and Setup ids, the moved display computations |
 | `CMakeLists.txt`, `tests/CMakeLists.txt`, `.github/workflows/{ci,release}.yml` | New targets and resources, packaging `nereusd`, the CI steps |
 | `docs/attribution/*`, `scripts/verify-thetis-headers.py`, `docs/architecture/2026-09-20-remote-media-control-v1.md`, `docs/architecture/2026-09-23-iphone-app-design.md`, `CLAUDE.md` | Provenance, the mic line, the measured figures, the index |
 
@@ -301,6 +336,10 @@ not, the controller stops and asks JJ.
       XcodeGen with `brew install xcodegen`.
 - [ ] Before Task 26's deployment step, JJ creates the second small server and points
       `rv.nereussdr.com` (A and AAAA records) at it (D38).
+- [ ] Before Task 12, confirm with JJ which session runs the station tasks (Parts C to I):
+      this plan's controller, or the Core/GUI session's controller in its station lanes.
+      Both sessions were set to build pairing, R5 and R4; the Core/GUI session is holding
+      its own R5 and R4 plans (2026-09-24) until JJ decides.
 
 **Order and parts.** A (Tasks 1 to 4): the written link. B (5 to 11): the app's
 foundation. C (12 to 18): identity and pairing. D (19 to 25): what the phone shows. E (26
@@ -578,6 +617,10 @@ before capabilities arrive.
   station's-side wording.
 - A peer that sends no `majors` or `features` behaves exactly as today (the existing
   session fixtures pass unchanged except the new keys in the station's `hello`).
+- Every gate already built sends older peers exactly what it sends today: the agreed-minor
+  gates (including the radio identity entries sent only at minor 11) and the capability
+  versions (`receiverAudioVersion`, `radioHardwareVersion` and the rest); the surface
+  manifest and the existing goldens pin it.
 - Negotiation is tested with injected supported lists (a test-only constructor
   argument), because a second major does not exist yet; the conformance manifest's
   `linkMajors` is `[1]` and each runner loops over it.
@@ -1089,7 +1132,8 @@ same device key is how a reclaim is recognised).
 - Create: `src/core/security/StationIdentity.{h,cpp}`, `src/core/security/DeviceStore.{h,cpp}`,
   `src/core/security/DeviceAuthenticator.{h,cpp}`, `src/core/security/StationLabel.{h,cpp}`
 - Modify: `src/core/security/TokenStore.{h,cpp}` (a new station creates no token; an
-  existing token becomes the legacy device entry)
+  upgraded station stays claimed through its token until the token is retired, and each
+  window that signs in with it enrols its own device key)
 - Modify: `src/core/session/SessionMessages.{h,cpp}` (`hello`: `identity`, `challenge`;
   `auth.request`: `device`), `src/core/session/StationServer.{h,cpp}`
 - Modify: `src/core/daemon/DaemonConfig.{h,cpp}`, `src/core/daemon/DaemonApp.cpp`,
@@ -1108,11 +1152,11 @@ same device key is how a reclaim is recognised).
     `QByteArray sign(const QByteArray& message) const` (64-byte raw signature),
     `static bool verify(const QByteArray& spki, const QByteArray& message, const QByteArray& signature)`,
     `QString keyPath() const`.
-  - `struct PairedDevice { QByteArray id; QByteArray publicKeySpki; QString name; QString kind /* "phone","tablet","computer" */; QDateTime pairedAt; QDateTime lastSeen; QString lastAddress; bool legacyToken; };`
+  - `struct PairedDevice { QByteArray id; QByteArray publicKeySpki; QString name; QString kind /* "phone","tablet","computer" */; QDateTime pairedAt; QDateTime lastSeen; QString lastAddress; bool enrolledThroughToken; };`
   - `class DeviceStore : public QObject` with `bool add(const PairedDevice&)`,
     `bool remove(const QByteArray& id)`, `std::optional<PairedDevice> find(const QByteArray& id) const`,
     `QList<PairedDevice> list() const`, `void touch(const QByteArray& id, const QString& address)`,
-    `bool isClaimed() const` (any non-legacy device, or the legacy entry), signals
+    `bool isClaimed() const` (any paired device, or a token not yet retired), signals
     `devicesChanged()` and `deviceRemoved(QByteArray id)`.
   - `class DeviceAuthenticator` with `QByteArray newChallenge()` (32 random bytes from
     the operating system's generator) and
@@ -1123,7 +1167,8 @@ same device key is how a reclaim is recognised).
     callsign); the default label is the `StationCallsign` setting.
   - `hello` (station) gains `identity: {publicKey, certBinding}` and `challenge`, and
     `features.deviceAuth: 1`; `auth.request` gains
-    `device: {id, publicKey, name, kind, signature}` with `token: ""`.
+    `device: {id, publicKey, name, kind, signature}` with `token: ""`; a sign-in with
+    the station token that also carries `device` enrols that device in the same step.
   - Capability `stationIdentityVersion = 1`.
 
 **Acceptance:**
@@ -1133,13 +1178,19 @@ same device key is how a reclaim is recognised).
   signature, a device not in the store, a signature over another connection's challenge,
   and a signature binding a different certificate hash are each refused with
   `auth.result accepted:false` and a plain reason.
-- Device-auth failures are rate-limited per source address (10 in 60 s refuses that
-  address for 60 s); they never lock out the token or other addresses, and token
-  failures never lock out device authentication.
-- A station upgraded with an existing token lists it as a device named
-  `Older NereusSDR (station token)`, kind `computer`, `legacyToken: true`; the token
-  still authenticates; a new station creates no token file and refuses `token`
-  authentication with "This station uses paired devices. Pair this device first."
+- Device-auth failures are rate-limited per source address and per device id (10 in
+  60 s refuses that address or id for 60 s); key authentication never consults the token
+  or pairing-code limits, and token failures never lock out a valid key. Connections
+  through the relay share its address, so there the limit applies per device id and per
+  introduction.
+- A station upgraded with an existing token starts claimed through it, with its pairing
+  window closed, so no stranger on the LAN can claim it. A window that signs in with the
+  token and sends its `device` block is enrolled as a paired device (kind `computer`,
+  `enrolledThroughToken: true`) and connects by key from then on, with nothing typed.
+  The token keeps working for windows that have not enrolled until `station.retireToken`
+  (Task 13) or the console retires it; after that, and on a new station (which creates
+  no token file), token sign-in is refused with "This station uses paired devices. Pair
+  this device first."
 - `lastSeen` and `lastAddress` update on each authenticated connection; over the relay
   (Part E) `lastAddress` is empty rather than the relay's address.
 - `nereusd` with no `remote_port` line listens on 47910 on IPv4 and IPv6 and announces;
@@ -1156,7 +1207,7 @@ admit path). Unit and conformance, offscreen:
 exposes the station on the LAN: flag for earlier review. Requires Task 4.
 
 - [ ] **Step 1:** Identity, label and device store with their tests.
-- [ ] **Step 2:** Device authentication, the legacy token entry, rate limits, listener
+- [ ] **Step 2:** Device authentication, token enrolment, rate limits, listener
       defaults, fixtures and the document.
 
 ## Task 13: Devices, rename and revoke
@@ -1175,17 +1226,22 @@ station-key backup prompt), spec §5.2 item 8.
 - Consumes: `DeviceStore`, `StationIdentity` (Task 12).
 - Produces:
   - Object key `devices`, class `StationDevices`, all properties station to client:
-    `listJson` (a JSON array of `{id, name, kind, pairedAt, lastSeen, connected, legacy}`),
+    `listJson` (a JSON array of `{id, name, kind, pairedAt, lastSeen, connected}`),
     `revision` (uint32, serial-number arithmetic), `stationLabel`, `claimed`,
-    `keyBackupAcknowledged`, `keyPath`. Task 14 adds `pairingWindowOpen` and
-    `pairingCode`.
+    `tokenActive`, `keyBackupAcknowledged`, `keyPath`. Task 14 adds `pairingWindowOpen`
+    and `pairingCode`.
   - Verbs (all in `verbSpecs()`, capability `deviceAdminVersion = 1`):
-    `devices.revoke {id}`, `station.rename {label}`, `station.acknowledgeKeyBackup {}`.
+    `devices.revoke {id}`, `station.rename {label}`, `station.acknowledgeKeyBackup {}`,
+    `station.retireToken {}`.
 
 **Acceptance:**
 - `devices.revoke` of a connected device ends that device's connection at once with
   `session.end`, reason "This device was removed from the station.", `retryable:false`,
-  and it can no longer authenticate; revoking the legacy entry deletes the token file.
+  and it can no longer authenticate.
+- `station.retireToken` is refused with a plain reason until at least one device key is
+  paired, so the owner cannot lock everyone out; once accepted it deletes the token
+  file, sets `tokenActive` false, and ends any connection still signed in by token with
+  Task 12's pairing text.
 - Revoking the device making the request is allowed and ends its own connection after
   the result is sent.
 - `station.rename` with an invalid label is refused with the reason naming the rule; a
@@ -1201,7 +1257,7 @@ station-key backup prompt), spec §5.2 item 8.
 with Task 12. Requires Task 12.
 
 - [ ] **Step 1:** The facade object and revoke with its connection-ending test.
-- [ ] **Step 2:** Rename, backup acknowledgement, fixtures, document.
+- [ ] **Step 2:** Rename, backup acknowledgement, token retirement, fixtures, document.
 
 ## Task 14: The pairing window and code
 
@@ -1474,14 +1530,16 @@ desktop's remote window also holds its own key; pairing design §6 and §11), R-
 **Files:**
 - Create: `src/core/security/ClientDeviceIdentity.{h,cpp}` (the desktop's own P-256 key in
   its profile directory, `device-identity.pem`, mode 0600)
-- Create: `src/core/session/StationPairingClient.{h,cpp}`,
-  `src/core/session/PairedStationRegistry.{h,cpp}` (saved stations keyed by identity
-  fingerprint, not by address)
-- Modify: `src/core/session/StationClient.{h,cpp}` (device-key authentication; identity
-  trust with the certificate binding; the legacy token for older stations),
+- Create: `src/core/session/StationPairingClient.{h,cpp}`
+- Modify: `src/gui/CoreTargetStore.{h,cpp}` (saved Cores move from `ConnectionTargets/V1`
+  to a V2 keyed by identity fingerprint, keeping the URL as the cached address and
+  carrying each record's trust details over exactly)
+- Modify: `src/core/session/StationClient.{h,cpp}` (device-key authentication; enrolling
+  its key the next time it signs in with a station token; identity trust with the
+  certificate binding; the token alone for stations with no identity),
   the R3 connection selection (`StationLanSelection`, `StationStartupSelection`) and the
   Connections dialog it drives
-- Test: `tests/tst_station_pairing_client.cpp`, `tests/tst_paired_station_registry.cpp`,
+- Test: `tests/tst_station_pairing_client.cpp`, `tests/tst_core_target_store.cpp`,
   `tests/tst_station_session.cpp`, the dialog's existing tests
 
 **Interfaces:**
@@ -1495,14 +1553,17 @@ desktop's remote window also holds its own key; pairing design §6 and §11), R-
     this network, or through the rendezvous once Task 27 lands), each ending in signal
     `paired(PairedStationRecord)` or `failed(QString reason)`, mirroring the app's
     `PairingClient`.
-  - Saved stations migrate: an existing URL-and-token entry stays usable and is shown as
-    "Older station (token)" until it is paired.
+  - Saved Cores migrate: an existing entry keeps working, enrols this computer's key on
+    its next token sign-in and connects by key afterwards; an entry for a station with no
+    identity stays a URL, token and pin as today.
 
 **Acceptance:**
 - The desktop pairs with a station on its LAN with one click and by code, then connects
   by device key; the station lists it as kind `computer` named after the machine.
 - A station whose `hello` has no identity is still reachable with its URL, token and
   certificate pin as today.
+- An existing saved Core enrols on its next sign-in and shows as paired afterwards, with
+  nothing typed; the V1 records migrate to V2 once and are never read again.
 - After pairing, a changed station certificate whose binding verifies is accepted
   without a prompt; a certificate without a valid binding is refused with a plain
   reason.
@@ -1511,7 +1572,7 @@ desktop's remote window also holds its own key; pairing design §6 and §11), R-
   project's widget-render test pattern, looked at before they are reported.
 
 **Verification:** authorisation plus UI. Unit and integration:
-`cmake --build build --target tst_station_pairing_client tst_paired_station_registry tst_station_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_pairing_client|tst_paired_station_registry|tst_station_session)$' --output-on-failure`.
+`cmake --build build --target tst_station_pairing_client tst_core_target_store tst_station_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_pairing_client|tst_core_target_store|tst_station_session)$' --output-on-failure`.
 Human smoke (JJ, pending until observed): pair the desktop with the Rock's station by one
 click, then revoke it from the station and see the desktop drop.
 
@@ -1519,7 +1580,7 @@ click, then revoke it from the station and see the desktop drop.
 earlier review. Requires Tasks 12 to 17.
 
 - [ ] **Step 1:** The desktop's key, device authentication and identity trust.
-- [ ] **Step 2:** The pairing client, the registry with migration, the dialog groups and
+- [ ] **Step 2:** The pairing client, the V2 store with migration, the dialog groups and
       their screenshots.
 
 ---
@@ -1544,13 +1605,16 @@ live on the station), spec §4.10.
   widgets, each keeping its existing source cite)
 - Modify: the desktop widgets that held those ranges (they now read `ControlRanges.h`),
   `src/core/settings/SettingsScope.cpp` (`filters/` becomes Station scope),
+  `src/gui/SetupDialog.cpp` (the Filter Presets page, which the R3 fix wave at
+  `59c94b25` registered as `SetupScope::ThisComputer`, becomes `SetupScope::Core` in the
+  same commit, so its edits reach the station),
   `src/models/FilterPresetStore.{h,cpp}` (presets follow the station in a remote window),
   `src/core/session/MirrorSchema.cpp`, `src/core/session/MirrorPolicy.cpp`,
   `src/core/session/StationServer.cpp`
 - Modify: `tests/data/link/v1/` (a G2 catalogue fixture and an HL2 catalogue fixture),
   `surface.json`, the link document (a Catalogue section with the full JSON shape)
-- Test: `tests/tst_station_catalog.cpp`, `tests/tst_settings_scope.cpp`,
-  `tests/tst_filter_preset_store.cpp`
+- Test: `tests/tst_station_catalog.cpp`, `tests/tst_settings_scope.cpp` (its per-page
+  key sweep and floor updated for the Filter Presets page), `tests/tst_filter_preset_store.cpp`
 
 **Interfaces:**
 - Consumes: `BoardCapabilities`, `SkuUiProfile`, `SliceModel` (its step list, whatever
@@ -1849,27 +1913,46 @@ station TCI server (for the TCI Server tool).
 **Before this task (controller):** the TCI Server tool lists the clients of the
 station's own TCI server, which the Core-owned accessories plan's Task 3 adds (R-R3-48,
 on `codex/integrate-r2-main`). Confirm it has merged and merge that branch in; if it has
-not, stop and ask JJ, since that plan belongs to the other agent's lane.
+not, stop and ask JJ, since that plan belongs to the other agent's lane. Also obtain from
+the Core/GUI session the Setup screens mockup JJ chose there on 2026-09-23 ("Option A":
+Change radio lives on a This Core page with the devices list; Connections stays about
+what to connect to) and put it in the brief.
 
 **Files:**
 - Create: `src/core/station/StationRadios.{h,cpp}` (the radios the station finds, and
-  choosing one)
-- Modify: `src/core/daemon/DaemonApp.cpp` (on a first start with no radio configured,
-  the station uses the only radio it finds, or waits for a choice when it finds
-  several), `src/core/session/StationCatalog.cpp` (the tools' `offered` and `reason`),
-  `src/core/session/SessionCommandDispatcher.cpp`
+  choosing one), `src/gui/setup/ThisCorePage.{h,cpp}` (Setup > This Core in a remote
+  window, registered as `SetupScope::Core`)
+- Modify: `src/core/daemon/DaemonApp.cpp` and `src/core/daemon/DaemonConfig.{h,cpp}` (the
+  choice order below), `src/core/session/StationLanAnnouncement.{h,cpp}` and
+  `src/core/session/DnsSdAdvertiser.{h,cpp}` (the `radio` field and TXT key),
+  `src/core/session/StationCatalog.cpp` (the tools' `offered`),
+  `src/core/session/SessionCommandDispatcher.cpp`, `src/gui/SetupDialog.cpp`
 - Modify: `tests/data/link/v1/`, `surface.json`, the link document
 - Test: `tests/tst_station_radios.cpp`, `tests/tst_station_tools.cpp`,
-  `tests/tst_support_bundle.cpp`
+  `tests/tst_support_bundle.cpp`, `tests/tst_this_core_page.cpp`
 
 **Interfaces:**
 - Consumes: `RadioDiscovery`, the catalogue (Task 19), record streams (Task 21), the
   station's TCI server (from the accessories plan's Task 3, R-R3-48).
 - Produces:
   - Stream `stationRadios`: `{id, name, model, mac, address, protocol, inUse}`; verbs
-    `station.useRadio {mac}` (saved, then the station reconnects; refused while keyed)
-    and `station.rescanRadios {}`.
-  - Availability (D41): Spot Hub, FreeDV Reporter and TX Equalizer always; PureSignal
+    `station.selectRadio {mac}` and `station.rescanRadios {}`. `selectRadio` is for paired
+    devices only, is refused while transmitting or while a switch is under way, saves the
+    choice at the station before acting, retires the current radio through the existing
+    recovery path, reconnects with the receive layout and per-radio settings, and
+    republishes the capabilities, the catalogue and the announcement.
+  - The station's choice order, as JJ gave it to the Core/GUI session on 2026-09-23: (1)
+    a radio chosen from an app, saved in the station's profile; (2) `radio_mac` from the
+    configuration file; (3) automatic only when exactly one radio is visible; (4)
+    otherwise the station waits for a choice and says so. Announcement schema 2 and the
+    Bonjour TXT gain `radio` (`connected`, `offline` or `waiting`).
+  - Setup > This Core, in a remote window (the chosen mockup): the Core's identity with
+    the key-backup line, its paired devices with Revoke and Add a device, and Change
+    radio, which lists `stationRadios` and sends `station.selectRadio`; an older Core
+    shows each section's plain reason instead.
+  - Availability (D41) starts from the unfinished controls plan's single list of unbuilt
+    features (R-R3-49), the same list the desktop hides by, then applies these hardware
+    rules: Spot Hub, FreeDV Reporter and TX Equalizer always; PureSignal
     when present; Diversity when the radio has a second receiver; TCI Server when the
     station's TCI server runs; VAX Audio when the station computer publishes VAX devices
     (a station the desktop hosts; a headless station publishes none, R-R3-44); Antenna
@@ -1887,23 +1970,30 @@ not, stop and ask JJ, since that plan belongs to the other agent's lane.
     versions and a telemetry snapshot).
 
 **Acceptance:**
-- A first start with one radio on the LAN uses it; with two, `stationRadios` lists both
-  and the station waits until `station.useRadio`.
+- A first start with one radio on the LAN uses it; with two, `stationRadios` lists both,
+  the announcement and TXT say `waiting`, and the station waits until
+  `station.selectRadio`; a saved choice beats `radio_mac`, which beats the automatic
+  pick; the choice survives a restart.
+- The This Core page lists the Core's devices, revokes one, shows the Add a device code
+  and changes the radio through `station.selectRadio`; screenshots per `ui-verification`
+  compared with the chosen mockup.
 - Availability follows the rules above for an ANAN-G2 and an HL2, on a station the
   desktop hosts and on a headless one; a `vax` gain written by a client changes the
   station computer's VAX channel and shows in the desktop's VAX applet.
-- `station.useRadio` while keyed is refused with its reason.
+- `station.selectRadio` while keyed or mid-switch is refused with its reason.
 - The support bundle contains no key, token, pairing code or device key (a test
   scans it).
 
 **Verification:** unit.
-`cmake --build build --target tst_station_radios tst_station_tools tst_support_bundle && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_radios|tst_station_tools|tst_support_bundle)$' --output-on-failure`.
+`cmake --build build --target tst_station_radios tst_station_tools tst_support_bundle tst_this_core_page && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_radios|tst_station_tools|tst_support_bundle|tst_this_core_page)$' --output-on-failure`.
 
 **Execution note (advisory):** opus. Choosing the station's radio: flag for earlier
 review (it can leave a station without a radio). Requires Tasks 19 and 21.
 
-- [ ] **Step 1:** The station's radios with first-start selection.
-- [ ] **Step 2:** Availability, the `vax` object, TCI clients and the support bundle.
+- [ ] **Step 1:** The station's radios, the choice order, `selectRadio` and the waiting
+      state.
+- [ ] **Step 2:** Availability, the `vax` object, TCI clients, the support bundle and
+      the This Core page.
 
 ---
 
@@ -1915,27 +2005,29 @@ hole punching, then relay on UDP and TCP 443; acceptance is a phone on a cellula
 carrier reaching the station), and D38 (a second small server). This comes before
 remote transmit in JJ's saved order (R3, R5, R4, R6).
 
-**Settled here, with reasons:**
+**Settled here, with reasons** (these match JJ's R5 answers to the Core/GUI session on
+2026-09-22 and 2026-09-23: device keys and pairing before remote access goes live, TURN
+over UDP first, the web-only fallback required, a separate control connection):
 
-* **One service binary, two roles, plus coturn.** `nereus-rendezvous` serves signalling
-  and the TLS relay floor on one TLS listener (TCP 443, WebSocket paths `/v1/station`,
-  `/v1/client`, `/v1/relay`); coturn serves STUN and TURN on UDP 3478 and UDP 443. The
-  floor cannot be TURN over TLS: the station's pinned libjuice rejects TURN over TCP and
-  TLS, and libnice (the alternative) needs GLib, which is LGPL and cannot be linked into
-  the App Store app. The floor therefore carries the same end-to-end encrypted ICE, DTLS
-  and SRTP datagrams inside a WebSocket, through a local UDP loopback on each end, so one
-  media stack serves every path and the relay sees only ciphertext.
-* **The control session crosses NAT on its own small ICE connection** (the R5 decision
-  brief's recommendation), carrying the unchanged session protocol over a reliable data
-  channel, so the media path and its code stay as they are.
+* **A small signalling service plus coturn.** The Python service in `rendezvous/`
+  (Task 26) handles registration, introductions and pairing mailboxes over a TLS
+  WebSocket on TCP 443; coturn serves STUN and TURN on UDP 3478 and UDP 443. The web-only
+  fallback over TCP 443 is chosen by measurement (Task 29) among the options the App
+  Store app can use; libnice is excluded because it needs GLib, which is LGPL.
+* **The control session crosses NAT on its own small ICE connection**, carrying the
+  unchanged session protocol over a reliable data channel, so media restarts never cut
+  control and the heartbeat never queues behind the display; on the LAN the direct
+  WebSocket path stays as it is.
 * **No path change while keyed.** A background upgrade waits for unkey; a path that
   fails while keyed is covered by the watchdog (Task 37), whose 400 ms deadline is
   shorter than the first reconnect attempt (1 s), which answers the stuck-PTT question
   the pairing design §9.7 left open.
-* **Credentials:** TURN credentials are coturn's time-limited REST form
-  (`use-auth-secret`), minted by the rendezvous for an introduction between a station and
-  one of its paired devices, valid 24 hours; a session older than 23 hours refreshes its
-  credentials with an ICE restart while unkeyed.
+* **Credentials:** coturn's time-limited form (`use-auth-secret`), minted only once the
+  station has accepted an introduction from one of its paired devices, valid 24 hours.
+  The pinned libjuice cannot restart ICE with new credentials, so a session that needs
+  fresh ones moves to a second peer connection, make-before-break and never while keyed
+  (Task 29); whether coturn keeps refreshing an allocation past its credential's expiry
+  is recorded by Task 26's Docker check.
 
 ## Task 26: The rendezvous service and the second server
 
@@ -1943,81 +2035,82 @@ remote transmit in JJ's saved order (R3, R5, R4, R6).
 relay), D38, pairing design §5.1 to §5.5.
 
 **Files:**
-- Create: `tools/nereus-rendezvous/` (`main.cpp`, `RendezvousServer.{h,cpp}`,
-  `StationRegistry.{h,cpp}`, `Nameplates.{h,cpp}`, `TurnCredentials.{h,cpp}`,
-  `RelayPairing.{h,cpp}`, `RateLimiter.{h,cpp}`, `RendezvousConfig.{h,cpp}`), its
-  target in `CMakeLists.txt` (built only with `-DNEREUS_BUILD_RENDEZVOUS=ON`)
-- Create: `packaging/rendezvous/` (`nereus-rendezvous.service`, `nereus-rendezvous.conf.sample`,
-  `turnserver.conf.sample`, `deploy.sh`, `README.md` covering DNS with A and AAAA
-  records, certificates from Let's Encrypt, firewall rules, rate limits and
-  self-hosting)
+- Create: `rendezvous/` at the top level, shaped like `website/`: `server/` (a Python
+  3.12 asyncio service using the distribution's `python3-websockets` and
+  `python3-cryptography`), `tests/` (pytest), `conformance/` (the vectors the C++ and
+  Swift clients also run), `deploy/` (`setup-server.sh`, systemd unit, coturn
+  `turnserver.conf`), `deploy.sh`, `README.md` (the self-hosting recipe: DNS with A and
+  AAAA records, certificates from Let's Encrypt, firewall rules, limits)
 - Create: `docs/architecture/2026-09-23-rendezvous-v1.md` (the rendezvous wire), a
   section in the link document pointing to it
-- Test: `tests/tst_rendezvous_server.cpp`, `tests/tst_rendezvous_nameplates.cpp`,
-  `tests/tst_turn_credentials.cpp`, `tests/tst_relay_pairing.cpp`
+- Modify: `.github/workflows/ci.yml` (a job running the service's pytest suite)
 
 **Interfaces:**
 - Consumes: the identity wire values (Part C).
 - Produces:
-  - Station registration on `/v1/station`: the station sends
-    `{type:"register", id, publicKey}` where
+  - Station registration: the station sends `{type:"register", id, publicKey}` where
     `id = base32(SHA-256("NereusSDR rendezvous id v1\n" || station identity SPKI DER))`,
     first 26 characters, lowercase; the server answers `{type:"challenge", nonce}`; the
     station answers `{type:"prove", signature}` over
     `"NereusSDR rendezvous register v1\n" || nonce`; only then is the id registered. A
-    second registration of the same id replaces the first.
-  - Introductions on `/v1/client`: `{type:"introduce", id, device, deviceSignature, offer}`
-    forwarded to the station as `{type:"introduction", from, device, deviceSignature, offer, turn}`
-    and the station's `{type:"answer", to, answer}` forwarded back; the rendezvous never
-    verifies devices (it cannot know them) and forwards each field untouched.
+    second registration of the same id replaces the first; unknown and offline ids get
+    the same answer.
+  - Introductions: `{type:"introduce", id, device, deviceSignature, offer}` forwarded to
+    the station as `{type:"introduction", from, device, deviceSignature, offer}` and the
+    station's `{type:"answer", to, answer, turn}` forwarded back; the rendezvous cannot
+    know pairings, so it verifies no device and forwards each field untouched, and TURN
+    credentials are minted only once the station has accepted the introduction.
   - Nameplates: a registered station sends `{type:"nameplate.claim"}` and receives the
     lowest free number from 1 up; a client sends `{type:"mailbox.open", nameplate}` and
-    the two exchange `{type:"mailbox", body}` messages carrying the opaque `pair.*`
-    messages of Task 14; a nameplate serves one mailbox at a time and is released when
-    the station releases it or disconnects.
-  - TURN credentials: `username = "<unix expiry>:<station id>"`,
-    `password = base64(HMAC-SHA1(shared secret, username))`, expiry 24 h.
-  - Relay pairing on `/v1/relay?session=<token>`: the two ends presenting the same
-    single-use token (minted into both sides of an introduction, 60 s to connect) are
-    joined and binary frames are forwarded both ways.
-  - Limits (configurable, these defaults): introductions 30 per minute per source
-    address and 60 per minute per station id; mailbox opens 10 per minute per source
-    address; per relayed session 2 Mbit/s each way; relay total 200 Mbit/s; each relay
-    leg's send queue at most 256 KiB, dropping the oldest frames beyond it;
-    `TCP_NODELAY` on every relay leg; a relayed session with no frames either way for
-    300 s is closed.
+    the two exchange `{type:"mailbox", body}` messages carrying Task 14's opaque `pair.*`
+    messages; a nameplate serves one mailbox at a time and is released when the station
+    releases it or disconnects.
+  - TURN credentials in coturn's time-limited form (`use-auth-secret`):
+    `username = "<unix expiry>:<station id>"`,
+    `password = base64(HMAC-SHA1(shared secret, username))`, 24 h. coturn's behaviour when
+    an allocation is refreshed after its credential expired is recorded by a test in
+    Docker and decides whether Task 29 refreshes credentials sooner.
+  - coturn hardening: no anonymous or static allocations; relaying to loopback, RFC 1918,
+    100.64/10, link-local, unique-local and multicast addresses blocked; no TCP relaying;
+    no admin CLI; quotas per session and in total sized to the server's transfer
+    allowance; UDP 3478 and 443 in both address families.
+  - Service limits (configurable, these defaults): introductions 30 a minute per source
+    address and 60 per station id; mailbox opens 10 a minute per source address; message
+    and size caps sized for real SDP (at most 64 KiB, candidates at most 4 KiB each, up to
+    64 per introduction); handshake and idle timeouts; logs in journald only, with ids
+    truncated and never a label, secret, minted password, SDP or candidate.
 
 **Acceptance:**
 - Registration without a valid proof is refused; a registered station receives
-  introductions only for its own id; an unknown id answers "not here" without saying
-  whether it ever existed.
-- The server stores nothing about stations on disk; logs carry ids and addresses, never
-  labels or message bodies.
+  introductions only for its own id; an unknown id and an offline one answer the same.
+- The service stores nothing about stations on disk.
 - Nameplates are allocated from 1, reused after release, and never serve two mailboxes
   at once; a mailbox body is forwarded unchanged.
-- Credentials verify with coturn's algorithm (the test computes the HMAC independently).
-- A relay join forwards 10 000 frames in each direction in order; beyond the queue
-  limit the oldest frames are dropped and counted; the session closes after the idle
-  time.
-- The service listens on IPv4 and IPv6; `README.md` explains every step a self-hoster
-  needs, including the AAAA records the pairing design §9.5 item 3 requires.
+- Credentials verify with coturn's algorithm (the test computes the HMAC independently),
+  and coturn in Docker (Ubuntu 24.04's version) accepts a valid allocation, refuses an
+  expired one and never relays to a blocked address (`turnutils_uclient`).
+- The conformance vectors pass in the service's tests and in the C++ and Swift client
+  tests (Task 27).
+- The service and coturn listen on IPv4 and IPv6; `README.md` explains every step a
+  self-hoster needs, including the AAAA records the pairing design §9.5 item 3 requires,
+  and a fresh container built from it alone serves both roles.
 
-**Verification:** networking and authorisation: invariant tests first. Unit and
-loopback integration:
-`cmake -S . -B build -DNEREUS_BUILD_RENDEZVOUS=ON && cmake --build build --target nereus-rendezvous tst_rendezvous_server tst_rendezvous_nameplates tst_turn_credentials tst_relay_pairing && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_rendezvous_server|tst_rendezvous_nameplates|tst_turn_credentials|tst_relay_pairing)$' --output-on-failure`.
-Deployment is a controller and JJ step, not the implementer's: JJ creates the second
-server and points `rv.nereussdr.com` (A and AAAA) at it; the controller runs
-`packaging/rendezvous/deploy.sh` against the address JJ gives and checks
-`https://rv.nereussdr.com/healthz` and a STUN binding from this Mac (pending until
+**Verification:** networking and authorisation: invariant tests first.
+`python3 -m pytest rendezvous/tests -q`; coturn checks in Docker by
+`rendezvous/tests/coturn-check.sh`. Deployment is a controller and JJ step, never the
+implementer's: JJ creates the second server and points `rv.nereussdr.com` (A and AAAA)
+at it (D38); the controller runs `rendezvous/deploy.sh` against the address JJ gives and
+checks the WebSocket, STUN on 3478 and 443, a test TURN allocation and certificate
+expiry from this Mac and from the Rock, in both address families (pending until
 observed).
 
 **Execution note (advisory):** opus. Networking, authorisation, an internet-facing
 service: flag for earlier review. Requires Part C.
 
-- [ ] **Step 1:** Registration with proof, introductions, nameplates and mailboxes,
-      with tests.
-- [ ] **Step 2:** Credentials, relay pairing and limits; packaging, `deploy.sh`,
-      `README.md` and the rendezvous document.
+- [ ] **Step 1:** The protocol document and conformance vectors; registration with
+      proof, introductions, nameplates and mailboxes, with tests.
+- [ ] **Step 2:** Credentials and coturn configuration with the Docker checks; limits,
+      deployment scripts and `README.md`.
 
 ## Task 27: Reaching the station through the rendezvous
 
@@ -2029,12 +2122,13 @@ server list; sessions survive a rendezvous outage) and §8.
 - Create: `src/core/session/RendezvousClient.{h,cpp}` (station and client roles),
   `src/core/session/IceConfiguration.{h,cpp}`
 - Modify: `src/core/session/media/LibDataChannelMediaTransport.{h,cpp}` (ICE servers
-  when the connection came through the rendezvous; host candidates otherwise),
+  when the connection came through the rendezvous; host candidates otherwise; the limits
+  below),
   `src/core/security/PairingWindow.cpp` (nameplate from the rendezvous),
   `src/core/daemon/DaemonApp.cpp`, `src/core/daemon/DaemonConfig.{h,cpp}`
   (`rendezvous_servers`, default `rv.nereussdr.com`; `relay = allow|deny`, default
   allow)
-- Modify: `src/core/session/StationClient.{h,cpp}`, `src/core/session/PairedStationRegistry.{h,cpp}`
+- Modify: `src/core/session/StationClient.{h,cpp}`, `src/gui/CoreTargetStore.{h,cpp}`
   (cached addresses per station)
 - Create: `ios/NereusKit/Sources/NereusLink/RendezvousClient.swift`,
   `ios/NereusKit/Sources/NereusLink/ConnectionAttempt.swift`
@@ -2056,8 +2150,16 @@ server list; sessions survive a rendezvous outage) and §8.
     no answer.
   - `ConnectionAttempt` (app) and its C++ twin record, per attempt, which paths were
     tried (this network, direct, relay) and how each ended, for the trouble screen.
-  - `PairedStation.endpoints` and the desktop registry keep the station's last good
-    addresses, tried first on the next connect.
+  - `PairedStation.endpoints` and the desktop's `CoreTargetStore` keep the station's last
+    good addresses, tried first on the next connect.
+  - ICE settings that respect the pinned libjuice's limits: libdatachannel uses one STUN
+    server and at most two TURN servers, and libjuice resolves one address per TURN host
+    preferring IPv4, so each rendezvous server publishes an IPv4-only and an IPv6-only
+    relay name and both slots carry them; credentials are fixed when gathering starts
+    (`disableAutoGathering`, then `gatherLocalCandidates` with the minted servers); the
+    MTU is 996 so TURN's 4-byte ChannelData header keeps datagrams at 1000 bytes; the
+    connect deadline covers gathering (up to 23.5 s) as well as the 39.5 s connectivity
+    timer.
 
 **Acceptance:**
 - A station with `remote_port` reachable only through NAT registers, receives an
@@ -2072,9 +2174,13 @@ server list; sessions survive a rendezvous outage) and §8.
   that was running before the stop continues.
 - IPv6 candidates are gathered and preferred when both ends have them.
 
-**Verification:** networking: integration on loopback with a rendezvous and coturn
-started by the test script (`tests/scripts/rendezvous-harness.sh`, which starts both on
-127.0.0.1 and ::1 with test secrets generated at run time), plus
+**Verification:** networking: integration on a traversal harness,
+`tests/scripts/traversal-harness.sh` (Linux network namespaces and nftables: an
+endpoint-independent NAT, a port-randomising NAT at both ends that forces the relay,
+UDP blocked, datagrams over about 1100 bytes dropped, an IPv6-only client behind NAT64
+and DNS64 with a CLAT, netem loss), with the rendezvous service and coturn started
+inside it and test secrets generated at run time; it runs in a Linux CI job under an
+opt-in ctest label `traversal`, never on the live server. Plus
 `cmake --build build --target tst_rendezvous_client tst_ice_configuration && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_rendezvous_client|tst_ice_configuration)$' --output-on-failure`
 and `ios/scripts/swift-test.sh --filter RendezvousClientTests`.
 Bench (controller and JJ, pending until observed): the phone on a cellular hotspot
@@ -2113,19 +2219,20 @@ decision brief's separate control-only ICE connection.
     a binary message whose first byte is `0x01` (more follows) or `0x02` (last), and
     reassembled within the same inbound caps as the WebSocket (station 1 MiB, client
     8 MiB); ping and pong are the single bytes `0x10` and `0x11` followed by a 4-byte id.
-  - The station's offer, relayed by the rendezvous, carries
-    `fingerprintSignature`: the identity key's signature over
-    `"NereusSDR dtls-binding v1\n" || the SHA-256 DTLS fingerprint in the SDP`; the
-    client verifies it before answering, and device authentication inside the session
-    uses that DTLS certificate's SHA-256 in place of the TLS certificate's.
+  - The control connection's DTLS certificate is the station's own persistent TLS
+    certificate (the one its identity key binds, Task 12), so the fingerprint the client
+    sees in the DTLS handshake must equal the bound certificate's; the client compares
+    them at the same gate it uses on the WebSocket, before anything is sent, and never
+    trusts the SDP's fingerprint alone, since it arrives through the rendezvous. Media
+    connections keep their one-off certificates.
 
 **Acceptance:**
 - A session over the data channel runs the full connect sequence and the whole session
   conformance suite (the runner gains a data-channel mode).
 - A 300 KiB settings snapshot crosses in chunks and reassembles exactly; a message over
   the cap is refused and the connection ends as the WebSocket's would.
-- An offer whose fingerprint signature does not verify is refused by the client before
-  any answer is sent.
+- A control connection whose DTLS certificate is not the bound station certificate is
+  refused by the client before any session message is sent.
 - The heartbeat declares the link dead after two missed pongs, as on the WebSocket.
 
 **Verification:** networking and authorisation: integration on loopback.
@@ -2136,73 +2243,95 @@ and `ios/scripts/swift-test.sh --filter DataChannelSessionTransportTests`.
 review. Requires Task 27.
 
 - [ ] **Step 1:** The transport with chunking and heartbeat, station and desktop.
-- [ ] **Step 2:** The signed fingerprint, the app transport, conformance in data-channel
-      mode, the document.
+- [ ] **Step 2:** The persistent DTLS certificate and its check, the app transport,
+      conformance in data-channel mode, the document.
 
-## Task 29: Racing paths, the relay floor and upgrading
+## Task 29: The web-only fallback, racing paths and upgrading
 
-**Requirements:** R-IOS-16 (direct first, relay last, what the phone tried),
-R-IOS-08 (pairing through the relay), pairing design §5.4 (both relay rungs, raced;
-path switches seamless; switchable off), remote design §12.1 (the stuck-PTT rule across a
-path switch, settled above).
+**Requirements:** R-IOS-16 (direct first, relay last, what the phone tried), R-IOS-08
+(pairing through the relay), pairing design §5.4 (both relay rungs, raced; path switches
+seamless; switchable off), remote design §12.1 (no path change while keyed), and the
+Core/GUI session's R5 decision D2 (the TLS/TCP 443 fallback is part of R5; its options
+are measured before one is chosen).
 
 **Files:**
-- Create: `src/core/session/RelayTransport.{h,cpp}` (the WebSocket to `/v1/relay` and
-  the local UDP loopback that carries ICE, DTLS and SRTP datagrams through it),
-  `src/core/session/PathRacer.{h,cpp}`
-- Create: `ios/NereusKit/Sources/NereusLink/RelayTransport.swift`, `PathRacer.swift`
-- Modify: `src/core/session/StationClient.{h,cpp}`, `src/core/session/StationServer.{h,cpp}`
-  (a same-device session arriving on a better path replaces the old one only while
-  unkeyed), `ios/NereusKit/Sources/NereusMedia/AudioJitterBuffer.swift` (the path switch
-  crossfade)
-- Modify: the link document (a "Paths" section)
-- Test: `tests/tst_relay_transport.cpp`, `tests/tst_path_racer.cpp`,
-  `ios/NereusKit/Tests/NereusLinkTests/PathRacerTests.swift`
+- Create: `docs/architecture/2026-09-23-relay-floor-measurement.md` (the comparison and
+  JJ's choice), `tests/scripts/floor-measurement.sh`
+- Create: `src/core/session/PathRacer.{h,cpp}`,
+  `ios/NereusKit/Sources/NereusLink/PathRacer.swift`
+- Create, for the option JJ chooses in Step 1: (B) patches to the fetched libjuice and
+  libdatachannel under `cmake/patches/`, carried by `cmake/NereusRemoteMedia.cmake` and
+  the app's vendoring script; (C) `src/core/session/TurnTlsShim.{h,cpp}` and
+  `ios/NereusKit/Sources/NereusLink/TurnTlsShim.swift`; (E)
+  `src/core/session/RelayTransport.{h,cpp}`,
+  `ios/NereusKit/Sources/NereusLink/RelayTransport.swift` and a `/v1/relay` role in the
+  rendezvous service
+- Modify: `src/core/session/StationClient.{h,cpp}` and `src/core/session/StationServer.{h,cpp}`
+  (a switchable transport beneath the session for make-before-break upgrades),
+  `src/core/session/media/DaemonMediaController.{h,cpp}` (a media `replace` operation),
+  the desktop's and the app's audio jitter buffers (dual receive across a switch), the
+  link document (a "Paths" section)
+- Test: `tests/tst_path_racer.cpp`, `tests/tst_session_transport_switch.cpp`,
+  `tests/tst_media_replace.cpp`, `ios/NereusKit/Tests/NereusLinkTests/PathRacerTests.swift`
 
 **Interfaces:**
-- Consumes: Tasks 26 to 28.
+- Consumes: Tasks 26 to 28; the traversal harness (Task 27).
 - Produces:
-  - The loopback: each end binds a UDP socket on 127.0.0.1; the peer connection is given
-    the remote candidate `127.0.0.1:<port> typ host`; each datagram crosses the
-    WebSocket as one binary frame `[channel byte: 0x01 control peer, 0x02 media peer][datagram]`,
-    at most 1001 bytes.
+  - The measured options, each usable in the App Store app (libnice is excluded: it
+    needs GLib, which is LGPL): (B) libjuice patched to speak TURN over TCP and TLS
+    (MPL-2.0, changed files published); (C) a local shim: libjuice speaks TURN/UDP to a
+    loopback socket and the shim carries STUN and ChannelData over TLS to coturn's TLS
+    listener on port 443; (E) our own relay over a WebSocket on the rendezvous service,
+    carrying the ICE, DTLS and SRTP datagrams in binary frames through a loopback UDP
+    socket at each end. Each is measured on the traversal harness with UDP blocked
+    except DNS and only TCP 443 open, at 0.5 % and 1 % loss and 30 and 80 ms delay:
+    inter-arrival p50, p95, p99 and maximum for keyed events, Opus and display frames;
+    the worst stall; cold time to first audio; recovery after a TCP reset; Pi 4 CPU at
+    145 and 520 kbit/s; artifact size; lines of code and patched upstream lines; and a
+    licence note for the station and for the app.
   - `PathRacer` starts, at once and together: direct TLS to each cached and LAN address
     (IPv6 first, IPv4 250 ms later), the rendezvous introduction with ICE (host, server
-    reflexive and TURN/UDP candidates), and, when the station allows the relay, the relay
-    floor; the first session to reach `snapshot.complete` wins and the others stop.
-  - Background upgrade: while connected through the relay, the racer retries the better
-    paths every 30 s; a better path's session is made as the same device (so the
-    station admits it without asking) and replaces the old one only while unkeyed; the
-    audio switches at a packet boundary once the new path has 200 ms buffered, with a
-    10 ms crossfade.
+    reflexive and TURN/UDP candidates), and, when the station allows the relay, the
+    chosen floor; the first session to reach `snapshot.complete` wins and the others
+    stop.
+  - Upgrades: libjuice nominates once and stops checking, so a better path is a second
+    peer connection. Control moves make-before-break beneath the session, through an
+    in-band barrier, with no close, re-authentication, snapshot or preemption. Media opens
+    a second peer, receives on both across the switch with duplicates dropped by RTP
+    timestamp, resumes the display on a keyframe, and retires the first with the new
+    `replace` operation (capability `mediaReplaceVersion = 1`). No upgrade starts while
+    keyed or while MOX's delay timers run.
 
 **Acceptance:**
-- With UDP blocked in the harness, the relay floor carries a full session: control,
-  audio and display, end-to-end encrypted (the relay's frames never contain the Opus or
-  JSON plaintext, checked in the test).
-- With every path open, the direct path wins; with only the relay, the relay wins and
-  the attempt record says what failed.
+- The measurement document holds every number above for each option, and JJ's choice
+  with its reason.
+- With UDP blocked, the chosen floor carries a full session (control, audio and
+  display), end-to-end encrypted: the relayed traffic never contains the Opus or JSON
+  plaintext (checked in the test).
+- With every path open the direct path wins; with only the floor, the floor wins and the
+  attempt record says what failed.
 - A relay-to-direct upgrade while listening leaves no audio gap over 40 ms and no
-  repeated audio over 40 ms (loopback measurement in the test); while keyed, no upgrade
-  starts until unkey.
-- While keyed, nothing here changes the path; severing a path while keyed, on every
-  rung, is Task 37's test.
-- `relay = deny` on the station stops the relay rung; the attempt record says the
-  station turned it off.
+  repeated audio over 40 ms, with no new snapshot and no re-authentication; while keyed,
+  no upgrade starts until unkey. Severing a path while keyed, on every rung, is Task 37's
+  test.
+- `relay = deny` on the station stops the relay rungs; the attempt record says the
+  station turned them off.
 
-**Verification:** networking and the transmit boundary: integration on loopback with
-the rendezvous harness; bench (controller and JJ, pending until observed): the phone on a
-cellular hotspot connects through each rung (forced by the station's settings and by
-blocking UDP on the phone's network), and an upgrade from relay to direct is heard
-without a glitch.
-`cmake --build build --target tst_relay_transport tst_path_racer && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_relay_transport|tst_path_racer)$' --output-on-failure`
-and `ios/scripts/swift-test.sh --filter PathRacerTests`.
+**Verification:** networking and the transmit boundary: the traversal harness, plus
+`cmake --build build --target tst_path_racer tst_session_transport_switch tst_media_replace && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_path_racer|tst_session_transport_switch|tst_media_replace)$' --output-on-failure`
+and `ios/scripts/swift-test.sh --filter PathRacerTests`. Bench (controller and JJ,
+pending until observed): the phone on a cellular hotspot connects through each rung
+(forced by the station's settings and by blocking UDP on the phone's network), and an
+upgrade from relay to direct is heard without a glitch.
 
 **Execution note (advisory):** opus. Networking and the transmit safety boundary: flag
-for earlier review. Requires Task 28.
+for earlier review. Step 1 is a measurement spike whose result goes to JJ; Step 2 waits
+for his choice. Requires Task 28.
 
-- [ ] **Step 1:** The relay transport and loopback, station and clients, with tests.
-- [ ] **Step 2:** The racer, the attempt record, the upgrade and crossfade, the document.
+- [ ] **Step 1:** Prototype the three options far enough to measure them; run the
+      measurement; write the comparison; the controller brings JJ the recommendation.
+- [ ] **Step 2:** Build the chosen floor, the racer, the make-before-break control
+      switch, the media replace with dual receive, and the document.
 
 ---
 
@@ -2440,6 +2569,9 @@ items 1 to 3 and 8, R-IOS-03 (the carrier stops before a handover).
 - `stopAllTx` with MOX on, with TUNE on, and with two-tone on each ends with all four
   off and `transmitStopped` emitted once with the message; with nothing keyed it does
   nothing and emits nothing.
+- Neither stop ever waits for a RADE end-of-over tail. JJ approved that tail in the
+  Core/GUI session on 2026-09-23, for building after R4: it is sent only on an operator's
+  release, lasts at most 1 s, and is skipped by any stop from this task.
 - The inline cite `// From Thetis console.cs:45324 [v2.10.3.15]` sits beside the port
   and the verifier scripts pass.
 
@@ -2486,11 +2618,14 @@ R-IOS-03 (the unkey-confirmed gate).
 - Produces:
   - `struct TxRefusal { QByteArray code; QString text; QByteArray fix; };` with codes
     `notReady` (snapshot not complete), `stationReceiveOnly`, `bandPlan`, `interlock`,
-    `ampStandby` (fix `operateAmp`), `paProtection`, `swr`, `otherDeviceKeyed`; every
+    `ampStandby` (fix `operateAmp`), `paProtection`, `swr`, `otherDeviceKeyed`,
+    `micNotReady` (Task 36); every
     `text` passes `OperatorWording::isPlain` (for example "The amplifier is in standby.
     Operate it, or change the interlock in Setup.").
   - `TxDecision StationTxGate::decide(const SessionPeerInfo&) const`: permitted only when
-    the peer's snapshot is complete, `remote_transmit = allow`, and its device is paired.
+    the peer declared `remoteTx` in its `hello` features (Task 4), its snapshot is
+    complete, `remote_transmit = allow`, and its device is paired. An older desktop that
+    reads the transmit flag without understanding it therefore never sees it true.
   - `class UnkeyGate : public QObject` with
     `void unkey(const QString& reason, QObject* context, std::function<void(UnkeyOutcome)> done)`,
     `UnkeyOutcome` being `Confirmed` (MOX reached receive: `MoxController::rxReady`) or
@@ -2501,8 +2636,9 @@ R-IOS-03 (the unkey-confirmed gate).
   - Capability `remoteTxVersion = 1`.
 
 **Acceptance:**
-- `txPermitted` is false until `snapshot.complete` has been sent to that peer, and false
-  for every peer when `remote_transmit = deny`, whose `TxRefusal` says so.
+- `txPermitted` is false until `snapshot.complete` has been sent to that peer, false for
+  a peer that did not declare `remoteTx`, and false for every peer when
+  `remote_transmit = deny`, whose `TxRefusal` says so.
 - Each refusal path in `MoxController` (`MoxController.cpp:494-523`) produces its
   `TxRefusal` code; the amplifier-standby interlock gives fix `operateAmp`.
 - `tx.setTxSlice` while keyed unkeys first, waits for `Confirmed`, then moves the TX
@@ -2531,19 +2667,40 @@ resumes after a reconnect), spec §4.6 item 7.
 - Modify: `src/core/session/SessionCommandDispatcher.{h,cpp}`, `src/core/session/MirrorPolicy.cpp`
   (`mox` and `tune` become station-to-client for remote writers; a write is refused with
   "Use the transmit button."), `src/core/PttSource.h` (`Remote`),
-  `src/models/RadioModel.{h,cpp}` (who keyed)
+  `src/models/RadioModel.{h,cpp}` (who keyed, the keying epoch),
+  `src/core/TciServer.{h,cpp}` and `src/core/TciProtocol.{h,cpp}` (transmit requests key
+  through the gates instead of being refused: on the station's own server as a
+  station-local source, and in a remote window, whose TCI server R-R3-42 built on
+  `codex/lane-b` at `c5ac13cc`, forwarded to the Core as `tx.key {trigger:"tci"}`;
+  `tests/tst_tci_tx_mutex.cpp` changes from "refused" to "keys through the gates")
 - Modify: `tests/data/link/v1/`, `surface.json`, the link document
-- Test: `tests/tst_remote_keying.cpp`
+- Test: `tests/tst_remote_keying.cpp`, `tests/tst_tci_tx_mutex.cpp`,
+  `tests/tst_tci_remote_window.cpp`
 
 **Interfaces:**
-- Consumes: `StationTxGate`, `TxRefusal` (Task 34).
+- Consumes: `StationTxGate`, `TxRefusal` (Task 34); the remote window's TCI server
+  (R-R3-42, merged into `codex/integrate-r2-main` before this task; the controller checks).
 - Produces:
-  - Verbs under `remoteTxVersion = 1`: `tx.key {trigger}`, `tx.unkey {}`, `tx.tune {on}`,
-    `tx.twoTone {on}`, `tx.keepalive {sequence}`, where `trigger` is `"screen"`,
-    `"headset"`, `"bluetooth"` or `"actionButton"`. A refused `tx.key` returns
-    `accepted:false` with result values `code`, `text`, `fix` from `TxRefusal`.
+  - Verbs under `remoteTxVersion = 1`: `tx.key {trigger}`, `tx.unkey {epoch}`,
+    `tx.tune {on}`, `tx.twoTone {on}`, where `trigger` is `"screen"`, `"headset"`,
+    `"bluetooth"`, `"actionButton"` or `"tci"`. An accepted `tx.key` returns a keying
+    `epoch` (uint32, advancing); a refused one returns `accepted:false` with result values
+    `code`, `text`, `fix` from `TxRefusal`. Key and unkey events are sent three times,
+    and the station acts once per epoch, so a single lost packet never stalls them
+    (pairing design §9.6); after a safety stop the station refuses anything carrying the
+    old epoch, so a stale key can never re-key.
+  - `tx.unkey` is a release: the station stops transmitting now, except that once the
+    RADE end-of-over (built after R4) exists it may finish that tail (at most 1 s, shown
+    as `txEnding`, Task 39).
+  - VOX: a device may arm the station's VOX (`voxEnabled`, Task 40); VOX keying is
+    attributed to it and covered by the same watchdog, starvation and time-out.
+  - TCI transmit: the station's own TCI server (R-R3-48) keys as a station-local source
+    (`PttSource`'s existing TCI value, the station's own time-out setting); a remote
+    window's TCI server forwards an app's transmit as `tx.key {trigger:"tci"}` with its
+    audio on the mic line (Task 36).
   - `PttSource::Remote`, and `RadioModel::keyedBy()` returning
-    `{deviceId, deviceName, deviceKind, trigger}` (empty when keyed at the station).
+    `{deviceId, deviceName, deviceKind, trigger, epoch}` (empty when keyed at the
+    station).
 
 **Acceptance:**
 - `tx.key` before `snapshot.complete` is refused with `notReady`; after it, it keys the
@@ -2553,6 +2710,11 @@ resumes after a reconnect), spec §4.6 item 7.
   `tx.key` (no replay, no resume).
 - A second device cannot key while another device holds the session (it has no session;
   the takeover rules of Task 41 apply).
+- A key or unkey sent three times acts once; a `tx.unkey` or keepalive carrying an epoch
+  older than the current one is ignored; after a watchdog stop, a delayed key from the
+  lost connection is refused.
+- A TCI transmit request to the station's own TCI server keys through the same gates;
+  one arriving through a remote window is attributed to that window's device.
 
 **Verification:** the transmit boundary: invariant tests first.
 `cmake --build build --target tst_remote_keying tst_link_conformance_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_remote_keying|tst_link_conformance_session)$' --output-on-failure`.
@@ -2564,53 +2726,82 @@ resumes after a reconnect), spec §4.6 item 7.
 
 ## Task 36: The microphone uplink
 
-**Requirements:** R-IOS-13, remote design §8.2 and §8.3, spec §4.1 (microphone capture
-and its Opus uplink on the phone; the station's PROC, EQ and leveler shape it), and
-parity for the desktop's remote window.
+**Requirements:** R-IOS-13, remote design §8.2 and §8.3 (the TX jitter buffer shorter
+than the starvation deadline; drift correction both ways; high-rate or lossless uplink
+when the link allows), spec §4.1 (microphone capture and its Opus uplink on the phone;
+the station's PROC, EQ and leveler shape it), and parity for the desktop's remote
+window.
 
 **Files:**
 - Modify: `src/core/session/media/LibDataChannelMediaTransport.{h,cpp}` (a second audio
   line, `mid "mic"`, receive-only at the station, offered only to a peer whose media
   start carries `remoteTxVersion`), `src/core/session/media/DaemonMediaController.{h,cpp}`
-- Create: `src/core/session/media/RemoteMicReceiver.{h,cpp}` (RTP, Opus decode, the TX
-  jitter buffer), `src/core/audio/RemoteMicSource.{h,cpp}` (a `TxMicRouter` source)
-- Modify: `src/core/audio/CompositeTxMicRouter.{h,cpp}` (`MicSource::Remote`, selected
-  only while a remote device holds transmit)
-- Modify: `src/gui/RemoteMediaController.{h,cpp}` (the desktop remote window captures its
-  microphone and sends it while it holds transmit)
-- Modify: the media control document (the mic line), `tests/data/link/v1/media/`
-- Test: `tests/tst_remote_mic_receiver.cpp`, `tests/tst_remote_mic_source.cpp`,
-  `tests/tst_media_transport.cpp`
+- Create: `src/core/session/media/RemoteMicReceiver.{h,cpp}` (RTP, Opus or L16 decode,
+  the TX jitter buffer, rate matching with the existing `RemoteAudioRateMatcher`)
+- Modify: `src/core/TxWorkerThread.{h,cpp}` (a remote ring with its own branch beside the
+  VAX and PC branches, in the normal path and the RADE path; the TCI branch returns
+  before RADE, so it is not reused), `src/models/RadioModel.{h,cpp}` (the station's mic
+  source follows the remote device while it holds transmit or has VOX armed)
+- Modify: `src/core/audio/CaptureSupervisor.{h,cpp}` and `src/gui/RemoteMediaController.{h,cpp}`
+  (the desktop remote window captures the microphone chosen in Audio > Devices through
+  the existing capture helper and sends it; today the supervisor serves local sessions
+  only)
+- Modify: the media control document (the mic line and the monitor), `tests/data/link/v1/media/`
+- Test: `tests/tst_remote_mic_receiver.cpp`, `tests/tst_tx_worker_remote_ring.cpp`,
+  `tests/tst_media_transport.cpp`, `tests/tst_remote_media_controller.cpp`
 
 **Interfaces:**
-- Consumes: Task 35; `TxMicRouter::pullSamples` (`TxMicRouter.h:53-68`).
+- Consumes: Task 35; the `P2FakeRadio` mic packets that drive the TX pump in tests.
 - Produces:
   - The mic line: Opus, payload type 111, `a=fmtp:111 minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=24000`,
-    mono 48 kHz, 20 ms frames (the app's `OpusEncoder.Profile.microphone`).
+    mono 48 kHz, 20 ms frames (the app's `OpusEncoder.Profile.microphone`); for the
+    desktop remote window only, also the L16 format of `PcmAudioCodec`, offered when the
+    link can carry it, as receive audio does.
   - `RemoteMicReceiver`: target depth 60 ms, maximum 120 ms (older packets dropped and
-    counted), Opus loss concealment and in-band FEC recovery, and signal
-    `starved(bool)` after 250 ms without audio while a remote device holds transmit.
-  - `MicSource::Remote` in `CompositeTxMicRouter`.
+    counted); Opus loss concealment and in-band FEC recovery; rate matching to the
+    radio's clock, so a sender up to 200 ppm off never drifts the buffer empty or full;
+    signal `starved(bool)` after 250 ms without audio while a remote device holds
+    transmit; the ring cleared on unkey.
+  - On `tx.key` in a voice mode the station raises MOX once the uplink buffer reaches its
+    60 ms target; if no microphone audio arrives within 250 ms it refuses with
+    `micNotReady` (Task 34's code). TUNE and two-tone need no microphone and key at once.
+  - VOX from a remote device: while the device has VOX armed (`voxEnabled` on and the
+    session permitted to transmit) its client streams the microphone, unkeyed, and the
+    station's VOX keys from it with `PttSource::Vox`, attributed to that device.
+  - The monitor: with MON on, the station's audio sent to the remote device carries the
+    transmit monitor while keyed, as the local speakers do (the phone plays it in
+    headphones only, Task 55).
+  - TCI transmit through a remote window: an app on the operator's computer that keys
+    through the window's TCI server has its TCI transmit audio sent on the mic line in
+    place of the microphone, keyed with `tx.key {trigger:"tci"}` (Task 35).
 
 **Acceptance:**
-- A 1 kHz tone sent from a test client reaches `TxMicRouter` at the right level within
-  the buffer's latency, with no discontinuity over 10 ms across 1 % packet loss.
+- A 1 kHz tone sent from a test client reaches the TX channel at the right level within
+  the buffer's latency, in SSB and in RADE, with no discontinuity over 10 ms across 1 %
+  packet loss.
+- A sender 200 ppm fast and one 200 ppm slow each run 10 minutes keyed with no false
+  starvation and no buffer overflow.
 - Older peers get exactly today's SDP (golden comparison).
-- The router uses the remote source only while the remote device is keyed; on unkey the
-  operator's configured source returns.
-- The desktop remote window sends its microphone while it holds transmit and never
-  otherwise (checked by counting packets).
+- The station uses the remote ring only while the remote device holds transmit or has
+  VOX armed; on unkey the operator's configured source returns and the ring is empty.
+- The desktop remote window sends its chosen microphone while it holds transmit or has
+  VOX armed, and never otherwise (checked by counting packets).
+- With MON on and keyed, the remote audio carries the monitor at the level the local
+  speakers would play it.
 
-**Verification:** media protocol change: unit plus real transport loopback.
-`cmake --build build --target tst_remote_mic_receiver tst_remote_mic_source tst_media_transport tst_remote_media_controller && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_remote_mic_receiver|tst_remote_mic_source|tst_media_transport|tst_remote_media_controller)$' --output-on-failure`.
-Bench (JJ, pending until observed): speech from the desktop remote window on air,
-shaped by the station's processing.
+**Verification:** a media protocol change and the transmit boundary: unit plus real
+transport loopback.
+`cmake --build build --target tst_remote_mic_receiver tst_tx_worker_remote_ring tst_media_transport tst_remote_media_controller && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_remote_mic_receiver|tst_tx_worker_remote_ring|tst_media_transport|tst_remote_media_controller)$' --output-on-failure`.
+Bench (JJ, pending until observed): speech from the desktop remote window on air, shaped
+by the station's processing, in SSB and RADE; VOX from the remote window.
 
-**Execution note (advisory):** opus. Flag for earlier review with the other transmit
-tasks. Requires Task 35.
+**Execution note (advisory):** opus. The transmit safety boundary: flag for earlier
+review with the other transmit tasks. Requires Task 35.
 
-- [ ] **Step 1:** The mic line and the receiver with the jitter buffer.
-- [ ] **Step 2:** The router source and the desktop window's capture.
+- [ ] **Step 1:** The mic line, the receiver with its buffer and rate matching, and the
+      remote ring in both TX paths.
+- [ ] **Step 2:** Keying on a filled buffer, VOX, the monitor, TCI audio, and the desktop
+      window's capture through the helper.
 
 ## Task 37: The watchdog and microphone starvation
 
@@ -2629,9 +2820,16 @@ design §9.7, spec §4.6 items 1 and 2, R-IOS-13.
 **Interfaces:**
 - Consumes: Tasks 33 to 36; the transports of Part E.
 - Produces:
-  - `RemoteTxWatchdog` armed while a remote device holds MOX or TUNE; each
-    `tx.keepalive` re-arms it; at 400 ms without one it calls
+  - Keepalives: `tx.keepalive {sequence, epoch}` every 100 ms while a device holds
+    transmit or has VOX armed. On a data-channel path they travel on their own
+    unordered, never-retransmitted channel labelled `tx`, so a lost packet is simply
+    superseded rather than stalling the reliable control channel behind a
+    retransmission; on the LAN WebSocket they ride the session.
+  - `RemoteTxWatchdog` armed while a remote device holds MOX or TUNE or has VOX armed;
+    each keepalive with the current epoch re-arms it; at 400 ms without one it calls
     `stopAllTx("The link to <device> went quiet, so the station stopped transmitting.")`.
+    It disarms at the device's release, so a RADE end-of-over tail (built after R4) never
+    looks like a lost link.
   - `StarvationPolicy::actionFor(DSPMode)` returning `KeepKeyed` or `Unkey` per the table
     above; on `starved(true)` an `Unkey` mode calls
     `stopAllTx("No microphone audio arrived from <device>, so the station stopped transmitting.")`.
@@ -2641,7 +2839,12 @@ design §9.7, spec §4.6 items 1 and 2, R-IOS-13.
   missed at the end drops it between 400 and 410 ms after the last; the connection
   closing drops it at once.
 - For each of the six unkey modes starvation unkeys at 250 ms; for the eight keep modes
-  it does not, and transmit continues until the time-out or unkey.
+  it does not, and transmit continues until the time-out or unkey. DSB is a keep mode
+  because WDSP's DSB modulator adds no carrier (`ammod.c`, mode 1), so silence there
+  sends nothing. TUNE and two-tone are exempt: they use no microphone.
+- Keepalives lost at 5 % on the `tx` channel never trip the watchdog in 10 minutes of
+  simulated keying; the same loss on a reliable channel is shown to stall (the test
+  records why the separate channel exists).
 - `tst_tx_link_loss_each_path` keys over each path (the WebSocket; the data channel on a
   direct ICE pair; through TURN/UDP; through the relay floor, using the Part E harness)
   and severs it: transmit stops within 500 ms of the last keepalive on every path.
@@ -2649,7 +2852,7 @@ design §9.7, spec §4.6 items 1 and 2, R-IOS-13.
 **Verification:** the transmit safety boundary: invariant tests first; the each-path
 test is the remote design's mandatory one.
 `cmake --build build --target tst_remote_tx_watchdog tst_starvation_policy tst_tx_link_loss_each_path && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_remote_tx_watchdog|tst_starvation_policy|tst_tx_link_loss_each_path)$' --output-on-failure`
-(the each-path test runs `tests/scripts/rendezvous-harness.sh` first).
+(the each-path test runs inside `tests/scripts/traversal-harness.sh`).
 Bench: Task 70's on-air rows.
 
 **Execution note (advisory):** opus. The transmit safety boundary: flag for earlier
@@ -2734,7 +2937,9 @@ R-IOS-21 (the time left), spec §5.5 items 5 and 8.
 - Produces: object key `txState`, class `TransmitState`, all station to client:
   `keyed`, `tuning`, `twoTone`, `txSliceId`, `keyedByName`, `keyedByKind`,
   `keyedTrigger`, `keyedSinceMs` (station clock), `timeOutRemainingSeconds`,
-  `forwardPowerWatts`, `swr`, `micLevelDb`, `stopReason` (`""`, `linkLost`,
+  `forwardPowerWatts`, `reflectedPowerWatts`, `swr`, `alcDb`, `micLevelDb`,
+  `txEnding` (true only during a RADE end-of-over tail, once built), `stopReason`
+  (`""`, `linkLost`,
   `micStarved`, `timeOut`, `takenOver`, `revoked`, `station`), `stopText`, `stopSerial`
   (advances on each stop). Updated every 100 ms while keyed and on change otherwise.
   Capability `txStateVersion = 1`.
@@ -2744,7 +2949,8 @@ R-IOS-21 (the time left), spec §5.5 items 5 and 8.
   loop); while unkeyed only changes are sent.
 - A time-out, a link loss, a starvation and the revoking of the keyed device (Task 13)
   each advance `stopSerial` once with the right `stopReason` and text.
-- The desktop remote window's TX meters show forward power and SWR from `txState`.
+- The desktop remote window's TX meters show forward and reflected power, SWR and ALC
+  from `txState`.
 
 **Verification:** unit and conformance.
 `cmake --build build --target tst_tx_meter_pump tst_transmit_state_facade tst_link_conformance_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_tx_meter_pump|tst_transmit_state_facade|tst_link_conformance_session)$' --output-on-failure`.
@@ -2850,8 +3056,10 @@ D21, D22, spec §4.5.
 - Only a paired, authenticated device ever receives `session.held`.
 - A holder stopped by a takeover sees `txState.stopReason` `takenOver`, with the taker's
   name in `stopText`, before its connection ends.
-- The desktop remote window shows the question and the "took over" notice with the
-  holder's name and time; screenshots per `ui-verification`.
+- The desktop remote window shows the question, the "took over" notice with the taker's
+  name and time, and Take it back, which asks the same question the other way; this
+  replaces the R3 behaviour where any authenticated peer preempts and the displaced
+  window gets a permanent refusal. Screenshots per `ui-verification`.
 
 **Verification:** authorisation and the transmit boundary: invariant tests first.
 `cmake --build build --target tst_station_takeover tst_link_conformance_session tst_station_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_takeover|tst_link_conformance_session|tst_station_session)$' --output-on-failure`.
@@ -2975,7 +3183,8 @@ page, and a station test proves each station setting on it takes effect live.
 * `gate`: optional `{"capability": "<name>", "min": N}`, `{"transmit": true}` (greyed
   with the transmit reason until permitted), `{"board": "<capability flag>"}`.
 * A page or control the desktop has not built yet is not described, so the phone does
-  not show it (D41): today General's Startup & Preferences, UI Scale & Theme and
+  not show it (D41). The unfinished controls plan's single list of unbuilt features
+  (R-R3-49) is the source, the same list the desktop hides by: today General's Startup & Preferences, UI Scale & Theme and
   Navigation (the phone has its own Navigation page, Task 58); DDC Routing; DSP's CW,
   AM/SAM and FM; CAT's Serial Ports, TCP/IP CAT and MIDI Control; Keyboard; all of Meter
   Styles but its one working toggle; Gradients; Diagnostics' Signal Generator and
@@ -3542,9 +3751,12 @@ and fix, never resuming after a reconnect), spec §5.1 items 12 and 13, §5.2 it
   the transmit controls (Task 40), the accessory verbs (Task 42).
 - Produces:
   - `actor PttController` with states `.idle`, `.keying`, `.keyed(since:)`,
-    `.unkeying`, `.refused(TxRefusalInfo)`, `.linkLost`; `func tap(trigger:)` toggles;
-    while keyed it sends `tx.keepalive` every 100 ms; after any reconnect it is `.idle`
-    and never keys by itself.
+    `.ending`, `.unkeying`, `.refused(TxRefusalInfo)`, `.linkLost`; `func tap(trigger:)`
+    toggles; it starts the microphone at the tap so the station's buffer is filling when
+    `tx.key` arrives; while keyed, or while VOX is armed, it sends `tx.keepalive` every
+    100 ms with the current epoch; `.ending` shows "TX ending" on the PTT while
+    `txState.txEnding` is true; after any reconnect it is `.idle` and never keys by
+    itself.
   - The toolbar left to right: RX panel, speaker mute, Slice A, Pan 1, Display, the link
     dot with its round-trip time, TX panel. The RX panel: AF gain, AGC, filter presets,
     the noise buttons, squelch. The TX panel: RF and tune power, TUNE, MOX, the amp's
@@ -3600,7 +3812,8 @@ the background), §5.4 items 6 to 10.
 - Produces: `AudioSessionController` configuring `.playAndRecord` with
   `.defaultToSpeaker` and `.allowBluetoothA2DP` (not `.allowBluetooth`, so AirPods stay
   in high-quality output and the microphone stays on the iPhone), mode `.default` (no
-  voice processing); `MicCapture.start()` on key and `stop()` on unkey; the band's
+  voice processing); `MicCapture.start()` at the PTT tap and while VOX is armed, and
+  `stop()` on unkey or when VOX is disarmed; the band's
   playback muted while keyed and MON routed only when the output is headphones (both
   settings on by default); the quality choice sent as the audio control's `opusBitrate`.
 
@@ -4282,6 +4495,13 @@ client.
     needs updating" naming both; a station speaking 1 and 2 serves a phone speaking 1.
 14. Screenshots of every screen in spec §5 taken on the device and compared side by side
     with the board's pictures, per `ui-verification`.
+15. The station killed (`kill -9 nereusd`) and its Ethernet pulled while keyed from the
+    phone: each radio's own watchdog stops the carrier, timed on an ANAN-G2 and an HL2.
+16. PureSignal calibrating and correcting while keyed from the phone on the ANAN-G2.
+17. TCI transmit from an app on the operator's computer through a remote window, and
+    from a station device through the station's own TCI server.
+18. A 30-minute keyed session from the phone (time-out set to off for the run) with no
+    false starvation from clock drift.
 
 **Verification:** bench and device, by JJ with the controller; every row stays pending
 until a device shows it. The controller confirms which device answers before any step
