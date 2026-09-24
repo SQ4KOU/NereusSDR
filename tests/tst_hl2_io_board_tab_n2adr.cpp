@@ -255,6 +255,39 @@ private slots:
 
         QCOMPARE(spy.count(), 0);
     }
+
+    // R-R3-46: in a remote window the matrix is the Core's, which the Core
+    // reconciled at its own connect; restoring the saved switch sets the
+    // checkbox only and leaves the matrix (so nothing is written to the
+    // Core just for opening Setup). A toggle still emits the switch for
+    // HardwarePage to write through, and the Core applies the preset.
+    void remote_restore_sets_the_switch_and_leaves_the_matrix()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+#ifdef NEREUS_BUILD_TESTS
+        remote.setBoardForTest(HPSDRHW::HermesLite);
+#endif
+        Hl2IoBoardTab tab(&remote);
+        QVERIFY(!ocMatrixHasAnyPinSet(remote.ocMatrix()));
+        QSignalSpy spy(&tab, &Hl2IoBoardTab::settingChanged);
+        QSignalSpy matrix(&remote.ocMatrixMutable(), &OcMatrix::changed);
+
+        QMap<QString, QVariant> settings;
+        settings.insert(QStringLiteral("n2adrFilter"), QVariant(QStringLiteral("True")));
+        tab.restoreSettings(settings);
+        QCOMPARE(spy.count(), 0);
+        QCOMPARE(matrix.count(), 0);
+        QVERIFY(!ocMatrixHasAnyPinSet(remote.ocMatrix()));
+
+        // Local direct mode is unchanged: the restore reconciles.
+        RadioModel local;
+#ifdef NEREUS_BUILD_TESTS
+        local.setBoardForTest(HPSDRHW::HermesLite);
+#endif
+        Hl2IoBoardTab localTab(&local);
+        localTab.restoreSettings(settings);
+        QVERIFY(ocMatrixHasAnyPinSet(local.ocMatrix()));
+    }
 };
 
 QTEST_APPLESS_MAIN(TstHl2IoBoardTabN2adr)

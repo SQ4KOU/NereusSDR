@@ -885,6 +885,7 @@ set(CORE_SOURCES
     src/core/HermesLiteBandwidthMonitor.cpp
     src/core/ModelPaths.cpp
     src/core/accessories/AlexController.cpp
+    src/core/accessories/AlexAntennaFacade.cpp
     src/core/accessories/ApolloController.cpp
     src/core/accessories/N2adrPreset.cpp
     src/core/accessories/PennyLaneController.cpp

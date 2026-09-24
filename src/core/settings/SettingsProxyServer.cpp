@@ -55,6 +55,10 @@
 //                                    the inbound write path. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46: hardware/<mac>/ writes for
+//                                    any radio but the connected one are
+//                                    refused. AI-assisted transformation
+//                                    via Anthropic Claude Code.
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the step
 //                                    attenuator range check removed: its
 //                                    keys are refused before it as the
@@ -152,9 +156,41 @@ QMap<QString, QString> SettingsProxyServer::buildSnapshot(const QString& connect
     return out;
 }
 
+QString SettingsProxyServer::otherRadioRefusal(const QString& key) const
+{
+    if (!m_connectedMac) {
+        return {};
+    }
+    static const QString kHwPrefix = QStringLiteral("hardware/");
+    if (!key.startsWith(kHwPrefix, Qt::CaseInsensitive)) {
+        return {};
+    }
+    const int end = key.indexOf(QLatin1Char('/'), kHwPrefix.size());
+    const QString segment = key.mid(kHwPrefix.size(),
+                                    end < 0 ? -1 : end - kHwPrefix.size());
+    // hardware/oc/ is a literal segment for every radio (OcOutputsHfTab),
+    // snapshotted alongside the connected MAC's keys.
+    if (segment.compare(QLatin1String("oc"), Qt::CaseInsensitive) == 0) {
+        return {};
+    }
+    const QString connected = m_connectedMac();
+    if (!connected.isEmpty() && segment.compare(connected, Qt::CaseInsensitive) == 0) {
+        return {};
+    }
+    return QStringLiteral("These settings are for a radio this Core is not connected to.");
+}
+
 SettingsApplyResult SettingsProxyServer::applyInboundWrite(const QString& key, const QVariant& value,
                                                            const QString& originTag)
 {
+    // R-R3-46: the Core's hardware settings are its connected radio's only.
+    if (const QString refusal = otherRadioRefusal(key); !refusal.isEmpty()) {
+        SettingsApplyResult result;
+        result.accepted = false;
+        result.reason = refusal;
+        result.restoredValue = m_appSettings.value(key);
+        return result;
+    }
     if (isModelOwnedDspSettingsKey(key)) {
         SettingsApplyResult result;
         result.reason = modelOwnedSettingsRefusal(key);

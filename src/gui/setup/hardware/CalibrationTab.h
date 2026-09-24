@@ -25,6 +25,9 @@
 //                  backed by CalibrationController model (Phase 3P-G).
 //                  J.J. Boyd (KG4VCF), with AI-assisted transformation via
 //                  Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: transmit permission for TX Display and
+//                 Volts/Amps. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -174,6 +177,11 @@ public:
     void populate(const RadioInfo& info, const BoardCapabilities& caps);
     void restoreSettings(const QMap<QString, QVariant>& settings);
 
+    // R-R3-46: TX Display Cal and Volts/Amps Calibration (the PA's
+    // current reading) follow the transmit permission with its reason; the
+    // frequency and level calibration stay live. Always permitted locally.
+    void setTransmitPermitted(bool permitted, const QString& reason);
+
 #ifdef NEREUS_BUILD_TESTS
     // Test seam: counts QGroupBox children of the main layout.
     int groupBoxCountForTest() const;
@@ -238,6 +246,8 @@ private:
 
     // Echo-loop guard: prevents model->UI update from triggering UI->model write
     bool m_updatingFromModel{false};
+    QWidget* m_txDisplayGroup{nullptr};
+    QWidget* m_vaCalGroup{nullptr};
 };
 
 } // namespace NereusSDR

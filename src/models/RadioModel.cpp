@@ -85,6 +85,9 @@
 //                 propagation to TransmitModel::setStepAttenuatorController
 //                 inside RadioModel::setStepAttController.  J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: the `alexAntennas` object, the Core's
+//                 hardware apply step and the I/O board probe request. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -312,6 +315,7 @@ warren@wpratt.com
 #include "core/dsp/DspAssetService.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/StepAttenuatorFacade.h"
+#include "core/accessories/AlexAntennaFacade.h"
 #include "core/PureSignal.h"
 #include "core/PsFeedbackChannel.h"
 #include "core/StepAttenuatorController.h"
@@ -645,6 +649,13 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_pureSignalSettings = new PureSignalSettings(this);
     m_pureSignalFacade = new PureSignalSessionFacade(this, nullptr, this);
     m_stepAttFacade = new StepAttenuatorFacade(this, this);
+    // R-R3-46 (radioHardwareVersion 2): the Alex antenna settings as one
+    // mirrored object. A Local model (the Core, or a local window) binds it
+    // to its own controller; a Remote model holds the Core's values.
+    m_alexAntennaFacade = new AlexAntennaFacade(this);
+    if (role == Role::Local) {
+        m_alexAntennaFacade->bindController(&m_alexController);
+    }
     if (role == Role::Local) {
         m_pureSignalSettings->load(AppSettings::instance().lastConnected());
         connect(m_pureSignalSettings, &PureSignalSettings::configurationChanged, this, [this]() {
@@ -17337,6 +17348,145 @@ void RadioModel::flushRemoteDspOptionsApply()
             emit dspChangeMeasured(elapsed);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-46: scheduleRemoteHardwareApply / flushRemoteHardwareApply
+//
+// A Hardware Config write from a remote window lands in the Core's
+// AppSettings through StationServer. The controllers that hold hardware
+// settings in memory (the OC pin matrix, the calibration controller, the
+// HL2 options) read their keys only when the radio connects, so without
+// this the radio would not change until the next connect, and a later
+// save of the stale in-memory copy would overwrite the window's change.
+// This reloads each such controller from the saved keys; the N2ADR switch
+// re-runs the same preset the connect path runs. What is applied is
+// unchanged; only the moment is new, as with the DSP > Options apply.
+//
+// NereusSDR-original infrastructure; no Thetis source ported here.
+// ---------------------------------------------------------------------------
+
+// Coalescing window for remote hardware writes. One OC pin click in a
+// window saves the whole matrix (OcMatrix::save writes every band and pin),
+// so a burst of keys should cost one reload. Same window as the DSP >
+// Options apply above.
+static constexpr int kHardwareApplyCoalesceMs = 50;
+
+void RadioModel::scheduleRemoteHardwareApply(const QString& key)
+{
+    if (!ownsLocalDsp()) {
+        return;
+    }
+    const QString mac = currentRadioMac();
+    if (mac.isEmpty()) {
+        return;
+    }
+    const QString prefix = QStringLiteral("hardware/%1/").arg(mac);
+    if (!key.startsWith(prefix, Qt::CaseInsensitive)) {
+        return;
+    }
+    const QString rest = key.mid(prefix.size());
+    QString reload;
+    if (rest.startsWith(QLatin1String("oc/"))) {
+        reload = QStringLiteral("oc");
+    } else if (rest == QLatin1String("hl2IoBoard/n2adrFilter")) {
+        reload = QStringLiteral("n2adr");
+    } else if (rest.startsWith(QLatin1String("cal/"))) {
+        reload = QStringLiteral("cal");
+    } else if (rest.startsWith(QLatin1String("hl2/"))) {
+        reload = QStringLiteral("hl2");
+    } else {
+        return;
+    }
+    m_pendingHardwareReloads.insert(reload);
+
+    if (m_hardwareApplyTimer == nullptr) {
+        m_hardwareApplyTimer = new QTimer(this);
+        m_hardwareApplyTimer->setSingleShot(true);
+        connect(m_hardwareApplyTimer, &QTimer::timeout,
+                this, &RadioModel::flushRemoteHardwareApply);
+    }
+    // Trailing edge from the first key of a burst (see the DSP > Options
+    // apply above).
+    if (!m_hardwareApplyTimer->isActive()) {
+        m_hardwareApplyTimer->start(kHardwareApplyCoalesceMs);
+    }
+}
+
+void RadioModel::flushRemoteHardwareApply()
+{
+    if (m_pendingHardwareReloads.isEmpty()) {
+        return;
+    }
+    const QSet<QString> reloads = m_pendingHardwareReloads;
+    m_pendingHardwareReloads.clear();
+    const QString mac = currentRadioMac();
+    if (mac.isEmpty()) {
+        return;
+    }
+    const auto observe = [this](const QString& name) {
+        if (m_hardwareApplyObserverForTest) {
+            m_hardwareApplyObserverForTest(name);
+        }
+    };
+
+    // The OC pin matrix first, so an N2ADR switch in the same burst lands
+    // on top of the pins the window saved, as it does in the window.
+    if (reloads.contains(QStringLiteral("oc"))) {
+        m_ocMatrix.setMacAddress(mac);
+        m_ocMatrix.load();
+        observe(QStringLiteral("oc"));
+    }
+    // The same reconcile the connect path runs (see connectToRadio):
+    // the N2ADR switch on the Core's HL2 fills or clears the filter-board
+    // pins, and the matrix is saved as the connect path saves it.
+    if (reloads.contains(QStringLiteral("n2adr")) && boardCapabilities().hasIoBoardHl2) {
+        const bool n2adrOn = AppSettings::instance()
+                                 .hardwareValue(mac, QStringLiteral("hl2IoBoard/n2adrFilter"),
+                                                QStringLiteral("True"))
+                                 .toString() == QStringLiteral("True");
+        m_ocMatrix.setMacAddress(mac);
+        applyN2adrPreset(m_ocMatrix, n2adrOn);
+        m_ocMatrix.save();
+        observe(QStringLiteral("n2adr"));
+    }
+    // The P2 codec reads effectiveFreqCorrectionFactor() for every
+    // high-priority command, so the reloaded factor goes out with the next.
+    if (reloads.contains(QStringLiteral("cal"))) {
+        m_calController.setMacAddress(mac);
+        m_calController.load();
+        // As the connect path does: a radio whose PA forward-power table
+        // was never saved gets its board's factory table, so a reload does
+        // not leave the Core without one.
+        // Source: Thetis console.cs:6691-6724 CalibratedPAPower [v2.10.3.13]
+        if (m_calController.paCalProfile().boardClass == PaCalBoardClass::None) {
+            m_calController.setPaCalProfile(
+                PaCalProfile::defaults(paCalBoardClassFor(m_hardwareProfile.model)));
+        }
+        observe(QStringLiteral("cal"));
+    }
+    if (reloads.contains(QStringLiteral("hl2"))) {
+        m_hl2Options.setMacAddress(mac);
+        m_hl2Options.load();
+        observe(QStringLiteral("hl2"));
+    }
+}
+
+RadioModel::IoBoardProbeOutcome RadioModel::requestIoBoardProbe()
+{
+    if (m_role == Role::Remote) {
+        if (m_station == nullptr) {
+            return {false, QStringLiteral("Connect to the Core to probe the I/O board.")};
+        }
+        const IStationLink::CommandOutcome outcome = m_station->requestIoBoardProbe();
+        return {outcome.sent, outcome.reason};
+    }
+    // The same call Setup's Probe button makes on a local radio.
+    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+        p1->requestIoBoardProbe();
+        return {true, {}};
+    }
+    return {false, QStringLiteral("The radio is not connected, so there is no I/O board to probe.")};
 }
 
 // Phase 3Q Sub-PR-4 D.3 — Segment hover tooltip.

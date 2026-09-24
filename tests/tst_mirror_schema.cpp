@@ -46,6 +46,7 @@
 #include "core/session/PureSignalSessionFacade.h"
 #include "models/NotchModel.h"
 #include "core/StepAttenuatorFacade.h"
+#include "core/accessories/AlexAntennaFacade.h"
 #include "models/PureSignalSettings.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
@@ -856,7 +857,8 @@ private:
                  &PureSignalSessionFacade::staticMetaObject,
                  &DspAssetService::staticMetaObject,
                  &NotchModel::staticMetaObject,
-                 &StepAttenuatorFacade::staticMetaObject };
+                 &StepAttenuatorFacade::staticMetaObject,
+                 &AlexAntennaFacade::staticMetaObject };
     }
 };
 

@@ -415,6 +415,10 @@ public:
     /// Public so a caller (and this task's tests) can inspect what a
     /// client is about to be told without standing up a client.
     StationCapabilities buildCapabilities() const;
+    /// R-R3-46: what this Core offers a window of its radio's hardware:
+    /// 0 nothing, 1 the `stepAtt` object, 2 also `alexAntennas`, the
+    /// hardware apply step and the I/O board probe.
+    int radioHardwareVersion() const;
 
     // ---- Subsystem accessors, non-owning, for tests and diagnostics ----
     StateMirror* stateMirror() const { return m_mirror; }

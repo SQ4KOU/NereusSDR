@@ -91,6 +91,11 @@ bool isModelOwnedNotchSettingsKey(QStringView key);
 // hardware/<mac>/options/{stepAtt,autoAtt,preamp}/... A window changes them
 // through the mirrored `stepAtt` object.
 bool isModelOwnedStepAttenuatorSettingsKey(QStringView key);
+// R-R3-46 (radioHardwareVersion 2): the Core's Alex antenna settings,
+// hardware/<mac>/alex/antenna/... AlexController saves them itself (and
+// again at teardown), so a raw write would be overwritten; a window changes
+// the receive ones through the mirrored `alexAntennas` object.
+bool isModelOwnedAlexAntennaSettingsKey(QStringView key);
 // The reason a raw write or remove of a model-owned key is refused, in the
 // operator's words.
 QString modelOwnedSettingsRefusal(QStringView key);

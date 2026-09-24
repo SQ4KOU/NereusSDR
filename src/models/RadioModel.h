@@ -42,6 +42,9 @@
 //                 engine handed out uncounted for this computer's own
 //                 devices, and the setNameForTest seam. NereusSDR-original;
 //                 no Thetis logic.
+//   2026-09-23 - R-R3-46: alexAntennaFacade(),
+//                 scheduleRemoteHardwareApply(), requestIoBoardProbe(). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -212,6 +215,7 @@ struct Ps3RoutingSnapshot;
 class DspAssetService;
 class PureSignalSessionFacade;
 class StepAttenuatorFacade;
+class AlexAntennaFacade;
 class PsccPump;
 // Phase 4 Agent 4A of issue #167: PaProfileManager forward declaration.
 // RadioModel owns the per-MAC PA gain profile bank (parallel to
@@ -1406,6 +1410,21 @@ public:
     /// local window's, where nothing reads it); a Remote model leaves it
     /// unbound and it holds the Core's values.
     StepAttenuatorFacade* stepAttFacade() const { return m_stepAttFacade; }
+    /// R-R3-46 (radioHardwareVersion 2): the Alex antenna settings as the
+    /// mirrored `alexAntennas` object. A Local model binds it to its own
+    /// AlexController; a Remote model leaves it unbound and it holds the
+    /// Core's values (and the window's Hardware Config availability).
+    AlexAntennaFacade* alexAntennaFacade() const { return m_alexAntennaFacade; }
+
+    /// R-R3-46: ask the radio's HL2 I/O board to identify itself (three
+    /// I2C reads). Locally the P1 connection enqueues them; a remote window
+    /// asks the Core. `sent` is false, with a plain reason, when nothing
+    /// was asked.
+    struct IoBoardProbeOutcome {
+        bool sent = false;
+        QString reason;
+    };
+    IoBoardProbeOutcome requestIoBoardProbe();
     NoiseFloorTracker* noiseFloorTracker() const { return m_noiseFloorTracker; }
     void setNoiseFloorTracker(NoiseFloorTracker* t) { m_noiseFloorTracker = t; }
 
@@ -1996,6 +2015,27 @@ public:
     // edits through rebuildDspOptionsForMode. No-op on a remote-role model.
     // Must be called on the main thread.
     void scheduleRemoteDspOptionsApply(const QString& key);
+
+    // R-R3-46: the Core's hardware apply step. The Core's StationServer
+    // calls this after it accepts a settings write or remove of a key from
+    // a remote window, beside scheduleRemoteDspOptionsApply. Keys under
+    // hardware/<connected MAC>/ that a live controller holds in memory
+    // queue that controller's reload: oc/ (the OC pin matrix the codec
+    // reads each frame), hl2IoBoard/n2adrFilter (the HL2 N2ADR filter
+    // board's pins in that matrix), cal/ (the frequency calibration the P2
+    // codec reads each command) and hl2/ (the HL2 options). After
+    // kHardwareApplyCoalesceMs the queued reloads run once, so the Core's
+    // own copy follows the saved settings and its later saves keep them.
+    // Every other key is ignored. No-op on a remote-role model. Must be
+    // called on the main thread.
+    void scheduleRemoteHardwareApply(const QString& key);
+
+    // Test-only: observe each reload the coalesced hardware apply makes,
+    // by name ("oc", "n2adr", "cal", "hl2").
+    void setHardwareApplyObserverForTest(std::function<void(const QString&)> observer)
+    {
+        m_hardwareApplyObserverForTest = std::move(observer);
+    }
 
     // Test-only: observe each slice apply the coalesced flush makes, as
     // (slice index, the slice's mode). Called before the RxChannel apply,
@@ -3468,6 +3508,14 @@ private:
 
     QTimer* m_dspOptionsApplyTimer{nullptr};
     QSet<QString> m_pendingDspOptionsGroups;
+
+    // R-R3-46: coalesces remote hardware settings writes into one reload
+    // per controller. See scheduleRemoteHardwareApply.
+    void flushRemoteHardwareApply();
+
+    QTimer* m_hardwareApplyTimer{nullptr};
+    QSet<QString> m_pendingHardwareReloads;
+    std::function<void(const QString&)> m_hardwareApplyObserverForTest;
     std::function<void(int, DSPMode)> m_dspOptionsApplyObserverForTest;
 
     // The connect-time DDC seed, factored out of the wireSliceSignals
@@ -4653,6 +4701,7 @@ private:
     DspAssetService* m_dspAssets{nullptr};
     PureSignalSessionFacade* m_pureSignalFacade{nullptr};
     StepAttenuatorFacade* m_stepAttFacade{nullptr};
+    AlexAntennaFacade* m_alexAntennaFacade{nullptr};
     std::unique_ptr<PureSignal> m_pureSignal;
 
     // 3M-4 Task 17 chunk C: pscc() driver — pairs per-DDC IQ streams

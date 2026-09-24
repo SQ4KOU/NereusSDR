@@ -196,6 +196,8 @@
 
 #include <QMap>
 #include <QObject>
+
+#include <functional>
 #include <QString>
 #include <QVariant>
 
@@ -277,6 +279,22 @@ public:
     SettingsApplyResult applyInboundWrite(const QString& key, const QVariant& value,
                                           const QString& originTag);
 
+    /// R-R3-46: the MAC of the radio the Core is connected to now, asked
+    /// at every write. With a provider set, a hardware/<mac>/ write (or
+    /// remove, otherRadioRefusal()) for any other MAC, or for any MAC while
+    /// no radio is connected, is refused: the Core applies hardware
+    /// settings for its own radio only. hardware/oc/ is a literal segment,
+    /// not a MAC, and is never refused here. Without a provider (older
+    /// callers and fixtures) nothing is checked.
+    void setConnectedMacProvider(std::function<QString()> provider)
+    {
+        m_connectedMac = std::move(provider);
+    }
+
+    /// The plain reason a write or remove of `key` is refused because it
+    /// names another radio, or an empty string when it does not.
+    QString otherRadioRefusal(const QString& key) const;
+
 signals:
     /// One Station-key change worth telling every connected client
     /// about: either a genuine local/daemon-side change (originTag
@@ -316,6 +334,8 @@ private:
     void onLocalAppSettingsChange(const QString& key);
 
     AppSettings& m_appSettings;
+
+    std::function<QString()> m_connectedMac;
 
     /// True for the duration of one applyInboundWrite() call. Checked
     /// first in onLocalAppSettingsChange(), before that method does

@@ -59,6 +59,13 @@
 //                                    and the plain refusal of raw attenuator
 //                                    and preamp settings. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46: radioHardwareVersion 2 with
+//                                    the `alexAntennas` object, the
+//                                    hardware apply step after a settings
+//                                    write, and hardware/<mac>/ writes
+//                                    refused for any radio but the
+//                                    connected one. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -82,6 +89,7 @@
 #include "PureSignalSessionFacade.h"
 #include "core/PureSignal.h"
 #include "core/StepAttenuatorFacade.h"
+#include "core/accessories/AlexAntennaFacade.h"
 #include <QScopeGuard>
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -208,6 +216,18 @@ bool isStepAttMessage(const SessionMessage& message)
     return message.objectKey == kStepAttKey
         || (message.kind == SessionMessageKind::Schema
             && message.className == "StepAttenuatorFacade");
+}
+
+// R-R3-46 (radioHardwareVersion 2): the Core's Alex antenna settings, for a
+// peer at kRadioIdentitySessionProtocolMinor, from a Core that also applies
+// Hardware Config writes (scheduleRemoteHardwareApply).
+constexpr const char* kAlexAntennasKey = "alexAntennas";
+
+bool isAlexAntennasMessage(const SessionMessage& message)
+{
+    return message.objectKey == kAlexAntennasKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "AlexAntennaFacade");
 }
 
 // The one reason a receive-only Core gives for every transmit
@@ -351,6 +371,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_registry = new ObjectRegistry(radioModel, m_mirror, this);
     m_dispatcher = new SessionCommandDispatcher(radioModel, this);
     m_settingsServer = new SettingsProxyServer(settings, this);
+    // R-R3-46: the Core applies hardware settings for its connected radio
+    // only; a write naming any other radio's MAC is refused.
+    if (radioModel) {
+        m_settingsServer->setConnectedMacProvider([model = QPointer<RadioModel>(radioModel)] {
+            return model ? model->currentRadioMac() : QString();
+        });
+    }
 
     // Outbound: everything the daemon has to say goes to whichever
     // transport currently holds the session, and to nothing at all when
@@ -1111,6 +1138,9 @@ void StationServer::buildMirror()
     // R-R3-46 (radioHardwareVersion 1): the Core's step attenuator and
     // preamp. Sent only to a peer at minor 11 (sendToSession).
     m_mirror->watch(QByteArray(kStepAttKey), m_radioModel->stepAttFacade());
+    // R-R3-46 (radioHardwareVersion 2): the Core's Alex antenna settings.
+    // Sent only to a peer at minor 11 (sendToSession).
+    m_mirror->watch(QByteArray(kAlexAntennasKey), m_radioModel->alexAntennaFacade());
     m_mirror->watch("pureSignal", m_radioModel->pureSignalFacade());
     m_mirror->watch(QByteArray(kTransmitKey), &m_radioModel->transmitModel());
     if (m_radioModel->tunerModel() != nullptr) {
@@ -1201,6 +1231,7 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     // R-R3-46: only a peer that was offered the object may change it, and
     // only while the Core's controller is behind it.
     const bool stepAttWrite = message.objectKey == kStepAttKey;
+    const bool alexWrite = message.objectKey == kAlexAntennasKey;
     QString stepAttRefusal;
     if (stepAttWrite
         && m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
@@ -1209,6 +1240,12 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     } else if (stepAttWrite
                && (m_radioModel.isNull() || !m_radioModel->stepAttFacade()->isBound())) {
         stepAttRefusal = QStringLiteral("The Core has no attenuator ready.");
+    } else if (alexWrite
+               && m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+        stepAttRefusal =
+            QStringLiteral("Update this app to change the radio's antennas on this Core.");
+    } else if (alexWrite && radioHardwareVersion() < 2) {
+        stepAttRefusal = QStringLiteral("The Core has no antenna settings ready.");
     }
     const bool receiveOnlyTransmitWrite = message.objectKey == QByteArray(kTransmitKey)
         && !m_radioModel.isNull() && m_radioModel->receiveOnlyStationPolicy();
@@ -1271,6 +1308,8 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             // another value (its range, what this radio offers).
             if (stepAttWrite && !m_radioModel.isNull()) {
                 result.reason = m_radioModel->stepAttFacade()->settleReason(update.name);
+            } else if (alexWrite && !m_radioModel.isNull()) {
+                result.reason = m_radioModel->alexAntennaFacade()->settleReason(update.name);
             }
             if (result.reason.isEmpty()) {
                 result.reason = QStringLiteral("The station retained the returned value after validating this edit.");
@@ -1297,7 +1336,7 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         }
     }
     // An older peer was never offered `stepAtt`; it gets nothing back for it.
-    const bool olderStepAttPeer = stepAttWrite
+    const bool olderStepAttPeer = (stepAttWrite || alexWrite)
         && m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor;
     if (!corrections.isEmpty() && !olderStepAttPeer) {
         // A write's side effects can change nnrLimit (turning NNR off or
@@ -1340,9 +1379,12 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
         return;
     }
     // R-R3-21: a DSP > Options RX setting takes effect now, not at the next
-    // mode change. RadioModel ignores every other key.
+    // mode change. R-R3-46: a Hardware Config setting reaches the Core's
+    // own controllers (the radio, and their later saves) now too. RadioModel
+    // ignores every other key.
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteDspOptionsApply(key);
+        m_radioModel->scheduleRemoteHardwareApply(key);
     }
 }
 
@@ -1357,7 +1399,8 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
         // reason; every other model-owned key keeps its existing wire string.
         // R-R3-46: so do the step attenuator and preamp keys.
         const bool plainReason = nr3Path || isModelOwnedNotchSettingsKey(key)
-            || isModelOwnedStepAttenuatorSettingsKey(key);
+            || isModelOwnedStepAttenuatorSettingsKey(key)
+            || isModelOwnedAlexAntennaSettingsKey(key);
         sendToSession(SessionMessages::settingsReject(key, value.isValid(), value.toString(),
             plainReason ? modelOwnedSettingsRefusal(key)
                     : QStringLiteral("Use the validated DSP controls to change these settings.")));
@@ -1386,11 +1429,21 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
         qCWarning(lcStation) << "Refused remote settings remove of non-station key" << key;
         return;
     }
+    // R-R3-46: as for a write, only the connected radio's hardware keys.
+    if (const QString refusal = m_settingsServer->otherRadioRefusal(key); !refusal.isEmpty()) {
+        const QVariant value = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings remove" << key << ":" << refusal;
+        sendToSession(SessionMessages::settingsReject(key, value.isValid(), value.toString(),
+                                                      refusal));
+        return;
+    }
     m_settings.remove(key);
     // R-R3-21: removing a DSP > Options RX setting returns it to its
-    // default, which takes effect now as a write does.
+    // default, which takes effect now as a write does. R-R3-46: so does a
+    // Hardware Config setting.
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteDspOptionsApply(key);
+        m_radioModel->scheduleRemoteHardwareApply(key);
     }
 }
 
@@ -1419,8 +1472,11 @@ void StationServer::sendToSession(const SessionMessage& message)
         // A Core without its controller behind the object does not offer
         // it (radioHardwareVersion 0), so it does not send it either.
         if (isStepAttMessage(message)
-            && (minor < kRadioIdentitySessionProtocolMinor || m_radioModel.isNull()
-                || !m_radioModel->stepAttFacade()->isBound())) {
+            && (minor < kRadioIdentitySessionProtocolMinor || radioHardwareVersion() < 1)) {
+            return;
+        }
+        if (isAlexAntennasMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor || radioHardwareVersion() < 2)) {
             return;
         }
         if (!needsNnrFit(message, minor)) {
@@ -1607,6 +1663,14 @@ void StationServer::setSustainableSliceLimit(int slices)
     m_sustainableSliceLimit = slices;
 }
 
+int StationServer::radioHardwareVersion() const
+{
+    if (m_radioModel.isNull() || !m_radioModel->stepAttFacade()->isBound()) {
+        return 0;
+    }
+    return m_radioModel->alexAntennaFacade()->isBound() ? 2 : 1;
+}
+
 StationCapabilities StationServer::buildCapabilities() const
 {
     StationCapabilities caps;
@@ -1635,8 +1699,10 @@ StationCapabilities StationServer::buildCapabilities() const
             && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor) {
             caps.radioIdentityEntries = true;
             // R-R3-46 / R-R3-11: 1 once the Core's controller is behind the
-            // `stepAtt` object (DaemonApp binds it before the server starts).
-            caps.radioHardwareVersion = m_radioModel->stepAttFacade()->isBound() ? 1 : 0;
+            // `stepAtt` object (DaemonApp binds it before the server starts);
+            // 2 once its Alex antennas are behind `alexAntennas` too, with
+            // the hardware apply step and the I/O board probe.
+            caps.radioHardwareVersion = radioHardwareVersion();
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();

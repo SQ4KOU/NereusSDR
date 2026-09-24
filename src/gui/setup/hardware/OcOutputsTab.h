@@ -19,6 +19,8 @@
 //                checkboxes wired to TransmitModel::userDigOut, gated on
 //                BoardCapabilities::hasPennyLane. J.J. Boyd (KG4VCF), with
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: transmit permission. J.J. Boyd (KG4VCF), AI-
+//                 assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -101,6 +103,10 @@ public:
     // (AppSettings under hardware/<mac>/oc/...) — this is a no-op stub so
     // the HardwarePage API contract is met without extra coupling.
     void restoreSettings(const QMap<QString, QVariant>& settings);
+
+    // R-R3-46: User Dig Out and the HF / SWL transmit fields follow the
+    // transmit permission with its reason. Always permitted locally.
+    void setTransmitPermitted(bool permitted, const QString& reason);
 
     // ── Test seams (P1 full-parity §4.3 — User Dig Out) ──────────────────
     // Exposed for tst_board_capability_flag_wiring; not part of the

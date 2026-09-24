@@ -154,6 +154,9 @@
 //                 editor lives at Hardware → Antenna/ALEX → Antenna
 //                 Control).  TX TUN Meter combo items now mi0bot-verbatim
 //                 (Fwd Pwr / Ref Pwr / Fwd SWR / SWR / Off).
+//   2026-09-23 - R-R3-46: PowerPage::applyHpsdrModel blocks the tune-
+//                 power spinbox before its range changes. J.J. Boyd (KG4VCF), AI-
+//                 assisted via Anthropic Claude Code.
 // =================================================================
 #include "TransmitSetupPages.h"
 #include "gui/StyleConstants.h"
@@ -588,6 +591,12 @@ void PowerPage::applyHpsdrModel(HPSDRModel m)
 {
     // Fixed-mode spinbox (Task 8).
     if (m_fixedTunePwrSpin) {
+        // R-R3-46 (carried): blocked before the range changes, not only
+        // around setValue(): a narrower range clamps the value, and the
+        // clamp's valueChanged would write that clamped tune power to the
+        // model (locally, and in a remote window when the Core's radio
+        // changes while the page is open).
+        QSignalBlocker rangeBlock(m_fixedTunePwrSpin);
         m_fixedTunePwrSpin->setRange(static_cast<double>(fixedTuneSpinboxMinFor(m)),
                                      static_cast<double>(fixedTuneSpinboxMaxFor(m)));
         m_fixedTunePwrSpin->setSingleStep(static_cast<double>(fixedTuneSpinboxStepFor(m)));
@@ -600,7 +609,6 @@ void PowerPage::applyHpsdrModel(HPSDRModel m)
         // is called after RadioModel::currentRadioChanged commits the
         // hardware profile).  Block to suppress the forward connect.
         if (model()) {
-            QSignalBlocker b(m_fixedTunePwrSpin);
             m_fixedTunePwrSpin->setValue(
                 tunePowerDisplayFromStored(model()->transmitModel().tunePower()));
         }

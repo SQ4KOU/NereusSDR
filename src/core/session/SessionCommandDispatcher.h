@@ -167,6 +167,7 @@ private:
     void handleConfigureTgxl(const NereusSDR::SessionMessage& invoke);
     void handleDisconnectTgxl(const NereusSDR::SessionMessage& invoke);
     void handleSetFourO3AEnabled(const NereusSDR::SessionMessage& invoke);
+    void handleRequestIoBoardProbe(const NereusSDR::SessionMessage& invoke);
     // nnr.setDiagnostics, nnr.resetTuning and (R-R3-40, minor 11)
     // nnr.tryAgain, each addressed to one slice ID.
     void handleNnrAction(const NereusSDR::SessionMessage& invoke);

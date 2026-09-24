@@ -13,6 +13,10 @@
 //                Claude Code. Sub-sub-tab under Hardware → Antenna/ALEX.
 //                Per-band antenna assignment + Block-TX safety; backed
 //                by AlexController model (Phase 3P-F Task 1).
+//   2026-09-23 - R-R3-46: a remote window reads and writes the Core's
+//                 receive antennas through the `alexAntennas` object; the transmit
+//                 half follows the transmit permission. J.J. Boyd (KG4VCF), AI-
+//                 assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -81,8 +85,10 @@
 // =================================================================
 
 #include "AntennaAlexAntennaControlTab.h"
+#include "HardwareTransmitGate.h"
 
 #include "core/accessories/AlexController.h"
+#include "core/accessories/AlexAntennaFacade.h"
 #include "core/AppSettings.h"
 #include "core/SkuUiProfile.h"
 #include "core/HardwareProfile.h"
@@ -110,6 +116,7 @@ AntennaAlexAntennaControlTab::AntennaAlexAntennaControlTab(RadioModel* model, QW
     : QWidget(parent)
     , m_model(model)
     , m_alex(&model->alexControllerMutable())
+    , m_remoteAlex(model->ownsLocalDsp() ? nullptr : model->alexAntennaFacade())
 {
     auto* outerLayout = new QVBoxLayout(this);
     outerLayout->setContentsMargins(8, 8, 8, 8);
@@ -149,10 +156,22 @@ AntennaAlexAntennaControlTab::AntennaAlexAntennaControlTab(RadioModel* model, QW
     applySkuProfile();
 
     // ── Connect model → UI ────────────────────────────────────────────────────
-    connect(m_alex, &AlexController::antennaChanged,
-            this, &AntennaAlexAntennaControlTab::onAntennaChanged);
-    connect(m_alex, &AlexController::blockTxChanged,
-            this, &AntennaAlexAntennaControlTab::onBlockTxChanged);
+    if (m_remoteAlex) {
+        // R-R3-46: a remote window shows the Core's antennas.
+        const auto resync = [this]() { syncAllFromSource(); };
+        connect(m_remoteAlex, &AlexAntennaFacade::rxAntennasChanged, this, resync);
+        connect(m_remoteAlex, &AlexAntennaFacade::rxOnlyAntennasChanged, this, resync);
+        connect(m_remoteAlex, &AlexAntennaFacade::txAntennasChanged, this, resync);
+        connect(m_remoteAlex, &AlexAntennaFacade::blockTxAnt2Changed, this,
+                &AntennaAlexAntennaControlTab::onBlockTxChanged);
+        connect(m_remoteAlex, &AlexAntennaFacade::blockTxAnt3Changed, this,
+                &AntennaAlexAntennaControlTab::onBlockTxChanged);
+    } else {
+        connect(m_alex, &AlexController::antennaChanged,
+                this, &AntennaAlexAntennaControlTab::onAntennaChanged);
+        connect(m_alex, &AlexController::blockTxChanged,
+                this, &AntennaAlexAntennaControlTab::onBlockTxChanged);
+    }
 
     // Re-sync when the connected radio changes (may switch HPSDRModel).
     connect(m_model, &RadioModel::currentRadioChanged,
@@ -170,6 +189,7 @@ AntennaAlexAntennaControlTab::AntennaAlexAntennaControlTab(RadioModel* model, QW
 void AntennaAlexAntennaControlTab::buildBlockTxStrip(QVBoxLayout* outerLayout)
 {
     auto* frame = new QFrame(this);
+    m_blockTxFrame = frame;
     frame->setFrameShape(QFrame::StyledPanel);
     frame->setStyleSheet(QStringLiteral(
         "QFrame { background-color: rgba(200,50,50,0.08); border: 1px solid rgba(200,50,50,0.4); border-radius: 4px; }"));
@@ -179,13 +199,13 @@ void AntennaAlexAntennaControlTab::buildBlockTxStrip(QVBoxLayout* outerLayout)
     row->setSpacing(16);
 
     m_blockTxAnt2 = new QCheckBox(tr("Block TX on Ant 2"), frame);
-    m_blockTxAnt2->setChecked(m_alex->blockTxAnt2());
+    m_blockTxAnt2->setChecked(blockTxAnt2Now());
     m_blockTxAnt2->setToolTip(tr("Prevents transmit assignments to Antenna Port 2. "
                                   "Use when Ant 2 is wired for receive only."));
     row->addWidget(m_blockTxAnt2);
 
     m_blockTxAnt3 = new QCheckBox(tr("Block TX on Ant 3"), frame);
-    m_blockTxAnt3->setChecked(m_alex->blockTxAnt3());
+    m_blockTxAnt3->setChecked(blockTxAnt3Now());
     m_blockTxAnt3->setToolTip(tr("Prevents transmit assignments to Antenna Port 3. "
                                   "Use when Ant 3 is wired for receive only."));
     row->addWidget(m_blockTxAnt3);
@@ -198,10 +218,15 @@ void AntennaAlexAntennaControlTab::buildBlockTxStrip(QVBoxLayout* outerLayout)
     outerLayout->addWidget(frame);
 
     // ── Wire Block-TX checkboxes → controller ─────────────────────────────────
+    // R-R3-46: in a remote window these are the Core's transmit settings,
+    // which change only on the Core until remote transmit; an edit shows the
+    // Core's value again.
     connect(m_blockTxAnt2, &QCheckBox::toggled, this, [this](bool checked) {
+        if (m_remoteAlex) { onBlockTxChanged(); return; }
         m_alex->setBlockTxAnt2(checked);
     });
     connect(m_blockTxAnt3, &QCheckBox::toggled, this, [this](bool checked) {
+        if (m_remoteAlex) { onBlockTxChanged(); return; }
         m_alex->setBlockTxAnt3(checked);
     });
 }
@@ -214,6 +239,7 @@ void AntennaAlexAntennaControlTab::buildBlockTxStrip(QVBoxLayout* outerLayout)
 void AntennaAlexAntennaControlTab::buildTxGrid(QBoxLayout* outerLayout)
 {
     auto* grp = new QGroupBox(tr("TX Antenna per Band"), this);
+    m_txGridGroup = grp;
     auto* layout = new QVBoxLayout(grp);
     layout->setContentsMargins(6, 6, 6, 6);
     layout->setSpacing(2);
@@ -245,7 +271,7 @@ void AntennaAlexAntennaControlTab::buildTxGrid(QBoxLayout* outerLayout)
         auto* grpBtn = new QButtonGroup(this);
         m_txGroups[b] = grpBtn;
 
-        const int currentAnt = m_alex->txAnt(band);  // 1-based
+        const int currentAnt = txAntOf(band);  // 1-based
 
         for (int a = 0; a < 3; ++a) {
             auto* rb = new QRadioButton(grp);
@@ -258,6 +284,7 @@ void AntennaAlexAntennaControlTab::buildTxGrid(QBoxLayout* outerLayout)
             // Wire to controller
             connect(rb, &QRadioButton::toggled, this, [this, band, antNum = a + 1](bool checked) {
                 if (!checked) { return; }
+                if (m_remoteAlex) { syncTxRow(static_cast<int>(band)); return; }
                 m_alex->setTxAnt(band, antNum);
             });
         }
@@ -342,7 +369,7 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
         // RX1 group
         auto* rx1Grp = new QButtonGroup(this);
         m_rx1Groups[b] = rx1Grp;
-        const int currentRx1 = m_alex->rxAnt(band);  // 1-based
+        const int currentRx1 = rxAntOf(band);  // 1-based
         for (int a = 0; a < 3; ++a) {
             auto* rb = new QRadioButton(grp);
             rb->setChecked((a + 1) == currentRx1);
@@ -353,6 +380,13 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
 
             connect(rb, &QRadioButton::toggled, this, [this, band, antNum = a + 1](bool checked) {
                 if (!checked) { return; }
+                if (m_remoteAlex) {
+                    // R-R3-46: the Core applies it; the row shows what the
+                    // Core keeps (or keeps its value when the edit is refused).
+                    m_remoteAlex->setRxAnt(band, antNum);
+                    syncRxRow(static_cast<int>(band));
+                    return;
+                }
                 m_alex->setRxAnt(band, antNum);
             });
         }
@@ -366,7 +400,7 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
         // RX-only group
         auto* rxOnlyGrp = new QButtonGroup(this);
         m_rxOnlyGroups[b] = rxOnlyGrp;
-        const int currentRxOnly = m_alex->rxOnlyAnt(band);  // 1-based
+        const int currentRxOnly = rxOnlyAntOf(band);  // 1-based
         for (int a = 0; a < 3; ++a) {
             auto* rb = new QRadioButton(grp);
             rb->setChecked((a + 1) == currentRxOnly);
@@ -377,6 +411,11 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
 
             connect(rb, &QRadioButton::toggled, this, [this, band, antNum = a + 1](bool checked) {
                 if (!checked) { return; }
+                if (m_remoteAlex) {
+                    m_remoteAlex->setRxOnlyAnt(band, antNum);
+                    syncRxRow(static_cast<int>(band));
+                    return;
+                }
                 m_alex->setRxOnlyAnt(band, antNum);
             });
         }
@@ -410,11 +449,11 @@ void AntennaAlexAntennaControlTab::onBlockTxChanged()
     // Sync Block-TX checkbox states from controller
     {
         QSignalBlocker b2(m_blockTxAnt2);
-        m_blockTxAnt2->setChecked(m_alex->blockTxAnt2());
+        m_blockTxAnt2->setChecked(blockTxAnt2Now());
     }
     {
         QSignalBlocker b3(m_blockTxAnt3);
-        m_blockTxAnt3->setChecked(m_alex->blockTxAnt3());
+        m_blockTxAnt3->setChecked(blockTxAnt3Now());
     }
     updateTxBlockedStates();
 }
@@ -424,7 +463,7 @@ void AntennaAlexAntennaControlTab::onBlockTxChanged()
 void AntennaAlexAntennaControlTab::syncTxRow(int row)
 {
     auto band = static_cast<Band>(row);
-    const int currentAnt = m_alex->txAnt(band);  // 1-based
+    const int currentAnt = txAntOf(band);  // 1-based
     for (int a = 0; a < 3; ++a) {
         if (auto* rb = m_txButtons[row][a]) {
             QSignalBlocker sb(rb);
@@ -436,8 +475,8 @@ void AntennaAlexAntennaControlTab::syncTxRow(int row)
 void AntennaAlexAntennaControlTab::syncRxRow(int row)
 {
     auto band = static_cast<Band>(row);
-    const int currentRx1     = m_alex->rxAnt(band);
-    const int currentRxOnly  = m_alex->rxOnlyAnt(band);
+    const int currentRx1     = rxAntOf(band);
+    const int currentRxOnly  = rxOnlyAntOf(band);
     for (int a = 0; a < 3; ++a) {
         if (auto* rb = m_rx1Buttons[row][a]) {
             QSignalBlocker sb(rb);
@@ -455,8 +494,8 @@ void AntennaAlexAntennaControlTab::updateTxBlockedStates()
     // When a TX port is blocked, grey out (disable) that column's radio buttons
     // for all bands so the user cannot select a blocked port.
     // Port columns: a == 0 → Ant 1, a == 1 → Ant 2, a == 2 → Ant 3.
-    const bool blk2 = m_alex->blockTxAnt2();
-    const bool blk3 = m_alex->blockTxAnt3();
+    const bool blk2 = blockTxAnt2Now();
+    const bool blk3 = blockTxAnt3Now();
 
     for (int b = 0; b < kBandCount; ++b) {
         if (auto* rb = m_txButtons[b][1]) { rb->setEnabled(!blk2); }  // Ant 2
@@ -496,11 +535,11 @@ void AntennaAlexAntennaControlTab::buildTxBypassStrip(QVBoxLayout* outerLayout)
     m_chkUseTxAntForRx->setToolTip(tr("Use the TX antenna for RX instead of the RX antenna."));
 
     // Initialize state from controller.
-    m_chkRxOutOnTx->setChecked(m_alex->rxOutOnTx());
-    m_chkExt1OutOnTx->setChecked(m_alex->ext1OutOnTx());
-    m_chkExt2OutOnTx->setChecked(m_alex->ext2OutOnTx());
-    m_chkRxOutOverride->setChecked(m_alex->rxOutOverride());
-    m_chkUseTxAntForRx->setChecked(m_alex->useTxAntForRx());
+    m_chkRxOutOnTx->setChecked(rxOutOnTxNow());
+    m_chkExt1OutOnTx->setChecked(ext1OutOnTxNow());
+    m_chkExt2OutOnTx->setChecked(ext2OutOnTxNow());
+    m_chkRxOutOverride->setChecked(rxOutOverrideNow());
+    m_chkUseTxAntForRx->setChecked(useTxAntForRxNow());
 
     row->addWidget(m_chkRxOutOnTx);
     row->addWidget(m_chkExt1OutOnTx);
@@ -510,6 +549,29 @@ void AntennaAlexAntennaControlTab::buildTxBypassStrip(QVBoxLayout* outerLayout)
     row->addStretch();
 
     outerLayout->addWidget(frame);
+
+    if (m_remoteAlex) {
+        // R-R3-46: in a remote window "Use TX antenna for RX" is the one
+        // receive switch here; it goes to the Core, and the four TX relay
+        // switches follow the Core's values (they wait for remote transmit).
+        connect(m_chkUseTxAntForRx, &QCheckBox::toggled, this, [this](bool on) {
+            m_remoteAlex->setUseTxAntennaForRx(on);
+            QSignalBlocker b(m_chkUseTxAntForRx);
+            m_chkUseTxAntForRx->setChecked(m_remoteAlex->useTxAntennaForRx());
+        });
+        const auto follow = [this](auto signal, QCheckBox* box) {
+            connect(m_remoteAlex, signal, this, [box](bool on) {
+                QSignalBlocker b(box);
+                box->setChecked(on);
+            });
+        };
+        follow(&AlexAntennaFacade::rxOutOnTxChanged, m_chkRxOutOnTx);
+        follow(&AlexAntennaFacade::ext1OutOnTxChanged, m_chkExt1OutOnTx);
+        follow(&AlexAntennaFacade::ext2OutOnTxChanged, m_chkExt2OutOnTx);
+        follow(&AlexAntennaFacade::rxOutOverrideChanged, m_chkRxOutOverride);
+        follow(&AlexAntennaFacade::useTxAntennaForRxChanged, m_chkUseTxAntForRx);
+        return;
+    }
 
     // UI → model
     connect(m_chkRxOutOnTx,     &QCheckBox::toggled, m_alex, &AlexController::setRxOutOnTx);
@@ -653,5 +715,100 @@ void AntennaAlexAntennaControlTab::applySkuProfile()
             : tr("Enable RX 1 IN on Alex or Ext 2 on ANAN during transmit."));
     }
 }
+
+// ── R-R3-46: remote window source, transmit permission ───────────────────────
+
+int AntennaAlexAntennaControlTab::txAntOf(Band band) const
+{
+    return m_remoteAlex ? m_remoteAlex->txAnt(band) : m_alex->txAnt(band);
+}
+
+int AntennaAlexAntennaControlTab::rxAntOf(Band band) const
+{
+    return m_remoteAlex ? m_remoteAlex->rxAnt(band) : m_alex->rxAnt(band);
+}
+
+int AntennaAlexAntennaControlTab::rxOnlyAntOf(Band band) const
+{
+    return m_remoteAlex ? m_remoteAlex->rxOnlyAnt(band) : m_alex->rxOnlyAnt(band);
+}
+
+bool AntennaAlexAntennaControlTab::blockTxAnt2Now() const
+{
+    return m_remoteAlex ? m_remoteAlex->blockTxAnt2() : m_alex->blockTxAnt2();
+}
+
+bool AntennaAlexAntennaControlTab::blockTxAnt3Now() const
+{
+    return m_remoteAlex ? m_remoteAlex->blockTxAnt3() : m_alex->blockTxAnt3();
+}
+
+bool AntennaAlexAntennaControlTab::rxOutOnTxNow() const
+{
+    return m_remoteAlex ? m_remoteAlex->rxOutOnTx() : m_alex->rxOutOnTx();
+}
+
+bool AntennaAlexAntennaControlTab::ext1OutOnTxNow() const
+{
+    return m_remoteAlex ? m_remoteAlex->ext1OutOnTx() : m_alex->ext1OutOnTx();
+}
+
+bool AntennaAlexAntennaControlTab::ext2OutOnTxNow() const
+{
+    return m_remoteAlex ? m_remoteAlex->ext2OutOnTx() : m_alex->ext2OutOnTx();
+}
+
+bool AntennaAlexAntennaControlTab::rxOutOverrideNow() const
+{
+    return m_remoteAlex ? m_remoteAlex->rxOutOverride() : m_alex->rxOutOverride();
+}
+
+bool AntennaAlexAntennaControlTab::useTxAntForRxNow() const
+{
+    return m_remoteAlex ? m_remoteAlex->useTxAntennaForRx() : m_alex->useTxAntForRx();
+}
+
+void AntennaAlexAntennaControlTab::syncAllFromSource()
+{
+    for (int row = 0; row < kBandCount; ++row) {
+        syncTxRow(row);
+        syncRxRow(row);
+    }
+    onBlockTxChanged();
+}
+
+void AntennaAlexAntennaControlTab::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    // The TX antenna grid, the Block-TX strip and the four TX relay
+    // switches; "Use TX antenna for RX" is a receive setting and stays.
+    for (QWidget* w : std::initializer_list<QWidget*>{
+             m_txGridGroup, m_blockTxFrame, m_chkRxOutOnTx, m_chkExt1OutOnTx,
+             m_chkExt2OutOnTx, m_chkRxOutOverride}) {
+        HardwareTransmitGate::apply(w, permitted, reason);
+    }
+}
+
+#ifdef NEREUS_BUILD_TESTS
+QRadioButton* AntennaAlexAntennaControlTab::rxButtonForTest(Band band, int ant) const
+{
+    const int b = static_cast<int>(band);
+    return (b >= 0 && b < kBandCount && ant >= 1 && ant <= 3)
+        ? m_rx1Buttons[static_cast<std::size_t>(b)][static_cast<std::size_t>(ant - 1)] : nullptr;
+}
+
+QRadioButton* AntennaAlexAntennaControlTab::rxOnlyButtonForTest(Band band, int ant) const
+{
+    const int b = static_cast<int>(band);
+    return (b >= 0 && b < kBandCount && ant >= 1 && ant <= 3)
+        ? m_rxOnlyButtons[static_cast<std::size_t>(b)][static_cast<std::size_t>(ant - 1)] : nullptr;
+}
+
+QRadioButton* AntennaAlexAntennaControlTab::txButtonForTest(Band band, int ant) const
+{
+    const int b = static_cast<int>(band);
+    return (b >= 0 && b < kBandCount && ant >= 1 && ant <= 3)
+        ? m_txButtons[static_cast<std::size_t>(b)][static_cast<std::size_t>(ant - 1)] : nullptr;
+}
+#endif
 
 } // namespace NereusSDR

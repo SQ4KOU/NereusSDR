@@ -21,6 +21,8 @@
 //                reflects OcMatrix::maskFor(currentBand, isTx) for
 //                the current PanadapterModel band and TransmitModel
 //                MOX state.
+//   2026-09-23 - R-R3-46: transmit permission. J.J. Boyd (KG4VCF), AI-
+//                 assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/setup.designer.cs header (lines 1-50) ===
@@ -88,6 +90,7 @@
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+#include <QList>
 #include <QWidget>
 #include <array>
 #include <vector>
@@ -145,6 +148,11 @@ public:
     // inject a byte without spinning a full RadioModel + band change.
     void setCurrentOcByte(quint8 byte);
 
+    // R-R3-46: the TX pin matrix, the TX pin actions, the external PA
+    // group and the reset (which clears TX pins too) follow the transmit
+    // permission with its reason. Always permitted locally.
+    void setTransmitPermitted(bool permitted, const QString& reason);
+
 private slots:
     void onMatrixChanged();
     void onResetClicked();
@@ -162,6 +170,7 @@ private:
 
     // Master toggles (AppSettings keys under hardware/<mac>/oc/)
     // Issue #174: m_n2adrFilter removed — see OcOutputsHfTab.cpp:113.
+    QList<QWidget*> m_transmitWidgets;
     QCheckBox* m_pennyExtCtrl{nullptr};
     QCheckBox* m_allowHotSwitching{nullptr};
 

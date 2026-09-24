@@ -18,6 +18,9 @@
 //                 Alex-2 Filters (placeholder for Task 9). J.J. Boyd (KG4VCF).
 //   2026-04-20 — Replaced Alex-2 Filters placeholder with real AntennaAlexAlex2Tab
 //                 (Task 9). J.J. Boyd (KG4VCF).
+//   2026-09-23 - R-R3-46: forwards the transmit permission to Antenna
+//                 Control. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -94,6 +97,10 @@ public:
     explicit AntennaAlexTab(RadioModel* model, QWidget* parent = nullptr);
     void populate(const RadioInfo& info, const BoardCapabilities& caps);
     void restoreSettings(const QMap<QString, QVariant>& settings);
+
+    // R-R3-46: the Antenna Control tab's transmit half follows the transmit
+    // permission with its reason. Always permitted locally.
+    void setTransmitPermitted(bool permitted, const QString& reason);
 
 signals:
     void settingChanged(const QString& key, const QVariant& value);

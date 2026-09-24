@@ -56,6 +56,9 @@
 //                 src/gui/TitleBar.{h,cpp}. AetherSDR has no per-file
 //                 headers; project-level citation per docs/attribution/
 //                 HOW-TO-PORT.md rule 6.
+//   2026-09-23 - R-R3-46: Hardware Config availability pushed to the
+//                 `alexAntennas` object; antenna refusals shown as toasts. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -318,6 +321,7 @@ warren@wpratt.com
 #include "core/ClarityController.h"
 #include "core/StepAttenuatorController.h"
 #include "core/StepAttenuatorFacade.h"
+#include "core/accessories/AlexAntennaFacade.h"
 
 #include <array>
 #include "core/MoxController.h"  // 3M-1a G.1: F.2 connect (hardwareFlipped → onMoxHardwareFlipped)
@@ -1167,12 +1171,20 @@ void MainWindow::ensureRemoteSession()
         connect(m_stationClient, &StationClient::propertyWriteCompleted, this,
                 [this](const QByteArray& objectKey, const QByteArray&, quint32,
                        bool accepted, const QString& reason) {
-            if (objectKey == "stepAtt" && !accepted && !reason.isEmpty()) {
+            // R-R3-46: so does an antenna edit (Setup > Hardware Config).
+            if ((objectKey == "stepAtt" || objectKey == "alexAntennas") && !accepted
+                && !reason.isEmpty()) {
                 showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
             }
         });
         if (StepAttenuatorFacade* stepAtt = m_radioModel->stepAttFacade()) {
             connect(stepAtt, &StepAttenuatorFacade::editRejected, this,
+                    [this](const QString& reason) {
+                showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
+            });
+        }
+        if (AlexAntennaFacade* alex = m_radioModel->alexAntennaFacade()) {
+            connect(alex, &AlexAntennaFacade::editRejected, this,
                     [this](const QString& reason) {
                 showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
             });
@@ -10417,6 +10429,17 @@ void MainWindow::applyRemoteRoleGating()
             : m_stationClient != nullptr
                 ? OperatorReasonText::forDisplay(m_stationClient->radioHardwareUnavailableReason())
                 : tr("Connect to the Core to change the attenuator and preamp."));
+    }
+    // R-R3-46: Setup > Hardware Config's receive settings go through the
+    // Core when it offers them (radioHardwareVersion 2); the page follows
+    // this and otherwise says why in user words.
+    if (AlexAntennaFacade* alex = m_radioModel->alexAntennaFacade()) {
+        const bool hardwareConfig = m_stationClient != nullptr
+            && m_stationClient->remoteHardwareConfigAvailable();
+        alex->setWindowAvailability(hardwareConfig, hardwareConfig ? QString()
+            : m_stationClient != nullptr
+                ? OperatorReasonText::forDisplay(m_stationClient->hardwareConfigUnavailableReason())
+                : tr("Connect to the Core to change the radio's hardware settings."));
     }
     // R-R3-46: Protocol Info shows the Core's radio (showCoreRadioInfo(),
     // never connection(), which a remote model does not have) once the

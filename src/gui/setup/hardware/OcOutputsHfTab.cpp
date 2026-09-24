@@ -15,6 +15,9 @@
 //                Persistence via OcMatrix model (Phase 3P-D Task 1).
 //                NereusSDR spin: 14 bands (incl. GEN/WWV/XVTR) vs
 //                Thetis's 12; GEN/WWV rows greyed by default.
+//   2026-09-23 - R-R3-46: TX pins, pin actions, external PA and reset
+//                 follow the transmit permission. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -56,6 +59,7 @@
 //============================================================================================//
 
 #include "OcOutputsHfTab.h"
+#include "HardwareTransmitGate.h"
 
 #include "core/AppSettings.h"
 #include "core/OcMatrix.h"
@@ -148,6 +152,7 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
         resetBtn->setToolTip(tr("Reset all OC matrix pin assignments and pin actions to Thetis defaults"));
         row->addWidget(resetBtn);
         connect(resetBtn, &QPushButton::clicked, this, &OcOutputsHfTab::onResetClicked);
+        m_transmitWidgets.append(resetBtn);
 
         outerLayout->addLayout(row);
     }
@@ -170,6 +175,7 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
         ));
         buildMatrixGrid(txGroup, /*tx=*/true);
         matrixRow->addWidget(txGroup, 1);
+        m_transmitWidgets.append(txGroup);
 
         outerLayout->addLayout(matrixRow);
     }
@@ -234,6 +240,7 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
             }
 
             bottomRow->addWidget(actionGroup, 3);
+            m_transmitWidgets.append(actionGroup);
         }
 
         // ── USB BCD output ───────────────────────────────────────────────────
@@ -325,6 +332,7 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
                     });
 
             bottomRow->addWidget(paGroup, 1);
+            m_transmitWidgets.append(paGroup);
         }
 
         // ── Live OC pin state ────────────────────────────────────────────────
@@ -612,6 +620,13 @@ bool OcOutputsHfTab::txPinCheckedForTest(int bandIdx, int pin) const
     if (pin < 0 || pin >= kPinCount) { return false; }
     auto* cb = m_txPins[bandIdx][pin];
     return cb ? cb->isChecked() : false;
+}
+
+void OcOutputsHfTab::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    for (QWidget* w : std::as_const(m_transmitWidgets)) {
+        HardwareTransmitGate::apply(w, permitted, reason);
+    }
 }
 
 } // namespace NereusSDR

@@ -35,6 +35,9 @@
 //                                    notch.move, notch.setActive and
 //                                    notch.delete on the Core's notch list.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46: requestIoBoardProbe, the HL2
+//                                    I/O board probe for a remote window.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -328,6 +331,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleDisconnectTgxl(invoke);
     } else if (invoke.commandVerb == "setFourO3AEnabled") {
         handleSetFourO3AEnabled(invoke);
+    } else if (invoke.commandVerb == "requestIoBoardProbe") {
+        handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning"
                || invoke.commandVerb == "nnr.tryAgain") {
         handleNnrAction(invoke);
@@ -930,6 +935,20 @@ void SessionCommandDispatcher::handleDisconnectTgxl(const SessionMessage& invoke
         return;
     }
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-46 (radioHardwareVersion 2): Setup's Probe button on the HL2 I/O
+// board tab, for a remote window. The Core makes the same call a local
+// window's button makes (RadioModel::requestIoBoardProbe).
+void SessionCommandDispatcher::handleRequestIoBoardProbe(const SessionMessage& invoke)
+{
+    if (!invoke.arguments.isEmpty()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("requestIoBoardProbe takes no arguments"), {});
+        return;
+    }
+    const RadioModel::IoBoardProbeOutcome outcome = m_radioModel->requestIoBoardProbe();
+    emitResult(invoke.commandVerb, invoke.commandId, outcome.sent, outcome.reason, {});
 }
 
 void SessionCommandDispatcher::handleSetFourO3AEnabled(const SessionMessage& invoke)

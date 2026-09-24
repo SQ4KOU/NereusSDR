@@ -10,6 +10,9 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - R-R3-46: a remote window's RX1 sample rate sets the
+//                 Core's first receiver. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -67,6 +70,7 @@
 #include "core/SampleRateCatalog.h"
 #include "gui/ComboStyle.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include <QCheckBox>
 #include <QClipboard>
@@ -340,7 +344,23 @@ void RadioInfoTab::onSampleRateChanged(int index)
         // connect via settingChanged above).  Without this call the
         // live-apply infrastructure added in PR #219 (Task 1.6) was
         // unreachable from the UI; codex post-merge review flagged as P2.
-        if (m_model) {
+        //
+        // R-R3-46: a remote window's radio is the Core's. The rate saved
+        // above stays the Core's default for that radio (its next connect);
+        // the Core's first receiver changes now, without a reconnect,
+        // through the same request the receiver's own rate menu sends.
+        if (m_model && !m_model->ownsLocalDsp()) {
+            const QList<SliceModel*> slices = m_model->slices();
+            SliceModel* first = nullptr;
+            for (SliceModel* slice : slices) {
+                if (slice && (first == nullptr || slice->sliceIndex() < first->sliceIndex())) {
+                    first = slice;
+                }
+            }
+            if (first != nullptr) {
+                m_model->requestSliceSampleRate(first->sliceIndex(), rate);
+            }
+        } else if (m_model) {
             m_model->setSampleRateLive(rate);
         }
         updateReconnectBanner();

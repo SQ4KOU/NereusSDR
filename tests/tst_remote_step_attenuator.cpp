@@ -195,7 +195,9 @@ private slots:
         auto s = join(HPSDRHW::Angelia, mac);
         QVERIFY(s != nullptr);
         QVERIFY(s->client->remoteRadioHardwareAvailable());
-        QCOMPARE(s->client->capabilities().radioHardwareVersion, 1);
+        // R-R3-46: 2 since the Core's antennas and hardware apply step came
+        // with it; the attenuator is offered from 1.
+        QCOMPARE(s->client->capabilities().radioHardwareVersion, 2);
         StepAttenuatorFacade* remote = s->remote();
         QVERIFY(!remote->isBound());
         QTRY_COMPARE(remote->maxDb(), 61);

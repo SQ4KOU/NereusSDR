@@ -549,6 +549,16 @@ public:
     /// in plain words: not connected yet, or a Core that does not offer
     /// them. Empty while remoteRadioHardwareAvailable().
     QString radioHardwareUnavailableReason() const;
+    // R-R3-46: the Core advertised radioHardwareVersion 2 on a session at
+    // minor 11 with property results. Hardware Config's receive settings
+    // reach the Core (its `alexAntennas` object, the hardware apply step
+    // after a settings write, and the I/O board probe).
+    bool remoteHardwareConfigAvailable() const;
+    /// Why Hardware Config edits cannot reach the Core, in plain words.
+    /// Empty while remoteHardwareConfigAvailable().
+    QString hardwareConfigUnavailableReason() const;
+    /// Verb "requestIoBoardProbe": probe the Core's radio's HL2 I/O board.
+    CommandOutcome requestIoBoardProbe() override;
     CommandOutcome requestNnrDiagnostics(int sliceId, int testMode, int outputMode) override;
     /// R-R3-40: the station can clear a runtime NNR limit on request
     /// (negotiated minor 11 and NNR control).

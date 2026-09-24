@@ -10,8 +10,15 @@
 //  - Persistence round-trip (load/save under a test MAC)
 
 #include "core/CalibrationController.h"
+#include "core/AppSettings.h"
+#include "core/BoardCapabilities.h"
+#include "core/ConnectionState.h"
+#include "core/HpsdrModel.h"
+#include "core/RadioDiscovery.h"
+#include "models/RadioModel.h"
 
 #include <QtTest/QtTest>
+#include <QScopeGuard>
 #include <QSignalSpy>
 
 class TstCalibrationController : public QObject {
@@ -32,6 +39,7 @@ private slots:
     void setPaCurrentSensitivity_emitsChanged();
     void setPaCurrentOffset_emitsChanged();
     void persistence_roundTrip();
+    void coreReloadsTheCalibrationAWindowSaved();
 };
 
 void TstCalibrationController::defaults_allCorrect()
@@ -210,6 +218,58 @@ void TstCalibrationController::persistence_roundTrip()
         // Effective factor should be the 10M one since using10M=true
         QCOMPARE(ctrl.effectiveFreqCorrectionFactor(), 0.999997);
     }
+}
+
+// R-R3-46: a Core whose calibration keys a remote window just wrote
+// reloads its own controller (the P2 codec reads it for every command),
+// keeps a PA forward-power table as its connect does, and a later save of
+// its controller keeps the window's values.
+void TstCalibrationController::coreReloadsTheCalibrationAWindowSaved()
+{
+    using namespace NereusSDR;
+    const QString mac = QStringLiteral("AA:BB:CC:DD:EE:52");
+    AppSettings& settings = AppSettings::instance();
+    settings.clearHardwareValues(mac);
+    const auto clean = qScopeGuard([&settings, mac] { settings.clearHardwareValues(mac); });
+
+    RadioModel core;
+    core.setBoardForTest(HPSDRHW::Saturn);
+    RadioInfo info;
+    info.macAddress = mac;
+    info.boardType = HPSDRHW::Saturn;
+    core.setLastRadioInfoForTest(info);
+    core.setConnectionStateForTest(ConnectionState::Connected);
+    QStringList reloads;
+    core.setHardwareApplyObserverForTest([&reloads](const QString& name) { reloads << name; });
+
+    // What a window's CalibrationController::save() sends: every cal key,
+    // and a PA table it never had (boardClass 0).
+    const QString base = QStringLiteral("hardware/%1/cal/").arg(mac);
+    settings.setValue(base + QStringLiteral("freqFactor"), QStringLiteral("1.000002"));
+    settings.setValue(base + QStringLiteral("freqFactor10M"), QStringLiteral("0.999998"));
+    settings.setValue(base + QStringLiteral("using10M"), QStringLiteral("True"));
+    settings.setValue(QStringLiteral("hardware/%1/paCalibration/boardClass").arg(mac),
+                      QStringLiteral("0"));
+    core.scheduleRemoteHardwareApply(base + QStringLiteral("freqFactor"));
+    core.scheduleRemoteHardwareApply(base + QStringLiteral("using10M"));
+    QTRY_COMPARE(reloads, QStringList{QStringLiteral("cal")});
+    QCOMPARE(core.calibrationController().freqCorrectionFactor(), 1.000002);
+    QCOMPARE(core.calibrationController().effectiveFreqCorrectionFactor(), 0.999998);
+    QVERIFY(core.calibrationController().paCalProfile().boardClass != PaCalBoardClass::None);
+
+    // The Core's own later save (its shutdown save, or its own Setup) keeps them.
+    core.calibrationControllerMutable().save();
+    QCOMPARE(settings.value(base + QStringLiteral("freqFactor")).toDouble(), 1.000002);
+    QCOMPARE(settings.value(base + QStringLiteral("using10M")).toString(), QStringLiteral("True"));
+
+    // Another radio's key, or a remote-role model, reloads nothing.
+    reloads.clear();
+    core.scheduleRemoteHardwareApply(QStringLiteral("hardware/11:22:33:44:55:66/cal/freqFactor"));
+    RadioModel remote(RadioModel::Role::Remote);
+    remote.setHardwareApplyObserverForTest([&reloads](const QString& name) { reloads << name; });
+    remote.scheduleRemoteHardwareApply(base + QStringLiteral("freqFactor"));
+    QTest::qWait(120);
+    QVERIFY(reloads.isEmpty());
 }
 
 QTEST_MAIN(TstCalibrationController)

@@ -528,6 +528,20 @@ bool isModelOwnedStepAttenuatorSettingsKey(QStringView rawKey)
             || parts[3] == QStringLiteral("preamp"));
 }
 
+bool isModelOwnedAlexAntennaSettingsKey(QStringView rawKey)
+{
+    // hardware/<mac>/alex/antenna/..., every key AlexController::save
+    // writes (per-band TX, RX and RX-only antennas, the Block-TX and relay
+    // switches, the per-ADC filter mode).
+    const QString key = rawKey.toString().toLower();
+    if (!key.startsWith(QStringLiteral("hardware/"))) {
+        return false;
+    }
+    const QStringList parts = key.split(QLatin1Char('/'));
+    return parts.size() >= 5 && parts[2] == QStringLiteral("alex")
+        && parts[3] == QStringLiteral("antenna");
+}
+
 bool isModelOwnedDspSettingsKey(QStringView rawKey)
 {
     const QString key = rawKey.toString().toLower();
@@ -541,6 +555,10 @@ bool isModelOwnedDspSettingsKey(QStringView rawKey)
     }
     // R-R3-46 / R-R3-11: the Core owns its step attenuator and preamp.
     if (isModelOwnedStepAttenuatorSettingsKey(rawKey)) {
+        return true;
+    }
+    // R-R3-46: the Core owns its Alex antenna settings.
+    if (isModelOwnedAlexAntennaSettingsKey(rawKey)) {
         return true;
     }
     // R-R3-21: the Core picks its NR3 model from its own asset store. An
@@ -567,6 +585,10 @@ QString modelOwnedSettingsRefusal(QStringView rawKey)
     }
     if (isModelOwnedStepAttenuatorSettingsKey(rawKey)) {
         return QStringLiteral("This Core keeps its own attenuator and preamp settings. "
+                              "Update this app to change them.");
+    }
+    if (isModelOwnedAlexAntennaSettingsKey(rawKey)) {
+        return QStringLiteral("This Core keeps its own antenna settings. "
                               "Update this app to change them.");
     }
     return QStringLiteral("Use the station DSP controls; raw settings writes cannot bypass model validation.");

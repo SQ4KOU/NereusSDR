@@ -15,6 +15,9 @@
 //                 Alex-2 Filters (placeholder for Task 9). J.J. Boyd (KG4VCF).
 //   2026-04-20 — Replaced Alex-2 Filters placeholder with real AntennaAlexAlex2Tab
 //                 (Task 9). J.J. Boyd (KG4VCF).
+//   2026-09-23 - R-R3-46: forwards the transmit permission to Antenna
+//                 Control. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -167,6 +170,13 @@ void AntennaAlexTab::populate(const RadioInfo& info, const BoardCapabilities& ca
     m_lastMac = info.macAddress;
     m_alex1Tab->restoreSettings(info.macAddress);
     m_alex2FiltersTab->restoreSettings(info.macAddress);
+}
+
+// ── setTransmitPermitted (R-R3-46) ────────────────────────────────────────────
+
+void AntennaAlexTab::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    m_antennaControlTab->setTransmitPermitted(permitted, reason);
 }
 
 // ── restoreSettings ───────────────────────────────────────────────────────────

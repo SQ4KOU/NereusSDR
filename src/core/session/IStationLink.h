@@ -128,6 +128,12 @@ public:
     virtual bool nnrControlAvailable() const { return false; }
     virtual CommandOutcome requestNnrDiagnostics(int, int, int)
     { return { false, QStringLiteral("NNR diagnostics are not supported by this station link.") }; }
+
+    // R-R3-46 (radioHardwareVersion 2): ask the Core to probe its radio's
+    // HL2 I/O board. The default refuses, for links that did not negotiate
+    // the Core's hardware settings.
+    virtual CommandOutcome requestIoBoardProbe()
+    { return { false, QStringLiteral("This Core cannot probe its radio's I/O board for this app.") }; }
 };
 
 } // namespace NereusSDR

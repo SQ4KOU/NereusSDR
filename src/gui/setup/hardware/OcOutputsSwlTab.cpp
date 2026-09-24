@@ -16,6 +16,9 @@
 //                Phase 3P-D Task 2 placeholder QLabel.
 //                J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: TX pins and reset follow the transmit
+//                 permission. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 //
 //=================================================================
@@ -57,6 +60,7 @@
 //============================================================================================//
 
 #include "OcOutputsSwlTab.h"
+#include "HardwareTransmitGate.h"
 
 #include "core/OcMatrix.h"
 #include "models/RadioModel.h"
@@ -97,6 +101,7 @@ OcOutputsSwlTab::OcOutputsSwlTab(RadioModel* model, OcMatrix* ocMatrix,
     auto* txGroup = new QGroupBox(tr("SWL — TX OC matrix"), this);
     buildMatrixGrid(txGroup, /*tx=*/true);
     matrixRow->addWidget(txGroup, /*stretch=*/1);
+    m_txGroup = txGroup;
 
     outer->addLayout(matrixRow, /*stretch=*/1);
 
@@ -266,6 +271,12 @@ bool OcOutputsSwlTab::txPinCheckedForTest(int swlBandRow, int pin) const
     if (pin < 0 || pin >= kSwlMatrixPinCount) { return false; }
     return m_txPins[swlBandRow][pin] &&
            m_txPins[swlBandRow][pin]->isChecked();
+}
+
+void OcOutputsSwlTab::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    HardwareTransmitGate::apply(m_txGroup, permitted, reason);
+    HardwareTransmitGate::apply(m_resetButton, permitted, reason);
 }
 
 } // namespace NereusSDR

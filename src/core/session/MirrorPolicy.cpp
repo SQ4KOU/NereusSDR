@@ -16,6 +16,8 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the Core's step
 //                                    attenuator and preamp (`stepAtt`).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: AlexAntennaFacade directions. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -349,6 +351,21 @@ const MirrorPolicy::Entry kEntries[] = {
     { "StepAttenuatorFacade", "overloadAdc0", MirrorDirection::Outbound },
     { "StepAttenuatorFacade", "overloadAdc1", MirrorDirection::Outbound },
     { "StepAttenuatorFacade", "adcLinked", MirrorDirection::Outbound },
+
+    // R-R3-46 (radioHardwareVersion 2): the Core's Alex antenna settings.
+    // The receive settings are two-way; the Core applies each through its
+    // own AlexController and answers with the value it kept. The transmit
+    // antennas and relays are the Core's to report until remote transmit.
+    { "AlexAntennaFacade", "rxAntennas", MirrorDirection::Bidirectional },
+    { "AlexAntennaFacade", "rxOnlyAntennas", MirrorDirection::Bidirectional },
+    { "AlexAntennaFacade", "useTxAntennaForRx", MirrorDirection::Bidirectional },
+    { "AlexAntennaFacade", "txAntennas", MirrorDirection::Outbound },
+    { "AlexAntennaFacade", "blockTxAnt2", MirrorDirection::Outbound },
+    { "AlexAntennaFacade", "blockTxAnt3", MirrorDirection::Outbound },
+    { "AlexAntennaFacade", "rxOutOnTx", MirrorDirection::Outbound },
+    { "AlexAntennaFacade", "ext1OutOnTx", MirrorDirection::Outbound },
+    { "AlexAntennaFacade", "ext2OutOnTx", MirrorDirection::Outbound },
+    { "AlexAntennaFacade", "rxOutOverride", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

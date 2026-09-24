@@ -53,6 +53,10 @@
 //                                    attenuator edits cannot reach the
 //                                    Core, for the window's controls.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: the `alexAntennas` object at
+//                 radioHardwareVersion 2, its edit gate and reason, and the
+//                 requestIoBoardProbe verb. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -70,6 +74,7 @@
 #include "DspCommandValues.h"
 #include "PureSignalSessionFacade.h"
 #include "core/StepAttenuatorFacade.h"
+#include "core/accessories/AlexAntennaFacade.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -1596,6 +1601,30 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         }
     }
 
+    // R-R3-46: a Core with radioHardwareVersion 2 mirrors its Alex antenna
+    // settings as `alexAntennas` and applies the window's receive edits
+    // through its own AlexController. Same gate shape as `stepAtt`.
+    if (AlexAntennaFacade* alex = m_radioModel->alexAntennaFacade()) {
+        alex->setEditGate([self](QString* reason) {
+            const bool allowed = self
+                && (self->m_applyingInbound || self->remoteHardwareConfigAvailable());
+            if (!allowed && reason) {
+                *reason = self ? self->hardwareConfigUnavailableReason()
+                               : QStringLiteral("Connect to the Core to change the radio's "
+                                                "hardware settings.");
+            }
+            return allowed;
+        });
+        if (m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+            && m_capabilities.radioHardwareVersion >= 2) {
+            m_objects.insert("alexAntennas", alex);
+            watchForOutbound("alexAntennas", alex);
+        } else {
+            m_objects.remove("alexAntennas");
+            m_outboundMirror->unwatch("alexAntennas");
+        }
+    }
+
     const QByteArray transmitKey(kTransmitKey);
     m_objects.insert(transmitKey, &m_radioModel->transmitModel());
     watchForOutbound(transmitKey, &m_radioModel->transmitModel());
@@ -2199,6 +2228,10 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
         auto* stepAtt = qobject_cast<StepAttenuatorFacade*>(target);
         return stepAtt && stepAtt->applyRemoteProperty(propertyName, native);
     }
+    if (className == "AlexAntennaFacade") {
+        auto* alex = qobject_cast<AlexAntennaFacade*>(target);
+        return alex && alex->applyRemoteProperty(propertyName, native);
+    }
     if (className == "PureSignalSettings") {
         auto* settings = qobject_cast<PureSignalSettings*>(target);
         return settings && settings->applyStationDiagnostic(propertyName, native);
@@ -2579,6 +2612,33 @@ QString StationClient::radioHardwareUnavailableReason() const
     }
     return QStringLiteral("This Core cannot change its radio's attenuator for this "
                           "app. Updating the Core may help.");
+}
+
+bool StationClient::remoteHardwareConfigAvailable() const
+{
+    return propertyResultsAvailable() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.radioHardwareVersion >= 2;
+}
+
+QString StationClient::hardwareConfigUnavailableReason() const
+{
+    if (remoteHardwareConfigAvailable()) {
+        return {};
+    }
+    if (!m_handshakeComplete) {
+        return QStringLiteral("Connect to the Core to change the radio's hardware settings.");
+    }
+    return QStringLiteral("This Core cannot change its radio's hardware settings for this "
+                          "app. Updating the Core may help.");
+}
+
+StationClient::CommandOutcome StationClient::requestIoBoardProbe()
+{
+    if (!remoteHardwareConfigAvailable()) {
+        return {false, hardwareConfigUnavailableReason()};
+    }
+    return sendCommand("requestIoBoardProbe", -1, {},
+                       QStringLiteral("the I/O board probe"));
 }
 
 bool StationClient::nnrControlAvailable() const

@@ -13,6 +13,10 @@
 //   2026-09-23 - R-R3-46: in a remote window the tabs show the Core's
 //                 radio; edits stay off the Core's raw hardware keys.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: a remote window's receive settings write through
+//                 to the Core, which applies them (radioHardwareVersion 2);
+//                 transmit fields follow the transmit permission.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -73,12 +77,14 @@
 #include "hardware/BandwidthMonitorTab.h"
 
 #include "core/AppSettings.h"
+#include "core/accessories/AlexAntennaFacade.h"
 #include "core/BoardCapabilities.h"
 #include "core/HardwareProfile.h"
 #include "core/RadioDiscovery.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
+#include <QLabel>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
@@ -96,6 +102,14 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     m_tabs = new QTabWidget(this);
     m_tabs->setTabPosition(QTabWidget::North);
     contentLayout()->setContentsMargins(0, 0, 0, 0);
+    // R-R3-46: why a remote window cannot change these, when it cannot.
+    m_remote = model != nullptr && !model->ownsLocalDsp();
+    m_remoteNotice = new QLabel(this);
+    m_remoteNotice->setObjectName(QStringLiteral("hardwareConfigUnavailable"));
+    m_remoteNotice->setWordWrap(true);
+    m_remoteNotice->setMargin(8);
+    m_remoteNotice->hide();
+    contentLayout()->addWidget(m_remoteNotice);
     contentLayout()->addWidget(m_tabs);
 
     // ── Create stub tab widgets ───────────────────────────────────────────────
@@ -158,6 +172,14 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     wire(m_bwMonitorTab,   QStringLiteral("bandwidthMonitor"));
 
     // ── Listen for live radio connection so sub-tabs populate ─────────────────
+    if (m_remote) {
+        if (AlexAntennaFacade* alex = m_model->alexAntennaFacade()) {
+            connect(alex, &AlexAntennaFacade::windowAvailabilityChanged,
+                    this, [this](bool) { applyRemoteAvailability(); });
+        }
+        applyRemoteAvailability();
+    }
+
     if (m_model) {
         connect(m_model, &RadioModel::currentRadioChanged,
                 this, &HardwarePage::onCurrentRadioChanged);
@@ -198,12 +220,13 @@ void HardwarePage::onTabSettingChanged(const QString& tabKey,
                                         const QVariant& value)
 {
     if (m_currentMac.isEmpty()) { return; } // no radio connected yet
-    // R-R3-46: in a remote window the tabs now show the Core's radio, but
-    // the Core applies hardware changes through its own controllers, never
-    // raw hardware/<mac>/ keys its teardown save would overwrite. Until that
-    // path exists an edit here is dropped, as it was while these tabs had no
-    // MAC (the page is also disabled with its reason).
-    if (m_model && !m_model->ownsLocalDsp()) { return; }
+    // R-R3-46: in a remote window the tabs show the Core's radio and write
+    // through to its settings for that radio, as a local window writes its
+    // own. The Core then reloads the controllers that hold them (its
+    // hardware apply step), so the radio changes now and the Core's later
+    // saves keep the change. Against a Core that does not offer that, the
+    // edit is dropped (the tabs are disabled with the reason).
+    if (m_remote && !remoteEditsAvailable()) { return; }
 
     // The tab emits keys like "radioInfo/sampleRate"; strip the leading tabKey/
     // prefix if already included, or compose it.
@@ -288,6 +311,36 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
     }
 }
 
+// ── Remote availability and transmit permission (R-R3-46) ────────────────────
+
+bool HardwarePage::remoteEditsAvailable() const
+{
+    const AlexAntennaFacade* alex = m_model ? m_model->alexAntennaFacade() : nullptr;
+    return alex != nullptr && alex->windowAvailable();
+}
+
+void HardwarePage::applyRemoteAvailability()
+{
+    if (!m_remote) {
+        return;
+    }
+    const bool available = remoteEditsAvailable();
+    const AlexAntennaFacade* alex = m_model ? m_model->alexAntennaFacade() : nullptr;
+    const QString reason = available || alex == nullptr ? QString()
+                                                        : alex->windowUnavailableReason();
+    m_tabs->setEnabled(available);
+    m_tabs->setToolTip(reason);
+    m_remoteNotice->setText(reason);
+    m_remoteNotice->setVisible(!available && !reason.isEmpty());
+}
+
+void HardwarePage::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    m_antennaAlexTab->setTransmitPermitted(permitted, reason);
+    m_ocOutputsTab->setTransmitPermitted(permitted, reason);
+    m_paCalTab->setTransmitPermitted(permitted, reason);
+}
+
 // ── Test helper ───────────────────────────────────────────────────────────────
 
 #ifdef NEREUS_BUILD_TESTS
@@ -305,6 +358,27 @@ bool HardwarePage::isTabVisibleForTest(Tab t) const
         case Tab::BandwidthMonitor: return m_tabs->isTabVisible(m_bwMonitorIdx);
     }
     return false;
+}
+
+QWidget* HardwarePage::tabWidgetForTest(Tab t) const
+{
+    switch (t) {
+        case Tab::RadioInfo:        return m_radioInfoTab;
+        case Tab::AntennaAlex:      return m_antennaAlexTab;
+        case Tab::OcOutputs:        return m_ocOutputsTab;
+        case Tab::Xvtr:             return m_xvtrTab;
+        case Tab::Diversity:        return m_diversityTab;
+        case Tab::Calibration:      return m_paCalTab;
+        case Tab::Hl2Options:       return m_hl2OptionsTab;
+        case Tab::Hl2IoBoard:       return m_hl2IoTab;
+        case Tab::BandwidthMonitor: return m_bwMonitorTab;
+    }
+    return nullptr;
+}
+
+bool HardwarePage::remoteEditsAvailableForTest() const
+{
+    return !m_remote || remoteEditsAvailable();
 }
 
 QString HardwarePage::tabTextForTest(Tab t) const

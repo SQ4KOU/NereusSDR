@@ -25,6 +25,10 @@
 //                  backed by CalibrationController model (Phase 3P-G).
 //                  J.J. Boyd (KG4VCF), with AI-assisted transformation via
 //                  Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: a remote window loads the Core's radio's
+//                 calibration; TX Display and Volts/Amps follow the transmit
+//                 permission. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -128,6 +132,7 @@
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
 #include "CalibrationTab.h"
+#include "HardwareTransmitGate.h"
 
 #include "core/BoardCapabilities.h"
 #include "core/CalibrationController.h"
@@ -323,6 +328,7 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     // Source: setup.cs:14325-14333 udTXDisplayCalOffset [@501e3f5]
     // =========================================================================
     auto* txDisplayGroup = new QGroupBox(tr("TX Display Cal"), scrollWidget);
+    m_txDisplayGroup = txDisplayGroup;
     auto* txDisplayForm  = new QFormLayout(txDisplayGroup);
 
     // Source: setup.cs:14325-14328 udTXDisplayCalOffset -> Display.TXDisplayCalOffset [@501e3f5]
@@ -348,6 +354,7 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     // ride on those names.
     // =========================================================================
     auto* vaCalGroup = new QGroupBox(tr("Volts/Amps Calibration"), scrollWidget);
+    m_vaCalGroup = vaCalGroup;
     auto* vaCalForm  = new QFormLayout(vaCalGroup);
 
     // Source: Thetis udAmpSens setup.designer.cs:11672-11677 [v2.10.3.13];
@@ -575,14 +582,29 @@ void CalibrationTab::syncFromController()
 
 // -- populate ------------------------------------------------------------------
 
-void CalibrationTab::populate(const RadioInfo& /*info*/, const BoardCapabilities& /*caps*/)
+void CalibrationTab::populate(const RadioInfo& info, const BoardCapabilities& /*caps*/)
 {
+    // R-R3-46: a remote window has no connect of its own to load the
+    // controller, so it reads the Core's radio's saved calibration here
+    // (reading only: nothing is written back until an edit).
+    if (m_calCtrl && m_model && !m_model->ownsLocalDsp() && !info.macAddress.isEmpty()) {
+        m_calCtrl->setMacAddress(info.macAddress);
+        m_calCtrl->load();
+    }
     // Load per-radio calibration settings from controller (set by RadioModel at connect).
     if (m_calCtrl) {
         syncFromController();
     }
     // Note: PaCalibrationGroup repopulation on radio swap is now handled by
     // PaWattMeterPage (Setup IA reshape Phase 3A, 2026-05-02).
+}
+
+// -- setTransmitPermitted (R-R3-46) -------------------------------------------
+
+void CalibrationTab::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    HardwareTransmitGate::apply(m_txDisplayGroup, permitted, reason);
+    HardwareTransmitGate::apply(m_vaCalGroup, permitted, reason);
 }
 
 // -- restoreSettings -----------------------------------------------------------

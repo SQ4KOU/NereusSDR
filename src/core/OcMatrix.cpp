@@ -18,6 +18,9 @@
 //                enums.cs TXPinActions exactly (7 values: MOX through
 //                MOX_TUNE_TWOTONE); no VOX/PA_IN (those do not exist
 //                in Thetis TXPinActions as of [@501e3f5]).
+//   2026-09-23 - R-R3-46: save() writes only the keys whose saved value
+//                differs. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Penny.cs header ===
@@ -208,19 +211,32 @@ void OcMatrix::save()
 
     QReadLocker locker(&m_lock);
 
+    // R-R3-46: write only the keys whose saved value differs, reading them
+    // with load()'s own defaults, so an unchanged cell reads back the same
+    // either way. One pin click used to rewrite every band and pin (385
+    // keys), which in a remote window is 385 writes to the Core, and on the
+    // Core 385 settings updates back to the window.
+    const auto store = [&s](const QString& key, const QString& value, const QString& fallback) {
+        if (s.value(key, fallback).toString() != value) {
+            s.setValue(key, value);
+        }
+    };
+    const QString kTrue = QStringLiteral("True");
+    const QString kFalse = QStringLiteral("False");
     for (int b = 0; b < kBandCount; ++b) {
         const QString bandSlug = bandKeyName(Band(b));
         for (int pin = 0; pin < kPinCount; ++pin) {
             const QString rxKey = QStringLiteral("%1/rx/%2/pin%3").arg(base, bandSlug).arg(pin + 1);
             const QString txKey = QStringLiteral("%1/tx/%2/pin%3").arg(base, bandSlug).arg(pin + 1);
-            s.setValue(rxKey, m_pins[b][pin][0] ? QStringLiteral("True") : QStringLiteral("False"));
-            s.setValue(txKey, m_pins[b][pin][1] ? QStringLiteral("True") : QStringLiteral("False"));
+            store(rxKey, m_pins[b][pin][0] ? kTrue : kFalse, kFalse);
+            store(txKey, m_pins[b][pin][1] ? kTrue : kFalse, kFalse);
         }
     }
 
+    const QString defaultSlug = actionSlug(TXPinAction::MoxTuneTwoTone);
     for (int pin = 0; pin < kPinCount; ++pin) {
         const QString k = QStringLiteral("%1/actions/pin%2/action").arg(base).arg(pin + 1);
-        s.setValue(k, actionSlug(m_pinActions[pin]));
+        store(k, actionSlug(m_pinActions[pin]), defaultSlug);
     }
 }
 

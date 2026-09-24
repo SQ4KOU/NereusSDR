@@ -43,6 +43,8 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QRadioButton>
+#include <QScopeGuard>
 #include <QComboBox>
 #include <QGraphicsOpacityEffect>
 #include <QGroupBox>
@@ -79,6 +81,11 @@
 #include "gui/setup/DeviceCard.h"
 #include "gui/setup/GeneralOptionsPage.h"
 #include "gui/setup/HardwarePage.h"
+#include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
+#include "gui/setup/hardware/OcOutputsHfTab.h"
+#include "core/accessories/AlexAntennaFacade.h"
+#include "core/accessories/AlexController.h"
+#include "core/RadioDiscovery.h"
 #include "gui/widgets/VfoWidget.h"
 #include "gui/widgets/StationBlock.h"
 #include "models/RadioModel.h"
@@ -879,9 +886,16 @@ private slots:
         QCOMPARE(h.proxy().droppedWhileOffline(), heldBefore);
 
         QSignalSpy superseded(&h.proxy(), &SettingsProxy::offlineEditsSuperseded);
+        // R-R3-46 (carried): the gap between Connect and the snapshot. An
+        // edit dropped after the check above (while the link came back)
+        // would show as a key the Core's snapshot contradicts.
         QVERIFY(connectFromRadioMenu(h));
         QTest::qWait(kSettleMs);
         QCOMPARE(superseded.size(), 0);
+        const QSet<QString> contradicted = h.proxy().keysContradictedByLastSnapshot();
+        QVERIFY2(contradicted.isEmpty(),
+                 qPrintable(QStringList(contradicted.cbegin(), contradicted.cend())
+                                .join(QStringLiteral(", "))));
         QCOMPARE(h.acceptedConnections(), 2);
     }
 
@@ -1005,6 +1019,64 @@ private slots:
         QVERIFY(badge->toolTip().contains(QStringLiteral("ADC0: overload")));
 
         h.station().setStepAttController(nullptr);
+    }
+
+    // R-R3-46: Hardware Config in a window connected to a Core that offers
+    // it (radioHardwareVersion 2). The tabs are live and show the Core's
+    // radio; an RX antenna change reaches the Core's own AlexController;
+    // an OC receive pin reaches the Core's settings for that radio and the
+    // Core reloads its matrix; the transmit fields wait for remote transmit.
+    void hardwareConfigReceiveSettingsReachTheCore()
+    {
+        StepAttenuatorController coreAtt;
+        coreAtt.setTickTimerEnabled(false);
+        RemoteWindowHarness h;
+        h.station().setStepAttController(&coreAtt);
+        const auto unbind = qScopeGuard([&h] { h.station().setStepAttController(nullptr); });
+        const QString mac = QStringLiteral("AA:BB:CC:DD:EE:53");
+        RadioInfo radio;
+        radio.macAddress = mac;
+        radio.boardType = HPSDRHW::Saturn;
+        h.station().setLastRadioInfoForTest(radio);
+        QStringList reloads;
+        h.station().setHardwareApplyObserverForTest(
+            [&reloads](const QString& name) { reloads << name; });
+        QVERIFY(h.start());
+        QVERIFY(connectFromRadioMenu(h));
+        QVERIFY(h.client()->remoteHardwareConfigAvailable());
+        QTRY_COMPARE(h.remoteModel()->currentRadioInfo().macAddress, mac);
+
+        SetupDialog* dialog = openSettings(h);
+        QVERIFY(dialog);
+        QWidget* const page = showSetupLeaf(dialog, QStringLiteral("Hardware Config"));
+        auto* hardware = qobject_cast<HardwarePage*>(page);
+        QVERIFY(hardware);
+        QVERIFY(hardware->isEnabled());
+        QTRY_VERIFY(hardware->remoteEditsAvailableForTest());
+        QVERIFY(hardware->findChild<QTabWidget*>()->isEnabled());
+
+        // RX antenna: the Core's controller changes.
+        auto* antennas = hardware->findChild<AntennaAlexAntennaControlTab*>();
+        QVERIFY(antennas);
+        QVERIFY(!antennas->txGridForTest()->isEnabled());
+        QRadioButton* const ant2 = antennas->rxButtonForTest(Band::Band40m, 2);
+        QVERIFY(ant2 && ant2->isEnabled());
+        ant2->click();
+        QTRY_COMPARE(h.station().alexController().rxAnt(Band::Band40m), 2);
+        QTRY_VERIFY(ant2->isChecked());
+
+        // OC receive pin: the Core's settings for its radio, and a reload.
+        auto* hf = hardware->findChild<OcOutputsHfTab*>();
+        QVERIFY(hf);
+        QCheckBox* pin = nullptr;
+        for (QCheckBox* box : hf->findChildren<QCheckBox*>()) {
+            if (box->toolTip() == QStringLiteral("RX OC pin 4, band 20m")) { pin = box; }
+        }
+        QVERIFY(pin && pin->isEnabled());
+        pin->click();
+        const QString key = QStringLiteral("hardware/%1/oc/rx/20m/pin4").arg(mac);
+        QTRY_COMPARE(h.stationSettings().value(key).toString(), QStringLiteral("True"));
+        QTRY_VERIFY(reloads.contains(QStringLiteral("oc")));
     }
 
     // R-R3-46 / R-R3-21: a Core that does not offer its attenuator

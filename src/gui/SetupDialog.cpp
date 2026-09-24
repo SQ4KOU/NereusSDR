@@ -90,6 +90,10 @@
 //                 permission with its reason; a remote window shows them
 //                 for a Core radio that has them. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: Hardware Config is no longer declared
+//                 unavailable remotely; a non-QDialog modal and a kept dialog's
+//                 close hold and then run the postponed rebuild. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -636,15 +640,19 @@ void SetupDialog::forgetPagePointersInside(const QWidget* page)
     if (inside(m_paValuesPage))   { m_paValuesPage = nullptr; }
 }
 
-QDialog* SetupDialog::openDialogOwnedBy(const QWidget* page) const
+QWidget* SetupDialog::openDialogOwnedBy(const QWidget* page) const
 {
     // The modal on top, if the page is anywhere in its parent chain. Walked
     // by QObject parent, not QWidget::isAncestorOf(): that stops at a window
     // boundary, and a dialog is a window of its own.
+    //
+    // R-R3-46 (carried from the remote window Setup re-review): returned as
+    // a QWidget, so a modal window that is not a QDialog still holds the
+    // rebuild back; qobject_cast<QDialog*> used to turn it into "none".
     if (QWidget* const modal = QApplication::activeModalWidget()) {
         for (const QObject* object = modal; object != nullptr; object = object->parent()) {
             if (object == page) {
-                return qobject_cast<QDialog*>(modal);
+                return modal;
             }
         }
     }
@@ -692,19 +700,28 @@ void SetupDialog::rebuildStalePages()
         // event loop, and deleting the page there would pull the page out
         // from under it. Postponed until the dialog is gone, or the page is
         // next shown.
-        if (QDialog* const owner = openDialogOwnedBy(old)) {
+        if (QWidget* const owner = openDialogOwnedBy(old)) {
             m_rebuildPostponed = true;
             if (!m_rebuildWaitsFor.contains(owner)) {
                 m_rebuildWaitsFor.insert(owner);
-                connect(owner, &QObject::destroyed, this, [this, owner] {
+                const auto rebuildLater = [this, owner] {
                     m_rebuildWaitsFor.remove(owner);
-                    // Queued: the dialog is destroyed on its way out of the
-                    // page's own code, which finishes first.
+                    // Queued: the dialog goes on its way out of the page's
+                    // own code, which finishes first.
                     QMetaObject::invokeMethod(this, [this] {
                         rebuildStalePages();
                         refreshTransmitPresentation();
                     }, Qt::QueuedConnection);
-                });
+                };
+                connect(owner, &QObject::destroyed, this, rebuildLater);
+                // R-R3-46 (carried): a dialog the page keeps after it
+                // closes is never destroyed, so its close runs the
+                // postponed rebuild too (queued, as above: finished() is
+                // emitted from inside the dialog's own done()).
+                if (auto* const dialog = qobject_cast<QDialog*>(owner)) {
+                    connect(dialog, &QDialog::finished, this, rebuildLater,
+                            Qt::QueuedConnection);
+                }
             }
             qCDebug(lcSetupTiming) << "rebuild of Setup page" << entry.label
                                    << "waits for its open dialog";
@@ -990,20 +1007,20 @@ void SetupDialog::buildTree()
     // setVoltsAmpsVisible().
     //
     // R-R3-21: both Hardware leaves act on the radio's hardware settings.
-    // R-R3-46: a remote window's tabs now show the Core's radio, but
-    // HardwarePage::onTabSettingChanged still drops every edit there (the
-    // Core applies hardware changes through its own controllers, not raw
-    // keys); the DDC Routing keys are per-MAC too.
+    // R-R3-46: in a remote window Hardware Config shows the Core's radio and
+    // its receive settings write through to the Core, which applies them;
+    // HardwarePage disables itself with the reason against a Core that does
+    // not offer that, and its transmit fields follow the transmit
+    // permission. DDC Routing (a placeholder locally too) stays declared
+    // unavailable; its keys are per-MAC as well.
     const QString hardwareReason = tr(
         "The radio's hardware settings cannot be changed from a remote window yet.");
-    QTreeWidgetItem* const hardwareConfigLeaf =
-        registerPage(hardware, "Hardware Config", SetupScope::Core, [this]() -> QWidget* {
+    registerPage(hardware, "Hardware Config", SetupScope::Core, [this]() -> QWidget* {
         auto* hwPage = new HardwarePage(m_model);
         connect(hwPage, &HardwarePage::anan8000DleVoltsAmpsChanged,
                 this,   &SetupDialog::anan8000DleVoltsAmpsChanged);
         return hwPage;
     });
-    markRemoteUnavailable(hardwareConfigLeaf, hardwareReason);
 
     // Phase 3F Sub-Epic E Tasks 8-10: DDC Routing power-user override page.
     // Skeleton-only landing; per-DDC table + override schema follow once
