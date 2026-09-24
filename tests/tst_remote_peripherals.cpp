@@ -378,7 +378,7 @@ private slots:
     void rawRfKitSwitchWriteIsRefused();
     void pgxlBandFollowLineLocalAndRemote();
     void oneTciSwitchDrivesTheCoresStationServer();
-    void windowHandsTheTciPortToTheCore();
+    void coreHereServesThisComputersApps();
     // R-R3-47 / R-R3-22
     void remoteWindowShowsTheCoresRecords();
     void remoteWindowChangesTheInterlockOnTheCore();
@@ -1450,6 +1450,9 @@ void RemotePeripheralsTest::oneTciSwitchDrivesTheCoresStationServer()
     QVERIFY(station.stationTciModel()->listening());
     QTRY_VERIFY(secondClient.stationTciAvailable());
 
+    // Rework part 1: the second window's switch shows the Core's.
+    QTRY_VERIFY(secondSwitch.switchOn());
+    QCOMPARE(secondSwitch.port(), port);
     secondSwitch.setSwitch(false, port, QHostAddress(QHostAddress::LocalHost));
     QTRY_VERIFY(!station.stationTciModel()->enabled());
     QVERIFY(!station.stationTciModel()->listening());
@@ -1459,13 +1462,13 @@ void RemotePeripheralsTest::oneTciSwitchDrivesTheCoresStationServer()
     AppSettings::instance().clear();
 }
 
-// Follow-up 1 (R-R3-48): a window on the Core's computer serves its TCI
-// port while the Core's station switch is off (I1). Another window (or the
-// phone) turns the Core's switch on: the Core cannot take the port on this
-// computer and says so; the window hands it over and the Core serves apps
-// on this computer and on the station network (a real address of this
-// computer stands in for the station network when there is one).
-void RemotePeripheralsTest::windowHandsTheTciPortToTheCore()
+// Rework part 1 (R-R3-48, one switch and one port): a window on the
+// Core's computer runs no TCI server of its own while connected. The phone
+// (or another window) turns the Core's station switch on: the Core serves
+// apps on this computer and on the station network (a real address of
+// this computer stands in for the station network when there is one), and
+// this window's switch shows the Core's.
+void RemotePeripheralsTest::coreHereServesThisComputersApps()
 {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
@@ -1490,6 +1493,13 @@ void RemotePeripheralsTest::windowHandsTheTciPortToTheCore()
     client.setCoreOnThisComputerForTest(true);
     TciServer local(&window);
     TciSwitch tci(&local, &window);
+    AppSettings::instance().setValue(QStringLiteral("TciServerEnabled"), QStringLiteral("False"));
+    CatTciServerPage page;
+    page.setRadioModel(&window);
+    QVERIFY(!page.switchOnForTesting());
+    // The window's switch at start (before any link): off here.
+    tci.setSwitch(false, port, QHostAddress(QHostAddress::LocalHost), /*tellCore=*/false);
+    QVERIFY(!local.isRunning());
     auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
     auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
     stationEnd->linkTo(clientEnd);
@@ -1499,19 +1509,20 @@ void RemotePeripheralsTest::windowHandsTheTciPortToTheCore()
     QVERIFY(completed.wait(5000) || !completed.isEmpty());
     QTRY_VERIFY(client.stationTciAvailable());
     window.reportStationLinkStateChanged();
+    QTRY_VERIFY(!local.isRunning());   // connected on the Core's computer: none here
 
-    // The window's switch at start, the Core's off: the window serves here.
-    tci.setSwitch(true, port, QHostAddress(QHostAddress::LocalHost), /*tellCore=*/false);
-    QVERIFY(local.isRunning());
-
-    // The phone turns the Core's switch on: it cannot take the port here...
+    // The phone turns the Core's switch on: the Core serves.
     QString reason;
     QVERIFY(station.setStationTciForStation(true, port, &reason));
-    // ...and the window hands it over; the Core serves.
     QTRY_VERIFY_WITH_TIMEOUT(station.stationTciModel()->listening(), 5000);
     QTRY_VERIFY(window.stationTciModel()->listening());
-    QVERIFY(!local.isRunning());
     QVERIFY(station.stationTciModel()->error().isEmpty());
+    QVERIFY(!local.isRunning());
+    QTRY_VERIFY(tci.switchOn());
+    QCOMPARE(tci.port(), port);
+    // The TCI page shows the Core's switch and port.
+    QTRY_VERIFY(page.switchOnForTesting());
+    QCOMPARE(page.portForTesting(), int(port));
     const auto servedAt = [](const QString& address, quint16 appPort) {
         QWebSocket app;
         QStringList frames;

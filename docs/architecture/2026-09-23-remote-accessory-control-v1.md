@@ -1025,31 +1025,25 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
 - The amp page and applet show the band-follow line (see "Band follow"):
   the RF-Kit page and applet from `rfkit`, the Power Genius applet and the
   4O3A page's General tab from `amplifier`, in local and remote windows.
-- The app's one TCI switch and port (CAT & Network > TCI Server) start this
-  window's own TCI server as before and, with `stationTciVersion` 1, send
-  `setStationTci` so the Core's station server runs on the same port; off
-  stops both. The command is sent only when the operator changes the switch
-  or the port; a window connecting does not change the Core's switch. The
-  page adds "Also at the station: <address>, port <port>" while the Core's
-  server listens ("The station's TCI server is not running." while it is on
-  and not listening). When the Core runs on the same computer as the
-  window and its station server is on, listening and on the same port,
-  the window runs no server of its own and apps there use the Core's; the
-  page then says "The Core on this computer serves TCI apps here, port
-  <port>." In every other case (the Core's switch off, including when
-  another window turns it off, not listening, another port, an older
-  Core) the window keeps its own server, so apps on that computer never
-  lose TCI. A window turning the switch on with the Core there waits up
-  to 3 seconds for the Core's whole answer (on, listening, on that port;
-  the object's properties arrive one at a time and the first is not the
-  answer) before serving itself, so the two do not race for the port.
-  When the Core there reports its switch on, on the window's port, but not
-  listening (another window or the phone turned it on while this window
-  held the port), the window releases the port and sends `setStationTci`
-  again, once for that state, under the same wait; if the Core still
-  cannot listen the window serves again. With the link to a Core on the
-  same computer down, the Core's last state is not trusted and the window
-  serves.
+- One TCI switch and one port (operator decision of 2026-09-23). In a
+  window connected to a Core with `stationTciVersion` 1, the switch and
+  port on CAT & Network > TCI Server are the Core's station switch and
+  port: the page shows them (following a change made from another window
+  or the phone, and keeping this computer's `TciServerEnabled` and
+  `TciServerPort` in step), and changing them sends `setStationTci`. The
+  Core keeps its own copy, so its server keeps running for the amp when
+  the window closes or another app connects. The window reads the Core's
+  change only once all its properties have arrived, and after sending a
+  change it waits for the Core to report that same switch and port before
+  following again, so it never flips back to a stale value. The window's
+  own server follows the switch only when the Core runs on another
+  computer; on the Core's own computer the window runs no server while
+  connected, and apps there use the Core's (it listens on that computer
+  too). The page adds "Also at the station: <address>, port <port>" while
+  the Core's server listens ("The station's TCI server is not running."
+  while it is on and not listening), or "The Core on this computer serves
+  TCI apps here, port <port>." on the Core's computer. With an older Core
+  (or none) the window's own server follows the switch as it always has.
 - A local window's RF-Kit band follow is worked out from its own TCI server
   the same way.
 - With `accessoryDataVersion` 1 the desktop remote window's 4O3A page
@@ -1174,16 +1168,14 @@ rewrite the fixtures, and update this document in the same commit.
   Core across restarts, a TCI app at the station hearing receive-only,
   `split_enable:` and `vfo:` as the Core's slice moves, transmit refused,
   the RF-Kit's band follow over the server, the one switch driving both
-  servers (none of the window's own when the Core is on this computer and
-  serving that port; the window's own when the Core's switch is off, not
-  listening or on another port, and after a wait with no answer), the
-  wait ending on the Core's whole answer in the wire's property order, the
-  handover of the port to a Core that cannot listen (once per state), the
-  window serving while the link is down, the Core retrying a listener
-  that could not start with its plain reason, and the TCI page's line.
-  `tst_remote_peripherals` completes the handover over the loopback: a
-  window serving the port, the Core's switch turned on by another app,
-  then the Core serving apps on its computer and on a station address.
+  servers, a window following the Core's switch and port changed by
+  another window (the whole change at once, in the wire's property
+  order), no window server on the Core's computer while connected, the
+  Core retrying a listener that could not start with its plain reason,
+  and the TCI page's line. `tst_remote_peripherals`: on the Core's
+  computer the window runs none, the phone turns the Core's switch on,
+  the Core serves apps on its computer and on a station address, and the
+  TCI page shows the Core's switch and port.
 - `tst_tci_tx_mutex`: the station server's transmit refusal on the wire,
   and its refusal of TX profile and XIT changes (nothing applied or
   broadcast, the kept value to the asking app, the reason off the wire).

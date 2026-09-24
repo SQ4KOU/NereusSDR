@@ -1,14 +1,15 @@
 // no-port-check: NereusSDR-original. R-R3-48 the app's one TCI switch.
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
-// 2026-09-24: R-R3-48 follow-up: the port handover to a Core on this
-// computer, the wait on the Core's whole answer, the link-down rule. J.J.
-// Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-48 rework: one switch and one port with the Core's
+// station server (operator decision 2026-09-23); the handover removed.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #pragma once
 
 #include <QHostAddress>
 #include <QObject>
 #include <QPointer>
-#include <QTimer>
+
+#include <optional>
 
 namespace NereusSDR {
 
@@ -17,70 +18,60 @@ class TciServer;
 
 // The app's one TCI switch and port (Setup > CAT & Network > TCI Server).
 //
-// On, it starts this window's own TciServer (as it always has) and, in a
-// window on a Core that runs a station TCI server (stationTciVersion 1),
-// asks the Core to run its server on the same port (setStationTci). Off
-// stops both. The Core keeps its switch when this window closes and when
-// another app connects: the command is sent only when the operator
-// changes the switch or the port here.
+// Operator decision of 2026-09-23: one TCI switch and one port. In a window
+// connected to a Core that runs a station TCI server (stationTciVersion 1)
+// the switch and port are the Core's: the window shows the Core's station
+// switch and port (following a change made by another window or the phone,
+// and keeping this computer's TciServerEnabled / TciServerPort settings in
+// step), and changing them here sets the Core's (setStationTci). The Core
+// keeps its own copy, so its server keeps running for the amp when this
+// window closes or another app connects.
 //
-// A Core on this same computer whose station server is on, listening and
-// on this switch's port already serves TCI here (it listens on this
-// computer too), so the window then runs no server of its own and apps on
-// this computer use the Core's: one server, one port. In every other case
-// (the Core's switch off, not listening, another port, or an older Core)
-// this window keeps its own server, so apps here never lose TCI. When this
-// window turns the switch on with the Core here, it waits up to
-// kCoreAnswerWaitMs for the Core's whole answer (on, listening, this port)
-// before serving itself, so the two do not race for the port.
-//
-// Handover: when the Core here reports its switch on, on this port, but
-// not listening (it could not take the port, typically because this
-// window held it), this window releases the port and asks the Core again,
-// once for that state, under the same wait; if the Core still cannot
-// listen, the window serves again. With the link to the Core down, the
-// Core's last state is not trusted: the window serves.
+// This window's own server follows the switch only when the Core runs on
+// another computer. On the Core's own computer the window runs no server:
+// the Core's server also listens on this computer and serves apps here.
+// Without a Core that offers a station server (a local window, an older
+// Core) the window's own server follows the switch as it always has.
 class TciSwitch : public QObject {
     Q_OBJECT
 public:
-    /// How long this window waits for the Core on this computer to answer
-    /// a switch-on before it serves TCI itself.
-    static constexpr int kCoreAnswerWaitMs = 3000;
-
     TciSwitch(TciServer* local, RadioModel* model, QObject* parent = nullptr);
 
     /// The switch changed (or the window started): apply it here and, when
-    /// `tellCore`, ask the Core for the same.
+    /// `tellCore`, set the Core's to the same.
     void setSwitch(bool on, quint16 port, const QHostAddress& bindAddress, bool tellCore = true);
     /// The port or bind address changed: restart this window's server if
-    /// it runs, and give the Core the new port while the switch is on.
+    /// it runs, and give the Core the new port.
     void setPortOrBind(quint16 port, const QHostAddress& bindAddress);
     /// The link to the Core changed: start or stop this window's server as
     /// the placement rule says.
     void reevaluate();
 
     bool switchOn() const { return m_on; }
-    /// The Core is on this computer (whether or not it serves TCI here).
+    quint16 port() const { return m_port; }
+    /// The Core is on this computer (kept while the link is down).
     bool coreServesThisComputer() const;
-    /// The Core on this computer serves TCI here on this switch's port
-    /// (its station switch on and listening), so this window runs none.
-    bool coreCoversThisComputer() const;
-    /// The Core runs a station TCI server this switch also controls.
+    /// Connected to a Core that runs a station TCI server this switch sets.
     bool coreHasStationServer() const;
 
     /// R-R3-48: the TCI page's line about the Core's station server, in a
-    /// remote window on a Core that runs one: "Also at the station:
-    /// <address>, port <port>". Empty when there is nothing to say.
+    /// remote window connected to a Core that runs one: "Also at the
+    /// station: <address>, port <port>". Empty when there is nothing to say
+    /// (and while the link is down).
     static QString stationLine(const RadioModel* model);
 
 signals:
     /// A request to the Core could not be sent; `reason` in plain words.
     void stationRequestFailed(const QString& reason);
+    /// The switch now shows the Core's switch and port (another window or
+    /// the phone changed them); this computer's settings already say so.
+    void switchFollowedCore(bool on, quint16 port);
 
 private:
     void applyLocal();
     void tellCore();
     void onStationTciChanged();
+    void followCore();
     bool linkUp() const;
 
     QPointer<TciServer> m_local;
@@ -88,15 +79,12 @@ private:
     bool m_on{false};
     quint16 m_port{50001};
     QHostAddress m_bind{QHostAddress::LocalHost};
-    // A switch-on sent to the Core on this computer, not yet answered.
-    bool m_awaitingCore{false};
-    // A handover (or switch-on) was asked of the Core for its current
-    // state; not again until the Core's switch or port changes, it listens,
-    // the link changes or this window's switch or port does.
-    bool m_handoverTried{false};
-    bool m_lastCoreEnabled{false};
-    int m_lastCorePort{0};
-    QTimer m_awaitTimer;
+    // What this window last asked the Core for; the Core's state is not
+    // followed until it says the same (its answer arrives a property at a
+    // time), so the switch never flips back to the Core's old value.
+    std::optional<std::pair<bool, quint16>> m_asked;
+    // The Core's object is read once its whole change has arrived.
+    bool m_followQueued{false};
 };
 
 } // namespace NereusSDR
