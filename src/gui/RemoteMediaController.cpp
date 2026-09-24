@@ -1139,9 +1139,10 @@ void RemoteMediaController::setAudioProfileChoice(RemoteAudioProfile profile)
         const QPointer<RemoteMediaController> self(this);
         requestWantedReceiverAudio();
         if (!self) { return; }
-        // R-R3-45: the headphones mix too, muted speakers or not. A failed
-        // headphones device stays failed until it or its configuration
-        // changes (fix wave); the quality choice does not touch it.
+        // R-R3-45: the headphones mix too, muted speakers or not. A choice
+        // of quality retries failed headphones (a decoder that could not
+        // start depends on it); a media reconnect does not.
+        d->headphonesFaulted = false;
         requestHeadphonesAudio();
         if (!self) { return; }
     }
@@ -1209,28 +1210,33 @@ void RemoteMediaController::fallBackToOpus(const QString& cause)
 QString RemoteMediaController::headphonesFaultText(RemoteAudioReceiver::Fault fault)
 {
     // The receiver names its faults after the speaker; for the headphones
-    // receiver they mean the headphones device.
+    // receiver they mean the headphones device. A fault stops the
+    // headphones until they are turned off and on again (or another device
+    // or audio quality is chosen), so each says how to try again.
     using Fault = RemoteAudioReceiver::Fault;
+    const QString again =
+        QStringLiteral(" Turn the headphones off and on in Setup, Audio, Devices to try again.");
     switch (fault) {
     case Fault::SpeakerOpenFailed:
-        return QStringLiteral("The headphones could not be opened.");
+        return QStringLiteral("The headphones could not be opened.") + again;
     case Fault::SpeakerTimingUnavailable:
-        return QStringLiteral("The headphones stopped reporting their timing.");
+        return QStringLiteral("The headphones stopped reporting their timing.") + again;
     case Fault::SpeakerCallbackTooLarge:
         return QStringLiteral("The headphones buffer is larger than remote playback "
                               "supports. Choose a smaller buffer or other headphones.");
     case Fault::SpeakerStalled:
-        return QStringLiteral("The headphones stopped playing audio.");
+        return QStringLiteral("The headphones stopped playing audio.") + again;
     case Fault::SpeakerWriteFailed:
-        return QStringLiteral("Audio could not be sent to the headphones.");
+        return QStringLiteral("Audio could not be sent to the headphones.") + again;
     case Fault::DecoderUnavailable:
         return QStringLiteral("The audio decoder for the headphones could not start on "
-                              "this computer.");
+                              "this computer. Choosing the audio quality again tries once more.");
     case Fault::ArrivalBurst:
     case Fault::StreamGap:
     case Fault::NoPackets:
     case Fault::DecodeFailed:
     case Fault::ClockBuffer:
+        // The receiver restarts itself after these; none of them persists.
         return QStringLiteral("Audio on the headphones was interrupted.");
     }
     return {};

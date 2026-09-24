@@ -316,8 +316,9 @@ accepted one. The headphones mix runs while the GUI asked for it, some slice
 is routed to the headphones, the radio is connected and media is ready.
 Each accepted request, and each change of those that starts or stops the
 mix, is answered with one `headphones-audio-context` (a radio drop only when
-the mix was sending, so an app told `no-headphones-receiver` keeps that
-reason): the audio-profile
+it changes what the app was last told: a mix that was sending stops, and
+`media-not-ready` becomes `radio-offline`, while `no-headphones-receiver`
+and `client-disabled` stand): the audio-profile
 shape of `audio-context` with op `headphones-audio-context`:
 
 | Field | Meaning |
@@ -343,8 +344,9 @@ The GUI plays the headphones mix on this computer's headphones output with
 its own receiver and rate matcher, paced by that device's clock. A
 headphones device failure stops only that receiver: the GUI asks the Core
 to stop the mix, says what happened in plain words, and the speakers play
-on. It asks again only when the headphones device is opened, closed or
-changed; a media reconnect or a new audio quality choice keeps the failure.
+on. It asks again when the headphones device is opened, closed or
+changed, or the operator chooses the audio quality again (a decoder that
+could not start depends on it); a media reconnect keeps the failure.
 With a Core that did not advertise the capability, a slice flag routed to
 the headphones says in plain words that this Core cannot send audio for the
 headphones, so the receiver plays on the speakers (such a Core sums every

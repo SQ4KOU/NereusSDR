@@ -871,14 +871,17 @@ void DaemonMediaController::onRadioConnectionStateChanged(ConnectionState state)
             }
         }
         // R-R3-45: the headphones mix keeps its intent, as receivers do.
-        // Only a mix that was sending stops here; one already off keeps the
-        // reason the app was given (no-headphones-receiver, say).
+        // The app hears of the drop only when it changes what it was last
+        // told: a mix that was sending stops, and an app last told
+        // media-not-ready learns radio-offline; one told
+        // no-headphones-receiver or client-disabled keeps that reason.
         if (m_headphones.revision != 0) {
             const bool wasSending = m_headphones.sending;
             stopHeadphonesAudioCapture();
-            if (wasSending) {
-                sendHeadphonesAudioContext(
-                    false, headphonesBlockedBy().value_or(RemoteAudioOffReason::RadioOffline));
+            const RemoteAudioOffReason reason =
+                headphonesBlockedBy().value_or(RemoteAudioOffReason::RadioOffline);
+            if (wasSending || m_headphones.lastOffReason != reason) {
+                sendHeadphonesAudioContext(false, reason);
             }
         }
         clearProduction();
@@ -1880,6 +1883,7 @@ void DaemonMediaController::sendHeadphonesAudioContext(bool enabled,
     if (!enabled) {
         context.offReason = reason;
     }
+    m_headphones.lastOffReason = context.offReason;
     context.profile = m_headphones.activeProfile;
     context.profileRefusal = m_headphones.profileRefusal;
     sendControl(encodeHeadphonesAudioContext(context));

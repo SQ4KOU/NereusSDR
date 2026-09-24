@@ -177,6 +177,9 @@ private:
         RemoteAudioProfile activeProfile{RemoteAudioProfile::Opus};
         std::optional<RemoteAudioProfileRefusal> profileRefusal;
         bool sending{false};
+        /// The reason in the last context sent, or empty after an enabled
+        /// one (fix wave: a radio drop says only what changed).
+        std::optional<RemoteAudioOffReason> lastOffReason;
         quint16 nextSequence{1};
         quint32 nextTimestamp{0};
         std::unique_ptr<DaemonAudioSender> sender;

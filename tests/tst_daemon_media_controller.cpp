@@ -643,6 +643,7 @@ private slots:
     void headphonesMixRunsWhileAReceiverIsOnTheHeadphones();
     void headphonesMixFollowsTheProfileAndTheRadio();
     void radioDropKeepsTheHeadphonesReasonWhenNothingIsRouted();
+    void radioDropTellsAnAppWaitingOnMediaThatTheRadioIsGone();
 };
 
 void TstDaemonMediaController::configuredBudgetReturnsExactAllocationResultsAndRejectsOvercommit()
@@ -5229,5 +5230,34 @@ void TstDaemonMediaController::radioDropKeepsTheHeadphonesReasonWhenNothingIsRou
     h.radio.setConnectionStateForTest(ConnectionState::Connected);
     QTRY_COMPARE(headphonesContextsIn(controls).size(), 3);
     QVERIFY(headphonesContextsIn(controls).constLast().value(QStringLiteral("enabled")).toBool());
+    h.finish();
+}
+
+// R-R3-45 fix wave (re-review): an app last told media-not-ready learns
+// radio-offline when the radio drops, since that is now the reason; a
+// second drop notice with the same reason is not sent.
+void TstDaemonMediaController::radioDropTellsAnAppWaitingOnMediaThatTheRadioIsGone()
+{
+    Harness h;
+    const auto routes = qScopeGuard([&h] { resetOutputRoutes(h); });
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(headphonesStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    h.radio.sliceById(h.spareSliceId)->setOutputRoute(SliceModel::OutputRoute::Headphones);
+    QVERIFY(h.client.sendMediaControl(headphonesAudioControl(1, true),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 1);
+    QCOMPARE(headphonesContextsIn(controls).constLast().value(QStringLiteral("reason")).toString(),
+             QStringLiteral("media-not-ready"));
+
+    h.radio.setConnectionStateForTest(ConnectionState::Disconnected);
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 2);
+    QCOMPARE(headphonesContextsIn(controls).constLast().value(QStringLiteral("reason")).toString(),
+             QStringLiteral("radio-offline"));
+    h.radio.setConnectionStateForTest(ConnectionState::Connected);
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 3);
+    QCOMPARE(headphonesContextsIn(controls).constLast().value(QStringLiteral("reason")).toString(),
+             QStringLiteral("media-not-ready"));
     h.finish();
 }

@@ -205,7 +205,9 @@ AudioEngine::AudioEngine(QObject* parent)
     m_mixScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
     m_hpMixScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
     m_programScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
-    m_mixScratchFrames.store(kMixScratchMinFrames, std::memory_order_release);
+    m_avMixScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
+    m_vaxScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
+    m_mixScratchFrames.store(kMixScratchMinFrames, std::memory_order_seq_cst);
 #if defined(Q_OS_LINUX)
     // Cache the Linux audio backend detection result up front so Task 14's
     // dispatch (PipeWireBus vs. LinuxPipeBus pactl path) has a stable
@@ -403,7 +405,7 @@ void AudioEngine::setSliceStreaming(int sliceId, bool streaming)
     if (!streaming) {
         // Close first so no new audio callback can enter behind the
         // invalidation and escape the acknowledgment wait below.
-        m_mixAdmissionClosed.store(true, std::memory_order_release);
+        m_mixAdmissionClosed.store(true, std::memory_order_seq_cst);
     }
 
     m_masterMix.setSliceStreaming(sliceId, streaming);
@@ -436,14 +438,14 @@ void AudioEngine::setSliceStreaming(int sliceId, bool streaming)
 
     if (!streaming) {
         unsigned inFlight =
-            m_mixRegionsInFlight.load(std::memory_order_acquire);
+            m_mixRegionsInFlight.load(std::memory_order_seq_cst);
         while (inFlight != 0) {
             m_mixRegionsInFlight.wait(inFlight,
-                                      std::memory_order_acquire);
+                                      std::memory_order_seq_cst);
             inFlight =
-                m_mixRegionsInFlight.load(std::memory_order_acquire);
+                m_mixRegionsInFlight.load(std::memory_order_seq_cst);
         }
-        m_mixAdmissionClosed.store(false, std::memory_order_release);
+        m_mixAdmissionClosed.store(false, std::memory_order_seq_cst);
     }
 }
 
@@ -1806,22 +1808,26 @@ void AudioEngine::skipSliceTaps(int sliceId, int frames) noexcept
 
 void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
 {
-    if (m_mixAdmissionClosed.load(std::memory_order_acquire)) {
+    // R-R3-45 fix wave: seq_cst on both sides of this gate (a Dekker
+    // pattern: store-closed then load-count against increment then
+    // load-closed), as the tap gates beside it already are. Acquire and
+    // release alone let each side miss the other's write.
+    if (m_mixAdmissionClosed.load(std::memory_order_seq_cst)) {
         return;
     }
-    m_mixRegionsInFlight.fetch_add(1, std::memory_order_acq_rel);
+    m_mixRegionsInFlight.fetch_add(1, std::memory_order_seq_cst);
     struct MixRegionGuard {
         std::atomic<unsigned>& count;
         ~MixRegionGuard()
         {
-            if (count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            if (count.fetch_sub(1, std::memory_order_seq_cst) == 1) {
                 count.notify_all();
             }
         }
     } mixRegion{m_mixRegionsInFlight};
     // Pairs with the control thread's close-before-invalidate sequence. If
     // close raced the first check, acknowledge without touching either mix.
-    if (m_mixAdmissionClosed.load(std::memory_order_acquire)) {
+    if (m_mixAdmissionClosed.load(std::memory_order_seq_cst)) {
         return;
     }
 
@@ -1978,13 +1984,12 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     if (vaxValid) {
         const int vaxIdx = vaxCh - 1;
         // Distinct from `mix` scratch below: that one is reserved for the
-        // master-mix accumulate path. Grows once per thread via resize(),
-        // zero-alloc thereafter.
-        static thread_local std::vector<float> vaxScratch;
-        const int stereoFloats = frames * 2;
-        if (static_cast<int>(vaxScratch.size()) < stereoFloats) {
-            vaxScratch.resize(static_cast<size_t>(stereoFloats));
-        }
+        // master-mix accumulate path. R-R3-45 fix wave: an engine member
+        // sized off this thread with the mix scratch (never resized here);
+        // the loop below drains any backlog a capacity at a time.
+        std::vector<float>& vaxScratch = m_vaxScratch;
+        const int vaxDrainFrames =
+            std::min(frames, m_mixScratchFrames.load(std::memory_order_seq_cst));
         // Mute wins over gain: when muted the channel's block is taken and
         // not pushed; spec says "tags / level UI still reflect routing,
         // but no downstream audio". Taking it keeps the mix in step.
@@ -1998,7 +2003,7 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         // Normally one block. More only after a slice on the channel was
         // late: then the backlog every slice has queued goes out at once.
         int mixedVax = 0;
-        while ((mixedVax = m_vaxMix.tryDrain(vaxCh, vaxScratch.data(), frames)) > 0) {
+        while ((mixedVax = m_vaxMix.tryDrain(vaxCh, vaxScratch.data(), vaxDrainFrames)) > 0) {
             if (!muted && vaxBus != nullptr && vaxBus->isOpen()) {
                 vaxBus->push(reinterpret_cast<const char*>(vaxScratch.data()),
                              static_cast<qint64>(mixedVax) * 2
@@ -2014,11 +2019,15 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     //
     // R-R3-45 fix wave: the scratch is owned by the engine and sized off
     // this thread (constructor, setDspBlockSize, start), so nothing here
-    // allocates. A block larger than it (never seen: the ring floor is the
-    // same 4096 frames) drains in parts over the following calls.
+    // allocates. Each drain takes at most the scratch's frames. A producer
+    // whose blocks are larger than that (not seen: the scratch starts at
+    // the mixer ring's own 4096-frame floor and follows the DSP block size)
+    // leaves the rest queued in its ring, the queue grows every period, and
+    // the ring's drop-oldest overflow then discards audio. So the fix for
+    // such a block is to size the scratch first, which setDspBlockSize does.
     std::vector<float>& mix = m_mixScratch;
     const int drainFrames =
-        std::min(frames, m_mixScratchFrames.load(std::memory_order_acquire));
+        std::min(frames, m_mixScratchFrames.load(std::memory_order_seq_cst));
 
     // Phase 3F: the mixer decides whether a block leaves, not us. It
     // returns 0 until every slice feeding the mix this period has
@@ -2058,13 +2067,11 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // `avMix`, matching upstream, where each mixer carries its own volume
     // and the anti-VOX instance is created at 1.0 (cmaster.c:167
     // [v2.10.3.15]).
-    static thread_local std::vector<float> avMix;
-    if (static_cast<int>(avMix.size()) < frames * 2) {
-        avMix.resize(static_cast<size_t>(frames) * 2);
-    }
-    const int avFrames = m_antiVoxMix.tryDrain(avMix.data(), frames);
+    // R-R3-45 fix wave: an engine member sized off this thread, as `mix`.
+    std::vector<float>& avMix = m_avMixScratch;
+    const int avFrames = m_antiVoxMix.tryDrain(avMix.data(), drainFrames);
     if (avFrames > 0) {
-        // DirectConnection only: avMix is thread_local scratch and the next
+        // DirectConnection only: avMix is the engine's scratch and the next
         // block overwrites it. See the signal's contract in AudioEngine.h.
         //
         // The consumer, TxWorkerThread::onAntiVoxBlockReady, therefore runs
@@ -2700,18 +2707,20 @@ void AudioEngine::ensureMixScratchFrames(int frames)
     if (frames <= m_mixScratchFrames.load(std::memory_order_acquire)) {
         return;
     }
-    m_mixAdmissionClosed.store(true, std::memory_order_release);
-    unsigned inFlight = m_mixRegionsInFlight.load(std::memory_order_acquire);
+    m_mixAdmissionClosed.store(true, std::memory_order_seq_cst);
+    unsigned inFlight = m_mixRegionsInFlight.load(std::memory_order_seq_cst);
     while (inFlight != 0) {
-        m_mixRegionsInFlight.wait(inFlight, std::memory_order_acquire);
-        inFlight = m_mixRegionsInFlight.load(std::memory_order_acquire);
+        m_mixRegionsInFlight.wait(inFlight, std::memory_order_seq_cst);
+        inFlight = m_mixRegionsInFlight.load(std::memory_order_seq_cst);
     }
     const auto floats = static_cast<size_t>(frames) * 2;
     m_mixScratch.assign(floats, 0.0f);
     m_hpMixScratch.assign(floats, 0.0f);
     m_programScratch.assign(floats, 0.0f);
-    m_mixScratchFrames.store(frames, std::memory_order_release);
-    m_mixAdmissionClosed.store(false, std::memory_order_release);
+    m_avMixScratch.assign(floats, 0.0f);
+    m_vaxScratch.assign(floats, 0.0f);
+    m_mixScratchFrames.store(frames, std::memory_order_seq_cst);
+    m_mixAdmissionClosed.store(false, std::memory_order_seq_cst);
 }
 
 void AudioEngine::setDspBlockSize(int blockSize)

@@ -803,7 +803,8 @@ public:
     void setDspBlockSize(int blockSize);
 
     // R-R3-45 fix wave: owner thread. Grows the DSP thread's mix scratch
-    // (speakers, headphones and program sums) to hold `frames` frames,
+    // (speakers, headphones, program, anti-VOX and VAX sums) to hold
+    // `frames` frames,
     // while no block is being mixed; never shrinks. The constructor sizes
     // it to kMixScratchMinFrames, setDspBlockSize and start() to the DSP
     // block size.
@@ -891,7 +892,7 @@ signals:
     /// once per audio period, whenever the anti-VOX mixer's readiness
     /// barrier releases a block.
     ///
-    /// **DirectConnection ONLY.** `samples` points at a thread_local
+    /// **DirectConnection ONLY.** `samples` points at the engine's
     /// scratch buffer that is valid for the duration of this synchronous
     /// emit and is overwritten by the next block. A queued connection would
     /// copy the pointer, not the audio, and hand the consumer a buffer that
@@ -1117,6 +1118,8 @@ private:
     std::vector<float> m_mixScratch;
     std::vector<float> m_hpMixScratch;
     std::vector<float> m_programScratch;
+    std::vector<float> m_avMixScratch;   // anti-VOX reference
+    std::vector<float> m_vaxScratch;     // one VAX channel's mix
     std::atomic<int> m_mixScratchFrames{0};
 
     // One receive-only remote-media observer.  Its lifetime is owned by the

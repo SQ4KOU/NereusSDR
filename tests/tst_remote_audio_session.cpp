@@ -1112,13 +1112,19 @@ private slots:
         QCOMPARE(remoteMedia.acceptedHeadphonesContext()->offReason,
                  std::optional{RemoteAudioOffReason::NoHeadphonesReceiver});
         QVERIFY(!remoteMedia.headphonesTelemetry().running);
-        const int backFrom = int(h.remoteBus->heard.size() / 2);
-        QTRY_VERIFY_WITH_TIMEOUT(h.remoteBus->heard.size() / 2 >= backFrom + 72000, 15000);
-        // B plays at its own gain there (0.45 of the tone, right-panned),
-        // well clear of the silence it had while on the headphones.
-        const double back1579 = toneAmplitude(h.remoteBus->heard, 1, 1579.0, backFrom + 24000);
+        // B plays there again at its own gain (0.45 of the tone, right-
+        // panned), well clear of the silence it had while on the headphones.
+        // Measured over the newest half second, once the route change has
+        // crossed the session and the jitter hold (its timing is not what
+        // is under test).
+        const auto newest1579 = [&h] {
+            const int frames = int(h.remoteBus->heard.size() / 2);
+            return frames < 24000 ? 0.0
+                                  : toneAmplitude(h.remoteBus->heard, 1, 1579.0, frames - 24000);
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(newest1579() > 0.03, 15000);
+        const double back1579 = newest1579();
         qInfo() << "speakers 1579 after B came back" << back1579;
-        QVERIFY(back1579 > 0.02);
         QVERIFY(back1579 > 100.0 * spk1579);
         QCOMPARE(int(audioContexts(controls).size()), mainContexts);
         QCOMPARE(remoteErrors.count(), 0);

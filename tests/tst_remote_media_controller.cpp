@@ -4697,7 +4697,9 @@ private slots:
         const QString problem = remoteMedia.headphonesProblem();
         QCOMPARE(problem, RemoteMediaController::headphonesFaultText(
                               RemoteAudioReceiver::Fault::SpeakerTimingUnavailable));
-        QCOMPARE(problem, QStringLiteral("The headphones stopped reporting their timing."));
+        QCOMPARE(problem, QStringLiteral("The headphones stopped reporting their timing. Turn the "
+                                         "headphones off and on in Setup, Audio, Devices to try "
+                                         "again."));
         QVERIFY(OperatorWording::isPlain(problem));
         QCOMPARE(errors.count(), 1);
         QCOMPARE(errors.constFirst().at(0).toString(), problem);
@@ -4735,6 +4737,24 @@ private slots:
                  requestsAfter);
         QVERIFY(!daemonMedia.headphonesMixSending());
         QCOMPARE(remoteMedia.headphonesProblem(), problem);
+        QCOMPARE(errors.count(), 1);
+
+        // Choosing the audio quality again does retry them (the fix wave's
+        // review: a decoder fault depends on it). The device is back, so
+        // they play, and the problem clears.
+        {
+            const RestoreAudioChoice restore;
+            h.remoteHeadphonesBus->setOutputPacingAvailableForTesting(true);
+            remoteMedia.setAudioProfileChoice(RemoteAudioProfile::Lossless);
+            QTRY_VERIFY_WITH_TIMEOUT(controlsFor(coreControls, QStringLiteral("headphones-audio"))
+                                         .constLast().value(QStringLiteral("enabled")).toBool(),
+                                     5000);
+            QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.headphonesTelemetry().running
+                                         && remoteMedia.headphonesTelemetry().decodedPackets > 10,
+                                     10000);
+            QVERIFY(remoteMedia.headphonesProblem().isEmpty());
+            remoteMedia.setAudioProfileChoice(RemoteAudioProfile::Opus);
+        }
         QCOMPARE(errors.count(), 1);
 
         // The headphones are closed and opened again (the Enabled box, or
