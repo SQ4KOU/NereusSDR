@@ -113,7 +113,7 @@ WorkerHarness makeHarness()
 // call posted behind the batch (idle versus stuck inside a slot), whether
 // the batch ran by the time that call was answered, and on Linux every
 // thread of the process with its scheduler state and kernel wait channel.
-// It runs only on the failure path; the wait itself is unchanged.
+// It runs only on the failure path.
 QString describeStalledBatch(const WorkerHarness& h,
                              const std::atomic<QThread*>& emittedOn,
                              const QSignalSpy& spy)
@@ -211,9 +211,21 @@ void TestRxDspWorkerThread::processIqBatch_runsOnWorkerThread()
                               Q_ARG(int, 0),
                               Q_ARG(QVector<float>, samples));
 
-    if (!spy.wait(5000)) {
+    // R-R3-21: the worker can emit before this thread reaches the wait (a
+    // loaded Linux run caught it: "worker emitted batchProcessed: yes, on
+    // the worker thread; spy count: 1" at the timeout). QSignalSpy::wait
+    // counts only emissions that land while it waits, so an early one read
+    // as a stall. Wait on the count instead: an emission at any moment after
+    // the batch was queued counts, and each short wait still returns on the
+    // emission itself.
+    QElapsedTimer waited;
+    waited.start();
+    while (spy.count() == 0 && waited.elapsed() < 5000) {
+        spy.wait(20);
+    }
+    if (spy.count() == 0) {
         const QByteArray why = QByteArrayLiteral(
-                                   "'spy.wait(5000)' returned FALSE; thread states:\n")
+                                   "no batchProcessed within 5 s; thread states:\n")
             + describeStalledBatch(h, observed, spy).toUtf8();
         QFAIL(why.constData());
     }
