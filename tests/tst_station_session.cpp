@@ -401,6 +401,7 @@ private slots:
     void windowFilterPolicyReachesTheCore();
     void windowFilterPolicyWaitsForACoreThatOffersIt();
     void windowFilterPolicyApplySendsWhatIsShown();
+    void coreTakesTheFilterPolicyOnlyFromMinorElevenAtVersionFour();
 
     // ---- Fix round 1 ----
     void reconnectSurvivesTheOldTransportClosing();
@@ -6248,6 +6249,81 @@ void TstStationSession::windowFilterPolicyApplySendsWhatIsShown()
     QCOMPARE(dialog.result(), int(QDialog::Accepted));
     QTRY_COMPARE(s.core->alexController().bpfMode(0), AlexController::BpfMode::Auto);
     QTRY_COMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::Auto);
+}
+
+void TstStationSession::coreTakesTheFilterPolicyOnlyFromMinorElevenAtVersionFour()
+{
+    // R-R3-46 / R-R3-21. A raw setAlexBpfMode against a real Core: taken
+    // from an app at minor 11 on a Core at radioHardwareVersion 4; refused
+    // in plain words from an app at minor 10, and on a Core below version 4
+    // (no attenuator controller behind it: version 0). A refusal changes
+    // nothing on the Core.
+    struct Outcome {
+        bool accepted = false;
+        QString reason;
+        AlexController::BpfMode mode = AlexController::BpfMode::Auto;
+    };
+    const auto run = [this](quint16 minor, bool versionFour) {
+        Outcome out;
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("bpf.settings")));
+        auto core = makeStationRadioModel(0);
+        StepAttenuatorController controller;
+        controller.setTickTimerEnabled(false);
+        if (versionFour) {
+            core->setStepAttController(&controller);
+        }
+        const auto unbind = qScopeGuard([&core] { core->setStepAttController(nullptr); });
+        StationServer server(core.get(), settings, m_securityDir.path());
+        auto* station = new LoopbackTransport(QStringLiteral("bpf-core"), this);
+        auto* peer = new LoopbackTransport(QStringLiteral("bpf-peer"), this);
+        station->linkTo(peer);
+        server.acceptTransport(station);
+        peer->sendText(SessionMessages::encode(SessionMessages::hello(
+            kSessionProtocolMajor, minor, 6, QStringLiteral("bpf-app"))));
+        peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+        [&] { QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"))); }();
+        peer->clearReceived();
+        peer->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+            "setAlexBpfMode", 57,
+            { MirrorUpdate{ 0, "chain", MirrorWireKind::Int64, QVariant(qlonglong(0)) },
+              MirrorUpdate{ 0, "mode", MirrorWireKind::Int64, QVariant(qlonglong(2)) } })));
+        SessionMessage result;
+        [&] {
+            QTRY_VERIFY([&] {
+                for (const QByteArray& wire : peer->received()) {
+                    const SessionMessage candidate = decodeOrFail(wire);
+                    if (candidate.kind == SessionMessageKind::CommandResult
+                        && candidate.commandId == quint32(57)) {
+                        result = candidate;
+                        return true;
+                    }
+                }
+                return false;
+            }());
+        }();
+        out.accepted = result.accepted;
+        out.reason = result.reason;
+        out.mode = core->alexController().bpfMode(0);
+        return out;
+    };
+
+    const Outcome taken = run(kRadioIdentitySessionProtocolMinor, true);
+    QVERIFY2(taken.accepted, qPrintable(taken.reason));
+    QCOMPARE(taken.mode, AlexController::BpfMode::ForceBypass);
+
+    const Outcome olderApp = run(quint16(kRadioIdentitySessionProtocolMinor - 1), true);
+    QVERIFY(!olderApp.accepted);
+    QCOMPARE(olderApp.reason,
+             QStringLiteral("Update this app to change the filter policy on this Core."));
+    QVERIFY(OperatorWording::isPlain(olderApp.reason));
+    QCOMPARE(olderApp.mode, AlexController::BpfMode::Auto);
+
+    const Outcome olderCore = run(kRadioIdentitySessionProtocolMinor, false);
+    QVERIFY(!olderCore.accepted);
+    QCOMPARE(olderCore.reason, QStringLiteral("The Core has no filter settings ready."));
+    QVERIFY(OperatorWording::isPlain(olderCore.reason));
+    QCOMPARE(olderCore.mode, AlexController::BpfMode::Auto);
 }
 
 void TstStationSession::windowFilterPolicyWaitsForACoreThatOffersIt()
