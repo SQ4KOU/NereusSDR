@@ -39,6 +39,7 @@
 #include <QJsonDocument>
 #include <QMetaObject>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QSet>
 #include <QStringList>
 #include <QTimer>
@@ -134,6 +135,13 @@ bool parseWithin(const QString& text, double* tolerance, double* centre)
 {
     const QStringList parts = text.mid(8).split(QLatin1Char(':'));
     if (parts.size() != 2) {
+        return false;
+    }
+    // Each part in JSON number syntax exactly (RFC 8259 section 6), not
+    // whatever a number parser would take ("+1", "inf", ".5", "0x10").
+    static const QRegularExpression jsonNumber(QStringLiteral(
+        "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"));
+    if (!jsonNumber.match(parts.at(0)).hasMatch() || !jsonNumber.match(parts.at(1)).hasMatch()) {
         return false;
     }
     bool okTolerance = false;

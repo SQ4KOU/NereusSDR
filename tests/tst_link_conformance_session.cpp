@@ -953,6 +953,14 @@ void TstLinkConformanceSession::alteredFixturesFailReadably()
     QVERIFY2(outside.contains(QStringLiteral("within 1 of -399.02")), qPrintable(outside));
     QVERIFY(!LinkFixtures::match(QStringLiteral("$within:1:-399.02"), QStringLiteral("x"), &none)
                  .isEmpty());
+    // Both numbers are JSON numbers: forms a number parser might take but
+    // JSON does not ("+1", "inf", ".5", "1.", "0x10", a space) are refused.
+    for (const char* bad : {"$within:+1:5", "$within:1:inf", "$within:.5:5", "$within:1.:5",
+                            "$within:1:0x10", "$within: 1:5", "$within:1:-nan"}) {
+        const QString refused = LinkFixtures::match(QString::fromLatin1(bad), 5.0, &none);
+        QVERIFY2(refused.contains(QStringLiteral("is not $within")), bad);
+    }
+    QVERIFY(LinkFixtures::match(QStringLiteral("$within:1e-1:5.05"), 5.0, &none).isEmpty());
     // connect-connectable's signal readings never admit the meter pump's
     // no-reading value: a reading of -400 fails the fixture.
     int readings = 0;

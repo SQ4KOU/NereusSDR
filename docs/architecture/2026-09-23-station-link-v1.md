@@ -1557,7 +1557,7 @@ a JSON string:
 | `"$object"` | any JSON object | no | yes, filled with `{}` |
 | `"$capture:<name>"` | any value, recorded under `<name>` | yes | no |
 | `"$ref:<name>"` | the value recorded under `<name>`, compared the same way | yes | yes, filled with the recorded value |
-| `"$within:<t>:<v>"` | a number no further than `<t>` from `<v>` (both in JSON number syntax, `<t>` at least 0) | yes | no |
+| `"$within:<t>:<v>"` | a number no further than `<t>` from `<v>`; `<t>` and `<v>` are each exactly a JSON number (RFC 8259 section 6: no `+`, no leading `.`, no `inf` or `nan`, no spaces), `<t>` at least 0; any other text is a malformed fixture | yes | no |
 
 A number the station's DSP measures is written `"$within:<t>:<v>"`, with
 the tolerance stated, never `"$any"`; a counter whose value depends on
