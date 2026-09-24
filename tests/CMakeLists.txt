@@ -6871,6 +6871,9 @@ nereus_add_test(tst_gui_connection_controller)
 # capability change, each driven through the window's own actions.
 # NereusSDR-native session boundary; no upstream port applies.
 nereus_add_test(tst_remote_window_harness fakes/RemoteWindowHarness.cpp)
+# R3 Setup fix wave (R-R3-21): SetupDialog's test seams (page scopes by
+# registry index) for the case that realizes every Core page.
+target_compile_definitions(tst_remote_window_harness PRIVATE NEREUS_BUILD_TESTS)
 
 # Remote Daemon R3 R-R3-30: a secondary slice flag may be destroyed and
 # replaced while its SliceModel and MainWindow remain alive during a pan-layout

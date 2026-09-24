@@ -77,6 +77,15 @@
 //                 control on it writes the Core's receiver or chooses the
 //                 Core's models. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-23: R3 Setup fix wave (R-R3-21, R-R3-10, R-R3-23). Core pages
+//                 wait for the Core's settings to really arrive (content
+//                 or the seed marker), not just any snapshot; a page with
+//                 its own dialog open is rebuilt only once that dialog is
+//                 gone; a failed rebuild keeps the page it had; pages the
+//                 local-DSP gate keeps disabled are not rebuilt. Filter
+//                 Presets, Spectrum Peaks, Waterfall Defaults, 3D View and
+//                 Export / Import are ThisComputer. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -140,6 +149,8 @@
 // TX Profile editor (Phase 3M-1c J.3 — under Audio)
 #include "setup/TxProfileSetupPage.h"
 
+#include <QApplication>
+#include <QDialog>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QShowEvent>
@@ -430,11 +441,16 @@ QWidget* SetupDialog::realizePage(int entryIndex)
     // R-R3-21: a Core page opened in a remote window that has never received
     // the Core's settings. Building it now would show this computer's ship
     // defaults as if they were the Core's (and a constructor that seeds a
-    // default would record it as an edit), so it gets an empty stand-in
-    // with the reason above it. The factory is kept; rebuildStalePages()
-    // replaces the stand-in once the Core's settings are available.
-    if (remoteSession() && entry.scope == SetupScope::Core && !m_stationAvailable
-        && !stationSnapshotHeld()) {
+    // default would record it as an edit, or send it once the link is up),
+    // so it gets an empty stand-in with the reason above it. The factory is
+    // kept; rebuildStalePages() replaces the stand-in once the Core's
+    // settings are available.
+    //
+    // R3 Setup fix wave (final review I2): "received" means the Core's
+    // settings really arrived (stationSettingsArrived()), not merely that a
+    // snapshot did: an empty, unseeded one leaves the session ready with
+    // nothing for these pages to show.
+    if (remoteSession() && entry.scope == SetupScope::Core && !stationSettingsArrived()) {
         auto* placeholder = new QWidget;
         placeholder->setObjectName(QStringLiteral("setupStationPlaceholder"));
         placeholder->setEnabled(false);
@@ -549,6 +565,11 @@ QWidget* SetupDialog::realizePage(int entryIndex)
 
 void SetupDialog::showPageAt(int entryIndex)
 {
+    if (m_rebuildPostponed) {
+        // A rebuild waited for a page's own dialog (rebuildStalePages());
+        // the page is shown again, so run it now.
+        rebuildStalePages();
+    }
     if (realizePage(entryIndex) == nullptr) {
         return;
     }
@@ -563,9 +584,14 @@ bool SetupDialog::remoteSession() const
     return m_model != nullptr && !m_model->ownsLocalDsp();
 }
 
-bool SetupDialog::stationSnapshotHeld() const
+bool SetupDialog::stationSettingsArrived() const
 {
-    return m_settingsProxy.isNull() || m_settingsProxy->hasReceivedSnapshot();
+    // The proxy's own Setup-gate condition without its ready() half: a
+    // snapshot with real content, or the Core's seed marker saying its
+    // profile is empty because it is fresh (SettingsProxy.h, "The
+    // Setup-dialog gate"). A disconnected window keeps what arrived.
+    return m_settingsProxy.isNull() || m_settingsProxy->hasNonEmptySnapshot()
+        || m_settingsProxy->contains(QLatin1String(AppSettings::kDaemonProfileSeededKey));
 }
 
 void SetupDialog::setStationSettingsAvailable(bool available, const QString& reason)
@@ -606,12 +632,35 @@ void SetupDialog::forgetPagePointersInside(const QWidget* page)
     if (inside(m_paValuesPage))   { m_paValuesPage = nullptr; }
 }
 
+QDialog* SetupDialog::openDialogOwnedBy(const QWidget* page) const
+{
+    // The modal on top, if the page is anywhere in its parent chain. Walked
+    // by QObject parent, not QWidget::isAncestorOf(): that stops at a window
+    // boundary, and a dialog is a window of its own.
+    if (QWidget* const modal = QApplication::activeModalWidget()) {
+        for (const QObject* object = modal; object != nullptr; object = object->parent()) {
+            if (object == page) {
+                return qobject_cast<QDialog*>(modal);
+            }
+        }
+    }
+    // A dialog of the page's that is open but not the active modal (a
+    // native file dialog, or one under another window's modal).
+    for (QDialog* dialog : page->findChildren<QDialog*>()) {
+        if (dialog->isVisible()) {
+            return dialog;
+        }
+    }
+    return nullptr;
+}
+
 void SetupDialog::rebuildStalePages()
 {
     if (m_rebuildingPages || !m_stationAvailable || !remoteSession()) {
         return;
     }
     m_rebuildingPages = true;
+    m_rebuildPostponed = false;
     const auto done = qScopeGuard([this] { m_rebuildingPages = false; });
 
     for (std::size_t i = 0; i < m_pages.size(); ++i) {
@@ -622,13 +671,55 @@ void SetupDialog::rebuildStalePages()
         if (!entry.placeholder && entry.builtGeneration == m_snapshotGeneration) {
             continue;  // already shows the newest snapshot
         }
-        if (!entry.placeholder) {
-            if (!entry.rebuildFactory) {
-                continue;
-            }
-            entry.factory = entry.rebuildFactory;
+        if (!entry.placeholder && entry.localDspUnavailable) {
+            // R3 Setup fix wave (final review M5): the local-DSP gate keeps
+            // this page disabled for the whole remote session, so a newer
+            // snapshot changes nothing on it; rebuilding would only log the
+            // gate's warning again.
+            entry.builtGeneration = m_snapshotGeneration;
+            continue;
+        }
+        if (!entry.placeholder && !entry.rebuildFactory) {
+            continue;
         }
         QWidget* const old = entry.widget;
+        // R3 Setup fix wave (final review I1): never under the page's own
+        // open dialog. The page's code is on the stack below that dialog's
+        // event loop, and deleting the page there would pull the page out
+        // from under it. Postponed until the dialog is gone, or the page is
+        // next shown.
+        if (QDialog* const owner = openDialogOwnedBy(old)) {
+            m_rebuildPostponed = true;
+            if (!m_rebuildWaitsFor.contains(owner)) {
+                m_rebuildWaitsFor.insert(owner);
+                connect(owner, &QObject::destroyed, this, [this, owner] {
+                    m_rebuildWaitsFor.remove(owner);
+                    // Queued: the dialog is destroyed on its way out of the
+                    // page's own code, which finishes first.
+                    QMetaObject::invokeMethod(this, [this] {
+                        rebuildStalePages();
+                        refreshTransmitPresentation();
+                    }, Qt::QueuedConnection);
+                });
+            }
+            qCDebug(lcSetupTiming) << "rebuild of Setup page" << entry.label
+                                   << "waits for its open dialog";
+            continue;
+        }
+        if (!entry.placeholder) {
+            entry.factory = entry.rebuildFactory;
+        }
+
+        // What the rebuild replaces, kept so a factory that yields nothing
+        // leaves the page as it was (final review M3).
+        const bool wasPlaceholder = entry.placeholder;
+        const bool wasStationDisabled = entry.stationDisabled;
+        const bool wasLocalDspUnavailable = entry.localDspUnavailable;
+        CatTciServerPage* const tciServerPage = m_tciServerPage;
+        PaGainByBandPage* const paGainPage = m_paGainPage;
+        PaWattMeterPage* const paWattMeterPage = m_paWattMeterPage;
+        PaValuesPage* const paValuesPage = m_paValuesPage;
+
         const bool wasCurrent = m_stack->currentWidget() == old;
         forgetPagePointersInside(old);
         entry.widget = nullptr;
@@ -637,17 +728,33 @@ void SetupDialog::rebuildStalePages()
         entry.stationDisabled = false;
         entry.localDspUnavailable = false;
         QWidget* const fresh = realizePage(static_cast<int>(i));
-        if (wasCurrent && fresh != nullptr) {
+        if (fresh == nullptr) {
+            qCWarning(lcSetupTiming) << "rebuilding Setup page" << entry.label
+                                     << "yielded nothing; keeping the page it had";
+            entry.widget = old;
+            entry.stackIndex = m_stack->indexOf(old);
+            entry.placeholder = wasPlaceholder;
+            entry.stationDisabled = wasStationDisabled;
+            entry.localDspUnavailable = wasLocalDspUnavailable;
+            entry.builtGeneration = m_snapshotGeneration;
+            m_tciServerPage = tciServerPage;
+            m_paGainPage = paGainPage;
+            m_paWattMeterPage = paWattMeterPage;
+            m_paValuesPage = paValuesPage;
+            // realizePage() moved the factory out; the next snapshot tries
+            // again.
+            if (!entry.factory) {
+                entry.factory = entry.rebuildFactory;
+            }
+            continue;
+        }
+        if (wasCurrent) {
             m_stack->setCurrentWidget(fresh);
         }
         m_stack->removeWidget(old);
         old->hide();
         old->setParent(nullptr);
         old->deleteLater();
-        if (fresh == nullptr) {
-            qCWarning(lcSetupTiming) << "rebuilding Setup page" << entry.label
-                                     << "yielded nothing";
-        }
     }
 }
 
@@ -1050,7 +1157,7 @@ void SetupDialog::buildTree()
 
     registerPage(dsp, "TNF", SetupScope::Core, [this] { return new MnfSetupPage(m_model); });
     // Stage C2: user-customisable filter preset editor (10 slots × 12 modes).
-    registerPage(dsp, "Filter Presets", SetupScope::Mixed, [this]() -> QWidget* {
+    registerPage(dsp, "Filter Presets", SetupScope::ThisComputer, [this]() -> QWidget* {
         return new FilterPresetsSetupPage(
             m_model ? m_model->filterPresetStore() : nullptr,
             m_model);
@@ -1083,14 +1190,14 @@ void SetupDialog::buildTree()
     });
 
     // Task 2.4: Spectrum Peaks page — skeleton with APH + Blob controls + back cross-link.
-    registerPage(display, "Spectrum Peaks", SetupScope::Mixed, [this]() -> QWidget* {
+    registerPage(display, "Spectrum Peaks", SetupScope::ThisComputer, [this]() -> QWidget* {
         auto* specPeaksPage = new SpectrumPeaksPage(m_model);
         connect(specPeaksPage, &SpectrumPeaksPage::backToSpectrumDefaultsRequested,
                 this, [this]() { selectPage(QStringLiteral("Spectrum Defaults")); });
         return specPeaksPage;
     });
 
-    registerPage(display, "Waterfall Defaults", SetupScope::Mixed,
+    registerPage(display, "Waterfall Defaults", SetupScope::ThisComputer,
                  [this] { return new WaterfallDefaultsPage(m_model); });
     registerPage(display, "Grid & Scales", SetupScope::Mixed,
                  [this] { return new GridScalesPage(m_model); });
@@ -1112,7 +1219,7 @@ void SetupDialog::buildTree()
     // menu's six 3D controls into Setup -> Display. Constructed against
     // the SpectrumWidget directly (not RadioModel, unlike every page
     // above) per Display3DSetupPage's own class-header comment.
-    registerPage(display, "3D View", SetupScope::Mixed, [this]() -> QWidget* {
+    registerPage(display, "3D View", SetupScope::ThisComputer, [this]() -> QWidget* {
         return new Display3DSetupPage(m_model ? m_model->spectrumWidget() : nullptr);
     });
 
@@ -1263,7 +1370,7 @@ void SetupDialog::buildTree()
                  [this] { return new ConnectionQualityPage(m_model); });
     registerPage(diagnostics, "Settings Validation", SetupScope::Mixed,
                  [this] { return new SettingsValidationPage(m_model); });
-    registerPage(diagnostics, "Export / Import", SetupScope::Mixed,
+    registerPage(diagnostics, "Export / Import", SetupScope::ThisComputer,
                  [this] { return new ExportImportConfigPage(m_model); });
     registerPage(diagnostics, "Logs", SetupScope::ThisComputer,
                  [] { return new LogsPage; });

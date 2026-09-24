@@ -11,6 +11,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 - J.J. Boyd (KG4VCF). R3 Setup fix wave (R-R3-21, R-R3-10):
+//                 while connected to a Core whose settings have not
+//                 arrived, Setup says "The Core has not sent its
+//                 settings." instead of asking to connect. AI-assisted
+//                 implementation via Anthropic Claude Code.
 //   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-21 / R-R3-10 / R-R3-17: Setup
 //                 opens in a remote window whether or not it is connected;
 //                 createSetupDialog() and applyRemoteRoleGating() push the
@@ -10229,6 +10234,12 @@ bool MainWindow::stationSettingsAvailable() const
 
 QString MainWindow::stationSettingsReason() const
 {
+    // R3 Setup fix wave (final review I2): true to the state. Connected to
+    // a Core that has not sent its settings (still arriving, or an empty
+    // profile it never marked), "Connect to the Core" would be wrong.
+    if (m_stationClient != nullptr && m_stationClient->isConnectionActive()) {
+        return tr("The Core has not sent its settings.");
+    }
     return tr("Connect to the Core to change these.");
 }
 

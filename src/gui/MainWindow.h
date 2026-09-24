@@ -569,7 +569,9 @@ private slots:
     /// R-R3-21 / R-R3-10: whether the Core's settings can be changed from
     /// this window (always in local direct mode; in a remote window only
     /// while connected and holding the Core's settings snapshot), and the
-    /// reason shown while they cannot.
+    /// reason shown while they cannot ("Connect to the Core to change
+    /// these." while disconnected, "The Core has not sent its settings."
+    /// while connected without them).
     bool stationSettingsAvailable() const;
     QString stationSettingsReason() const;
 

@@ -96,6 +96,7 @@
 #include <QGroupBox>
 #include <QMap>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMetaObject>
 #include <QPushButton>
 #include <QRadioButton>
@@ -107,6 +108,7 @@
 #include <QStackedWidget>
 #include <QPointer>
 #include <QStringList>
+#include <QTimer>
 #include <QTemporaryDir>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
@@ -129,6 +131,7 @@
 #include "core/settings/ISettingsBackend.h"
 #include "core/settings/SettingsProxy.h"
 #include "core/settings/SettingsScope.h"
+#include "gui/ConnectionPanel.h"
 #include "gui/GuiSessionCoordinator.h"
 #include "gui/MainWindow.h"
 #include "gui/SetupDialog.h"
@@ -340,6 +343,32 @@ QList<QWidget*> controlsGatedWith(QWidget* page, const QString& reason)
         if (w->accessibleDescription() == reason) { gated << w; }
     }
     return gated;
+}
+
+// R3 Setup fix wave: the reason shown while connected to a Core that has
+// not sent its settings (MainWindow::stationSettingsReason()).
+const QString kCoreSettingsMissingReason = QStringLiteral("The Core has not sent its settings.");
+
+QPushButton* buttonWithText(QWidget* page, const QString& text)
+{
+    for (QPushButton* button : page->findChildren<QPushButton*>()) {
+        if (button->text() == text) { return button; }
+    }
+    return nullptr;
+}
+
+// A connected remote dialog: the Core's settings (seed marker plus
+// `settings`) have arrived, the session is ready and MainWindow's push
+// has made them available.
+void connectDialog(SettingsProxy& proxy, SetupDialog& dialog,
+                   const QMap<QString, QString>& settings = {})
+{
+    QMap<QString, QString> snapshot = settings;
+    snapshot.insert(QLatin1String(AppSettings::kDaemonProfileSeededKey), QStringLiteral("True"));
+    proxy.applySnapshot(snapshot);
+    proxy.setReady(true);
+    dialog.setStationSettingsAvailable(true, kStationReason);
+    QCoreApplication::processEvents();
 }
 
 } // namespace
@@ -1688,9 +1717,10 @@ private slots:
         QVERIFY(notice != nullptr);
 
         // Mixed pages: how many Core controls each disables. A Mixed page
-        // not listed has none (Filter Presets, Spectrum Peaks, Waterfall
-        // Defaults, 3D View, Export / Import), or is already unavailable as
-        // a whole in a remote window (VAX, Advanced: local-DSP gate).
+        // not listed is already unavailable as a whole in a remote window
+        // (VAX, Advanced: local-DSP gate). Filter Presets, Spectrum Peaks,
+        // Waterfall Defaults, 3D View and Export / Import have no Core
+        // controls and are ThisComputer (R3 Setup fix wave, final review I4).
         const QMap<QString, int> coreControls{
             {QStringLiteral("Options"), 1},             // General: Region
             {QStringLiteral("Spectrum Defaults"), 5},   // FFT size, window, Hz/bin, fps x2
@@ -1764,9 +1794,9 @@ private slots:
             }
             }
         }
-        QVERIFY(thisComputer >= 15);
+        QVERIFY(thisComputer >= 20);
         QVERIFY(core >= 25);
-        QVERIFY(mixed >= 10);
+        QVERIFY(mixed >= 9);
 
         // Nothing towards the Core: nothing sent, and nothing held as an
         // edit to be reported as lost on the next connect.
@@ -1920,6 +1950,210 @@ private slots:
         dialog.setStationSettingsAvailable(true, kStationReason);
         QCoreApplication::processEvents();
         QCOMPARE(builds, 4);  // no new snapshot since they were built
+    }
+
+    // R3 Setup fix wave (final review I2): connected to a Core whose
+    // snapshot was empty and carried no seed marker, the session is ready
+    // but the Core's settings have not arrived. No Core page is built (its
+    // constructor would send this computer's defaults to the Core), nothing
+    // is sent while every page is shown, and the reason says what is true.
+    void coreSetupPagesWaitForTheCoresSettingsNotAnySnapshot()
+    {
+        SettingsProxy proxy;
+        AppSettings::instance().setRemoteBackend(&proxy);
+        RadioModel remote(RadioModel::Role::Remote);
+        proxy.applySnapshot({});
+        proxy.setReady(true);
+        QVERIFY(proxy.hasReceivedSnapshot());
+        QVERIFY(!proxy.setupDialogAllowed());
+        QSignalSpy writes(&proxy, &SettingsProxy::outboundWriteRequested);
+        QSignalSpy removes(&proxy, &SettingsProxy::outboundRemoveRequested);
+
+        SetupDialog dialog(&remote);
+        QVERIFY(!dialog.stationSettingsAvailableForTest());
+        dialog.setStationSettingsAvailable(false, kCoreSettingsMissingReason);
+        QVERIFY(OperatorWording::isPlain(kCoreSettingsMissingReason));
+        int probeBuilds = 0;
+        const int probe = dialog.registerPageForTest(
+            QStringLiteral("Core probe"), SetupScope::Core,
+            [&probeBuilds] { ++probeBuilds; return new QWidget; });
+
+        auto* const notice = dialog.findChild<QLabel*>(QStringLiteral("setupStationUnavailable"));
+        QVERIFY(notice != nullptr);
+        const QStringList labels = dialog.pageLabelsForTest();
+        int core = 0;
+        for (int i = 0; i < dialog.registeredPageCountForTest(); ++i) {
+            QWidget* const page = showSetupLeafAt(dialog, i);
+            if (page == nullptr || dialog.pageScopeAtForTest(i) != SetupScope::Core) {
+                continue;
+            }
+            ++core;
+            QVERIFY2(page->objectName() == QStringLiteral("setupStationPlaceholder"),
+                     qPrintable(labels.at(i)));
+            QVERIFY2(!page->isEnabled(), qPrintable(labels.at(i)));
+            QCOMPARE(notice->text(), kCoreSettingsMissingReason);
+            QVERIFY2(!notice->isHidden(), qPrintable(labels.at(i)));
+        }
+        QVERIFY(core >= 25);
+        QCOMPARE(probeBuilds, 0);
+        QVERIFY(dialog.realizePageAtForTest(probe) != nullptr);
+        QCOMPARE(probeBuilds, 0);
+        QCOMPARE(writes.size(), 0);
+        QCOMPARE(removes.size(), 0);
+
+        // The Core's settings arrive: the stand-ins become the real pages.
+        connectDialog(proxy, dialog);
+        QCOMPARE(probeBuilds, 1);
+        QVERIFY(!dialog.isPagePlaceholderForTest(QStringLiteral("NB/SNB")));
+    }
+
+    // R3 Setup fix wave (final review I1): a page is never rebuilt under
+    // its own open dialog. A snapshot that arrives while Settings
+    // Validation's question is open leaves the page (and the question)
+    // alone; the page is rebuilt once the question has closed.
+    void setupPageIsNotRebuiltUnderItsOwnOpenDialog()
+    {
+        SettingsProxy proxy;
+        AppSettings::instance().setRemoteBackend(&proxy);
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        connectDialog(proxy, dialog, {{QStringLiteral("Region"), QStringLiteral("Japan")}});
+
+        const QString label = QStringLiteral("Settings Validation");
+        dialog.selectPage(label);
+        QPointer<QWidget> page = dialog.realizedPageForTest(label);
+        QVERIFY(page);
+        QPushButton* const forget = buttonWithText(page, QStringLiteral("Forget This Radio"));
+        QVERIFY(forget != nullptr && forget->isEnabled());
+
+        bool boxOpen = false;
+        bool pageKeptWhileOpen = false;
+        QTimer::singleShot(0, this, [&] {
+            auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            boxOpen = box != nullptr;
+            proxy.applySnapshot({{QStringLiteral("Region"), QStringLiteral("Italy")}});
+            QTest::qWait(100);  // the snapshot's queued rebuild runs in the box's loop
+            pageKeptWhileOpen = !page.isNull() && dialog.realizedPageForTest(label) == page;
+            if (box != nullptr) {
+                box->button(QMessageBox::No)->click();
+            }
+        });
+        forget->click();  // returns when the question is answered
+        QVERIFY(boxOpen);
+        QVERIFY(pageKeptWhileOpen);
+        // Rebuilt once the question has gone.
+        QTRY_VERIFY(page.isNull());
+        QWidget* const rebuilt = dialog.realizedPageForTest(label);
+        QVERIFY(rebuilt != nullptr);
+        QCOMPARE(dialog.findChild<QStackedWidget*>()->currentWidget(), rebuilt);
+    }
+
+    // R3 Setup fix wave (final review M2): the link drops while Settings
+    // Validation's Forget question is open. Yes then writes nothing, not
+    // even an edit held for the next connect.
+    void settingsValidationYesAfterTheLinkDropsWritesNothing()
+    {
+        SettingsProxy proxy;
+        AppSettings::instance().setRemoteBackend(&proxy);
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        connectDialog(proxy, dialog);
+        const QString label = QStringLiteral("Settings Validation");
+        dialog.selectPage(label);
+        QWidget* const page = dialog.realizedPageForTest(label);
+        QVERIFY(page != nullptr);
+        QSignalSpy writes(&proxy, &SettingsProxy::outboundWriteRequested);
+        QSignalSpy removes(&proxy, &SettingsProxy::outboundRemoveRequested);
+        const QSet<QString> heldBefore = proxy.droppedWhileOffline();
+
+        for (const QString& text : {QStringLiteral("Forget This Radio"),
+                                    QStringLiteral("Reset to Defaults")}) {
+            QPushButton* const button = buttonWithText(page, text);
+            QVERIFY(button != nullptr);
+            proxy.setReady(true);
+            dialog.setStationSettingsAvailable(true, kStationReason);
+            QVERIFY(button->isEnabled());
+            bool answered = false;
+            QTimer::singleShot(0, this, [&] {
+                auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+                if (box == nullptr) { return; }
+                // The link drops: the session is no longer ready and
+                // MainWindow pushes the change to the open dialog.
+                proxy.setReady(false);
+                dialog.setStationSettingsAvailable(false, kStationReason);
+                box->button(QMessageBox::Yes)->click();
+                answered = true;
+            });
+            button->click();
+            QVERIFY2(answered, qPrintable(text));
+        }
+        QCOMPARE(writes.size(), 0);
+        QCOMPARE(removes.size(), 0);
+        const QSet<QString> held = proxy.droppedWhileOffline() - heldBefore;
+        QVERIFY2(held.isEmpty(),
+                 qPrintable(QStringList(held.cbegin(), held.cend()).join(QStringLiteral(", "))));
+    }
+
+    // R3 Setup fix wave (final review M3): a page whose factory yields
+    // nothing on a rebuild keeps the page it had instead of losing its
+    // entry until Setup is reopened.
+    void setupPageRebuildThatYieldsNothingKeepsThePage()
+    {
+        SettingsProxy proxy;
+        AppSettings::instance().setRemoteBackend(&proxy);
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        connectDialog(proxy, dialog);
+
+        int builds = 0;
+        const int probe = dialog.registerPageForTest(
+            QStringLiteral("Failing probe"), SetupScope::Mixed, [&builds]() -> QWidget* {
+                ++builds;
+                return builds == 1 ? new QWidget : nullptr;
+            });
+        QPointer<QWidget> first = dialog.realizePageAtForTest(probe);
+        QVERIFY(first);
+
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("page factory yielded nothing")));
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("rebuilding Setup page.*yielded nothing")));
+        proxy.applySnapshot({{QStringLiteral("Region"), QStringLiteral("Italy")}});
+        QTRY_COMPARE(builds, 2);
+        QCoreApplication::processEvents();
+        QVERIFY(first);
+        QCOMPARE(dialog.realizePageAtForTest(probe), first.data());
+        QCOMPARE(showSetupLeafAt(dialog, probe), first.data());
+    }
+
+    // R3 Setup fix wave (final review M5): VAX and Advanced stay disabled
+    // by the local-DSP gate for the whole remote session, so a new snapshot
+    // does not rebuild them (or log the gate's warning again).
+    void pagesTheLocalDspGateDisablesAreNotRebuilt()
+    {
+        SettingsProxy proxy;
+        AppSettings::instance().setRemoteBackend(&proxy);
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        connectDialog(proxy, dialog);
+
+        QMap<QString, QPointer<QWidget>> pages;
+        for (const QString& label : {QStringLiteral("VAX"), QStringLiteral("Advanced")}) {
+            QTest::ignoreMessage(QtWarningMsg, QRegularExpression(
+                QStringLiteral("Setup page.*reached local DSP on a remote-station model")));
+            dialog.selectPage(label);
+            pages.insert(label, dialog.realizedPageForTest(label));
+            QVERIFY2(pages.value(label) && !pages.value(label)->isEnabled(), qPrintable(label));
+        }
+        // Another page is rebuilt by the same snapshot, so the rebuild ran.
+        dialog.selectPage(QStringLiteral("Multimeter"));
+        QPointer<QWidget> multimeter = dialog.realizedPageForTest(QStringLiteral("Multimeter"));
+        proxy.applySnapshot({{QStringLiteral("Region"), QStringLiteral("Italy")}});
+        QTRY_VERIFY(multimeter.isNull());
+        for (auto it = pages.cbegin(); it != pages.cend(); ++it) {
+            QVERIFY2(it.value(), qPrintable(it.key()));
+            QCOMPARE(dialog.realizedPageForTest(it.key()), it.value().data());
+        }
     }
 
     // Local direct mode: the push has no effect. Core pages are built and
@@ -2902,8 +3136,18 @@ private slots:
     // still behaves exactly as before. The open keys on a radio name the
     // model learns on connect, so setNameForTest stands in for a connect.
     // ====================================================================
+    void localWindowDisconnectStillOpensConnections_data()
+    {
+        QTest::addColumn<bool>("pickerManaged");
+        QTest::newRow("picker") << true;
+        // R3 Setup fix wave (final review M4): a window without the picker
+        // shows its own connection panel.
+        QTest::newRow("direct panel") << false;
+    }
+
     void localWindowDisconnectStillOpensConnections()
     {
+        QFETCH(bool, pickerManaged);
         AppSettings::instance().setValue(QStringLiteral("audio/FirstRunComplete"),
                                          QStringLiteral("True"));
         RadioDiscovery::clearHoldOffForTest();
@@ -2916,24 +3160,36 @@ private slots:
         });
 
         MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
-        window.setConnectionPickerManaged(true);
+        window.setConnectionPickerManaged(pickerManaged);
         RadioModel* const model = window.radioModel();
         QVERIFY(model->ownsLocalDsp());
         QSignalSpy requests(&window, &MainWindow::connectionsRequested);
+        const auto panelShown = [&window] {
+            auto* panel = window.findChild<ConnectionPanel*>();
+            return panel != nullptr && panel->isVisible();
+        };
 
         // No radio name yet (the startup case): a disconnected state opens
         // nothing.
         model->setConnectionStateForTest(ConnectionState::Connecting);
         model->setConnectionStateForTest(ConnectionState::Disconnected);
         QCOMPARE(requests.count(), 0);
+        QVERIFY(!panelShown());
 
         // After a connect has named the radio, losing it opens Connections,
-        // once.
+        // once: the picker's request, or this window's own panel.
         model->setNameForTest(QStringLiteral("ANAN-G2"));
         model->setConnectionStateForTest(ConnectionState::Connecting);
         requests.clear();
         model->setConnectionStateForTest(ConnectionState::Disconnected);
-        QCOMPARE(requests.count(), 1);
+        if (pickerManaged) {
+            QCOMPARE(requests.count(), 1);
+            QVERIFY(!panelShown());
+        } else {
+            QCOMPARE(requests.count(), 0);
+            QVERIFY(panelShown());
+            QCOMPARE(window.findChildren<ConnectionPanel*>().size(), 1);
+        }
     }
 
     // ====================================================================

@@ -44,7 +44,9 @@
 #include <QSignalSpy>
 #include <QTimer>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 
+#include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/session/StationCapabilities.h"
@@ -720,6 +722,98 @@ private slots:
         QCOMPARE(notice->text(), kStationReason);
         QVERIFY(showSetupLeaf(dialog, QStringLiteral("Devices"))->isEnabled());
         QCOMPARE(h.acceptedConnections(), 1);
+    }
+
+    // R-R3-21 / R-R3-10 (R3 Setup fix wave, final review I2): connected to
+    // a Core whose settings never arrive (its profile is empty and was never
+    // marked), Setup's Core pages wait as stand-ins, say what is true (not
+    // "Connect to the Core"), and nothing is sent.
+    void connectedWithoutTheCoresSettingsCorePagesWait()
+    {
+        RemoteWindowHarness h;
+        h.stationSettings().remove(QLatin1String(AppSettings::kDaemonProfileSeededKey));
+        QVERIFY(h.start());
+        QVERIFY(connectFromRadioMenu(h));
+        QTest::qWait(kSettleMs);
+        QVERIFY(h.proxy().ready());
+        QVERIFY(h.proxy().hasReceivedSnapshot());
+        QVERIFY(!h.proxy().setupDialogAllowed());
+        QSignalSpy writes(&h.proxy(), &SettingsProxy::outboundWriteRequested);
+        QSignalSpy removes(&h.proxy(), &SettingsProxy::outboundRemoveRequested);
+
+        SetupDialog* const dialog = openSettings(h);
+        QVERIFY(dialog);
+        auto* const notice = dialog->findChild<QLabel*>(QStringLiteral("setupStationUnavailable"));
+        QVERIFY(notice);
+        QWidget* const nb = showSetupLeaf(dialog, QStringLiteral("NB/SNB"));
+        QVERIFY(nb);
+        QCOMPARE(nb->objectName(), QStringLiteral("setupStationPlaceholder"));
+        QVERIFY(!nb->isEnabled());
+        QVERIFY(notice->isVisible());
+        const QString reason = QStringLiteral("The Core has not sent its settings.");
+        QCOMPARE(notice->text(), reason);
+        QVERIFY(OperatorWording::isPlain(reason));
+        QVERIFY(showSetupLeaf(dialog, QStringLiteral("Devices"))->isEnabled());
+        QCOMPARE(writes.size(), 0);
+        QCOMPARE(removes.size(), 0);
+
+        // Disconnected, the reason asks to connect again.
+        QVERIFY(disconnectFromRadioMenu(h));
+        QTRY_VERIFY(!h.client()->isConnectionActive());
+        showSetupLeaf(dialog, QStringLiteral("NB/SNB"));
+        QTRY_COMPARE(notice->text(), kStationReason);
+    }
+
+    // R-R3-17 / R-R3-21 (R3 Setup fix wave, final review M1): connected
+    // once, then disconnected, the operator opens Setup and visits every
+    // Core page (built from the Core's last values, disabled). None of
+    // them records an edit, so the reconnect warns about nothing.
+    void setupOpenedWhileDisconnectedRecordsNoEdit()
+    {
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        StationClient* const client = h.client();
+        QVERIFY(connectFromRadioMenu(h));
+        QVERIFY(disconnectFromRadioMenu(h));
+        QTRY_VERIFY(!client->isConnectionActive());
+        QTest::qWait(kSettleMs);
+        const QSet<QString> heldBefore = h.proxy().droppedWhileOffline();
+        QSignalSpy writes(&h.proxy(), &SettingsProxy::outboundWriteRequested);
+        QSignalSpy removes(&h.proxy(), &SettingsProxy::outboundRemoveRequested);
+
+        SetupDialog* const dialog = openSettings(h);
+        QVERIFY(dialog);
+        auto* const tree = dialog->findChild<QTreeWidget*>();
+        auto* const stack = dialog->findChild<QStackedWidget*>();
+        QVERIFY(tree && stack);
+        int corePages = 0;
+        for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+            const int index = (*it)->data(0, Qt::UserRole).toInt();
+            if (index < 0 || dialog->pageScopeAtForTest(index) != SetupScope::Core) {
+                continue;
+            }
+            tree->setCurrentItem(*it);
+            QWidget* const page = stack->currentWidget();
+            QVERIFY(page);
+            // Built from the Core's last values, not a stand-in, and disabled.
+            QVERIFY2(page->objectName() != QStringLiteral("setupStationPlaceholder"),
+                     qPrintable((*it)->text(0)));
+            QVERIFY2(!page->isEnabled(), qPrintable((*it)->text(0)));
+            ++corePages;
+        }
+        QVERIFY(corePages >= 25);
+        QCOMPARE(writes.size(), 0);
+        QCOMPARE(removes.size(), 0);
+        const QSet<QString> held = h.proxy().droppedWhileOffline() - heldBefore;
+        QVERIFY2(held.isEmpty(),
+                 qPrintable(QStringList(held.cbegin(), held.cend()).join(QStringLiteral(", "))));
+        QCOMPARE(h.proxy().droppedWhileOffline(), heldBefore);
+
+        QSignalSpy superseded(&h.proxy(), &SettingsProxy::offlineEditsSuperseded);
+        QVERIFY(connectFromRadioMenu(h));
+        QTest::qWait(kSettleMs);
+        QCOMPARE(superseded.size(), 0);
+        QCOMPARE(h.acceptedConnections(), 2);
     }
 
     // R-R3-17 / R-R3-21: a fresh remote window's first connect tells the

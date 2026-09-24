@@ -41,6 +41,10 @@
 //                 remote transmit permission; each combo is named after
 //                 its settings key. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-23 - R3 Setup fix wave (R-R3-21, R-R3-10): building the page
+//                 applies the saved high-resolution filter setting without
+//                 writing it back. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -528,11 +532,12 @@ void DspOptionsPage::buildUI()
     // channel supplies the FIR curve; when OFF the pointer is held but unused
     // (paintHighResolutionFilterCurve is gated on m_highResolution).  A nullptr
     // channel causes paintHighResolutionFilterCurve to return early gracefully.
+    //
+    // R3 Setup fix wave (R-R3-21): the fan-out does not save. Only the
+    // operator's toggle below does; building the page (in a remote window,
+    // from the Core's settings, possibly offline) must not write the value
+    // it has just read back to the Core.
     auto applyHighResFanOut = [this](bool v) {
-        AppSettings::instance().setValue(
-            QStringLiteral("DspOptionsHighResFilterCharacteristics"),
-            v ? QStringLiteral("True") : QStringLiteral("False"));
-
         RadioModel* rm = model();
         ContainerManager* cm = rm ? rm->containerManager() : nullptr;
         if (!cm) {
@@ -559,7 +564,12 @@ void DspOptionsPage::buildUI()
     };
 
     // Wire toggle → persist + fan-out.
-    connect(m_highResFilterChars, &QCheckBox::toggled, this, applyHighResFanOut);
+    connect(m_highResFilterChars, &QCheckBox::toggled, this, [applyHighResFanOut](bool v) {
+        AppSettings::instance().setValue(
+            QStringLiteral("DspOptionsHighResFilterCharacteristics"),
+            v ? QStringLiteral("True") : QStringLiteral("False"));
+        applyHighResFanOut(v);
+    });
 
     // Initial bind: apply the persisted value immediately so any FilterDisplayItem
     // instances that already exist pick up both the mode and the channel binding

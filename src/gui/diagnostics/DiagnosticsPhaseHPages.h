@@ -81,6 +81,10 @@ private:
     QPushButton* m_resetBtn{nullptr};
     QPushButton* m_forgetBtn{nullptr};
     QPushButton* m_refreshBtn{nullptr};
+    // The last availability pushed by setStationSettingsAvailable(). Read
+    // again after a confirmation returns: the link can drop while it is
+    // open (R3 Setup fix wave, final review M2).
+    bool         m_stationSettingsAvailable{true};
 
     void buildUI();
 };

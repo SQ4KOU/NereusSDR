@@ -18,6 +18,7 @@
 #include <QSplitter>
 #include <QLabel>
 #include <QPointer>
+#include <QSet>
 
 #include <functional>
 #include <vector>
@@ -210,10 +211,12 @@ private:
     // the station gate and the rebuild only ever run there).
     bool remoteSession() const;
 
-    // R-R3-21: the Core's settings have reached this window at least once
-    // (so a Core page built now shows the Core's values, not ship
-    // defaults). True when no settings proxy is installed.
-    bool stationSnapshotHeld() const;
+    // R-R3-21: the Core's settings have really reached this window at
+    // least once (so a Core page built now shows the Core's values, not
+    // ship defaults): a snapshot with content, or the Core's seed marker.
+    // An empty, unseeded snapshot does not count (R3 Setup fix wave, final
+    // review I2). True when no settings proxy is installed.
+    bool stationSettingsArrived() const;
 
     // R-R3-21: a new settings snapshot was applied. Counts it and queues a
     // rebuild of the pages built from an older one.
@@ -221,8 +224,15 @@ private:
 
     // R-R3-21: while the Core's settings are available, rebuild every
     // realized Core and Mixed page built from an older snapshot, and every
-    // placeholder. Guarded against re-entry.
+    // placeholder. Guarded against re-entry. R3 Setup fix wave: a page
+    // with its own dialog open waits (I1); a page the local-DSP gate keeps
+    // disabled is not rebuilt (M5); a factory that yields nothing leaves
+    // the page it had (M3).
     void rebuildStalePages();
+
+    // The open dialog that belongs to `page` (the page is in its QObject
+    // parent chain), or nullptr.
+    QDialog* openDialogOwnedBy(const QWidget* page) const;
 
     // Clears the cross-page pointers that point into a page about to be
     // replaced; the page's factory sets them again.
@@ -264,6 +274,10 @@ private:
     QPointer<SettingsProxy> m_settingsProxy;
     int             m_snapshotGeneration = 0;
     bool            m_rebuildingPages = false;
+    // R3 Setup fix wave (I1): a rebuild waited for a page's own dialog; it
+    // runs when that dialog is destroyed or the next page is shown.
+    bool            m_rebuildPostponed = false;
+    QSet<QDialog*>  m_rebuildWaitsFor;
 
     std::vector<PageEntry> m_pages;
 

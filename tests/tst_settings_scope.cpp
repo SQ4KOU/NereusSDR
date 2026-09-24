@@ -786,9 +786,11 @@ private slots:
         const QList<ThisComputerPage> pages =
             thisComputerPages(QString::fromUtf8(dialog.readAll()));
 
-        // Floors: Task 1 registered 19 ThisComputer leaves; a registration
-        // regex that stopped matching would otherwise pass vacuously.
-        QVERIFY2(pages.size() >= 15,
+        // Floors: Task 1 registered 19 ThisComputer leaves and the R3 Setup
+        // fix wave five more (Filter Presets, Spectrum Peaks, Waterfall
+        // Defaults, 3D View, Export / Import); a registration regex that
+        // stopped matching would otherwise pass vacuously.
+        QVERIFY2(pages.size() >= 22,
                  qPrintable(QStringLiteral("only %1 ThisComputer registrations found")
                                 .arg(pages.size())));
 
