@@ -6,6 +6,8 @@
 // 2026-09-24: R-R3-48 rework: the station address and this computer bound
 // separately; only the blocked one retried, named in the reason. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-48 rework follow-up: the first listen failure logged
+// once. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/StationTciController.h"
 
 #include "core/AppSettings.h"
@@ -38,6 +40,10 @@ StationTciController::StationTciController(RadioModel* radio, StationTciModel* m
     // operator's own earlier choices.
     m_server = std::make_unique<TciServer>(radio);
     m_server->setStationReceiveOnly(true);
+    // Rework follow-up 2: this controller logs the station listener's
+    // state changes itself (once each); the server's per-attempt listen,
+    // start and stop lines go to debug, so nothing is logged twice.
+    m_server->setQuietListenAttempts(true);
     connect(m_server.get(), &TciServer::errorOccurred, this, [this](const QString& error) {
         // The raw socket error is for the log; the object carries plain
         // words (apply()).
@@ -176,7 +182,6 @@ void StationTciController::apply()
     if (!m_enabled) {
         resetRetry();
         m_failing = false;
-        m_server->setQuietListenAttempts(false);
         if (m_server->isRunning()) {
             m_server->stop();
         }
@@ -222,7 +227,6 @@ void StationTciController::apply()
             qCInfo(lcTci) << "Station TCI server listening on every station address again";
         }
         m_failing = false;
-        m_server->setQuietListenAttempts(false);
     } else {
         const int delay = kRetryDelaysMs[qMin(m_retryStep, int(std::size(kRetryDelaysMs)) - 1)];
         ++m_retryStep;
@@ -231,7 +235,6 @@ void StationTciController::apply()
             qCWarning(lcTci) << "Station TCI server could not listen on" << m_blocked
                              << "port" << m_port << m_error << "; retrying";
             m_failing = true;
-            m_server->setQuietListenAttempts(true);
         }
         m_retryTimer.start(delay);
     }

@@ -628,8 +628,25 @@ private slots:
         StationTciModel state;
         StationTciController controller(&model, &state);
         controller.setBindOverride(QStringLiteral("127.0.0.1"));
+        // Rework follow-up 2: the first failure is logged once, and the
+        // retries not at all (warnings counted while it fails).
+        static int s_listenWarnings = 0;
+        s_listenWarnings = 0;
+        static QtMessageHandler s_previous = nullptr;
+        s_previous = qInstallMessageHandler(
+            [](QtMsgType type, const QMessageLogContext& context, const QString& text) {
+                if (type == QtWarningMsg && text.contains(QStringLiteral("listen"))) {
+                    ++s_listenWarnings;
+                }
+                if (s_previous) {
+                    s_previous(type, context, text);
+                }
+            });
         QString reason;
         QVERIFY(controller.setEnabled(true, port, &reason));
+        QTest::qWait(2500);   // at least one retry
+        qInstallMessageHandler(s_previous);
+        QCOMPARE(s_listenWarnings, 1);
         QVERIFY(state.enabled());
         QVERIFY(!state.listening());
         QCOMPARE(state.error(), StationTciController::blockedReason(

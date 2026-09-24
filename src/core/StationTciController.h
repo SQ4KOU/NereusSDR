@@ -45,7 +45,8 @@ class TciServer;
 // 30 s) while the switch is on, without stopping and starting the server.
 // The object says which address is blocked, in plain words, meanwhile, and
 // the log has one line when it starts failing and one when it listens on
-// everything again, not one per try. So the RF-Kit keeps band follow while
+// everything again, not one per try (the server's own per-attempt lines are
+// at debug level). So the RF-Kit keeps band follow while
 // the station address is up, whatever holds this computer's port.
 class StationTciController : public QObject {
     Q_OBJECT
