@@ -19,6 +19,10 @@
 //                 re-check that availability after their question
 //                 returns. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-23 - R-R3-21: Connection Quality's "EP6 sequence gaps" row
+//                 shows the EP6 sequence error count, not the throttle
+//                 event count. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "DiagnosticsPhaseHPages.h"
@@ -98,7 +102,9 @@ void ConnectionQualityPage::onTick()
                              + QStringLiteral(" B/s"));
     m_throttleLabel->setText(bw.isThrottled() ? QStringLiteral("THROTTLED")
                                               : QStringLiteral("ok"));
-    m_seqGapLabel->setText(QString::number(bw.throttleEventCount()));
+    // R-R3-21: the row names EP6 sequence gaps; it showed the LAN throttle
+    // event count (the row above already reports throttling).
+    m_seqGapLabel->setText(QString::number(bw.ep6SequenceErrorCount()));
 }
 
 // ── SettingsValidationPage ───────────────────────────────────────────────────

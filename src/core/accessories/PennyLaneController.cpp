@@ -20,6 +20,10 @@
 //                per-MAC persistence. OC bitmask logic lives in OcMatrix
 //                (Phase 3P-D Task 1). Setup UI deferred to a follow-up if
 //                Penny owners request it.
+//   2026-09-23   J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code: load() adopts the unread global
+//                hardware/oc/pennyExtCtrl once for a radio with no value
+//                of its own (R-R3-21).
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Penny.cs header (lines 1-22) ===
@@ -143,8 +147,22 @@ void PennyLaneController::load()
     if (m_mac.isEmpty()) { return; }
     auto& s = AppSettings::instance();
     const QString base = persistenceKey();
+    const QString key = QStringLiteral("%1/extCtrlEnabled").arg(base);
+    // R-R3-21: Setup's checkbox used to save a global
+    // hardware/oc/pennyExtCtrl that nothing read. A radio with no value of
+    // its own takes that saved value once, under its own key, so an
+    // operator's earlier choice survives the rename. The global key stays
+    // for any other saved radio that has not loaded yet.
+    if (!s.contains(key)) {
+        const QString legacyKey = QStringLiteral("hardware/oc/pennyExtCtrl");
+        if (s.contains(legacyKey)) {
+            const bool legacyOn = s.value(legacyKey).toString()
+                                      .compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
+            s.setValue(key, legacyOn ? QStringLiteral("True") : QStringLiteral("False"));
+        }
+    }
     // Default "True" matches Thetis penny_ext_ctrl_enabled = true [console.cs:14899] [@501e3f5]
-    m_extCtrlEnabled = (s.value(QStringLiteral("%1/extCtrlEnabled").arg(base), QStringLiteral("True")).toString() == QStringLiteral("True"));
+    m_extCtrlEnabled = (s.value(key, QStringLiteral("True")).toString() == QStringLiteral("True"));
     emit extCtrlEnabledChanged(m_extCtrlEnabled);
 }
 

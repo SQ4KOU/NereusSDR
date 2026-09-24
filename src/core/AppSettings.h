@@ -12,6 +12,9 @@
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
 //                 AppSettings XML persistence: key/value semantics (PascalCase keys, True/False string booleans, per-StationName nesting) port Thetis database.cs SaveVarsDictionary/RestoreVarsDictionary pattern; QXmlStream file I/O skeleton follows AetherSDR `src/core/AppSettings.{h,cpp}`.
+//   2026-09-23 - R-R3-21: migrateRenamedKeys() one-shot rename for keys
+//                 whose writer and reader disagreed (WsjtxSpotLifetime).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -675,6 +678,15 @@ public:
     // one-shot removes the orphan key so it doesn't linger in users'
     // settings files after upgrade.  Idempotent (no-op if key absent).
     static void removeOrphanOcN2adrFilter(AppSettings& s);
+
+    // R-R3-21: one-shot renames for settings whose writer and reader used
+    // different names, so the saved value was never read. Each old name is
+    // read once and written under the name everything now uses, then
+    // removed; a value already saved under the new name wins. Idempotent.
+    //   WsjtxSpotLifetime -> WsjtxSpotLifetimeSec (Spot Hub WSJT-X Spot Life)
+    // Penny Ext Control's rename is per radio and happens in
+    // PennyLaneController::load().
+    static void migrateRenamedKeys(AppSettings& s);
 
 private:
     // Private default constructor — used only by instance().

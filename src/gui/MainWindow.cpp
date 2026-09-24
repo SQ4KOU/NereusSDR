@@ -63,6 +63,12 @@
 //   2026-09-23 - R-R3-46: Hardware Config availability pushed to the
 //                 `alexAntennas` object; antenna refusals shown as toasts. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-21: clearing spots moves to Ctrl+Shift+X
+//                 (Disconnect keeps Ctrl+Shift+K); Band > HF uses the band buttons' path;
+//                 Tools test entries only in developer builds; saved
+//                 Multimeter and high-resolution filter settings and the
+//                 DXCC country table load at startup. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -407,6 +413,8 @@ warren@wpratt.com
 #include "gui/RemoteMediaController.h"
 #include "core/settings/SettingsProxy.h"
 #include "setup/DspSetupPages.h"   // NrAnfSetupPage::selectSubtab
+#include "setup/DspOptionsPage.h"  // applyPersistedHighResFilter (R-R3-21)
+#include "setup/MultimeterPage.h"  // applyPersistedSettings (R-R3-21)
 #include "gui/DspAssetDialog.h"
 #include "models/PureSignalSettings.h"
 #include "core/session/PureSignalSessionFacade.h"
@@ -3833,6 +3841,24 @@ void MainWindow::buildUI()
     // pick up the startup board capabilities.
     pushCapsToAllContainers();
 
+    // R-R3-21: Setup > Multimeter (average, unit, decimal, history
+    // duration) and DSP > Options (high-resolution filter graph) reached
+    // the meters only when their Setup page was opened, so a restart lost
+    // them until then. Apply the saved values to the restored meters now.
+    MultimeterPage::applyPersistedSettings(m_radioModel);
+    DspOptionsPage::applyPersistedHighResFilter(m_radioModel);
+
+    // R-R3-21: the DXCC country table the spot colouring resolves against.
+    // cty.dat is bundled as the ":/cty.dat" resource (resources.qrc), as
+    // AetherSDR loads it at startup (MainWindow.cpp:1469 [@1e0718ad]);
+    // without it every spot resolved to no country.
+    if (DxccColorProvider* dxcc = m_radioModel->dxccColorProvider()) {
+        if (!dxcc->loadCtyDat()) {
+            qCWarning(lcSpots) << "DXCC country table (:/cty.dat) did not load;"
+                               << "spots will not be coloured by country";
+        }
+    }
+
     // Default splitter sizes on first run: ~80% spectrum, ~20% panel
     if (!AppSettings::instance().contains(QStringLiteral("MainSplitterSizes"))) {
         m_mainSplitter->setSizes({1024, 256});
@@ -5495,8 +5521,18 @@ void MainWindow::buildUI()
     // so we defer by one event loop pass to ensure RxChannel exists.
     connect(m_radioModel->wdspEngine(), &WdspEngine::initializedChanged,
             this, [this](bool ok) {
-        if (!ok) { return; }
+        if (!ok) {
+            // R-R3-21: the filter displays hold channel 0's RxChannel for the
+            // high-resolution curve; WdspEngine has already destroyed it, so
+            // rebind them to none (rxChannelForSlice(0) is null now).
+            DspOptionsPage::applyPersistedHighResFilter(m_radioModel);
+            return;
+        }
         QTimer::singleShot(0, this, [this]() {
+            // R-R3-21: bind the new channel 0 to the filter displays with
+            // the saved high-resolution setting, as opening DSP > Options
+            // used to be the only way to do.
+            DspOptionsPage::applyPersistedHighResFilter(m_radioModel);
             // Phase 3F Sub-Epic J Task 11: RadioModel::rxChannelForSlice()
             // replaces the direct wdspEngine()->rxChannel() reach. Still
             // channel 0 here on purpose -- this is the boot-time seed, before
@@ -7373,25 +7409,27 @@ void MainWindow::buildMenuBar()
 
     {
         QMenu* hfMenu = bandMenu->addMenu(QStringLiteral("&HF"));
-        // Frequency values from Thetis console.cs band definitions
-        const struct { const char* label; double freqHz; } hfBands[] = {
-            { "160m (1.8 MHz)",    1.8e6   },
-            { "80m (3.5 MHz)",     3.5e6   },
-            { "60m (5.3 MHz)",     5.3e6   },
-            { "40m (7.0 MHz)",     7.0e6   },
-            { "30m (10.1 MHz)",   10.1e6   },
-            { "20m (14.0 MHz)",   14.0e6   },
-            { "17m (18.068 MHz)", 18.068e6 },
-            { "15m (21.0 MHz)",   21.0e6   },
-            { "12m (24.89 MHz)",  24.89e6  },
-            { "10m (28.0 MHz)",   28.0e6   },
-            { "6m (50.0 MHz)",    50.0e6   },
+        // R-R3-21: each entry goes through the band buttons' path, so the
+        // band's saved frequency, mode and filter come back (and a first
+        // visit uses the band's seed). It used to set the listed frequency
+        // directly, skipping the per-band memory.
+        const struct { const char* label; Band band; } hfBands[] = {
+            { "160m (1.8 MHz)",   Band::Band160m },
+            { "80m (3.5 MHz)",    Band::Band80m  },
+            { "60m (5.3 MHz)",    Band::Band60m  },
+            { "40m (7.0 MHz)",    Band::Band40m  },
+            { "30m (10.1 MHz)",   Band::Band30m  },
+            { "20m (14.0 MHz)",   Band::Band20m  },
+            { "17m (18.068 MHz)", Band::Band17m  },
+            { "15m (21.0 MHz)",   Band::Band15m  },
+            { "12m (24.89 MHz)",  Band::Band12m  },
+            { "10m (28.0 MHz)",   Band::Band10m  },
+            { "6m (50.0 MHz)",    Band::Band6m   },
         };
-        for (const auto& band : hfBands) {
-            double freq = band.freqHz;
-            hfMenu->addAction(QString::fromUtf8(band.label), this, [this, freq]() {
-                SliceModel* slice = m_radioModel->activeSlice();
-                if (slice) { slice->setFrequency(freq); }
+        for (const auto& entry : hfBands) {
+            const Band band = entry.band;
+            hfMenu->addAction(QString::fromUtf8(entry.label), this, [this, band]() {
+                if (m_radioModel) { m_radioModel->onBandButtonClicked(band); }
             });
         }
     }
@@ -7749,34 +7787,40 @@ void MainWindow::buildMenuBar()
     // event the Core never had, so applyRemoteRoleGating() gives them the
     // transmit gate, and each handler refuses the same way the TX
     // Equalizer entry's does. Local direct mode is unchanged.
-    toolsMenu->addSeparator();
-    {
-        QAction* testToastAct = toolsMenu->addAction(
-            QStringLiteral("Test antenna switch &toast"));
-        m_actTestAntennaToast = testToastAct;
-        testToastAct->setObjectName(QStringLiteral("toolsTestAntennaSwitchToast"));
-        testToastAct->setToolTip(testAntennaToastToolTip());
-        connect(testToastAct, &QAction::triggered, this, [this]() {
-            if (!transmitControlsPermitted()) { return; }
-            if (m_radioModel) {
-                m_radioModel->emitAntennaAutoSwitched(
-                    0, QStringLiteral("ANT1"), QStringLiteral("ANT2"));
-            }
-        });
-    }
-    {
-        QAction* testReRouteAct = toolsMenu->addAction(
-            QStringLiteral("Test TX-bound &re-route dialog"));
-        m_actTestTxBoundReRoute = testReRouteAct;
-        testReRouteAct->setObjectName(QStringLiteral("toolsTestTxBoundReRoute"));
-        testReRouteAct->setToolTip(testTxBoundReRouteToolTip());
-        connect(testReRouteAct, &QAction::triggered, this, [this]() {
-            if (!transmitControlsPermitted()) { return; }
-            if (m_radioModel) {
-                m_radioModel->requestTxBoundReRoute(
-                    QStringLiteral("ANT2"), QStringLiteral("ANT1"));
-            }
-        });
+    //
+    // R-R3-21: developer builds only. A release build (no smoke-build tag;
+    // see BuildIdentity.h) shows no test entries; m_actTestAntennaToast and
+    // m_actTestTxBoundReRoute then stay null, which every user null-checks.
+    if (!BuildIdentity::buildTag().isEmpty()) {
+        toolsMenu->addSeparator();
+        {
+            QAction* testToastAct = toolsMenu->addAction(
+                QStringLiteral("Test antenna switch &toast"));
+            m_actTestAntennaToast = testToastAct;
+            testToastAct->setObjectName(QStringLiteral("toolsTestAntennaSwitchToast"));
+            testToastAct->setToolTip(testAntennaToastToolTip());
+            connect(testToastAct, &QAction::triggered, this, [this]() {
+                if (!transmitControlsPermitted()) { return; }
+                if (m_radioModel) {
+                    m_radioModel->emitAntennaAutoSwitched(
+                        0, QStringLiteral("ANT1"), QStringLiteral("ANT2"));
+                }
+            });
+        }
+        {
+            QAction* testReRouteAct = toolsMenu->addAction(
+                QStringLiteral("Test TX-bound &re-route dialog"));
+            m_actTestTxBoundReRoute = testReRouteAct;
+            testReRouteAct->setObjectName(QStringLiteral("toolsTestTxBoundReRoute"));
+            testReRouteAct->setToolTip(testTxBoundReRouteToolTip());
+            connect(testReRouteAct, &QAction::triggered, this, [this]() {
+                if (!transmitControlsPermitted()) { return; }
+                if (m_radioModel) {
+                    m_radioModel->requestTxBoundReRoute(
+                        QStringLiteral("ANT2"), QStringLiteral("ANT1"));
+                }
+            });
+        }
     }
 
     // =========================================================================
@@ -7823,13 +7867,17 @@ void MainWindow::buildMenuBar()
         dlg.exec();
     });
 
-    // Phase 3J-2 H1: Ctrl+Shift+K clears all rows in SpotModel. Mirrors the
+    // Phase 3J-2 H1: Ctrl+Shift+X clears all rows in SpotModel. Mirrors the
     // "Clear All Spots" button on SpotHubDialog's Display tab so the user
     // can wipe stale spots without opening the dialog. Application-scoped
     // QShortcut so it fires regardless of which child widget has focus.
+    // R-R3-21: it was Ctrl+Shift+K, which Radio > Disconnect owns; Qt fires
+    // neither owner of an ambiguous chord. X for "clear", free in every
+    // menu (tst_controls_that_work checks every shortcut is unique).
     {
         auto* clearSpotsShortcut = new QShortcut(
-            QKeySequence(QStringLiteral("Ctrl+Shift+K")), this);
+            QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_X), this);
+        clearSpotsShortcut->setObjectName(QStringLiteral("clearSpotsShortcut"));
         clearSpotsShortcut->setContext(Qt::ApplicationShortcut);
         connect(clearSpotsShortcut, &QShortcut::activated, this, [this]() {
             if (m_radioModel && m_radioModel->spotModel()) {

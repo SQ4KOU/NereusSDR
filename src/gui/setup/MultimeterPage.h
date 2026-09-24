@@ -37,6 +37,8 @@
 //                 the Core's settings.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-21: applyPersistedSettings() for startup.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -117,6 +119,12 @@ public:
     // meter), so it is disabled while the Core's settings are unavailable;
     // the rest of the page is this computer's display.
     void setStationSettingsAvailable(bool available, const QString& reason) override;
+
+    // R-R3-21: applies the saved averaging window, signal unit,
+    // show-decimal and signal-history duration to the live meter
+    // poller and meter items, as opening this page does. MainWindow calls
+    // it at startup so the values survive a restart without opening Setup.
+    static void applyPersistedSettings(RadioModel* model);
 
 signals:
     /// Emitted when the user clicks the "← Spectrum defaults" cross-link.

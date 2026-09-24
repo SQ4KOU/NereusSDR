@@ -74,6 +74,34 @@ private slots:
         QVERIFY(p2.extCtrlEnabled());
     }
 
+    // R-R3-21: the Setup checkbox used to save to the global
+    // hardware/oc/pennyExtCtrl key, which nothing read. A radio with no
+    // value of its own takes that saved value once, under its own key.
+    void legacy_global_key_migrates_once_into_the_radio_key() {
+        auto& s = AppSettings::instance();
+        const QString mac = QStringLiteral("de:ad:be:ef:00:03");
+        const QString legacy = QStringLiteral("hardware/oc/pennyExtCtrl");
+        const QString perMac = QStringLiteral("hardware/%1/penny/extCtrlEnabled").arg(mac);
+        // The old checkbox stored a QVariant(bool), which AppSettings saves
+        // as "false".
+        s.setValue(legacy, false);
+        QVERIFY(!s.contains(perMac));
+
+        PennyLaneController p;
+        p.setMacAddress(mac);
+        p.load();
+        QVERIFY(!p.extCtrlEnabled());
+        QCOMPARE(s.value(perMac).toString(), QStringLiteral("False"));
+
+        // From then on the radio's own key wins over the old one.
+        s.setValue(perMac, QStringLiteral("True"));
+        PennyLaneController again;
+        again.setMacAddress(mac);
+        again.load();
+        QVERIFY(again.extCtrlEnabled());
+        s.remove(legacy);
+    }
+
     // load() without MAC is a no-op; default remains true
     void load_without_mac_is_noop() {
         PennyLaneController p;

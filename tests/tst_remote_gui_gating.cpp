@@ -128,6 +128,7 @@
 #include <memory>
 
 #include "core/AppSettings.h"
+#include "core/BuildIdentity.h"
 #include "core/AudioEngine.h"
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
@@ -3409,6 +3410,10 @@ private slots:
     // ====================================================================
     void toolsMenuTestEntriesAreDisabledInARemoteSession()
     {
+        // R-R3-21: the test entries exist only in developer builds, which
+        // carry a smoke-build tag (tst_controls_that_work covers release).
+        BuildIdentity::setBuildTag(QStringLiteral("test@0000000"));
+        const auto clearBuildTag = qScopeGuard([] { BuildIdentity::setBuildTag(QString()); });
         // The arrangement tst_gui_session_coordinator makes first: no VAX
         // first-run dialog, and no discovery broadcast from the local
         // windows onto the LAN.

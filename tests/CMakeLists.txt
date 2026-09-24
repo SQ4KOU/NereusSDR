@@ -5689,6 +5689,11 @@ nereus_add_test(tst_mainwindow_tools_spot_hub)
 # additions for Phase 3J-2 + 3R.
 nereus_add_test(tst_spot_settings_round_trip)
 
+# R3 controls that work, Task 1 (R-R3-21): the Spot Hub's WSJT-X colour
+# swatches and Spot Life slider reach the spots RadioModel adds, and a
+# lifetime saved under the old WsjtxSpotLifetime name is migrated.
+nereus_add_test(tst_wsjtx_spot_settings)
+
 # ── Phase 3J-2 + 3R M2: SpotHub Display tab knobs end-to-end ───────────────
 # Pins the consumer side of the Display tab loop introduced by
 # SpotHubDialog F4 (commit 2026-05-11):
@@ -6865,6 +6870,12 @@ nereus_add_test(tst_core_target_store)
 nereus_add_test(tst_station_startup_selection)
 nereus_add_test(tst_gui_session_coordinator)
 target_compile_definitions(tst_gui_session_coordinator PRIVATE NEREUS_BUILD_TESTS)
+# R3 controls that work, Task 1 (R-R3-21, R-R3-17): shortcut uniqueness in
+# local and remote windows, developer-only Tools test entries, startup
+# apply of saved meter settings, Band > HF band memory, the bundled DXCC
+# table, and Connection Quality's EP6 sequence gap count.
+nereus_add_test(tst_controls_that_work)
+target_compile_definitions(tst_controls_that_work PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_connection_selector)
 nereus_add_test(tst_station_lan_cache)
 nereus_add_test(tst_station_lan_transport)

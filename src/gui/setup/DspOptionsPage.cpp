@@ -45,6 +45,11 @@
 //                 applies the saved high-resolution filter setting without
 //                 writing it back. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-21: applyHighResFilter() / applyPersistedHighResFilter()
+//                 let MainWindow apply the saved high-resolution filter
+//                 setting at startup and when the receive channel appears,
+//                 not only when this page opens. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -185,6 +190,56 @@ void wireCheckPersist(QCheckBox* check, const QString& key)
 }
 
 }  // namespace
+
+// R-R3-21: the high-resolution filter setting used to reach the filter
+// displays only when this page was built, so a restart lost it until the
+// operator opened Setup. The fan-out lives here so the page and MainWindow
+// (startup, and each time the receive channel is created or destroyed)
+// apply it the same way.
+//
+// bindRxChannel(rxCh) is called unconditionally: when high-res is ON the
+// channel supplies the FIR curve; when OFF the pointer is held but unused
+// (paintHighResolutionFilterCurve is gated on m_highResolution).  A nullptr
+// channel causes paintHighResolutionFilterCurve to return early gracefully.
+//
+// R3 Setup fix wave (R-R3-21): the fan-out does not save. Only the
+// operator's toggle does; building the page (in a remote window, from the
+// Core's settings, possibly offline) must not write the value it has just
+// read back to the Core.
+void DspOptionsPage::applyHighResFilter(RadioModel* rm, bool highRes)
+{
+    ContainerManager* cm = rm ? rm->containerManager() : nullptr;
+    if (!cm) {
+        return;
+    }
+
+    // Phase 3F Sub-Epic J Task 11: RadioModel::rxChannelForSlice()
+    // replaces the direct wdspEngine()->rxChannel() reach -- src/gui/
+    // no longer touches WdspEngine directly. Still channel 0: containers
+    // and their MeterItems are not slice-scoped today (forEachMeterItem
+    // fans out to every container regardless of which slice, if any, it
+    // is showing), so there is no "this item's slice" to resolve yet.
+    // Whether this fan-out should instead follow the active slice
+    // (Task 4 gave the container S-meter that treatment) is a separate,
+    // larger question left for a follow-up, not a mechanical routing fix.
+    RxChannel* rxCh = rm->rxChannelForSlice(0);
+
+    cm->forEachMeterItem([highRes, rxCh](MeterItem* item) {
+        if (auto* fdi = qobject_cast<FilterDisplayItem*>(item)) {
+            fdi->bindRxChannel(rxCh);
+            fdi->setHighResolution(highRes);
+        }
+    });
+}
+
+void DspOptionsPage::applyPersistedHighResFilter(RadioModel* rm)
+{
+    const bool persistedHighRes =
+        AppSettings::instance().value(
+            QStringLiteral("DspOptionsHighResFilterCharacteristics"),
+            QStringLiteral("False")).toString() == QLatin1String("True");
+    applyHighResFilter(rm, persistedHighRes);
+}
 
 // ── Construction ──────────────────────────────────────────────────────────────
 
@@ -524,43 +579,11 @@ void DspOptionsPage::buildUI()
 
     loadCheck(m_highResFilterChars, "DspOptionsHighResFilterCharacteristics", false);
 
-    // Task 4.4: helper that fans out high-res mode + RxChannel binding to all
-    // live FilterDisplayItem instances.  Extracted so it can be called both on
-    // initial construction (to apply the persisted value) and on toggle.
-    //
-    // bindRxChannel(rxCh) is called unconditionally: when high-res is ON the
-    // channel supplies the FIR curve; when OFF the pointer is held but unused
-    // (paintHighResolutionFilterCurve is gated on m_highResolution).  A nullptr
-    // channel causes paintHighResolutionFilterCurve to return early gracefully.
-    //
-    // R3 Setup fix wave (R-R3-21): the fan-out does not save. Only the
-    // operator's toggle below does; building the page (in a remote window,
-    // from the Core's settings, possibly offline) must not write the value
-    // it has just read back to the Core.
+    // Task 4.4: fans out high-res mode + RxChannel binding to all live
+    // FilterDisplayItem instances, on initial construction (to apply the
+    // persisted value) and on toggle. See applyHighResFilter() above.
     auto applyHighResFanOut = [this](bool v) {
-        RadioModel* rm = model();
-        ContainerManager* cm = rm ? rm->containerManager() : nullptr;
-        if (!cm) {
-            return;
-        }
-
-        // Phase 3F Sub-Epic J Task 11: RadioModel::rxChannelForSlice()
-        // replaces the direct wdspEngine()->rxChannel() reach -- src/gui/
-        // no longer touches WdspEngine directly. Still channel 0: containers
-        // and their MeterItems are not slice-scoped today (forEachMeterItem
-        // fans out to every container regardless of which slice, if any, it
-        // is showing), so there is no "this item's slice" to resolve yet.
-        // Whether this fan-out should instead follow the active slice
-        // (Task 4 gave the container S-meter that treatment) is a separate,
-        // larger question left for a follow-up, not a mechanical routing fix.
-        RxChannel* rxCh = rm ? rm->rxChannelForSlice(0) : nullptr;
-
-        cm->forEachMeterItem([v, rxCh](MeterItem* item) {
-            if (auto* fdi = qobject_cast<FilterDisplayItem*>(item)) {
-                fdi->bindRxChannel(rxCh);
-                fdi->setHighResolution(v);
-            }
-        });
+        applyHighResFilter(model(), v);
     };
 
     // Wire toggle → persist + fan-out.
@@ -576,13 +599,7 @@ void DspOptionsPage::buildUI()
     // before the first paint.
     // NOTE: ContainerManager::forEachMeterItem() is safe to call during buildUI()
     // because SetupDialog is constructed after all containers are initialised.
-    {
-        const bool persistedHighRes =
-            AppSettings::instance().value(
-                QStringLiteral("DspOptionsHighResFilterCharacteristics"),
-                QStringLiteral("False")).toString() == QLatin1String("True");
-        applyHighResFanOut(persistedHighRes);
-    }
+    applyPersistedHighResFilter(model());
 
     layout->addWidget(m_highResFilterChars);
 

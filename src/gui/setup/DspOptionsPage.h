@@ -16,6 +16,9 @@
 //                 Anthropic Claude Code.
 //                 Task 4.1: DspOptionsPage skeleton + 18 controls.
 //                 Mirrors Thetis DSP Options tab (design Section 4A).
+//   2026-09-23 - R-R3-21: static high-resolution filter fan-out helpers
+//                 for startup. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -113,6 +116,15 @@ public:
     static bool comboValuesDiffer4(QComboBox* a, QComboBox* b,
                                    QComboBox* c, QComboBox* d);
     static bool comboValuesDiffer3(QComboBox* a, QComboBox* b, QComboBox* c);
+
+    // R-R3-21: fan the high-resolution filter setting (and channel 0's
+    // RxChannel, or none) out to every FilterDisplayItem. The persisted
+    // form reads DspOptionsHighResFilterCharacteristics. Neither saves.
+    // MainWindow calls the persisted form at startup and when the receive
+    // channel is created or destroyed, so the setting survives a restart
+    // without opening Setup.
+    static void applyHighResFilter(RadioModel* model, bool highRes);
+    static void applyPersistedHighResFilter(RadioModel* model);
 
     QCheckBox* highResolutionFilterCharacteristicsCheckBox() const noexcept
     {

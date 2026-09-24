@@ -93,6 +93,10 @@
 //                 restores its attenuator and preamp and sends them to the
 //                 radio (Thetis console.cs:17325 [v2.10.3.15]). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-21: onWsjtxSpotReceived colours each decode with the
+//                 Spot Hub's WSJT-X swatch for its kind (AetherSDR
+//                 MainWindow_Spots.cpp [@1e0718ad]). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2587,10 +2591,38 @@ void RadioModel::onWsjtxSpotReceived(const DxSpot& spot)
     // WSJT-X spots are real-time and dense; AetherSDR's
     // DxClusterDialog.cpp:1201 [@0cd4559] defaults to 120 s lifetime for
     // the dialog's UI, so reuse that here.
+    // R-R3-21: the Spot Hub's Spot Life slider saves WsjtxSpotLifetimeSec
+    // (it saved WsjtxSpotLifetime, which nothing read; CoreInit migrates it).
     const int lifetime = s.value(QStringLiteral("WsjtxSpotLifetimeSec"),
                                  120).toInt();
-    const QString color = s.value(QStringLiteral("WsjtxSpotColor"),
-                                  QStringLiteral("#00FF00")).toString();
+    // R-R3-21: the colour the Spot Hub's WSJT-X swatches saved for this
+    // decode's kind. This read a WsjtxSpotColor that nothing wrote.
+    // From AetherSDR src/gui/MainWindow_Spots.cpp:585-622 [@1e0718ad]:
+    // calling me, then CQ POTA, then CQ, then the default. AetherSDR's
+    // WsjtxFilter* gating in the same block is not ported here.
+    const QString& msg = spot.comment;
+    const bool isCQ = msg.startsWith(QStringLiteral("CQ "));
+    const bool isPOTA = msg.contains(QStringLiteral("CQ POTA"));
+    bool isCallingMe = false;
+    {
+        const QString myCall = s.value(QStringLiteral("DxClusterCallsign")).toString();
+        if (!myCall.isEmpty()) {
+            const QStringList parts = msg.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            if (parts.size() >= 2 && parts[0] == myCall) {
+                isCallingMe = true;
+            }
+        }
+    }
+    QString color;
+    if (isCallingMe) {
+        color = s.value(QStringLiteral("WsjtxColorCallingMe"), QStringLiteral("#FF0000")).toString();
+    } else if (isPOTA) {
+        color = s.value(QStringLiteral("WsjtxColorPOTA"), QStringLiteral("#00FFFF")).toString();
+    } else if (isCQ) {
+        color = s.value(QStringLiteral("WsjtxColorCQ"), QStringLiteral("#00FF00")).toString();
+    } else {
+        color = s.value(QStringLiteral("WsjtxColorDefault"), QStringLiteral("#FFFFFF")).toString();
+    }
     const int idx = m_spotModel->dedupIndexFor(spot.dxCall, spot.freqMhz);
     m_spotModel->applySpotStatus(idx, kvsFromSpot(spot, lifetime, color));
 

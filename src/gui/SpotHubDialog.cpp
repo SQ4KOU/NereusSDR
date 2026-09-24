@@ -102,6 +102,10 @@
 //                                    preserved verbatim from upstream
 //                                    `:146-178`. AI tooling:
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-21: the WSJT-X Spot Life slider
+//                                    reads and saves WsjtxSpotLifetimeSec,
+//                                    the name RadioModel reads. AI
+//                                    tooling: Anthropic Claude Code.
 
 #include "SpotHubDialog.h"
 
@@ -1334,7 +1338,9 @@ void SpotHubDialog::buildWsjtxTab(QTabWidget* tabs)
     lifeLabel->setStyleSheet("QLabel { color: #808080; font-size: 12px; }");
     decodeRow->addWidget(lifeLabel);
 
-    int wsjtxLife = s.value("WsjtxSpotLifetime", 120).toInt();
+    // R-R3-21: WsjtxSpotLifetimeSec is the name RadioModel reads; this
+    // saved WsjtxSpotLifetime, which nothing read (CoreInit migrates it).
+    int wsjtxLife = s.value("WsjtxSpotLifetimeSec", 120).toInt();
     auto* wsjtxLifeSlider = new QSlider(Qt::Horizontal);
     wsjtxLifeSlider->setObjectName("wsjtxLifeSlider");
     wsjtxLifeSlider->setRange(30, 300);
@@ -1351,7 +1357,7 @@ void SpotHubDialog::buildWsjtxTab(QTabWidget* tabs)
     connect(wsjtxLifeSlider, &QSlider::valueChanged, this, [wsjtxLifeValue](int v) {
         wsjtxLifeValue->setText(QString("%1s").arg(v));
         auto& settings = AppSettings::instance();
-        settings.setValue("WsjtxSpotLifetime", v);
+        settings.setValue("WsjtxSpotLifetimeSec", v);
         settings.save();
     });
     layout->addLayout(decodeRow);

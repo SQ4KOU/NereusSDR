@@ -12,6 +12,9 @@
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
 //                 AppSettings XML persistence: key/value semantics (PascalCase keys, True/False string booleans, per-StationName nesting) port Thetis database.cs SaveVarsDictionary/RestoreVarsDictionary pattern; QXmlStream file I/O skeleton follows AetherSDR `src/core/AppSettings.{h,cpp}`.
+//   2026-09-23 - R-R3-21: migrateRenamedKeys() one-shot rename for keys
+//                 whose writer and reader disagreed (WsjtxSpotLifetime).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1403,6 +1406,35 @@ void AppSettings::removeOrphanOcN2adrFilter(AppSettings& s)
     qDebug() << "Removed orphan settings key" << QString(kOrphanKey)
              << "(issue #174 — OcOutputsHfTab N2ADR checkbox had no consumer)";
     s.save();
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-21: one-shot renames (see AppSettings.h)
+// ---------------------------------------------------------------------------
+
+void AppSettings::migrateRenamedKeys(AppSettings& s)
+{
+    struct Rename { const char* oldKey; const char* newKey; };
+    static constexpr Rename kRenames[] = {
+        {"WsjtxSpotLifetime", "WsjtxSpotLifetimeSec"},
+    };
+    bool changed = false;
+    for (const Rename& r : kRenames) {
+        const QString oldKey = QString::fromLatin1(r.oldKey);
+        if (!s.contains(oldKey)) {
+            continue;
+        }
+        const QString newKey = QString::fromLatin1(r.newKey);
+        if (!s.contains(newKey)) {
+            s.setValue(newKey, s.value(oldKey));
+        }
+        s.remove(oldKey);
+        changed = true;
+        qDebug() << "Renamed settings key" << oldKey << "to" << newKey;
+    }
+    if (changed) {
+        s.save();
+    }
 }
 
 // ---------------------------------------------------------------------------

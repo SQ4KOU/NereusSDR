@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/">
+        <file>cty.dat</file>
     </qresource>
     <qresource prefix="/bandplans">
         <file alias="arrl-us.json">resources/bandplans/arrl-us.json</file>

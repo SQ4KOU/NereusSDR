@@ -157,6 +157,10 @@
 //   2026-09-23 - R-R3-46: PowerPage::applyHpsdrModel blocks the tune-
 //                 power spinbox before its range changes. J.J. Boyd (KG4VCF), AI-
 //                 assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-21: Speech Processor's AM-SQ / DEXP button opens
+//                 Transmit > DEXP/VOX (it asked for a "VOX/DEXP" page that
+//                 does not exist). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 #include "TransmitSetupPages.h"
 #include "gui/StyleConstants.h"
@@ -976,7 +980,8 @@ QLabel* SpeechProcessorPage::addStageRow(QGridLayout* grid, int row,
                                           const QString& buttonText,
                                           const QString& buttonTooltip,
                                           const QString& linkPage,
-                                          const QString& futurePhaseTag)
+                                          const QString& futurePhaseTag,
+                                          const QString& linkCategory)
 {
     auto* nameLbl = new QLabel(stageName);
     nameLbl->setStyleSheet(QStringLiteral(
@@ -1014,8 +1019,8 @@ QLabel* SpeechProcessorPage::addStageRow(QGridLayout* grid, int row,
         // Future-phase placeholder — visible-but-disabled.
         btn->setEnabled(false);
     } else {
-        connect(btn, &QPushButton::clicked, this, [this, linkPage]() {
-            emit openSetupRequested(QStringLiteral("DSP"), linkPage);
+        connect(btn, &QPushButton::clicked, this, [this, linkCategory, linkPage]() {
+            emit openSetupRequested(linkCategory, linkPage);
         });
     }
 
@@ -1191,15 +1196,19 @@ void SpeechProcessorPage::buildStageStatusSection()
         QStringLiteral("CFC"),
         QString());
 
-    // AM-SQ / DEXP — placeholder (3M-3a-iii target; cross-links to VOX/DEXP).
+    // AM-SQ / DEXP: placeholder (3M-3a-iii target; cross-links to DEXP/VOX).
+    // R-R3-21: the page is registered as Transmit > "DEXP/VOX"
+    // (SetupDialog.cpp); asking for "VOX/DEXP" found nothing, so the click
+    // did nothing.
     m_amSqDexpStatusLabel = addStageRow(grid, row++,
         QStringLiteral("AM-SQ / DEXP"),
         QStringLiteral("off"),
         false,
-        QStringLiteral("Open VOX/DEXP Setup"),
-        QStringLiteral("Open Setup → DSP → VOX/DEXP (AM-Squelch + Downward Expander)"),
-        QStringLiteral("VOX/DEXP"),
-        QStringLiteral("3M-3a-iii"));
+        QStringLiteral("Open DEXP/VOX Setup"),
+        QStringLiteral("Open Setup → Transmit → DEXP/VOX (AM-Squelch + Downward Expander)"),
+        QStringLiteral("DEXP/VOX"),
+        QStringLiteral("3M-3a-iii"),
+        QStringLiteral("Transmit"));
 
     auto* groupLayout = qobject_cast<QVBoxLayout*>(group->layout());
     if (groupLayout) {

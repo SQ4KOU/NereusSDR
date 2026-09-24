@@ -15,6 +15,7 @@
 #include "core/RadioConnection.h"
 #include "core/RadioDiscovery.h"
 #include "core/HpsdrModel.h"
+#include "core/HermesLiteBandwidthMonitor.h"
 #include "fakes/P1FakeRadio.h"
 
 using namespace NereusSDR;
@@ -103,6 +104,42 @@ private slots:
         // samples[0] = I0, samples[1] = Q0
         QVERIFY(qAbs(samples[0] - 0.5f) < 0.001f);
         QVERIFY(qAbs(samples[1] - 0.0f) < 0.001f);
+
+        conn.disconnect();
+        fake.stop();
+    }
+
+    // R-R3-21: Diagnostics > Connection Quality's "EP6 sequence gaps".
+    // Each ep6 frame whose sequence number is not one past the last counts
+    // one error, as P1RadioConnection::onReadyRead documents.
+    void ep6SequenceGapsAreCounted() {
+        P1FakeRadio fake;
+        fake.setAutoStreamEnabled(false);
+        fake.start();
+
+        HermesLiteBandwidthMonitor bw;
+        P1RadioConnection conn;
+        conn.init();
+        conn.setBandwidthMonitor(&bw);
+        QSignalSpy frames(&conn, &RadioConnection::frameReceived);
+
+        conn.connectToRadio(makeInfo(fake));
+        QTRY_VERIFY_WITH_TIMEOUT(fake.isRunning(), 3000);
+
+        fake.sendEp6Frames(5);
+        QTRY_COMPARE_WITH_TIMEOUT(frames.count(), 5, 3000);
+        const int before = bw.ep6SequenceErrorCount();
+
+        // In-order frames add nothing.
+        fake.sendEp6Frames(3);
+        QTRY_COMPARE_WITH_TIMEOUT(frames.count(), 8, 3000);
+        QCOMPARE(bw.ep6SequenceErrorCount(), before);
+
+        // A jump in the sequence counts one gap.
+        fake.skipEp6Sequence(4);
+        fake.sendEp6Frames(2);
+        QTRY_COMPARE_WITH_TIMEOUT(frames.count(), 10, 3000);
+        QCOMPARE(bw.ep6SequenceErrorCount(), before + 1);
 
         conn.disconnect();
         fake.stop();
