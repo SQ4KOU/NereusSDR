@@ -127,6 +127,11 @@
 //                                    session.end. AI-assisted
 //                                    implementation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08): the
+//                                    five pair.* kinds (pair.start,
+//                                    pair.accept, pair.spake, pair.confirm,
+//                                    pair.fail). AI-assisted implementation
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -175,6 +180,16 @@ enum class SessionMessageKind {
     // R3: bounded, capability-gated station observations. Never a command.
     StationTelemetry,
     PropertyResult,
+    // iPhone app Task 14 (R-IOS-08): pairing a device, on a connection
+    // that sends pair.start after its hello instead of auth.request, and
+    // only to a Core whose hello declares features.pairing (the link
+    // document's Pairing section). The connection ends after pair.accept,
+    // the Core's pair.confirm, or pair.fail.
+    PairStart,    // device -> Core: mode "lan" or "code", and the device
+    PairAccept,   // Core -> device: one tap succeeded; the Core's identity
+    PairSpake,    // both: one SPAKE2+EE step, 0 to 3
+    PairConfirm,  // both: a confirmation box under the agreed keys
+    PairFail,     // Core -> device: why not, and when to try again
 };
 
 /// The session protocol's own semantic version, advertised by BOTH ends in
@@ -290,6 +305,15 @@ struct SessionStationIdentity {
 
 /// iPhone app Task 12: auth.request's `device`, base64url text as on the
 /// wire (the link document, section 3.5).
+/// iPhone app Task 14: the device pair.start names (its key as base64url of
+/// SPKI DER, a name and a kind). In code mode the name and kind inside the
+/// device's confirmation box win over these.
+struct SessionPairDevice {
+    QString publicKey;
+    QString name;
+    QString kind;       // "phone", "tablet", "computer"
+};
+
 struct SessionDeviceBlock {
     QString id;         // SHA-256 of the device key's SPKI DER
     QString publicKey;  // the device key, SPKI DER
@@ -519,6 +543,24 @@ struct SessionMessage {
     /// paragraph.
     QString originTag;
 
+    // ── iPhone app Task 14: the pair.* kinds ───────────────────────────
+
+    /// PairStart: "lan" (one tap) or "code".
+    QString pairMode;
+    /// PairStart: the device asking to pair.
+    std::optional<SessionPairDevice> pairDevice;
+    /// PairAccept: the Core's label (its identity rides in stationIdentity).
+    QString pairLabel;
+    /// PairSpake: the step, 0 to 3, and its bytes as base64url.
+    int pairStep = 0;
+    QString pairData;
+    /// PairConfirm: the box as base64url (a 24-byte nonce, then the
+    /// ciphertext).
+    QString pairBox;
+    /// PairFail: milliseconds until trying again makes sense (0: now, or
+    /// never with this Core as it stands). Its reason rides in `reason`.
+    qint64 retryAfterMs = 0;
+
     /// R3 MediaControl only. Individual media operations validate their own
     /// fields after the authenticated, snapshot-ready session gate. This
     /// envelope carries signalling/subscriptions, never audio or FFT arrays.
@@ -665,6 +707,17 @@ public:
     /// unset, which SettingsProxy::applyRejection() distinguishes from a
     /// restored empty string) and is encoded as an EMPTY entry list rather
     /// than an entry carrying an empty value.
+    // ── iPhone app Task 14: pairing ─────────────────────────────────────
+
+    static SessionMessage pairStart(const QString& mode, const SessionPairDevice& device);
+    static SessionMessage pairAccept(const SessionStationIdentity& identity,
+                                     const QString& label);
+    static SessionMessage pairSpake(int step, const QString& data);
+    static SessionMessage pairConfirm(const QString& box);
+    /// `reason` is what the operator reads; `retryAfterMs` is when trying
+    /// again makes sense.
+    static SessionMessage pairFail(const QString& reason, qint64 retryAfterMs);
+
     static SessionMessage settingsReject(const QString& key, bool hasRestoredValue,
                                          const QString& restoredValue,
                                          const QString& reason = {});

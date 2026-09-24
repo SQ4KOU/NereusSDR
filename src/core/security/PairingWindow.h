@@ -136,10 +136,11 @@ signals:
 
 private:
     void followDevices();
-    void setState(State state);
-    void setCode(const QString& code);
-    /// A new code now, or when the wait ends.
-    void offerCode();
+    /// Sets the state and the code, then signals each that moved.
+    void commit(State state, const QString& code);
+    /// The code to show in `state`: the current one, a new one, or none
+    /// (closed, in use, or waiting; the wait's timer is then armed).
+    QString codeFor(State state);
     qint64 now() const;
 
     DeviceStore& m_devices;

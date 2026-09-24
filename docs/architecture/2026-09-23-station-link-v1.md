@@ -237,6 +237,140 @@ in with its key alone, nothing typed.
 **Last seen.** Every authenticated connection of a paired device records
 the time and the peer's address (empty over the relay, never the relay's).
 
+### 3.6 Pairing
+
+A device that is not paired pairs on a connection of its own (iPhone app
+plan Task 14; the pairing design, sections 4.2, 4.3 and 4.5). After the
+station's `hello` it sends its own `hello` and then `pair.start` in place of
+`auth.request`, and only to a station whose `hello` declares
+`features.pairing` 1 (`SpakeExchange::isAvailable()` and a usable identity
+key, the same condition as `deviceAuth`). The station declares it; it never
+asks it of a client. Nothing on a pairing connection signs in: the
+connection ends after `pair.accept`, the station's `pair.confirm` or
+`pair.fail`, with no `session.end`, and the device then signs in by key on
+a new connection (section 3.5). An `auth.request` after `pair.start`, or a
+`pair.*` message out of turn, ends the connection with `session.end`
+`protocolError`. The handshake deadline (section 12.2) applies.
+
+**The pairing window** (`PairingWindow`) is the station's, not any
+connection's:
+
+- `OpenUnclaimed`: the Core has no paired device and no active token
+  (`DeviceStore::isClaimed` false). Open with no timer. One tap pairs,
+  and so does the code.
+- `ClosedClaimed`: the Core is claimed and the window is shut. Nothing
+  pairs.
+- `OpenReopened`: reopened on a claimed Core, from the Core's console or
+  by a paired device (`pairing.open`, section 9.1). Only the code pairs.
+  It closes after one successful pairing, or on `pairing.close`.
+
+The first pairing closes an unclaimed window. A Core that loses its last
+device (and has no token) is unclaimed again, and its window opens.
+
+**The code** is a number and two words, `<nameplate>-<word>-<word>`, for
+example `7-anvil-harbor`. The words come from
+`resources/pairing-words-v1.txt`: 256 lowercase words of 4 to 7 letters,
+no two within one edit of each other and no two alike in sound. The
+number is the rendezvous nameplate (Part E); until the rendezvous exists
+the station picks one from 1 to 99 (`PairingWindow::kLocalNameplateMax`).
+Both ends normalise a typed code before they use it
+(`PairingCode::normalise`). Normalising lowercases and trims, drops any
+leading zeros of the number, and joins the three parts with single
+hyphens, whatever separators were typed. It refuses anything that is not
+a number from 1 to 999999 and two words of the list. The normalised text,
+as UTF-8, is the password.
+
+The code appears on the Core's console (standard output, never the logging
+categories), on its status page and on the Remote Access page of a desktop
+running the Core. The link carries it only to a connection signed in with
+a paired device's own key: in the `devices` object's `pairingCode` and in
+`pairing.open`'s result (section 7.1). A connection signed in with the
+token receives `""` in both, even when its hello declares `deviceAuth`. A
+fixture writes the code as `"$string"`, never literally.
+
+**Single use, and the wait.** The station commits to the code when the
+device's step 1 arrives (`PairingWindow::takeCode`). From then on the code
+is either paired with or burned: a wrong code, a `pair.fail` from the
+device, or the connection ending first all burn it. Only one exchange
+holds the code at a time, and a second one's step 1 is refused. After a
+burned code the next one appears after 5 s. The wait doubles after each
+consecutive failure, up to 300 s (`kFirstRetryMs`, `kMaxRetryMs`), and a
+successful pairing resets it. While no code is shown, `pair.start` in
+code mode is refused, and `retryAfterMs` says when the next one appears.
+
+**The messages** (every binary value is base64url without padding):
+
+| Kind | From | Keys |
+| --- | --- | --- |
+| `pair.start` | device | `mode` `"lan"` or `"code"`; `device` `{"publicKey", "name", "kind"}`: the device's P-256 key as in section 3.4, a name, and `phone`, `tablet` or `computer` |
+| `pair.accept` | station | `identity` `{"publicKey", "certBinding"}` as in the hello (section 3.4); `label`, the Core's label (`devices`' `stationLabel`) |
+| `pair.spake` | both | `step`, 0 to 3; `data`, that step's bytes |
+| `pair.confirm` | both | `box`: a 24-byte nonce, then the XChaCha20-Poly1305 (IETF) ciphertext and tag |
+| `pair.fail` | station, and the device after its own step 3 fails | `reason`, plain words; `retryAfterMs`, a whole number of milliseconds, 0 to 2147483647 (0: now, or not with this Core as it stands) |
+
+**One tap** (`mode` `"lan"`). The station adds the device when the Core
+is unclaimed (`OpenUnclaimed`), `pairing_lan_click` is `allow`, and the
+connection's address is on one of the Core's directly connected networks
+(`StationServer::isOnDirectNetwork`: a loopback address, or one inside the
+subnet of an address of a running interface). A relayed connection has no
+address of its own, so it never qualifies. The station then sends
+`pair.accept` and ends the connection.
+
+**The code** (`mode` `"code"`), SPAKE2+EE over libsodium
+(`SpakeExchange`). Its fixed values are the client identity
+`"nereussdr-device-v1"` and the server identity `"nereussdr-station-v1"`.
+Password hashing uses libsodium's default algorithm (Argon2id) with
+`crypto_pwhash_OPSLIMIT_INTERACTIVE` and
+`crypto_pwhash_MEMLIMIT_INTERACTIVE`:
+
+1. Station: `pair.spake` step 0, 36 bytes: the hash parameters and salt.
+   The station hashes each code once, when the first code-mode pairing
+   asks for it.
+2. Device: checks that step 0 names exactly those parameters
+   (`crypto_spake_validate_public_data`) before it hashes the code, then
+   sends step 1, 32 bytes. The station takes the code here.
+3. Station: step 2, 64 bytes.
+4. Device: step 3, 32 bytes. When the codes differ, the device's step 3
+   fails; it sends `pair.fail` instead, and the station burns the code and
+   answers with its own `pair.fail`. Otherwise the device sends step 3 and
+   then its `pair.confirm`, whose box is sealed with the shared key
+   `client_sk` around the compact JSON `{"publicKey", "name", "kind"}`.
+5. Station: checks step 3 (spake2-ee's step 4). A mismatch burns the code
+   and sends `pair.fail`. It opens the device's box. The box's
+   `publicKey` must be the one `pair.start` named, and the box's `name`
+   and `kind` win over the plain ones. The station adds the device and
+   answers with its own `pair.confirm`: a box sealed with `server_sk`
+   around `{"identity": {"publicKey", "certBinding"}, "label"}`. Then it
+   ends the connection.
+
+Whoever carries these messages (the rendezvous, later) learns nothing it
+could test guesses against. Each exchange is one guess, and the code burns
+after it.
+
+| Refusal | `pair.fail` reason | `retryAfterMs` |
+| --- | --- | --- |
+| No pairing on this Core (no identity key or cryptography) | "This Core cannot pair new devices." | 0 |
+| A key that is not a P-256 key, or an unusable name or kind (in `pair.start` or the box), or a box that does not open or names another key | "The Core could not read this device's details. Update this app." | 0 (the wait, from the box on) |
+| The key is paired already | "This device is already paired with this Core. Connect to it instead." | 0 |
+| The window is closed | "This Core is not taking new devices. Open pairing on the Core or on a paired device first." | 0 |
+| One tap on a claimed Core | "One tap pairs only a Core with no paired devices. Use the pairing code the Core shows." | 0 |
+| One tap with `pairing_lan_click = deny` | "This Core pairs only with its code. Use the pairing code the Core shows." | 0 |
+| One tap from off the Core's networks | "One tap works only on the Core's own network. Use the pairing code the Core shows." | 0 |
+| Another exchange holds the code | "Another device is pairing with this Core right now. Try again shortly." | 5000 |
+| No code shown yet (the wait) | "The Core is waiting before it shows a new pairing code. Try again when the new code appears." | until the next code |
+| The code changed between step 0 and step 1 | "The pairing code changed. Enter the code the Core shows now." | 0, or the wait |
+| A malformed step 1 | "The pairing code was not accepted. A new code will appear on the Core." | the wait |
+| A wrong code (either side) | "The pairing code was not right. A new code will appear on the Core." | the wait |
+| The device could not be saved | "The Core could not save this device. Try again." | 0, or the wait once the code was taken |
+
+`nereus_pairing_peer` (`tests/tools/`) is the station's side of one
+pairing over standard input and output, one message per line, for the
+cross-implementation tests. It prints `{"type":"peer.ready","code",
+"certSha256"}` first and `{"type":"peer.done","paired","devices"}` last.
+Its options are `--lan-deny`, `--address <ip>` (default `127.0.0.1`) and
+`--claimed` (a device paired first, the window reopened). The live
+exchange cannot be scripted in a fixture, so this tool proves it.
+
 ## 4. Messages
 
 Every message is `{"type": "<kind>", ...}`. The table lists every kind, the
@@ -263,6 +397,11 @@ writes.
 | `media.control` | `payload` (object), `type` (string) | none |
 | `object.create` | `class` (string), `key` (string), `properties` (array), `type` (string) | none |
 | `object.destroy` | `class` (string), `key` (string), `type` (string) | none |
+| `pair.accept` | `identity` (object), `label` (string), `type` (string) | none |
+| `pair.confirm` | `box` (string), `type` (string) | none |
+| `pair.fail` | `reason` (string), `retryAfterMs` (number), `type` (string) | none |
+| `pair.spake` | `data` (string), `step` (number), `type` (string) | none |
+| `pair.start` | `device` (object), `mode` (string), `type` (string) | none |
 | `property.result` | `key` (string), `results` (array), `type` (string), `writeId` (number) | none |
 | `property.write` | `key` (string), `properties` (array), `type` (string) | `writeId` (number) |
 | `schema` | `class` (string), `fields` (array), `type` (string) | none |
@@ -323,7 +462,9 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
    then `auth.request`: a paired device's `device` block with `token` `""`
    (section 3.5), or the token of a Core upgraded from before paired
    devices, with or without the window's `device` block to enrol
-   (`StationClient.cpp` sends the token after its pin check).
+   (`StationClient.cpp` sends the token after its pin check). A device
+   that is not paired sends `pair.start` instead, and the connection
+   pairs and ends (section 3.6).
 4. The station sends `auth.result`. On success, in this order
    (`StationServer::promoteToSession`):
    - `capabilities` (section 6);
@@ -433,8 +574,9 @@ sent (device authentication, pairing, the takeover question, Setup
 descriptions) is declared here, and asked with
 `StationServer::peerDeclares(peer, feature, minVersion)`; the desktop
 client asks `StationClient::stationDeclares(feature, minVersion)`. The station
-declares `deviceAuth` 1 (section 3.5) when its identity key is usable; the
-desktop client declares none yet and sends `{}`. A client's `deviceAuth` 1
+declares `deviceAuth` 1 (section 3.5) and `pairing` 1 (section 3.6) when
+its identity key is usable; the desktop client declares none yet and sends
+`{}`. A client's `deviceAuth` 1
 (or later) also asks for the `devices` object and its commands (section
 7.1): the station sends them to no other peer, so a window that declares
 nothing sees exactly the wire it was built for. A client never sends a
@@ -511,6 +653,7 @@ change shows as surface drift and as a change to this table.
 | `remoteTgxlControlVersion` | 1 |
 | `stationIdentityVersion` | 1 |
 | `deviceAdminVersion` | 1 |
+| `pairingVersion` | 1 |
 
 <!-- /surface -->
 
@@ -556,12 +699,17 @@ When a feature is off, its version is 0:
   Core has its identity key and signs devices in by key (section 3.5);
   0 when that key is unusable. A client learns the same before
   capabilities from the hello's `features.deviceAuth`.
-- `deviceAdminVersion`: sent only at agreed minor 11, last. 1 when the
+- `deviceAdminVersion`: sent only at agreed minor 11. 1 when the
   Core's identity key is usable (the same condition as
   `stationIdentityVersion`): the `devices` object (section 7.1) and
   `devices.revoke`, `station.rename`, `station.acknowledgeKeyBackup` and
   `station.retireToken` (section 9.1), for a peer whose hello declares
   `deviceAuth`. 0 otherwise.
+- `pairingVersion`: sent only at agreed minor 11, last. 1 when the Core
+  pairs devices (the hello's `features.pairing`, section 3.6): the
+  `devices` object's `pairingWindowOpen` and `pairingCode`, and
+  `pairing.open` and `pairing.close` (section 9.1), for the same peers as
+  `deviceAdminVersion`. 0 otherwise.
 
 `txPermitted` is always false today: remote transmit is R4.
 
@@ -630,6 +778,7 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 | 47 | `remoteTgxlControlVersion` | `i64` |
 | 48 | `stationIdentityVersion` | `i64` |
 | 49 | `deviceAdminVersion` | `i64` |
+| 50 | `pairingVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1033,7 +1182,7 @@ An enum property lists the values its domain allows.
 | 142 | `snrDb` | `f64` | outbound |  |
 | 143 | `lastRadeRxCallsign` | `utf8` | outbound |  |
 
-**StationDevicesFacade** (7 properties)
+**StationDevicesFacade** (9 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1044,6 +1193,8 @@ An enum property lists the values its domain allows.
 | 4 | `tokenActive` | `bool` | outbound |  |
 | 5 | `keyBackupAcknowledged` | `bool` | outbound |  |
 | 6 | `keyPath` | `utf8` | outbound |  |
+| 7 | `pairingWindowOpen` | `bool` | outbound |  |
+| 8 | `pairingCode` | `utf8` | outbound |  |
 
 **StationTciModel** (5 properties)
 
@@ -1173,7 +1324,7 @@ Notes on the keys:
   declares `deviceAuth` 1 or later, while `deviceAdminVersion` is 1
   (`StationServer::sendToSession`). A window that declares nothing (today's
   desktop) and an older peer never see it or its schema. Every property is
-  `outbound`; the object changes only through its four commands (section
+  `outbound`; the object changes only through its six commands (section
   9.1), and a write to it is refused as any `outbound` write is. Its
   properties (`StationDevicesFacade`):
   - `listJson` (`utf8`): a JSON array of the paired devices in pairing
@@ -1196,6 +1347,12 @@ Notes on the keys:
     this Core's identity key (`station.acknowledgeKeyBackup`); false on a
     new Core and again after the key is replaced.
   - `keyPath` (`utf8`): where the identity key file is on the Core.
+  - `pairingWindowOpen` (`bool`, `pairingVersion` 1): the pairing window
+    is open (section 3.6).
+  - `pairingCode` (`utf8`, `pairingVersion` 1): the current pairing code,
+    `""` while the window is closed and while no code is shown. Sent only
+    to a connection signed in with a paired device's own key; any other
+    connection receives `""` (`StationServer::withPairingCodeFor`).
 - **Unknown classes.** A client that receives a schema for a class it does
   not know records the difference and drops that class's objects and
   deltas.
@@ -1487,6 +1644,8 @@ refused.
 | `station.rename` | `label` utf8 | `deviceAdminVersion` | 1 | 11 |
 | `station.acknowledgeKeyBackup` | none | `deviceAdminVersion` | 1 | 11 |
 | `station.retireToken` | none | `deviceAdminVersion` | 1 | 11 |
+| `pairing.open` | none | `pairingVersion` | 1 | 11 |
+| `pairing.close` | none | `pairingVersion` | 1 | 11 |
 
 <!-- /surface -->
 
@@ -1536,6 +1695,16 @@ Four command groups need a sentence beyond the table:
   and accepted with nothing to do on a Core without a token. Each accepted
   one names `devices` in `affected`; its change reaches the object in the
   next `delta`.
+- **The pairing window.** `pairing.open` and `pairing.close`
+  (`pairingVersion` 1) go to the same peers as the device commands, and
+  from any other the station refuses them with "Update this app to pair
+  new devices with this Core.". `pairing.open` reopens the window on a
+  claimed Core (nothing to do while it is open) and answers with `values`
+  holding `code` (`utf8`), the current code, which is `""` for a
+  connection signed in with the token (section 3.6). `pairing.close`
+  closes a reopened window. Either one with arguments is refused ("The
+  request to open pairing was not understood.", "The request to close
+  pairing was not understood.").
 
 ### 9.2 Unknown verbs
 
@@ -1695,6 +1864,10 @@ non-empty string; an empty one is refused like any mistyped key.
 A device's connection ends whatever removed the device
 (`DeviceStore::deviceRemoved`): the command, the Core's console or a reset.
 The connection that asked is ended just after its own `command.result`.
+
+A pairing connection (section 3.6) ends after `pair.accept`, the
+station's `pair.confirm` or `pair.fail`, with no `session.end`: the reason
+a client acts on is `pair.fail`'s.
 
 One code is defined for an end the station never sends:
 `identityChanged`, which a client uses for its own end when the Core's
@@ -1916,13 +2089,16 @@ runs, and the station messages that follow refer to them only through
 Each end decodes `wire`; when `decodes` is true it encodes the result
 again and the two JSON objects compare equal after parsing, key order
 ignored. The fixtures cover every message kind in each direction it
-travels: seven from the client (`hello`, `auth.request`, `command.invoke`,
-`media.control`, `property.write`, `settings.write`, `settings.remove`)
-and sixteen from the station, with a `delta` carrying `"nan"` and `"-inf"`
+travels: eleven from the client (`hello`, `auth.request`, `command.invoke`,
+`media.control`, `property.write`, `settings.write`, `settings.remove`,
+and `pair.start`, `pair.spake`, `pair.confirm`, `pair.fail`) and twenty
+from the station (the sixteen before pairing, and `pair.accept`,
+`pair.spake`, `pair.confirm`, `pair.fail`), with a `delta` carrying `"nan"` and `"-inf"`
 (section 4.2). The client's `hello` has two fixtures: an older app's,
 without `majors` or `features`, and one declaring both; `auth.request` has
 two: a token, and a device sign-in with its `device` block (section 3.5).
-The station's `hello` carries `majors`, `features` (`deviceAuth` 1),
+The station's `hello` carries `majors`, `features` (`deviceAuth` 1 and
+`pairing` 1),
 `identity` and `challenge`, from a station supporting `[1, 2]`, so `major`
 is 1, the oldest (section 6.1). `auth.result` and `session.end` each have a
 second fixture carrying a `code` (section 12.4). The refusals are: a
@@ -1933,8 +2109,12 @@ missing required key (`command.invoke` without `id`), a wrong type (an
 section 4.2, a `hello` major above 65535, a `hello` with an empty `majors`,
 a `hello` declaring a feature version that is not a whole number, a
 `hello` whose `identity` is not an object, an `auth.request` whose `device`
-lacks `signature`, a `session.end` with an empty `code`, and an unknown
-`type`.
+lacks `signature`, a `session.end` with an empty `code`, a `pair.start`
+whose `mode` is neither `lan` nor `code`, a `pair.spake` step outside 0 to
+3, a `pair.fail` whose `retryAfterMs` is not a whole number, and an
+unknown `type`. The pairing fixtures carry placeholders for keys, shares
+and boxes; the live exchange is proved by `nereus_pairing_peer` (section
+3.6).
 
 The two transport caps (1 MiB into the station, 8 MiB into the desktop
 client, section 12.3) are enforced by the WebSocket layer before any
@@ -2140,6 +2320,7 @@ same on every machine.
 | `device-other-challenge`, `device-other-certificate` | The paired device signs another challenge, or another certificate: `code` `deviceProofFailed`, then the close |
 | `devices` | On a new Core with the runner's device and two others paired, a device that declares `deviceAuth` receives the `devices` object in its snapshot (`listJson` and `keyPath` as `"$string"`, since they carry run-time ids, pairing and sign-in times and a path); a rename with a renamed argument and with a label outside the rule is refused, then a rename is stored (`settings.value` `StationLabel`) and the object's next `delta` carries it; raw `settings.write` and `settings.remove` of `StationLabel` are refused; the key backup is acknowledged; another device is revoked; `station.retireToken` with no token is accepted; then the device revokes itself: `command.result`, `session.end` `deviceRemoved`, the close. Runs on the station alone |
 | `devices-not-offered` | A window at minor 11 that declares no features receives no `devices` object, and `station.rename` is refused "Update this app to manage this Core's paired devices." Runs on the station alone |
+| `devices-pairing` | On the same Core as `devices`, `pairing.open` and `pairing.close` each with a renamed argument are refused; `pairing.open` is accepted with `values` `code` as `"$string"`, and the object's next `delta` has `pairingWindowOpen` true and `pairingCode` `"$string"`; `pairing.close` is accepted and the next `delta` has them false and `""`. Runs on the station alone |
 | `devices-retire-token-refused`, `devices-retire-token` | On an upgraded Core, a token connection that declares `deviceAuth` receives the object with `tokenActive` true; `station.retireToken` is refused with no device paired, and with one paired it is accepted and the connection ends: `session.end` `pairingRequired`, `retryable` false. Run on the station alone |
 | `connection-limit` | With eight other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
@@ -2257,8 +2438,8 @@ how a fixture is written to what the code does.
 - **Operator wording.** A reason a client may show an operator is plain
   English with no protocol terms. Every reason the station sends (the
   `reason` of `auth.result`, `session.end`, `command.result`,
-  `property.result`, `settings.reject` and the display's `rejected` and
-  `allocation-result`) passes `OperatorWording::isPlain` and names no
+  `property.result`, `settings.reject`, `pair.fail` and the display's
+  `rejected` and `allocation-result`) passes `OperatorWording::isPlain` and names no
   function, class, requirement or phase; `tst_station_reason_wording`
   checks the sources that word them (every reason literal, a reason of one
   word, and what `.arg()` inserts into one; a new function that words a

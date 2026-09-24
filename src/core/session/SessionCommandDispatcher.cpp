@@ -101,6 +101,9 @@
 //                                    station.acknowledgeKeyBackup and
 //                                    station.retireToken.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08):
+//                                    pairing.open and pairing.close.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -303,6 +306,8 @@ QString notRepresentableReason()
 //   devices.revoke, station.rename, station.acknowledgeKeyBackup,
 //   station.retireToken    deviceAdminVersion 1, to a device whose hello
 //                          declares deviceAuth (the `devices` object)
+//   pairing.open,
+//   pairing.close          pairingVersion 1, to the same peers
 //
 // tst_link_surface_manifest keeps this table and the routing in step: a
 // source scan of dispatch() and of each prefix family's handler, and a
@@ -461,6 +466,9 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"station.retireToken", {}, "deviceAdminVersion", 1,
          kRadioIdentitySessionProtocolMinor},
+        // The Core's pairing window (iPhone app Task 14, R-IOS-08).
+        {"pairing.open", {}, "pairingVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"pairing.close", {}, "pairingVersion", 1, kRadioIdentitySessionProtocolMinor},
     };
     return specs;
 }
@@ -522,6 +530,11 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         || invoke.commandVerb == "station.acknowledgeKeyBackup"
         || invoke.commandVerb == "station.retireToken") {
         handleDeviceAdmin(invoke);
+        return;
+    }
+    // iPhone app Task 14: the pairing window needs no radio either.
+    if (invoke.commandVerb == "pairing.open" || invoke.commandVerb == "pairing.close") {
+        handlePairingWindow(invoke);
         return;
     }
     if (m_radioModel.isNull()) {
@@ -1410,6 +1423,39 @@ void SessionCommandDispatcher::handleDeviceAdmin(const SessionMessage& invoke)
     }
     emitResult(verb, invoke.commandId, result.accepted, result.reason,
                result.accepted ? QList<QByteArray>{"devices"} : QList<QByteArray>{});
+}
+
+// iPhone app Task 14 (R-IOS-08, pairingVersion 1). pairing.open answers
+// with the window's code in `code` ("" while no code is shown);
+// StationServer blanks it for any connection not signed in with a paired
+// device's key before the result leaves the Core.
+void SessionCommandDispatcher::handlePairingWindow(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    const bool open = verb == "pairing.open";
+    if (m_deviceAdmin.isNull()) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("This Core cannot pair new devices."), {});
+        return;
+    }
+    if (!invoke.arguments.isEmpty()) {
+        emitResult(verb, invoke.commandId, false,
+                   open ? QStringLiteral("The request to open pairing was not understood.")
+                        : QStringLiteral("The request to close pairing was not understood."),
+                   {});
+        return;
+    }
+    const DeviceAdminResult result =
+        open ? m_deviceAdmin->openPairing() : m_deviceAdmin->closePairing();
+    if (!result.accepted || !open) {
+        emitResult(verb, invoke.commandId, result.accepted, result.reason,
+                   result.accepted ? QList<QByteArray>{"devices"} : QList<QByteArray>{});
+        return;
+    }
+    emit commandResultReady(SessionMessages::commandResult(
+        verb, invoke.commandId, true, QString(), {"devices"},
+        {MirrorUpdate{0, QByteArrayLiteral("code"), MirrorWireKind::Utf8,
+                      QVariant(m_deviceAdmin->pairingCode())}}));
 }
 
 void SessionCommandDispatcher::handleSetStationTci(const SessionMessage& invoke)

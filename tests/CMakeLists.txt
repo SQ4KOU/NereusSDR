@@ -7269,6 +7269,29 @@ target_compile_definitions(tst_pairing_code PRIVATE
 nereus_add_test(tst_pairing_window EXTRA_LABELS core)
 nereus_add_test(tst_spake_exchange EXTRA_LABELS core)
 
+# iPhone app Task 14 (R-IOS-08): the Core's side of one pairing over
+# standard input and output, for the cross-implementation tests (the iPhone
+# app's pairing interop test, Task 15, and tst_station_pairing below). The
+# phone session's Task 10 adds tests/tools/ on its own branch: keep both
+# sets of tools here when the two meet.
+add_executable(nereus_pairing_peer EXCLUDE_FROM_ALL
+    tools/nereus_pairing_peer.cpp
+    $<TARGET_OBJECTS:nereus_test_sandbox>)
+target_link_libraries(nereus_pairing_peer PRIVATE NereusCore)
+set_target_properties(nereus_pairing_peer PROPERTIES AUTOMOC ON)
+set_property(GLOBAL APPEND PROPERTY NEREUS_ALL_TESTS nereus_pairing_peer)
+
+# The pairing on the link: LAN mode's refusals and success, code mode's
+# burn, backoff and success, the code kept from token sign-ins and from the
+# logging categories, pairing.open and pairing.close, and the peer tool
+# above paired with the C++ device side in code and LAN mode.
+nereus_add_test(tst_station_pairing
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+add_dependencies(tst_station_pairing nereus_pairing_peer)
+target_compile_definitions(tst_station_pairing PRIVATE
+    NEREUS_PAIRING_PEER="$<TARGET_FILE:nereus_pairing_peer>")
+
 # Remote Daemon R2, Task 18: the wss session. Everything tasks 7 through 17
 # built converges here -- StateMirror, ObjectRegistry,
 # SessionCommandDispatcher and SettingsProxyServer on a socket, behind Task

@@ -8,12 +8,16 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: iPhone app Task 14 (R-IOS-08): the pairing window's two
+//               properties and verbs. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationDevicesFacade.h"
 
 #include "core/AppSettings.h"
 #include "core/security/DeviceStore.h"
+#include "core/security/PairingWindow.h"
 #include "core/security/StationIdentity.h"
 #include "core/security/StationLabel.h"
 #include "core/security/TokenStore.h"
@@ -59,13 +63,16 @@ bool storeSetting(AppSettings& settings, const QString& key, const QString& valu
 
 StationDevicesFacade::StationDevicesFacade(DeviceStore& devices, TokenStore& tokens,
                                            const StationIdentity& identity,
-                                           AppSettings& settings, QObject* parent)
+                                           AppSettings& settings, QObject* parent,
+                                           PairingWindow* pairingWindow)
     : QObject(parent)
     , m_devices(devices)
     , m_tokens(tokens)
     , m_identity(identity)
     , m_settings(settings)
 {
+    attachPairingWindow(pairingWindow);
+    // The state the object starts from, at revision 0.
     m_state = compute();
     connect(&m_devices, &DeviceStore::devicesChanged, this, &StationDevicesFacade::refresh);
 }
@@ -96,7 +103,34 @@ StationDevicesFacade::State StationDevicesFacade::compute() const
             acknowledged == StationIdentity::toBase64Url(m_identity.fingerprint());
         state.keyPath = m_identity.keyPath();
     }
+    if (m_pairingWindow != nullptr) {
+        state.pairingWindowOpen = m_pairingWindow->isOpen();
+        state.pairingCode = m_pairingWindow->currentCode();
+    }
     return state;
+}
+
+void StationDevicesFacade::attachPairingWindow(PairingWindow* window)
+{
+    if (m_pairingWindow != nullptr) {
+        disconnect(m_pairingWindow, nullptr, this, nullptr);
+    }
+    m_pairingWindow = window;
+    if (m_pairingWindow != nullptr) {
+        connect(m_pairingWindow, &PairingWindow::stateChanged, this,
+                &StationDevicesFacade::refresh);
+        connect(m_pairingWindow, &PairingWindow::codeChanged, this,
+                &StationDevicesFacade::refresh);
+    }
+}
+
+void StationDevicesFacade::setPairingWindow(PairingWindow* window)
+{
+    if (m_pairingWindow == window) {
+        return;
+    }
+    attachPairingWindow(window);
+    refresh();
 }
 
 void StationDevicesFacade::refresh()
@@ -210,6 +244,25 @@ DeviceAdminResult StationDevicesFacade::retireToken()
     qCInfo(lcDevices) << "The pairing token was retired";
     refresh();
     emit tokenRetired();
+    return {true, QString()};
+}
+
+DeviceAdminResult StationDevicesFacade::openPairing()
+{
+    if (m_pairingWindow == nullptr) {
+        return {false, QStringLiteral("This Core cannot pair new devices.")};
+    }
+    // The window's own signals refresh the object.
+    m_pairingWindow->reopen();
+    return {true, QString()};
+}
+
+DeviceAdminResult StationDevicesFacade::closePairing()
+{
+    if (m_pairingWindow == nullptr) {
+        return {false, QStringLiteral("This Core cannot pair new devices.")};
+    }
+    m_pairingWindow->close();
     return {true, QString()};
 }
 

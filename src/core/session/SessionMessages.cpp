@@ -47,6 +47,10 @@
 //                                    the end `code`. AI-assisted
 //                                    implementation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08): the
+//                                    five pair.* kinds. AI-assisted
+//                                    implementation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -245,6 +249,51 @@ SessionMessage SessionMessages::sessionEnd(const QString& reason, bool retryable
     return m;
 }
 
+SessionMessage SessionMessages::pairStart(const QString& mode, const SessionPairDevice& device)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::PairStart;
+    m.pairMode = mode;
+    m.pairDevice = device;
+    return m;
+}
+
+SessionMessage SessionMessages::pairAccept(const SessionStationIdentity& identity,
+                                           const QString& label)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::PairAccept;
+    m.stationIdentity = identity;
+    m.pairLabel = label;
+    return m;
+}
+
+SessionMessage SessionMessages::pairSpake(int step, const QString& data)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::PairSpake;
+    m.pairStep = step;
+    m.pairData = data;
+    return m;
+}
+
+SessionMessage SessionMessages::pairConfirm(const QString& box)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::PairConfirm;
+    m.pairBox = box;
+    return m;
+}
+
+SessionMessage SessionMessages::pairFail(const QString& reason, qint64 retryAfterMs)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::PairFail;
+    m.reason = reason;
+    m.retryAfterMs = retryAfterMs;
+    return m;
+}
+
 SessionMessage SessionMessages::propertyWrite(const QByteArray& objectKey,
                                               const QList<MirrorUpdate>& updates,
                                               quint32 writeId)
@@ -366,6 +415,12 @@ constexpr KindName kKindNames[] = {
     { SessionMessageKind::SettingsReject, "settings.reject" },
     { SessionMessageKind::MediaControl, "media.control" },
     { SessionMessageKind::StationTelemetry, "station.metrics.v1" },
+    // iPhone app Task 14 (R-IOS-08): pairing a device.
+    { SessionMessageKind::PairStart, "pair.start" },
+    { SessionMessageKind::PairAccept, "pair.accept" },
+    { SessionMessageKind::PairSpake, "pair.spake" },
+    { SessionMessageKind::PairConfirm, "pair.confirm" },
+    { SessionMessageKind::PairFail, "pair.fail" },
 };
 
 struct WireKindName {
@@ -433,6 +488,11 @@ QList<SessionMessageKind> SessionMessages::allKinds()
         SessionMessageKind::MediaControl,
         SessionMessageKind::StationTelemetry,
         SessionMessageKind::PropertyResult,
+        SessionMessageKind::PairStart,
+        SessionMessageKind::PairAccept,
+        SessionMessageKind::PairSpake,
+        SessionMessageKind::PairConfirm,
+        SessionMessageKind::PairFail,
     };
 }
 
@@ -881,6 +941,42 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
         o.insert(QStringLiteral("results"), results);
         break;
     }
+    // iPhone app Task 14: the pair.* kinds (the link document's Pairing
+    // section).
+    case SessionMessageKind::PairStart:
+        o.insert(QStringLiteral("mode"), message.pairMode);
+        o.insert(QStringLiteral("device"),
+                 QJsonObject{
+                     {QStringLiteral("publicKey"),
+                      message.pairDevice ? message.pairDevice->publicKey : QString()},
+                     {QStringLiteral("name"),
+                      message.pairDevice ? message.pairDevice->name : QString()},
+                     {QStringLiteral("kind"),
+                      message.pairDevice ? message.pairDevice->kind : QString()},
+                 });
+        break;
+    case SessionMessageKind::PairAccept:
+        o.insert(QStringLiteral("identity"),
+                 QJsonObject{
+                     {QStringLiteral("publicKey"),
+                      message.stationIdentity ? message.stationIdentity->publicKey : QString()},
+                     {QStringLiteral("certBinding"),
+                      message.stationIdentity ? message.stationIdentity->certBinding
+                                              : QString()},
+                 });
+        o.insert(QStringLiteral("label"), message.pairLabel);
+        break;
+    case SessionMessageKind::PairSpake:
+        o.insert(QStringLiteral("step"), message.pairStep);
+        o.insert(QStringLiteral("data"), message.pairData);
+        break;
+    case SessionMessageKind::PairConfirm:
+        o.insert(QStringLiteral("box"), message.pairBox);
+        break;
+    case SessionMessageKind::PairFail:
+        o.insert(QStringLiteral("reason"), message.reason);
+        o.insert(QStringLiteral("retryAfterMs"), static_cast<double>(message.retryAfterMs));
+        break;
     case SessionMessageKind::SettingsWrite:
     case SessionMessageKind::SettingsValue:
     case SessionMessageKind::SettingsRemove:
@@ -1098,6 +1194,48 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
     if ((kind == SessionMessageKind::SettingsWrite
          || kind == SessionMessageKind::SettingsValue)
         && !o.value(QStringLiteral("origin")).isString()) {
+        return false;
+    }
+    // iPhone app Task 14: the pair.* kinds. These run before the peer has
+    // signed in, so every field is checked for presence and type like the
+    // handshake's; what the strings hold is the pairing's to judge.
+    if (kind == SessionMessageKind::PairStart) {
+        const QString mode = o.value(QStringLiteral("mode")).toString();
+        const QJsonValue device = o.value(QStringLiteral("device"));
+        if (!o.value(QStringLiteral("mode")).isString()
+            || (mode != QLatin1String("lan") && mode != QLatin1String("code"))
+            || !device.isObject()) {
+            return false;
+        }
+        for (const char* field : {"publicKey", "name", "kind"}) {
+            if (!device.toObject().value(QLatin1String(field)).isString()) {
+                return false;
+            }
+        }
+    }
+    if (kind == SessionMessageKind::PairAccept) {
+        const QJsonValue identity = o.value(QStringLiteral("identity"));
+        if (!identity.isObject()
+            || !identity.toObject().value(QStringLiteral("publicKey")).isString()
+            || !identity.toObject().value(QStringLiteral("certBinding")).isString()
+            || !o.value(QStringLiteral("label")).isString()) {
+            return false;
+        }
+    }
+    if (kind == SessionMessageKind::PairSpake
+        && (!isWholeNumberIn(o.value(QStringLiteral("step")), 0.0, 3.0)
+            || !o.value(QStringLiteral("data")).isString()
+            || o.value(QStringLiteral("data")).toString().isEmpty())) {
+        return false;
+    }
+    if (kind == SessionMessageKind::PairConfirm
+        && (!o.value(QStringLiteral("box")).isString()
+            || o.value(QStringLiteral("box")).toString().isEmpty())) {
+        return false;
+    }
+    if (kind == SessionMessageKind::PairFail
+        && (!o.value(QStringLiteral("reason")).isString()
+            || !isWholeNumberIn(o.value(QStringLiteral("retryAfterMs")), 0.0, 2147483647.0))) {
         return false;
     }
     // Task 11: CommandInvoke and CommandResult share "verb" and "id";
@@ -1368,6 +1506,37 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         }
         break;
     }
+    case SessionMessageKind::PairStart: {
+        message.pairMode = o.value(QStringLiteral("mode")).toString();
+        const QJsonObject device = o.value(QStringLiteral("device")).toObject();
+        message.pairDevice = SessionPairDevice{
+            device.value(QStringLiteral("publicKey")).toString(),
+            device.value(QStringLiteral("name")).toString(),
+            device.value(QStringLiteral("kind")).toString(),
+        };
+        break;
+    }
+    case SessionMessageKind::PairAccept: {
+        const QJsonObject identity = o.value(QStringLiteral("identity")).toObject();
+        message.stationIdentity = SessionStationIdentity{
+            identity.value(QStringLiteral("publicKey")).toString(),
+            identity.value(QStringLiteral("certBinding")).toString(),
+        };
+        message.pairLabel = o.value(QStringLiteral("label")).toString();
+        break;
+    }
+    case SessionMessageKind::PairSpake:
+        message.pairStep = static_cast<int>(o.value(QStringLiteral("step")).toDouble());
+        message.pairData = o.value(QStringLiteral("data")).toString();
+        break;
+    case SessionMessageKind::PairConfirm:
+        message.pairBox = o.value(QStringLiteral("box")).toString();
+        break;
+    case SessionMessageKind::PairFail:
+        message.reason = o.value(QStringLiteral("reason")).toString();
+        message.retryAfterMs =
+            static_cast<qint64>(o.value(QStringLiteral("retryAfterMs")).toDouble());
+        break;
     case SessionMessageKind::Capabilities:
     case SessionMessageKind::SettingsSnapshot:
     case SessionMessageKind::PropertyWrite:

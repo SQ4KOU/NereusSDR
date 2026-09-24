@@ -116,6 +116,10 @@
 //                                    station.retireToken, routed to the
 //                                    Core's StationDevicesFacade.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08):
+//                                    pairing.open and pairing.close, routed
+//                                    to the same facade.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -255,6 +259,9 @@ private:
     // iPhone app Task 13 (R-IOS-08, deviceAdminVersion 1): devices.revoke,
     // station.rename, station.acknowledgeKeyBackup, station.retireToken.
     void handleDeviceAdmin(const NereusSDR::SessionMessage& invoke);
+    // iPhone app Task 14 (R-IOS-08, pairingVersion 1): pairing.open and
+    // pairing.close.
+    void handlePairingWindow(const NereusSDR::SessionMessage& invoke);
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
                     const QString& reason, const QList<QByteArray>& affectedKeys);

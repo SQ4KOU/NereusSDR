@@ -39,9 +39,26 @@
 // Several devices may be connected at once (a later session design); the
 // facade keeps a set for that reason.
 //
+// iPhone app Task 14 (R-IOS-08, pairingVersion 1): the pairing window.
+// `pairingWindowOpen` and `pairingCode` follow the Core's PairingWindow,
+// and two more verbs act on it:
+//
+//   pairing.open    reopen the window on a claimed Core; the result's
+//                   values carry `code`.
+//   pairing.close   close a reopened window.
+//
+// The code is a secret: StationServer sends `pairingCode` and the verb's
+// `code` only to a connection signed in with a paired device's key, and
+// "" to any other (a window signed in with the old pairing token). Nothing
+// here logs it.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-24: iPhone app Task 14 (R-IOS-08): pairingWindowOpen,
+//               pairingCode, openPairing() and closePairing(). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
 // =================================================================
@@ -55,6 +72,7 @@ namespace NereusSDR {
 
 class AppSettings;
 class DeviceStore;
+class PairingWindow;
 class StationIdentity;
 class TokenStore;
 
@@ -75,15 +93,20 @@ class StationDevicesFacade final : public QObject {
     Q_PROPERTY(bool keyBackupAcknowledged READ keyBackupAcknowledged
                    NOTIFY devicesStateChanged)
     Q_PROPERTY(QString keyPath READ keyPath NOTIFY devicesStateChanged)
+    // iPhone app Task 14: after keyPath, so every earlier ordinal stays.
+    Q_PROPERTY(bool pairingWindowOpen READ pairingWindowOpen NOTIFY devicesStateChanged)
+    Q_PROPERTY(QString pairingCode READ pairingCode NOTIFY devicesStateChanged)
 
 public:
     /// The Core-owned setting that holds the acknowledged key's fingerprint.
     static constexpr const char* kKeyBackupSettingsKey = "StationKeyBackupAcknowledged";
 
     /// None of the four is owned; each must outlive this object.
+    /// iPhone app Task 14: `pairingWindow` (not owned, may be null) is the
+    /// Core's pairing window, as setPairingWindow() takes it.
     StationDevicesFacade(DeviceStore& devices, TokenStore& tokens,
                          const StationIdentity& identity, AppSettings& settings,
-                         QObject* parent = nullptr);
+                         QObject* parent = nullptr, PairingWindow* pairingWindow = nullptr);
 
     /// A JSON array of {id, name, kind, pairedAt, lastSeen, connected}, in
     /// pairing order. `id` is the device's key fingerprint in base64url;
@@ -97,11 +120,26 @@ public:
     bool tokenActive() const { return m_state.tokenActive; }
     bool keyBackupAcknowledged() const { return m_state.keyBackupAcknowledged; }
     QString keyPath() const { return m_state.keyPath; }
+    /// iPhone app Task 14: the Core's pairing window is open, and its
+    /// current code ("" while closed or while no code is shown). See the
+    /// header comment for who receives the code.
+    bool pairingWindowOpen() const { return m_state.pairingWindowOpen; }
+    QString pairingCode() const { return m_state.pairingCode; }
+
+    /// iPhone app Task 14: the Core's pairing window, which the two
+    /// properties follow and the two verbs act on. Not owned; must outlive
+    /// this object. Without one, the window reads closed and both verbs
+    /// are refused.
+    void setPairingWindow(PairingWindow* window);
 
     DeviceAdminResult revoke(const QString& id);
     DeviceAdminResult rename(const QString& label);
     DeviceAdminResult acknowledgeKeyBackup();
     DeviceAdminResult retireToken();
+    /// pairing.open: reopen the window (a no-op while it is open).
+    DeviceAdminResult openPairing();
+    /// pairing.close: close a reopened window (a no-op while it is closed).
+    DeviceAdminResult closePairing();
 
     /// The paired devices (by id) that hold an authenticated connection.
     void setConnectedDevices(const QSet<QByteArray>& ids);
@@ -131,15 +169,19 @@ private:
         bool tokenActive = false;
         bool keyBackupAcknowledged = false;
         QString keyPath;
+        bool pairingWindowOpen = false;
+        QString pairingCode;
 
         bool operator==(const State&) const = default;
     };
     State compute() const;
+    void attachPairingWindow(PairingWindow* window);
 
     DeviceStore& m_devices;
     TokenStore& m_tokens;
     const StationIdentity& m_identity;
     AppSettings& m_settings;
+    PairingWindow* m_pairingWindow = nullptr;
     QSet<QByteArray> m_connected;
     State m_state;
     quint32 m_revision = 0;

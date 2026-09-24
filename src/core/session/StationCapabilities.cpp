@@ -37,6 +37,9 @@
 //   2026-09-24 - iPhone app Task 13 (R-IOS-08): deviceAdminVersion, last
 //                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 14 (R-IOS-08): pairingVersion, last in
+//                the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -137,8 +140,10 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         updates.append(intEntry("remoteTgxlControlVersion", remoteTgxlControlVersion));
         // iPhone app Task 12: device sign-in by key, last.
         updates.append(intEntry("stationIdentityVersion", stationIdentityVersion));
-        // iPhone app Task 13: the devices object and its verbs, last.
+        // iPhone app Task 13: the devices object and its verbs.
         updates.append(intEntry("deviceAdminVersion", deviceAdminVersion));
+        // iPhone app Task 14: pairing, the pairing window and its verbs, last.
+        updates.append(intEntry("pairingVersion", pairingVersion));
     }
     return updates;
 }
@@ -322,7 +327,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "accessoryDataVersion"
                    || u.name == "remoteTgxlControlVersion"
                    || u.name == "stationIdentityVersion"
-                   || u.name == "deviceAdminVersion") {
+                   || u.name == "deviceAdminVersion"
+                   || u.name == "pairingVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -341,6 +347,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.stationIdentityVersion = version;
                 } else if (u.name == "deviceAdminVersion") {
                     caps.deviceAdminVersion = version;
+                } else if (u.name == "pairingVersion") {
+                    caps.pairingVersion = version;
                 } else {
                     caps.remoteTgxlControlVersion = version;
                 }

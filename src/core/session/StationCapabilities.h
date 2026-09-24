@@ -86,6 +86,9 @@
 //   2026-09-24 - iPhone app Task 13 (R-IOS-08): deviceAdminVersion, last
 //                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 14 (R-IOS-08): pairingVersion, last in
+//                the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -181,8 +184,14 @@ struct StationCapabilities {
     /// object (its paired devices, label, claim, token and key backup) to a
     /// device whose hello declares `deviceAuth` 1, and takes devices.revoke,
     /// station.rename, station.acknowledgeKeyBackup and station.retireToken.
-    /// Sent last in the same minor-11 block.
+    /// Sent in the same minor-11 block, after stationIdentityVersion.
     int deviceAdminVersion = 0;
+    /// iPhone app Task 14 (R-IOS-08): 1 means the Core pairs devices (the
+    /// `pair.*` messages, which a client learns before capabilities from the
+    /// hello's `features.pairing`), keeps `pairingWindowOpen` and
+    /// `pairingCode` on the `devices` object, and takes `pairing.open` and
+    /// `pairing.close`. Sent last in the same minor-11 block.
+    int pairingVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

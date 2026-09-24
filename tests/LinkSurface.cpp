@@ -39,6 +39,9 @@
 //                                    client declares deviceAuth so the
 //                                    object is sent. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08): the
+//                                    five pair.* kinds' sample messages.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -218,6 +221,23 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
         m.telemetry = sampleTelemetry(3);
         return m;
     }
+    // iPhone app Task 14: the pair.* kinds. Placeholders, never a real key,
+    // code, share or box.
+    case SessionMessageKind::PairStart:
+        return SessionMessages::pairStart(
+            QStringLiteral("code"),
+            SessionPairDevice{QStringLiteral("key"), QStringLiteral("name"),
+                              QStringLiteral("phone")});
+    case SessionMessageKind::PairAccept:
+        return SessionMessages::pairAccept(
+            SessionStationIdentity{QStringLiteral("key"), QStringLiteral("binding")},
+            QStringLiteral("KG4VCF/shack"));
+    case SessionMessageKind::PairSpake:
+        return SessionMessages::pairSpake(1, QStringLiteral("share"));
+    case SessionMessageKind::PairConfirm:
+        return SessionMessages::pairConfirm(QStringLiteral("box"));
+    case SessionMessageKind::PairFail:
+        return SessionMessages::pairFail(QStringLiteral("refused"), 5000);
     }
     return std::nullopt;
 }

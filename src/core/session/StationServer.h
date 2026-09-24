@@ -191,6 +191,15 @@
 //                                    removed or the token it signed in
 //                                    with is retired. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08, D37):
+//                                    the pairing window, pairing by one
+//                                    tap and by code (SPAKE2+EE), the
+//                                    hello's features.pairing,
+//                                    pairingVersion 1, pairing.open and
+//                                    pairing.close, and the code sent only
+//                                    to a connection signed in with a
+//                                    paired device's key. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -220,6 +229,8 @@ class AppSettings;
 class CertificateStore;
 class DeviceAuthenticator;
 class DeviceStore;
+class PairingWindow;
+class SpakeExchange;
 class StationIdentity;
 class ObjectRegistry;
 class RadioModel;
@@ -434,6 +445,33 @@ public:
     void setPairingLanClickAllowed(bool allowed) { m_pairingLanClickAllowed = allowed; }
     bool pairingLanClickAllowed() const { return m_pairingLanClickAllowed; }
 
+    /// iPhone app Task 14 (R-IOS-08): the Core's pairing window. Never null.
+    /// Its state is the Core's, not any connection's: open with no timer
+    /// while the Core is unclaimed, reopened from the console (reopen())
+    /// or a paired device (`pairing.open`).
+    PairingWindow* pairingWindow() const;
+    /// 1 when the Core pairs devices (its identity key is usable): the
+    /// hello declares features.pairing 1 and capabilities carry
+    /// pairingVersion 1. 0 otherwise.
+    int pairingVersion() const;
+
+    /// Where the pairing code is printed when it changes: the Core's
+    /// console. Never the logging categories. nereusd installs
+    /// printToConsole(); a Core with none (a test, a desktop that shows the
+    /// code on its own page) prints nothing. Installing one prints the
+    /// current code at once.
+    void setPairingConsole(std::function<void(const QString&)> console);
+    /// The line printed for a new code, exactly.
+    static QString formatPairingCodeNotice(const QString& code);
+    /// Writes `text` to standard output and flushes it: the Core's console,
+    /// as the first-run banner is written.
+    static void printToConsole(const QString& text);
+    /// Whether `address` (a connection's peer address) is on one of this
+    /// machine's directly connected networks: a loopback address, or one
+    /// inside the subnet of an address of a running interface. Empty (a
+    /// relayed connection) is not. One tap pairs only from such an address.
+    static bool isOnDirectNetwork(const QString& address);
+
     /// See kDefaultAuthDeadlineMs. Values below 1 disable the deadline,
     /// which is logged as a warning rather than silently accepted.
     void setAuthDeadlineMs(int ms);
@@ -566,6 +604,9 @@ private:
     /// per-CONNECTION (the mirror, the registry, the dispatcher, the
     /// settings server) is shared, because there is only ever one
     /// authenticated session to own it.
+    /// iPhone app Task 14: one connection's pairing (StationServer.cpp).
+    struct PairingAttempt;
+
     struct Peer {
         SessionTransport* transport = nullptr;
         QString description;
@@ -586,6 +627,9 @@ private:
         /// iPhone app Task 13: signed in with the pairing token (whether or
         /// not it also enrolled its device key). Retiring the token ends it.
         bool signedInWithToken = false;
+        /// iPhone app Task 14: this connection's pairing, from pair.start
+        /// to its end. Shared, not owned alone, only because Peer is copied.
+        std::shared_ptr<PairingAttempt> pairing;
 
         /// Pings sent since the last pong. Reset to 0 by every pong; the
         /// heartbeat tick declares death when it reaches maxMissedPongs().
@@ -617,6 +661,25 @@ private:
     void handlePropertyWrite(SessionTransport* transport, const SessionMessage& message);
     void handleSettingsWrite(SessionTransport* transport, const SessionMessage& message);
     void handleSettingsRemove(const SessionMessage& message);
+    // iPhone app Task 14 (R-IOS-08): pairing, before any sign-in.
+    void handlePairStart(SessionTransport* transport, const SessionMessage& message);
+    void handlePairSpake(SessionTransport* transport, const SessionMessage& message);
+    void handlePairConfirm(SessionTransport* transport, const SessionMessage& message);
+    void handlePairFailFromDevice(SessionTransport* transport);
+    /// Sends pair.fail with `reason` and `retryAfterMs`, then ends the
+    /// connection. A code the connection had taken is burned by dropPeer.
+    void sendPairFail(SessionTransport* transport, const QString& reason, qint64 retryAfterMs);
+    /// The stored data for the window's current code (one Argon2id hash
+    /// per code, kept until the code changes); empty when there is none.
+    QByteArray pairingStoredData();
+    /// Signed in with a paired device's own key (not the old token): the
+    /// only connections the pairing code is sent to.
+    bool peerSeesPairingCode(SessionTransport* transport) const;
+    /// `message` as `transport` may see it: the pairing code blanked on the
+    /// `devices` object and in pairing.open's result for any other
+    /// connection.
+    SessionMessage withPairingCodeFor(SessionTransport* transport,
+                                      const SessionMessage& message) const;
 
     /// Completes the session: capability exchange, settings snapshot,
     /// mirror attach, snapshot-complete marker. Preempts any incumbent
@@ -688,6 +751,12 @@ private:
     QByteArray m_certSha256;
     QByteArray m_certBinding;
     bool m_pairingLanClickAllowed = true;
+    // iPhone app Task 14: the pairing window, the stored data for its
+    // current code (wiped when the code changes), and the console.
+    std::unique_ptr<PairingWindow> m_pairingWindow;
+    QByteArray m_pairingStored;
+    quint64 m_pairingStoredSerial = 0;
+    std::function<void(const QString&)> m_pairingConsole;
 
     QWebSocketServer* m_wsServer = nullptr;
 

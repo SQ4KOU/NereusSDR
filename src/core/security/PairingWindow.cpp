@@ -72,54 +72,53 @@ void PairingWindow::followDevices()
     const bool claimed = m_devices.isClaimed();
     if (!claimed && m_state != State::OpenUnclaimed) {
         // A new Core, or one that lost its last device: open, no timer.
-        setState(State::OpenUnclaimed);
-        offerCode();
+        commit(State::OpenUnclaimed, codeFor(State::OpenUnclaimed));
     } else if (claimed && m_state == State::OpenUnclaimed) {
         // The first device claimed it.
-        setState(State::ClosedClaimed);
-        setCode(QString());
+        m_wait->stop();
+        commit(State::ClosedClaimed, QString());
     }
 }
 
-void PairingWindow::setState(State state)
+void PairingWindow::commit(State state, const QString& code)
 {
-    if (m_state == state) {
-        return;
-    }
+    // Both fields first, then the signals, so a listener reading the window
+    // on the first signal sees the whole change: one change, not two.
+    const bool stateMoved = m_state != state;
+    const bool codeMoved = m_code != code;
     m_state = state;
-    qCInfo(lcPairing) << "Pairing window:" << state;
-    emit stateChanged(state);
-}
-
-void PairingWindow::setCode(const QString& code)
-{
-    if (m_code == code) {
-        return;
-    }
     m_code = code;
-    // Never logged: the code is a secret while it is live.
-    emit codeChanged(m_code);
+    if (stateMoved) {
+        qCInfo(lcPairing) << "Pairing window:" << state;
+        emit stateChanged(state);
+    }
+    if (codeMoved) {
+        // Never logged: the code is a secret while it is live.
+        emit codeChanged(m_code);
+    }
 }
 
-void PairingWindow::offerCode()
+QString PairingWindow::codeFor(State state)
 {
-    if (!isOpen() || m_codeInUse) {
-        return;
+    if (state == State::ClosedClaimed || m_codeInUse) {
+        return {};
+    }
+    if (!m_code.isEmpty()) {
+        return m_code;
     }
     const qint64 remaining = m_nextCodeAt - now();
     if (remaining > 0) {
-        setCode(QString());
         m_wait->start(static_cast<int>(std::min<qint64>(remaining, kMaxRetryMs)));
-        return;
+        return {};
     }
     m_wait->stop();
     const QString code = PairingCode::generate(m_nameplate);
     if (code.isEmpty()) {
         qCWarning(lcPairing) << "No pairing code could be made: the word list is missing";
-        return;
+        return {};
     }
     ++m_serial;
-    setCode(code);
+    return code;
 }
 
 void PairingWindow::reopen()
@@ -127,8 +126,7 @@ void PairingWindow::reopen()
     if (m_state != State::ClosedClaimed) {
         return;
     }
-    setState(State::OpenReopened);
-    offerCode();
+    commit(State::OpenReopened, codeFor(State::OpenReopened));
 }
 
 void PairingWindow::close()
@@ -137,8 +135,7 @@ void PairingWindow::close()
         return;
     }
     m_wait->stop();
-    setState(State::ClosedClaimed);
-    setCode(QString());
+    commit(State::ClosedClaimed, QString());
 }
 
 void PairingWindow::setNameplate(int nameplate)
@@ -147,8 +144,13 @@ void PairingWindow::setNameplate(int nameplate)
         return;
     }
     m_nameplate = nameplate;
-    if (!m_code.isEmpty()) {
-        offerCode();
+    if (!m_code.isEmpty() && !m_codeInUse) {
+        // The shown code carries the old number: make a new one.
+        const QString old = m_code;
+        m_code.clear();
+        const QString next = codeFor(m_state);
+        m_code = old;
+        commit(m_state, next);
     }
 }
 
@@ -158,7 +160,7 @@ bool PairingWindow::takeCode(quint64 serial)
         return false;
     }
     m_codeInUse = true;
-    setCode(QString());
+    commit(m_state, QString());
     return true;
 }
 
@@ -170,12 +172,13 @@ void PairingWindow::pairingSucceeded()
     m_wait->stop();
     if (m_state == State::OpenReopened) {
         // One device per reopening.
-        setState(State::ClosedClaimed);
-        setCode(QString());
+        commit(State::ClosedClaimed, QString());
         return;
     }
     followDevices();
-    offerCode();
+    if (isOpen()) {
+        commit(m_state, codeFor(m_state));
+    }
 }
 
 void PairingWindow::pairingFailed()
@@ -187,7 +190,7 @@ void PairingWindow::pairingFailed()
     const qint64 wait = std::min<qint64>(kFirstRetryMs << doublings, kMaxRetryMs);
     m_nextCodeAt = now() + wait;
     qCInfo(lcPairing) << "Pairing failed; the next code follows in" << wait << "ms";
-    offerCode();
+    commit(m_state, codeFor(m_state));
 }
 
 qint64 PairingWindow::retryAfterMs() const
@@ -206,7 +209,7 @@ void PairingWindow::poll()
     if (!isOpen() || m_codeInUse || !m_code.isEmpty()) {
         return;
     }
-    offerCode();
+    commit(m_state, codeFor(m_state));
 }
 
 } // namespace NereusSDR

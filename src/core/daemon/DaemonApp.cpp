@@ -47,6 +47,9 @@
 //               token is no longer created; pairing_lan_click reaches the
 //               station server. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 14 (R-IOS-08): the pairing code is printed
+//               on the Core's console. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -490,6 +493,9 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     // iPhone app Task 12: nereusd.conf's pairing_lan_click, read by the
     // pairing window (Task 14) for the one-click pairing on this network.
     m_stationServer->setPairingLanClickAllowed(cfg.pairingLanClickAllowed);
+    // iPhone app Task 14 (R-IOS-08): the pairing code is printed on the
+    // Core's console (standard output) whenever it changes, never logged.
+    m_stationServer->setPairingConsole(&StationServer::printToConsole);
     // R-R3-08/37/40: with display_adaptive on, the Core always advertises a
     // display budget, so apps plan in budget mode from the start and follow
     // it down when the Core is busy: the configured pair when there is one,

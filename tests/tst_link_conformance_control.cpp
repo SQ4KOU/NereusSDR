@@ -31,6 +31,9 @@
 //                                    linkMajors read against the
 //                                    station's supported majors.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08): the
+//                                    pair.* kinds in both directions.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -60,6 +63,10 @@ const QStringList& clientKinds()
         QStringLiteral("command.invoke"), QStringLiteral("media.control"),
         QStringLiteral("property.write"), QStringLiteral("settings.write"),
         QStringLiteral("settings.remove"),
+        // iPhone app Task 14: pairing (pair.fail when the device's own
+        // step 3 fails).
+        QStringLiteral("pair.start"), QStringLiteral("pair.spake"),
+        QStringLiteral("pair.confirm"), QStringLiteral("pair.fail"),
     };
     return kinds;
 }
@@ -75,6 +82,9 @@ const QStringList& stationKinds()
         QStringLiteral("command.result"),  QStringLiteral("settings.value"),
         QStringLiteral("settings.reject"), QStringLiteral("session.end"),
         QStringLiteral("media.control"),   QStringLiteral("station.metrics.v1"),
+        // iPhone app Task 14: pairing.
+        QStringLiteral("pair.accept"),     QStringLiteral("pair.spake"),
+        QStringLiteral("pair.confirm"),    QStringLiteral("pair.fail"),
     };
     return kinds;
 }
