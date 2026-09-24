@@ -127,6 +127,10 @@
 //                                    4 with the setAlexBpfMode verb, the
 //                                    filter policy from a remote window.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49: a window's Network Watchdog
+//                                    change is applied to the Core's radio
+//                                    when it arrives. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -636,6 +640,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             [this](const QString& key, const QVariant& value, const QString& originTag) {
                 sendToSession(
                     SessionMessages::settingsValue(key, value.toString(), originTag));
+            });
+    // R-R3-49: the Network Watchdog is a radio setting, applied where the
+    // radio is. A window's change lands in the Core's settings above; the
+    // Core's radio takes it here, whichever path stored it.
+    connect(m_settingsServer, &SettingsProxyServer::outboundValueChanged, this,
+            [this](const QString& key, const QVariant& value, const QString&) {
+                if (key == QLatin1String("NetworkWatchdogEnabled") && m_radioModel) {
+                    m_radioModel->applyNetworkWatchdog(value.toString() == QLatin1String("True"));
+                }
             });
     // Whole-branch review, Important 4. A removal has its own signal and
     // its own frame. It used to arrive here as an outboundValueChanged

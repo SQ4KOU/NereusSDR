@@ -503,14 +503,14 @@ public slots:
     virtual int txSampleRate() const { return 48000; }
 
     // --- Watchdog ---
-    // Enable / disable the radio-side network watchdog. When enabled,
-    // the radio firmware drops TX if it stops seeing C&C traffic.
-    // Mirrors SetWatchdogTimer(int bits) in NetworkIOImports.cs:197-198
-    // [v2.10.3.13]. Boolean only — no host-side timeout parameter.
-    //
-    // Wire bit emission: P1 implemented in P1RadioConnection::sendMetisStart
-    // (RUNSTOP pkt[3] bit 7 per dsopenhpsdr1.v:399-400 [@7472bd1]).
-    // P2 wire bit deferred to E.8 — see tracking comment in P2RadioConnection.cpp.
+    // R-R3-49: the Network Watchdog setting (Setup > General > Options),
+    // applied where the radio is. Protocol 2 sends it in byte 38 of the
+    // general packet, sends that packet at once on a change and sends it
+    // every 500 ms only while it is on; Protocol 1 sends nothing for it.
+    // On both, it sets how long an established link waits for data before
+    // the radio is declared lost: three seconds on, no limit off. See
+    // P2RadioConnection::setWatchdogEnabled and
+    // P1RadioConnection::setWatchdogEnabled for the Thetis lines.
     virtual void setWatchdogEnabled(bool enabled) = 0;
 
     bool isWatchdogEnabled() const noexcept { return m_watchdogEnabled; }
@@ -710,18 +710,8 @@ protected:
     HardwareProfile m_hardwareProfile;
 
     // Shared boolean state for setWatchdogEnabled / isWatchdogEnabled.
-    // Both P1 and P2 overrides read/write this field.
-    //
-    // Default TRUE: HL2 firmware (dsopenhpsdr1.v:399-400) interprets RUNSTOP
-    // byte bit 7 as watchdog_disable (1 = disabled, 0 = enabled). When this
-    // field is true, sendMetisStart/sendMetisStop write bit 7 = 0 (watchdog
-    // enabled), matching deskhpsdr's implicit behavior (buffer[3] = command
-    // with no bit-7 OR → bit 7 = 0 → watchdog active by default).
-    //
-    // 3M-0 used false here (bug): first sendMetisStart would have written
-    // bit 7 = 1 → watchdog disabled on connect. Fixed in 3M-1a Task E.5.
-    // From deskhpsdr/src/old_protocol.c:3811 [@120188f]:
-    //   buffer[3] = command;  // 0x01 start / 0x00 stop — bit 7 never set
+    // Both P1 and P2 overrides read/write this field. Default true, as
+    // Thetis's checkbox is checked by default and applied at startup.
     bool m_watchdogEnabled{true};
 
     // Shared state for setTrxRelay / isTrxRelayEngaged (3M-1a Task E.1).

@@ -57,6 +57,9 @@
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex. Also retire incomplete wideband bursts at capture/connection changes.
 //   2026-09-23 - Established silence judged only when no datagram is waiting (R-R3-29): Thetis ChannelMaster/network.c:656-671 [v2.10.3.15].
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Network Watchdog setting drives general packet byte 38, is sent at once on a change,
+//                 gates the 500 ms keepalive and the established-silence wait: Thetis network.c:656, 897-898, 1436 and
+//                 netInterface.c:1364-1372 [v2.10.3.15]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -642,7 +645,12 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // captures a default-init state before SetADCCount(2) is applied.
     m_numAdc = m_hardwareProfile.caps ? m_hardwareProfile.adcCount : m_caps->adcCount;
     m_numDac = 1;
-    m_wdt = 1;  // Watchdog timer MUST be enabled — radio requires it for streaming
+    // R-R3-49: byte 38 carries the Network Watchdog setting (default on, as
+    // Thetis's checkbox, applied before SendStart by setup.cs:2195).
+    // From Thetis network.c:897-898 [v2.10.3.15]:
+    //   // Watchdog Timer default = 0 disabled
+    //   packetbuf[38] = prn->wdt;
+    m_wdt = m_watchdogEnabled ? 1 : 0;
 
     // From Thetis console.cs:8216 UpdateDDCs() — 2-ADC P2 boards (Angelia /
     // Orion / OrionMKII / Saturn / ANAN-G2) place RX1 on DDC2 because DDC0/
@@ -1303,51 +1311,67 @@ quint8 P2RadioConnection::effectiveLpfBitsAlex0() const
 }
 
 // ---------------------------------------------------------------------------
-// setWatchdogEnabled — Phase 3M-0 Task 5
+// setWatchdogEnabled
 //
-// Records the requested watchdog enable state in the base-class
-// m_watchdogEnabled field (shared with P1).
+// R-R3-49: the Network Watchdog setting (Setup > General > Options). Byte 38
+// of the general packet carries it; a change sends the general packet at
+// once; the 500 ms keepalive general packet runs only while it is on
+// (onKeepAliveTick); and it sets how long an established stream waits for
+// data before the radio is declared lost (three seconds on, no limit off).
 //
-// From Thetis NetworkIOImports.cs:197-198 [v2.10.3.13]:
-//   [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
-//   public static extern void SetWatchdogTimer(int bits);
+// From Thetis setup.cs:18024-18028 [v2.10.3.15]:
+//   private void chkNetworkWDT_CheckedChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
+//   }
+// From Thetis netInterface.c:1364-1372 [v2.10.3.15]:
+//   void SetWatchdogTimer(int enable)
+//   {
+//       if (prn->wdt != enable)
+//       {
+//           prn->wdt = enable;
+//           if (listenSock != INVALID_SOCKET)
+//               CmdGeneral();
+//       }
+//   }
+// From Thetis network.c:897-898 [v2.10.3.15]:
+//   // Watchdog Timer default = 0 disabled
+//   packetbuf[38] = prn->wdt;
+// From Thetis network.c:656 [v2.10.3.15]:
+//   DWORD retVal = WSAWaitForMultipleEvents(1, &prn->hDataEvent, FALSE, prn->wdt ? 3000 : WSA_INFINITE, FALSE);
 //
-// The callsite (setup.cs:17986 [v2.10.3.13]):
-//   NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
-//
-// NOTE: P2RadioConnection already carries m_wdt (int, maps to prn->wdt) which
-// is set to 1 unconditionally in connectToRadio() because the radio requires
-// the watchdog for streaming. m_watchdogEnabled records the *user* toggle from
-// Setup → Network WDT checkbox; the relationship to m_wdt is unresolved.
-//
-// 3M-1a Task E.8 — DEFERRED with documented blocker
-// (pre-code review §7.8, "P2 BPF2Gnd / Alex T/R / Network watchdog —
-//  DEFERRED to research"):
-//
-//   "deskhpsdr does not currently emit a P2 watchdog command.  Likely a
-//    Saturn-specific register; documented blocker."
-//   "P2 watchdog wire bit stays a state-tracking stub.  Update the TODO
-//    comment to reference this pre-code review §7.8 and file a tracking
-//    issue."
-//
-// State-only stub: setWatchdogEnabled stores the requested value in the
-// base-class m_watchdogEnabled field (default true, set by E.5).  No P2
-// wire emission.  P1 wire bit was resolved in E.5 (RUNSTOP pkt[3] bit 7).
-//
-// Tracking: see GitHub issue (filed post-merge — link to be added when
-// the issue number is known).  Re-port path: when Saturn register layout
-// is identified (likely via deskhpsdr saturndrivers.c / saturnregisters.c
-// once they document the watchdog control register), restore the wire-bit
-// emission via sendCmdGeneral() and remove the deferral note.
-// Cite: NetworkIOImports.cs:197-198 [v2.10.3.13] (DllImport entry that
-// indirects through ChannelMaster.dll's closed-source watchdog handler).
+// NereusSDR sends the general packet only once the stream is running (its
+// socket and the radio's address are set at connect). Turning the watchdog
+// off stops a wait in progress; turning it on starts the wait from then, so
+// the radio is not declared lost the moment the box is ticked.
 // ---------------------------------------------------------------------------
 void P2RadioConnection::setWatchdogEnabled(bool enabled)
 {
-    if (m_watchdogEnabled == enabled) {
+    m_watchdogEnabled = enabled;
+    const int wdt = enabled ? 1 : 0;
+    if (m_wdt == wdt) {
         return;
     }
-    m_watchdogEnabled = enabled;
+    m_wdt = wdt;
+
+    if (!enabled) {
+        if (m_establishedSilenceTimer) {
+            m_establishedSilenceTimer->stop();
+        }
+    } else if (m_running && !m_linkLossLatched
+               && state() == ConnectionState::Connected
+               && m_establishedSilenceTimer) {
+        m_establishedSilenceGeneration = m_connectionGeneration;
+        m_establishedSilenceDeadline = QDeadlineTimer(
+            std::chrono::milliseconds(m_establishedSilenceTimeoutMs),
+            Qt::PreciseTimer);
+        m_establishedSilenceTimer->start(m_establishedSilenceTimeoutMs);
+    }
+
+    if (m_running && m_socket && !m_radioInfo.address.isNull()) {
+        sendCmdGeneral();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2253,6 +2277,12 @@ bool P2RadioConnection::isSelectedSourceAddress(const QHostAddress& sender) cons
 // authoritative and status/mic/wideband traffic cannot establish the link.
 void P2RadioConnection::noteAcceptedInboundDatagram(quint64 datagramGeneration)
 {
+    // R-R3-49: with the Network Watchdog off the wait has no limit.
+    // From Thetis network.c:656 [v2.10.3.15]:
+    //   prn->wdt ? 3000 : WSA_INFINITE
+    if (m_wdt == 0) {
+        return;
+    }
     if (!m_running || m_linkLossLatched
         || datagramGeneration != m_connectionGeneration
         || state() != ConnectionState::Connected
@@ -2274,6 +2304,9 @@ void P2RadioConnection::noteAcceptedInboundDatagram(quint64 datagramGeneration)
 
 void P2RadioConnection::onEstablishedSilenceTimeout()
 {
+    if (m_wdt == 0) {
+        return; // R-R3-49: watchdog off, no limit (network.c:656 [v2.10.3.15])
+    }
     if (!m_running || m_linkLossLatched
         || state() != ConnectionState::Connected
         || m_establishedSilenceGeneration != m_connectionGeneration) {
@@ -2399,11 +2432,11 @@ void P2RadioConnection::stopForEstablishedSilence()
 // Fires every 500ms, sends CmdGeneral when running
 void P2RadioConnection::onKeepAliveTick()
 {
-    // From Thetis network.c:1436
-    // if (prn->run && prn->wdt) CmdGeneral();
-    // Note: we send CmdGeneral unconditionally when running (wdt=0 means no watchdog,
-    // but keepalive still runs per Thetis behavior)
-    if (m_running && !m_radioInfo.address.isNull()) {
+    // R-R3-49: the keepalive general packet goes out only while the Network
+    // Watchdog is on.
+    // From Thetis network.c:1436 [v2.10.3.15]:
+    //   if (prn->run && prn->wdt) CmdGeneral();
+    if (m_running && m_wdt != 0 && !m_radioInfo.address.isNull()) {
         sendCmdGeneral();
     }
 

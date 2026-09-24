@@ -80,33 +80,47 @@ applets' tests, and `docs/architecture/2026-09-20-remote-daemon-r3-verification/
 **Requirements:** R-R3-49, R-R3-21, R-R3-11.
 
 Setup > General > Options saves `NetworkWatchdogEnabled` (`GeneralOptionsPage.cpp:350-360`),
-but nothing reads the key and `setWatchdogEnabled()` has no caller; P2 has no known
-wire bit in NereusSDR (`P2RadioConnection.cpp:1320-1340`).
+but nothing reads the key and `setWatchdogEnabled()` has no caller.
 
-**Files:** `src/core/P1RadioConnection.*`, `src/core/P2RadioConnection.*` (only if
-Thetis sends a P2 watchdog), the connect path that applies it
-(`src/models/RadioModel.cpp`), `src/core/settings/SettingsScope.cpp` (the setting
-becomes Core-owned: a radio setting, applied where the radio is), the page, the unbuilt
-list if P2 has no watchdog, tests.
+What Thetis does with it (v2.10.3.15; mi0bot-Thetis the same for the HL2). The checkbox
+(default checked, `setup.designer.cs:8434`, applied at startup by `setup.cs:2195`) calls
+`NetworkIO.SetWatchdogTimer` (`setup.cs:18024-18028`), which stores `prn->wdt` and sends
+the general packet when it changes (`netInterface.c:1364-1372`).
+
+- Protocol 2: byte 38 of the general packet carries it (`network.c:897-898`); the 500 ms
+  keepalive general packet goes out only while it is on (`network.c:1436`); and an
+  established stream waits three seconds for data before the radio is declared lost,
+  for ever with it off (`network.c:656`).
+- Protocol 1: nothing goes on the wire. The start and stop packets are `0x01` / `0x00`
+  whatever the setting (`networkproto1.c:50, 85`). The setting only sets the wait for
+  data: three seconds on, for ever off (`networkproto1.c:292-294`; mi0bot 297 and 443).
+
+**Files:** `src/core/P1RadioConnection.*`, `src/core/P2RadioConnection.*`, the connect
+path that applies it (`src/models/RadioModel.cpp`), the Core's apply on a window's change
+(`src/core/session/StationServer.cpp`), `src/core/settings/SettingsScope.cpp` (the
+setting becomes Core-owned: a radio setting, applied where the radio is), the page, tests.
 
 **Acceptance:**
-- Read first: where Thetis sends the network watchdog for Protocol 1 and whether it
-  does for Protocol 2 (`console.cs`, `setup.cs`, `NetworkIO.cs`, `networkproto1.c`,
-  `network.c`; mi0bot-Thetis for the HL2). Report the file:line cites before writing
-  code.
-- Protocol 1: the setting is sent at connect and on change, with the value Thetis
-  sends, on a local radio and on the Core; a remote window changes the Core's setting.
-- Protocol 2: if Thetis sends one, the same; if it does not, the checkbox is hidden for
-  P2 radios through the unbuilt list (its own entry), local and remote.
-- A test on the P1 fake shows the bit on the wire for on and off; a remote-window test
-  shows the change reaching the Core.
+- Read first: the Thetis lines above, quoted with file:line in the report.
+- Protocol 2: byte 38 follows the setting at connect and on change (default on); a change
+  sends the general packet at once; the keepalive runs only while it is on; with it off
+  no loss is declared when data stops.
+- Protocol 1: the start packet stays as today (no watchdog bit). The wait for data before
+  the radio is declared lost is 3000 ms with the setting on and has no limit with it off.
+- The setting is a Station setting: applied by the window on a local radio and by the
+  Core on the Core's; a remote window's change reaches the Core. An older Core refuses the
+  key; the page puts the box back and says the Core needs updating, in plain words.
+- Tests: the P2 fake shows byte 38 on and off at connect and on change, the immediate
+  send, and the keepalive stopping with it off; P1 and P2 loss detection follow the wait;
+  a remote window's change reaches the Core and its radio.
 
-**Verification:** the tests above by exact name.
+**Verification:** `tst_network_watchdog`, `tst_network_watchdog_setting`,
+`tst_p1_watchdog_wire`, `tst_remote_gui_gating` by exact name.
 
 **Execution note (advisory):** opus (small; source research first).
 
-- [ ] **Step 1:** Source research (report cites); P1 wiring and scope; P2 wiring or
-  hide; tests; commit.
+- [ ] **Step 1:** Source research (report cites); P2 wire and wait; P1 wait; scope, page
+  and Core apply; tests; commit.
 
 ## Task 3: The VAX page says Opus can cost the weakest digital decodes
 

@@ -159,6 +159,10 @@
 //                auto-reconnect and poll interval applied at once.
 //                NereusSDR-original; no Thetis logic. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Network Watchdog setting reaches the radio at
+//                connect and on change (Thetis setup.cs:2195, 18024-18028
+//                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -8652,6 +8656,46 @@ void RadioModel::removePanadapter(int index)
     emit panadapterRemoved(index);
 }
 
+// ---------------------------------------------------------------------------
+// R-R3-49: the Network Watchdog setting, applied where the radio is.
+//
+// From Thetis setup.cs:18024-18028 [v2.10.3.15]:
+//   private void chkNetworkWDT_CheckedChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
+//   }
+// Default on: Thetis setup.designer.cs:8434 [v2.10.3.15]
+//   this.chkNetworkWDT.Checked = true;
+// ---------------------------------------------------------------------------
+bool RadioModel::networkWatchdogSetting()
+{
+    return AppSettings::instance()
+               .value(QStringLiteral("NetworkWatchdogEnabled"), QStringLiteral("True"))
+               .toString()
+           == QStringLiteral("True");
+}
+
+void RadioModel::setNetworkWatchdogEnabled(bool enabled)
+{
+    AppSettings::instance().setValue(QStringLiteral("NetworkWatchdogEnabled"),
+                                     enabled ? QStringLiteral("True") : QStringLiteral("False"));
+    applyNetworkWatchdog(enabled);
+}
+
+void RadioModel::applyNetworkWatchdog(bool enabled)
+{
+    // A remote window has no radio of its own; the Core applies its copy.
+    RadioConnection* conn = m_connection;
+    if (conn == nullptr) {
+        return;
+    }
+    QMetaObject::invokeMethod(conn, [conn, enabled]() {
+        conn->setWatchdogEnabled(enabled);
+    });
+}
+
+
 // --- Connection ---
 
 void RadioModel::connectToRadioPreservingSlices(const RadioInfo& info)
@@ -11235,6 +11279,17 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     QMetaObject::invokeMethod(m_connection, [conn = m_connection,
                                               ps = m_transmitModel.pureSigEnabled()]() {
         conn->setPuresignalRun(ps);
+    });
+
+    // R-R3-49: the Network Watchdog setting reaches the connection before
+    // it starts, as Thetis applies the checkbox at startup, before any
+    // SendStart: P2 carries it in the first general packet, P1 uses it for
+    // the wait for data.
+    // From Thetis setup.cs:2195 [v2.10.3.15]:
+    //   chkNetworkWDT_CheckedChanged(this, e);
+    QMetaObject::invokeMethod(m_connection, [conn = m_connection,
+                                              on = networkWatchdogSetting()]() {
+        conn->setWatchdogEnabled(on);
     });
 
     // Now dispatch connectToRadio -- it will find the correct m_rxFreqHz[0]

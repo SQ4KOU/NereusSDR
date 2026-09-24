@@ -76,6 +76,9 @@
 //                their own for the Core's refusals (accessoryRequestRefused).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Network Watchdog setting applied where the
+//                radio is (setNetworkWatchdogEnabled / applyNetworkWatchdog).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -563,6 +566,16 @@ public:
     // place to widen when a later phase (R4's TX path) makes part of it
     // true for a remote client too.
     bool ownsLocalDsp() const { return m_role == Role::Local; }
+
+    // R-R3-49: the Network Watchdog (Setup > General > Options) is a radio
+    // setting, applied where the radio is. setNetworkWatchdogEnabled saves
+    // it (a remote window's save goes to the Core) and applies it to this
+    // model's own radio, if it has one. applyNetworkWatchdog applies a value
+    // without saving it: the Core calls it when a window's change arrives.
+    // The connect path applies the saved value before the radio starts.
+    static bool networkWatchdogSetting();
+    void setNetworkWatchdogEnabled(bool enabled);
+    void applyNetworkWatchdog(bool enabled);
 
     // Sub-components
     RadioConnection*  connection()       { return m_connection; }

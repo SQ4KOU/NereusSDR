@@ -24,6 +24,12 @@
 //                 window's edits and otherwise disabled with its plain
 //                 reason. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 / R-R3-21: the Network Watchdog checkbox reaches the
+//                 radio where it is (this window's, or the Core's from a
+//                 remote window), is disabled with the Core's reason while
+//                 its settings are unavailable, and says the Core needs
+//                 updating when an older Core refuses it. J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -79,6 +85,7 @@
 #include "core/PureSignal.h"
 #include "core/StepAttenuatorController.h"
 #include "core/StepAttenuatorFacade.h"
+#include "core/settings/SettingsProxy.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -207,7 +214,8 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
 
 void GeneralOptionsPage::setStationSettingsAvailable(bool available, const QString& reason)
 {
-    gateStationControls({m_comboFRSRegion}, available, reason);
+    // R-R3-49: the Network Watchdog is the Core's setting too.
+    gateStationControls({m_comboFRSRegion, m_chkNetworkWDT}, available, reason);
 }
 
 void GeneralOptionsPage::setReceiveOnlyVisible(bool visible)
@@ -353,11 +361,45 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
     // Default ON — first-launch loads "True"
     m_chkNetworkWDT->setChecked(
         s.value(QStringLiteral("NetworkWatchdogEnabled"), QStringLiteral("True")).toString() == QStringLiteral("True"));
-    connect(m_chkNetworkWDT, &QCheckBox::toggled, this, [](bool on) {
-        AppSettings::instance().setValue(QStringLiteral("NetworkWatchdogEnabled"),
-                                          on ? QStringLiteral("True") : QStringLiteral("False"));
+    // R-R3-49: a radio setting, applied where the radio is. RadioModel saves
+    // it (a remote window's save goes to the Core, which applies it) and
+    // applies it to this window's own radio.
+    // From Thetis setup.cs:18024-18028 [v2.10.3.15]:
+    //   if (initializing) return;
+    //   NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
+    connect(m_chkNetworkWDT, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_lblNetworkWDTCore) {
+            m_lblNetworkWDTCore->setVisible(false);
+        }
+        if (RadioModel* radio = model()) {
+            radio->setNetworkWatchdogEnabled(on);
+        } else {
+            AppSettings::instance().setValue(QStringLiteral("NetworkWatchdogEnabled"),
+                                              on ? QStringLiteral("True") : QStringLiteral("False"));
+        }
     });
     vbox->addWidget(m_chkNetworkWDT);
+
+    // R-R3-49 / R-R3-21: an older Core keeps this setting to itself and
+    // refuses a window's change; the box goes back and the page says why.
+    m_lblNetworkWDTCore = new QLabel(
+        tr("The Core needs updating before this window can change the network watchdog."), group);
+    m_lblNetworkWDTCore->setObjectName(QStringLiteral("lblNetworkWDTCore"));
+    m_lblNetworkWDTCore->setWordWrap(true);
+    m_lblNetworkWDTCore->setVisible(false);
+    vbox->addWidget(m_lblNetworkWDTCore);
+    if (auto* proxy = dynamic_cast<SettingsProxy*>(AppSettings::instance().remoteBackend())) {
+        connect(proxy, &SettingsProxy::valueRejected, this,
+                [this](const QString& key, const QVariant& restored) {
+            if (key != QLatin1String("NetworkWatchdogEnabled") || !m_chkNetworkWDT) {
+                return;
+            }
+            const QSignalBlocker blocker(m_chkNetworkWDT);
+            m_chkNetworkWDT->setChecked(!restored.isValid()
+                                        || restored.toString() == QLatin1String("True"));
+            m_lblNetworkWDTCore->setVisible(true);
+        });
+    }
 
     contentLayout()->addWidget(group);
 }
