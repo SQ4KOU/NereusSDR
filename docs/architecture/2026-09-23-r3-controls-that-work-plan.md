@@ -64,6 +64,10 @@ all user-visible text in plain user words). R3 plan requirements R-R3-17, R-R3-2
 - Band > HF goes through the band button path so the per-band memory applies.
 - Tools menu test entries (antenna switch toast, TX-bound re-route) only in developer
   builds.
+- DXCC spot colouring has no country table: `DxccColorProvider::loadCtyDat()` defaults
+  to `:/cty.dat`, but no resource file includes `cty.dat` and nothing calls the function
+  (found by the Linux suite run of 2026-09-23). Find how the shipped feature meant to get
+  its table (a bundled resource or a downloaded file) and make DXCC colouring use it.
 - Tests: the tests covering each site, plus new cases where none exists (a settings
   migration case per renamed key; a startup-apply case; a shortcut uniqueness check
   over all menu actions and application shortcuts).
@@ -77,6 +81,8 @@ all user-visible text in plain user words). R3 plan requirements R-R3-17, R-R3-2
   Setup.
 - Band > HF restores the band's last frequency and mode like the band button.
 - Release builds show no test entries in the Tools menu.
+- DXCC colouring works from a fresh install: a spot from a known country gets its country's
+  colour tier (a test loads the table the app loads).
 
 **Verification:** the covering tests and the new cases, built and run by exact name.
 
