@@ -1046,15 +1046,14 @@ public:
 
     /// Hand the transmitter to the slice with this ID, RF-safely.
     ///
-    /// Takes a slice ID (see sliceById), not a list position, and converts.
-    /// TxSliceArbiter::requestHandoff is positional, but every per-slice UI
-    /// surface carries the stable id -- PanadapterApplet::activeSliceIndex()
-    /// is resolved through sliceById by the status-overlay refresh -- so
-    /// handing one straight to the other picks the wrong slice, or none at
-    /// all, as soon as a mid-list removal makes ids and positions diverge.
-    /// With A(0) B(1) C(2), removing B leaves C at id 2 / position 1: the
-    /// unconverted call asks for position 2 and is rejected, so the
-    /// transmitter silently stays where it was.
+    /// Takes a slice ID (see sliceById), not a list position, and passes it
+    /// straight on: TxSliceArbiter::requestHandoff matches it against
+    /// SliceModel::sliceIndex(), the stable id every per-slice UI surface
+    /// carries (PanadapterApplet::activeSliceIndex() is resolved through
+    /// sliceById by the status-overlay refresh). So a mid-list removal that
+    /// makes ids and positions diverge still picks the right slice: with
+    /// A(0) B(1) C(2), removing B leaves C at id 2 / position 1, and a
+    /// handoff to 2 reaches C.
     ///
     /// Returns false without moving anything when the id resolves to no
     /// slice, or when there is no arbiter. Delegates the MOX drop to

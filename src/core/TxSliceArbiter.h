@@ -43,8 +43,9 @@ public:
     SliceModel* txBoundSlice() const;
 
     /// Inject the MoxController (called by RadioModel during construction wiring).
-    /// Arbiter calls mox->setMox(false) and waits for moxChanged confirmation
-    /// before flipping txSlice flags.
+    /// Arbiter calls mox->setMox(false) before flipping txSlice flags and
+    /// relies on setMox being synchronous: MoxController commits the new MOX
+    /// state before setMox returns, so there is no moxChanged wait.
     void setMoxController(MoxController* mox);
 
     /// Inject the slice list owner (RadioModel) so arbiter can flip txSlice

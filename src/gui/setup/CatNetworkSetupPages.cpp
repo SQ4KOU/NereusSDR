@@ -288,6 +288,16 @@ void CatTciServerPage::buildServerGroup()
     });
     form->addRow(tr("Rate limit:"), m_rateLimitSpin);
     // R-R3-49: nothing applies the rate limit yet; hidden until it does.
+    // Receiver and transmit gaps plan, Task 4: Thetis has no limit on
+    // incoming TCI messages. Its udTCIRateLimit (setup.designer.cs:58636-58665
+    // [v2.10.3.15], 0..1000 ms, default 100, "The maximum rate VFO/IF/DDS
+    // messages can be sent to clients") is the shortest gap in ms between
+    // outgoing vfo, dds and tx_frequency updates to each app, applied when
+    // the server starts (TCIServer.cs:6420-6480 [v2.10.3.15] VFOChange /
+    // CentreChange / TXFrequencyChange; setup.cs:22517 [v2.10.3.15]).
+    // NereusSDR sends those through TciVfoCoalescer's 5 ms drain only, so
+    // this msg/s spin box would say something the server does not do; it
+    // stays hidden until the Thetis pacing is ported with a ms control.
     UnbuiltFeatures::hideUnlessBuilt(m_rateLimitSpin, UnbuiltFeature::TciExtras);
 
     // Show Log button — Phase 3J-1 closeout Item 2 (2026-05-12) wires the
