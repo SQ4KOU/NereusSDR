@@ -75,7 +75,7 @@ void ConnectionQualityPage::buildUI()
         auto* row = new QHBoxLayout();
         auto* lab = new QLabel(label);
         lab->setMinimumWidth(180);
-        out = new QLabel(QStringLiteral("—"));
+        out = new QLabel(QStringLiteral("–"));
         row->addWidget(lab);
         row->addWidget(out, 1);
         form->addLayout(row);
@@ -89,7 +89,7 @@ void ConnectionQualityPage::buildUI()
     auto* histGroup = addSection(QStringLiteral("60 s History"));
     auto* histLayout = qobject_cast<QVBoxLayout*>(histGroup->layout());
     m_historyPlaceholder = new QLabel(
-        QStringLiteral("60 s history graph — wired in follow-up phase."));
+        QStringLiteral("The 60 s history graph is not shown yet."));
     m_historyPlaceholder->setStyleSheet(QStringLiteral("color: #888;"));
     histLayout->addWidget(m_historyPlaceholder);
     SetupPage::markNyi(m_historyPlaceholder, QStringLiteral("3P-H follow-up"));
@@ -166,7 +166,7 @@ void SettingsValidationPage::refresh()
     }
     const auto issues = m_model->settingsHygiene().issues();
     if (issues.isEmpty()) {
-        m_issueList->addItem(QStringLiteral("✓ No issues — all settings within board capability ranges."));
+        m_issueList->addItem(QStringLiteral("✓ No issues: every setting is within this radio's range."));
         return;
     }
     for (const auto& issue : issues) {
@@ -174,7 +174,7 @@ void SettingsValidationPage::refresh()
             issue.severity == SettingsHygiene::Severity::Critical ? QStringLiteral("CRIT") :
             issue.severity == SettingsHygiene::Severity::Warning  ? QStringLiteral("WARN") :
                                                                     QStringLiteral("INFO");
-        m_issueList->addItem(QStringLiteral("[%1] %2 — %3")
+        m_issueList->addItem(QStringLiteral("[%1] %2: %3")
                                  .arg(sev, issue.summary, issue.detail));
     }
 }
@@ -314,8 +314,8 @@ void ExportImportConfigPage::onExportRadioClicked()
 {
     QMessageBox::information(
         this, QStringLiteral("Per-Radio Export"),
-        QStringLiteral("Per-radio export filters by MAC and is wired in a "
-                       "follow-up phase. Use 'Export All Settings' for now."));
+        QStringLiteral("Exporting one radio's settings is not available yet. "
+                       "Use 'Export All Settings' for now."));
 }
 
 // ── LogsPage ─────────────────────────────────────────────────────────────────

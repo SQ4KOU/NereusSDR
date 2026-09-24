@@ -7807,7 +7807,7 @@ void RadioModel::onBandButtonClicked(Band band)
         // saveToSettings(newBand) baked that stale freq into the new
         // band's slot. Full short-circuit is simpler and matches the
         // common user mental model of "lock = slice is inert".
-        const QString reason = QStringLiteral("Band %1 ignored: slice is locked — unlock to change bands")
+        const QString reason = QStringLiteral("Band %1 ignored: the slice is locked. Unlock it to change bands.")
                                    .arg(bandLabel(band));
         qCDebug(lcConnection) << reason;
         emit bandClickIgnored(band, reason);
@@ -16832,11 +16832,11 @@ void RadioModel::onMoxHardwareFlipped(bool isTx)
 QString RadioModel::connectionUptimeText() const
 {
     if (!m_connectionStartedAt.isValid()) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     const qint64 elapsedSec = m_connectionStartedAt.secsTo(QDateTime::currentDateTime());
     if (elapsedSec < 0) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     const qint64 h  = elapsedSec / 3600;
     const qint64 m  = (elapsedSec % 3600) / 60;
@@ -16855,7 +16855,7 @@ QString RadioModel::connectionUptimeText() const
 QString RadioModel::connectedRadioName() const
 {
     if (!isConnected() || m_lastRadioInfo.name.isEmpty()) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     return m_lastRadioInfo.name;
 }
@@ -16863,7 +16863,7 @@ QString RadioModel::connectedRadioName() const
 QString RadioModel::connectionProtocolText() const
 {
     if (!isConnected()) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     return QString::number(static_cast<int>(m_lastRadioInfo.protocol));
 }
@@ -16871,7 +16871,7 @@ QString RadioModel::connectionProtocolText() const
 QString RadioModel::connectionFirmwareText() const
 {
     if (!isConnected() || m_lastRadioInfo.firmwareVersion <= 0) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     return QStringLiteral("v") + QString::number(m_lastRadioInfo.firmwareVersion);
 }
@@ -16879,7 +16879,7 @@ QString RadioModel::connectionFirmwareText() const
 QString RadioModel::connectionIpText() const
 {
     if (!isConnected()) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     return m_lastRadioInfo.address.toString()
            + QStringLiteral(" : ")
@@ -16889,7 +16889,7 @@ QString RadioModel::connectionIpText() const
 QString RadioModel::connectionMacText() const
 {
     if (!isConnected() || m_lastRadioInfo.macAddress.isEmpty()) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     return m_lastRadioInfo.macAddress;
 }
@@ -16903,7 +16903,7 @@ QString RadioModel::connectionSampleRateText() const
 {
     const int rateHz = connectionSampleRateHz();
     if (rateHz <= 0) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     if (rateHz % 1000 == 0) {
         return QString::number(rateHz / 1000) + QStringLiteral(" kHz");
@@ -17598,7 +17598,7 @@ QString RadioModel::buildConnectionTooltip() const
     const double rxMbps = m_connection ? m_connection->rxByteRate(1000) : 0.0;
 
     QString lines;
-    lines += QStringLiteral("%1 — Connected %2\n")
+    lines += QStringLiteral("%1, connected %2\n")
                  .arg(connectedRadioName(), connectionUptimeText());
     lines += QStringLiteral("  %1 · %2\n")
                  .arg(connectionIpText(), connectionMacText());

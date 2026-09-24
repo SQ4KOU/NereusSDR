@@ -440,7 +440,7 @@ void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
         s.value("User/Callsign").toString().trimmed().isEmpty();
     if (needsFirstRunPrompt) {
         auto* firstRunBanner = new QLabel(
-            "First-time setup — enter your callsign and grid square "
+            "First-time setup: enter your callsign and grid square "
             "below.  Spot sources stay disconnected until your "
             "callsign is set.");
         firstRunBanner->setObjectName("settingsFirstRunBanner");
@@ -470,7 +470,7 @@ void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
         s.value("User/Callsign").toString());
     m_settingsCallEdit->setObjectName("settingsCallEdit");
     m_settingsCallEdit->setPlaceholderText(
-        "Enter Callsign Here (4-12 chars — required to publish spots)");
+        "Enter Callsign Here (4-12 characters, required to publish spots)");
     m_settingsCallEdit->setMaxLength(12);
     m_settingsCallEdit->setStyleSheet(kLineEditStyle);
     grid->addWidget(m_settingsCallEdit, row, 1);
@@ -481,7 +481,7 @@ void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
         s.value("User/GridSquare").toString());
     m_settingsGridEdit->setObjectName("settingsGridEdit");
     m_settingsGridEdit->setPlaceholderText(
-        "Enter Grid Here (Maidenhead — e.g. EM73 or EM73XY)");
+        "Enter Grid Here (Maidenhead, e.g. EM73 or EM73XY)");
     m_settingsGridEdit->setMaxLength(6);
     m_settingsGridEdit->setStyleSheet(kLineEditStyle);
     grid->addWidget(m_settingsGridEdit, row, 1);

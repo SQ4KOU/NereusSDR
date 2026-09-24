@@ -916,7 +916,7 @@ void SpeechProcessorPage::buildActiveProfileSection()
     m_manageProfileBtn->setObjectName(QStringLiteral("btnManageProfile"));
     m_manageProfileBtn->setAutoDefault(false);
     m_manageProfileBtn->setToolTip(QStringLiteral(
-        "Open the TX EQ editor (Tools → TX Equalizer) — the profile combo "
+        "Open the TX EQ editor (Tools → TX Equalizer). The profile combo "
         "and Save / Save As / Delete buttons live there."));
     m_manageProfileBtn->setStyleSheet(QStringLiteral(
         "QPushButton { background: #1a2a3a; border: 1px solid #304050;"

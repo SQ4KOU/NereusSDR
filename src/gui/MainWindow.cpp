@@ -824,7 +824,7 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
         // Create dialog on first progress signal
         if (!m_wisdomDialog && percent < 100) {
             m_wisdomDialog = new QProgressDialog(this);
-            m_wisdomDialog->setWindowTitle(QStringLiteral("NereusSDR — FFTW Wisdom"));
+            m_wisdomDialog->setWindowTitle(QStringLiteral("NereusSDR: FFTW Wisdom"));
             m_wisdomDialog->setLabelText(
                 QStringLiteral("Optimizing FFT plans for DSP engine...\n\n"
                                "This only happens on first run."));
@@ -8735,7 +8735,7 @@ void MainWindow::buildStatusBar()
     m_paStatusBadge->setSvgIcon(QStringLiteral(":/icons/badge-check.svg"));
     m_paStatusBadge->setLabel(QStringLiteral("PA"));
     m_paStatusBadge->setVariant(StatusBadge::Variant::On);
-    m_paStatusBadge->setToolTip(tr("PA Status — OK"));
+    m_paStatusBadge->setToolTip(tr("PA status: OK"));
 
     // ── ADC overload alarm: reserved slot between PA and TX ──────────────
     // Dimmed by default; shown at full opacity when StepAttenuatorController
@@ -9150,10 +9150,10 @@ void MainWindow::setPaTripped(bool tripped)
     if (!m_paStatusBadge) { return; }
     if (tripped) {
         m_paStatusBadge->setVariant(StatusBadge::Variant::Tx);
-        m_paStatusBadge->setToolTip(tr("PA Status — FAULT (PA tripped, MOX dropped)"));
+        m_paStatusBadge->setToolTip(tr("PA status: FAULT (the PA tripped and MOX dropped)"));
     } else {
         m_paStatusBadge->setVariant(StatusBadge::Variant::On);
-        m_paStatusBadge->setToolTip(tr("PA Status — OK"));
+        m_paStatusBadge->setToolTip(tr("PA status: OK"));
     }
 }
 
@@ -12540,7 +12540,7 @@ void MainWindow::showFeatureRequestDialog()
 void MainWindow::showFeatureRequestDialogImpl()
 {
     static const QString kPrompt = QStringLiteral(
-        "IMPORTANT — before doing anything else, fetch the complete list of open\n"
+        "IMPORTANT: before doing anything else, fetch the complete list of open\n"
         "issues by reading pages sequentially until you get fewer than 100 results:\n"
         "  Page 1: https://github.com/boydsoftprez/NereusSDR/issues?state=open&per_page=100&page=1\n"
         "  Page 2: https://github.com/boydsoftprez/NereusSDR/issues?state=open&per_page=100&page=2\n"
@@ -12551,10 +12551,10 @@ void MainWindow::showFeatureRequestDialogImpl()
         "I want to report an issue or request a feature for NereusSDR, a cross-platform\n"
         "Qt6/C++20 SDR console for OpenHPSDR radios (ANAN, Hermes Lite 2, etc.). It uses\n"
         "the OpenHPSDR Protocol 1 and Protocol 2 over UDP, with client-side DSP via WDSP.\n\n"
-        "DUPLICATE CHECK — this is mandatory. Search the fetched issue list for keywords\n"
+        "DUPLICATE CHECK: this is mandatory. Search the fetched issue list for keywords\n"
         "related to my description below. Check titles AND bodies. If you find an existing\n"
         "issue that covers the same thing, STOP and tell me:\n"
-        "  > Duplicate found: #<number> — <title>\n"
+        "  > Duplicate found: #<number>: <title>\n"
         "  > I recommend adding a +1 reaction and a comment describing your use case.\n"
         "Do NOT write a new issue if a duplicate exists.\n\n"
         "If no duplicate exists, determine whether my description is a BUG REPORT or a\n"
@@ -12562,20 +12562,20 @@ void MainWindow::showFeatureRequestDialogImpl()
         "Use GitHub-flavored Markdown formatting (headers, code blocks, bullet points).\n\n"
         "FOR FEATURE REQUESTS include:\n"
         "1. A clear, concise title (imperative mood)\n"
-        "2. ## What — what the feature does from the user's perspective\n"
-        "3. ## Why — what problem it solves\n"
-        "4. ## How Other Clients Do It — how Thetis, PowerSDR, SparkSDR, etc. handle this\n"
-        "5. ## Suggested Behavior — specific UX: what the user clicks, sees, what happens.\n"
+        "2. ## What: what the feature does from the user's perspective\n"
+        "3. ## Why: what problem it solves\n"
+        "4. ## How Other Clients Do It: how Thetis, PowerSDR, SparkSDR, etc. handle this\n"
+        "5. ## Suggested Behavior: specific UX, what the user clicks, sees, what happens.\n"
         "   Reference NereusSDR UI elements (AppletPanel, VfoWidget, RxApplet, SetupDialog, etc.)\n"
-        "6. ## Protocol Hints — relevant OpenHPSDR commands, or \"Unknown — needs research\"\n"
-        "7. ## Acceptance Criteria — 3-5 bullet points defining done vs not-done\n\n"
+        "6. ## Protocol Hints: relevant OpenHPSDR commands, or \"Unknown, needs research\"\n"
+        "7. ## Acceptance Criteria: 3-5 bullet points defining done vs not-done\n\n"
         "FOR BUG REPORTS include:\n"
         "1. A clear title describing the broken behavior\n"
-        "2. ## What happened — describe the incorrect behavior\n"
-        "3. ## What I expected — describe the correct behavior\n"
-        "4. ## Steps to reproduce — numbered steps to trigger the bug\n"
-        "5. ## Environment — OS, radio model, protocol version, firmware version if relevant\n"
-        "6. ## Suggested fix — if you have an idea what's wrong, describe it\n\n"
+        "2. ## What happened: describe the incorrect behavior\n"
+        "3. ## What I expected: describe the correct behavior\n"
+        "4. ## Steps to reproduce: numbered steps to trigger the bug\n"
+        "5. ## Environment: OS, radio model, protocol version, firmware version if relevant\n"
+        "6. ## Suggested fix: if you have an idea what's wrong, describe it\n\n"
         "Suggest appropriate labels from: enhancement, bug, documentation,\n"
         "help wanted, good first issue, question\n\n"
         "Here is my idea or bug report:\n\n"
@@ -12604,9 +12604,9 @@ void MainWindow::showFeatureRequestDialogImpl()
         "<h3 style='color:#c8d8e8;'>AI-Assisted Issue Reporter</h3>"
         "<p style='color:#8090a0;'>Use any AI assistant to write a detailed bug report or feature request.</p>"
         "<ol style='color:#c8d8e8;'>"
-        "<li><b>Choose your AI</b> below — prompt is copied to your clipboard</li>"
+        "<li><b>Choose your AI</b> below; the prompt is copied to your clipboard</li>"
         "<li><b>Paste the prompt</b> into the AI chat</li>"
-        "<li><b>Describe your idea</b> — edit the [bracketed] section</li>"
+        "<li><b>Describe your idea</b>: edit the [bracketed] section</li>"
         "<li><b>Copy the AI's output</b> and click <b>Submit Your Idea</b></li>"
         "</ol>"));
     header->setWordWrap(true);
@@ -12645,7 +12645,7 @@ void MainWindow::showFeatureRequestDialogImpl()
             QApplication::clipboard()->setText(kPrompt);
             QDesktopServices::openUrl(QUrl(url));
             statusLabel->setText(QStringLiteral(
-                "Prompt copied to clipboard — paste into the AI, "
+                "Prompt copied to clipboard. Paste it into the AI, "
                 "then come back and click Submit Your Idea"));
             statusLabel->show();
         });

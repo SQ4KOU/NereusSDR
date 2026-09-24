@@ -140,15 +140,15 @@ void RxDashboard::buildUi()
     m_sqlBadge   ->setSvgIcon(QStringLiteral(":/icons/badge-sql.svg"));
 
     // Always-shown badges: placeholder state until bound.
-    m_modeBadge->setLabel(QStringLiteral("—"));
+    m_modeBadge->setLabel(QStringLiteral("–"));
     m_modeBadge->setVariant(StatusBadge::Variant::Info);
     m_modeBadge->setToolTip(tr("Operating mode"));
 
-    m_filterBadge->setLabel(QStringLiteral("—"));
+    m_filterBadge->setLabel(QStringLiteral("–"));
     m_filterBadge->setVariant(StatusBadge::Variant::On);
     m_filterBadge->setToolTip(tr("Filter passband width"));
 
-    m_agcBadge->setLabel(QStringLiteral("—"));
+    m_agcBadge->setLabel(QStringLiteral("–"));
     m_agcBadge->setVariant(StatusBadge::Variant::Info);
     m_agcBadge->setToolTip(tr("AGC mode"));
 
@@ -246,7 +246,7 @@ void RxDashboard::onModeChanged(int mode)
 {
     // Use SliceModel::modeName() static helper (verified present in SliceModel.h).
     const QString name = SliceModel::modeName(static_cast<DSPMode>(mode));
-    m_modeBadge->setLabel(name.isEmpty() ? QStringLiteral("—") : name);
+    m_modeBadge->setLabel(name.isEmpty() ? QStringLiteral("–") : name);
     m_modeBadge->setVariant(StatusBadge::Variant::Info);
     m_modeBadge->setToolTip(name.isEmpty()
         ? tr("Operating mode")
@@ -268,7 +268,7 @@ void RxDashboard::onFilterChanged(int low, int high)
         text = QString::number(passband);
         tipDetail = tr("%1 Hz").arg(passband);
     } else {
-        text = QStringLiteral("—");
+        text = QStringLiteral("–");
     }
     m_filterBadge->setLabel(text);
     m_filterBadge->setVariant(StatusBadge::Variant::On);
@@ -290,10 +290,10 @@ void RxDashboard::onAgcChanged(int agcMode)
         sizeof(kAgcLetters) / sizeof(kAgcLetters[0]));
     const QString letter = (agcMode >= 0 && agcMode < kAgcCount)
         ? QString::fromLatin1(kAgcLetters[agcMode])
-        : QStringLiteral("—");
+        : QStringLiteral("–");
     const QString full = (agcMode >= 0 && agcMode < kAgcCount)
         ? QString::fromLatin1(kAgcNames[agcMode])
-        : QStringLiteral("—");
+        : QStringLiteral("–");
     m_agcBadge->setLabel(letter);
     m_agcBadge->setVariant(StatusBadge::Variant::Info);
     m_agcBadge->setToolTip(tr("AGC %1").arg(full));

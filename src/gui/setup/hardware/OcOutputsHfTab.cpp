@@ -356,7 +356,7 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
                     "background: rgba(255,255,255,0.1);"
                     "border: 1px solid rgba(255,255,255,0.2);"
                     "border-radius: 6px;"));
-                led->setToolTip(tr("OC pin %1 — reflects last C&C OC byte sent to radio").arg(pin + 1));
+                led->setToolTip(tr("OC pin %1: shows the last OC byte sent to the radio").arg(pin + 1));
                 m_leds[pin] = led;
                 pinCol->addWidget(led, 0, Qt::AlignHCenter);
                 pinCol->addWidget(new QLabel(tr("%1").arg(pin + 1), ledGroup), 0, Qt::AlignHCenter);

@@ -374,7 +374,7 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
         m_procBtn->setAccessibleName(QStringLiteral("Speech processor"));
         m_procBtn->setObjectName(QStringLiteral("PhoneCwProcButton"));
         m_procBtn->setToolTip(QStringLiteral(
-            "CPDR speech compressor — left-click toggles."));
+            "CPDR speech compressor. Left-click toggles."));
         row->addWidget(m_procBtn);
 
         // Control 8: PROC slider (0..20 dB CPDR level) + numeric "X dB"

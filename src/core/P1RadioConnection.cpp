@@ -2885,8 +2885,8 @@ void P1RadioConnection::onConnectTimeout()
     setState(ConnectionState::Disconnected);
 
     emit connectFailed(ConnectFailure::Timeout,
-                       QStringLiteral("No response from radio within %1 ms — "
-                                      "check IP address, radio power, and network")
+                       QStringLiteral("No response from radio within %1 ms. Check the "
+                                      "IP address, radio power and network.")
                            .arg(kConnectTimeoutMs));
 }
 
@@ -4038,7 +4038,7 @@ void P1RadioConnection::hl2CheckBandwidthMonitor()
                                     << "watchdog ticks;"
                                     << "throttle events:" << m_bwMonitor->throttleEventCount();
             emit errorOccurred(RadioConnectionError::None,
-                               QStringLiteral("HL2 LAN throttled — pausing ep2"));
+                               QStringLiteral("HL2 LAN throttled; pausing ep2"));
         } else if (!nowThrottled && m_hl2Throttled) {
             m_hl2Throttled = false;
             qCInfo(lcConnection) << "HL2: LAN throttle cleared — ep6 stream resumed";
@@ -4071,7 +4071,7 @@ void P1RadioConnection::hl2CheckBandwidthMonitor()
                                     << m_hl2ThrottleCount << "watchdog ticks;"
                                     << "pausing ep2 command frames";
             emit errorOccurred(RadioConnectionError::None,
-                               QStringLiteral("HL2 LAN throttled — pausing ep2"));
+                               QStringLiteral("HL2 LAN throttled; pausing ep2"));
         }
     } else {
         // Sequence advanced — clear throttle.

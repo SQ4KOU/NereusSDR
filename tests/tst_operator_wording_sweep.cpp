@@ -187,7 +187,7 @@ const QRegularExpression& developerWording()
 {
     static const QRegularExpression pattern(QStringLiteral(
         "\\bPhase \\d|\\bTask \\d|\\b\\d[A-Z]-\\d|design spec|\u00a7|\\\\u00a7"
-        "|\\bQT_[A-Z_]+=|Feature request"
+        "|\\bQT_[A-Z_]+=|Feature request|\\b(follow-up|future|later) phase"
         "|\\b[A-Z][a-z]+[A-Z][A-Za-z]*(Dialog|Toast|Widget|Applet|Page|Controller|Model)\\b"
         "|addSliceOnPan"));
     return pattern;
@@ -205,6 +205,40 @@ QString developerWordingIn(const QString& text)
         return QStringLiteral("em dash");
     }
     return {};
+}
+
+// The string literals a user can read in a source file: codeLiterals()
+// without the ones inside a log statement (qDebug / qInfo / qWarning /
+// qCritical and their qC* forms, up to the statement's ';'), which only the
+// log shows. Placeholders on the operator's decision list (the "NYI"
+// strings) are left to the unfinished-controls plan.
+QStringList userVisibleLiterals(const QString& path)
+{
+    static const QRegularExpression token(QStringLiteral(
+        "(\"(?:[^\"\\\\\\n]|\\\\.)*\")|(;)|(\\bqC?(?:Debug|Info|Warning|Critical|Fatal)\\b)"));
+    QString code;
+    for (const QString& line : codeWithoutComments(path).split(QLatin1Char('\n'))) {
+        if (!line.trimmed().startsWith(QLatin1Char('#'))) {
+            code += line + QLatin1Char('\n');
+        }
+    }
+    QStringList found;
+    bool inLog = false;
+    QRegularExpressionMatchIterator it = token.globalMatch(code);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch m = it.next();
+        if (!m.captured(3).isEmpty()) {
+            inLog = true;
+        } else if (!m.captured(2).isEmpty()) {
+            inLog = false;
+        } else if (!inLog) {
+            const QString text = m.captured(1).mid(1, m.captured(1).size() - 2);
+            if (!text.contains(QLatin1String("NYI"))) {
+                found.append(text);
+            }
+        }
+    }
+    return found;
 }
 
 // Every string literal in a source file's code: comments and preprocessor
@@ -754,12 +788,31 @@ private slots:
             {"src/gui/setup/AudioTciPage.cpp", true,
              {"Phase 3J-1"}, {"Slices C and D are not available over TCI."}},
             {"src/gui/setup/AudioVaxPage.cpp", false,
-             {"Task 24+"}, {"The number of programs using this channel is not shown yet."}},
+             {"Task 24+", "override \u2014 no consumer", "no consumer"},
+             {"The number of programs using this channel is not shown yet.",
+              "No program is using this device"}},
             {"src/gui/SpectrumOverlayPanel.cpp", true,
              {"design spec", "reserved for future phase"},
              {"Sending I/Q to a VAX channel is not available yet."}},
             {"src/gui/diagnostics/DiagnosticsPhaseHPages.cpp", true,
-             {"QT_LOGGING_TO_CONSOLE"}, {}},
+             {"QT_LOGGING_TO_CONSOLE", "follow-up phase"},
+             {"The 60 s history graph is not shown yet.",
+              "Exporting one radio's settings is not available yet. Use 'Export All "
+              "Settings' for now."}},
+            // Fix wave item 2: the VFO flag's tooltips carried Thetis and
+            // WDSP file cites and WDSP function names; the cites are
+            // comments beside the strings now.
+            {"src/gui/widgets/VfoWidget.cpp", false,
+             {"From Thetis", "patchpanel.c", "(SetRXAPanelRun)", "(SetRXAPanelBinaural)",
+              "Maps to Thetis", "Alex.cs", "nob.c", "matches AetherSDR",
+              "NNR: WDSP neural"},
+             {"Audio pan: left/right stereo balance (\u2212100 = full left, 0 = center, "
+              "+100 = full right)",
+              "Mute the receive audio",
+              "Binaural audio: I and Q play in separate ears, for a stereo image in headphones",
+              "RX Bypass on TX: routes the receive path through the bypass relay while "
+              "transmitting.",
+              "NNR: neural noise reduction. Left-click activates, right-click adjusts settings"}},
             {"src/gui/applets/Rf2ksApplet.cpp", true,
              {"G200C267", "Feature request", "tuner write verb"},
              {"The amplifier's firmware does not let NereusSDR tune or bypass it.\\n"
@@ -794,6 +847,95 @@ private slots:
                 QVERIFY2(!developerWording().match(text).hasMatch(),
                          qPrintable(QStringLiteral("%1: %2")
                                         .arg(QLatin1String(site.file), text)));
+            }
+        }
+    }
+
+    // Fix wave item 12: no user-visible string in the files the R3 controls
+    // plan touched carries an em dash; prose uses periods, colons,
+    // semicolons, parentheses or commas, and a lone empty-value mark in a
+    // readout is an en dash. Log lines and the decision-list placeholders
+    // are not read by the operator here and are left out.
+    void noEmDashInUserVisibleStrings()
+    {
+        const char* files[] = {
+            "src/gui/AboutDialog.cpp",
+            "src/gui/MainWindow.cpp",
+            "src/gui/SpectrumOverlayPanel.cpp",
+            "src/gui/SpotHubDialog.cpp",
+            "src/gui/applets/PhoneCwApplet.cpp",
+            "src/gui/applets/TxApplet.cpp",
+            "src/gui/diagnostics/DiagnosticsPhaseHPages.cpp",
+            "src/gui/diagnostics/RadioStatusPage.cpp",
+            "src/gui/setup/AudioVaxPage.cpp",
+            "src/gui/setup/DspOptionsPage.cpp",
+            "src/gui/setup/DspSetupPages.cpp",
+            "src/gui/setup/TransmitSetupPages.cpp",
+            "src/gui/setup/hardware/OcOutputsHfTab.cpp",
+            "src/gui/widgets/VfoWidget.cpp",
+            "src/gui/widgets/RxDashboard.cpp",
+            "src/models/RadioModel.cpp",
+            "src/core/P1RadioConnection.cpp",
+        };
+        for (const char* file : files) {
+            const QStringList literals = userVisibleLiterals(sourcePath(file));
+            QVERIFY2(literals.size() >= 5, file);
+            for (const QString& text : literals) {
+                QVERIFY2(!text.contains(QChar(0x2014)) && !text.contains(QLatin1String("\\u2014")),
+                         qPrintable(QStringLiteral("%1: %2").arg(QLatin1String(file), text)));
+            }
+        }
+        // The readouts' empty-value mark is the en dash.
+        const QStringList status = userVisibleLiterals(
+            sourcePath("src/gui/diagnostics/RadioStatusPage.cpp"));
+        QVERIFY(status.contains(QString(QChar(0x2013))));
+        QVERIFY(status.contains(QString(QChar(0x2013)) + QStringLiteral(" W")));
+    }
+
+    // Fix wave items 2 and 12: the strings rewritten without em dashes or
+    // developer wording read in user words.
+    void rewordedStringsArePlain()
+    {
+        const struct { const char* file; QStringList texts; } sites[] = {
+            {"src/gui/MainWindow.cpp",
+             {"PA status: OK", "PA status: FAULT (the PA tripped and MOX dropped)",
+              "NereusSDR: FFTW Wisdom"}},
+            {"src/gui/SpotHubDialog.cpp",
+             {"Enter Callsign Here (4-12 characters, required to publish spots)",
+              "Enter Grid Here (Maidenhead, e.g. EM73 or EM73XY)"}},
+            {"src/gui/applets/TxApplet.cpp",
+             {"TX Leveler: slow speech-leveling AGC. Improves intelligibility on weak speech."}},
+            {"src/gui/diagnostics/DiagnosticsPhaseHPages.cpp",
+             {"\u2713 No issues: every setting is within this radio's range.", "[%1] %2: %3"}},
+            {"src/gui/diagnostics/RadioStatusPage.cpp",
+             {"No issues found. Settings are valid.", "[%1] %2: %3"}},
+            {"src/gui/setup/AudioVaxPage.cpp",
+             {"No program is using this device", "\u26a0  Not bound. Pick a virtual cable",
+              "\u26a0  Disabled. Enable it to route audio"}},
+            {"src/gui/setup/DspOptionsPage.cpp",
+             {"Sets the internal buffer size. Larger values give sharper filters but add latency.",
+              "Time to last change: none yet"}},
+            {"src/gui/setup/hardware/OcOutputsHfTab.cpp",
+             {"OC pin %1: shows the last OC byte sent to the radio"}},
+            {"src/models/RadioModel.cpp",
+             {"Band %1 ignored: the slice is locked. Unlock it to change bands."}},
+            {"src/core/P1RadioConnection.cpp",
+             {"No response from radio within %1 ms. Check the IP address, radio power and "
+              "network."}},
+        };
+        for (const auto& site : sites) {
+            const QStringList literals = userVisibleLiterals(sourcePath(site.file));
+            for (const QString& written : site.texts) {
+                const QString text = written;
+                QVERIFY2(literals.contains(text),
+                         qPrintable(QStringLiteral("%1 lacks: %2")
+                                        .arg(QLatin1String(site.file), text)));
+                QVERIFY2(OperatorWording::isPlain(text),
+                         qPrintable(text + QStringLiteral(" [")
+                                    + OperatorWording::internalTermIn(text) + QLatin1Char(']')));
+                QVERIFY2(developerWordingIn(text).isEmpty(),
+                         qPrintable(text + QStringLiteral(" [") + developerWordingIn(text)
+                                    + QLatin1Char(']')));
             }
         }
     }

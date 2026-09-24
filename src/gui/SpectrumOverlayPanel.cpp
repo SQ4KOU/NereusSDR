@@ -582,7 +582,7 @@ void SpectrumOverlayPanel::buildAntFlyout()
             "QPushButton:checked { background: #0070c0; color: #ffffff; "
             "border: 1px solid #0090e0; }"
             "QPushButton:hover { border: 1px solid #0090e0; }");
-        m_wnbBtn->setToolTip("Wideband noise blanker — suppresses impulse noise across panadapter bandwidth");
+        m_wnbBtn->setToolTip("Wideband noise blanker: suppresses impulse noise across the panadapter bandwidth");
         row->addWidget(m_wnbBtn);
         row->addStretch();
         vbox->addLayout(row);

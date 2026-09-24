@@ -194,7 +194,7 @@ VaxChannelCard::VaxChannelCard(int channel, QWidget* parent)
     m_statusLabel->setTextFormat(Qt::PlainText);
     m_statusLabel->setVisible(false);
 
-    m_badgeLabel = new QLabel(QStringLiteral("override — no consumer"), this);
+    m_badgeLabel = new QLabel(QStringLiteral("No program is using this device"), this);
     m_badgeLabel->setStyleSheet(QLatin1String(kBadgeStyle));
     m_badgeLabel->setVisible(false);
 
@@ -275,7 +275,7 @@ VaxChannelCard::VaxChannelCard(int channel, QWidget* parent)
         m_consumerLabel = new QLabel(
             // TODO(later-task): wire live consumer count from engine's
             // owned PipeWireBus collection via Task 24+ accessor.
-            QStringLiteral("—"), this);
+            QStringLiteral("–"), this);
         m_consumerLabel->setStyleSheet(QLatin1String(kSpecRowPlaceholderStyle));
         // R-R3-17: user words (the live count is a Task 24+ accessor).
         m_consumerLabel->setToolTip(tr("The number of programs using this "
@@ -531,7 +531,7 @@ void VaxChannelCard::updateBadge()
         if (!enabled) {
             m_statusLabel->setStyleSheet(QLatin1String(kStatusUnboundStyle));
             m_statusLabel->setText(QStringLiteral(
-                "⚠  Disabled — enable to route audio"));
+                "⚠  Disabled. Enable it to route audio"));
             m_statusLabel->setToolTip(QStringLiteral(
                 "The VAX channel's Enabled checkbox is off. Check it to "
                 "open the audio bus and route receiver audio through this "
@@ -573,7 +573,7 @@ void VaxChannelCard::updateBadge()
                         QLatin1String(kStatusUnboundStyle));
 #  if defined(Q_OS_MAC)
                     m_statusLabel->setText(QStringLiteral(
-                        "⚠  Native HAL unavailable — reinstall "
+                        "⚠  Native HAL unavailable. Reinstall "
                         "NereusSDR"));
                     m_statusLabel->setToolTip(QStringLiteral(
                         "NereusSDR could not open the bundled CoreAudio "
@@ -642,7 +642,7 @@ void VaxChannelCard::updateBadge()
                 m_statusLabel->setStyleSheet(
                     QLatin1String(kStatusUnboundStyle));
                 m_statusLabel->setText(QStringLiteral(
-                    "⚠  Not bound — pick a virtual cable"));
+                    "⚠  Not bound. Pick a virtual cable"));
                 m_statusLabel->setToolTip(QStringLiteral(
                     "Windows has no built-in virtual audio cable. "
                     "Install VB-CABLE, Voicemeeter, or VAC and pick it "
@@ -900,7 +900,7 @@ void AudioVaxPage::buildPage()
 
     // Section header.
     auto* headerLabel = new QLabel(
-        QStringLiteral("Virtual Audio eXchange — PipeWire sources"), this);
+        QStringLiteral("Virtual Audio eXchange: PipeWire sources"), this);
     headerLabel->setStyleSheet(
         QStringLiteral("QLabel { color: #8aa8c0; font-size: 12px; }"));
     insertBeforeStretch(headerLabel);
@@ -910,7 +910,7 @@ void AudioVaxPage::buildPage()
         QStringLiteral(
             "Each VAX channel is exposed to the system as a PipeWire virtual "
             "source (node). Consumer applications (WSJT-X, FLDIGI, etc.) "
-            "select it as an audio input device — no virtual cable needed."),
+            "select it as an audio input device; no virtual cable needed."),
         this);
     subHeader->setStyleSheet(
         QStringLiteral("QLabel { color: #607080; font-size: 11px; }"));

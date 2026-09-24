@@ -451,7 +451,7 @@ void DspOptionsPage::buildUI()
     //   dsp_buf_cw_rx    = 64    (no CW TX)
     //   dsp_buf_dig_rx   = 64    dsp_buf_dig_tx   = 64
     const QString kBufTooltip = tr(
-        "Sets the DSP internal buffer size — larger values yield sharper "
+        "Sets the internal buffer size. Larger values give sharper "
         "filters but add latency.");
 
     QComboBox* unusedTxStub = nullptr;
@@ -480,7 +480,7 @@ void DspOptionsPage::buildUI()
     // Defaults from Thetis console.cs:39141-39216 [v2.10.3.13] — all 4096
     // for every mode/direction.
     const QString kFiltTooltip = tr(
-        "Sets the FIR filter length — larger values yield sharper "
+        "Sets the FIR filter length. Larger values give sharper "
         "filter skirts but add CPU and latency.");
 
     auto* fszPhone = buildModeSubgroup(tr("SSB/AM"), kFilterSizes,
@@ -628,7 +628,7 @@ void DspOptionsPage::buildUI()
     // Task 4.6 subscribes to RadioModel::dspChangeMeasured(qint64).
     // Placeholder text shown until the first rebuild occurs.
     // =========================================================================
-    m_timeToLastChangeLabel = new QLabel(tr("Time to last change: — (no change yet)"), this);
+    m_timeToLastChangeLabel = new QLabel(tr("Time to last change: none yet"), this);
     m_timeToLastChangeLabel->setStyleSheet(QStringLiteral("color: #888;"));
 
     // Wire to RadioModel::dspChangeMeasured if model is available.
@@ -745,8 +745,8 @@ void DspOptionsPage::recomputeWarnings()
         m_bufPhoneTx, m_bufFmTx, m_bufDigTx);
     m_warnBufferSize->setVisible(bufferSizeDifferentRX || bufferSizeDifferentTX);
     m_warnBufferSize->setToolTip(
-        tr("Buffer sizes differ across modes — WDSP will use the mode-specific "
-           "value and no implicit conversion happens. Set all modes to the same "
+        tr("Buffer sizes differ across modes. Each mode uses its own "
+           "value and nothing is converted. Set all modes to the same "
            "buffer size if you want a consistent configuration."));
 
     const bool filterSizeDifferentRX = comboValuesDiffer4(
@@ -755,7 +755,7 @@ void DspOptionsPage::recomputeWarnings()
         m_filtSizePhoneTx, m_filtSizeFmTx, m_filtSizeDigTx);
     m_warnFilterSize->setVisible(filterSizeDifferentRX || filterSizeDifferentTX);
     m_warnFilterSize->setToolTip(
-        tr("Filter sizes differ across modes — WDSP will use the mode-specific "
+        tr("Filter sizes differ across modes. Each mode uses its own "
            "value. Set all modes to the same filter size for a consistent "
            "configuration."));
 
@@ -765,8 +765,8 @@ void DspOptionsPage::recomputeWarnings()
         m_filtTypePhoneTx, m_filtTypeFmTx, m_filtTypeDigTx);
     m_warnBufferType->setVisible(filterTypeDifferentRX || filterTypeDifferentTX);
     m_warnBufferType->setToolTip(
-        tr("Filter types differ across modes — some modes use Linear Phase and "
-           "others use Low Latency. WDSP will use the mode-specific type."));
+        tr("Filter types differ across modes: some modes use Linear Phase and "
+           "others use Low Latency. Each mode uses its own type."));
 }
 
 }  // namespace NereusSDR

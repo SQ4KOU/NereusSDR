@@ -587,9 +587,11 @@ void VfoWidget::buildHeaderRow()
         QStringLiteral("QPushButton { color: #888888; }"
                        "QPushButton:checked { color: #ffcc44; background: #2a2a1a; }"));
     m_rxBypassBtn->setFixedHeight(18);
+    // Maps to Thetis chkRxOutOnTx (Alex.cs:61) [cite moved from the tooltip,
+    // R-R3-17].
     m_rxBypassBtn->setToolTip(QStringLiteral(
-        "RX Bypass on TX — routes RX path through bypass relay during transmit. "
-        "Maps to Thetis chkRxOutOnTx (Alex.cs:61)."));
+        "RX Bypass on TX: routes the receive path through the bypass relay "
+        "while transmitting."));
     m_rxBypassBtn->setVisible(false);  // hidden until setBoardCapabilities + setHpsdrSku confirm gates
     connect(m_rxBypassBtn, &QPushButton::toggled, this, [this](bool on) {
         if (m_updatingFromModel || !m_transmitPermitted) { return; }
@@ -1193,7 +1195,9 @@ void VfoWidget::buildAudioTab()
         m_panSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
-        m_panSlider->setToolTip(QStringLiteral("Audio pan: left/right stereo balance (−100 = full left, 0 = center, +100 = full right)\nFrom Thetis radio.cs:1386 — WDSP patchpanel.c:159"));
+        // From Thetis radio.cs:1388 pan_dsp [v2.10.3.15]; WDSP patchpanel.c:169
+        // SetRXAPanelPan (cites moved from the tooltip, R-R3-17).
+        m_panSlider->setToolTip(QStringLiteral("Audio pan: left/right stereo balance (−100 = full left, 0 = center, +100 = full right)"));
         row->addWidget(m_panSlider);
 
         m_panLabel = new QLabel(QStringLiteral("0"), audioWidget);
@@ -1219,13 +1223,18 @@ void VfoWidget::buildAudioTab()
         m_muteBtn = new QPushButton(QStringLiteral("Mute"), audioWidget);
         m_muteBtn->setCheckable(true);
         m_muteBtn->setStyleSheet(vfoDspToggleStyle());
-        m_muteBtn->setToolTip(QStringLiteral("Mute RX audio output (SetRXAPanelRun)\nFrom Thetis dsp.cs:393 — WDSP patchpanel.c:126"));
+        // From Thetis dsp.cs:393 SetRXAPanelRun [v2.10.3.15]; WDSP
+        // patchpanel.c:136 (cites moved from the tooltip, R-R3-17).
+        m_muteBtn->setToolTip(QStringLiteral("Mute the receive audio"));
         row->addWidget(m_muteBtn);
 
         m_binBtn = new QPushButton(QStringLiteral("BIN"), audioWidget);
         m_binBtn->setCheckable(true);
         m_binBtn->setStyleSheet(vfoDspToggleStyle());
-        m_binBtn->setToolTip(QStringLiteral("Binaural audio: I/Q channels separate for headphone stereo image (SetRXAPanelBinaural)\nFrom Thetis radio.cs:1145 — WDSP patchpanel.c:187"));
+        // From Thetis radio.cs:1147 bin_on_dsp [v2.10.3.15]; WDSP
+        // patchpanel.c:197 SetRXAPanelBinaural (cites moved from the
+        // tooltip, R-R3-17).
+        m_binBtn->setToolTip(QStringLiteral("Binaural audio: I and Q play in separate ears, for a stereo image in headphones"));
         row->addWidget(m_binBtn);
 
         row->addStretch();
@@ -1396,11 +1405,11 @@ void VfoWidget::buildDspTab()
     // Upstream tags preserved: //MW0LGE (from cited console.cs:43545) [v2.10.3.15]
     m_nbButton = makeToggle(QStringLiteral("NB"));
     m_nbButton->setToolTip(tr(
-        "Noise blanker — left-click cycles Off \u2192 NB \u2192 NB2 \u2192 Off,\n"
-        "right-click opens Setup \u2192 DSP \u2192 NB/SNB.\n"
-        "NB  (nob.c, Whitney): time-domain impulse blanker, suited to\n"
+        "Noise blanker: left-click cycles Off \u2192 NB \u2192 NB2 \u2192 Off,\n"
+        "right-click opens its Setup page (NB/SNB).\n"
+        "NB: time-domain impulse blanker, suited to\n"
         "      sporadic crashes (powerline / ignition).\n"
-        "NB2 (nobII.c): second-generation with hold/interpolate modes,\n"
+        "NB2: second-generation with hold/interpolate modes,\n"
         "      suited to denser impulse noise."));
     // Right-click → Setup page. Mirrors Thetis chkNB_MouseDown
     // (console.cs:44447 [v2.10.3.13]) which calls ShowSetupTab(NB_Tab).
@@ -1420,9 +1429,9 @@ void VfoWidget::buildDspTab()
     m_nr3Btn->setContextMenuPolicy(Qt::CustomContextMenu);
     // Tooltips — Sub-epic C-1.
     // From Thetis console.resx:3879 — chkNR.ToolTip (closest analogue for NR1)
-    m_nr1Btn->setToolTip(QStringLiteral("NR1: Adaptive LMS noise reduction — left-click activates, right-click adjusts knobs"));
-    m_nr2Btn->setToolTip(QStringLiteral("NR2: EMNR (Enhanced Multiband Noise Reduction) — left-click activates, right-click adjusts knobs"));
-    m_nr3Btn->setToolTip(QStringLiteral("NR3: RNNR (Recurrent Neural Net noise reduction) — left-click activates, right-click adjusts knobs"));
+    m_nr1Btn->setToolTip(QStringLiteral("NR1: Adaptive LMS noise reduction. Left-click activates, right-click adjusts knobs"));
+    m_nr2Btn->setToolTip(QStringLiteral("NR2: EMNR (Enhanced Multiband Noise Reduction). Left-click activates, right-click adjusts knobs"));
+    m_nr3Btn->setToolTip(QStringLiteral("NR3: RNNR (Recurrent Neural Net noise reduction). Left-click activates, right-click adjusts knobs"));
     // 4×2 layout (option B) — four cols consistently filled.
     //   Row 0: NB  | NR1  | NR2 | NR3
     //   Row 1: NR4 | DFNR | MNR | NNR
@@ -1442,11 +1451,11 @@ void VfoWidget::buildDspTab()
     m_bnrBtn->setContextMenuPolicy(Qt::CustomContextMenu);
     m_mnrBtn->setContextMenuPolicy(Qt::CustomContextMenu);
     m_nnrBtn->setContextMenuPolicy(Qt::CustomContextMenu);
-    m_nr4Btn->setToolTip(QStringLiteral("NR4: SBNR (Spectral Baseline NR) — left-click activates, right-click adjusts knobs"));
-    m_dfnrBtn->setToolTip(QStringLiteral("DFNR: DeepFilter noise reduction — left-click activates, right-click adjusts knobs"));
-    m_bnrBtn->setToolTip(QStringLiteral("BNR: NVIDIA noise reduction — left-click activates, right-click adjusts knobs"));
-    m_mnrBtn->setToolTip(QStringLiteral("MNR: macOS noise reduction — left-click activates, right-click adjusts knobs"));
-    m_nnrBtn->setToolTip(QStringLiteral("NNR: WDSP neural noise reduction — left-click activates, right-click adjusts settings"));
+    m_nr4Btn->setToolTip(QStringLiteral("NR4: SBNR (Spectral Baseline NR). Left-click activates, right-click adjusts knobs"));
+    m_dfnrBtn->setToolTip(QStringLiteral("DFNR: DeepFilter noise reduction. Left-click activates, right-click adjusts knobs"));
+    m_bnrBtn->setToolTip(QStringLiteral("BNR: NVIDIA noise reduction. Left-click activates, right-click adjusts knobs"));
+    m_mnrBtn->setToolTip(QStringLiteral("MNR: macOS noise reduction. Left-click activates, right-click adjusts knobs"));
+    m_nnrBtn->setToolTip(QStringLiteral("NNR: neural noise reduction. Left-click activates, right-click adjusts settings"));
     m_nnrToolTip = m_nnrBtn->toolTip();
     dspGrid->addWidget(m_nr4Btn,  1, 0);
     dspGrid->addWidget(m_dfnrBtn, 1, 1);
@@ -1480,8 +1489,8 @@ void VfoWidget::buildDspTab()
     m_snbToggle = makeToggle(QStringLiteral("SNB"));
     // From Thetis console.resx:3927 — chkDSPNB2.ToolTip (labeled "SNB" in Thetis UI)
     m_snbToggle->setToolTip(tr(
-        "Spectral Noise Blanker — left-click toggles, right-click opens\n"
-        "Setup \u2192 DSP \u2192 NB/SNB. Runs independently of NB/NB2 and\n"
+        "Spectral Noise Blanker: left-click toggles, right-click opens\n"
+        "its Setup page (NB/SNB). Runs independently of NB/NB2 and\n"
         "targets tonal/wideband statics that time-domain blankers can't\n"
         "see."));
     // Right-click → Setup page. Mirrors Thetis chkDSPNB2_MouseDown
@@ -3530,7 +3539,7 @@ void VfoWidget::showDfnrPopup(const QPoint& globalPos)
                  [](int v) { return QString::number(v / 100.0, 'f', 2); },
                  [this](int v) { if (m_slice) m_slice->setDfnrPostFilterBeta(v / 100.0); },
                  tr("Post-filter aggressiveness (0 = disabled, 0.30+ = aggressive). "
-                    "Default 0 (off) — matches AetherSDR. Higher values reduce "
+                    "Default 0 (off). Higher values reduce "
                     "residual musical-noise artifacts but may over-attenuate "
                     "consonants. Typical tuning: start at 0.05-0.10 and nudge up."),
                  /*factory=*/0);
@@ -3630,7 +3639,7 @@ void VfoWidget::showMnrPopup(const QPoint& globalPos)
                  tr("Temporal (per-bin) gain smoothing.\n"
                     "  0.00 = instant (more musical noise, fast transients)\n"
                     "  0.70 = balanced (default)\n"
-                    "  1.00 = frozen (gain never updates — filter stuck)\n"
+                    "  1.00 = frozen (gain never updates; the filter is stuck)\n"
                     "Higher = smoother but slower to react to changing noise."),
                  /*factory=*/70);
 

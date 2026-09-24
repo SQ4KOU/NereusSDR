@@ -161,7 +161,7 @@ void AboutDialog::buildUI()
     mainLayout->addWidget(title);
 
     auto* version = new QLabel(
-        QStringLiteral("v%1 — Cross-platform SDR Console")
+        QStringLiteral("v%1: Cross-platform SDR Console")
             .arg(QCoreApplication::applicationVersion()),
         this);
     version->setAlignment(Qt::AlignCenter);

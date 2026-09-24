@@ -427,7 +427,7 @@ void TxApplet::buildUI()
         m_voxBtn->setAccessibleName(QStringLiteral("VOX voice-operated transmit"));
         m_voxBtn->setObjectName(QStringLiteral("TxVoxButton"));
         m_voxBtn->setToolTip(QStringLiteral(
-            "VOX — voice-operated transmit.  Left-click to toggle.\n"
+            "VOX: voice-operated transmit.  Left-click to toggle.\n"
             "Right-click to open the DEXP/VOX setup page."));
         // CustomContextMenu so right-click hits the openSetupRequested slot
         // instead of the default platform menu.
@@ -582,7 +582,7 @@ void TxApplet::buildUI()
         m_levBtn->setAccessibleName(QStringLiteral("TX Leveler enable"));
         m_levBtn->setObjectName(QStringLiteral("TxLevButton"));
         m_levBtn->setToolTip(QStringLiteral(
-            "TX Leveler — slow speech-leveling AGC. Improves intelligibility on weak speech."));
+            "TX Leveler: slow speech-leveling AGC. Improves intelligibility on weak speech."));
         row->addWidget(m_levBtn, 1);
 
         m_eqBtn = new QPushButton(QStringLiteral("EQ"), this);
@@ -608,7 +608,7 @@ void TxApplet::buildUI()
         m_cfcBtn->setAccessibleName(QStringLiteral("Continuous Frequency Compressor enable"));
         m_cfcBtn->setObjectName(QStringLiteral("TxCfcButton"));
         m_cfcBtn->setToolTip(QStringLiteral(
-            "CFC — 10-band continuous frequency compressor. Left-click to "
+            "CFC: 10-band continuous frequency compressor. Left-click to "
             "toggle. Right-click to open the CFC dialog."));
         // Right-click → modeless TxCfcDialog (mirrors EQ button pattern).
         m_cfcBtn->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -635,7 +635,7 @@ void TxApplet::buildUI()
         applyComboStyle(m_profileCombo);
         m_profileCombo->setAccessibleName(QStringLiteral("TX profile"));
         m_profileCombo->setToolTip(QStringLiteral(
-            "TX Profile — left-click to switch.  Right-click to edit "
+            "TX Profile: left-click to switch.  Right-click to edit "
             "(Setup → Audio → TX Profile)."));
         // Custom context-menu policy so right-click emits
         // customContextMenuRequested instead of the default popup.

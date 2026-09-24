@@ -1611,8 +1611,8 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
         slice ? qRound(slice->nb1TransitionMs() * 100.0) : 1,
         100.0, 2, tr(" ms"),
         tr("Time to decrease/increase to/from zero amplitude around an\n"
-           "impulse. Controls how gradually the blanker fades in and out\n"
-           "— very short = crisp click; longer = gentler but audible."));
+           "impulse. Controls how gradually the blanker fades in and out:\n"
+           "very short = crisp click; longer = gentler but audible."));
     connect(nb1Trans, &QSlider::valueChanged, this, [slice](int v) {
         // Slider is the x100 integer; the model stores real milliseconds and
         // RadioModel does the ms -> seconds conversion on the way to WDSP.
@@ -1700,7 +1700,7 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
         40, 600,
         qRound((slice ? slice->snbK2() : 20.0) * 10.0),
         10.0, 1, QString{},
-        tr("Multiplier applied to the final detection threshold — confirms\n"
+        tr("Multiplier applied to the final detection threshold. It confirms\n"
            "candidates from Threshold 1 as real noise outliers. Lower =\n"
            "more aggressive overall blanking; higher = fewer false triggers\n"
            "on genuine voice peaks."));
