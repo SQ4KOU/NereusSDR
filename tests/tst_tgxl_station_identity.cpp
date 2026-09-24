@@ -509,6 +509,8 @@ private slots:
         QVERIFY(model.setTgxlNetworkForStation(true, QString(), QString(), QString(), &reason));
         seq = waitFor(QStringLiteral("ifconf address= netmask= gateway= dhcp=true"));
         QVERIFY(seq != 0);
+        // M9: an unobserved non-zero code (the design doc's section 6.1
+        // says only that non-zero is a failure; none has been captured).
         answer(seq, QStringLiteral("1|"));
         QTRY_COMPARE(settings->tgxlAnswer(),
                      QStringLiteral("The Tuner Genius did not take the new network settings."));
@@ -520,6 +522,11 @@ private slots:
         const quint32 setupSeq = waitFor(QStringLiteral("setup read"));
         const quint32 ifconfSeq = waitFor(QStringLiteral("ifconf read"));
         QVERIFY(setupSeq != 0 && ifconfSeq != 0);
+        // M9: shapes from the local page's parsers
+        // (TgxlAdvancedPage::onSetupResponse / onIfconfResponse); the
+        // capture (captures/flex-tgxl-direct-NOTES.md) shows the `ifconf
+        // read` request but not its reply, so both are unobserved, pending
+        // hardware.
         answer(setupSeq, QStringLiteral("0|nickname=Tuner_Genius_XL"));
         answer(ifconfSeq, QStringLiteral("0|dhcp=0 ip=192.168.1.60 netmask=255.255.255.0 "
                                          "gateway=192.168.1.1"));

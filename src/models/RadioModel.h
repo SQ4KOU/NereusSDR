@@ -76,6 +76,10 @@
 //                their own for the Core's refusals (accessoryRequestRefused).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 fix wave: resetRfKitErrorForStation; the station
+//                TCI objects owned by std::unique_ptr; accessory refusals
+//                say whether the page that sent them shows them. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-49: the Network Watchdog setting applied where the
 //                radio is (setNetworkWatchdogEnabled / applyNetworkWatchdog).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -419,7 +423,7 @@ public:
     void attachStation(NereusSDR::IStationLink* link) { m_station = link; }
     IStationLink* stationLink() const { return m_station; }
     void detachStation() { m_station = nullptr; }
-    void reportStationLinkStateChanged() { emit stationLinkStateChanged(); }
+    void reportStationLinkStateChanged();
 
     // ── Remote-daemon R2 Task 18: the production handshake entry points ──
     //
@@ -550,12 +554,25 @@ public:
     /// the device it names ("faults" for any other). Role::Remote only.
     /// Routed to accessoryRequestRefused, which MainWindow toasts and the
     /// pages that sent the request show, never to the slice toast.
-    void reportStationAccessoryRefusal(const QString& device, const QString& reason);
+    void reportStationAccessoryRefusal(const QString& device, const QString& reason,
+                                       quint32 commandId = 0);
+    /// Follow-up 3 / rework part 5: `page` sent request `commandId` and
+    /// shows the Core's refusal of it itself. The refusal counts as shown
+    /// (accessoryRequestRefused's shownOnPage, so MainWindow does not toast
+    /// it too) only if the page still exists and is visible when it
+    /// arrives; otherwise it is toasted. Claims end when the command
+    /// completes or the link to the Core drops. 0 is ignored.
+    void noteAccessoryRequestShownOnPage(quint32 commandId, QObject* page);
+    /// Follow-up 6: one of the Core's station settings changed (`key`), or
+    /// a whole snapshot arrived (empty). Role::Remote only; emits
+    /// stationSettingChanged for the pages that show those settings.
+    void reportStationSettingChanged(const QString& key);
 
     /// R-R3-22 fix wave: the Core answered command `commandId` (the id in
     /// IStationLink::CommandOutcome). `reason` is the Core's words for a
     /// refusal, empty when accepted. Role::Remote only. Routed to
     /// stationCommandFinished for a sender that waits on its own command.
+    /// Ends any page's claim on the command (noteAccessoryRequestShownOnPage).
     void reportStationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
 
     /// The station refused a sample-rate change, with its own reason.
@@ -1817,7 +1834,7 @@ public:
     // (enableStationTci), and from the Core's values in a remote window.
     StationTciModel* stationTciModel() const { return m_stationTciModel; }
     // R-R3-48: the Core's station TCI server (nullptr outside the Core).
-    StationTciController* stationTciController() const { return m_stationTci; }
+    StationTciController* stationTciController() const { return m_stationTci.get(); }
     // R-R3-47: the Core's RF-Kit controller (nullptr outside the Core).
     StationRfKitController* stationRfKitController() const { return m_stationRfKit; }
     // SmartSDR API server on TCP 4992. Owned by RadioModel; lifetime matches.
@@ -3291,8 +3308,14 @@ signals:
     void sliceAddRejected(QString reason);
     /// R-R3-47 / R-R3-22: the Core refused a request for an accessory's own
     /// settings (`device` "pgxl" or "tgxl"); `reason` is the Core's words.
-    void accessoryRequestRefused(const QString& device, const QString& reason);
-    /// R-R3-22 fix wave: see reportStationCommandFinished.
+    void accessoryRequestRefused(const QString& device, const QString& reason,
+                                 bool shownOnPage);
+    /// Remote window: a Core station setting changed (empty: a snapshot).
+    void stationSettingChanged(const QString& key);
+    /// R-R3-22 fix wave: see reportStationCommandFinished. The one
+    /// per-command result signal: the amp applets' pending requests and
+    /// the TCI switch's request wait both match their own id here (an
+    /// accessory refusal also arrives on accessoryRequestRefused).
     void stationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
 
     /// Phase 3F Sub-Epic I closeout, defect F4: the operator retuned a slice
@@ -5139,8 +5162,12 @@ private:
     // and its state, and the RF-Kit's band follow over that server.
     StationRfKitController* m_stationRfKit{nullptr};
     StationTciModel*        m_stationTciModel{nullptr};
-    StationTciController*   m_stationTci{nullptr};
-    RfKitBandFollow*        m_rfKitBandFollow{nullptr};
+    // M6: owned here and destroyed first in ~RadioModel (they hold this
+    // model's slices and receivers), not through Qt parenting.
+    std::unique_ptr<StationTciController> m_stationTci;
+    std::unique_ptr<RfKitBandFollow>      m_rfKitBandFollow;
+    // Follow-up 3: accessory requests whose refusal their page shows.
+    QHash<quint32, QPointer<QObject>> m_pageShownAccessoryRequests;
 
     // Phase 3P-III: RF-Kit RF2K-S connection. unique_ptr with Qt parent=this
     // so destruction order is deterministic and QObject hierarchy is intact.

@@ -87,7 +87,8 @@ void LanDiscovery::parseAnnouncement(const QString& payload, quint16 port,
             || !m_stationBind->acceptsPeer(QHostAddress(m.captured("ip"))))) {
         qCDebug(lcLan) << "ignored an announcement from outside the station network:"
                        << sender << m.captured("ip");
-        m_ignoredOffNetwork.append({m.captured("model"), m.captured("ip")});
+        m_ignoredOffNetwork.append({m.captured("model"), m.captured("ip"),
+                                    m.captured("serial")});
         return;
     }
     const QString serial = m.captured("serial");

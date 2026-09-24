@@ -10,6 +10,7 @@
 #include <QNetworkAddressEntry>
 #include <QObject>
 #include <QPointer>
+#include <QTimer>
 
 #include <memory>
 #include <optional>
@@ -37,6 +38,16 @@ class TciServer;
 //
 // The server transmits for no app until remote transmit (R-R3-25): see
 // TciServer::setStationReceiveOnly.
+//
+// The station address and this computer are listened on separately (rework
+// part 3): what binds is kept and served, and only an address another
+// program holds is retried, with a bounded backoff (1, 2, 5, 10, then every
+// 30 s) while the switch is on, without stopping and starting the server.
+// The object says which address is blocked, in plain words, meanwhile, and
+// the log has one line when it starts failing and one when it listens on
+// everything again, not one per try (the server's own per-attempt lines are
+// at debug level). So the RF-Kit keeps band follow while
+// the station address is up, whatever holds this computer's port.
 class StationTciController : public QObject {
     Q_OBJECT
 public:
@@ -64,6 +75,12 @@ public:
     /// a plain reason) for a port outside 1024 to 65535.
     bool setEnabled(bool enabled, int port, QString* reason);
 
+    /// The plain reason the object carries while `blocked` addresses cannot
+    /// be listened on (another program holds the port there).
+    static QString blockedReason(quint16 port, const QList<QHostAddress>& blocked);
+    /// The retry delays, ms; the last repeats.
+    static constexpr int kRetryDelaysMs[] = {1000, 2000, 5000, 10000, 30000};
+
     /// The addresses the server listens on when on.
     QList<QHostAddress> wantedAddresses() const;
 
@@ -72,6 +89,7 @@ public:
 private:
     void apply();
     void publish();
+    void resetRetry();
 
     QPointer<RadioModel> m_radio;
     QPointer<StationTciModel> m_model;
@@ -81,8 +99,13 @@ private:
     StationNetwork::StationBind m_bind;
     bool m_enabled{false};
     quint16 m_port{kDefaultPort};
-    QList<QHostAddress> m_listening;
+    QList<QHostAddress> m_listening;   // bound now
+    QList<QHostAddress> m_wanted;      // the addresses this server is for
+    QList<QHostAddress> m_blocked;     // wanted, not bound (retried)
     QString m_error;
+    QTimer m_retryTimer;
+    int m_retryStep{0};
+    bool m_failing{false};
 };
 
 } // namespace NereusSDR

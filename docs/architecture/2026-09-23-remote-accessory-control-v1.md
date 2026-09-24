@@ -429,7 +429,22 @@ computer (127.0.0.1), so apps there reach it.
 It transmits for no app until remote transmit: the init burst says
 `receive_only:true` and `tx_enable:<rx>,false`; `trx:<rx>,true` touches no
 MOX, takes no transmit audio lock and is answered `trx:<rx>,false`; transmit
-audio frames are dropped. Nor does it let an app change the Core's
+audio frames are dropped. The Core listens on the station address and on
+its own computer separately: what binds is kept and served, and an
+address another program holds is retried while the switch is on, after
+1, 2, 5 and 10 seconds and then every 30 seconds, without stopping the
+server (a new `setStationTci` tries at once). `listening` is true while
+any address serves, `stationAddress` names the station address only
+while it serves, and `error` names the blocked one: "Another program on
+the Core's computer is using port <port>, so apps there cannot reach the
+station's TCI server. The Core keeps trying." or "Another program is
+using port <port> at the station address <address>, so devices at the
+station cannot reach the station's TCI server. The Core keeps trying."
+(both: "... on the Core's computer and at the station address <address>,
+so the station's TCI server cannot start. ..."). The RF-Kit keeps band
+follow while the station address serves. The Core logs one line when an
+address is first blocked and one when every address serves again, not
+one per try. Nor does it let an app change the Core's
 transmit configuration: `tx_profile_ex:<name>`, `xit_enable:<rx>,<bool>`
 and `xit_offset:<rx>,<hz>` change nothing, are not broadcast, and are
 answered to the asking app with the value the Core keeps (queries answer
@@ -474,9 +489,11 @@ of this and binds as it always has.
   address hears no broadcast. The Core ignores any announcement whose
   sender, or whose announced address, is not on the station network or the
   Core's own computer, so a device on another network is never identified
-  or admitted. When the only Power Genius (Tuner Genius) announcement heard
-  came from another network, or the configured address itself is off the
-  station network, the refusal in `connectionError` says so and how to
+  or admitted. When this Power Genius (Tuner Genius) was heard only from
+  another network (an announcement from its configured address or with the
+  serial its own `info` reply gave; another amp's announcement does not
+  count), or the configured address itself is off the station network,
+  the refusal in `connectionError` says so and how to
   allow it: "The Power Genius at <address> is on a different network from
   the radio, and the Core accepts station devices only on the radio's
   network. To allow it, set station_bind in the Core's nereusd.conf to the
@@ -630,16 +647,15 @@ Answers (`<device>` is "Power Genius" or "Tuner Genius"):
 Reboot, and sends nothing without a yes. Save & Reboot asks the local
 window's own question, word for word ("Sending `save` will persist your
 configuration to flash and reboot the PGXL. ...", titled "Save & Reboot
-PGXL" or "Save & Reboot TGXL"). A local window applies network settings
-without a dialog; a remote window, which may be far from the station, asks,
-titled "Apply Network Settings", in words that are true there (its Network
-section shows the same words): "The Power Genius will switch to these
-network settings. If the Core cannot reach it afterwards, enter its new
-address for the Power Genius on the Peripherals page and connect again."
-(or the Tuner Genius). The local page's warning names Scan LAN, which a
-remote window does not offer, so it is not used there. Whether a local
-window should ask too is the operator's decision (queued). The iPhone app
-asks the remote window's question. Before asking, either window checks the
+PGXL" or "Save & Reboot TGXL"). Before new network settings, local and
+remote windows alike (operator decision of 2026-09-24) ask, titled "Apply
+Network Settings", in words true in both: "The Power Genius will switch to
+these network settings. If NereusSDR cannot reach it afterwards, enter its
+new address for the Power Genius on the Peripherals page and connect
+again." (or the Tuner Genius); nothing is sent, local or remote, without a
+yes. A remote window's Network section shows the same words; the local
+page's section keeps its own warning, which names Scan LAN (not offered in
+a remote window). The iPhone app asks the same question. Before asking, either window checks the
 setting as the Core does (see Refusals) and shows the reason instead.
 
 ## The 4O3A and RF-Kit fields on the `radio` object
@@ -699,10 +715,16 @@ its log.
 The desktop app shows the Core's refusal of any accessory command in this
 document (the Power Genius, Tuner Genius and RF-Kit commands, the
 interlock, output limit and fault history commands, `setStationTci` and
-`setFourO3AEnabled`) as an accessory notice, never as a slice notice; the
-page that sent it (the Advanced pages, the interlock page) also shows it
-and keeps the Core's values. An unrelated slice refusal does not touch
-those pages.
+`setFourO3AEnabled`) on its own accessory route, never as a slice notice.
+A refusal of a request sent by the Power Genius, Tuner Genius or RF-Kit
+page shows on that page only (with the Core's values kept) if that page
+is still open and on screen when the refusal arrives; if Setup was
+closed meanwhile, or the link to the Core dropped, it shows as a notice
+instead, so no refusal is lost. Any other
+accessory refusal (from the interlock page, the Peripherals and 4O3A
+pages, an applet, the TCI switch) shows as a notice, and the interlock
+page also reloads the Core's policy. An unrelated slice refusal does not
+touch those pages.
 
 Property writes:
 
@@ -769,9 +791,9 @@ Commands:
 | `setPgxlNetwork`, `setTgxlNetwork` with other arguments | "The request to change the Power Genius network settings was not understood." (or Tuner Genius) |
 | `setPgxlNetwork`, `setTgxlNetwork` with an address that is not four numbers from 0 to 255 | "Enter each address as four numbers from 0 to 255 separated by dots." |
 | `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and no address or no netmask | "Without DHCP, enter an address and a netmask." |
-| `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and a netmask that is not ones then zeros (or is all zeros) | "Enter a netmask such as 255.255.255.0." |
-| `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and an address a device cannot use (0.0.0.0, 127.x, multicast, 240 and above, 255.255.255.255) | "Enter an address the device can use on your network." |
-| `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and a gateway off the address's network (or equal to it) | "Enter a gateway on the same network as the address, or leave it empty." |
+| `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and a netmask that is not ones then zeros, is all zeros, or is 255.255.255.255 | "Enter a netmask such as 255.255.255.0." |
+| `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and an address a device cannot use (0.0.0.0, 127.x, multicast, 240 and above, 255.255.255.255, or the subnet's network or broadcast address, except on a 255.255.255.254 link) | "Enter an address the device can use on your network." |
+| `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and a gateway off the address's network, equal to it, or at the subnet's network or broadcast address | "Enter a gateway on the same network as the address, or leave it empty." |
 | `savePgxlSettings`, `saveTgxlSettings` with arguments | "The request to save and restart the Power Genius was not understood." (or Tuner Genius) |
 | `readPgxlSettings`, `readTgxlSettings` with arguments | "The request to read the Power Genius settings was not understood." (or Tuner Genius) |
 | `setFourO3AEnabled` below minor 4 | "Remote 4O3A control requires a newer station protocol." |
@@ -1006,31 +1028,49 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   same way. Below 2 the page says "This Core does not offer RF-Kit
   amplifier setup to this app." and changes nothing. With
   `remoteRfKitControlVersion` 3 the page's automatic retry, poll interval
-  and four antenna names show the Core's values and Save writes them as
-  station settings; Reset amp error state sends `resetRfKitError`, and a
+  and four antenna names show the Core's values (following another
+  window's change to them, except a field the operator has changed and
+  whose saved value the Core has not yet echoed back) and Save writes them
+  as station settings; Reset amp error state sends `resetRfKitError`, and a
   refusal shows in the status line. Below 3 those controls are shown,
   unchangeable, with "This Core does not let this app change these
   settings. Updating the Core may help."
 - The amp page and applet show the band-follow line (see "Band follow"):
   the RF-Kit page and applet from `rfkit`, the Power Genius applet and the
   4O3A page's General tab from `amplifier`, in local and remote windows.
-- The app's one TCI switch and port (CAT & Network > TCI Server) start this
-  window's own TCI server as before and, with `stationTciVersion` 1, send
-  `setStationTci` so the Core's station server runs on the same port; off
-  stops both. The command is sent only when the operator changes the switch
-  or the port; a window connecting does not change the Core's switch. The
-  page adds "Also at the station: <address>, port <port>" while the Core's
-  server listens ("The station's TCI server is not running." while it is on
-  and not listening). When the Core runs on the same computer as the
-  window and its station server is on, listening and on the same port,
-  the window runs no server of its own and apps there use the Core's; the
-  page then says "The Core on this computer serves TCI apps here, port
-  <port>." In every other case (the Core's switch off, including when
-  another window turns it off, not listening, another port, an older
-  Core) the window keeps its own server, so apps on that computer never
-  lose TCI. A window turning the switch on with the Core there waits up
-  to 3 seconds for the Core's answer before serving itself, so the two do
-  not race for the port.
+- One TCI switch and one port (operator decision of 2026-09-23). In a
+  window connected to a Core with `stationTciVersion` 1, the switch and
+  port on CAT & Network > TCI Server are the Core's station switch and
+  port: the page shows them (following a change made from another window
+  or the phone, and keeping this computer's `TciServerEnabled` and
+  `TciServerPort` in step), and changing them sends `setStationTci`. The
+  Core keeps its own copy, so its server keeps running for the amp when
+  the window closes or another app connects. At connect the Core's stored
+  switch wins and the window's switch follows it; a Core that has no
+  stored station switch yet (no `StationTci_Enabled` in its settings, as
+  after the upgrade on a computer that ran the window with TCI on) takes
+  the window's switch and port instead, so apps there keep TCI. Until
+  this link's settings snapshot arrives the window decides nothing (a
+  previous Core's settings, from earlier in the same run, do not count). The window reads the Core's
+  change only once all its properties have arrived, and after sending a
+  change it waits for the Core to report that same switch and port before
+  following again, so it never flips back to a stale value. That wait
+  ends as soon as the request is over whatever became of it: the Core's
+  answer to `setStationTci` (accepted or refused), the link going down or
+  coming up, or a new connection; the window then follows the Core's
+  current switch and port. The window's
+  own server follows the switch only when the Core runs on another
+  computer; on the Core's own computer the window runs no server while
+  connected, and apps there use the Core's (it listens on that computer
+  too). The page adds "Also at the station: <address>, port <port>" while
+  the Core's server listens ("The station's TCI server is not running."
+  while it is on and not listening), or "The Core on this computer serves
+  TCI apps here, port <port>." on the Core's computer. With the link to
+  the Core down the switch shows the last known state and the page says
+  nothing about the Core; on the Core's computer the window starts no
+  server (there is no radio there to serve), and on another computer its
+  server follows the switch. With an older Core (or none) the window's own
+  server follows the switch as it always has.
 - A local window's RF-Kit band follow is worked out from its own TCI server
   the same way.
 - With `accessoryDataVersion` 1 the desktop remote window's 4O3A page
@@ -1155,10 +1195,17 @@ rewrite the fixtures, and update this document in the same commit.
   Core across restarts, a TCI app at the station hearing receive-only,
   `split_enable:` and `vfo:` as the Core's slice moves, transmit refused,
   the RF-Kit's band follow over the server, the one switch driving both
-  servers (none of the window's own when the Core is on this computer and
-  serving that port; the window's own when the Core's switch is off, not
-  listening or on another port, and after a wait with no answer), and the
-  TCI page's line.
+  servers, a window following the Core's switch and port changed by
+  another window (the whole change at once, in the wire's property
+  order), no window server on the Core's computer while connected, the
+  Core retrying a listener that could not start with its plain reason,
+  the station network served while a third program holds the port on the
+  Core's computer (the RF-Kit's band follow up, the reason naming the
+  blocked address, that computer taken on the next retry with no stop
+  and start), and the TCI page's line. `tst_remote_peripherals`: on the Core's
+  computer the window runs none, the phone turns the Core's switch on,
+  the Core serves apps on its computer and on a station address, and the
+  TCI page shows the Core's switch and port.
 - `tst_tci_tx_mutex`: the station server's transmit refusal on the wire,
   and its refusal of TX profile and XIT changes (nothing applied or
   broadcast, the kept value to the asking app, the reason off the wire).
@@ -1235,8 +1282,11 @@ rewrite the fixtures, and update this document in the same commit.
   works every control: its Reset amp error reaches the Core's amp as
   `POST /error/reset`, the same request a local page's button sends to its
   own amp (both fakes record it); refused with no amp admitted, on the
-  accessory route; Save writes automatic retry, poll interval and the four
-  names as station settings, which the Core applies to its connection;
+  accessory route; Save sends automatic retry, poll interval and the four
+  names over the link as station settings (through the window's settings
+  proxy to the Core's store), which the Core applies to its connection on
+  arrival, and the page follows a change made on the Core by another
+  window;
   below `remoteRfKitControlVersion` 3 the controls stay unchangeable with
   a plain reason. `tst_station_rfkit_controller`: the Core's reset reaches
   only an admitted amp. `tst_station_accessory_state`: `resetRfKitError`
@@ -1260,5 +1310,13 @@ and the Rock's fault history after a restart; the power-cap alert from a
 real transmit through the Power Genius (with remote transmit); and, only
 with the operator's go-ahead because it changes the devices' own settings,
 a name change and a Save & Reboot on the real Power Genius and Tuner Genius
-from the Rock's remote window (the setup and ifconf read replies used here
-are shaped as the local pages parse them; no capture of them exists yet).
+from the Rock's remote window. None of the device replies the settings
+tests use has been captured: the `setup read` reply follows the design
+doc's section 6.4 (verbatim from the FlexRadio wiki: `nickname= fan=
+meffa= led=`), and its `bias=` is unobserved; the `ifconf read` reply uses
+`dhcp=` (0 or 1) and `ip=`, the keys the local Tuner Genius page's parser
+reads, where the design doc documents `address=` and `dhcp=false` (the
+Core, like the local page, reads `ip=`: which one the devices send is part
+of the pending evidence); the refusal code 50000015 is the one a real
+Power Genius sent when it refused `amplifier create` (bench note of
+2026-05-21), and a refusal of a settings command has not been observed.

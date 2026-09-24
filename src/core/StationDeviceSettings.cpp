@@ -12,16 +12,22 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  A fixed network setting needs an address
 //                                    and a netmask (R-R3-47). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  A fixed setting refuses a /32 netmask and
+//                                    the subnet's network and broadcast
+//                                    addresses (R-R3-47). AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  A gateway at the subnet's network or
+//                                    broadcast address is refused (R-R3-47).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  A request with no answer times out
-//                                    (R-R3-47). AI-assisted via Anthropic
-//                                    Claude Code.
+//                                    (R-R3-47), on a monotonic clock.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/StationDeviceSettings.h"
 
 #include "core/AppSettings.h"
 
-#include <QDateTime>
 #include <QHostAddress>
 #include <QRegularExpression>
 
@@ -52,8 +58,9 @@ const QStringList& fanModes()
 
 StationDeviceSettings::StationDeviceSettings(Device device, Wire wire, QObject* parent)
     : QObject(parent), m_device(device), m_wire(std::move(wire))
-    , m_now([] { return QDateTime::currentMSecsSinceEpoch(); })
+    , m_now([this] { return m_monotonic.elapsed(); })
 {
+    m_monotonic.start();
     m_timeoutTimer.setInterval(1000);
     connect(&m_timeoutTimer, &QTimer::timeout, this, &StationDeviceSettings::checkTimeouts);
 }
@@ -121,19 +128,29 @@ QString StationDeviceSettings::networkProblem(bool dhcp, const QString& inputAdd
         return QStringLiteral("Without DHCP, enter an address and a netmask.");
     }
     const quint32 mask = QHostAddress(netmask).toIPv4Address();
-    // A netmask is ones, then zeros (255.255.255.0), and not all zeros.
-    if (mask == 0 || ((~mask) & ((~mask) + 1u)) != 0) {
+    // A netmask is ones, then zeros (255.255.255.0), not all zeros, and not
+    // /32 (a device alone on its network reaches nothing).
+    if (mask == 0 || mask == 0xFFFFFFFFu || ((~mask) & ((~mask) + 1u)) != 0) {
         return QStringLiteral("Enter a netmask such as 255.255.255.0.");
     }
     const QHostAddress host(address);
     const quint32 ip = host.toIPv4Address();
+    // Nor the subnet's network or broadcast address (except on a /31
+    // point-to-point link, where both are hosts).
+    const bool pointToPoint = mask == 0xFFFFFFFEu;
+    const bool networkOrBroadcast = !pointToPoint
+        && ((ip & ~mask) == 0 || (ip | mask) == 0xFFFFFFFFu);
     if (ip == 0 || host.isLoopback() || host.isMulticast() || ip == 0xFFFFFFFFu
-        || (ip >> 24) >= 240u) {
+        || (ip >> 24) >= 240u || networkOrBroadcast) {
         return QStringLiteral("Enter an address the device can use on your network.");
     }
     if (!gateway.isEmpty()) {
         const quint32 gw = QHostAddress(gateway).toIPv4Address();
-        if ((gw & mask) != (ip & mask) || gw == ip) {
+        // Rework part 6: nor at the subnet's network or broadcast address
+        // (except on a /31 link).
+        const bool gwNetworkOrBroadcast = !pointToPoint
+            && ((gw & ~mask) == 0 || (gw | mask) == 0xFFFFFFFFu);
+        if ((gw & mask) != (ip & mask) || gw == ip || gwNetworkOrBroadcast) {
             return QStringLiteral("Enter a gateway on the same network as the address, "
                                   "or leave it empty.");
         }

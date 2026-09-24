@@ -43,6 +43,11 @@
 //                                    in words true there; only this
 //                                    device's refusals reload the page.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: a local window asks
+//                                    the same plain question as a remote one
+//                                    before applying network settings
+//                                    (operator decision 2026-09-24).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "PgxlAdvancedPage.h"
@@ -306,6 +311,8 @@ void PgxlAdvancedPage::buildIdentitySection(QVBoxLayout* topLay)
             const IStationLink::CommandOutcome outcome = link
                 ? link->requestPgxlName(m_nickname->text().trimmed())
                 : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+            // Follow-up 3: this page shows the Core's refusal; no toast too.
+            m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);
             showRemoteOutcome(outcome.sent, outcome.reason);
             return;
         }
@@ -461,7 +468,7 @@ void PgxlAdvancedPage::buildNetworkSection(QVBoxLayout* topLay)
     lay->addLayout(form);
 
     // M4: a remote window's words (no Scan LAN there); local unchanged.
-    auto* warnLabel = new QLabel(isRemote() ? remoteNetworkWarningText() : networkWarningText());
+    auto* warnLabel = new QLabel(isRemote() ? networkQuestionText() : networkWarningText());
     warnLabel->setWordWrap(true);
     warnLabel->setStyleSheet(QStringLiteral("color: #e8c01e;"));
     lay->addWidget(warnLabel);
@@ -639,6 +646,8 @@ void PgxlAdvancedPage::buildFaultHistorySection(QVBoxLayout* topLay)
             const IStationLink::CommandOutcome outcome = link
                 ? link->requestClearAccessoryFaults(QStringLiteral("pgxl"))
                 : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+            // Follow-up 3: this page shows the Core's refusal; no toast too.
+            m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);
             if (!outcome.sent && m_remoteNote) {
                 m_remoteNote->setText(OperatorReasonText::forDisplay(outcome.reason));
             }
@@ -857,9 +866,9 @@ bool PgxlAdvancedPage::confirmRemote(const QString& title, const QString& text)
     return box.clickedButton() == apply;
 }
 
-QString PgxlAdvancedPage::remoteNetworkWarningText()
+QString PgxlAdvancedPage::networkQuestionText()
 {
-    return QStringLiteral("The Power Genius will switch to these network settings. If the Core "
+    return QStringLiteral("The Power Genius will switch to these network settings. If NereusSDR "
                           "cannot reach it afterwards, enter its new address for the "
                           "Power Genius on the Peripherals page and connect again.");
 }
@@ -917,6 +926,8 @@ void PgxlAdvancedPage::sendRemotePowerCap()
     const IStationLink::CommandOutcome outcome = link
         ? link->requestPgxlPowerCap(m_powerCapCheck->isChecked(), m_powerCapSpin->value())
         : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+    // Follow-up 3: this page shows the Core's refusal; no toast too.
+    m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);
     if (!outcome.sent) {
         refreshRemote();
         m_remoteNote->setText(OperatorReasonText::forDisplay(outcome.reason));
@@ -1118,6 +1129,8 @@ void PgxlAdvancedPage::onSaveAndReboot()
         const IStationLink::CommandOutcome outcome = link
             ? link->requestPgxlSaveAndRestart()
             : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);
         if (!outcome.sent) {
             showRemoteOutcome(false, outcome.reason);
             return;
@@ -1155,6 +1168,8 @@ void PgxlAdvancedPage::onRevert()
         const IStationLink::CommandOutcome outcome = link
             ? link->requestPgxlReadSettings()
             : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);
         showRemoteOutcome(outcome.sent, outcome.reason);
         setPendingState(false);
         return;
@@ -1298,7 +1313,7 @@ void PgxlAdvancedPage::onApplyIfconf()
         // Core's network, so the window asks first, in the Network
         // section's own words; nothing is sent without a yes.
         if (!confirmRemote(QStringLiteral("Apply Network Settings"),
-                           remoteNetworkWarningText())) {
+                           networkQuestionText())) {
             return;
         }
         IStationLink* link = m_model->stationLink();
@@ -1307,6 +1322,8 @@ void PgxlAdvancedPage::onApplyIfconf()
                                        m_netmaskEdit->text().trimmed(),
                                        m_gatewayEdit->text().trimmed())
             : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);
         if (!outcome.sent) {
             showRemoteOutcome(false, outcome.reason);
             return;
@@ -1318,6 +1335,12 @@ void PgxlAdvancedPage::onApplyIfconf()
         return;
     }
     if (!m_model->pgxlConnection()->isConnected()) {
+        return;
+    }
+    // Operator decision 2026-09-24: a local window asks the same question
+    // before new network settings as a remote one; nothing is sent
+    // without a yes.
+    if (!confirmRemote(QStringLiteral("Apply Network Settings"), networkQuestionText())) {
         return;
     }
     m_model->pgxlConnection()->writeIfconf(
@@ -1393,6 +1416,8 @@ void PgxlAdvancedPage::sendRemoteHardware(const QString& setting, const QString&
     const IStationLink::CommandOutcome outcome = link
         ? link->requestPgxlHardware(setting, value)
         : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+    // Follow-up 3: this page shows the Core's refusal; no toast too.
+    m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);
     if (!outcome.sent) {
         showRemoteOutcome(false, outcome.reason);
         return;

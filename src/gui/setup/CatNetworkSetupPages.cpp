@@ -20,6 +20,8 @@
 #include "core/TciSwitch.h"
 #include "models/RadioModel.h"
 
+#include <QSignalBlocker>
+#include <QTimer>
 #include <QNetworkInterface>
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
@@ -161,7 +163,10 @@ void CatTciServerPage::buildServerGroup()
     // From Thetis setup.designer.cs:57979-57983 [v2.10.3.13] — chkTCIEnable
     m_enableCheck = new QCheckBox(tr("Enable TCI Server"), group);
     m_enableCheck->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
-    m_enableCheck->setToolTip(tr("Enable the built-in TCI (Transceiver Control Interface) WebSocket server."));
+    m_enableCheck->setToolTip(tr("Enable the built-in TCI (Transceiver Control Interface) WebSocket server. "
+                                 "In a window on a Core, this switch and the port below are the "
+                                 "Core's: they turn the station's TCI server on or off, and they "
+                                 "show a change made from another window or the phone."));
     m_enableCheck->setChecked(
         s.value(QStringLiteral("TciServerEnabled"), QStringLiteral("False")).toString()
         == QStringLiteral("True"));
@@ -220,6 +225,10 @@ void CatTciServerPage::buildServerGroup()
     m_portSpin = new QSpinBox(group);
     m_portSpin->setStyleSheet(QString::fromLatin1(Style::kSpinBoxStyle));
     m_portSpin->setRange(1024, 65535);
+    // Rework follow-up 5 (R-R3-48): the port is sent (to this window's
+    // server and the Core's) when editing finishes (Enter, focus leaving,
+    // the arrows), not for every keystroke.
+    m_portSpin->setKeyboardTracking(false);
     m_portSpin->setToolTip(tr("TCP port the TCI WebSocket server listens on (1024–65535). "
                                "Default is 50001. Requires server restart to take effect."));
     m_portSpin->setValue(
@@ -335,12 +344,41 @@ void CatTciServerPage::setRadioModel(NereusSDR::RadioModel* model)
 
 void CatTciServerPage::refreshStationLine()
 {
+    // Rework part 1 (R-R3-48, one switch and one port): the switch and port
+    // show the Core's, which TciSwitch writes to this computer's settings
+    // once the Core's whole change has arrived; read them after it.
+    QTimer::singleShot(0, this, &CatTciServerPage::reloadSwitchFromSettings);
     if (!m_stationLine) {
         return;
     }
     const QString line = NereusSDR::TciSwitch::stationLine(m_radioModelRef.data());
     m_stationLine->setText(line);
     m_stationLine->setVisible(!line.isEmpty());
+}
+
+void CatTciServerPage::reloadSwitchFromSettings()
+{
+    auto& s = AppSettings::instance();
+    if (m_enableCheck) {
+        const QSignalBlocker block(m_enableCheck);
+        m_enableCheck->setChecked(
+            s.value(QStringLiteral("TciServerEnabled"), QStringLiteral("False")).toString()
+            == QStringLiteral("True"));
+    }
+    if (m_portSpin && !m_portSpin->hasFocus()) {
+        const QSignalBlocker block(m_portSpin);
+        m_portSpin->setValue(s.value(QStringLiteral("TciServerPort"), 50001).toInt());
+    }
+}
+
+bool CatTciServerPage::switchOnForTesting() const
+{
+    return m_enableCheck && m_enableCheck->isChecked();
+}
+
+int CatTciServerPage::portForTesting() const
+{
+    return m_portSpin ? m_portSpin->value() : 0;
 }
 
 QString CatTciServerPage::stationLineForTesting() const

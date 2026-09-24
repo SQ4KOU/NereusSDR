@@ -156,7 +156,10 @@
 //                AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-47 fix wave: Reset amp error for a window
 //                (resetRfKitErrorForStation) and a window's RF-Kit
-//                auto-reconnect and poll interval applied at once.
+//                auto-reconnect and poll interval applied at once; the
+//                station TCI controller and RF-Kit band follow owned by
+//                std::unique_ptr, not raw delete; a refusal the page that
+//                sent it shows is marked shownOnPage.
 //                NereusSDR-original; no Thetis logic. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-49: the Network Watchdog setting reaches the radio at
@@ -2629,10 +2632,8 @@ RadioModel::~RadioModel()
 {
     // R-R3-48: the station TCI server holds this model's slices and
     // receivers; stop it while they still exist.
-    delete m_rfKitBandFollow;
-    m_rfKitBandFollow = nullptr;
-    delete m_stationTci;
-    m_stationTci = nullptr;
+    m_rfKitBandFollow.reset();
+    m_stationTci.reset();
     teardownConnection();
     qDeleteAll(m_slices);
     qDeleteAll(m_panadapters);
@@ -3441,13 +3442,13 @@ void RadioModel::enableStationAccessoryIdentity()
 void RadioModel::enableStationTci(const QString& bindOverride)
 {
     if (m_role != Role::Local || m_stationTci) { return; }
-    m_stationTci = new StationTciController(this, m_stationTciModel, this);
+    m_stationTci = std::make_unique<StationTciController>(this, m_stationTciModel);
     m_stationTci->setBindOverride(bindOverride);
     if (isConnected() && !m_lastRadioInfo.address.isNull()) {
         m_stationTci->setRadioAddress(m_lastRadioInfo.address);
     }
     // R-R3-48: the RF-Kit follows the band as an app of this server.
-    m_rfKitBandFollow = new RfKitBandFollow(m_rfKitModel, this);
+    m_rfKitBandFollow = std::make_unique<RfKitBandFollow>(m_rfKitModel);
     m_rfKitBandFollow->setServer(m_stationTci->server());
     // R-R3-22: the one station rule, when the Core has set it, wins over
     // the override given here.
@@ -4553,12 +4554,41 @@ void RadioModel::reportStationSliceCommandRejected(const QString& reason)
     emit sliceAddRejected(reason);
 }
 
-void RadioModel::reportStationAccessoryRefusal(const QString& device, const QString& reason)
+void RadioModel::reportStationAccessoryRefusal(const QString& device, const QString& reason,
+                                               quint32 commandId)
 {
     if (m_role != Role::Remote) {
         return;
     }
-    emit accessoryRequestRefused(device, reason);
+    // Rework part 5: shown only on a page still there and on screen.
+    const QPointer<QObject> page = m_pageShownAccessoryRequests.take(commandId);
+    const bool shownOnPage = commandId != 0 && page
+        && page->property("visible").toBool();
+    emit accessoryRequestRefused(device, reason, shownOnPage);
+}
+
+void RadioModel::noteAccessoryRequestShownOnPage(quint32 commandId, QObject* page)
+{
+    if (commandId != 0 && page) {
+        m_pageShownAccessoryRequests.insert(commandId, page);
+    }
+}
+
+void RadioModel::reportStationLinkStateChanged()
+{
+    // Rework part 5: with the link down no claimed answer will come.
+    const IStationLink* link = stationLink();
+    if (!link || !link->stationLinkReady()) {
+        m_pageShownAccessoryRequests.clear();
+    }
+    emit stationLinkStateChanged();
+}
+
+void RadioModel::reportStationSettingChanged(const QString& key)
+{
+    if (m_role == Role::Remote) {
+        emit stationSettingChanged(key);
+    }
 }
 
 void RadioModel::reportStationCommandFinished(quint32 commandId, bool accepted,
@@ -4567,6 +4597,9 @@ void RadioModel::reportStationCommandFinished(quint32 commandId, bool accepted,
     if (m_role != Role::Remote) {
         return;
     }
+    // Follow-up 3: the command is over, so no page's claim on it remains
+    // (a refusal's claim was already taken by reportStationAccessoryRefusal).
+    m_pageShownAccessoryRequests.remove(commandId);
     emit stationCommandFinished(commandId, accepted, reason);
 }
 

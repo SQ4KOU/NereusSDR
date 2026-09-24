@@ -91,7 +91,10 @@
 //                 accessoryRequestRefused, never the slice toast. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-47: remoteRfKitControlVersion 3 (the resetRfKitError
-//                 request, the RF-Kit page's settings from a remote window).
+//                 request, the RF-Kit page's settings from a remote window);
+//                 a Core setting's change is reported to the window's pages
+//                 (stationSettingChanged); whether the Core keeps a TCI
+//                 switch is read from this link's settings snapshot only.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-46 / R-R3-21: radioHardwareVersion 4, the filter
 //                 policy request (setAlexBpfMode) and its plain reason.
@@ -864,6 +867,7 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     // first session is epoch 1; 0 means "never attached"). See
     // sessionEpoch()'s doc comment.
     ++m_sessionEpoch;
+    m_settingsSnapshotThisLink = false;
     m_lastTelemetrySequence = 0;
     m_lastTelemetrySampleElapsedMs = -1;
     m_capabilities.remoteDisplayBudgetVersion = 0;
@@ -954,6 +958,7 @@ void StationClient::onTransportClosed()
     if (sender() != nullptr && sender() != m_transport) {
         return;
     }
+    m_settingsSnapshotThisLink = false;   // rework follow-up 4
     // Task 19: a plain transport close with no station-sent reason is
     // exactly the case automatic reconnect exists for -- "kill the
     // daemon" (a clean TCP close) is the bench scenario the parent task
@@ -1852,12 +1857,16 @@ void StationClient::handleSettingsSnapshot(const SessionMessage& message)
 
     const bool firstSnapshot = !m_settingsProxy->hasReceivedSnapshot();
     m_settingsProxy->applySnapshot(data);
+    m_settingsSnapshotThisLink = true;
+    m_coreKeepsTciSwitch = data.contains(QStringLiteral("StationTci_Enabled"));
     // R-R3-46: the window's copy of the Core's OC pin matrix follows the
     // Core's settings (RadioModel::scheduleRemoteOcReload, coalesced).
     if (!m_radioModel.isNull()) {
         for (auto it = data.constBegin(); it != data.constEnd(); ++it) {
             m_radioModel->scheduleRemoteOcReload(it.key());
         }
+        // Follow-up 6: pages showing the Core's settings re-read them.
+        m_radioModel->reportStationSettingChanged(QString());
     }
 
     // Ready only NOW, never earlier. SliceModel, NotchModel,
@@ -1906,6 +1915,9 @@ void StationClient::handleSettingsValue(const SessionMessage& message)
     // it, so the client reported contains() true and value(key, default)
     // "" for a key the station did not have.
     const QString key = QString::fromUtf8(message.objectKey);
+    if (key == QLatin1String("StationTci_Enabled")) {
+        m_coreKeepsTciSwitch = !message.updates.isEmpty();   // rework follow-up 4
+    }
     if (message.updates.isEmpty()) {
         m_settingsProxy->applyRemoteRemoval(key);
     } else {
@@ -1916,6 +1928,9 @@ void StationClient::handleSettingsValue(const SessionMessage& message)
     // window's copy, so its next save cannot send a stale cell back.
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteOcReload(key);
+        // Follow-up 6: another window's (or the Core's) change reaches the
+        // pages that show it.
+        m_radioModel->reportStationSettingChanged(key);
     }
 }
 
@@ -3316,7 +3331,7 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             // L1 (R-R3-47, R-R3-22, R-R3-48): an accessory refusal has its
             // own route (the pages that sent it show it; MainWindow says
             // it), never the slice one.
-            m_radioModel->reportStationAccessoryRefusal(device, reason);
+            m_radioModel->reportStationAccessoryRefusal(device, reason, message.commandId);
         } else {
             m_radioModel->reportStationSliceCommandRejected(reason);
         }
@@ -3379,8 +3394,9 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         }
     }
     // R-R3-22 fix wave: every result by its id, so a sender (the amp
-    // applets) clears its own pending request and shows only its own
-    // refusal. The refusal's words are the same the routing above used.
+    // applets, the TCI switch) clears its own pending request and shows
+    // only its own refusal; it also ends a page's claim on an accepted
+    // accessory request (follow-up 3). The refusal's words are the same the routing above used.
     if (!m_radioModel.isNull()) {
         const QPointer<StationClient> self(this);
         const QString finishedReason = message.accepted ? QString()
@@ -3471,6 +3487,19 @@ bool StationClient::stationTciAvailable() const
 {
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.stationTciVersion >= 1;
+}
+
+int StationClient::coreStationTciStored() const
+{
+    // The Core's station switch is its StationTci_Enabled station setting
+    // (StationTciController), which reaches this window in the settings
+    // snapshot; absent there, the Core has none yet.
+    // Rework follow-up 4: this link's snapshot, not one from a Core this
+    // window used before.
+    if (m_settingsProxy.isNull() || !m_settingsSnapshotThisLink) {
+        return -1;
+    }
+    return m_coreKeepsTciSwitch ? 1 : 0;
 }
 
 bool StationClient::coreServesTciOnThisComputer() const

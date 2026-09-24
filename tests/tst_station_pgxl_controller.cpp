@@ -342,6 +342,12 @@ private slots:
                                                 QStringLiteral("ClassA"), &reason));
         seq = waitForCommand(peer, rx, QStringLiteral("setup bias=a"), &from);
         QVERIFY(seq != 0);
+        // M9: a refusal. 50000015 is the code a real Power Genius sent when it
+        // refused `amplifier create` (bench note of 2026-05-21 in
+        // RadioModel.cpp, above the PGXL_PairModel read); the design doc
+        // (2026-05-18-pgxl-tgxl-and-analog-smeter-design.md section 6.1, from
+        // the FlexRadio wiki) says only that non-zero is a failure. The amp's
+        // refusal of a `setup` command itself has not been observed.
         reply(peer, seq, QStringLiteral("50000015|"));
         QTRY_COMPARE(settings->pgxlAnswer(),
                      QStringLiteral("The Power Genius did not take the new setting."));
@@ -399,6 +405,31 @@ private slots:
         QCOMPARE(reason, QStringLiteral("Enter a gateway on the same network as the address, "
                                         "or leave it empty."));
         QVERIFY(OperatorWording::isPlain(reason));
+        // Follow-up 7: a /32 netmask, and the subnet's network and broadcast
+        // addresses, cannot be a device's fixed setting.
+        QVERIFY(!model.setPgxlNetworkForStation(false, QStringLiteral("192.168.1.50"),
+                                                QStringLiteral("255.255.255.255"), QString(),
+                                                &reason));
+        QCOMPARE(reason, QStringLiteral("Enter a netmask such as 255.255.255.0."));
+        for (const char* address : {"192.168.1.0", "192.168.1.255"}) {
+            QVERIFY(!model.setPgxlNetworkForStation(false, QString::fromLatin1(address),
+                                                    QStringLiteral("255.255.255.0"), QString(),
+                                                    &reason));
+            QCOMPARE(reason,
+                     QStringLiteral("Enter an address the device can use on your network."));
+        }
+        // Rework part 6: a gateway at the subnet's broadcast (or network)
+        // address is refused too.
+        for (const char* gateway : {"192.168.1.255", "192.168.1.0"}) {
+            QCOMPARE(StationDeviceSettings::networkProblem(
+                         false, QStringLiteral("192.168.1.50"), QStringLiteral("255.255.255.0"),
+                         QString::fromLatin1(gateway)),
+                     QStringLiteral("Enter a gateway on the same network as the address, "
+                                    "or leave it empty."));
+        }
+        QVERIFY(StationDeviceSettings::networkProblem(false, QStringLiteral("10.0.0.0"),
+                                                      QStringLiteral("255.255.255.254"),
+                                                      QString()).isEmpty());   // /31 link
         QCOMPARE(frames.count(), sentBefore);
 
         // Network: `ifconf address= netmask= gateway= dhcp=`.
@@ -422,6 +453,14 @@ private slots:
         const quint32 setupSeq = waitForCommand(peer, rx, QStringLiteral("setup read"), &from);
         const quint32 ifconfSeq = waitForCommand(peer, rx, QStringLiteral("ifconf read"), &from);
         QVERIFY(setupSeq != 0 && ifconfSeq != 0);
+        // M9: reply shapes, none captured from a real amp (pending hardware
+        // evidence). `setup read`: the design doc's section 6.4 (verbatim
+        // from the FlexRadio wiki) documents `nickname= fan= meffa= led=`;
+        // `bias=` is not in that reply and is unobserved (the Core reads it
+        // only if the amp sends it). `ifconf read`: `dhcp=` 0/1 and `ip=`
+        // are the keys TgxlAdvancedPage::onIfconfResponse (the local page's
+        // parser, the only one in the tree) reads; the design doc's
+        // section 6.4 documents `address=` and `dhcp=false` instead.
         reply(peer, setupSeq, QStringLiteral("0|nickname=Amp2 bias=classa fan=continuous led=90"));
         reply(peer, ifconfSeq, QStringLiteral("0|dhcp=1 ip=10.0.0.5 netmask=255.0.0.0 "
                                               "gateway=10.0.0.1"));
@@ -500,6 +539,12 @@ private slots:
 
         now += 1;
         settings.checkTimeouts();
+        // Follow-up 4: the Core's own clock is monotonic (a Pi or Rock has no
+        // real-time clock and its wall clock steps at boot): it counts from
+        // the object's start, not from 1970.
+        StationDeviceSettings fresh(StationDeviceSettings::Device::Tgxl, {});
+        QVERIFY(fresh.clockNowForTesting() >= 0);
+        QVERIFY(fresh.clockNowForTesting() < 60'000);
         QCOMPARE(model.pgxlAnswer(),
                  QStringLiteral("The Power Genius did not answer. Try again."));
         QVERIFY(!model.pgxlAnswerAccepted());
@@ -597,9 +642,12 @@ private slots:
         model.setStationBind(QStringLiteral("127.0.0.1"));
         auto* pgxl = model.pgxlConnection();
         QSignalSpy frames(pgxl, &PgxlConnection::testFrameWrittenForTesting);
-        QVERIFY(answerUpToInfo(model, amp, frames, "V3.8.9", kInfoReply));
-        const QString line = QStringLiteral("PowerGeniusXL ip=192.168.1.43 v=3.8.9 serial=%1 nickname=PowerGeniusXL")
-                                 .arg(QString::fromLatin1(kSerial));
+        // A serial no real amp has, so a Power Genius on the bench LAN
+        // (heard by broadcast) is never taken for this one.
+        QVERIFY(answerUpToInfo(model, amp, frames, "V3.8.9",
+                               "serial=77-777/77-7777  version=3.8.9 protocol=1.0 mains=240"));
+        const QString line = QStringLiteral(
+            "PowerGeniusXL ip=192.168.1.43 v=3.8.9 serial=77-777/77-7777 nickname=PowerGeniusXL");
         discoveryOf(model)->injectDatagramForTesting(line, amp.serverPort(),
                                                      QHostAddress(QStringLiteral("192.168.1.43")));
         QTRY_COMPARE_WITH_TIMEOUT(model.amplifierModel()->connectionPhase(), Phase::Error, 6000);
@@ -610,6 +658,35 @@ private slots:
         QVERIFY(OperatorWording::isPlain(error));
         QCOMPARE(OperatorReasonText::forDisplay(error), error);   // a window shows it as sent
         QVERIFY(!pgxl->isConnected());
+        QString reason;
+        QVERIFY(model.disconnectPgxlForStation(&reason));
+    }
+
+    // Follow-up 8: another Power Genius announcing from another network
+    // (not this amp's serial, not its address) is not a reason to say this
+    // amp is on another network.
+    void anotherAmpOffTheNetworkIsNotThisAmp()
+    {
+        AppSettings::instance().setValue(QStringLiteral("PGXL_AutoReconnect"), QStringLiteral("False"));
+        QTcpServer amp;
+        QVERIFY(amp.listen(QHostAddress::LocalHost, 0));
+        RadioModel model;
+        prepare(model);
+        model.setStationBind(QStringLiteral("127.0.0.1"));
+        auto* pgxl = model.pgxlConnection();
+        QSignalSpy frames(pgxl, &PgxlConnection::testFrameWrittenForTesting);
+        // This amp's serial is one no real amp has: a Power Genius on the
+        // bench LAN announcing by broadcast (the discovery sockets hear every
+        // network) is then not this amp either.
+        QVERIFY(answerUpToInfo(model, amp, frames, "V3.8.9",
+                               "serial=77-777/77-7777  version=3.8.9 protocol=1.0 mains=240"));
+        discoveryOf(model)->injectDatagramForTesting(
+            QStringLiteral("PowerGeniusXL ip=192.168.1.77 v=3.8.9 serial=99-999/99-9999 nickname=Other"),
+            amp.serverPort(), QHostAddress(QStringLiteral("192.168.1.77")));
+        QTRY_COMPARE_WITH_TIMEOUT(model.amplifierModel()->connectionPhase(), Phase::Error, 6000);
+        const QString error = model.amplifierModel()->connectionError();
+        QVERIFY2(!error.contains(QStringLiteral("different network")), qPrintable(error));
+        QVERIFY(error.startsWith(QStringLiteral("No matching PGXL discovery announcement")));
         QString reason;
         QVERIFY(model.disconnectPgxlForStation(&reason));
     }

@@ -30,8 +30,14 @@
 //                "cannot send" answer unsubscribes the apps and tells them.
 //                AI-assisted transformation via Anthropic Claude Code.
 //   2026-09-24 - R-R3-48 / R-R3-25: the station server tells the operator
-//                why a TX profile or XIT change was not made. J.J. Boyd
-//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                why a TX profile or XIT change was not made; its extra
+//                listeners go through deleteLater, not raw delete. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-48 follow-up: quiet listen attempts while the Core
+//                retries its station listener; the main listener goes
+//                through deleteLater, not raw delete; addListener adds an
+//                address to a running server (rework). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -1286,10 +1292,17 @@ bool TciServer::start(const QList<QHostAddress>& bindAddresses, quint16 port)
                                            QWebSocketServer::NonSecureMode, this);
         if (!extra->listen(bindAddresses.at(i), boundPort)) {
             const QString errStr = extra->errorString();
-            qCWarning(lcTci) << "TciServer: failed to listen on"
-                             << bindAddresses.at(i).toString() << "port" << boundPort
-                             << errStr;
-            delete extra;
+            if (m_quietListenAttempts) {
+                qCDebug(lcTci) << "TciServer: failed to listen on"
+                               << bindAddresses.at(i).toString() << "port" << boundPort
+                               << errStr;
+            } else {
+                qCWarning(lcTci) << "TciServer: failed to listen on"
+                                 << bindAddresses.at(i).toString() << "port" << boundPort
+                                 << errStr;
+            }
+            // M6: Qt ownership (parented to this); it never listened.
+            extra->deleteLater();
             stop();
             emit errorOccurred(errStr);
             return false;
@@ -1297,9 +1310,40 @@ bool TciServer::start(const QList<QHostAddress>& bindAddresses, quint16 port)
         connect(extra, &QWebSocketServer::newConnection,
                 this, &TciServer::onNewConnection);
         m_extraServers.append(extra);
-        qCInfo(lcTci) << "TciServer: also listening on" << bindAddresses.at(i).toString()
-                      << "port" << boundPort;
+        if (m_quietListenAttempts) {
+            qCDebug(lcTci) << "TciServer: also listening on"
+                           << bindAddresses.at(i).toString() << "port" << boundPort;
+        } else {
+            qCInfo(lcTci) << "TciServer: also listening on"
+                          << bindAddresses.at(i).toString() << "port" << boundPort;
+        }
     }
+    return true;
+}
+
+bool TciServer::addListener(const QHostAddress& address)
+{
+    if (!m_server) {
+        return false;
+    }
+    const quint16 port = m_server->serverPort();
+    auto* extra = new QWebSocketServer(QStringLiteral("NereusSDR-TCI"),
+                                       QWebSocketServer::NonSecureMode, this);
+    if (!extra->listen(address, port)) {
+        if (m_quietListenAttempts) {
+            qCDebug(lcTci) << "TciServer: failed to listen on" << address.toString()
+                           << "port" << port << extra->errorString();
+        } else {
+            qCWarning(lcTci) << "TciServer: failed to listen on" << address.toString()
+                             << "port" << port << extra->errorString();
+        }
+        extra->deleteLater();   // Qt ownership; it never listened
+        return false;
+    }
+    connect(extra, &QWebSocketServer::newConnection, this, &TciServer::onNewConnection);
+    m_extraServers.append(extra);
+    qCInfo(lcTci) << "TciServer: also listening on" << address.toString() << "port" << port;
+    emit listenersChanged();
     return true;
 }
 
@@ -1342,11 +1386,17 @@ bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
     // Setup UI surfaces a tooltip warning when a non-loopback option is
     // selected.
     if (!m_server->listen(bindAddress, port)) {
-        qCWarning(lcTci) << "TciServer: failed to listen on"
-                         << bindAddress.toString() << "port" << port
-                         << m_server->errorString();
+        if (m_quietListenAttempts) {
+            qCDebug(lcTci) << "TciServer: failed to listen on" << bindAddress.toString()
+                           << "port" << port << m_server->errorString();
+        } else {
+            qCWarning(lcTci) << "TciServer: failed to listen on" << bindAddress.toString()
+                             << "port" << port << m_server->errorString();
+        }
         const QString errStr = m_server->errorString();
-        delete m_server;
+        // Qt ownership (parented to this): it never listened, so a later
+        // deletion holds nothing.
+        m_server->deleteLater();
         m_server = nullptr;
         emit errorOccurred(errStr);
         return false;
@@ -1355,7 +1405,11 @@ bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
     connect(m_server, &QWebSocketServer::newConnection,
             this, &TciServer::onNewConnection);
 
-    qCInfo(lcTci) << "TciServer: listening on" << m_server->serverPort();
+    if (m_quietListenAttempts) {
+        qCDebug(lcTci) << "TciServer: listening on" << m_server->serverPort();
+    } else {
+        qCInfo(lcTci) << "TciServer: listening on" << m_server->serverPort();
+    }
     emit serverStarted(m_server->serverPort());
 
     // From Thetis TCIServer.cs:2650-2654 [v2.10.3.13] — 20s server-driven ping
@@ -1474,16 +1528,25 @@ void TciServer::stop()
         updateRemoteReceiverDemand(rx);
     }
 
+    // Closed now, so the port is free at once and no connection arrives;
+    // the clients above were already closed and released. Qt deletes the
+    // server (parented to this) after the current event, or with this
+    // object when it goes.
     m_server->close();
-    delete m_server;
+    m_server->deleteLater();
     m_server = nullptr;
     for (QWebSocketServer* extra : std::as_const(m_extraServers)) {
+        // M6: closed now, so the port is free at once; Qt deletes it.
         extra->close();
-        delete extra;
+        extra->deleteLater();
     }
     m_extraServers.clear();
 
-    qCInfo(lcTci) << "TciServer: stopped";
+    if (m_quietListenAttempts) {
+        qCDebug(lcTci) << "TciServer: stopped";
+    } else {
+        qCInfo(lcTci) << "TciServer: stopped";
+    }
     emit serverStopped();
 }
 

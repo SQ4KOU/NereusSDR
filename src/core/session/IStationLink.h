@@ -100,10 +100,12 @@ public:
     struct CommandOutcome {
         bool sent = false;
         QString reason;
-        /// R-R3-22 fix wave: the id the command went out under, when sent
-        /// and the link numbers its commands (0 otherwise). Its result
-        /// arrives as RadioModel::stationCommandFinished with the same id,
-        /// so a sender can tell its own command's result apart.
+        /// The id the command went out under, when sent and the link
+        /// numbers its commands (0 otherwise). Its result arrives as
+        /// RadioModel::stationCommandFinished with the same id, so a sender
+        /// can tell its own command's result apart (the amp applets, the
+        /// TCI switch), and a page that sent it can claim the Core's
+        /// refusal (RadioModel::noteAccessoryRequestShownOnPage).
         quint32 commandId = 0;
     };
 
@@ -200,6 +202,10 @@ public:
     /// TCI here, so the window runs no TCI server of its own. Kept while the
     /// link is down (the Core keeps its server), false for another Core.
     virtual bool coreServesTciOnThisComputer() const { return false; }
+    /// Rework part 2 (R-R3-48): whether the Core keeps a station TCI switch
+    /// of its own yet (1), not yet (0: this window's switch seeds it), or
+    /// its settings have not arrived on this link (-1).
+    virtual int coreStationTciStored() const { return -1; }
 
     /// R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core shares its
     /// accessory records and settings (`accessoryData`) and takes these
