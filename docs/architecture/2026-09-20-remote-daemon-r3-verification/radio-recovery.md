@@ -108,7 +108,9 @@ recovery are not accepted. Private logs: `r3-recovery-native-build.log`,
 ## R-R3-27 seen live, 2026-09-23
 
 R-R3-27 (a Core started while its radio is not yet discoverable, then finds
-it) was observed live twice on 2026-09-23, from the controller's notes.
+it) was observed live twice on 2026-09-23. Source: the 2026-09-24 audit of
+the R3 plan's open items (the crew ledger's `r3-audit.md`, row for plan line
+1318).
 
 The first observation ran from about 08:24 to 08:35. Build `ac4c63aa` was
 installed while the G2's `p2app` was down. The Core ignored the other radio
@@ -118,15 +120,13 @@ found at 08:35:42, and audio played at 08:35:53, roughly eleven minutes after
 authentication. No Core or window restart occurred at any point in the
 interval.
 
-The same recovery was observed again that evening, at about 20:15, on build
-`44584133`, with the same result: the Core found the radio once it became
-discoverable and audio resumed, with no restart.
+The audit records a second observation that evening, at about 20:15, on
+build `44584133`. It records nothing more about that session.
 
-Both observations used code `55e7d49f` (the checkpoint installed above).
-This confirms the software recovery path described in this document holds
-under a real absent-then-present radio, closing the physical acceptance gap
-this document previously left open for R-R3-27 specifically. Still open: a
-slice-retention check against the window's own log for these two sessions,
-and physical radio-loss/resume acceptance for R-R3-29 (a radio that stops
+Both builds, `ac4c63aa` and `44584133`, contain the recovery code from
+`55e7d49f` (the checkpoint installed above). R-R3-27 has been observed twice;
+its acceptance still needs the slice-retention check against the window's own
+log for these sessions, so the plan box stays open. Separately open:
+physical radio-loss/resume acceptance for R-R3-29 (a radio that stops
 sending after an established connection, rather than one that is absent at
 start).

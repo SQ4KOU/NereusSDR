@@ -475,8 +475,9 @@ Still pending an operator or device observation:
 - Late-network boot recovery (R-R3-26), media loss with control still
   healthy (R-R3-28), and the radio stopping then resuming (R-R3-29), each on
   the actual boards. R-R3-27 (a Core started before its radio is
-  discoverable) was already seen live twice on 2026-09-23, 08:24-08:35 and
-  again at 20:15; see [radio-recovery.md](radio-recovery.md).
+  discoverable) was observed twice on 2026-09-23, 08:24-08:35 and again at
+  20:15; its acceptance still needs the slice-retention check from the
+  window's log; see [radio-recovery.md](radio-recovery.md).
 - A signed install and rollback repeated at the final checkpoint.
 - One-pan and four-pan on-wire budgets and delivered quality, including
   informal internet (Pi 4 over public IPv6) evidence.

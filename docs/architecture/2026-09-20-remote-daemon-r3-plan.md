@@ -1455,14 +1455,14 @@ rules, configuration sample and the R3 verification ledger.
   pass, including the full 698-test suite. Matching `55e7d49f` is installed;
   the GUI authenticated before radio arrival during normal startup, but actual
   absent-radio startup acceptance remains pending; established-radio loss is tested separately under R-R3-29.
-  HARDWARE-PENDING (seen live, not written up): code 55e7d49f. Seen twice on
-  2026-09-23: a Core started while its radio was down found it later and
-  played audio with no restart. First at build ac4c63aa, installed while the
-  G2's p2app was down; the Core ignored the other radio (.107), the window
-  authenticated at 08:24:43, the G2 was found at 08:35:42 and audio played
-  at 08:35:53. Again at build 44584133 (20:15). Recorded in
+  HARDWARE-PENDING (written up in radio-recovery.md): recovery code
+  55e7d49f. Observed twice on 2026-09-23. First at build ac4c63aa, installed
+  while the G2's p2app was down: the Core ignored the other radio (.107), the
+  window authenticated at 08:24:43, the G2 was found at 08:35:42 and audio
+  played at 08:35:53, with no restart. Again at build 44584133 (20:15); the
+  audit records nothing more about that session. Recorded in
   [radio-recovery.md](2026-09-20-remote-daemon-r3-verification/radio-recovery.md);
-  only a slice-retention check from the window's log remains.
+  acceptance still needs the slice-retention check from the window's log.
 - [ ] Install a signed checkpoint with a recoverable previous binary/library
   set, preserve private station configuration, and verify boot, clean stop,
   client reconnect and live media. Provide a launcher using private pairing
@@ -1520,5 +1520,5 @@ whole-plan review loops.
 | Second-pan RADE | R-R3-31 playback correction installed at signed `200d2a0e`; listening acceptance still open | Owning-slice routing, lifecycle guards, the upstream 4096-frame mixer correction, and demand-only admitted-packet release are installed. The burst/loss regression, consolidated review and 692 desktop tests pass. Ordinary receive has shown no further GUI underflow restart after startup recovery; the one-SSB/one-RADE operator check remains pending. Leaving RADE on both receivers resolved the earlier audible problem. Sender scheduling and sustained operation remain open; see [RADE verification](2026-09-20-remote-daemon-r3-verification/rade-multislice.md). |
 | Core banner and telemetry graphs | R-R3-32/33/35 installed; all three tabs and restart gaps observed live | Aether graph/history port uses fetched source `0dea0dd7`. Total/directional Core application traffic, separate Opus bandwidth and speaker buffering are visible in matching `3402d171`; RTT is separately labeled. All 696 desktop tests and native build passed. CPU/memory history and capture-to-playback latency remain follow-on work; see [design](2026-09-21-core-telemetry-design.md). |
 | Audio controls and diagnostics | R-R3-23 source complete for status/health/retry; task 5a items 2 and 3 open | Persistent codec/status/health display and Retry are implemented and evidenced; see [remote audio status verification](2026-09-20-remote-daemon-r3-verification/remote-audio-status.md). Fixed 24 kbit/s stereo is still active; the measured 24/48 comparison and any quality selector remain open. A selectable quality profile needs an acknowledged Core contract; no adaptive-rate claim. |
-| Boot and radio recovery | R-R3-26 installed; R-R3-27/29 installed in `55e7d49f`; physical acceptance open | All 698 executables pass. Normal restart exercised GUI authentication before Saturn I/Q arrival. The Rock then became unreachable by SSH/ping; host diagnosis, late-network boot and physical radio-loss recovery remain pending. R-R3-27 was seen live twice on 2026-09-23 (08:24-08:35 and again at 20:15): a Core started while its radio was down found it later and played audio with no restart. See [evidence](2026-09-20-remote-daemon-r3-verification/radio-recovery.md). |
+| Boot and radio recovery | R-R3-26 installed; R-R3-27/29 installed in `55e7d49f`; physical acceptance open | All 698 executables pass. Normal restart exercised GUI authentication before Saturn I/Q arrival. The Rock then became unreachable by SSH/ping; host diagnosis, late-network boot and physical radio-loss recovery remain pending. R-R3-27 was observed twice on 2026-09-23 (08:24-08:35 at build ac4c63aa, where a Core started while its radio was down found it later and played audio with no restart, and again at 20:15 at build 44584133); acceptance still needs the slice-retention check. See [evidence](2026-09-20-remote-daemon-r3-verification/radio-recovery.md). |
 | R3 completion plan and 2026-09-23 hotfix plans | Stacked on this plan, third lane worktree, branch codex/remote-filter-policy | The 2026-09-24 R3 completion plan (docs/architecture/2026-09-24-r3-completion-plan.md) closed the amplifier applets' Disconnect/Reconnect in a remote window (Task 1, 16ba6687), corrected the Network Watchdog setting to follow Thetis source (Task 2, f92f19db), and added the VAX page's remote-audio-compressed note (Task 3, c236a9a0). The 2026-09-23 plans delivered, ahead of this plan's own boxes: the R3 NR3 model crash hotfix, the R3 controls-that-work plan and its fix wave, the R3 receiver-load hotfix, the R3 unfinished-controls plan and its fix wave, the R3 remote zoom-flash hotfix (25df3195, closing part of the D1 crop/zoom box above), the R3 remote radio hardware plan's Task 6, and the R3 Linux suite fixes plan (the two flakes closed in 8f8ae6d6, 5766dd36, 93567686, credited above against the full-suite gate row). |
