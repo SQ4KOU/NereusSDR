@@ -382,6 +382,22 @@ void AboutDialog::buildUI()
 
     mainLayout->addLayout(cardRow);
 
+    // R-R3-50: the other libraries NereusSDR is built with, named in the
+    // same plain words as the cards above. Their licence texts ship in the
+    // licenses folder (packaging/third-party-licenses/README.md lists each).
+    mainLayout->addSpacing(8);
+    // §D exception: #aabbcc matches the card subtitle colour above.
+    auto* alsoBuiltWith = new QLabel(
+        QStringLiteral("Also built with RADE, Opus, PortAudio, r8brain, rnnoise, "
+                       "DeepFilterNet, libspecbleach, libdatachannel, libjuice, "
+                       "usrsctp, libsrtp, plog, nlohmann json, OpenSSL and zlib. "
+                       "Their licences ship with NereusSDR in its licenses folder."),
+        this);
+    alsoBuiltWith->setAlignment(Qt::AlignCenter);
+    alsoBuiltWith->setWordWrap(true);
+    alsoBuiltWith->setStyleSheet(QStringLiteral("color: #aabbcc; font-size: 11px;"));  // §D exception
+    mainLayout->addWidget(alsoBuiltWith);
+
     // ── Divider ─────────────────────────────────────────────────────────
     auto* div3 = new QFrame(this);
     div3->setFrameShape(QFrame::HLine);
