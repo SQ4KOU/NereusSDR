@@ -387,8 +387,14 @@ or spectrum. Reboot/reconnect passed earlier at `daf05135`; a new reboot at
 - [Pinned transport build and two-peer probe](transport-probe.md): encrypted
   display and RTP exchange and stop/recreate passed in the standalone harness.
   Production Qt transport and MediaPeer tests now pass, including callback
-  retirement during stop/restart/deletion. Real on-wire MTU verification remains
-  pending. The selected libjuice backend lacks TURN/TCP and TURN/TLS; see the
+  retirement during stop/restart/deletion. The loopback probe passed two
+  rounds at MTU 1000 (transport-probe.md:86-88); RTP packets are capped at
+  940 bytes before encryption (OpusAudioCodec.h:26, PcmAudioCodec.h:41,
+  refused oversize at LibDataChannelMediaTransport.cpp:770, from ea55d24a).
+  A packet capture of the encrypted audio (Opus 24k, Opus 48k and Lossless)
+  showing every packet at 1000 bytes or less remains pending; only the
+  display capture exists so far (969 bytes). The selected libjuice backend
+  lacks TURN/TCP and TURN/TLS; see the
   [plan's network continuity section](../2026-09-20-remote-daemon-r3-plan.md#network-decisions-carried-forward).
 - [Opus source/packet probe](opus-profile-probe.txt) and
   [fixture source](opus-profile-probe.c): how high the sound reaches follows
@@ -422,10 +428,60 @@ or spectrum. Reboot/reconnect passed earlier at `daf05135`; a new reboot at
 
 ## Operator acceptance still pending
 
-Live remote spectrum and 2D/3D waterfall, real stereo listening, four-pan and
-two-tier capacity, independent-clock stability, measured total bandwidth,
-two-hour hardware audio soak, and fresh installation/reconnect with media.
-Internet carrier and CGNAT-to-CGNAT evidence remain separate network gates.
+Refreshed against the 2026-09-24 read-only audit of the R3 plan's unchecked
+boxes.
+
+The two-hour hardware audio soak is superseded: the operator decided on
+2026-09-23 at 09:50 that soak runs are removed as gates. The periodic
+counters remain (38f79249, the 60 s log line), but no gate depends on them.
+
+Still pending an operator or device observation:
+
+- Loopback or Rock packet-size capture of the encrypted audio codecs (Opus
+  24k, Opus 48k, Lossless) at 1000 bytes or less; only the display capture
+  exists so far (969 bytes).
+- Wideband wings and the optional 3D row: largest frame size and fragment
+  count on the Rock at 4096 points, 60 fps, 3D on; real zoom and wing
+  gestures including a slice shared with another window; the wideband
+  frame freshness limit, pending the Saturn's real burst cadence.
+- Connections screen entry points: each click starts exactly one Core
+  attempt; a manual Disconnect does not redial; first connection, Core
+  unreachable, retry backoff, cancel, Core recovered, Core up with radio
+  down, and a manual Disconnect after a good session.
+- Persistent Core identity and retry/error wording; queue item C (what a
+  permanently refused or taken-over window shows) is still undecided.
+- Station selection: LAN announcements (IPv4 and IPv6), switching between
+  the local radio and the Rock with real display and audio, add/edit/forget,
+  and Core online with radio offline.
+- Slice-flag lifetime while a pan shrinks and the Core keeps sending AGC
+  updates.
+- TX-entry-point disabled-state wording review at an operator checkpoint.
+- Tuner Genius (TGXL) real connection from the Rock: the connection to
+  .234:9010 still hangs half-open; a network check of the Rock's route and
+  interface comes first.
+- Measured Core-to-client audio latency readout on the Rock with a real
+  speaker; the Network Diagnostics tab labels, connected and disconnected.
+- A real two-slice Core stop/start and window reconnect with the same IDs.
+- Opus profile listening (24 vs 48 kbit/s) with Rock CPU and wire bytes; the
+  acknowledged-configuration Lossless path carried to the Rock.
+- The RADE two-pan smoke test (A on SSB, B on RADE-U).
+- Session display budget under one, four, floating and shared-stream pans on
+  the Rock.
+- Full-span and deep-zoom capacity measurement on the Rock and the Pi 4 (the
+  Pi 4 cannot yet be upgraded to current code; its installer refuses an
+  existing install).
+- The final combined gate: the full desktop suite once more at the merged
+  head, plus ARM-sensitive tests and a staged Linux install.
+- Late-network boot recovery (R-R3-26), media loss with control still
+  healthy (R-R3-28), and the radio stopping then resuming (R-R3-29), each on
+  the actual boards. R-R3-27 (a Core started before its radio is
+  discoverable) was already seen live twice on 2026-09-23, 08:24-08:35 and
+  again at 20:15; see [radio-recovery.md](radio-recovery.md).
+- A signed install and rollback repeated at the final checkpoint.
+- One-pan and four-pan on-wire budgets and delivered quality, including
+  informal internet (Pi 4 over public IPv6) evidence.
+
+Internet carrier and CGNAT-to-CGNAT evidence remain separate R5 gates.
 
 ## Consolidated display-checkpoint review
 
