@@ -5,11 +5,15 @@
 // nereus-audio-capture helper (R-R3-36): the real helper re-executed from
 // this binary with --capture-helper, and the scripted fake re-executed
 // with --fake-capture-child <scenario>.  No test opens a real microphone:
-// the real helper is only ever asked for a device that does not exist.
+// the helper child is a test run, so it never initialises PortAudio and
+// answers from a test device list.
 //
 // Modification history (NereusSDR):
 //   2026-09-22: J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-24: R-R3-21: the helper child answers from a test device list
+//               and never initialises PortAudio. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -34,6 +38,10 @@ namespace P = NereusSDR::CaptureProtocol;
 namespace {
 
 const QString kMissingDevice = QStringLiteral("NereusSDR test device that does not exist");
+// R-R3-21: the helper child is this binary re-run, so it is a test run too
+// and never initialises PortAudio. main() hands it this device list, which
+// it answers from in place of the computer's real devices.
+const QString kListedDevice = QStringLiteral("NereusSDR test microphone");
 
 // One child process plus an incremental record reader over its stdout.
 class Child {
@@ -147,6 +155,39 @@ private slots:
         QVERIFY(!hello->build.isEmpty());
         QVERIFY2(elapsed < 3000, qPrintable(QStringLiteral("hello after %1 ms").arg(elapsed)));
         qInfo("hello after %lld ms, build %s", elapsed, qPrintable(hello->build));
+    }
+
+    // R-R3-21: a device on the test list is found but never opened: a test
+    // run touches no real audio device.
+    void helperInATestRunOpensNoDevice()
+    {
+        Child helper;
+        QVERIFY(helper.start({QStringLiteral("--capture-helper")}));
+        QVERIFY(helper.next(3000).has_value());
+        helper.send(configureRecord(4, kListedDevice));
+        helper.send(openRecord(4));
+        std::optional<P::Status> failed;
+        while (!failed) {
+            const auto status = helper.nextStatus(10000);
+            QVERIFY2(status.has_value(), helper.diagnostics().constData());
+            QCOMPARE(status->generation, 4u);
+            QVERIFY2(status->state != P::HelperState::Ready, "a test run must never open a device");
+            QVERIFY2(status->state != P::HelperState::Permission,
+                     "the test process would have raised an OS permission prompt");
+            if (status->state == P::HelperState::Failed) {
+                failed = status;
+            } else {
+                QCOMPARE(status->state, P::HelperState::Opening);
+            }
+        }
+        QVERIFY(failed->reason == P::FailReason::OpenFailed
+                || failed->reason == P::FailReason::PermissionDenied);
+        if (failed->reason == P::FailReason::OpenFailed) {
+            QCOMPARE(failed->detail, QStringLiteral("a test run opens no audio device"));
+        }
+        helper.send(P::encodeShutdown());
+        QVERIFY(helper.finishes(3000));
+        QCOMPARE(helper.process().exitCode(), 0);
     }
 
     void helperReportsMissingNamedDevice()
@@ -382,6 +423,7 @@ private slots:
 int main(int argc, char* argv[])
 {
     if (argc > 1 && std::strcmp(argv[1], "--capture-helper") == 0) {
+        NereusSDR::setCaptureHelperTestDevices({kListedDevice});
         return captureHelperEntryPointForTest(argc - 1, argv + 1);
     }
     if (argc > 2 && std::strcmp(argv[1], "--fake-capture-child") == 0) {
