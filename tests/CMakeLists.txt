@@ -2746,6 +2746,11 @@ nereus_add_test(tst_tx_cfc_dialog)
 # NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
 nereus_add_test(tst_tx_applet_mon)
 
+# R-R3-45: the SPEAKERS / PHONES choice beside MON on the TX applet, and the
+# plain notice when the headphones are chosen and not open.
+nereus_add_test(tst_tx_applet_mon_output)
+target_compile_definitions(tst_tx_applet_mon_output PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1a H.4: PowerPage wiring — Max Power, per-band Tune Power, ATT-on-TX ──
 # (class renamed from PowerPaPage in IA reshape Phase 6, 2026-05-02; test
 #  filename retains 'power_pa_page' for git history continuity)
@@ -3946,6 +3951,13 @@ nereus_add_test(tst_audio_engine_tx_monitor_state)
 # Pre-code review §4.3 + §4.4.
 nereus_add_test(tst_audio_engine_tx_monitor_block)
 target_compile_definitions(tst_audio_engine_tx_monitor_block PRIVATE NEREUS_BUILD_TESTS)
+
+# R-R3-45 (operator decision 2026-09-24): MON plays on the speakers or the
+# headphones, the operator's choice (audio/TxMonitor/Output, default
+# speakers). Default, saving, each route, a live change without doubling,
+# and MON never in the anti-VOX reference.
+nereus_add_test(tst_audio_engine_tx_monitor_output)
+target_compile_definitions(tst_audio_engine_tx_monitor_output PRIVATE NEREUS_BUILD_TESTS)
 
 # Plan: 3M-1b E.4. Exercises AudioEngine::rxBlockReady MOX gate —
 # the RX-leak-during-MOX fold that fixes the PR #144 cosmetic regression.

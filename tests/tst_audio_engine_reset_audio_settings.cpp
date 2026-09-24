@@ -87,6 +87,8 @@ private slots:
     void emitsSpeakersConfigChanged();
     void emitsVaxConfigChangedForAllChannels();
     void emitsAudioSettingsReset();
+    // R-R3-45: the MON output choice goes with the rest.
+    void putsTheMonitorBackOnTheSpeakers();
 
 private:
     int m_opened{0};   // fake devices made by the engines under test
@@ -328,6 +330,26 @@ void TstAudioEngineResetAudioSettings::emitsAudioSettingsReset()
     engine->resetAudioSettings();
 
     QCOMPARE(spy.count(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-45: resetting the audio settings puts MON back on the speakers,
+// announces it, and does not write the key straight back.
+void TstAudioEngineResetAudioSettings::putsTheMonitorBackOnTheSpeakers()
+{
+    auto& s = AppSettings::instance();
+    RadioModel radio;
+    useFakeDevices(radio.audioEngine(), &m_opened);
+    radio.audioEngine()->setTxMonitorOutput(TxMonitorOutput::Headphones);
+    QCOMPARE(s.value(QStringLiteral("audio/TxMonitor/Output")).toString(),
+             QStringLiteral("Headphones"));
+
+    QSignalSpy spy(radio.audioEngine(), &AudioEngine::txMonitorOutputChanged);
+    radio.audioEngine()->resetAudioSettings();
+
+    QCOMPARE(radio.audioEngine()->txMonitorOutput(), TxMonitorOutput::Speakers);
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(!s.contains(QStringLiteral("audio/TxMonitor/Output")));
 }
 
 QTEST_MAIN(TstAudioEngineResetAudioSettings)

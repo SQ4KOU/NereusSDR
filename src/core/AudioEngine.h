@@ -21,6 +21,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-24 : R-R3-45 transmit monitor output by J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code. MON plays on the
+//                 speakers or the headphones, the operator's own choice,
+//                 saved as audio/TxMonitor/Output (this computer's setting).
 //   2026-09-24 : vaxBusOpenChanged signal (R-R3-49, R-R3-21) by J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-23 : R-R3-45 Task 2 by J.J. Boyd (KG4VCF), AI-assisted via
@@ -189,6 +193,11 @@ class SliceModel;
 // plays on. The speakers carry master volume and mute; the headphones
 // carry neither (VAX design 6.3).
 enum class RemotePlaybackOutput : int { Speakers = 0, Headphones = 1 };
+
+// R-R3-45: where the transmit monitor (MON) plays, chosen by the operator
+// beside the MON button. Independent of the receivers' own routes: MON is
+// how you sound on air, and it goes where you want to hear it.
+enum class TxMonitorOutput : int { Speakers = 0, Headphones = 1 };
 
 class MasterMixAudioTap {
 public:
@@ -789,6 +798,29 @@ public:
     void setTxMonitorVolume(float volume);
     float txMonitorVolume() const { return m_txMonitorVolume.load(std::memory_order_acquire); }
 
+    /// R-R3-45: where MON plays, the speakers (default, as before) or the
+    /// headphones. Main thread: stores the atomic the audio thread reads in
+    /// txMonitorBlockReady, saves audio/TxMonitor/Output ("Speakers" or
+    /// "Headphones"), and emits txMonitorOutputChanged on change. The mixer
+    /// crossfades the monitor from one output to the other over its ramp,
+    /// so a change while transmitting neither gaps nor doubles.
+    ///
+    /// With the headphones chosen and no headphones output open, MON is
+    /// heard nowhere; the control beside MON says why (headphonesAvailable).
+    ///
+    /// R4 seam: on the Core this setter decides where the Core's MON goes,
+    /// and a MON routed to the headphones lands in the headphones mix that
+    /// setHeadphonesMixAudioTap() hands a remote window. When remote
+    /// transmit lands, a remote window's choice reaches the Core through a
+    /// session command calling this setter.
+    void setTxMonitorOutput(TxMonitorOutput output);
+    TxMonitorOutput txMonitorOutput() const
+    {
+        return m_txMonitorToHeadphones.load(std::memory_order_acquire)
+            ? TxMonitorOutput::Headphones
+            : TxMonitorOutput::Speakers;
+    }
+
     // Per-channel VAX controls (Sub-Phase 9 Task 9.2a). Main-thread writes,
     // audio-thread reads, via std::atomic — matches the setVolume /
     // m_masterVolume handshake. `channel` is 1..4; out-of-range calls are
@@ -909,6 +941,8 @@ signals:
     // Plan: 3M-1b E.2. Pre-code review §4.4.
     void txMonitorEnabledChanged(bool enabled);
     void txMonitorVolumeChanged(float volume);
+    // R-R3-45: the MON output choice changed.
+    void txMonitorOutputChanged(NereusSDR::TxMonitorOutput output);
     void vaxRxGainChanged(int channel, float gain);
     void vaxMutedChanged(int channel, bool muted);
     void vaxTxGainChanged(float gain);
@@ -1220,6 +1254,10 @@ private:
     // for the aaudio mix path; NereusSDR exposes this as user-adjustable
     // volume (pre-code review §4.4). Not a port; AudioEngine is NereusSDR-native.
     std::atomic<float> m_txMonitorVolume{0.5f};
+    // R-R3-45: MON on the headphones sum instead of the speakers. Written
+    // by setTxMonitorOutput() on the main thread, read by
+    // txMonitorBlockReady() on the audio thread.
+    std::atomic<bool>  m_txMonitorToHeadphones{false};
 
     // Sub-Phase 9 Task 9.2a — per-channel VAX rx gain / mute and master
     // VAX tx gain. Main-thread writes via set*() setters, DSP-thread
