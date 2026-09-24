@@ -317,9 +317,24 @@ private slots:
     {
         WdspChannelLoad load{};
         QCOMPARE(GetChannelDspLoad(kChannel, &load), 0);
+        // The hold is steady while the worker keeps running its blocks:
+        // every read while held is flagged, not only most of them.
         WDSPSetTestHoldLoadPair(kChannel, 1);
-        const int held = GetChannelDspLoad(kChannel, &load);
+        const auto until = Clock::now() + std::chrono::milliseconds(500);
+        int reads = 0;
+        int unflagged = 0;
+        int held = 1;
+        while (Clock::now() < until) {
+            const int result = GetChannelDspLoad(kChannel, &load);
+            ++reads;
+            if (result != 1) {
+                ++unflagged;
+                held = result;
+            }
+        }
         WDSPSetTestHoldLoadPair(kChannel, 0);
+        QVERIFY2(unflagged == 0, qPrintable(QStringLiteral("%1 of %2 reads not flagged")
+                                                .arg(unflagged).arg(reads)));
         QCOMPARE(held, 1);
         QVERIFY(load.readNs > 0);
         QCOMPARE(GetChannelDspLoad(kChannel, &load), 0);

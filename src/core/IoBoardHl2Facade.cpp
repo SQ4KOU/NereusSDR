@@ -13,6 +13,8 @@
 // Modification history (NereusSDR):
 //   2026-09-23  J.J. Boyd / KG4VCF  Created (R-R3-46 fix wave). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  clearRemoteValues (follow-up). AI-
+//                                    assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/IoBoardHl2Facade.h"
@@ -125,6 +127,23 @@ bool IoBoardHl2Facade::applyRemoteProperty(const QByteArray& property, const QVa
     }
     pushToTarget();
     return true;
+}
+
+void IoBoardHl2Facade::clearRemoteValues()
+{
+    if (isBound()) {
+        return;
+    }
+    const bool wasDetected = m_detected;
+    const bool hadVersion = m_hardwareVersion != 0;
+    const bool hadRegisters = m_registers != Registers{};
+    m_detected = false;
+    m_hardwareVersion = 0;
+    m_registers = Registers{};
+    if (wasDetected) { emit detectedChanged(false); }
+    if (hadVersion) { emit hardwareVersionChanged(0); }
+    if (hadRegisters) { emit registersChanged(registers()); }
+    pushToTarget();
 }
 
 void IoBoardHl2Facade::refresh()

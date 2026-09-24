@@ -28,6 +28,8 @@
 // Modification history (NereusSDR):
 //   2026-09-23  J.J. Boyd / KG4VCF  Created (R-R3-46 fix wave). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  clearRemoteValues (follow-up). AI-
+//                                    assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -70,6 +72,11 @@ public:
     /// A remote window: a value the Core reports. False for any other name,
     /// and always false while bound.
     bool applyRemoteProperty(const QByteArray& property, const QVariant& value);
+
+    /// A remote window whose Core does not offer the object: forget the
+    /// last Core's board (not detected, version 0, registers 0), in the
+    /// held values and the target board. A no-op while bound.
+    void clearRemoteValues();
 
     bool detected() const { return m_detected; }
     int hardwareVersion() const { return m_hardwareVersion; }

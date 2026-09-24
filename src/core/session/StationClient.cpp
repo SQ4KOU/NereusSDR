@@ -1666,6 +1666,9 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         } else {
             m_objects.remove("ioBoard");
             m_outboundMirror->unwatch("ioBoard");
+            // Follow-up item 5: the window's board shows no Core's board
+            // it cannot follow (a previous Core's readings would stay).
+            ioBoard->clearRemoteValues();
         }
     }
 

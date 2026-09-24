@@ -127,7 +127,8 @@ boydsoftprez@gmail.com
 //                 at rest (the read may be torn; the caller skips it), and
 //                 the test-only WDSPSetTestHoldLoadPair added by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
-//                 Claude Code (R-R3-40).
+//                 Claude Code (R-R3-40). 2026-09-24: the hold is a flag the
+//                 reader checks, steady whatever the worker does.
 // =================================================================
 
 #include "comm.h"
@@ -649,7 +650,10 @@ int GetChannelDspLoad (int channel, WdspChannelLoad* out)
 			busy = load_read64 (&load_busy_ns[channel]);
 			start = load_read64 (&block_start_ns[channel]);
 			now_ns = (long long)dsplock_now_ns ();
-			if ((before & 1) == 0 && load_read64 (&load_seq[channel]) == before)
+			// A test hold (WDSPSetTestHoldLoadPair) makes every attempt
+			// find the pair changing, steadily, whatever the worker does.
+			if ((before & 1) == 0 && load_read64 (&load_seq[channel]) == before
+				&& load_read32 (&test_load_pair_held[channel]) == 0)
 			{
 				break;
 			}
@@ -678,18 +682,10 @@ void WDSPSetTestHoldLoadPair (int channel, int hold)
 	{
 		return;
 	}
-	// Opens (odd) or closes (even) the channel's load pair as the worker's
-	// load_seq_step does, so a read in between finds a change in progress.
-	// The worker's own steps come in pairs, so the parity it leaves is this
-	// hook's.
-	if (hold && InterlockedExchange (&test_load_pair_held[channel], 1L) == 0)
-	{
-		load_seq_step (channel);
-	}
-	else if (!hold && InterlockedExchange (&test_load_pair_held[channel], 0L) != 0)
-	{
-		load_seq_step (channel);
-	}
+	// Read by GetChannelDspLoad only; the worker's sequence is untouched, so
+	// the hold is steady (a parity trick on load_seq was not: the worker's
+	// own steps briefly made it even again).
+	InterlockedExchange (&test_load_pair_held[channel], hold ? 1L : 0L);
 }
 
 PORT

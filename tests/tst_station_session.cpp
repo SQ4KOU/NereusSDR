@@ -389,6 +389,7 @@ private slots:
     void ioBoardProbeIsAskedOfTheCore();
     void windowBandAntennaEditKeepsTheCoresNewerBands();
     void windowShowsTheCoresIoBoard();
+    void windowForgetsTheIoBoardOfACoreThatDoesNotOfferIt();
     void windowOcMatrixFollowsTheCore();
     void hardwareConfigRx1RateGoesToTheCoresFirstReceiver();
 
@@ -6150,6 +6151,44 @@ void TstStationSession::windowShowsTheCoresIoBoard()
                                                QByteArray(name)), name);
     }
     QVERIFY(OperatorWording::isPlain(IoBoardHl2Facade::readOnlyReason()));
+}
+
+void TstStationSession::windowForgetsTheIoBoardOfACoreThatDoesNotOfferIt()
+{
+    // R-R3-46 follow-up item 5. A window that showed one Core's I/O board
+    // and then joins a Core that does not offer `ioBoard` (below
+    // radioHardwareVersion 3) no longer shows the first Core's board.
+    RadioModel remote(RadioModel::Role::Remote);
+    IoBoardHl2Facade* facade = remote.ioBoardFacade();
+    QVERIFY(facade->applyRemoteProperty("hardwareVersion", int(IoBoardHl2::kHardwareVersion1)));
+    QString registers(IoBoardHl2Facade::kRegisterCount * 2, QLatin1Char('0'));
+    registers.replace(int(IoBoardHl2::Register::REG_FIRMWARE_MAJOR) * 2, 2, QStringLiteral("02"));
+    QVERIFY(facade->applyRemoteProperty("registers", registers));
+    QVERIFY(facade->applyRemoteProperty("detected", true));
+    QVERIFY(remote.ioBoard().isDetected());
+    QCOMPARE(remote.ioBoard().registerValue(IoBoardHl2::Register::REG_FIRMWARE_MAJOR), quint8(0x02));
+
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    auto* station = new LoopbackTransport(QStringLiteral("io-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("io-client"), this);
+    station->linkTo(peer);
+    client.startSession(peer, QStringLiteral("test-token"));
+    station->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("station"))));
+    station->sendText(SessionMessages::encode(SessionMessages::authResult(true, {}, false)));
+    StationCapabilities caps;
+    caps.propertyResultVersion = 1;
+    caps.radioIdentityEntries = true;
+    caps.radioHardwareVersion = 2;
+    station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
+    station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
+    QTRY_VERIFY(client.isHandshakeComplete());
+
+    QVERIFY(!remote.ioBoard().isDetected());
+    QCOMPARE(remote.ioBoard().hardwareVersion(), quint8(0));
+    QCOMPARE(remote.ioBoard().registerValue(IoBoardHl2::Register::REG_FIRMWARE_MAJOR), quint8(0));
+    QVERIFY(!facade->detected());
 }
 
 void TstStationSession::windowOcMatrixFollowsTheCore()
