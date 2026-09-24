@@ -429,11 +429,11 @@ void SetupDialog::setTciServer(NereusSDR::TciServer* server)
     }
 }
 
-void SetupDialog::setReceiverAudioCompressed(bool compressed)
+void SetupDialog::setReceiverAudioNote(RemoteReceiverAudioNote note)
 {
-    m_receiverAudioCompressed = compressed;
+    m_receiverAudioNote = note;
     if (m_vaxPage) {
-        m_vaxPage->setReceiverAudioCompressed(compressed);
+        m_vaxPage->setReceiverAudioNote(note);
     }
 }
 
@@ -1175,7 +1175,7 @@ void SetupDialog::buildTree()
                      auto* vaxPage = new AudioVaxPage(m_model);
                      // R-R3-43 / R-R3-44: the compressed-audio note's state.
                      m_vaxPage = vaxPage;
-                     vaxPage->setReceiverAudioCompressed(m_receiverAudioCompressed);
+                     vaxPage->setReceiverAudioNote(m_receiverAudioNote);
                      return wrapWithAudioBackendStrip(vaxPage);
                  });
     // R-R3-42: Audio > TCI configures the TCI server that runs on this

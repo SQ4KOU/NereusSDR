@@ -48,10 +48,16 @@
 //                that Lossless avoids it (setReceiverAudioCompressed, pushed
 //                by MainWindow through SetupDialog). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24: R-R3-43 / R-R3-44 fix wave: setReceiverAudioNote replaces
+//                setReceiverAudioCompressed; with Lossless chosen but not
+//                running the note says the connection cannot carry it right
+//                now. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
 // =================================================================
 
 #include "core/audio/VirtualCableDetector.h"
 #include "gui/HGauge.h"
+#include "gui/RemoteReceiverAudioNote.h"
 #include "gui/SetupPage.h"
 #include "gui/setup/DeviceCard.h"
 
@@ -244,11 +250,13 @@ public:
         return nullptr;
     }
 
-    // R-R3-43 / R-R3-44: true while this is a remote window whose receiver
-    // streams (the ones feeding VAX) are Opus rather than lossless; shows
-    // the compressed-audio note. False (the default, and always in a local
+    // R-R3-43 / R-R3-44: in a remote window whose receiver streams (the
+    // ones feeding VAX) are Opus rather than lossless, shows the
+    // compressed-audio note: with Opus chosen it points to the Lossless
+    // choice; with Lossless chosen but not running it says the connection
+    // cannot carry it right now. None (the default, and always in a local
     // window) hides it. SetupDialog forwards MainWindow's live value.
-    void setReceiverAudioCompressed(bool compressed);
+    void setReceiverAudioNote(RemoteReceiverAudioNote note);
     bool compressedAudioNoteShown() const;
     QString compressedAudioNoteText() const;
 

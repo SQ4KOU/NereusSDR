@@ -16,6 +16,7 @@
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "gui/AudioClockEstimator.h"
+#include "gui/RemoteReceiverAudioNote.h"
 
 #include <QHash>
 #include <QList>
@@ -135,6 +136,13 @@ QString remoteAudioQualityText(const RemoteAudioStatus& status);
 /// running receiver stream uses, else what the Core runs for the speakers,
 /// else the choice itself.
 bool remoteReceiverAudioIsCompressed(const RemoteAudioStatus& status);
+
+/// R-R3-43 / R-R3-44: which note Setup > Audio > VAX shows about the
+/// receiver streams (see RemoteReceiverAudioNote.h). None whenever
+/// receiverAudioNegotiated is false: the Core sends no receiver streams, so
+/// VAX is not fed from it.
+RemoteReceiverAudioNote remoteReceiverAudioNote(const RemoteAudioStatus& status,
+                                                bool receiverAudioNegotiated);
 
 /// The Core connection panel's "Remote audio" section, one line per item
 /// joined with '\n': headline, problem (only when status.problem is set),

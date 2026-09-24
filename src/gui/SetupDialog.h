@@ -20,6 +20,8 @@
 #include <QPointer>
 #include <QSet>
 
+#include "gui/RemoteReceiverAudioNote.h"
+
 #include <functional>
 #include <vector>
 
@@ -98,10 +100,11 @@ public:
     void setTciServer(class NereusSDR::TciServer* server);
 
     // R-R3-43 / R-R3-44: whether this remote window's receiver streams (the
-    // ones feeding VAX) are Opus rather than lossless. MainWindow pushes it
-    // live; the Audio > VAX page shows its compressed-audio note while true.
-    // Never pushed in a local window, where it stays false.
-    void setReceiverAudioCompressed(bool compressed);
+    // ones feeding VAX) are Opus rather than lossless, and why (the choice,
+    // or Lossless chosen but not running). MainWindow pushes it live; the
+    // Audio > VAX page shows its compressed-audio note while it is not None.
+    // Never pushed in a local window, where it stays None.
+    void setReceiverAudioNote(RemoteReceiverAudioNote note);
 
 public:
     // R-R3-21: the S-meter's face, peak hold or decay changed (its
@@ -314,9 +317,9 @@ private:
     // itself and never destroys it independently, so it outlives this dialog.
     TciServer* m_pendingTciServer = nullptr;
 
-    // R-R3-43 / R-R3-44: the value setReceiverAudioCompressed() last got,
+    // R-R3-43 / R-R3-44: the value setReceiverAudioNote() last got,
     // replayed into the VAX page when it is realized.
-    bool m_receiverAudioCompressed = false;
+    RemoteReceiverAudioNote m_receiverAudioNote = RemoteReceiverAudioNote::None;
     QPointer<AudioVaxPage> m_vaxPage;
 
     // Phase 8 of #167: PA category nav-tree root + 3 child items, plus

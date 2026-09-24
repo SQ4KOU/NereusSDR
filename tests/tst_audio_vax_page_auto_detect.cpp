@@ -38,6 +38,7 @@
 #include "core/audio/VirtualCableDetector.h"
 #include "gui/setup/AudioVaxPage.h"
 #include "OperatorWording.h"
+#include "gui/RemoteAudioStatus.h"
 
 using namespace NereusSDR;
 
@@ -593,7 +594,9 @@ private slots:
     // R-R3-43 / R-R3-44 / R-R3-21: the compressed-audio note. Absent by
     // default (a local window, or lossless), shown while the receiver
     // streams are Opus, hidden again when they are lossless. Plain words
-    // that name the cost and the Lossless choice; no cite inside.
+    // that name the cost; no cite inside. With Opus chosen it points to
+    // the Lossless choice; with Lossless chosen but not running (a
+    // fallback) it says the connection cannot carry it right now instead.
     void compressedAudioNoteFollowsTheReceiverStreams()
     {
         AudioVaxPage page(nullptr);
@@ -602,22 +605,39 @@ private slots:
         QVERIFY(note != nullptr);
         QVERIFY(note->isHidden());
 
-        page.setReceiverAudioCompressed(true);
+        page.setReceiverAudioNote(RemoteReceiverAudioNote::OpusChosen);
         QVERIFY(page.compressedAudioNoteShown());
         QVERIFY(!note->isHidden());
-        page.setReceiverAudioCompressed(false);
+        page.setReceiverAudioNote(RemoteReceiverAudioNote::None);
         QVERIFY(!page.compressedAudioNoteShown());
         QVERIFY(note->isHidden());
 
-        const QString text = page.compressedAudioNoteText();
-        QCOMPARE(text, QStringLiteral(
+        page.setReceiverAudioNote(RemoteReceiverAudioNote::OpusChosen);
+        const QString opusText = page.compressedAudioNoteText();
+        QCOMPARE(opusText, QStringLiteral(
             "Receiver audio from the Core is compressed (Opus), so the weakest "
             "digital-mode signals may not decode. Set Audio quality to Lossless "
             "in Core connection if your network can carry it."));
-        QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
-        QVERIFY(!text.contains(QChar(0x2014)));
-        QVERIFY(!text.contains(QLatin1String("docs/")));
-        QVERIFY(!text.contains(QLatin1String(".md")));
+
+        page.setReceiverAudioNote(RemoteReceiverAudioNote::LosslessUnavailable);
+        QVERIFY(page.compressedAudioNoteShown());
+        const QString fallbackText = page.compressedAudioNoteText();
+        QCOMPARE(fallbackText, QStringLiteral(
+            "Receiver audio from the Core is compressed (Opus): Lossless is chosen, "
+            "but this connection cannot carry it right now. The weakest "
+            "digital-mode signals may not decode."));
+        QVERIFY(!fallbackText.contains(QLatin1String("Set Audio quality")));
+
+        // Back to Opus chosen: today's text again.
+        page.setReceiverAudioNote(RemoteReceiverAudioNote::OpusChosen);
+        QCOMPARE(page.compressedAudioNoteText(), opusText);
+
+        for (const QString& text : {opusText, fallbackText}) {
+            QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+            QVERIFY(!text.contains(QChar(0x2014)));
+            QVERIFY(!text.contains(QLatin1String("docs/")));
+            QVERIFY(!text.contains(QLatin1String(".md")));
+        }
     }
 };
 

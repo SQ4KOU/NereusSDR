@@ -1298,9 +1298,9 @@ void MainWindow::ensureRemoteSession()
         // R-R3-43 / R-R3-44: the VAX page's compressed-audio note follows
         // the quality choice and its fallback while Setup is open.
         connect(m_remoteMedia, &RemoteMediaController::audioStatusChanged, this, [this] {
-            const bool compressed = remoteReceiverAudioCompressed();
+            const RemoteReceiverAudioNote note = remoteReceiverAudioNoteNow();
             for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
-                dialog->setReceiverAudioCompressed(compressed);
+                dialog->setReceiverAudioNote(note);
             }
         });
         connect(m_remoteMedia, &RemoteMediaController::recoveryRequested,
@@ -11165,7 +11165,7 @@ SetupDialog* MainWindow::createSetupDialog()
     dialog->setTransmitPermitted(transmitControlsPermitted(),
         tr("Remote transmit controls are not available from this Core yet."));
     dialog->setStationSettingsAvailable(stationSettingsAvailable(), stationSettingsReason());
-    dialog->setReceiverAudioCompressed(remoteReceiverAudioCompressed());
+    dialog->setReceiverAudioNote(remoteReceiverAudioNoteNow());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     wireSetupDialog(dialog);
     return dialog;
@@ -11191,12 +11191,15 @@ QString MainWindow::stationSettingsReason() const
     return tr("Connect to the Core to change these.");
 }
 
-bool MainWindow::remoteReceiverAudioCompressed() const
+RemoteReceiverAudioNote MainWindow::remoteReceiverAudioNoteNow() const
 {
     // Only a remote window has m_remoteMedia, and only a Core that sends
     // receiver streams feeds VAX from it.
-    return m_remoteMedia != nullptr && m_remoteMedia->receiverAudioNegotiated()
-        && remoteReceiverAudioIsCompressed(m_remoteMedia->audioStatus());
+    if (m_remoteMedia == nullptr) {
+        return RemoteReceiverAudioNote::None;
+    }
+    return remoteReceiverAudioNote(m_remoteMedia->audioStatus(),
+                                   m_remoteMedia->receiverAudioNegotiated());
 }
 
 bool MainWindow::transmitControlsPermitted() const

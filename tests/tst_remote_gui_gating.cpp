@@ -113,6 +113,7 @@
 #include <QtTest/QtTest>
 
 #include "OperatorWording.h"
+#include "gui/RemoteAudioStatus.h"
 
 #include <QAction>
 #include <QApplication>
@@ -1687,7 +1688,7 @@ private slots:
     {
         RadioModel remote(RadioModel::Role::Remote);
         SetupDialog dialog(&remote);
-        dialog.setReceiverAudioCompressed(true);  // before the page exists
+        dialog.setReceiverAudioNote(RemoteReceiverAudioNote::OpusChosen);  // before the page exists
         dialog.selectPage(QStringLiteral("VAX"));
         QWidget* const page = dialog.realizedPageForTest(QStringLiteral("VAX"));
         QVERIFY(page != nullptr);
@@ -1695,10 +1696,11 @@ private slots:
         QVERIFY(note != nullptr);
         QVERIFY(!note->isHidden());
         QVERIFY2(OperatorWording::isPlain(note->text()), qPrintable(note->text()));
-        dialog.setReceiverAudioCompressed(false);  // Lossless now runs
+        dialog.setReceiverAudioNote(RemoteReceiverAudioNote::None);  // Lossless now runs
         QVERIFY(note->isHidden());
-        dialog.setReceiverAudioCompressed(true);   // it fell back to Opus
+        dialog.setReceiverAudioNote(RemoteReceiverAudioNote::LosslessUnavailable);  // it fell back to Opus
         QVERIFY(!note->isHidden());
+        QVERIFY(!note->text().contains(QLatin1String("Set Audio quality")));
 
         RadioModel local;
         SetupDialog localDialog(&local);

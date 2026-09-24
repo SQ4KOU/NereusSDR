@@ -94,6 +94,7 @@
 #include "core/session/RemoteStationOptions.h"
 #include "core/WdspTypes.h"
 #include "gui/ReceiverStopNotices.h"
+#include "gui/RemoteReceiverAudioNote.h"
 
 class QProgressDialog;
 class QSplitter;
@@ -578,10 +579,10 @@ private slots:
     void showRemoteConnectionPanel();
     void refreshRemoteConnectionUi();
     bool transmitControlsPermitted() const;
-    // R-R3-43 / R-R3-44: a remote window whose Core sends receiver streams
-    // and runs them as Opus (the choice, or Lossless falling back). False in
-    // a local window.
-    bool remoteReceiverAudioCompressed() const;
+    // R-R3-43 / R-R3-44: the VAX page's note for a remote window whose Core
+    // sends receiver streams and runs them as Opus (the choice, or Lossless
+    // chosen but not running). None in a local window.
+    RemoteReceiverAudioNote remoteReceiverAudioNoteNow() const;
     /// R-R3-21 / R-R3-10: whether the Core's settings can be changed from
     /// this window (always in local direct mode; in a remote window only
     /// while connected and holding the Core's settings snapshot), and the

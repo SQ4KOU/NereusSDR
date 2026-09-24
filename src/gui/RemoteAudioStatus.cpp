@@ -226,6 +226,17 @@ bool remoteReceiverAudioIsCompressed(const RemoteAudioStatus& status)
     return status.chosenProfile == RemoteAudioProfile::Opus;
 }
 
+RemoteReceiverAudioNote remoteReceiverAudioNote(const RemoteAudioStatus& status,
+                                                bool receiverAudioNegotiated)
+{
+    if (!receiverAudioNegotiated || !remoteReceiverAudioIsCompressed(status)) {
+        return RemoteReceiverAudioNote::None;
+    }
+    return status.chosenProfile == RemoteAudioProfile::Lossless
+        ? RemoteReceiverAudioNote::LosslessUnavailable
+        : RemoteReceiverAudioNote::OpusChosen;
+}
+
 QString remoteAudioQualityText(const RemoteAudioStatus& status)
 {
     if (status.runningProfile) {

@@ -584,6 +584,34 @@ private slots:
         QVERIFY(!remoteReceiverAudioIsCompressed(status));
     }
 
+    // R-R3-43 / R-R3-44 fix wave: which note the VAX page shows. None
+    // without receiver streams from the Core or while they are lossless;
+    // OpusChosen when Opus is the choice; LosslessUnavailable when Lossless
+    // is the choice but Opus runs (a fallback or a refusal).
+    void receiverAudioNoteSaysWhyItIsCompressed()
+    {
+        RemoteAudioStatus status;
+        status.state = State::Playing;
+        status.chosenProfile = RemoteAudioProfile::Opus;
+        status.runningProfile = RemoteAudioProfile::Opus;
+        QCOMPARE(remoteReceiverAudioNote(status, /*receiverAudioNegotiated=*/false),
+                 RemoteReceiverAudioNote::None);
+        QCOMPARE(remoteReceiverAudioNote(status, true), RemoteReceiverAudioNote::OpusChosen);
+
+        status.chosenProfile = RemoteAudioProfile::Lossless;
+        status.runningProfile = RemoteAudioProfile::Lossless;
+        QCOMPARE(remoteReceiverAudioNote(status, true), RemoteReceiverAudioNote::None);
+
+        status.runningProfile = RemoteAudioProfile::Opus;
+        status.qualityReason = RemoteAudioQualityReason::NetworkTooSlow;
+        QCOMPARE(remoteReceiverAudioNote(status, true),
+                 RemoteReceiverAudioNote::LosslessUnavailable);
+        QCOMPARE(remoteReceiverAudioNote(status, false), RemoteReceiverAudioNote::None);
+
+        status.state = State::NotConnected;
+        QCOMPARE(remoteReceiverAudioNote(status, true), RemoteReceiverAudioNote::None);
+    }
+
     // Everything the quality choice puts in front of the operator stays in
     // user words: no wire or engineering terms.
     void qualityWordingCarriesNoInternalTerms()

@@ -28,10 +28,12 @@
 // via Anthropic Claude Code. In a remote window whose receiver streams are
 // Opus, a plain note says the weakest digital-mode signals may not decode
 // and that Lossless avoids it; it follows the quality choice and its
-// fallback live (setReceiverAudioCompressed).
+// fallback live (setReceiverAudioNote; with Lossless chosen but not running
+// it says the connection cannot carry it right now instead).
 // =================================================================
 
 #include "AudioVaxPage.h"
+#include "gui/RemoteAudioStatus.h"
 
 #include "core/AppSettings.h"
 #include "core/AudioDeviceConfig.h"
@@ -899,11 +901,30 @@ AudioVaxPage::AudioVaxPage(RadioModel* model, QWidget* parent)
     readerTimer->start();
 }
 
-void AudioVaxPage::setReceiverAudioCompressed(bool compressed)
+void AudioVaxPage::setReceiverAudioNote(RemoteReceiverAudioNote note)
 {
-    if (m_compressedNote) {
-        m_compressedNote->setVisible(compressed);
+    if (!m_compressedNote) {
+        return;
     }
+    switch (note) {
+    case RemoteReceiverAudioNote::None:
+        break;
+    case RemoteReceiverAudioNote::OpusChosen:
+        m_compressedNote->setText(QStringLiteral(
+            "Receiver audio from the Core is compressed (Opus), so the weakest "
+            "digital-mode signals may not decode. Set Audio quality to Lossless "
+            "in Core connection if your network can carry it."));
+        break;
+    case RemoteReceiverAudioNote::LosslessUnavailable:
+        // The operator already chose Lossless; pointing them at it again
+        // would be wrong. Say the connection cannot carry it right now.
+        m_compressedNote->setText(QStringLiteral(
+            "Receiver audio from the Core is compressed (Opus): Lossless is chosen, "
+            "but this connection cannot carry it right now. The weakest "
+            "digital-mode signals may not decode."));
+        break;
+    }
+    m_compressedNote->setVisible(note != RemoteReceiverAudioNote::None);
 }
 
 bool AudioVaxPage::compressedAudioNoteShown() const
