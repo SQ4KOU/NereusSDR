@@ -35,6 +35,8 @@
 #include "OperatorWording.h"
 
 #include <QFile>
+#include <QFileInfo>
+#include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -64,9 +66,30 @@ public:
 };
 } // namespace
 
+// Follow-up 2: this binary's own settings file (a profile named after the
+// process), so the restart tests that remove and read it cannot race any
+// other test binary under ctest -j (they all share the qttest sandbox's
+// default file).
+static QString privateProfile()
+{
+    return QStringLiteral("tst-fault-log-%1").arg(QCoreApplication::applicationPid());
+}
+
 class FaultLogTest : public QObject {
     Q_OBJECT
 private slots:
+    void initTestCase()
+    {
+        NereusSDR::AppSettings::setProfileOverride(privateProfile());
+        QVERIFY(NereusSDR::AppSettings::instance().filePath().contains(privateProfile()));
+    }
+    void cleanupTestCase()
+    {
+        const QString path = NereusSDR::AppSettings::instance().filePath();
+        QFile::remove(path);
+        QFile::remove(path + QStringLiteral(".bak"));
+        QDir().rmdir(QFileInfo(path).absolutePath());
+    }
     void ringBufferKeepsNewestTen();
     void likelyCauseSwrTrip();
     void persistsAcrossInstances();
@@ -310,6 +333,7 @@ void FaultLogTest::historySurvivesACoreRestart()
 {
     const QString file = NereusSDR::AppSettings::instance().filePath();
     QVERIFY(!file.isEmpty());
+    QVERIFY(file.contains(privateProfile()));   // never the shared sandbox file
     QFile::remove(file);
     NereusSDR::AppSettings::instance().clear();
     {
@@ -358,6 +382,7 @@ void FaultLogTest::historySurvivesACoreRestart()
 void FaultLogTest::interlockAndPowerCapSurviveACoreRestart()
 {
     const QString file = NereusSDR::AppSettings::instance().filePath();
+    QVERIFY(file.contains(privateProfile()));   // never the shared sandbox file
     QFile::remove(file);
     NereusSDR::AppSettings::instance().clear();
     {
