@@ -6,6 +6,7 @@
 // AI-assisted via Anthropic Claude Code.
 #include "core/StationTgxlController.h"
 #include "core/LanDiscovery.h"
+#include "core/LogCategories.h"
 #include <QHostAddress>
 
 namespace NereusSDR {
@@ -200,9 +201,14 @@ void StationTgxlController::identify(quint64 attempt, const QString& peer, quint
         if (product != QStringLiteral("TunerGenius")
             && product != QStringLiteral("TunerGeniusXL")) {
             m_state.deviceSerial = serial;
+            // In operator words: the station sends this to an app as the
+            // connection error (iPhone app Part A fix wave, R-IOS-01).
+            qCInfo(lcConnection) << "Expected TunerGenius/TunerGeniusXL at" << m_peer << "; observed"
+                                    << product << "serial" << serial;
             m_connection->rejectIdentity(attempt,
-                QStringLiteral("Expected TunerGenius/TunerGeniusXL at the connected endpoint; observed %1 (serial %2).")
-                    .arg(product, serial));
+                QStringLiteral("The device at this address reports itself as %1, not a Tuner Genius. "
+                               "Check the tuner's address and port.")
+                    .arg(product));
             return;
         }
         tryAdmit();
@@ -210,9 +216,11 @@ void StationTgxlController::identify(quint64 attempt, const QString& peer, quint
     connect(discovery, &LanDiscovery::scanFinished, this, [this, discovery, attempt] {
         if (!current(attempt) || m_discovery != discovery) { return; }
         if (m_discoveredSerial.isEmpty()) {
+            qCInfo(lcConnection) << "No matching TGXL discovery announcement for"
+                                    << m_peer << m_peerPort;
             m_connection->rejectIdentity(attempt,
-                QStringLiteral("No matching TGXL discovery announcement for %1:%2. Check the tuner address, port and station LAN discovery.")
-                    .arg(m_peer).arg(m_peerPort));
+                QStringLiteral("The Core did not find a Tuner Genius at this address on its network. "
+                               "Check the tuner's address and port."));
         }
         // Matching discovery with native info still pending is bounded by
         // TgxlConnection's independent identity timer.

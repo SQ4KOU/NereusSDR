@@ -19,6 +19,11 @@
 //                 socket per dial, bind-failure fallback) replaces the
 //                 static single-shot retry and the reused socket; opt-in
 //                 identity admission for the Core (StationPgxlController).
+//   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code:
+//                 iPhone app Part A fix wave (R-IOS-01): the identity
+//                 failures a station sends an app as the amplifier's
+//                 connection error are in operator words; the detail goes
+//                 to the log.
 // =================================================================
 #include "PgxlConnection.h"
 #include "AppSettings.h"
@@ -121,9 +126,14 @@ bool PgxlConnection::admitIdentity(quint64 socketAttemptToken,
         return false;
     }
     if (m_identityInfo.serial != expectedSerial) {
+        // The station shows this reason to an app as sent, so it is in
+        // operator words (iPhone app Part A fix wave, R-IOS-01); the serials
+        // go to the log.
+        qCInfo(lcPgxl) << "PGXL identity serial mismatch: expected" << expectedSerial
+                           << "observed" << m_identityInfo.serial;
         failIdentityAdmission(socketAttemptToken,
-            QStringLiteral("PGXL identity serial mismatch: expected %1, observed %2")
-                .arg(expectedSerial, m_identityInfo.serial));
+            QStringLiteral("The Power Genius at this address is not the one the Core found on its "
+                           "network. Check the amplifier's address and port."));
         return false;
     }
 
@@ -164,7 +174,8 @@ bool PgxlConnection::rejectIdentity(quint64 socketAttemptToken, const QString& r
         return false;
     }
     failIdentityAdmission(socketAttemptToken,
-        reason.isEmpty() ? QStringLiteral("PGXL identity was rejected by station discovery")
+        reason.isEmpty() ? QStringLiteral("The Core could not confirm that the device at this "
+                                          "address is a Power Genius.")
                          : reason);
     return true;
 }
@@ -840,11 +851,11 @@ void PgxlConnection::onIdentityTimeout()
     if (!m_identityAdmissionRequired || !socketAttemptIsCurrent(attempt)) {
         return;
     }
+    qCInfo(lcPgxl) << "PGXL identity timed out; serial" << m_identityInfo.serial;
     failIdentityAdmission(attempt,
         m_identityInfo.serial.isEmpty()
-            ? QStringLiteral("PGXL native identity timed out")
-            : QStringLiteral("PGXL discovery approval timed out for serial %1")
-                  .arg(m_identityInfo.serial));
+            ? QStringLiteral("The device at this address did not answer as a Power Genius in time.")
+            : QStringLiteral("The Core did not see this Power Genius on its network in time."));
 }
 
 void PgxlConnection::scheduleReconnect() {
@@ -1013,10 +1024,11 @@ void PgxlConnection::processLine(const QString& line, quint64 attemptGeneration)
                 && m_pendingIdentityInfoSeq != 0 && rseq == m_pendingIdentityInfoSeq) {
                 const quint64 identityAttempt = attemptGeneration;
                 if (!hexOk || hexCode != 0) {
+                    qCInfo(lcPgxl) << "PGXL native info failed with code"
+                                       << (hexOk ? QString::number(hexCode, 16)
+                                                 : QStringLiteral("parse-error"));
                     failIdentityAdmission(identityAttempt,
-                        QStringLiteral("PGXL native info failed with code %1")
-                            .arg(hexOk ? QString::number(hexCode, 16)
-                                       : QStringLiteral("parse-error")));
+                        QStringLiteral("The Power Genius at this address did not say which unit it is."));
                     return;
                 }
                 QMap<QString, QString> fields;
@@ -1026,8 +1038,9 @@ void PgxlConnection::processLine(const QString& line, quint64 attemptGeneration)
                 }
                 const QString serial = fields.value(QStringLiteral("serial"));
                 if (serial.isEmpty()) {
+                    qCInfo(lcPgxl) << "PGXL info reply named no serial";
                     failIdentityAdmission(identityAttempt,
-                        QStringLiteral("PGXL native info omitted a nonempty serial"));
+                        QStringLiteral("The Power Genius at this address did not say which unit it is."));
                     return;
                 }
                 m_pendingIdentityInfoSeq = 0;

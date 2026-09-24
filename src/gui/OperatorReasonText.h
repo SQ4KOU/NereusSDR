@@ -44,7 +44,9 @@
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
 //                                    the Tuner Genius set-up refusal names
-//                                    the device in words, not "TGXL".
+//                                    the device in words, not "TGXL"; the
+//                                    Core's old accessory check wording is
+//                                    an older Core's now.
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once

@@ -1708,7 +1708,12 @@ how a fixture is written to what the code does.
   checks the sources that word them (every reason literal, a reason of one
   word, and what `.arg()` inserts into one; a new function that words a
   reason, in any file, fails until it is scanned) and every reason the
-  session fixtures record. An app shows these as sent. Codes are not reasons and keep their
+  session fixtures record. An app shows these as sent. Text the station
+  sends as a property value that an app shows as it arrives is held to the
+  same rule: the `connectionError` of the `tuner`, `amplifier` and `rfkit`
+  objects, a slice's `nnrStatus` and `nnrLastError`, the radio's
+  `rxFilter0Reason` and `rxFilter1Reason`, and `pureSignalSettings`'
+  `lastLoadError` (the same test reads the sources that write them). Codes are not reasons and keep their
   spelling: an audio context's `reason` (`client-disabled`,
   `receiver-limit`, ...), `displayBudgetReason`, and the display retire
   reasons "slice removed" and "slice stream binding changed", which

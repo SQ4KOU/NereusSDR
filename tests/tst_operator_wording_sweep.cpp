@@ -726,8 +726,9 @@ private slots:
     }
 
     // R3 post-merge follow-ups (R-R3-17, R-R3-21): this app's own "does not
-    // support" refusals, the NNR adapter's reasons and the Core's Tuner
-    // Genius XL checks are read from their sources and each is shown in user
+    // support" refusals and the NNR adapter's reasons are read from their
+    // sources (the Core's Tuner Genius checks are worded at the source now:
+    // accessoryChecksAreInUserWordsAtTheSource) and each is shown in user
     // words that name the Core, never the station or PS3. A new or reworded
     // one there fails here until the table has it.
     void refusalsAndTunerChecksReadInUserWordsAtTheSource()
@@ -758,9 +759,6 @@ private slots:
             {"src/core/session/StationClient.cpp",
              "^(The station does not support |This station cannot )", 7},
             {"src/core/dsp/NnrAdapter.cpp", ".", 8},
-            {"src/core/TgxlConnection.cpp", "^TGXL [a-z]+ .* ", 6},
-            {"src/core/StationTgxlController.cpp",
-             "^(Expected TunerGenius|No matching TGXL)", 2},
         };
         for (const auto& site : sites) {
             const QStringList reasons =
@@ -778,6 +776,37 @@ private slots:
                 QVERIFY2(!stationWord.match(shown).hasMatch(), qPrintable(reason + QStringLiteral(" -> ") + shown));
             }
         }
+    }
+
+    // iPhone app Part A fix wave (R-IOS-01): the Core's Tuner Genius and
+    // Power Genius checks are written in operator words where they are
+    // decided, because an app shows the connection error as the Core sends
+    // it. This app shows each as sent; an older Core's words are the table's
+    // olderCoreKeys and patterns.
+    void accessoryChecksAreInUserWordsAtTheSource()
+    {
+        static const QRegularExpression literal(
+            QStringLiteral("QStringLiteral\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*\\)"));
+        static const QRegularExpression device(QStringLiteral("(Tuner|Power) Genius"));
+        static const QRegularExpression placeholder(QStringLiteral("%[0-9]"));
+        int checked = 0;
+        for (const char* file : {"src/core/TgxlConnection.cpp", "src/core/PgxlConnection.cpp",
+                                 "src/core/StationTgxlController.cpp",
+                                 "src/core/StationPgxlController.cpp"}) {
+            const QString code = codeWithoutComments(sourcePath(file));
+            QRegularExpressionMatchIterator it = literal.globalMatch(code);
+            while (it.hasNext()) {
+                QString reason = it.next().captured(1);
+                if (!device.match(reason).hasMatch() || !reason.startsWith(QLatin1String("The "))) {
+                    continue;
+                }
+                ++checked;
+                reason.replace(placeholder, QStringLiteral("SPE Expert"));
+                QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+                QCOMPARE(OperatorReasonText::forDisplay(reason), reason);
+            }
+        }
+        QVERIFY2(checked >= 12, qPrintable(QString::number(checked)));
     }
 
     // R3 controls that work, Task 3 (R-R3-17, R-R3-21): the developer

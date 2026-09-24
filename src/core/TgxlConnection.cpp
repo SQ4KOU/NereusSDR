@@ -22,6 +22,10 @@
 //   2026-09-22  J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 OpenAI Codex: retire each failed Qt socket before retry so
 //                 asynchronous timeout state cannot leak into source binding.
+//   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code:
+//                 iPhone app Part A fix wave (R-IOS-01): the identity
+//                 failures a station sends an app as the tuner's connection
+//                 error are in operator words; the detail goes to the log.
 // =================================================================
 #include "TgxlConnection.h"
 #include "AppSettings.h"
@@ -120,9 +124,14 @@ bool TgxlConnection::admitIdentity(quint64 socketAttemptToken,
         return false;
     }
     if (m_identityInfo.serial != expectedSerial) {
+        // The station shows this reason to an app as sent, so it is in
+        // operator words (iPhone app Part A fix wave, R-IOS-01); the serials
+        // go to the log.
+        qCInfo(lcTgxl) << "TGXL identity serial mismatch: expected" << expectedSerial
+                           << "observed" << m_identityInfo.serial;
         failIdentityAdmission(socketAttemptToken,
-            QStringLiteral("TGXL identity serial mismatch: expected %1, observed %2")
-                .arg(expectedSerial, m_identityInfo.serial));
+            QStringLiteral("The Tuner Genius at this address is not the one the Core found on its "
+                           "network. Check the tuner's address and port."));
         return false;
     }
 
@@ -162,7 +171,8 @@ bool TgxlConnection::rejectIdentity(quint64 socketAttemptToken,
         return false;
     }
     failIdentityAdmission(socketAttemptToken,
-        reason.isEmpty() ? QStringLiteral("TGXL identity was rejected by station discovery")
+        reason.isEmpty() ? QStringLiteral("The Core could not confirm that the device at this "
+                                          "address is a Tuner Genius.")
                          : reason);
     return true;
 }
@@ -727,10 +737,11 @@ void TgxlConnection::processLine(const QString& line,
                 && rseq == m_pendingIdentityInfoSeq) {
                 const quint64 identityAttempt = attemptGeneration;
                 if (!hexOk || hexCode != 0) {
+                    qCInfo(lcTgxl) << "TGXL native info failed with code"
+                                       << (hexOk ? QString::number(hexCode, 16)
+                                                 : QStringLiteral("parse-error"));
                     failIdentityAdmission(identityAttempt,
-                        QStringLiteral("TGXL native info failed with code %1")
-                            .arg(hexOk ? QString::number(hexCode, 16)
-                                       : QStringLiteral("parse-error")));
+                        QStringLiteral("The Tuner Genius at this address did not say which unit it is."));
                     return;
                 }
 
@@ -746,8 +757,9 @@ void TgxlConnection::processLine(const QString& line,
                 const QString serial = fields.value(QStringLiteral("serial"));
                 if (parts.isEmpty() || parts.first() != QStringLiteral("info")
                     || serial.isEmpty()) {
+                    qCInfo(lcTgxl) << "TGXL info reply named no serial";
                     failIdentityAdmission(identityAttempt,
-                        QStringLiteral("TGXL native info omitted a nonempty serial"));
+                        QStringLiteral("The Tuner Genius at this address did not say which unit it is."));
                     return;
                 }
 
@@ -1036,11 +1048,11 @@ void TgxlConnection::onIdentityTimeout()
     if (!m_identityAdmissionRequired || !socketAttemptIsCurrent(attempt)) {
         return;
     }
+    qCInfo(lcTgxl) << "TGXL identity timed out; serial" << m_identityInfo.serial;
     failIdentityAdmission(attempt,
         m_identityInfo.serial.isEmpty()
-            ? QStringLiteral("TGXL native identity timed out")
-            : QStringLiteral("TGXL discovery approval timed out for serial %1")
-                  .arg(m_identityInfo.serial));
+            ? QStringLiteral("The device at this address did not answer as a Tuner Genius in time.")
+            : QStringLiteral("The Core did not see this Tuner Genius on its network in time."));
 }
 
 void TgxlConnection::scheduleReconnect()

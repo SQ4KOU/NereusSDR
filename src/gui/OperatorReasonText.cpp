@@ -245,23 +245,6 @@ constexpr Entry kEntries[] = {
     {"The station is not connected.", nullptr,
      "This app is not connected to the Core."},
 
-    // The Core's Tuner Genius XL checks, TgxlConnection.cpp: shown on the
-    // Peripherals page's Tuner Genius XL row. The worded ones are patterns.
-    {"TGXL identity was rejected by station discovery", nullptr,
-     "The Core could not confirm that the device at this address is a Tuner Genius."},
-    {"TGXL native info omitted a nonempty serial", nullptr,
-     "The Tuner Genius at this address did not say which unit it is."},
-    {"TGXL native identity timed out", nullptr,
-     "The device at this address did not answer as a Tuner Genius in time."},
-
-    // The Core's Power Genius XL checks, PgxlConnection.cpp (R-R3-47):
-    // shown on the Peripherals page's Power Genius XL row and its Setup tab.
-    {"PGXL identity was rejected by station discovery", nullptr,
-     "The Core could not confirm that the device at this address is a Power Genius."},
-    {"PGXL native info omitted a nonempty serial", nullptr,
-     "The Power Genius at this address did not say which unit it is."},
-    {"PGXL native identity timed out", nullptr,
-     "The device at this address did not answer as a Power Genius in time."},
     // Noise reduction status and refusals, NnrAdapter.cpp (two also in
     // SliceModel.cpp and RadioModel.cpp): shown in the NNR panel and when
     // turning NNR on is refused.
@@ -523,6 +506,21 @@ constexpr Entry kOlderCoreEntries[] = {
      "Enter the Power Genius's IP address or host name, and a port from 1 to 65535."},
     {"source retune no longer covers requested crop", "Refused: out of range",
      "The receiver was retuned and no longer covers this view.", "Refused"},
+    // The Core's Tuner Genius and Power Genius checks before the Core sent
+    // them in operator words (iPhone app Part A fix wave): shown on the
+    // Peripherals page's rows. The worded ones are patterns below.
+    {"TGXL identity was rejected by station discovery", nullptr,
+     "The Core could not confirm that the device at this address is a Tuner Genius."},
+    {"TGXL native info omitted a nonempty serial", nullptr,
+     "The Tuner Genius at this address did not say which unit it is."},
+    {"TGXL native identity timed out", nullptr,
+     "The device at this address did not answer as a Tuner Genius in time."},
+    {"PGXL identity was rejected by station discovery", nullptr,
+     "The Core could not confirm that the device at this address is a Power Genius."},
+    {"PGXL native info omitted a nonempty serial", nullptr,
+     "The Power Genius at this address did not say which unit it is."},
+    {"PGXL native identity timed out", nullptr,
+     "The device at this address did not answer as a Power Genius in time."},
 };
 
 // Reasons worded around a value (a number, a pan's name, an action). The

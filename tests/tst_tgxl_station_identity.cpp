@@ -257,7 +257,9 @@ private slots:
                  QStringLiteral("TunerGenius"), QStringLiteral("241288-1"));
         QVERIFY(!model.tunerModel()->hasDirectConnection());
         QVERIFY(QMetaObject::invokeMethod(discovery, "onTimeout", Qt::DirectConnection));
-        QVERIFY(model.tunerModel()->connectionError().contains(QStringLiteral("No matching TGXL")));
+        QCOMPARE(model.tunerModel()->connectionError(),
+                 QStringLiteral("The Core did not find a Tuner Genius at this address on its "
+                                "network. Check the tuner's address and port."));
         QVERIFY(!model.tunerModel()->isPresent());
         QVERIFY(model.disconnectTgxlForStation(&reason));
     }

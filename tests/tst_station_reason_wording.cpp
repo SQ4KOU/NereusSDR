@@ -228,6 +228,9 @@ const QList<ReasonSender>& reasonSenders()
         {"authResult", 1},   {"settingsReject", 3},       {"dropPeer", 1},
         {"sendRejected", 3}, {"sendAllocationResult", 4}, {"rejectAllocation", 3},
         {"reject", 0},       {"rejectDetail", 1},         {"fail", 0},
+        // Text the station sends as a property value (propertyTextSources).
+        {"connectionFailed", 0}, {"failIdentityAdmission", 1}, {"setLastLoadError", 0},
+        {"setNnrLastError", 0},
     };
     return senders;
 }
@@ -286,7 +289,8 @@ QStringList reasonExpressionsIn(const QString& statement)
         }
     }
     static const QRegularExpression assignment(QStringLiteral(
-        "\\b(?:\\w*[Rr]eason|\\w*[Rr]efusal|m_lastError|m_lastActionError)\\s*=(?!=)"));
+        "\\b(?:\\w*[Rr]eason|\\w*[Rr]easonText|\\w*[Rr]efusal|m_lastError|m_lastActionError)"
+        "\\s*=(?!=)"));
     const QRegularExpressionMatch assigned = assignment.match(statement);
     if (assigned.hasMatch()) {
         expressions.append(statement.mid(assigned.capturedEnd()));
@@ -469,7 +473,8 @@ QStringList problemsOf(const ReasonText& reason, const QStringList& plainInserts
 {
     QStringList problems;
     QString problem = wordingProblemIn(reason.text);
-    if (problem.isEmpty() && reason.positioned
+    static const QRegularExpression letter(QStringLiteral("[A-Za-z]"));
+    if (problem.isEmpty() && reason.positioned && letter.match(reason.text).hasMatch()
         && !reason.text.trimmed().contains(QLatin1Char(' '))) {
         problem = QStringLiteral("one word");
     }
@@ -504,6 +509,9 @@ struct ReasonSource {
     // .arg() arguments here, by their text inside .arg( ), that insert
     // plain words (numbers, a band, an address, the operator's own label).
     QStringList plainInserts = {};
+    // Only literals in a reason position count: the file also writes
+    // device commands with spaces in them (the accessory connections).
+    bool positionedOnly = false;
 };
 
 const QList<ReasonSource>& reasonSources()
@@ -636,6 +644,38 @@ const QList<AppSideReason>& appSideReasons()
     return sites;
 }
 
+// Text the station sends as a property value, which an app shows as sent
+// (the link document's section 17): each accessory's connectionError (the
+// Tuner Genius, the Power Genius and the RF-Kit amplifier), a receiver's
+// nnrStatus and nnrLastError, the receive filters' rxFilter0Reason and
+// rxFilter1Reason, and PureSignal's lastLoadError. NnrAdapter.cpp (the
+// NNR explanation behind nnrStatus) is a reason source above.
+const QList<ReasonSource>& propertyTextSources()
+{
+    static const QList<ReasonSource> sources{
+        {"src/core/TgxlConnection.cpp", {}, {}, 4, {}, true},
+        {"src/core/PgxlConnection.cpp", {}, {}, 4, {}, true},
+        // The name an amplifier that is not an RF2K-S reports for itself.
+        {"src/core/Rf2ksConnection.cpp", {}, {}, 2, {QStringLiteral("device")}, true},
+        // The name the device at the address reports for itself.
+        {"src/core/StationTgxlController.cpp", {}, {}, 2, {QStringLiteral("product")}},
+        // The name the device at the address reports for itself.
+        {"src/core/StationPgxlController.cpp", {}, {}, 2, {QStringLiteral("product")}},
+        {"src/core/StationRfKitController.cpp", {}, {}, 0},
+        // Band names ("20m"), one or several joined with " + ".
+        {"src/core/accessories/AlexController.cpp", {QStringLiteral("recomputeBpf")}, {}, 3,
+         {QStringLiteral("bandLabel(s.currentBpfBand)"),
+          QStringLiteral("bandList.join(QStringLiteral(\" + \"))")}},
+        {"src/core/dsp/NnrSettings.h", {QStringLiteral("nnrLimitExplanation")}, {}, 4},
+        {"src/models/SliceModel.cpp",
+         {QStringLiteral("setActiveNr"), QStringLiteral("applyNnrSettings"),
+          QStringLiteral("requestNnrDiagnostics"), QStringLiteral("restoreNnrSettings")},
+         {}, 3},
+        {"src/models/PureSignalSettings.cpp", {QStringLiteral("load")}, {}, 1},
+    };
+    return sources;
+}
+
 QStringList sourceFiles(const QStringList& roots)
 {
     QStringList files;
@@ -729,6 +769,72 @@ QStringList unplacedReasonSites(const QString& file, const QString& code, int* f
     return unplaced;
 }
 
+// Checks every source of `sources` as reasons: the problems found, and
+// how many reasons were checked. `failures` also gets a line for a source
+// with fewer reasons than it promises, or a named function not found.
+int checkReasonSources(const QList<ReasonSource>& sources, QStringList* failures)
+{
+    static const QRegularExpression anyName(QStringLiteral("."));
+    int checked = 0;
+    for (const ReasonSource& source : sources) {
+        const QString code = codeOf(sourcePath(QString::fromLatin1(source.file)));
+        if (code.isEmpty()) {
+            failures->append(QStringLiteral("%1: not read").arg(QLatin1String(source.file)));
+            continue;
+        }
+        QList<ReasonText> found;
+        if (source.functions.isEmpty()) {
+            found = reasonsIn(code);
+        } else {
+            QStringList seen;
+            for (const FunctionBody& function : functionsIn(code, anyName)) {
+                if (!source.functions.contains(function.name)) {
+                    continue;
+                }
+                seen.append(function.name);
+                for (const ReasonText& reason : reasonsIn(function.body)) {
+                    const bool known = std::any_of(
+                        found.cbegin(), found.cend(),
+                        [&reason](const ReasonText& r) { return r.text == reason.text; });
+                    if (!known) {
+                        found.append(reason);
+                    }
+                }
+            }
+            for (const QString& function : source.functions) {
+                if (!seen.contains(function)) {
+                    failures->append(QStringLiteral("%1: %2 not found")
+                                         .arg(QLatin1String(source.file), function));
+                }
+            }
+        }
+        int reasons = 0;
+        for (const ReasonText& reason : found) {
+            if (source.positionedOnly && !reason.positioned) {
+                continue;
+            }
+            const bool exempt = std::any_of(
+                source.notReasons.cbegin(), source.notReasons.cend(),
+                [&reason](const QString& start) { return reason.text.startsWith(start); });
+            if (exempt) {
+                continue;
+            }
+            ++reasons;
+            for (const QString& problem : problemsOf(reason, source.plainInserts)) {
+                failures->append(QStringLiteral("%1: %2").arg(QLatin1String(source.file), problem));
+            }
+        }
+        if (reasons < source.atLeast) {
+            failures->append(QStringLiteral("%1: %2 reasons, fewer than %3")
+                                 .arg(QLatin1String(source.file))
+                                 .arg(reasons)
+                                 .arg(source.atLeast));
+        }
+        checked += reasons;
+    }
+    return checked;
+}
+
 } // namespace
 
 class TestStationReasonWording : public QObject {
@@ -795,57 +901,27 @@ private slots:
 
     void everyStationReasonIsPlain()
     {
-        static const QRegularExpression anyName(QStringLiteral("."));
         QStringList failures;
-        int checked = 0;
-        for (const ReasonSource& source : reasonSources()) {
-            const QString code = codeOf(sourcePath(QString::fromLatin1(source.file)));
-            QVERIFY2(!code.isEmpty(), source.file);
-            QList<ReasonText> found;
-            if (source.functions.isEmpty()) {
-                found = reasonsIn(code);
-            } else {
-                QStringList seen;
-                for (const FunctionBody& function : functionsIn(code, anyName)) {
-                    if (!source.functions.contains(function.name)) {
-                        continue;
-                    }
-                    seen.append(function.name);
-                    for (const ReasonText& reason : reasonsIn(function.body)) {
-                        const bool known = std::any_of(
-                            found.cbegin(), found.cend(),
-                            [&reason](const ReasonText& r) { return r.text == reason.text; });
-                        if (!known) {
-                            found.append(reason);
-                        }
-                    }
-                }
-                for (const QString& function : source.functions) {
-                    QVERIFY2(seen.contains(function),
-                             qPrintable(QStringLiteral("%1: %2 not found")
-                                            .arg(QLatin1String(source.file), function)));
-                }
-            }
-            int reasons = 0;
-            for (const ReasonText& reason : found) {
-                const bool exempt = std::any_of(
-                    source.notReasons.cbegin(), source.notReasons.cend(),
-                    [&reason](const QString& start) { return reason.text.startsWith(start); });
-                if (exempt) {
-                    continue;
-                }
-                ++reasons;
-                for (const QString& problem : problemsOf(reason, source.plainInserts)) {
-                    failures.append(QStringLiteral("%1: %2").arg(QLatin1String(source.file), problem));
-                }
-            }
-            QVERIFY2(reasons >= source.atLeast,
-                     qPrintable(QStringLiteral("%1: %2 reasons")
-                                    .arg(QLatin1String(source.file)).arg(reasons)));
-            checked += reasons;
+        const int checked = checkReasonSources(reasonSources(), &failures);
+        // QtTest cuts a long message short; each failure gets its own line.
+        for (const QString& failure : std::as_const(failures)) {
+            qWarning().noquote() << failure;
         }
         QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
         QVERIFY2(checked >= 250, qPrintable(QString::number(checked)));
+    }
+
+    void everyStationPropertyTextIsPlain()
+    {
+        // Text sent as a property value is shown as sent too.
+        QStringList failures;
+        const int checked = checkReasonSources(propertyTextSources(), &failures);
+        // QtTest cuts a long message short; each failure gets its own line.
+        for (const QString& failure : std::as_const(failures)) {
+            qWarning().noquote() << failure;
+        }
+        QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
+        QVERIFY2(checked >= 25, qPrintable(QString::number(checked)));
     }
 
     void anUnlistedReasonSiteFails()

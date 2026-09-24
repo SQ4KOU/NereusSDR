@@ -47,6 +47,10 @@
 //   2026-09-24 - iPhone app Task 4b (R-IOS-01, R-R3-21): the reasons this
 //                file sends an app are in operator words. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Part A fix wave (R-IOS-01): the saved-settings
+//                notice (nnrLastError) is in operator words; the setting
+//                names go to the log. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1474,8 +1478,13 @@ void SliceModel::restoreNnrSettings()
         else rejected.append(QStringLiteral("NrActive"));
     }
     setActiveNr(active);
-    if (!rejected.isEmpty())
-        setNnrLastError(QStringLiteral("Invalid saved NNR settings used defaults: %1").arg(rejected.join(QStringLiteral(", "))));
+    if (!rejected.isEmpty()) {
+        // nnrLastError reaches a remote app as sent: operator words there,
+        // the setting names in the log (iPhone app Part A fix wave, R-IOS-01).
+        qCInfo(lcDsp) << "Saved NNR settings not used, defaults applied:" << rejected;
+        setNnrLastError(QStringLiteral("Some saved noise reduction settings could not be used, "
+                                       "so their defaults are in use."));
+    }
 }
 
 // NR1

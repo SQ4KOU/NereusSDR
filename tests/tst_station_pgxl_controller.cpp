@@ -273,8 +273,9 @@ private slots:
         announce(model, amp.serverPort(), QStringLiteral("PowerGeniusXL"),
                  QStringLiteral("10-200/24-0047"));
         QTRY_COMPARE(model.amplifierModel()->connectionPhase(), Phase::Error);
-        QVERIFY(model.amplifierModel()->connectionError().startsWith(
-            QStringLiteral("PGXL identity serial mismatch")));
+        QCOMPARE(model.amplifierModel()->connectionError(),
+                 QStringLiteral("The Power Genius at this address is not the one the Core found "
+                                "on its network. Check the amplifier's address and port."));
         QVERIFY(!pgxl->isConnected());
         QCOMPARE(commandsOf(frames), QStringList{QStringLiteral("info")});
     }
@@ -326,7 +327,8 @@ private slots:
         peer->flush();
         QTRY_COMPARE(model.amplifierModel()->connectionPhase(), Phase::Error);
         QCOMPARE(model.amplifierModel()->connectionError(),
-                 QStringLiteral("PGXL native identity timed out"));
+                 QStringLiteral("The device at this address did not answer as a Power Genius "
+                                "in time."));
         QVERIFY(!pgxl->isConnected());
         QCOMPARE(commandsOf(frames), QStringList{QStringLiteral("info")});
     }

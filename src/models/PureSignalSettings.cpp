@@ -3,6 +3,7 @@
 #include "PureSignalSettings.h"
 
 #include "core/AppSettings.h"
+#include "core/LogCategories.h"
 
 #include <QVariant>
 #include <QStringList>
@@ -188,7 +189,10 @@ bool PureSignalSettings::load()
 {
     const QString prefix = settingsPrefix();
     if (prefix.isEmpty()) {
-        setLastLoadError(QStringLiteral("PureSignal settings require a valid radio MAC identity."));
+        // lastLoadError reaches a remote app as sent: operator words
+        // (iPhone app Part A fix wave, R-IOS-01).
+        setLastLoadError(QStringLiteral("PureSignal settings could not be loaded because the "
+                                        "radio was not identified."));
         return false;
     }
 
@@ -248,10 +252,13 @@ bool PureSignalSettings::load()
     const PureSignalSettingsValues before = m_values;
     m_values = restored;
     publishChanges(before, false);
+    if (!rejected.isEmpty()) {
+        qCInfo(lcDsp) << "Saved PureSignal settings not used, defaults applied:" << rejected;
+    }
     setLastLoadError(rejected.isEmpty()
         ? QString{}
-        : QStringLiteral("Invalid saved PureSignal settings used defaults: %1")
-              .arg(rejected.join(QStringLiteral(", "))));
+        : QStringLiteral("Some saved PureSignal settings could not be used, so their defaults "
+                         "are in use."));
     return true;
 }
 
