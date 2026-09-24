@@ -95,6 +95,13 @@ rerun it after a vendor update. libspecbleach has no such file: its source
 files carry only the notice `libspecbleach.txt` and `LGPLv2.1.txt` already
 hold. The DeepFilterNet header NereusSDR compiles carries no notice.
 
+DeepFilterNet's library is compiled from Rust crates, each under its own
+licence. When `setup-deepfilter.sh` or `setup-deepfilter.ps1` builds the
+library from source, it also writes `deepfilternet-crates.txt` here with
+`scripts/collect-crate-notices.py`: every crate compiled into the library,
+its version, its licence expression and its licence and notice files,
+copied byte for byte.
+
 Per-file attribution for ported code lives in the source-file headers
 and is indexed in `docs/attribution/THETIS-PROVENANCE.md`,
 `docs/attribution/aethersdr-reconciliation.md`, and

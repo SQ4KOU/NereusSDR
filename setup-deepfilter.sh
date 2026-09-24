@@ -131,6 +131,15 @@ if [ -f "$MODEL_SRC" ]; then
     echo "  Model:   $OUT_DIR/models/$MODEL_NAME"
 fi
 
+# Crate notices: the licence and notice files of every Rust crate compiled
+# into the library, written into the licence folder every package ships
+# (R-R3-50). --offline in the script: it reads only what cargo cbuild fetched.
+python3 scripts/collect-crate-notices.py \
+    --manifest-path "$TMPDIR/DeepFilterNet/Cargo.toml" \
+    --package deep_filter --features deep_filter/capi \
+    --commit "$DFNR_COMMIT" \
+    --output packaging/third-party-licenses/deepfilternet-crates.txt
+
 # Commit hash
 echo "$DFNR_COMMIT" > "$OUT_DIR/COMMIT"
 

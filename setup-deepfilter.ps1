@@ -131,6 +131,17 @@ try {
         Write-Host "  Model: $OutDir\models\$ModelName" -ForegroundColor Green
     }
 
+    # Crate notices: the licence and notice files of every Rust crate
+    # compiled into the library, written into the licence folder every
+    # package ships (R-R3-50). --offline in the script: it reads only what
+    # cargo cbuild fetched.
+    & python scripts\collect-crate-notices.py `
+        --manifest-path "$TempDir\DeepFilterNet\Cargo.toml" `
+        --package deep_filter --features deep_filter/capi `
+        --commit $DfnrCommit `
+        --output packaging\third-party-licenses\deepfilternet-crates.txt
+    if ($LASTEXITCODE -ne 0) { throw "crate notice generation failed" }
+
     # Commit hash
     $DfnrCommit | Out-File -Encoding ascii -NoNewline "$OutDir\COMMIT"
 
