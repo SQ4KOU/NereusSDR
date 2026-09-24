@@ -1404,8 +1404,12 @@ rewrite the fixtures, and update this document in the same commit.
   reason with the link down; an older Core leaves them greyed and sends
   nothing.
 - `session-verbs-tgxl-control` (`tests/data/link/v1/sessions/`): the three
-  commands right and wrong on a Core with no tuner, run by the station and
-  app conformance runners.
+  commands right and wrong on a Core with no tuner, and the antenna command
+  with port 4 ("Choose Tuner Genius antenna 1, 2 or 3."), run by the
+  station and app conformance runners. The on-air refusal is not in it:
+  the station's runner has no way to put its Core on the air (its setup
+  has no key for it, and a receive-only Core refuses every key), so the
+  unit tests above cover it.
 
 Hardware evidence is pending for the operator checkpoint: ANT 1, 2 and 3,
 OPERATE and BYPASS switched on the real Tuner Genius from the Rock's
