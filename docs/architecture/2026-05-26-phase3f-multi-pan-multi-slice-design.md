@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-26
 **Author:** J.J. Boyd ~KG4VCF, co-authored with Claude Sonnet 4.6
-**Status:** Design (brainstorm complete, awaiting spec review)
+**Status:** Sub-epics A-G shipped (see "Phase 3F shipping note" below); Sub-epic H (bench verification) pending.
 **Scope:** Phase 3F (multi-panadapter), 3F-DIV (full Thetis Diversity port), wideband extended-pan
 **Supersedes:** `docs/architecture/phase3f-multi-panadapter-plan.md` (2026-04-09), `docs/architecture/multi-panadapter.md` (Phase 2B design)
 
@@ -1231,7 +1231,7 @@ Phase 3F multi-pan + multi-slice landed across 8 sub-epics (A-G shipped, H bench
 
 The headline operator-visible deliverables:
 
-1. **Multi-pan layout** with 5 templates (Single, Stacked, Side-by-Side, Wide+2, Grid 2x2). Pan layout persists across launches. Float any pan to a second monitor via Float Active Pan action.
+1. **Multi-pan layout** with 9 layouts of up to 5 pans: "1" (Single), "2v" (Stacked), "2h" (Side-by-Side), "12h" (Wide+2), "2h1", "3v", "2x2" (Grid), "4v", "3h2". The last four grew the original 5-template plan per the 2026-08-02 bottom-banner-and-pan-menu design §8.3 (`src/gui/PanadapterStack.h`, `MainWindow::panIdsForLayout`). Pan layout persists across launches. Float any pan to a second monitor via Float Active Pan action.
 2. **Multi-slice (up to maxSlices per SKU)** with TxSliceArbiter enforcing the single-TX invariant. RF-safe handoff (MOX drop before TX-slice flip). Slice add/remove via +PAN dropdown or Ctrl+R.
 3. **Per-pan badges** showing slice letter, freq, mode, CH N, plus optional TX/WIDE/DIV/PS HOLD pills. Right-click VFO flag for context menu (TX/Antenna/Rate/Diversity/Filter/Remove).
 4. **Alex per-ADC BPF state machine** with operator override via FilterPolicyDialog (Auto / Force band / Force bypass). Bottom-bar CH 0 / CH 1 indicators reflect live BPF state.
@@ -1840,6 +1840,12 @@ The design therefore splits the two decisions, because they are not the same ris
 
 #### 16.2.6 Interaction with `SliceStreamAllocator`
 
+**Status: not built.** The `FilterChainRouter` class described in this section (§16.2.1-§16.2.7)
+does not exist in `src` or `tests`. The stream-to-chain assignment that shipped lives in
+`RadioModel::chainForStream` (`src/models/RadioModel.cpp:14680`), not in a standalone router
+class. §16.2 stays in this document as the design record; treat it as not-yet-implemented rather
+than as a description of the shipping code.
+
 Clean separation of ownership, no negotiation:
 
 | Layer | Owns | Never does |
@@ -1992,6 +1998,18 @@ work, is not named in §9 at all.
   PS TX, and the "PS HOLD" pill never fires for the one slice that actually lost its DDC. One-line
   fix inside the PS branch. `P1CodecStandard::applyDdcAssignment` has the same shape
   (`src/core/codec/P1CodecStandard.cpp:900-921`).
+
+**Update (2026-09-24, receiver-and-transmit-gaps Task 3).** The P1 Hermes / HermesC10 (G2E) row
+above is corrected: stream 1 (rx2) now stays on DDC1 under PureSignal TX, matching Thetis `GetDDC`
+cases 5 and 7 (`console.cs:8704-8743 [v2.10.3.15]`), which give `rx2 = 1` in both the plain and the
+diversity PS-MOX shapes. `P1CodecStandard::applyDdcAssignment` no longer leaves `streamDdc[1]` at
+-1 in that branch, so slice B no longer reads as PS HOLD while a P1 Hermes-class radio transmits
+with PureSignal on.
+
+The HL2 is left as documented above: `P1CodecHl2::applyDdcAssignment` still suppresses stream 1
+(`streamDdc[1] = -1`) under PS-MOX, even though mi0bot's `GetDDC` (`console.cs:8733-8762
+[@c26a8a4]`) shows the same `rx2 = 1` shape for cases 5 and 7. This is pending a careful mi0bot
+reading and an HL2 bench check before it is changed to match.
 
 #### 16.3.3 TX
 
