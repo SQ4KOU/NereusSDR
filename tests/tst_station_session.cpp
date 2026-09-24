@@ -46,7 +46,11 @@
 #include <QByteArray>
 #include <QCryptographicHash>
 #include <QFile>
+#include <QGroupBox>
 #include <QHostAddress>
+#include <QLabel>
+#include <QPushButton>
+#include <QRadioButton>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
@@ -90,6 +94,7 @@
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/accessories/AlexController.h"
 #include "gui/setup/HardwarePage.h"
+#include "gui/widgets/FilterPolicyDialog.h"
 #include "models/NotchModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -392,6 +397,9 @@ private slots:
     void windowForgetsTheIoBoardOfACoreThatDoesNotOfferIt();
     void windowOcMatrixFollowsTheCore();
     void hardwareConfigRx1RateGoesToTheCoresFirstReceiver();
+    // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the filter policy dialog.
+    void windowFilterPolicyReachesTheCore();
+    void windowFilterPolicyWaitsForACoreThatOffersIt();
 
     // ---- Fix round 1 ----
     void reconnectSurvivesTheOldTransportClosing();
@@ -6120,6 +6128,151 @@ void TstStationSession::windowBandAntennaEditKeepsTheCoresNewerBands()
     QVERIFY(OperatorWording::isPlain(toast.last().at(0).toString()));
     QCOMPARE(s.core->alexController().rxAnt(Band::Band17m), 1);
     QCOMPARE(window->rxAnt(Band::Band17m), 1);
+}
+
+void TstStationSession::windowFilterPolicyReachesTheCore()
+{
+    // R-R3-46 / R-R3-21 (radioHardwareVersion 4). The filter policy dialog
+    // in a remote window shows the Core's policy; a change reaches the
+    // Core, is applied there by its own controller as a local Apply is,
+    // is saved for the Core's radio, and every window shows it.
+    AppSettings& coreStore = AppSettings::instance();
+    coreStore.clearHardwareValues(kHardwareMac);
+    const auto cleanStore = qScopeGuard([&coreStore] { coreStore.clearHardwareValues(kHardwareMac); });
+    HardwareSession s;
+    joinHardwareWindow(s, coreStore, this, m_securityDir.path());
+    const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
+    if (QTest::currentTestFailed()) { return; }
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 4);
+    QVERIFY(s.client->filterPolicyEditAvailable());
+    QVERIFY(s.client->filterPolicyUnavailableReason().isEmpty());
+    s.core->alexControllerMutable().setMacAddress(kHardwareMac);
+    QTRY_VERIFY(s.window->filterChainStateAvailable(0));
+    QCOMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::Auto);
+
+    const QString savedKey =
+        QStringLiteral("hardware/%1/alex/antenna/Alex0_BpfMode").arg(kHardwareMac);
+    {
+        FilterPolicyDialog dialog(0, s.window.get());
+        auto* group = dialog.findChild<QGroupBox*>(QStringLiteral("filterPolicyModeGroup"));
+        auto* autoBtn = dialog.findChild<QRadioButton*>(QStringLiteral("filterPolicyAuto"));
+        auto* bypass = dialog.findChild<QRadioButton*>(QStringLiteral("filterPolicyForceBypass"));
+        auto* apply = dialog.findChild<QPushButton*>(QStringLiteral("filterPolicyApply"));
+        auto* note = dialog.findChild<QLabel*>(QStringLiteral("filterPolicyNote"));
+        QVERIFY(group && autoBtn && bypass && apply && note);
+        QVERIFY(group->isEnabled());
+        QVERIFY(autoBtn->isChecked());  // the Core's policy
+        QVERIFY(OperatorWording::isPlain(note->text()));
+        QVERIFY2(!note->text().contains(QStringLiteral("not available")), qPrintable(note->text()));
+        bypass->setChecked(true);
+        apply->click();
+        QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    }
+    // Applied by the Core's controller, as a local Apply is.
+    QTRY_COMPARE(s.core->alexController().bpfMode(0), AlexController::BpfMode::ForceBypass);
+    AlexController local;
+    local.setBpfMode(0, AlexController::BpfMode::ForceBypass);  // the local dialog's call
+    QCOMPARE(s.core->alexController().adcState(0).effective, local.adcState(0).effective);
+    QCOMPARE(s.core->alexController().adcState(0).reasonText, local.adcState(0).reasonText);
+    QCOMPARE(s.core->alexController().bpfMode(1), AlexController::BpfMode::Auto);
+    // Saved on the Core for its radio, under the key the Core's controller
+    // loads.
+    QTRY_COMPARE(coreStore.value(savedKey).toString(), QStringLiteral("2"));
+    // Every window shows it.
+    QTRY_COMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::ForceBypass);
+    QTRY_COMPARE(s.window->filterChainState(0).effective, AlexController::BpfEffective::Bypass);
+    {
+        FilterPolicyDialog again(0, s.window.get());
+        auto* bypass = again.findChild<QRadioButton*>(QStringLiteral("filterPolicyForceBypass"));
+        QVERIFY(bypass && bypass->isChecked());
+    }
+
+    // A wideband chain stays bypassed, but its new policy still reaches the
+    // Core, is saved and is shown.
+    s.core->alexControllerMutable().setWidebandActive(1, true);
+    QTRY_VERIFY(s.window->filterChainStateAvailable(1));
+    const IStationLink::CommandOutcome sent =
+        s.client->requestFilterPolicy(1, int(AlexController::BpfMode::ForceBand));
+    QVERIFY(sent.sent);
+    QTRY_COMPARE(s.core->alexController().bpfMode(1), AlexController::BpfMode::ForceBand);
+    QTRY_COMPARE(coreStore.value(QStringLiteral("hardware/%1/alex/antenna/Alex1_BpfMode")
+                                     .arg(kHardwareMac)).toString(),
+                 QStringLiteral("1"));
+    QTRY_COMPARE(s.window->filterChainState(1).mode, AlexController::BpfMode::ForceBand);
+
+    // A policy the Core does not have is refused in plain words and changes
+    // nothing.
+    QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
+    QVERIFY(s.client->requestFilterPolicy(0, 7).sent);
+    QTRY_COMPARE(toast.count(), 1);
+    QVERIFY2(OperatorWording::isPlain(toast.last().at(0).toString()),
+             qPrintable(toast.last().at(0).toString()));
+    QCOMPARE(s.core->alexController().bpfMode(0), AlexController::BpfMode::ForceBypass);
+}
+
+void TstStationSession::windowFilterPolicyWaitsForACoreThatOffersIt()
+{
+    // R-R3-46 / R-R3-21. Against a Core below radioHardwareVersion 4 the
+    // remote dialog says in plain words that the Core needs updating and
+    // sends nothing; from 4 its Apply is the setAlexBpfMode command.
+    for (const int version : {2, 3, 4}) {
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        auto* station = new LoopbackTransport(QStringLiteral("bpf-station"), this);
+        auto* peer = new LoopbackTransport(QStringLiteral("bpf-client"), this);
+        station->linkTo(peer);
+        client.startSession(peer, QStringLiteral("test-token"));
+        station->sendText(SessionMessages::encode(SessionMessages::hello(
+            kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("station"))));
+        station->sendText(SessionMessages::encode(SessionMessages::authResult(true, {}, false)));
+        StationCapabilities caps;
+        caps.propertyResultVersion = 1;
+        caps.radioIdentityEntries = true;
+        caps.radioHardwareVersion = version;
+        station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
+        station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QCOMPARE(remote.stationLink(), static_cast<IStationLink*>(&client));
+        QCOMPARE(client.filterPolicyEditAvailable(), version >= 4);
+        const QString reason = client.filterPolicyUnavailableReason();
+        QCOMPARE(reason.isEmpty(), version >= 4);
+
+        // The Core's chain state as it reports it.
+        AlexController::AlexAdcState coreState;
+        coreState.mode = AlexController::BpfMode::Auto;
+        coreState.reasonText = QStringLiteral("20m");
+        FilterPolicyDialog dialog(0, &remote.alexControllerMutable(), nullptr, &coreState,
+                                  true, remote.stationLink());
+        auto* group = dialog.findChild<QGroupBox*>(QStringLiteral("filterPolicyModeGroup"));
+        auto* bypass = dialog.findChild<QRadioButton*>(QStringLiteral("filterPolicyForceBypass"));
+        auto* apply = dialog.findChild<QPushButton*>(QStringLiteral("filterPolicyApply"));
+        auto* note = dialog.findChild<QLabel*>(QStringLiteral("filterPolicyNote"));
+        QVERIFY(group && bypass && apply && note);
+        QVERIFY(OperatorWording::isPlain(note->text()));
+        station->clearReceived();
+        if (version < 4) {
+            QVERIFY(!group->isEnabled());
+            QCOMPARE(note->text(), reason);
+            QVERIFY2(reason.contains(QStringLiteral("Updating the Core")), qPrintable(reason));
+            QVERIFY(OperatorWording::isPlain(reason));
+            const IStationLink::CommandOutcome refused = client.requestFilterPolicy(0, 2);
+            QVERIFY(!refused.sent);
+            QCOMPARE(refused.reason, reason);
+            apply->click();
+            QTest::qWait(50);
+            QVERIFY(!station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+        } else {
+            QVERIFY(group->isEnabled());
+            bypass->setChecked(true);
+            apply->click();
+            QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+            QVERIFY(!station->receivedKinds().contains(QByteArrayLiteral("property.write")));
+        }
+        // Nothing changes in the window on the way out: the Core's answer
+        // comes back as its published chain state.
+        QCOMPARE(remote.alexController().bpfMode(0), AlexController::BpfMode::Auto);
+    }
 }
 
 void TstStationSession::windowShowsTheCoresIoBoard()

@@ -14,6 +14,11 @@
 //   2026-09-24 R-R3-49 / R-R3-21: the HPF checkbox is hidden until built
 //              (hpf-bcast). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //              Claude Code.
+//   2026-09-24 R-R3-46 / R-R3-21: in a remote window the policy can be
+//              changed on the Core (radioHardwareVersion 4, the
+//              setAlexBpfMode request); an older Core keeps a plain reason
+//              and nothing is sent. J.J. Boyd (KG4VCF), AI-assisted via
+//              Anthropic Claude Code.
 // =================================================================
 //
 // no-port-check: NereusSDR-original
@@ -21,6 +26,8 @@
 #include "gui/widgets/FilterPolicyDialog.h"
 
 #include "core/accessories/AlexController.h"
+#include "core/session/IStationLink.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/StyleConstants.h"
 #include "gui/UnbuiltFeatures.h"
 #include "models/RadioModel.h"
@@ -41,15 +48,22 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, RadioModel* model, QWidge
     : FilterPolicyDialog(chainIndex, &model->alexControllerMutable(), parent,
                          model->role() == RadioModel::Role::Remote
                              ? &model->filterChainState(chainIndex) : nullptr,
-                         model->filterChainStateAvailable(chainIndex))
+                         model->filterChainStateAvailable(chainIndex),
+                         model->role() == RadioModel::Role::Remote
+                             ? model->stationLink() : nullptr)
 {
 }
 
 FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWidget* parent,
                                        const AlexController::AlexAdcState* stationState,
-                                       bool stationStateAvailable)
+                                       bool stationStateAvailable, IStationLink* station)
     : QDialog(parent)
 {
+    // R-R3-46 / R-R3-21: a remote window changes the Core's policy only when
+    // the Core takes the change from this app (radioHardwareVersion 4).
+    const bool remote = stationState != nullptr;
+    const bool remoteEditable = remote && stationStateAvailable && station != nullptr
+        && station->filterPolicyEditAvailable();
     setWindowTitle(QStringLiteral("Chain %1 - Filter Policy").arg(chainIndex));
     setStyleSheet(QStringLiteral("background: %1; color: %2;")
                       .arg(QLatin1String(Style::kPanelBg),
@@ -92,6 +106,10 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWi
         QStringLiteral("Force filter (TX-bound band)"), modeGroup);
     auto* forceByBtn = new QRadioButton(
         QStringLiteral("Force bypass - Always wideband"), modeGroup);
+    modeGroup->setObjectName(QStringLiteral("filterPolicyModeGroup"));
+    autoBtn->setObjectName(QStringLiteral("filterPolicyAuto"));
+    forceBandBtn->setObjectName(QStringLiteral("filterPolicyForceFilter"));
+    forceByBtn->setObjectName(QStringLiteral("filterPolicyForceBypass"));
     btnGroup->addButton(autoBtn, int(AlexController::BpfMode::Auto));
     btnGroup->addButton(forceBandBtn, int(AlexController::BpfMode::ForceBand));
     btnGroup->addButton(forceByBtn, int(AlexController::BpfMode::ForceBypass));
@@ -109,11 +127,18 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWi
     modeLayout->addWidget(autoBtn);
     modeLayout->addWidget(forceBandBtn);
     modeLayout->addWidget(forceByBtn);
-    modeGroup->setEnabled(stationState == nullptr);
-    modeGroup->setVisible(!stationState || stationStateAvailable);
+    modeGroup->setEnabled(!remote || remoteEditable);
+    modeGroup->setVisible(!remote || stationStateAvailable);
     main->addWidget(modeGroup);
-    if (stationState && stationStateAvailable) {
-        auto* note = new QLabel(tr("Core reports this filter state. Remote policy editing is not available yet."), this);
+    QLabel* note = nullptr;
+    if (remote && stationStateAvailable) {
+        const QString noteText = remoteEditable
+            ? tr("This is the Core's filter policy. A change applies on the Core.")
+            : station != nullptr
+                ? OperatorReasonText::forDisplay(station->filterPolicyUnavailableReason())
+                : tr("Connect to the Core to change the filter policy.");
+        note = new QLabel(noteText, this);
+        note->setObjectName(QStringLiteral("filterPolicyNote"));
         note->setWordWrap(true);
         main->addWidget(note);
     }
@@ -136,11 +161,27 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWi
     cancelBtn->setStyleSheet(Style::buttonBaseStyle());
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     footer->addWidget(cancelBtn);
-    auto* applyBtn = new QPushButton(stationState ? tr("Close") : tr("Apply"), this);
+    auto* applyBtn = new QPushButton(remote && !remoteEditable ? tr("Close") : tr("Apply"), this);
+    applyBtn->setObjectName(QStringLiteral("filterPolicyApply"));
     applyBtn->setStyleSheet(Style::buttonBaseStyle() + Style::blueCheckedStyle());
     connect(applyBtn, &QPushButton::clicked, this,
-            [this, alex, chainIndex, btnGroup, readOnly = stationState != nullptr]() {
-        if (readOnly) { accept(); return; }
+            [this, alex, chainIndex, btnGroup, remote, remoteEditable, station, note,
+             shownMode = int(state.mode)]() {
+        if (remote) {
+            // R-R3-46 / R-R3-21: the Core applies the policy and every
+            // window follows its published chain state; nothing is changed
+            // here on the way out.
+            const int wanted = btnGroup->checkedId();
+            if (!remoteEditable || wanted == shownMode) { accept(); return; }
+            const IStationLink::CommandOutcome outcome =
+                station->requestFilterPolicy(chainIndex, wanted);
+            if (!outcome.sent) {
+                if (note) { note->setText(OperatorReasonText::forDisplay(outcome.reason)); }
+                return;
+            }
+            accept();
+            return;
+        }
         alex->setBpfMode(chainIndex,
                          static_cast<AlexController::BpfMode>(btnGroup->checkedId()));
         accept();
