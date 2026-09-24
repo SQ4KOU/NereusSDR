@@ -21,7 +21,10 @@
 //   devices.revoke {id}            remove a paired device. StationServer
 //                                  ends that device's connection on
 //                                  DeviceStore::deviceRemoved, whatever
-//                                  removed it.
+//                                  removed it. The last device is refused
+//                                  while no token is active (the Core would
+//                                  be unclaimed again; only the console's
+//                                  reset does that).
 //   station.rename {label}         store the label under the Core-owned
 //                                  StationLabel setting.
 //   station.acknowledgeKeyBackup   the operator has backed up the Core's
@@ -64,6 +67,9 @@
 //   2026-09-24: iPhone app Task 17 (R-IOS-08): resetUnclaimed(), the
 //               console's `reset --unclaimed --yes`. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R1-I1): the last device is not
+//               revoked while no token is active. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>

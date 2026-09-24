@@ -25,8 +25,9 @@
 //                  close() or `pairing.close`.
 //
 // The state follows the device store: the first pairing claims the Core
-// and closes an unclaimed window; a Core that loses its last device (and
-// has no token) is unclaimed again and opens (lockout recovery). The
+// and closes an unclaimed window; a Core reset to unclaimed from its
+// console opens again (devices.revoke never removes the last device while
+// no token is active, so physical access is the only way back). The
 // window's state is the Core's, independent of any connection.
 //
 // The code is single use. The exchange takes it (takeCode()) at the step
@@ -49,6 +50,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (R1-I1): the last device is not
+//               revoked while no token is active. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QObject>

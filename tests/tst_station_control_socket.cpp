@@ -33,6 +33,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (R1-I1): the last device is not
+//               revoked while no token is active. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -629,11 +632,22 @@ private slots:
         QVERIFY(!reply.ok);
         QCOMPARE(core.server()->deviceStore()->list().size(), 1);
 
+        // The last device is not removed while no token is active: the
+        // console's reset is how a Core becomes unclaimed (fix wave R1-I1).
+        reply = core.run({QStringLiteral("devices"), QStringLiteral("revoke"), device.id()});
+        QVERIFY(!reply.ok);
+        verifyPlain(reply);
+        QCOMPARE(reply.text, QStringLiteral("Pair another device first, or reset this Core from "
+                                            "its own computer."));
+        QCOMPARE(core.server()->deviceStore()->list().size(), 1);
+
+        Device other;
+        QVERIFY(core.server()->deviceStore()->add(other.record(QStringLiteral("Shack iPad"))));
         reply = core.run({QStringLiteral("devices"), QStringLiteral("revoke"), device.id()});
         QVERIFY2(reply.ok, qPrintable(reply.text));
         verifyPlain(reply);
         QVERIFY(reply.text.contains(QStringLiteral("Shack iPhone was removed")));
-        QVERIFY(core.server()->deviceStore()->list().isEmpty());
+        QCOMPARE(core.server()->deviceStore()->list().size(), 1);
         QVERIFY(endedWithCode(session, QStringLiteral("deviceRemoved")));
     }
 

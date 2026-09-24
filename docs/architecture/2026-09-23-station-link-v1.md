@@ -266,8 +266,10 @@ connection's:
   by a paired device (`pairing.open`, section 9.1). Only the code pairs.
   It closes after one successful pairing, or on `pairing.close`.
 
-The first pairing closes an unclaimed window. A Core that loses its last
-device (and has no token) is unclaimed again, and its window opens.
+The first pairing closes an unclaimed window, for good. `devices.revoke`
+never removes the last device while no token is active (section 9.1), so a
+claimed Core becomes unclaimed again only through its console's `reset
+--unclaimed --yes`, and its window then opens.
 
 **The code** is a number and two words, `<nameplate>-<word>-<word>`, for
 example `7-anvil-harbor`. The words come from
@@ -1694,6 +1696,10 @@ Four command groups need a sentence beyond the table:
   `devices.revoke` removes the paired device whose `id` (as in `listJson`)
   it names; the Core ends that device's connection (section 12.4), and a
   device may revoke itself, its connection ending just after the result.
+  The last paired device is refused while no token is active, "Pair
+  another device first, or reset this Core from its own computer.": its
+  removal would leave the Core unclaimed, and only the console's reset
+  does that (section 3.6).
   `station.rename` stores a label (section 8.2): a callsign of letters,
   digits and `/`, then optionally `/` and up to 32 letters, digits, `-` or
   `_`; any other is refused with a reason that states the rule.

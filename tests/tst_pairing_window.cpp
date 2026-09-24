@@ -17,8 +17,8 @@
 //
 // then the admit paths: a new Core is OpenUnclaimed with no timer; the
 // first pairing claims it (ClosedClaimed); reopen() opens OpenReopened,
-// which closes after one successful pairing or close(); a Core that loses
-// its last device opens again; every change of the code is signalled.
+// which closes after one successful pairing or close(); a Core reset to
+// unclaimed opens again; every change of the code is signalled.
 //
 // Time is an injected clock; nothing sleeps. Codes are made at run time
 // and never printed.
@@ -28,6 +28,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (R1-I1): the last device is not
+//               revoked while no token is active. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -302,13 +305,16 @@ private slots:
         QVERIFY(f.window->codeSerial() != serial);
     }
 
-    void losingTheLastDeviceOpensTheWindowAgain()
+    void aResetToUnclaimedOpensTheWindowAgain()
     {
+        // The console's `reset --unclaimed --yes` is the one way a claimed
+        // Core becomes unclaimed: devices.revoke refuses the last device
+        // while no token is active (fix wave R1-I1, tst_station_devices).
         Fixture f;
         const PairedDevice device = makeDevice();
         QVERIFY(f.store->add(device));
         QCOMPARE(f.window->state(), PairingWindow::State::ClosedClaimed);
-        QVERIFY(f.store->remove(device.id));
+        QVERIFY(f.store->reset());
         QCOMPARE(f.window->state(), PairingWindow::State::OpenUnclaimed);
         QVERIFY(!f.window->currentCode().isEmpty());
     }

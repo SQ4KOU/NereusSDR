@@ -37,6 +37,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (R1-I1): the last device is not
+//               revoked while no token is active. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -54,6 +57,7 @@
 #include "core/AppSettings.h"
 #include "core/security/DeviceAuthenticator.h"
 #include "core/security/DeviceStore.h"
+#include "core/security/PairingWindow.h"
 #include "core/security/StationIdentity.h"
 #include "core/security/StationLabel.h"
 #include "core/security/TokenStore.h"
@@ -410,7 +414,10 @@ private slots:
     {
         Core core(false);
         Device phone;
+        Device tablet;
         QVERIFY(core.server->deviceStore()->add(phone.record()));
+        // Not the last device (that is refused; see below).
+        QVERIFY(core.server->deviceStore()->add(tablet.record(QStringLiteral("Shack iPad"))));
         LoopbackTransport* app = core.deviceSession(phone);
         QVERIFY(app != nullptr);
 
@@ -467,6 +474,49 @@ private slots:
         QCOMPARE(list.at(0).toObject().value(QStringLiteral("id")).toString(), phone.id());
         QCOMPARE(core.deviceSignInResult(tablet).value(QStringLiteral("code")).toString(),
                  QStringLiteral("deviceNotPaired"));
+    }
+
+    void revokingTheLastDeviceIsRefusedWhileNoTokenIsActive()
+    {
+        // Fix wave R1-I1: removing the last device of a Core with no token
+        // would make it unclaimed again, open to one tap on its network and
+        // to codes from anywhere. The pairing design closes the window for
+        // good at the first pair; physical access (the console's reset) is
+        // how a Core becomes unclaimed again.
+        Core core(false);
+        Device phone;
+        QVERIFY(core.server->deviceStore()->add(phone.record()));
+        LoopbackTransport* app = core.deviceSession(phone);
+        QVERIFY(app != nullptr);
+        QVERIFY(!core.devices().tokenActive());
+
+        const QJsonObject result = core.invoke(app, "devices.revoke", {utf8("id", phone.id())});
+        QCOMPARE(result.value(QStringLiteral("accepted")).toBool(true), false);
+        const QString reason = result.value(QStringLiteral("reason")).toString();
+        QCOMPARE(reason, QStringLiteral("Pair another device first, or reset this Core from its "
+                                        "own computer."));
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        QVERIFY(app->isOpen());
+        QVERIFY(core.server->deviceStore()->find(phone.key.fingerprint()));
+        QVERIFY(core.devices().claimed());
+        QCOMPARE(core.server->pairingWindow()->state(), PairingWindow::State::ClosedClaimed);
+        QVERIFY(core.server->pairingWindow()->currentCode().isEmpty());
+    }
+
+    void revokingTheLastDeviceIsAcceptedWhileTheTokenIsActive()
+    {
+        // The token keeps the Core claimed, so the window stays shut.
+        Core core(/*upgradedWithToken=*/true);
+        Device phone;
+        QVERIFY(core.server->deviceStore()->add(phone.record()));
+        LoopbackTransport* app = core.deviceSession(phone);
+        QVERIFY(app != nullptr);
+        const QJsonObject result = core.invoke(app, "devices.revoke", {utf8("id", phone.id())});
+        QVERIFY2(result.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(result.value(QStringLiteral("reason")).toString()));
+        verifyEnded(app, kRemoved, QStringLiteral("deviceRemoved"));
+        QVERIFY(core.devices().claimed());
+        QCOMPARE(core.server->pairingWindow()->state(), PairingWindow::State::ClosedClaimed);
     }
 
     void revokeRefusesWhatItCannotDo()
@@ -752,16 +802,22 @@ private slots:
         QCOMPARE(devices.revision(), ++revision);
         QVERIFY(devices.acknowledgeKeyBackup().accepted);
         QCOMPARE(devices.revision(), ++revision);
-        QVERIFY(devices.revoke(phone.id()).accepted);
+        Device tablet;
+        QVERIFY(store.add(tablet.record(QStringLiteral("Shack iPad"))));
         QCOMPARE(devices.revision(), ++revision);
-        QCOMPARE(listOf(devices).size(), 0);
-        QVERIFY(!devices.claimed());
-        QCOMPARE(changed.count(), 5);
+        QVERIFY(devices.revoke(tablet.id()).accepted);
+        QCOMPARE(devices.revision(), ++revision);
+        QCOMPARE(listOf(devices).size(), 1);
+        QVERIFY(devices.claimed());
+        QCOMPARE(changed.count(), 6);
 
-        // Refusals change nothing.
+        // Refusals change nothing: a device no longer paired, and the last
+        // one while no token is active.
         QVERIFY(!devices.rename(QStringLiteral("not a label")).accepted);
+        QVERIFY(!devices.revoke(tablet.id()).accepted);
         QVERIFY(!devices.revoke(phone.id()).accepted);
-        QVERIFY(!devices.retireToken().accepted);
+        // With no token, retiring it has nothing to do.
+        QVERIFY(devices.retireToken().accepted);
         QCOMPARE(devices.revision(), revision);
     }
 

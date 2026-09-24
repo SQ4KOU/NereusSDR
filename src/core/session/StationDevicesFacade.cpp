@@ -14,6 +14,9 @@
 //   2026-09-24: iPhone app Task 17 (R-IOS-08): resetUnclaimed(). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (R1-I1): the last device is not
+//               revoked while no token is active. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationDevicesFacade.h"
@@ -188,8 +191,19 @@ DeviceAdminResult StationDevicesFacade::revoke(const QString& id)
     }
     bool ok = false;
     const QByteArray raw = StationIdentity::fromBase64Url(id, &ok);
-    if (!ok || !m_devices.find(raw)) {
+    const std::optional<PairedDevice> device = ok ? m_devices.find(raw) : std::nullopt;
+    if (!device) {
         return {false, QStringLiteral("That device is not paired with this Core.")};
+    }
+    // Fix wave R1-I1: the last device of a Core with no token is what keeps
+    // it claimed. Removing it would open the pairing window to one tap on
+    // the Core's network and to codes from anywhere; the pairing design
+    // closes the window for good at the first pair, and only physical
+    // access (the console's reset) makes a Core unclaimed again. The same
+    // guard as retireToken's, from the other side.
+    if (!m_tokens.isActive() && m_devices.list().size() <= 1) {
+        return {false, QStringLiteral("Pair another device first, or reset this Core from its "
+                                      "own computer.")};
     }
     // DeviceStore emits deviceRemoved (StationServer ends that device's
     // connection) and devicesChanged (refresh) on success.
