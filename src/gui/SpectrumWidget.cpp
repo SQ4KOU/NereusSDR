@@ -8,6 +8,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-24 J.J. Boyd / KG4VCF : setPeakHoldEnabled emits
+//                 peakHoldEnabledChanged (R-R3-49, R-R3-21). AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-22 J.J. Boyd / KG4VCF — adapt AetherSDR prepareForShutdown()
 //                 [@0dea0dd7]; native child teardown only, preserving the
 //                 standalone QRhi owner's lifetime (OpenAI Codex).
@@ -1977,6 +1980,7 @@ void SpectrumWidget::setPeakHoldEnabled(bool on)
     }
     scheduleSettingsSave();
     update();
+    emit peakHoldEnabledChanged(on);
 }
 
 void SpectrumWidget::setPeakHoldDelayMs(int ms)

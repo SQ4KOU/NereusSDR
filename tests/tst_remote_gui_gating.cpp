@@ -163,6 +163,7 @@
 #include "core/settings/SettingsScope.h"
 #include "gui/ConnectionPanel.h"
 #include "gui/GuiSessionCoordinator.h"
+#include "gui/SpectrumWidget.h"
 #include "gui/UnbuiltFeatures.h"
 #include "gui/containers/ContainerButtonDispatcher.h"
 #include "models/Band.h"
@@ -210,6 +211,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#include "fakes/FakeAudioBus.h"
 #include "fakes/MainWindowTestSettings.h"
 
 using namespace NereusSDR;
@@ -3868,6 +3870,78 @@ private slots:
         QCOMPARE(vfo->frequency(),
                  static_cast<int64_t>(std::llround(model->sliceById(0)->frequency())));
         QVERIFY(modes->activeMode() >= 0);
+    }
+
+    // Fix wave M3 (R-R3-49, R-R3-21): the Peak hold and VAX 1 buttons light
+    // the moment their targets change elsewhere (the pan overlay, Setup >
+    // Audio > VAX), not at the next unrelated refresh.
+    void containerPeakAndVaxButtonsFollowChangesMadeElsewhere()
+    {
+        using Id = OtherButtonItem::ButtonId;
+        Test::markAudioFirstRunDone();
+        RadioDiscovery::clearHoldOffForTest();
+        {
+            RadioDiscovery discovery;
+            discovery.holdOffScans(std::chrono::minutes{5});
+        }
+        const auto releaseHoldOff = qScopeGuard([] {
+            RadioDiscovery::clearHoldOffForTest();
+            AppSettings::instance().remove(QStringLiteral("audio/Vax1/Enabled"));
+        });
+
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.replace({}, false));
+        MainWindow* const window = sessions.window();
+        RadioModel* const model = window->radioModel();
+        while (model->slices().isEmpty()) { QVERIFY(model->addSlice() >= 0); }
+        QVERIFY(model->sliceById(0) != nullptr);
+        AudioEngine* const audio = model->localAudioDevices();
+        QVERIFY(audio != nullptr);
+        audio->setVaxBusFactoryForTest([](int channel) -> std::unique_ptr<IAudioBus> {
+            auto bus = std::make_unique<FakeAudioBus>(QStringLiteral("FakeVax%1").arg(channel));
+            AudioFormat fmt;
+            fmt.sampleRate = 48000;
+            fmt.channels = 2;
+            fmt.sample = AudioFormat::Sample::Float32;
+            bus->open(fmt);
+            return bus;
+        });
+        audio->setVaxEnabled(1, false);
+
+        auto* manager = window->findChild<ContainerManager*>();
+        QVERIFY(manager != nullptr);
+        ContainerWidget* const container = manager->createContainer(1, DockMode::Floating);
+        auto* meter = new MeterWidget();
+        container->setContent(meter);
+        auto* buttons = new OtherButtonItem();
+        meter->addItem(buttons);
+        container->wireInteractiveItem(buttons);
+        const auto destroy = qScopeGuard([manager, container] {
+            manager->destroyContainer(container->id());
+        });
+
+        // Peak hold, changed on slice A's panadapter.
+        SpectrumWidget* sw = nullptr;
+        for (SpectrumWidget* candidate : window->findChildren<SpectrumWidget*>()) {
+            candidate->setPeakHoldEnabled(false);
+            if (sw == nullptr) { sw = candidate; }
+        }
+        QVERIFY(sw != nullptr);
+        QVERIFY(buttons->isButtonAvailable(Id::PeakHold));
+        const bool before = buttons->buttonState(Id::PeakHold);
+        for (SpectrumWidget* candidate : window->findChildren<SpectrumWidget*>()) {
+            candidate->setPeakHoldEnabled(true);
+        }
+        QVERIFY(!before);
+        QVERIFY(buttons->buttonState(Id::PeakHold));
+
+        // VAX 1, switched on as Setup > Audio > VAX does.
+        QVERIFY(!buttons->buttonState(Id::Vac1));
+        audio->setVaxEnabled(1, true);
+        QVERIFY(audio->isVaxBusOpen(1));
+        QVERIFY(buttons->buttonState(Id::Vac1));
+        audio->setVaxEnabled(1, false);
+        QVERIFY(!buttons->buttonState(Id::Vac1));
     }
 
     void containerButtonsActOnTheirOwnSliceLocallyAndRemotely()

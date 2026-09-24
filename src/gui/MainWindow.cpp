@@ -2906,6 +2906,10 @@ void MainWindow::wireSpectrumSliceControls(SpectrumWidget* sw,
     // bypasses the allocator via forceHardwareFrequency and writes the centre
     // into this widget), and let the next VFO move settle the offsets to zero
     // through the now-unpinned allocator.
+    // R-R3-21 (fix wave M3): a container's Peak button lights at once when
+    // peak hold changes on its slice's pan, from the overlay or elsewhere.
+    connect(sw, &SpectrumWidget::peakHoldEnabledChanged, this,
+            [this](bool) { refreshContainerControls(); });
     connect(sw, &SpectrumWidget::ctunEnabledChanged, this,
             [this, panId, sw](bool enabled) {
         // R-R3-21: a container's CTUN button lights from its slice's pan.
@@ -3951,6 +3955,12 @@ void MainWindow::buildUI()
         // R-R3-49: VAX 1 / VAX 2 open and close this computer's VAX
         // outputs, as Setup > Audio > VAX does (live in a remote window).
         hooks.vaxDevices = m_radioModel->localAudioDevices();
+        // Fix wave M3: VAX 1 / VAX 2 light at once when Setup > Audio > VAX
+        // (or anything else) opens or closes this computer's VAX output.
+        if (hooks.vaxDevices) {
+            connect(hooks.vaxDevices, &AudioEngine::vaxBusOpenChanged, this,
+                    [this](int) { refreshContainerControls(); });
+        }
         m_containerButtons = std::make_unique<ContainerButtonDispatcher>(
             m_radioModel, std::move(hooks));
     }

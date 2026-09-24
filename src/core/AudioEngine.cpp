@@ -19,6 +19,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-24 : setVaxEnabled emits vaxBusOpenChanged (R-R3-49, R-R3-21)
+//                 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 //   2026-09-23 : R-R3-45 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code. Speakers or headphones per receiver (VAX
 //                 design 6.2): the master mixer builds both sums, the
@@ -162,6 +165,7 @@
 #endif
 
 #include <QCoreApplication>
+#include <QScopeGuard>
 #include <QStandardPaths>
 
 #include <portaudio.h>
@@ -1270,6 +1274,9 @@ void AudioEngine::setVaxEnabled(int channel, bool on)
     if (channel < 1 || channel > 4) {
         return;
     }
+    // R-R3-21: emitted once the bus lock below is released, whichever
+    // branch returns.
+    const auto announce = qScopeGuard([this, channel] { emit vaxBusOpenChanged(channel); });
     const int idx = channel - 1;
     // R-R3-44: see setVaxConfig().
     std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);

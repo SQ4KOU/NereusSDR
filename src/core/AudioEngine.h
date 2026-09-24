@@ -21,6 +21,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-24 : vaxBusOpenChanged signal (R-R3-49, R-R3-21) by J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-23 : R-R3-45 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code. Headphones output beside the speakers (VAX
 //                 design 5.3, 6.2, 6.3): opened at start() when Setup,
@@ -859,6 +861,10 @@ signals:
     void vaxRxGainChanged(int channel, float gain);
     void vaxMutedChanged(int channel, bool muted);
     void vaxTxGainChanged(float gain);
+    /// R-R3-21 (R3 unfinished controls fix wave M3): setVaxEnabled() ran
+    /// for `channel`; isVaxBusOpen(channel) may have changed. A container's
+    /// VAX button lights from it at once.
+    void vaxBusOpenChanged(int channel);
 
     // (Phase 3M-1c D.1 added a micBlockReady(const float*, int) signal
     //  that fired on every kMicBlockFrames=720-sample accumulator block.
