@@ -12,12 +12,12 @@ directory alongside NereusSDR's own `LICENSE`.
 | --- | --- | --- | --- | --- |
 | NereusSDR | application | GPL-3.0 | (see root `LICENSE`) | `GPLv3.txt` |
 | Qt 6 | GUI / network / audio framework | LGPL-3.0 (dynamic linking) | `qt6.txt` | `LGPLv3.txt` (+ `GPLv3.txt` by LGPL §4 reference) |
-| FFTW3 | FFT library | GPL-2.0-or-later | `fftw3.txt` | `GPLv2.txt` |
-| WDSP | DSP engine | GPL-2.0-or-later | `wdsp.txt` | `GPLv2.txt` |
-| RADE (radae_nopy b2891023) | RADE digital voice modem, built as the rade shared library | BSD-2-Clause | `rade.txt` | `rade.txt` |
-| r8brain-free-src 5c44bebe | sample rate conversion for RADE transmit audio | MIT | `r8brain.txt` | `r8brain.txt` |
+| FFTW3 | FFT library | GPL-2.0-or-later | `fftw3.txt`, `fftw3-notices.txt` | `GPLv2.txt` |
+| WDSP | DSP engine | GPL-2.0-or-later | `wdsp.txt`, `wdsp-notices.txt` | `GPLv2.txt` |
+| RADE (radae_nopy b2891023) | RADE digital voice modem, built as the rade shared library | BSD-2-Clause | `rade.txt`, `rade-notices.txt` | `rade.txt` |
+| r8brain-free-src 5c44bebe | sample rate conversion for RADE transmit audio | MIT | `r8brain.txt`, `r8brain-notices.txt` | `r8brain.txt` |
 | libspecbleach 0.2.0 (41d3f583) | NR4 noise reduction | LGPL-2.1-or-later | `libspecbleach.txt` | `LGPLv2.1.txt` |
-| rnnoise 70f1d256 | NR3 noise reduction and its two bundled models | BSD-3-Clause | `rnnoise.txt` | `rnnoise.txt` |
+| rnnoise 70f1d256 | NR3 noise reduction and its two bundled models | BSD-3-Clause | `rnnoise.txt`, `rnnoise-notices.txt` | `rnnoise.txt` |
 | DeepFilterNet d375b2d8 | DFNR noise reduction library and its bundled model | Apache-2.0 OR MIT | `deepfilternet.txt` | `deepfilternet-apache.txt`, `deepfilternet-mit.txt` |
 | PortAudio v19.7.0 | audio device input and output | MIT | `portaudio.txt` | `portaudio.txt` |
 | nlohmann json 55f93686 | JSON parsing for libdatachannel | MIT | `nlohmann-json.txt` | `nlohmann-json.txt` |
@@ -49,13 +49,13 @@ directory, or when a text file here is named by no row.
 | Library | Comes from | Pinned version | Ships in | Notice file |
 | --- | --- | --- | --- | --- |
 | Qt 6 | installed on the build machine; copied into packages by linuxdeploy, macdeployqt and windeployqt | the release workflow's Qt | desktop packages; the Core uses the system's Qt | `qt6.txt` |
-| FFTW3 | `third_party/fftw3` (Windows headers and DLLs, fetched from fftw.org by the root CMakeLists.txt when missing); system package on Linux; Homebrew on macOS | 3.3.5 on Windows; the system or Homebrew package elsewhere | desktop packages and the Core | `fftw3.txt` |
-| WDSP | `third_party/wdsp` | TAPR v1.29 with NereusSDR changes | desktop packages and the Core | `wdsp.txt` |
-| RADE (radae_nopy) | `third_party/rade` | b2891023f3aecdf8b1793618000b1be6bcb2c4d1 | desktop packages and the Core | `rade.txt` |
-| Opus | ExternalProject `build_opus`, `build_opus_x86` and `build_opus_arm` in `third_party/rade/cmake/BuildOpus.cmake`, built into the rade library with its LPCNet and FARGAN parts | 940d4e5af64351ca8ba8390df3f555484c567fbb | desktop packages and the Core | `opus.txt` |
-| r8brain-free-src | `third_party/r8brain` | 5c44bebe9c477d47b1dc7037fcaae2794ff2b4e1 | desktop packages and the Core | `r8brain.txt` |
+| FFTW3 | `third_party/fftw3` (Windows headers and DLLs, fetched from fftw.org by the root CMakeLists.txt when missing); system package on Linux; Homebrew on macOS | 3.3.5 on Windows; the system or Homebrew package elsewhere | desktop packages and the Core | `fftw3.txt`, `fftw3-notices.txt` |
+| WDSP | `third_party/wdsp` | TAPR v1.29 with NereusSDR changes | desktop packages and the Core | `wdsp.txt`, `wdsp-notices.txt` |
+| RADE (radae_nopy) | `third_party/rade` | b2891023f3aecdf8b1793618000b1be6bcb2c4d1 | desktop packages and the Core | `rade.txt`, `rade-notices.txt` |
+| Opus | ExternalProject `build_opus`, `build_opus_x86` and `build_opus_arm` in `third_party/rade/cmake/BuildOpus.cmake`, built into the rade library with its LPCNet and FARGAN parts | 940d4e5af64351ca8ba8390df3f555484c567fbb | desktop packages and the Core | `opus.txt`, `opus-notices.txt` |
+| r8brain-free-src | `third_party/r8brain` | 5c44bebe9c477d47b1dc7037fcaae2794ff2b4e1 | desktop packages and the Core | `r8brain.txt`, `r8brain-notices.txt` |
 | libspecbleach | `third_party/libspecbleach`, FetchContent `libspecbleach_upstream` | 41d3f58310391e05ecfb8b7c9efb62ea2ba8ef05 (v0.2.0) | desktop packages and the Core | `libspecbleach.txt` |
-| rnnoise | `third_party/rnnoise`, FetchContent `rnnoise_upstream` | 70f1d256acd4b34a572f999a05c87bf00b67730d | desktop packages and the Core (models too) | `rnnoise.txt` |
+| rnnoise | `third_party/rnnoise`, FetchContent `rnnoise_upstream` | 70f1d256acd4b34a572f999a05c87bf00b67730d | desktop packages and the Core (models too) | `rnnoise.txt`, `rnnoise-notices.txt` |
 | DeepFilterNet | `third_party/deepfilter`, built or downloaded by `setup-deepfilter.sh` and `setup-deepfilter.ps1` | d375b2d8309e0935d165700c91da9de862a99c31 | desktop packages, and the Core when its build has the library | `deepfilternet.txt` |
 | PortAudio | FetchContent `portaudio` | v19.7.0 | desktop packages and the Core | `portaudio.txt` |
 | zlib | FetchContent `zlib` on Windows; the system library elsewhere | v1.3.1 on Windows | Windows packages | `zlib.txt` |
@@ -82,6 +82,18 @@ above, with its text, if it ships.
 | macdeployqt (macOS app) | Qt frameworks and plugins, and every other non-system library the app links, for example FFTW and OpenSSL, plus the libraries Homebrew's Qt depends on for the Apple Silicon build | confirm on the next release build |
 | windeployqt (Windows) | Qt libraries and plugins | confirm on the next release build |
 | release.yml copy steps (Windows) | `libfftw3-3.dll`, `libfftw3f-3.dll`, `deepfilter.dll` and `rade.dll`, all with rows above | listed above |
+
+## Notices inside the compiled sources
+
+Some libraries' source files carry copyright and licence notices that
+their top-level licence text does not: other holders, other years or
+other licences. Each `<library>-notices.txt` file lists those notices,
+each distinct notice once and exactly as the source file writes it, with
+the files it appears in. They cover the files NereusSDR compiles into its
+programs. `scripts/collect-source-notices.py <library>` writes them;
+rerun it after a vendor update. libspecbleach has no such file: its source
+files carry only the notice `libspecbleach.txt` and `LGPLv2.1.txt` already
+hold. The DeepFilterNet header NereusSDR compiles carries no notice.
 
 Per-file attribution for ported code lives in the source-file headers
 and is indexed in `docs/attribution/THETIS-PROVENANCE.md`,
@@ -147,6 +159,12 @@ the §6(b) fallback.
 - `nlohmann-json.txt`   nlohmann json full MIT notice
 - `zlib.txt`            zlib full notice
 - `libaspl.txt`         libASPL full MIT notice
+- `fftw3-notices.txt`   notices in the FFTW header NereusSDR compiles
+- `wdsp-notices.txt`    notices in the WDSP sources NereusSDR compiles
+- `rade-notices.txt`    notices in the RADE sources NereusSDR compiles
+- `opus-notices.txt`    notices in the Opus sources the RADE build compiles
+- `r8brain-notices.txt` notices in the r8brain-free-src headers NereusSDR compiles
+- `rnnoise-notices.txt` notices in the rnnoise sources NereusSDR compiles
 
 This directory is installed to:
 
