@@ -329,3 +329,35 @@ Linux container if possible.
 **Execution note (advisory):** opus; items can be separate commits.
 
 - [ ] **Step 1:** Each item, test, commit.
+
+## Task 10: The TCI update gap as Thetis has it, and notices that do not depend on the build machine
+
+**Requirements:** R-R3-49 (every control does what its label says); R-R3-50 (licences).
+
+**Items:**
+1. **The TCI update gap.** Thetis's `udTCIRateLimit` is not an incoming-message limit. It is
+   the shortest gap between outgoing `vfo`, `dds` and `tx_frequency` updates to TCI apps: 0 to
+   1000 ms, default 100 (TCIServer.cs:6420-6480 [v2.10.3.15]; found by Task 4).
+   - NereusSDR's hidden `TciRateLimitMsgsPerSec` control was modelled as a messages-per-second
+     limit and never wired.
+   - Port Thetis's gap (source first, with cites and author tags), and show the control in
+     Thetis's unit and default.
+   - Reconcile `TciVfoCoalescer.h`'s note (which subsumed Thetis's throttle layers into the
+     event loop) with the port. Its Layer 3 dedup stays.
+   - A saved value in the old unit is dropped once, through the settings schema step, with a
+     CHANGELOG line.
+   - Test: updates to one app come no closer together than the gap; 0 sends every change.
+2. **Notices that do not depend on the build machine.** The notices presets for the fetched
+   libraries (portaudio, libdatachannel, libjuice, usrsctp, libsrtp) read the files one build
+   tree compiled. So the committed files report out of date against a macOS arm64 tree, and
+   would against a Linux or Windows tree. Collect from each library's full list of sources
+   that any supported platform compiles (from its CMake lists, all platforms), so every
+   machine regenerates the same file. Regenerate the committed files, and add a pytest case
+   that the same inputs give the same output whichever platform's tree is given.
+
+**Verification:** the TCI family and `tst_unbuilt_features`; the compliance pytest and the
+licence check.
+
+**Execution note (advisory):** opus.
+
+- [ ] **Step 1:** Each item, test, commit.
