@@ -210,6 +210,8 @@ class TestP1DdcLayoutPerModel : public QObject {
 private slots:
     void layout_matches_thetis_data();
     void layout_matches_thetis();
+    void nddc5_banks_6_and_7_carry_the_tx_frequency_data();
+    void nddc5_banks_6_and_7_carry_the_tx_frequency();
 };
 
 void TestP1DdcLayoutPerModel::layout_matches_thetis_data()
@@ -277,6 +279,53 @@ void TestP1DdcLayoutPerModel::layout_matches_thetis()
                                     cfg.psFbDdc, cfg.txMonDdc, a.p1Diversity,
                                     cfg.p1RxCount, cfg.nDdc);
     QCOMPARE(fromPs, actual);
+}
+
+// Slots 3 and 4 are the PureSignal pair on the nddc == 5 boards, and Thetis
+// tunes them to the TX frequency always. From Thetis ChannelMaster/
+// networkproto1.c:538-551 [v2.10.3.15]:
+//   case 6: //RX4 VFO (DDC3)       // DDC3 is TX frequency always
+//   case 7: //RX5 VFO (DDC4)       // DDC4 is TX frequency for Orion2 TX with
+//                                  // puresignal, otherwise not used, so make TX always
+// The Hermes class (nddc 4) keeps its bank 5 / 6 extension untouched.
+void TestP1DdcLayoutPerModel::nddc5_banks_6_and_7_carry_the_tx_frequency_data()
+{
+    QTest::addColumn<int>("model");
+    QTest::addColumn<int>("nddc");
+    QTest::addColumn<bool>("txOnSlots34");
+    QTest::newRow("ANAN7000D nddc5")    << int(HPSDRModel::ANAN7000D)    << 5 << true;
+    QTest::newRow("ANVELINAPRO3 nddc5") << int(HPSDRModel::ANVELINAPRO3) << 5 << true;
+    QTest::newRow("REDPITAYA nddc5")    << int(HPSDRModel::REDPITAYA)    << 5 << true;
+    QTest::newRow("HERMES nddc4")       << int(HPSDRModel::HERMES)       << 4 << false;
+}
+
+void TestP1DdcLayoutPerModel::nddc5_banks_6_and_7_carry_the_tx_frequency()
+{
+    QFETCH(int, model);
+    QFETCH(int, nddc);
+    QFETCH(bool, txOnSlots34);
+    const auto codec = codecFor(static_cast<HPSDRModel>(model));
+
+    for (bool mox : {false, true}) {
+        CodecContext ctx{};
+        ctx.model         = static_cast<HPSDRModel>(model);
+        ctx.mox           = mox;
+        ctx.activeRxCount = 5;
+        ctx.p1PsNDdc      = nddc;
+        ctx.txFreqHz      = 14200000;
+        for (int i = 0; i < 7; ++i) {
+            ctx.rxFreqHz[i] = 7000000 + i * 10000;
+        }
+        for (int bank : {6, 7}) {
+            quint8 out[5] = {};
+            codec->composeCcForBank(bank, ctx, out);
+            const quint32 hz = (quint32(out[1]) << 24) | (quint32(out[2]) << 16)
+                             | (quint32(out[3]) << 8) | quint32(out[4]);
+            const quint32 want = txOnSlots34 ? 14200000u
+                                             : quint32(ctx.rxFreqHz[bank - 3]);
+            QCOMPARE(hz, want);
+        }
+    }
 }
 
 QTEST_APPLESS_MAIN(TestP1DdcLayoutPerModel)

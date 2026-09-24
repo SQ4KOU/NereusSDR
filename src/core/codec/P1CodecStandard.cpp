@@ -293,9 +293,28 @@ void P1CodecStandard::composeCcForBank(int bank, const CodecContext& ctx,
             static const quint8 kRxC0Addr[] = { 0x08, 0x0A, 0x0C, 0x0E, 0x10 };
             const int rxIdx = bank - 3;  // bank 5 → rxIdx 2, bank 9 → rxIdx 6
             out[0] = quint8(C0base | kRxC0Addr[bank - 5]);
-            const quint64 freq = (rxIdx < ctx.activeRxCount)
-                                  ? ctx.rxFreqHz[rxIdx]
-                                  : ctx.txFreqHz;
+            quint64 freq = (rxIdx < ctx.activeRxCount)
+                            ? ctx.rxFreqHz[rxIdx]
+                            : ctx.txFreqHz;
+            // Plan Task 11: on the nddc == 5 boards (Orion class, AnvelinaPro3,
+            // RedPitaya) frame slots 3 and 4 are the PureSignal pair
+            // (MetisReadThreadMainLoop case 5, twist(spr, 3, 4, 1)), and Thetis
+            // tunes both to the TX frequency. From Thetis
+            // ChannelMaster/networkproto1.c:538-551 [v2.10.3.15]:
+            //   case 6: //RX4 VFO (DDC3)
+            //       C0 |= 0x0a;
+            //       // DDC3 is TX frequency always
+            //       ddc_freq = prn->tx[0].frequency;
+            //   case 7: //RX5 VFO (DDC4)
+            //       C0 |= 0x0c;
+            //       // DDC4 is TX frequency for Orion2 TX with puresignal, otherwise not used, so make TX always
+            //       ddc_freq = prn->tx[0].frequency;
+            // Kept to nddc == 5: on the nddc == 4 Hermes class slots 2 and 3
+            // (banks 5 and 6) still carry slices C and D in plain receive, a
+            // NereusSDR extension this task does not touch.
+            if ((bank == 6 || bank == 7) && ctx.p1PsNDdc == 5) {
+                freq = ctx.txFreqHz;
+            }
             const quint32 hz = quint32(freq);
             out[1] = quint8((hz >> 24) & 0xFF);
             out[2] = quint8((hz >> 16) & 0xFF);
