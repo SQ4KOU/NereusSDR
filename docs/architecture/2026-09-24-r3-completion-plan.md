@@ -222,3 +222,41 @@ version refusal, other refusal, dropped link), by exact name, offscreen.
 **Execution note (advisory):** opus (small).
 
 - [ ] **Step 1:** The message, the buttons, no retry for permanent ends, tests; commit.
+
+## Task 6: The TCI and MMIO pages in plain words
+
+**Requirements:** R-R3-21 (operator wording), R-R3-48.
+
+Operator decision of 2026-09-24 (question D, option 1): keep the words an operator must
+match in another program exactly as that program shows them (TCI, TCP, UDP, JSON, XML,
+port, IP address; MMIO kept in brackets so Thetis users can find it), and put
+NereusSDR's own jargon into plain words. Runs after the accessories plan's TCI rework
+lands on integration (it edits the same TCI page).
+
+**Files:** `src/gui/setup/CatNetworkSetupPages.cpp` (TCI Server page),
+`src/gui/containers/MmioEndpointsDialog.{h,cpp}`,
+`src/gui/containers/MmioVariablePickerPopup.{h,cpp}`, any other surface showing the same
+words, their tests, `tests/tst_operator_wording_sweep.cpp`.
+
+**Acceptance (the approved wording):**
+- "Bind interface:" and "Bind IP:" read **"Listen on:"**.
+- "Endpoints", "New endpoint" and "Endpoint properties" read **"Data sources"**, **"New
+  data source"** and **"Data source settings"**.
+- "Transport" reads **"Connection type"** (its choices keep TCP client, TCP listener, UDP
+  listener and the rest as they are).
+- "Discovered variables" reads **"Values received"**; "Pick MMIO Variable" reads
+  **"Choose a value"**.
+- "Clear binding" reads **"Unlink from this meter"**.
+- The MMIO window's title reads **"Meter Data Sources (MMIO)"**.
+- The TCI enable tooltip reads **"Turn on the TCI server so programs like WSJT-X or JTDX
+  can control this radio."**
+- The formats JSON, XML and "RAW (key:value)" and every port and address stay as they
+  are; saved settings keys do not change; local and remote windows alike.
+- The wording sweep holds the new words (and fails if "endpoint", "binding", "bind
+  interface" or "WebSocket" come back in text a user reads on these surfaces).
+
+**Verification:** the pages' tests and the wording sweep, by exact name, offscreen.
+
+**Execution note (advisory):** opus (small; strings and their tests).
+
+- [ ] **Step 1:** The wording, the tests; commit.
