@@ -30,6 +30,9 @@
 //                (KG4VCF): each client's own read position per receiver,
 //                so two apps on one receiver each get all of its audio.
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-23 - R3 receiver audio fix wave (R-R3-42) by J.J. Boyd
+//                (KG4VCF): a left and a right resampler per receiver.
+//                AI-assisted transformation via Anthropic Claude Code.
 
 #pragma once
 #ifdef HAVE_WEBSOCKETS
@@ -101,7 +104,17 @@ struct TciClientSession {
     // From Thetis TCIServer.cs:789 [v2.10.3.13] — m_rxAudioResamplers
     // Dictionary<int, Resampler> replaced by QHash<int, void*> (opaque ptr
     // to RESAMPLEF struct allocated via create_resampleF / create_resampleFV).
-    QHash<int, void*> audioResamplers;
+    //
+    // R-R3-42 fix wave: one resampler per channel, created and destroyed
+    // together. A single one run over interleaved L/R mixed the channels at
+    // every rate other than 48 kHz.
+    // From Thetis TCIServer.cs:702-708 [v2.10.3.15] — TCIRxAudioResamplerState
+    // holds a LeftResampler and a RightResampler per receiver.
+    struct RxAudioResamplers {
+        void* left = nullptr;
+        void* right = nullptr;
+    };
+    QHash<int, RxAudioResamplers> audioResamplers;
 
     // R-R3-42: this client's read position in each subscribed receiver's
     // audio, counted in stereo frames since TciServer started collecting

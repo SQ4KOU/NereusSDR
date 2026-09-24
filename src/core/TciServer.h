@@ -31,6 +31,11 @@
 //                and raw I/Q refused with a plain reason off the wire),
 //                per-client read positions and left-channel mono.
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-23 - R3 receiver audio fix wave (R-R3-42, R-R3-21) by J.J.
+//                Boyd (KG4VCF): stereo resampled per channel; remote
+//                rx_sensors from the mirrored meter; a late "cannot send"
+//                answer stops the apps. AI-assisted transformation via
+//                Anthropic Claude Code.
 
 #pragma once
 #ifdef HAVE_WEBSOCKETS
@@ -313,6 +318,10 @@ private slots:
     // Destroys all RESAMPLEF instances for the given session and clears the map.
     // Called from onClientDisconnected and stop().
     void cleanupResamplers(std::shared_ptr<TciClientSession>& session);
+    // R-R3-42 fix wave: a receiver's left and right resamplers, made and
+    // destroyed together (both null when either could not be made).
+    static TciClientSession::RxAudioResamplers createRxAudioResamplers(int inRate, int outRate);
+    static void destroyRxAudioResamplers(TciClientSession::RxAudioResamplers& pair);
 
     // Phase 3J-1 review P2.3: connect RX audio tap (RxChannel::audioFrameReady
     // → onAudioFrameReady) and IQ tap (RadioModel::rawIqData →
@@ -488,6 +497,16 @@ private:
     // We size for the largest legal audioStreamSamples (2048) * 2 channels.
     static constexpr int kMaxDrainSamples = 2048 * 2;
     std::array<float, kMaxDrainSamples> m_drainScratch{};
+    // R-R3-42 fix wave: per-channel resampling scratch. Input: one channel
+    // of a block (up to 2048 frames); output: up to 8x that (384 kHz).
+    static constexpr int kMaxResampleFrames = 2048;
+    static constexpr int kMaxResampleOutFrames = kMaxResampleFrames * 8;
+    // Allocated once in the constructor.
+    std::vector<float> m_resampleInLeft;
+    std::vector<float> m_resampleInRight;
+    std::vector<float> m_resampleOutLeft;
+    std::vector<float> m_resampleOutRight;
+    std::vector<float> m_resampleOut;
 
     // Handle for the WdspEngine::initializedChanged connection so we can
     // disconnect it if TciServer is destroyed before WDSP initializes.
@@ -632,6 +651,11 @@ private:
     std::array<bool, kMaxTciRxSlices> m_remoteUnavailable{};
     // The receiver's audio is stopped with a notice showing.
     std::array<bool, kMaxTciRxSlices> m_rxStoppedNotice{};
+    // A request for this receiver is being made (the Core may answer it
+    // before request() returns); audio_start handles that answer itself.
+    std::array<bool, kMaxTciRxSlices> m_remoteRequesting{};
+    // The app whose audio_start is being handled, while it is.
+    const TciClientSession* m_subscribingSession{nullptr};
 
     QString m_noticeReason;
     bool m_noticeFromReceiverStop{false};
@@ -640,6 +664,12 @@ private:
     // Asks for, or releases, receiver `rx` to match whether any app
     // listens to it. Remote window only; never from receiverAudioBlock.
     void updateRemoteReceiverDemand(int rx);
+    // The Core cannot send receiver `rx`'s audio: every app listening to
+    // it is told the stream stopped, and the request is released.
+    void stopUnavailableReceiver(int rx);
+    // Remote window: the level TCI reports for receiver 0, from the Core's
+    // meter reading the window mirrors for slice 0 (-140 dBm without one).
+    double remoteReceiverLevelDbm() const;
     // receiverStop: the notice is about a receiver's audio stopping, and
     // goes once that audio flows again. quiet: shown, never toasted.
     void raiseOperatorNotice(const QString& peer, const QString& reason,

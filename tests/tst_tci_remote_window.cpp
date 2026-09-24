@@ -32,6 +32,12 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio plan, Task 4.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio fix wave: stereo at
+//                                    12 kHz keeps L and R apart; rx_sensors
+//                                    read the Core's mirrored meter; a late
+//                                    "cannot send" answer stops the app.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #ifdef HAVE_WEBSOCKETS
@@ -174,6 +180,24 @@ struct FakeReceiverSource {
         }
     }
 };
+
+// A tone's amplitude in one channel of interleaved audio at `rateHz`.
+double amplitudeAt(const QVector<float>& samples, int channels, int channel, double hz,
+                   int rateHz, int firstFrame)
+{
+    constexpr double kTwoPi = 2.0 * 3.14159265358979323846;
+    double cosine = 0.0;
+    double sine = 0.0;
+    int frames = 0;
+    for (int f = firstFrame; f * channels + channel < samples.size(); ++f) {
+        const double phase = kTwoPi * hz * double(f) / double(rateHz);
+        const double v = samples.at(f * channels + channel);
+        cosine += v * std::cos(phase);
+        sine += v * std::sin(phase);
+        ++frames;
+    }
+    return frames > 0 ? 2.0 * std::hypot(cosine, sine) / frames : 0.0;
+}
 
 // Receiver-audio requests the Core received for one slice, in order.
 QList<QJsonObject> receiverRequests(const QSignalSpy& coreControls, int sliceId)
@@ -389,6 +413,132 @@ private slots:
                      qPrintable(QStringLiteral("mono sample %1 differs").arg(k)));
         }
         app.close();
+        tci.stop();
+    }
+
+    // Stereo at 12 kHz from a remote window: each channel is resampled on
+    // its own, so a 440 Hz left and a 1000 Hz right arrive apart.
+    void remoteStereoAt12kKeepsLeftAndRightApart()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        // Outlives the server, whose teardown releases through it.
+        FakeReceiverSource core;
+        TciServer tci(&remote);
+        tci.setRemoteReceiverAudio(core.source());
+        QVERIFY(tci.start(0));
+        QWebSocket app;
+        QSignalSpy binary(&app, &QWebSocket::binaryMessageReceived);
+        QVERIFY(connectClient(app, tci.port()));
+        app.sendTextMessage(QStringLiteral("audio_samplerate:12000;"));
+        app.sendTextMessage(QStringLiteral("audio_start:0;"));
+        QTRY_VERIFY_WITH_TIMEOUT(tci.remoteReceiverRequested(0), 3000);
+        IReceiverPcmSink* const sink = core.sinks.value(0);
+        QVERIFY(sink != nullptr);
+        constexpr int kPacket = 1920;
+        constexpr double kTwoPi = 2.0 * 3.14159265358979323846;
+        std::vector<float> pcm(kPacket * 2);
+        for (int sent = 0; sent < 48000; sent += kPacket) {
+            for (int i = 0; i < kPacket; ++i) {
+                const double t = double(sent + i) / 48000.0;
+                pcm[size_t(2 * i)] = float(0.3 * std::sin(kTwoPi * 440.0 * t));
+                pcm[size_t(2 * i + 1)] = float(0.2 * std::sin(kTwoPi * 1000.0 * t));
+            }
+            sink->receiverAudioBlock(0, pcm.data(), kPacket);
+            QTest::qWait(10);
+        }
+        QTest::qWait(300);
+        const RxAudio audio = rxAudio(binary, 0);
+        QCOMPARE(audio.channels, 2u);
+        QVERIFY2(audio.samples.size() >= 2 * 11000, qPrintable(QString::number(audio.samples.size())));
+        constexpr int kSkip = 600;
+        const double leftLow = amplitudeAt(audio.samples, 2, 0, 440.0, 12000, kSkip);
+        const double leftHigh = amplitudeAt(audio.samples, 2, 0, 1000.0, 12000, kSkip);
+        const double rightLow = amplitudeAt(audio.samples, 2, 1, 440.0, 12000, kSkip);
+        const double rightHigh = amplitudeAt(audio.samples, 2, 1, 1000.0, 12000, kSkip);
+        QVERIFY2(std::abs(leftLow - 0.3) < 0.01 && leftHigh < 0.005,
+                 qPrintable(QStringLiteral("left: 440 Hz %1, 1000 Hz %2").arg(leftLow).arg(leftHigh)));
+        QVERIFY2(std::abs(rightHigh - 0.2) < 0.01 && rightLow < 0.005,
+                 qPrintable(QStringLiteral("right: 440 Hz %1, 1000 Hz %2").arg(rightLow).arg(rightHigh)));
+        app.close();
+        tci.stop();
+    }
+
+    // rx_sensors in a remote window read the Core's slice meter the window
+    // mirrors (the value its own S-meter draws, calibrated at the Core as
+    // a local window calibrates its own), -140 dBm until a reading arrives.
+    void remoteRxSensorsReadTheCoresMeter()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        TciServer tci(&remote);
+        QVERIFY(tci.start(0));
+        QWebSocket app;
+        QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+        QVERIFY(connectClient(app, tci.port()));
+        app.sendTextMessage(QStringLiteral("rx_sensors_enable:true,30;"));
+        // No slice mirrored yet: the floor.
+        QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("rx_sensors:0,-140.0;")), 3000);
+
+        QVERIFY(remote.addSliceWithStationId(0) >= 0);
+        SliceModel* slice = remote.sliceById(0);
+        QVERIFY(slice != nullptr);
+        // The Core's no-reading sentinel is not a level.
+        slice->setSignalAverageDbm(-400.0);
+        text.clear();
+        QTest::qWait(120);
+        QVERIFY(texts(text).contains(QStringLiteral("rx_sensors:0,-140.0;")));
+        slice->setSignalAverageDbm(-73.4);
+        text.clear();
+        QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("rx_sensors:0,-73.4;")), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            texts(text).contains(QStringLiteral("rx_channel_sensors:0,0,-73.4;")), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            texts(text).contains(QStringLiteral("rx_channel_sensors_ex:0,0,-73.4,-73.4,-73.4;")), 3000);
+        // Still no receiver of this computer's reached.
+        QVERIFY(!remote.localDspHandOutNames().contains(QByteArrayLiteral("wdspEngine")));
+        app.close();
+        tci.stop();
+        remote.removeSliceWithStationId(0);
+    }
+
+    // The Core's "cannot send" answer can come after audio_start was
+    // echoed (the media connection came up later): every app on that
+    // receiver is then told the stream stopped, and it is released.
+    void aLateUnavailableAnswerStopsTheApp()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        // Outlives the server, whose teardown releases through it.
+        FakeReceiverSource core;
+        TciServer tci(&remote);
+        tci.setRemoteReceiverAudio(core.source());
+        QVERIFY(tci.start(0));
+        QWebSocket appA;
+        QWebSocket appB;
+        QSignalSpy textA(&appA, &QWebSocket::textMessageReceived);
+        QSignalSpy textB(&appB, &QWebSocket::textMessageReceived);
+        QSignalSpy binaryA(&appA, &QWebSocket::binaryMessageReceived);
+        QVERIFY(connectClient(appA, tci.port()));
+        QVERIFY(connectClient(appB, tci.port()));
+        appA.sendTextMessage(QStringLiteral("audio_start:0;"));
+        appB.sendTextMessage(QStringLiteral("audio_start:0;"));
+        QTRY_VERIFY_WITH_TIMEOUT(texts(textA).contains(QStringLiteral("audio_start:0;")), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(texts(textB).contains(QStringLiteral("audio_start:0;")), 3000);
+        QCOMPARE(core.requests, QList<int>{0});
+
+        IReceiverPcmSink* const sink = core.sinks.value(0);
+        QVERIFY(sink != nullptr);
+        sink->receiverAudioStopped(
+            0, QString::fromLatin1(RemoteMediaController::kReceiverAudioUnavailableReason));
+        QTRY_VERIFY_WITH_TIMEOUT(texts(textA).contains(QStringLiteral("audio_stop:0;")), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(texts(textB).contains(QStringLiteral("audio_stop:0;")), 3000);
+        QCOMPARE(core.releases, QList<int>{0});
+        QVERIFY(!tci.remoteReceiverRequested(0));
+        // Nothing more is sent for it.
+        const int before = rxAudio(binaryA, 0).blocks;
+        sink->receiverAudioBlock(0, std::vector<float>(4096 * 2, 0.1f).data(), 4096);
+        QTest::qWait(200);
+        QCOMPARE(rxAudio(binaryA, 0).blocks, before);
+        appA.close();
+        appB.close();
         tci.stop();
     }
 

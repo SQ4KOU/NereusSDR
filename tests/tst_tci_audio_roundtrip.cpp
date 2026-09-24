@@ -12,6 +12,12 @@
 // one receiver each receive all of its audio, and a mono client receives
 // the left channel (Thetis TCIServer.cs PublishRxAudioSamples), not half
 // a block of interleaved stereo.
+//
+// R3 receiver audio fix wave (R-R3-42), 2026-09-23, J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code: stereo at a rate other than
+// 48 kHz keeps left and right apart (one resampler per channel, as Thetis
+// TCIServer.cs resampleRxAudioSamples does), not one resampler run over
+// interleaved L/R.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -35,6 +41,7 @@ private slots:
     void synthetic_1khz_tone_arrives_as_binary_frame();
     void two_clients_on_one_receiver_each_get_all_of_it();
     void mono_client_gets_the_left_channel();
+    void stereo_at_12k_keeps_left_and_right_apart();
 };
 
 namespace {
@@ -88,6 +95,23 @@ void injectRamp(TciServer& server, int totalFrames)
         }
         server.injectAudioFrameForTest(0, left.data(), right.data(), n, 48000);
     }
+}
+
+// A tone's amplitude in one channel of interleaved audio at `rateHz`.
+double toneAmplitude(const QVector<float>& samples, int channels, int channel,
+                     double hz, int rateHz, int firstFrame)
+{
+    double cosine = 0.0;
+    double sine = 0.0;
+    int frames = 0;
+    for (int f = firstFrame; f * channels + channel < samples.size(); ++f) {
+        const double phase = 2.0 * M_PI * hz * double(f) / double(rateHz);
+        const double v = samples.at(f * channels + channel);
+        cosine += v * std::cos(phase);
+        sine += v * std::sin(phase);
+        ++frames;
+    }
+    return frames > 0 ? 2.0 * std::hypot(cosine, sine) / frames : 0.0;
 }
 
 bool connectClient(QWebSocket& client, quint16 port)
@@ -178,6 +202,55 @@ void TestTciAudioRoundtrip::mono_client_gets_the_left_channel()
                                     .arg(double(rampLeft(frame)))));
         }
     }
+    client.close();
+    server.stop();
+}
+
+// Stereo at 12 kHz: one resampler used to run over interleaved L/R, which
+// mixed the channels and read them at the wrong rate. Each channel now has
+// its own, so a 440 Hz left and a 1000 Hz right arrive apart, at 12 kHz.
+void TestTciAudioRoundtrip::stereo_at_12k_keeps_left_and_right_apart()
+{
+    TciServer server(nullptr);
+    QVERIFY(server.start(0));
+    QWebSocket client;
+    QSignalSpy binary(&client, &QWebSocket::binaryMessageReceived);
+    QVERIFY(connectClient(client, server.port()));
+    client.sendTextMessage(QStringLiteral("audio_samplerate:12000;"));
+    client.sendTextMessage(QStringLiteral("audio_stream_channels:2;"));
+    client.sendTextMessage(QStringLiteral("audio_start:0;"));
+    QTest::qWait(100);
+
+    constexpr int kChunk = 1024;
+    constexpr int kTotal = 48000;   // one second at 48 kHz
+    std::vector<float> left(kChunk), right(kChunk);
+    for (int sent = 0; sent < kTotal; sent += kChunk) {
+        for (int i = 0; i < kChunk; ++i) {
+            const double t = double(sent + i) / 48000.0;
+            left[size_t(i)] = float(0.3 * std::sin(2.0 * M_PI * 440.0 * t));
+            right[size_t(i)] = float(0.2 * std::sin(2.0 * M_PI * 1000.0 * t));
+        }
+        server.injectAudioFrameForTest(0, left.data(), right.data(), kChunk, 48000);
+        QTest::qWait(10);
+    }
+    QTest::qWait(300);
+
+    QVector<float> received;
+    for (const DecodedBlock& block : decodeRxAudio(binary)) {
+        QCOMPARE(block.channels, 2u);
+        received += block.samples;
+    }
+    // 2048 frames of 48 kHz audio per block, 512 at 12 kHz.
+    QVERIFY2(received.size() >= 2 * 11000, qPrintable(QString::number(received.size())));
+    constexpr int kSkip = 600;   // past the resampler's start
+    const double leftLow = toneAmplitude(received, 2, 0, 440.0, 12000, kSkip);
+    const double leftHigh = toneAmplitude(received, 2, 0, 1000.0, 12000, kSkip);
+    const double rightLow = toneAmplitude(received, 2, 1, 440.0, 12000, kSkip);
+    const double rightHigh = toneAmplitude(received, 2, 1, 1000.0, 12000, kSkip);
+    QVERIFY2(std::abs(leftLow - 0.3) < 0.01 && leftHigh < 0.005,
+             qPrintable(QStringLiteral("left: 440 Hz %1, 1000 Hz %2").arg(leftLow).arg(leftHigh)));
+    QVERIFY2(std::abs(rightHigh - 0.2) < 0.01 && rightLow < 0.005,
+             qPrintable(QStringLiteral("right: 440 Hz %1, 1000 Hz %2").arg(rightLow).arg(rightHigh)));
     client.close();
     server.stop();
 }
