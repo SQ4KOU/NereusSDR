@@ -70,6 +70,12 @@
 //                listeners on the station network only) and the FlexRadio
 //                beacon following the 4O3A switch. NereusSDR-original.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: the Power Genius's and Tuner Genius's
+//                own settings for a window (`accessorySettings`, the
+//                ...ForStation device-settings requests) and a route of
+//                their own for the Core's refusals (accessoryRequestRefused).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -302,6 +308,7 @@ class RfKitBandFollow;
 class AmplifierModel;
 class RfKitModel;
 class AccessoryDataModel;
+class AccessorySettingsModel;
 class StationAccessoryData;
 class ConnectionDiagnostics;
 
@@ -533,6 +540,12 @@ public:
     /// from the silent divergence this whole round exists to close: the
     /// click does nothing and nothing says why.
     void reportStationSliceCommandRejected(const QString& reason);
+
+    /// R-R3-47 / R-R3-22: the Core refused a request for one of its
+    /// accessories' own settings (`device` "pgxl" or "tgxl"), with its own
+    /// reason. Role::Remote only. Routed to accessoryRequestRefused, which
+    /// the Advanced pages show, and not to the slice toast.
+    void reportStationAccessoryRefusal(const QString& device, const QString& reason);
 
     /// The station refused a sample-rate change, with its own reason.
     /// Role::Remote only. Routed to sliceRetuneRejected, which carries the
@@ -1976,6 +1989,30 @@ public:
     /// antenna names and fault logs follow it at once. Other keys ignored.
     void applyRemoteAccessorySetting(const QString& key);
 
+    // R-R3-47 / R-R3-22: the Power Genius's and Tuner Genius's own settings
+    // (`accessorySettings`, remotePgxlControlVersion 3 and
+    // remoteTgxlControlVersion 1). Non-null from construction. On the Core
+    // the station controllers keep it current; a Remote model holds the
+    // Core's values for the Advanced pages.
+    AccessorySettingsModel* accessorySettingsModel() const { return m_accessorySettingsModel; }
+    // A window's request, sent by the Core as the local Advanced page's own
+    // device command (StationDeviceSettings). True when it left for the
+    // device; the answer arrives on accessorySettingsModel().
+    bool setPgxlNameForStation(const QString& name, QString* reason);
+    /// `setting` is "biasMode" (utf8 ClassA or ClassAB), "fanMode" (utf8
+    /// Auto, Quiet or Continuous) or "ledIntensity" (0 to 100).
+    bool setPgxlHardwareForStation(const QString& setting, const QVariant& value,
+                                   QString* reason);
+    bool setPgxlNetworkForStation(bool dhcp, const QString& address, const QString& netmask,
+                                  const QString& gateway, QString* reason);
+    bool savePgxlSettingsForStation(QString* reason);
+    bool readPgxlSettingsForStation(QString* reason);
+    bool setTgxlNameForStation(const QString& name, QString* reason);
+    bool setTgxlNetworkForStation(bool dhcp, const QString& address, const QString& netmask,
+                                  const QString& gateway, QString* reason);
+    bool saveTgxlSettingsForStation(QString* reason);
+    bool readTgxlSettingsForStation(QString* reason);
+
     // Phase 3G-9b: one-shot profile that sets the 7 smooth-default recipe
     // values on SpectrumWidget. Called from the constructor exactly once
     // on first launch (gated by AppSettings key "DisplayProfileApplied").
@@ -3220,6 +3257,9 @@ signals:
     // request because the maxSlices() cap has been reached.  Status-bar /
     // toast subscribers wire to this signal in Sub-Epic C Tasks 8-9.
     void sliceAddRejected(QString reason);
+    /// R-R3-47 / R-R3-22: the Core refused a request for an accessory's own
+    /// settings (`device` "pgxl" or "tgxl"); `reason` is the Core's words.
+    void accessoryRequestRefused(const QString& device, const QString& reason);
 
     /// Phase 3F Sub-Epic I closeout, defect F4: the operator retuned a slice
     /// to a frequency no DDC can reach, and the frequency has been rolled
@@ -5171,6 +5211,7 @@ private:
     ConnectionDiagnostics* m_pgxlDiagnostics{nullptr};
     ConnectionDiagnostics* m_tgxlDiagnostics{nullptr};
     AccessoryDataModel* m_accessoryDataModel{nullptr};
+    AccessorySettingsModel* m_accessorySettingsModel{nullptr};
     StationAccessoryData* m_stationAccessoryData{nullptr};
 
     // Phase 3P-II Phase 4 Task 94: last known PGXL state string.

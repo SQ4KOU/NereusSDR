@@ -6,11 +6,15 @@
 // 2026-09-24: R-R3-22 / R-R3-47: identity announcements from the station
 // network only (setStationBind). J.J. Boyd (KG4VCF), AI-assisted via
 // Anthropic Claude Code.
+// 2026-09-24: R-R3-47 / R-R3-22: the tuner's own settings for a window
+// (deviceSettings, StationDeviceSettings.h). J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #pragma once
 
 #include "core/TgxlConnection.h"
 #include "models/TunerModel.h"
 #include "core/StationNetwork.h"
+#include "core/StationDeviceSettings.h"
 #include <QPointer>
 
 #include <optional>
@@ -34,6 +38,10 @@ public:
     /// station network only (LanDiscovery::setStationBind). Unset (a
     /// desktop window, or a test) hears every announcement.
     void setStationBind(const StationNetwork::StationBind& bind) { m_stationBind = bind; }
+    /// R-R3-47 / R-R3-22: a window's requests for the tuner's own settings
+    /// (name, network, Save & Reboot, Revert), sent as the local Advanced
+    /// page sends them, answered on AccessorySettingsModel.
+    StationDeviceSettings* deviceSettings() const { return m_settings; }
 
 signals:
     /// R-R3-47: a Tuner Genius fault for the Core's record. `kind` is
@@ -53,6 +61,7 @@ private:
     QPointer<TgxlConnection> m_connection;
     QPointer<TunerModel> m_model;
     QPointer<LanDiscovery> m_discovery;
+    StationDeviceSettings* m_settings{nullptr};
     std::optional<StationNetwork::StationBind> m_stationBind;
     TunerModel::StationConnectionState m_state;
     TgxlIdentityInfo m_nativeInfo;

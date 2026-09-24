@@ -2,6 +2,8 @@
 // Structure from StationTgxlController.cpp; captured wire evidence in
 // StationPgxlController.h. J.J. Boyd (KG4VCF), September 2026; AI-assisted
 // via Anthropic Claude Code.
+// 2026-09-24: R-R3-47 / R-R3-22: deviceSettings, the amp's own settings for
+// a window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/StationPgxlController.h"
 #include "core/AppSettings.h"
 #include "core/LanDiscovery.h"
@@ -31,6 +33,27 @@ StationPgxlController::StationPgxlController(PgxlConnection* connection,
         // This controller, not the raw connection signals, reports the phase.
         model->setConnectionStateOwnedByController(true);
     }
+    // R-R3-47 / R-R3-22: the amp's own settings, through the connection's
+    // own command methods (the local Advanced page's commands).
+    StationDeviceSettings::Wire wire;
+    wire.connected = [this] { return m_connection && m_connection->isConnected(); };
+    wire.writeSetup = [this](const QMap<QString, QString>& fields) {
+        return m_connection ? m_connection->writeSetup(fields) : quint32(0);
+    };
+    wire.readSetup = [this] { return m_connection ? m_connection->readSetup() : quint32(0); };
+    wire.writeIfconf = [this](const QString& ip, const QString& netmask,
+                              const QString& gateway, bool dhcp) {
+        return m_connection ? m_connection->writeIfconf(ip, netmask, gateway, dhcp)
+                            : quint32(0);
+    };
+    wire.readIfconf = [this] { return m_connection ? m_connection->readIfconf() : quint32(0); };
+    wire.save = [this] { return m_connection ? m_connection->save() : quint32(0); };
+    m_settings = new StationDeviceSettings(StationDeviceSettings::Device::Pgxl, std::move(wire),
+                                           this);
+    connect(connection, &PgxlConnection::replyReceived, m_settings,
+            &StationDeviceSettings::onReply);
+    connect(connection, &PgxlConnection::disconnected, m_settings,
+            &StationDeviceSettings::onDisconnected);
     connect(connection, &PgxlConnection::identityProtocolProgress, this,
             [this](quint64 token, const QString& peer, quint16 port, const QString& version) {
         if (!m_running) { return; }
@@ -120,6 +143,7 @@ void StationPgxlController::resetScope(const QString& host, quint16 port, bool e
     if (!self || m_generation != generation) { return; }
 
     clearIdentity();
+    m_settings->reset();
     m_state = {};
     m_state.configuredHost = host;
     m_state.configuredPort = port;
@@ -151,6 +175,7 @@ void StationPgxlController::cancel(bool disabled)
     stopDiscovery();
     if (m_connection) { m_connection->disconnect(); }
     clearIdentity();
+    m_settings->reset();
     m_state.phase = disabled ? Phase::Disabled : Phase::Disconnected;
     m_state.error.clear();
     publish();

@@ -728,7 +728,10 @@ private slots:
                                    // R-R3-48: the station TCI server.
                                    "stationTciVersion",
                                    // R-R3-47: the accessory records.
-                                   "accessoryDataVersion"});
+                                   "accessoryDataVersion",
+                                   // R-R3-47: the Tuner Genius's own
+                                   // settings.
+                                   "remoteTgxlControlVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -763,7 +766,8 @@ private slots:
                                            QByteArrayLiteral("remotePgxlControlVersion"),
                                            QByteArrayLiteral("remoteRfKitControlVersion"),
                                            QByteArrayLiteral("stationTciVersion"),
-                                           QByteArrayLiteral("accessoryDataVersion")}) {
+                                           QByteArrayLiteral("accessoryDataVersion"),
+                                           QByteArrayLiteral("remoteTgxlControlVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

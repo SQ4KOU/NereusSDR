@@ -1,10 +1,14 @@
 // no-port-check: NereusSDR-original. R-R3-22/25 Core accessory admission.
 // Loopback TCP peers and captured discovery/info grammar; no RF or hardware.
+// 2026-09-24: R-R3-47 / R-R3-22: a window's requests for the tuner's own
+// settings reach the (fake) tuner as the local page's own commands. J.J.
+// Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include "core/AppSettings.h"
 #include "core/LanDiscovery.h"
+#include "models/AccessorySettingsModel.h"
 #include "models/RadioModel.h"
 #include "models/TunerModel.h"
 
@@ -382,6 +386,115 @@ private slots:
         QCOMPARE(model.tunerModel()->configuredPort(), int(newServer.serverPort()));
         QVERIFY(model.disconnectTgxlForStation(&reason));
     }
+    // R-R3-47 / R-R3-22: a window's requests for the tuner's own settings
+    // (name, network, Save & Reboot, Revert). The Core sends each as the
+    // local Advanced page's own command (the fake tuner records the
+    // bytes), matches the answer and publishes it in plain words; the
+    // tuner's name read back is saved as the local page saves it.
+    void deviceSettingsReachTheTunerAsTheLocalPageSendsThem()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+        RadioModel model;
+        prepare(model);
+        const AccessorySettingsModel* settings = model.accessorySettingsModel();
+        QSignalSpy frames(model.tgxlConnection(), &TgxlConnection::testFrameWrittenForTesting);
+        QString reason;
+        QVERIFY(!model.setTgxlNameForStation(QStringLiteral("Tuner"), &reason));
+        QCOMPARE(reason, QStringLiteral("The Core is not connected to the Tuner Genius."));
+        QVERIFY(model.configureTgxlForStation(QStringLiteral("127.0.0.1"), server.serverPort(),
+                                              &reason));
+        QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(), 1500);
+        auto* peer = server.nextPendingConnection();
+        peer->write("V1.2.17\n"); peer->flush();
+        QTRY_VERIFY_WITH_TIMEOUT(infoSequence(frames) != 0, 1500);
+        auto* discovery = model.findChild<LanDiscovery*>();
+        QVERIFY(discovery);
+        sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
+        QTRY_COMPARE(model.tgxlConnection()->identityInfo().serial, QStringLiteral("241288-1"));
+        QVERIFY(!model.saveTgxlSettingsForStation(&reason));   // not admitted yet
+        announce(discovery, server.serverPort(), QStringLiteral("TunerGeniusXL"),
+                 QStringLiteral("241288-1"));
+        QTRY_VERIFY(model.tgxlConnection()->isConnected());
+
+        QByteArray pending;
+        QStringList lines;
+        const auto waitFor = [&](const QString& command) {
+            quint32 seq = 0;
+            (void)QTest::qWaitFor([&] {   // 0 when it never arrives
+                pending += peer->readAll();
+                qsizetype nl = 0;
+                while ((nl = pending.indexOf('\n')) >= 0) {
+                    lines.append(QString::fromUtf8(pending.left(nl)));
+                    pending.remove(0, nl + 1);
+                }
+                for (const QString& line : lines) {
+                    const qsizetype bar = line.indexOf(QLatin1Char('|'));
+                    if (bar > 1 && line.mid(bar + 1) == command) {
+                        seq = line.mid(1, bar - 1).toUInt();
+                        lines.removeOne(line);
+                        return true;
+                    }
+                }
+                return false;
+            }, 3000);
+            return seq;
+        };
+        const auto answer = [&](quint32 seq, const QString& codeAndBody) {
+            peer->write(QStringLiteral("R%1|%2\n").arg(seq).arg(codeAndBody).toUtf8());
+            peer->flush();
+        };
+
+        QVERIFY(model.setTgxlNameForStation(QStringLiteral("Shack Tuner"), &reason));
+        quint32 seq = waitFor(QStringLiteral("setup nickname=Shack Tuner"));
+        QVERIFY(seq != 0);
+        answer(seq, QStringLiteral("0|"));
+        QTRY_COMPARE(settings->tgxlNickname(), QStringLiteral("Shack Tuner"));
+        QCOMPARE(settings->tgxlAnswer(), QStringLiteral("The Tuner Genius took the new name."));
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("TGXL_Nickname")).toString(),
+                 QStringLiteral("Shack Tuner"));
+
+        QVERIFY(model.setTgxlNetworkForStation(true, QString(), QString(), QString(), &reason));
+        seq = waitFor(QStringLiteral("ifconf address= netmask= gateway= dhcp=true"));
+        QVERIFY(seq != 0);
+        answer(seq, QStringLiteral("1|"));
+        QTRY_COMPARE(settings->tgxlAnswer(),
+                     QStringLiteral("The Tuner Genius did not take the new network settings."));
+        QVERIFY(!settings->tgxlNetworkKnown());
+
+        // Revert: the tuner's name read back is saved (TgxlAdvancedPage's
+        // onSetupResponse does the same).
+        QVERIFY(model.readTgxlSettingsForStation(&reason));
+        const quint32 setupSeq = waitFor(QStringLiteral("setup read"));
+        const quint32 ifconfSeq = waitFor(QStringLiteral("ifconf read"));
+        QVERIFY(setupSeq != 0 && ifconfSeq != 0);
+        answer(setupSeq, QStringLiteral("0|nickname=Tuner_Genius_XL"));
+        answer(ifconfSeq, QStringLiteral("0|dhcp=0 ip=192.168.1.60 netmask=255.255.255.0 "
+                                         "gateway=192.168.1.1"));
+        QTRY_COMPARE(settings->tgxlAddress(), QStringLiteral("192.168.1.60"));
+        QCOMPARE(settings->tgxlNickname(), QStringLiteral("Tuner_Genius_XL"));
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("TGXL_Nickname")).toString(),
+                 QStringLiteral("Tuner_Genius_XL"));
+        QVERIFY(!settings->tgxlDhcp());
+
+        QVERIFY(model.saveTgxlSettingsForStation(&reason));
+        seq = waitFor(QStringLiteral("save"));
+        QVERIFY(seq != 0);
+        answer(seq, QStringLiteral("0|saving"));
+        QTRY_COMPARE(settings->tgxlAnswer(),
+                     QStringLiteral("The Tuner Genius is saving its settings and restarting."));
+        // The Power Genius's record is untouched.
+        QCOMPARE(settings->pgxlAnswerCount(), qint64(0));
+        // Nothing operated the tuner or moved its antenna.
+        for (const auto& row : frames) {
+            const QString frame = row.first().toString();
+            QVERIFY2(!frame.contains(QStringLiteral("operate"))
+                         && !frame.contains(QStringLiteral("bypass"))
+                         && !frame.contains(QStringLiteral("antenna")), qPrintable(frame));
+        }
+        QVERIFY(model.disconnectTgxlForStation(&reason));
+    }
+
     void pendingLifecycleCancellation()
     {
         QFETCH(int, action);

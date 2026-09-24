@@ -12,6 +12,10 @@
 // the Core records (a live connection dropping, an attempt ending at an
 // error, never an operator's disconnect), and the power-cap alert the Core
 // raises. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-47 / R-R3-22: remotePgxlControlVersion 3 and
+// remoteTgxlControlVersion 1 (last), the read-only `accessorySettings`
+// object and its fixture. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+// Claude Code.
 #include <QtTest/QtTest>
 #include <QFile>
 #include <QJsonArray>
@@ -42,6 +46,7 @@
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationServer.h"
 #include "models/AccessoryDataModel.h"
+#include "models/AccessorySettingsModel.h"
 #include "models/AmplifierModel.h"
 #include "models/RadioModel.h"
 #include "models/RfKitModel.h"
@@ -182,9 +187,9 @@ bool snapshotDone(const LoopbackTransport* peer)
 bool namesAccessory(const SessionMessage& m)
 {
     return m.objectKey == "amplifier" || m.objectKey == "rfkit"
-        || m.objectKey == "accessoryData"
+        || m.objectKey == "accessoryData" || m.objectKey == "accessorySettings"
         || m.className == "AmplifierModel" || m.className == "RfKitModel"
-        || m.className == "AccessoryDataModel";
+        || m.className == "AccessoryDataModel" || m.className == "AccessorySettingsModel";
 }
 
 } // namespace
@@ -594,13 +599,20 @@ private slots:
                     "accessoryData",
                     {MirrorUpdate{0, "interlockMode", MirrorWireKind::Enum,
                                   QVariant(qlonglong(2))}}, 9)));
+                // R-R3-47 / R-R3-22: nor can a device's own settings be
+                // written; they change only through their commands.
+                peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+                    "accessorySettings",
+                    {MirrorUpdate{0, "pgxlNickname", MirrorWireKind::Utf8,
+                                  QVariant(QStringLiteral("Written"))}}, 10)));
                 QTRY_VERIFY([&] {
                     int results = 0;
                     for (const SessionMessage& m : receivedMessages(peer)) {
                         results += m.kind == SessionMessageKind::PropertyResult ? 1 : 0;
                     }
-                    return results == 3;
+                    return results == 4;
                 }());
+                QVERIFY(station.accessorySettingsModel()->pgxlNickname().isEmpty());
             }
             *out = receivedMessages(peer);
         };
@@ -611,20 +623,24 @@ private slots:
         bool sawAmplifier = false;
         bool sawRfKit = false;
         bool sawAccessoryData = false;
+        bool sawAccessorySettings = false;
         QStringList refusals;
         for (const SessionMessage& m : current) {
             if (m.kind == SessionMessageKind::Capabilities) {
                 caps = StationCapabilities::fromUpdates(m.updates);
-                QCOMPARE(m.updates.at(m.updates.size() - 4).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 5).name,
                          QByteArrayLiteral("remotePgxlControlVersion"));
-                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 4).name,
                          QByteArrayLiteral("remoteRfKitControlVersion"));
                 // R-R3-48: then the station TCI server's version.
-                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
                          QByteArrayLiteral("stationTciVersion"));
-                // R-R3-47: the accessory records' version travels last.
-                QCOMPARE(m.updates.constLast().name,
+                // R-R3-47: then the accessory records' version.
+                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
                          QByteArrayLiteral("accessoryDataVersion"));
+                // R-R3-47: the Tuner Genius's own settings travel last.
+                QCOMPARE(m.updates.constLast().name,
+                         QByteArrayLiteral("remoteTgxlControlVersion"));
             }
             if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "amplifier") {
                 sawAmplifier = true;
@@ -646,14 +662,22 @@ private slots:
                 sawAccessoryData = true;
                 QCOMPARE(m.className, QByteArrayLiteral("AccessoryDataModel"));
             }
+            if (m.kind == SessionMessageKind::ObjectCreate
+                && m.objectKey == "accessorySettings") {
+                sawAccessorySettings = true;
+                QCOMPARE(m.className, QByteArrayLiteral("AccessorySettingsModel"));
+            }
             if (m.kind == SessionMessageKind::PropertyResult) {
                 QCOMPARE(m.propertyResults.size(), 1);
                 QVERIFY(!m.propertyResults.first().accepted);
                 refusals.append(m.propertyResults.first().reason);
             }
         }
-        // R-R3-47: 2 once the Core's PGXL commands are offered (Task 2).
-        QCOMPARE(caps.remotePgxlControlVersion, 2);
+        // R-R3-47: 2 once the Core's PGXL commands are offered (Task 2), 3
+        // with the amp's own settings (Task 6).
+        QCOMPARE(caps.remotePgxlControlVersion, 3);
+        // R-R3-47: the Tuner Genius's own settings (Task 6).
+        QCOMPARE(caps.remoteTgxlControlVersion, 1);
         // R-R3-47: 2 once the Core's RF-Kit commands are offered (Task 3).
         QCOMPARE(caps.remoteRfKitControlVersion, 2);
         // R-R3-47: the accessory records and settings (Task 4).
@@ -661,12 +685,14 @@ private slots:
         QVERIFY(sawAmplifier);
         QVERIFY(sawRfKit);
         QVERIFY(sawAccessoryData);
+        QVERIFY(sawAccessorySettings);
         refusals.sort();
         // R-R3-25 / R-R3-47: the Core is receive-only (StationServer sets
         // it), so the amp's `operate` gets the receive-only reason.
         QStringList expected{AmplifierModel::receiveOnlyOperateReason(),
                              RfKitModel::readOnlyReason(),
-                             AccessoryDataModel::readOnlyReason()};
+                             AccessoryDataModel::readOnlyReason(),
+                             AccessorySettingsModel::readOnlyReason()};
         expected.sort();
         QCOMPARE(refusals, expected);
 
@@ -680,6 +706,7 @@ private slots:
                 QVERIFY(u.name != "remoteRfKitControlVersion");
                 QVERIFY(u.name != "stationTciVersion");
                 QVERIFY(u.name != "accessoryDataVersion");
+                QVERIFY(u.name != "remoteTgxlControlVersion");
             }
         }
 
@@ -693,7 +720,81 @@ private slots:
                 QCOMPARE(c.remotePgxlControlVersion, 0);
                 QCOMPARE(c.remoteRfKitControlVersion, 0);
                 QCOMPARE(c.accessoryDataVersion, 0);
+                QCOMPARE(c.remoteTgxlControlVersion, 0);
             }
+        }
+    }
+
+    // R-R3-47 / R-R3-22: the verbs for the amp's and tuner's own settings
+    // need their versions (an older app, and a Core that does not own its
+    // accessories, are refused in plain words); a malformed request is not
+    // understood; with no device the Core says so; nothing reaches a device.
+    void deviceSettingsVerbsNeedTheirVersions()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const auto results = [&](bool owns, quint16 minor,
+                                 const QList<SessionMessage>& invokes) {
+            RadioModel station;
+            if (owns) {
+                station.enableStationAccessoryIdentity();
+            }
+            AppSettings settings(dir.filePath(QStringLiteral("v-%1-%2.settings")
+                                                  .arg(owns).arg(minor)));
+            StationServer server(&station, settings, dir.path());
+            LoopbackTransport* peer = nullptr;
+            connectRawPeer(this, server, minor, &peer);
+            [&] { QTRY_VERIFY(snapshotDone(peer)); }();
+            for (const SessionMessage& invoke : invokes) {
+                peer->sendText(SessionMessages::encode(invoke));
+            }
+            QStringList reasons;
+            // The comparison below says what was missing if one never came.
+            (void)QTest::qWaitFor([&] {
+                reasons.clear();
+                for (const SessionMessage& m : receivedMessages(peer)) {
+                    if (m.kind == SessionMessageKind::CommandResult) {
+                        reasons.append(m.accepted ? QStringLiteral("accepted") : m.reason);
+                    }
+                }
+                return reasons.size() == invokes.size();
+            }, 3000);
+            return reasons;
+        };
+        const MirrorUpdate name{0, "name", MirrorWireKind::Utf8, QVariant(QStringLiteral("Amp"))};
+        const QList<SessionMessage> invokes{
+            SessionMessages::commandInvoke("setPgxlName", 21, {name}),
+            SessionMessages::commandInvoke("saveTgxlSettings", 22, {}),
+        };
+
+        QCOMPARE(results(true, quint16(kRadioIdentitySessionProtocolMinor - 1), invokes),
+                 (QStringList{
+                     QStringLiteral("Update this app to change the Power Genius's own "
+                                    "settings on this Core."),
+                     QStringLiteral("Update this app to change the Tuner Genius's own "
+                                    "settings on this Core.")}));
+        QCOMPARE(results(false, kRadioIdentitySessionProtocolMinor, invokes),
+                 (QStringList{QStringLiteral("Station accessory configuration is unavailable."),
+                              QStringLiteral("Station accessory configuration is unavailable.")}));
+        const QStringList current = results(true, kRadioIdentitySessionProtocolMinor, {
+            SessionMessages::commandInvoke("setPgxlName", 21, {name}),
+            SessionMessages::commandInvoke("readTgxlSettings", 22, {}),
+            SessionMessages::commandInvoke(
+                "setPgxlHardware", 23,
+                {MirrorUpdate{0, "fanMode", MirrorWireKind::Utf8, QVariant(QStringLiteral("Auto"))},
+                 MirrorUpdate{0, "ledIntensity", MirrorWireKind::Int64, QVariant(qlonglong(5))}}),
+            SessionMessages::commandInvoke(
+                "setTgxlNetwork", 24,
+                {MirrorUpdate{0, "dhcp", MirrorWireKind::Bool, QVariant(true)}}),
+        });
+        QCOMPARE(current, (QStringList{
+            QStringLiteral("The Core is not connected to the Power Genius."),
+            QStringLiteral("The Core is not connected to the Tuner Genius."),
+            QStringLiteral("The request to change the Power Genius hardware was not understood."),
+            QStringLiteral("The request to change the Tuner Genius network settings was not "
+                           "understood.")}));
+        for (const QString& reason : current) {
+            QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
         }
     }
 
@@ -855,6 +956,70 @@ private slots:
                  StationTciModel::readOnlyReason());
         QCOMPARE(reasons.value(QLatin1String("accessoryDataReadOnly")).toString(),
                  AccessoryDataModel::readOnlyReason());
+        // R-R3-47 / R-R3-22: the devices' own settings on `accessorySettings`.
+        QCOMPARE(reasons.value(QLatin1String("accessorySettingsReadOnly")).toString(),
+                 AccessorySettingsModel::readOnlyReason());
+        QVERIFY(OperatorWording::isPlain(AccessorySettingsModel::readOnlyReason()));
+    }
+
+    // R-R3-47 / R-R3-22: the accessorySettings fixture is what the Core
+    // sends: the amp's settings as it last reported them at attach; then
+    // the amp's answer to a new name, and the tuner's network settings.
+    void accessorySettingsFixtureIsWhatTheCoreSends()
+    {
+        AccessorySettingsModel settings;
+        AccessorySettingsModel::Device amp;
+        amp.nickname = QStringLiteral("Shack PGXL");
+        amp.biasMode = QStringLiteral("ClassAB");
+        amp.fanMode = QStringLiteral("Auto");
+        amp.ledIntensity = 75;
+        amp.networkKnown = true;
+        amp.dhcp = false;
+        amp.address = QStringLiteral("192.168.1.50");
+        amp.netmask = QStringLiteral("255.255.255.0");
+        amp.gateway = QStringLiteral("192.168.1.1");
+        amp.answer = QStringLiteral("The Power Genius sent its network settings.");
+        amp.answerAccepted = true;
+        amp.answerCount = 2;
+        settings.setPgxl(amp);
+
+        MirrorRecorder recorder("accessorySettings", &settings);
+        amp.nickname = QStringLiteral("Contest PGXL");
+        amp.answer = QStringLiteral("The Power Genius took the new name.");
+        amp.answerCount = 3;
+        settings.setPgxl(amp);
+        recorder.flush();
+        AccessorySettingsModel::Device tuner;
+        tuner.nickname = QStringLiteral("Tuner_Genius_XL");
+        tuner.networkKnown = true;
+        tuner.dhcp = true;
+        tuner.address = QStringLiteral("192.168.1.60");
+        tuner.netmask = QStringLiteral("255.255.255.0");
+        tuner.gateway = QStringLiteral("192.168.1.1");
+        tuner.answer = QStringLiteral("The Tuner Genius sent its network settings.");
+        tuner.answerAccepted = true;
+        tuner.answerCount = 1;
+        settings.setTgxl(tuner);
+        recorder.flush();
+        QString why;
+        QVERIFY2(matchesFixture(QStringLiteral("accessorySettings.jsonl"), recorder.text(), &why),
+                 qPrintable(why));
+
+        QFile file(fixturePath(QStringLiteral("accessorySettings.jsonl")));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QList<SessionMessage> messages = decodeLines(file.readAll());
+        QVERIFY(!messages.isEmpty());
+        AccessorySettingsModel window;
+        for (const SessionMessage& m : messages) {
+            for (const MirrorUpdate& u : m.updates) {
+                QVERIFY2(window.applyStationValue(u.name, u.value), u.name.constData());
+            }
+        }
+        QCOMPARE(window.pgxl(), amp);
+        QCOMPARE(window.tgxl(), tuner);
+        QVERIFY(OperatorWording::isPlain(window.pgxlAnswer()));
+        // The tuner has no hardware settings on the wire.
+        QVERIFY(!window.applyStationValue("tgxlBiasMode", QStringLiteral("ClassA")));
     }
 
     // R-R3-47 / R-R3-22: the accessoryData fixture is what the Core sends:

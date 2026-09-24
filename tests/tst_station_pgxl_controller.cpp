@@ -8,6 +8,10 @@
 // on the bench (StationPgxlController.h names the capture files). No real
 // accessory is contacted and nothing is sent to hardware.
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-47 / R-R3-22: a window's requests for the amp's own
+// settings reach the (fake) amp as the local page's own commands, with the
+// amp's answers and values published on AccessorySettingsModel. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QPointer>
 #include <QRegularExpression>
@@ -19,6 +23,7 @@
 #include "core/PgxlConnection.h"
 #include "core/SmartSdrApiListener.h"
 #include "core/StationPgxlController.h"
+#include "models/AccessorySettingsModel.h"
 #include "models/AmplifierModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -64,6 +69,49 @@ QStringList commandsOf(const QSignalSpy& frames)
         commands.append(frame.mid(frame.indexOf(QLatin1Char('|')) + 1));
     }
     return commands;
+}
+
+// What the fake amp received, line by line: the bytes on the wire.
+struct Received {
+    QByteArray pending;
+    QStringList lines;
+    void take(QTcpSocket* peer)
+    {
+        pending += peer->readAll();
+        qsizetype nl = 0;
+        while ((nl = pending.indexOf('\n')) >= 0) {
+            lines.append(QString::fromUtf8(pending.left(nl)));
+            pending.remove(0, nl + 1);
+        }
+    }
+};
+
+// Wait for the amp to receive `command` (after `from` lines); its sequence.
+quint32 waitForCommand(QTcpSocket* peer, Received& rx, const QString& command,
+                       qsizetype* from)
+{
+    quint32 seq = 0;
+    // The sequence stays 0 when the command never arrives.
+    (void)QTest::qWaitFor([&] {
+        rx.take(peer);
+        for (qsizetype i = *from; i < rx.lines.size(); ++i) {
+            const QString& line = rx.lines.at(i);
+            const qsizetype bar = line.indexOf(QLatin1Char('|'));
+            if (line.startsWith(QLatin1Char('C')) && bar > 1 && line.mid(bar + 1) == command) {
+                seq = line.mid(1, bar - 1).toUInt();
+                *from = i + 1;
+                return true;
+            }
+        }
+        return false;
+    }, 3000);
+    return seq;
+}
+
+void reply(QTcpSocket* peer, quint32 seq, const QString& codeAndBody)
+{
+    peer->write(QStringLiteral("R%1|%2\n").arg(seq).arg(codeAndBody).toUtf8());
+    peer->flush();
 }
 
 } // namespace
@@ -231,6 +279,169 @@ private slots:
         QVERIFY(model.disconnectPgxlForStation(&reason));
         QCOMPARE(ampModel->connectionPhase(), Phase::Disconnected);
         QVERIFY(!pgxl->isConnected());
+    }
+
+    // R-R3-47 / R-R3-22: a window's requests for the amp's own settings. The
+    // Core sends each as exactly the command the local Advanced page sends
+    // (the fake amp records the bytes), matches the amp's answer by its
+    // sequence and publishes the values the amp took or reported, and its
+    // answer in plain words. Nothing reaches an amp the Core has not
+    // admitted, a bad value is refused before anything is sent, and nothing
+    // operates the amp.
+    void deviceSettingsReachTheAmpAsTheLocalPageSendsThem()
+    {
+        QTcpServer amp;
+        QVERIFY(amp.listen(QHostAddress::LocalHost, 0));
+        RadioModel model;
+        prepare(model);
+        auto* pgxl = model.pgxlConnection();
+        const AccessorySettingsModel* settings = model.accessorySettingsModel();
+        QSignalSpy frames(pgxl, &PgxlConnection::testFrameWrittenForTesting);
+        QString reason;
+
+        // No amp yet: refused, nothing sent.
+        QVERIFY(!model.setPgxlNameForStation(QStringLiteral("Shack"), &reason));
+        QCOMPARE(reason, QStringLiteral("The Core is not connected to the Power Genius."));
+        QVERIFY(!model.savePgxlSettingsForStation(&reason));
+        QVERIFY(!model.readPgxlSettingsForStation(&reason));
+        QCOMPARE(frames.count(), 0);
+
+        // An amp that has not been admitted gets nothing but `info`.
+        QTcpSocket* peer = answerUpToInfo(model, amp, frames, "V3.8.9", kInfoReply);
+        QVERIFY(peer);
+        QVERIFY(!model.setPgxlNetworkForStation(true, QString(), QString(), QString(), &reason));
+        QCOMPARE(commandsOf(frames), QStringList{QStringLiteral("info")});
+        announce(model, amp.serverPort(), QStringLiteral("PowerGeniusXL"),
+                 QString::fromLatin1(kSerial));
+        QTRY_VERIFY(pgxl->isConnected());
+
+        Received rx;
+        qsizetype from = 0;
+
+        // Name: `setup nickname=`, saved on the Core beside it.
+        QVERIFY2(model.setPgxlNameForStation(QStringLiteral(" Shack PGXL "), &reason),
+                 qPrintable(reason));
+        QCOMPARE(settings->pgxlAnswer(),
+                 QStringLiteral("Sent to the Power Genius. Waiting for its answer."));
+        quint32 seq = waitForCommand(peer, rx, QStringLiteral("setup nickname=Shack PGXL"), &from);
+        QVERIFY(seq != 0);
+        const qint64 before = settings->pgxlAnswerCount();
+        reply(peer, seq, QStringLiteral("0|"));
+        QTRY_COMPARE(settings->pgxlNickname(), QStringLiteral("Shack PGXL"));
+        QCOMPARE(settings->pgxlAnswer(), QStringLiteral("The Power Genius took the new name."));
+        QVERIFY(settings->pgxlAnswerAccepted());
+        QCOMPARE(settings->pgxlAnswerCount(), before + 1);
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("PGXL_Nickname")).toString(),
+                 QStringLiteral("Shack PGXL"));
+
+        // Bias, refused by the amp: the value is not taken; the answer says so.
+        QVERIFY(model.setPgxlHardwareForStation(QStringLiteral("biasMode"),
+                                                QStringLiteral("ClassA"), &reason));
+        seq = waitForCommand(peer, rx, QStringLiteral("setup bias=a"), &from);
+        QVERIFY(seq != 0);
+        reply(peer, seq, QStringLiteral("50000015|"));
+        QTRY_COMPARE(settings->pgxlAnswer(),
+                     QStringLiteral("The Power Genius did not take the new setting."));
+        QVERIFY(!settings->pgxlAnswerAccepted());
+        QVERIFY(settings->pgxlBiasMode().isEmpty());
+
+        // Fan and LED.
+        QVERIFY(model.setPgxlHardwareForStation(QStringLiteral("fanMode"),
+                                                QStringLiteral("Quiet"), &reason));
+        seq = waitForCommand(peer, rx, QStringLiteral("setup fan=quiet"), &from);
+        QVERIFY(seq != 0);
+        reply(peer, seq, QStringLiteral("0|"));
+        QTRY_COMPARE(settings->pgxlFanMode(), QStringLiteral("Quiet"));
+        QVERIFY(model.setPgxlHardwareForStation(QStringLiteral("ledIntensity"), 40, &reason));
+        seq = waitForCommand(peer, rx, QStringLiteral("setup led=40"), &from);
+        QVERIFY(seq != 0);
+        reply(peer, seq, QStringLiteral("0|"));
+        QTRY_COMPARE(settings->pgxlLedIntensity(), 40);
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("PGXL_LedIntensity")).toInt(), 40);
+
+        // Values the page could never send are refused before anything leaves.
+        const qsizetype sentBefore = frames.count();
+        QVERIFY(!model.setPgxlHardwareForStation(QStringLiteral("ledIntensity"), 101, &reason));
+        QCOMPARE(reason, QStringLiteral("Choose an LED brightness from 0 to 100."));
+        QVERIFY(!model.setPgxlHardwareForStation(QStringLiteral("fanMode"),
+                                                 QStringLiteral("Loud"), &reason));
+        QVERIFY(!model.setPgxlHardwareForStation(QStringLiteral("biasMode"),
+                                                 QStringLiteral("B"), &reason));
+        QVERIFY(!model.setPgxlHardwareForStation(QStringLiteral("operate"), 1, &reason));
+        QVERIFY(!model.setPgxlNetworkForStation(false, QStringLiteral("192.168.1.256"),
+                                                QStringLiteral("255.255.255.0"),
+                                                QStringLiteral("192.168.1.1"), &reason));
+        QCOMPARE(reason, QStringLiteral("Enter each address as four numbers from 0 to 255 "
+                                        "separated by dots."));
+        QVERIFY(!model.setPgxlNameForStation(QStringLiteral("Amp\nstatus"), &reason));
+        QCOMPARE(reason, QStringLiteral("Enter a name without line breaks or tabs."));
+        QCOMPARE(frames.count(), sentBefore);
+
+        // Network: `ifconf address= netmask= gateway= dhcp=`.
+        QVERIFY(model.setPgxlNetworkForStation(false, QStringLiteral("192.168.1.50"),
+                                               QStringLiteral("255.255.255.0"),
+                                               QStringLiteral("192.168.1.1"), &reason));
+        seq = waitForCommand(peer, rx,
+                             QStringLiteral("ifconf address=192.168.1.50 netmask=255.255.255.0 "
+                                            "gateway=192.168.1.1 dhcp=false"),
+                             &from);
+        QVERIFY(seq != 0);
+        reply(peer, seq, QStringLiteral("0|"));
+        QTRY_VERIFY(settings->pgxlNetworkKnown());
+        QCOMPARE(settings->pgxlAddress(), QStringLiteral("192.168.1.50"));
+        QVERIFY(!settings->pgxlDhcp());
+        QCOMPARE(settings->pgxlAnswer(),
+                 QStringLiteral("The Power Genius took the new network settings."));
+
+        // Revert: `setup read` then `ifconf read`; the amp's values replace ours.
+        QVERIFY(model.readPgxlSettingsForStation(&reason));
+        const quint32 setupSeq = waitForCommand(peer, rx, QStringLiteral("setup read"), &from);
+        const quint32 ifconfSeq = waitForCommand(peer, rx, QStringLiteral("ifconf read"), &from);
+        QVERIFY(setupSeq != 0 && ifconfSeq != 0);
+        reply(peer, setupSeq, QStringLiteral("0|nickname=Amp2 bias=classa fan=continuous led=90"));
+        reply(peer, ifconfSeq, QStringLiteral("0|dhcp=1 ip=10.0.0.5 netmask=255.0.0.0 "
+                                              "gateway=10.0.0.1"));
+        QTRY_COMPARE(settings->pgxlAddress(), QStringLiteral("10.0.0.5"));
+        QCOMPARE(settings->pgxlNickname(), QStringLiteral("Amp2"));
+        QCOMPARE(settings->pgxlBiasMode(), QStringLiteral("ClassA"));
+        QCOMPARE(settings->pgxlFanMode(), QStringLiteral("Continuous"));
+        QCOMPARE(settings->pgxlLedIntensity(), 90);
+        QVERIFY(settings->pgxlDhcp());
+        QCOMPARE(settings->pgxlNetmask(), QStringLiteral("255.0.0.0"));
+        QCOMPARE(settings->pgxlGateway(), QStringLiteral("10.0.0.1"));
+        QCOMPARE(settings->pgxlAnswer(),
+                 QStringLiteral("The Power Genius sent its network settings."));
+
+        // Save & Reboot: `save`, acknowledged with "saving".
+        QVERIFY(model.savePgxlSettingsForStation(&reason));
+        seq = waitForCommand(peer, rx, QStringLiteral("save"), &from);
+        QVERIFY(seq != 0);
+        reply(peer, seq, QStringLiteral("0|saving"));
+        QTRY_COMPARE(settings->pgxlAnswer(),
+                     QStringLiteral("The Power Genius is saving its settings and restarting."));
+
+        // The bytes on the wire are the connection's own framing.
+        rx.take(peer);
+        QVERIFY(rx.lines.contains(QStringLiteral("C%1|save").arg(seq)));
+        // Nothing asked the amp to operate.
+        for (const QString& line : rx.lines) {
+            QVERIFY2(!line.contains(QStringLiteral("operate")), qPrintable(line));
+        }
+        QVERIFY(!model.amplifierModel()->operate());
+
+        // A request still waiting when the amp goes away: said plainly.
+        QVERIFY(model.setPgxlNameForStation(QStringLiteral("Late"), &reason));
+        QVERIFY(waitForCommand(peer, rx, QStringLiteral("setup nickname=Late"), &from) != 0);
+        peer->abort();
+        QTRY_COMPARE(settings->pgxlAnswer(),
+                     QStringLiteral("The Power Genius went offline before it answered."));
+        QVERIFY(!settings->pgxlAnswerAccepted());
+        QVERIFY(model.disconnectPgxlForStation(&reason));
+        // A new scope forgets the old amp's values, keeps the last answer.
+        QVERIFY(settings->pgxlNickname().isEmpty());
+        QVERIFY(!settings->pgxlNetworkKnown());
+        QCOMPARE(settings->pgxlAnswer(),
+                 QStringLiteral("The Power Genius went offline before it answered."));
     }
 
     // A Tuner Genius answering at the amp's address: never admitted, never

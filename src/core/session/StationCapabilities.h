@@ -76,6 +76,10 @@
 //   2026-09-24 - R-R3-47 / R-R3-22: accessoryDataVersion, last in the
 //                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: remotePgxlControlVersion 3 and
+//                remoteTgxlControlVersion 1 (the amp's and tuner's own
+//                settings), the latter last in the minor-11 block. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -127,7 +131,11 @@ struct StationCapabilities {
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows
-    /// no Power Genius readings from this Core.
+    /// no Power Genius readings from this Core. 2 adds configurePgxl,
+    /// disconnectPgxl and setPgxlConnectionSettings; 3 adds the amp's own
+    /// settings (the pgxl* properties of the read-only `accessorySettings`
+    /// object and the setPgxlName, setPgxlHardware, setPgxlNetwork,
+    /// savePgxlSettings and readPgxlSettings commands).
     int remotePgxlControlVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its RF-Kit RF2K-S status
     /// as the read-only `rfkit` object; 2 adds the interface, antenna and
@@ -146,6 +154,12 @@ struct StationCapabilities {
     /// setTxInterlockPolicy, setPgxlPowerCap and clearAccessoryFaults
     /// commands. Sent last in the same block.
     int accessoryDataVersion = 0;
+    /// R-R3-47 / R-R3-22: 1 means the Core sends its Tuner Genius's own
+    /// settings (the tgxl* properties of `accessorySettings`) and takes the
+    /// setTgxlName, setTgxlNetwork, saveTgxlSettings and readTgxlSettings
+    /// commands. Sent last in the same minor-11 block. 0: a window cannot
+    /// change the tuner's own settings on this Core and says so.
+    int remoteTgxlControlVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

@@ -57,6 +57,13 @@
 //                                    setPgxlPowerCap and clearAccessoryFaults
 //                                    (accessoryDataVersion 1). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the amp's and
+//                                    tuner's own settings (setPgxlName,
+//                                    setPgxlHardware, setPgxlNetwork,
+//                                    savePgxlSettings, readPgxlSettings and
+//                                    the four setTgxl* / *TgxlSettings
+//                                    verbs). AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -371,6 +378,14 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetPgxlPowerCap(invoke);
     } else if (invoke.commandVerb == "clearAccessoryFaults") {
         handleClearAccessoryFaults(invoke);
+    } else if (invoke.commandVerb == "setPgxlName" || invoke.commandVerb == "setPgxlHardware"
+               || invoke.commandVerb == "setPgxlNetwork"
+               || invoke.commandVerb == "savePgxlSettings"
+               || invoke.commandVerb == "readPgxlSettings"
+               || invoke.commandVerb == "setTgxlName" || invoke.commandVerb == "setTgxlNetwork"
+               || invoke.commandVerb == "saveTgxlSettings"
+               || invoke.commandVerb == "readTgxlSettings") {
+        handleAccessoryDeviceSettings(invoke);
     } else if (invoke.commandVerb == "requestIoBoardProbe") {
         handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "setAlexRxAntenna") {
@@ -1178,6 +1193,97 @@ void SessionCommandDispatcher::handleClearAccessoryFaults(const SessionMessage& 
         return;
     }
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
+// 1): the amp's and the tuner's own settings. The Core sends each to the
+// device as the local Advanced page's own command (StationDeviceSettings);
+// accepted means it left for the device, and the device's answer comes
+// back on `accessorySettings`. None keys a transmitter or operates the amp.
+void SessionCommandDispatcher::handleAccessoryDeviceSettings(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    const bool pgxl = verb.contains("Pgxl");
+    const QString device = pgxl ? QStringLiteral("Power Genius") : QStringLiteral("Tuner Genius");
+    const auto notUnderstood = [&](const QString& what) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to %1 was not understood.").arg(what), {});
+    };
+    QString reason;
+    bool sent = false;
+    if (verb == "setPgxlName" || verb == "setTgxlName") {
+        QString name;
+        if (!hasExactlyArguments(invoke.arguments, { "name" })
+            || !findUtf8Argument(invoke.arguments, "name", &name)) {
+            notUnderstood(QStringLiteral("rename the %1").arg(device));
+            return;
+        }
+        sent = pgxl ? m_radioModel->setPgxlNameForStation(name, &reason)
+                    : m_radioModel->setTgxlNameForStation(name, &reason);
+    } else if (verb == "setPgxlHardware") {
+        // Exactly one of biasMode (utf8), fanMode (utf8), ledIntensity (i64).
+        const MirrorUpdate* only = invoke.arguments.size() == 1 ? &invoke.arguments.first()
+                                                                : nullptr;
+        QVariant value;
+        bool shape = false;
+        if (only && (only->name == "biasMode" || only->name == "fanMode")) {
+            QString text;
+            shape = findUtf8Argument(invoke.arguments, only->name, &text);
+            value = text;
+        } else if (only && only->name == "ledIntensity") {
+            int led = 0;
+            shape = hasWireKind(invoke.arguments, "ledIntensity", MirrorWireKind::Int64)
+                && findIntArgument(invoke.arguments, "ledIntensity", &led) == ArgumentStatus::Ok;
+            value = led;
+        }
+        if (!shape) {
+            notUnderstood(QStringLiteral("change the Power Genius hardware"));
+            return;
+        }
+        sent = m_radioModel->setPgxlHardwareForStation(QString::fromUtf8(only->name), value,
+                                                       &reason);
+    } else if (verb == "setPgxlNetwork" || verb == "setTgxlNetwork") {
+        QVariant dhcp;
+        QString address;
+        QString netmask;
+        QString gateway;
+        if (!hasExactlyArguments(invoke.arguments, { "dhcp", "address", "netmask", "gateway" })
+            || !findArgument(invoke.arguments, "dhcp", &dhcp)
+            || dhcp.typeId() != QMetaType::Bool
+            || !findUtf8Argument(invoke.arguments, "address", &address)
+            || !findUtf8Argument(invoke.arguments, "netmask", &netmask)
+            || !findUtf8Argument(invoke.arguments, "gateway", &gateway)) {
+            notUnderstood(QStringLiteral("change the %1 network settings").arg(device));
+            return;
+        }
+        sent = pgxl ? m_radioModel->setPgxlNetworkForStation(dhcp.toBool(), address, netmask,
+                                                             gateway, &reason)
+                    : m_radioModel->setTgxlNetworkForStation(dhcp.toBool(), address, netmask,
+                                                             gateway, &reason);
+    } else if (verb == "savePgxlSettings" || verb == "saveTgxlSettings") {
+        if (!hasExactlyArguments(invoke.arguments, {})) {
+            notUnderstood(QStringLiteral("save and restart the %1").arg(device));
+            return;
+        }
+        sent = pgxl ? m_radioModel->savePgxlSettingsForStation(&reason)
+                    : m_radioModel->saveTgxlSettingsForStation(&reason);
+    } else {
+        if (!hasExactlyArguments(invoke.arguments, {})) {
+            notUnderstood(QStringLiteral("read the %1 settings").arg(device));
+            return;
+        }
+        sent = pgxl ? m_radioModel->readPgxlSettingsForStation(&reason)
+                    : m_radioModel->readTgxlSettingsForStation(&reason);
+    }
+    if (!sent) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty()
+                       ? QStringLiteral("The Core did not send the request to the %1.").arg(device)
+                       : reason,
+                   {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
 }
 
 void SessionCommandDispatcher::handleDisconnectPgxl(const SessionMessage& invoke)

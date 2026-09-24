@@ -22,6 +22,9 @@
 //                 single-shot; every physical dial gets a fresh socket; an
 //                 opt-in identity admission (native `info` serial, held
 //                 until the Core's controller approves it) for the Core.
+//   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (R-R3-47, R-R3-22): replyReceived, every answer of an
+//                 admitted amp by sequence, for the Core's device settings.
 // =================================================================
 #pragma once
 
@@ -166,6 +169,10 @@ signals:
     void pairingResult(bool succeeded, const QString& detail);
     void saveAcknowledged();
     void reconnectAttempt(int attemptNumber, int backoffMs);
+    /// R-R3-47 / R-R3-22: every R-frame answer once the amp is connected
+    /// (admitted, on the Core): its sequence, whether its code was 0, and
+    /// its body. The Core's device settings match their requests by it.
+    void replyReceived(quint32 seq, bool accepted, const QString& body);
 
     // R-R3-47 identity admission (only with setIdentityAdmissionRequired).
     void identityProtocolProgress(quint64 socketAttemptToken,

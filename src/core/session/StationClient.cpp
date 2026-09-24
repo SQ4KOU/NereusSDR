@@ -80,6 +80,11 @@
 //                 `accessoryData` object and the setTxInterlockPolicy,
 //                 setPgxlPowerCap and clearAccessoryFaults requests). J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: remotePgxlControlVersion 3 and
+//                 remoteTgxlControlVersion 1 (the `accessorySettings` object
+//                 and the amp's and tuner's own settings requests); their
+//                 refusals go to the Advanced pages, not the slice toast.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -95,6 +100,7 @@
 #include "models/RfKitModel.h"
 #include "models/StationTciModel.h"
 #include "models/AccessoryDataModel.h"
+#include "models/AccessorySettingsModel.h"
 
 #include <QHostAddress>
 #include <QNetworkInterface>
@@ -1724,6 +1730,11 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         { "accessoryData", m_radioModel->accessoryDataModel(),
           m_agreedMinor >= kRadioIdentitySessionProtocolMinor
               && m_capabilities.accessoryDataVersion >= 1 },
+        // R-R3-47 / R-R3-22: the amp's and tuner's own settings.
+        { "accessorySettings", m_radioModel->accessorySettingsModel(),
+          m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+              && (m_capabilities.remotePgxlControlVersion >= 3
+                  || m_capabilities.remoteTgxlControlVersion >= 1) },
     };
     for (const auto& accessory : accessories) {
         const QByteArray key(accessory.key);
@@ -2388,6 +2399,11 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
         auto* data = qobject_cast<AccessoryDataModel*>(target);
         return data != nullptr && data->applyStationValue(propertyName, native);
     }
+    // R-R3-47 / R-R3-22: a plain state apply; changes only by command.
+    if (className == "AccessorySettingsModel") {
+        auto* settings = qobject_cast<AccessorySettingsModel*>(target);
+        return settings != nullptr && settings->applyStationValue(propertyName, native);
+    }
     if (className != "SliceModel") {
         return false;
     }
@@ -2614,6 +2630,16 @@ MirrorUpdate boolArgument(const QByteArray& name, bool value)
 MirrorUpdate doubleArgument(const QByteArray& name, double value)
 {
     return MirrorUpdate{ 0, name, MirrorWireKind::Float64, QVariant(value) };
+}
+
+// R-R3-47 / R-R3-22: the amp's and tuner's own settings verbs, whose
+// refusals the Advanced pages show (RadioModel::accessoryRequestRefused).
+bool isAccessoryDeviceSettingsVerb(const QByteArray& verb)
+{
+    return verb == "setPgxlName" || verb == "setPgxlHardware" || verb == "setPgxlNetwork"
+        || verb == "savePgxlSettings" || verb == "readPgxlSettings" || verb == "setTgxlName"
+        || verb == "setTgxlNetwork" || verb == "saveTgxlSettings"
+        || verb == "readTgxlSettings";
 }
 
 } // namespace
@@ -2937,6 +2963,105 @@ StationClient::CommandOutcome StationClient::requestClearAccessoryFaults(const Q
                        QStringLiteral("the fault history"));
 }
 
+// R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
+// 1): the amp's and tuner's own settings. A Core that did not offer them is
+// not asked; the window says why.
+StationClient::CommandOutcome StationClient::requestPgxlName(const QString& name)
+{
+    if (!pgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestPgxlName(name);
+    }
+    return sendCommand("setPgxlName", -1, { stringArgument("name", name) },
+                       QStringLiteral("the Power Genius name"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlHardware(const QString& setting,
+                                                                 const QString& value)
+{
+    if (!pgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestPgxlHardware(setting, value);
+    }
+    if (setting == QLatin1String("ledIntensity")) {
+        return sendCommand("setPgxlHardware", -1, { intArgument("ledIntensity", value.toInt()) },
+                           QStringLiteral("the Power Genius hardware setting"));
+    }
+    return sendCommand("setPgxlHardware", -1, { stringArgument(setting.toUtf8(), value) },
+                       QStringLiteral("the Power Genius hardware setting"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlNetwork(bool dhcp, const QString& address,
+                                                                const QString& netmask,
+                                                                const QString& gateway)
+{
+    if (!pgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestPgxlNetwork(dhcp, address, netmask, gateway);
+    }
+    return sendCommand("setPgxlNetwork", -1,
+                       { boolArgument("dhcp", dhcp), stringArgument("address", address),
+                         stringArgument("netmask", netmask),
+                         stringArgument("gateway", gateway) },
+                       QStringLiteral("the Power Genius network settings"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlSaveAndRestart()
+{
+    if (!pgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestPgxlSaveAndRestart();
+    }
+    return sendCommand("savePgxlSettings", -1, {},
+                       QStringLiteral("the Power Genius Save & Reboot"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlReadSettings()
+{
+    if (!pgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestPgxlReadSettings();
+    }
+    return sendCommand("readPgxlSettings", -1, {},
+                       QStringLiteral("the request for the Power Genius settings"));
+}
+
+StationClient::CommandOutcome StationClient::requestTgxlName(const QString& name)
+{
+    if (!tgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestTgxlName(name);
+    }
+    return sendCommand("setTgxlName", -1, { stringArgument("name", name) },
+                       QStringLiteral("the Tuner Genius name"));
+}
+
+StationClient::CommandOutcome StationClient::requestTgxlNetwork(bool dhcp, const QString& address,
+                                                                const QString& netmask,
+                                                                const QString& gateway)
+{
+    if (!tgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestTgxlNetwork(dhcp, address, netmask, gateway);
+    }
+    return sendCommand("setTgxlNetwork", -1,
+                       { boolArgument("dhcp", dhcp), stringArgument("address", address),
+                         stringArgument("netmask", netmask),
+                         stringArgument("gateway", gateway) },
+                       QStringLiteral("the Tuner Genius network settings"));
+}
+
+StationClient::CommandOutcome StationClient::requestTgxlSaveAndRestart()
+{
+    if (!tgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestTgxlSaveAndRestart();
+    }
+    return sendCommand("saveTgxlSettings", -1, {},
+                       QStringLiteral("the Tuner Genius Save & Reboot"));
+}
+
+StationClient::CommandOutcome StationClient::requestTgxlReadSettings()
+{
+    if (!tgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestTgxlReadSettings();
+    }
+    return sendCommand("readTgxlSettings", -1, {},
+                       QStringLiteral("the request for the Tuner Genius settings"));
+}
+
 StationClient::CommandOutcome StationClient::requestDisconnectTgxl()
 {
     if (!remoteTgxlConfigAvailable()) {
@@ -3021,6 +3146,11 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             }
         } else if (pending.verb == "requestSliceSampleRate") {
             m_radioModel->reportStationRetuneRejected(pending.sliceId, reason);
+        } else if (isAccessoryDeviceSettingsVerb(pending.verb)) {
+            // R-R3-47 / R-R3-22: the Advanced page that sent it shows it.
+            m_radioModel->reportStationAccessoryRefusal(
+                pending.verb.contains("Pgxl") ? QStringLiteral("pgxl") : QStringLiteral("tgxl"),
+                reason);
         } else {
             m_radioModel->reportStationSliceCommandRejected(reason);
         }
@@ -3144,6 +3274,18 @@ bool StationClient::accessoryDataAvailable() const
 {
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.accessoryDataVersion >= 1;
+}
+
+bool StationClient::pgxlDeviceSettingsAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remotePgxlControlVersion >= 3;
+}
+
+bool StationClient::tgxlDeviceSettingsAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remoteTgxlControlVersion >= 1;
 }
 
 bool StationClient::stationTciAvailable() const

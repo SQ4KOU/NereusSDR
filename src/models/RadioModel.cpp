@@ -145,6 +145,7 @@
 //                FlexRadio beacon follows the 4O3A switch (updateFlexBeacon).
 //                NereusSDR-original; no Thetis logic. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47/22: accessorySettings. J.J. Boyd (KG4VCF), AI: Claude Code.
 // =================================================================
 
 //=================================================================
@@ -468,6 +469,7 @@ warren@wpratt.com
 #include "models/RfKitModel.h"
 #include "models/StationTciModel.h"
 #include "models/AccessoryDataModel.h"
+#include "models/AccessorySettingsModel.h"
 #include "core/StationAccessoryData.h"
 #include "core/ConnectionDiagnostics.h"
 
@@ -1443,6 +1445,10 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_pgxlDiagnostics = new ConnectionDiagnostics(this);
     m_tgxlDiagnostics = new ConnectionDiagnostics(this);
     m_accessoryDataModel = new AccessoryDataModel(this);
+    // R-R3-47 / R-R3-22: the amp's and tuner's own settings. The Core's
+    // station controllers keep it current (enableStationAccessoryIdentity);
+    // a Remote model holds the Core's values.
+    m_accessorySettingsModel = new AccessorySettingsModel(this);
     if (m_role == Role::Local) {
         m_pgxlDiagnostics->bindTo(m_pgxlConnection);
         m_tgxlDiagnostics->bindTo(m_tgxlConnection);
@@ -3384,6 +3390,9 @@ void RadioModel::enableStationAccessoryIdentity()
     // (and so before onPgxlConnected pairs it).
     m_stationPgxl = new StationPgxlController(m_pgxlConnection, m_amplifierModel, this);
     m_stationPgxl->cancel(!fourO3AEnabled());
+    // R-R3-47 / R-R3-22: the amp's and tuner's own settings for a window.
+    m_stationPgxl->deviceSettings()->setModel(m_accessorySettingsModel);
+    m_stationTgxl->deviceSettings()->setModel(m_accessorySettingsModel);
     // R-R3-47: the RF-Kit too: admitted once its /info names an RF2K-S.
     m_stationRfKit = new StationRfKitController(m_rfKitConnection.get(), m_rfKitModel, this);
     m_stationRfKit->cancel(!rfKitEnabled());
@@ -3536,6 +3545,94 @@ void RadioModel::applyRemoteAccessorySetting(const QString& key)
     if (m_role == Role::Local && m_stationAccessoryData) {
         m_stationAccessoryData->applySetting(key);
     }
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-47 / R-R3-22: the Power Genius's and Tuner Genius's own settings for
+// a window (remotePgxlControlVersion 3, remoteTgxlControlVersion 1). Each is
+// sent by the station controller's StationDeviceSettings as the local
+// Advanced page's own command. NereusSDR-original; no Thetis logic.
+// ---------------------------------------------------------------------------
+
+namespace {
+bool refuseNoStationDevice(QString* reason)
+{
+    if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+    return false;
+}
+} // namespace
+
+bool RadioModel::setPgxlNameForStation(const QString& name, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
+    return m_stationPgxl->deviceSettings()->setName(name, reason);
+}
+
+bool RadioModel::setPgxlHardwareForStation(const QString& setting, const QVariant& value,
+                                           QString* reason)
+{
+    if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
+    StationDeviceSettings* settings = m_stationPgxl->deviceSettings();
+    if (setting == QLatin1String("biasMode")) {
+        return settings->setBiasMode(value.toString(), reason);
+    }
+    if (setting == QLatin1String("fanMode")) {
+        return settings->setFanMode(value.toString(), reason);
+    }
+    if (setting == QLatin1String("ledIntensity")) {
+        return settings->setLedIntensity(value.toInt(), reason);
+    }
+    if (reason) {
+        *reason = QStringLiteral("The request to change the Power Genius hardware was not "
+                                 "understood.");
+    }
+    return false;
+}
+
+bool RadioModel::setPgxlNetworkForStation(bool dhcp, const QString& address,
+                                          const QString& netmask, const QString& gateway,
+                                          QString* reason)
+{
+    if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
+    return m_stationPgxl->deviceSettings()->setNetwork(dhcp, address, netmask, gateway, reason);
+}
+
+bool RadioModel::savePgxlSettingsForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
+    return m_stationPgxl->deviceSettings()->saveAndRestart(reason);
+}
+
+bool RadioModel::readPgxlSettingsForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
+    return m_stationPgxl->deviceSettings()->readBack(reason);
+}
+
+bool RadioModel::setTgxlNameForStation(const QString& name, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
+    return m_stationTgxl->deviceSettings()->setName(name, reason);
+}
+
+bool RadioModel::setTgxlNetworkForStation(bool dhcp, const QString& address,
+                                          const QString& netmask, const QString& gateway,
+                                          QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
+    return m_stationTgxl->deviceSettings()->setNetwork(dhcp, address, netmask, gateway, reason);
+}
+
+bool RadioModel::saveTgxlSettingsForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
+    return m_stationTgxl->deviceSettings()->saveAndRestart(reason);
+}
+
+bool RadioModel::readTgxlSettingsForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
+    return m_stationTgxl->deviceSettings()->readBack(reason);
 }
 
 namespace {
@@ -4403,6 +4500,14 @@ void RadioModel::reportStationSliceCommandRejected(const QString& reason)
         return;
     }
     emit sliceAddRejected(reason);
+}
+
+void RadioModel::reportStationAccessoryRefusal(const QString& device, const QString& reason)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    emit accessoryRequestRefused(device, reason);
 }
 
 void RadioModel::reportStationRetuneRejected(int sliceId, const QString& reason)

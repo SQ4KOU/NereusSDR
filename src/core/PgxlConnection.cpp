@@ -19,6 +19,9 @@
 //                 socket per dial, bind-failure fallback) replaces the
 //                 static single-shot retry and the reused socket; opt-in
 //                 identity admission for the Core (StationPgxlController).
+//   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (R-R3-47, R-R3-22): replyReceived for every answer of a
+//                 connected amp (the Core's device settings).
 // =================================================================
 #include "PgxlConnection.h"
 #include "AppSettings.h"
@@ -1050,6 +1053,16 @@ void PgxlConnection::processLine(const QString& line, quint64 attemptGeneration)
             // publish presence, readings or pairing.
             if (m_identityAdmissionRequired && !m_connected) {
                 return;
+            }
+
+            // R-R3-47 / R-R3-22: every answer, by sequence, for the Core's
+            // device settings. Emitted first; a consumer may delete this.
+            {
+                QPointer<PgxlConnection> self(this);
+                emit replyReceived(rseq, hexOk && hexCode == 0, body);
+                if (!self || (!offlineTest && !socketAttemptIsCurrent(attemptGeneration))) {
+                    return;
+                }
             }
 
             // Check for pairing result correlation.

@@ -25,6 +25,9 @@
 //   2026-09-22  J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 OpenAI Codex: retire each failed Qt socket before retry so
 //                 asynchronous timeout state cannot leak into source binding.
+//   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (R-R3-47, R-R3-22): replyReceived, every answer of an
+//                 admitted tuner by sequence, for the Core's device settings.
 // =================================================================
 #pragma once
 
@@ -154,6 +157,10 @@ signals:
     void ifconfResponse(const QMap<QString,QString>& fields);
     void saveAcknowledged();
     void reconnectAttempt(int attemptNumber, int backoffMs);
+    /// R-R3-47 / R-R3-22: every R-frame answer once the tuner is connected
+    /// (admitted, on the Core): its sequence, whether its code was 0, and
+    /// its body. The Core's device settings match their requests by it.
+    void replyReceived(quint32 seq, bool accepted, const QString& body);
     void identityProtocolProgress(quint64 socketAttemptToken,
                                   const QString& peerAddress,
                                   quint16 peerPort,

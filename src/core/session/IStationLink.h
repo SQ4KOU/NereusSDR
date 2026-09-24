@@ -70,6 +70,11 @@
 //                                    (accessoryDataVersion 1): interlock
 //                                    policy, output limit, fault history.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the amp's and
+//                                    tuner's own settings
+//                                    (remotePgxlControlVersion 3,
+//                                    remoteTgxlControlVersion 1).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -192,6 +197,41 @@ public:
     { return { false, QStringLiteral("This Core does not share its amplifier and tuner settings with this app.") }; }
     virtual CommandOutcome requestClearAccessoryFaults(const QString&)
     { return { false, QStringLiteral("This Core does not share its amplifier and tuner settings with this app.") }; }
+
+    /// R-R3-47 / R-R3-22 (remotePgxlControlVersion 3): the Core sends the
+    /// Power Genius's own settings (name, hardware, network, Save & Reboot,
+    /// Revert) to the amp as the local Advanced page does. Acceptance means
+    /// the request left for the amp; the amp's answer and values come back
+    /// on `accessorySettings`.
+    virtual bool pgxlDeviceSettingsAvailable() const { return false; }
+    virtual CommandOutcome requestPgxlName(const QString&)
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    /// `setting` is "biasMode" (ClassA or ClassAB), "fanMode" (Auto, Quiet
+    /// or Continuous) or "ledIntensity" (0 to 100, as a number).
+    virtual CommandOutcome requestPgxlHardware(const QString&, const QString&)
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestPgxlNetwork(bool, const QString&, const QString&, const QString&)
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestPgxlSaveAndRestart()
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestPgxlReadSettings()
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    /// R-R3-47 / R-R3-22 (remoteTgxlControlVersion 1): the same for the
+    /// Tuner Genius's own settings (name, network, Save & Reboot, Revert).
+    virtual bool tgxlDeviceSettingsAvailable() const { return false; }
+    virtual CommandOutcome requestTgxlName(const QString&)
+    { return { false, tgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestTgxlNetwork(bool, const QString&, const QString&, const QString&)
+    { return { false, tgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestTgxlSaveAndRestart()
+    { return { false, tgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestTgxlReadSettings()
+    { return { false, tgxlDeviceSettingsUnavailableReason() }; }
+    static QString pgxlDeviceSettingsUnavailableReason()
+    { return QStringLiteral("This Core does not let this app change the Power Genius's own settings. Updating the Core may help."); }
+    static QString tgxlDeviceSettingsUnavailableReason()
+    { return QStringLiteral("This Core does not let this app change the Tuner Genius's own settings. Updating the Core may help."); }
+
     virtual CommandOutcome requestApplyNnrModels(quint32)
     { return { false, QStringLiteral("NNR model application is not supported by this station link.") }; }
     virtual bool nnrControlAvailable() const { return false; }

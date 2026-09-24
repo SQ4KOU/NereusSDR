@@ -22,6 +22,9 @@
 //   2026-09-22  J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 OpenAI Codex: retire each failed Qt socket before retry so
 //                 asynchronous timeout state cannot leak into source binding.
+//   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (R-R3-47, R-R3-22): replyReceived for every answer of a
+//                 connected tuner (the Core's device settings).
 // =================================================================
 #include "TgxlConnection.h"
 #include "AppSettings.h"
@@ -772,6 +775,18 @@ void TgxlConnection::processLine(const QString& line,
             // no unrelated response may leak identity/presence/telemetry.
             if (m_identityAdmissionRequired && !m_connected) {
                 return;
+            }
+
+            // R-R3-47 / R-R3-22: every answer, by sequence, for the Core's
+            // device settings. Emitted first; a consumer may delete this.
+            {
+                QPointer<TgxlConnection> self(this);
+                emit replyReceived(rseq, hexOk && hexCode == 0, body);
+                if (!self
+                    || (!offlineTest
+                        && !socketAttemptIsCurrent(attemptGeneration))) {
+                    return;
+                }
             }
 
             // Pong correlation: any R-frame matching a pending ping seq is a pong.

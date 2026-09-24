@@ -167,6 +167,10 @@
 //                                    minor-11 peers. AI-assisted
 //                                    implementation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: pgxlControlVersion
+//                                    3 and tgxlControlVersion 1, the amp's
+//                                    and tuner's own settings. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -423,10 +427,16 @@ public:
     // the `amplifier` and `rfkit` objects (remotePgxlControlVersion and
     // remoteRfKitControlVersion); 0 otherwise.
     int accessoryStatusVersion() const;
-    // R-R3-47: remotePgxlControlVersion. 2 on a Core that owns its
-    // accessories (the `amplifier` object and the configurePgxl,
-    // disconnectPgxl and setPgxlConnectionSettings verbs); 0 otherwise.
+    // R-R3-47: remotePgxlControlVersion. 3 on a Core that owns its
+    // accessories (the `amplifier` object, the configurePgxl,
+    // disconnectPgxl and setPgxlConnectionSettings verbs, and the amp's own
+    // settings on `accessorySettings` with their verbs); 0 otherwise.
     int pgxlControlVersion() const;
+    // R-R3-47 / R-R3-22: remoteTgxlControlVersion. 1 on a Core that owns its
+    // accessories (the tuner's own settings on `accessorySettings` and the
+    // setTgxlName, setTgxlNetwork, saveTgxlSettings and readTgxlSettings
+    // verbs); 0 otherwise.
+    int tgxlControlVersion() const;
     // R-R3-47: remoteRfKitControlVersion. 2 on a Core that owns its
     // accessories (the `rfkit` object with its interface, antenna, tuner
     // and band-follow rows, and the configureRfKit, disconnectRfKit and

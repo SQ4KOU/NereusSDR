@@ -312,6 +312,13 @@ struct SessionMessage {
     ///                               "swrGateEnabled": Bool, "swrGateMax": Double}
     ///   setPgxlPowerCap        -- {"enabled": Bool, "watts": Int64}
     ///   clearAccessoryFaults   -- {"device": Utf8}
+    ///   setPgxlName, setTgxlName -- {"name": Utf8}
+    ///   setPgxlHardware        -- exactly one of {"biasMode": Utf8},
+    ///                               {"fanMode": Utf8}, {"ledIntensity": Int64}
+    ///   setPgxlNetwork, setTgxlNetwork -- {"dhcp": Bool, "address": Utf8,
+    ///                               "netmask": Utf8, "gateway": Utf8}
+    ///   savePgxlSettings, saveTgxlSettings, readPgxlSettings,
+    ///   readTgxlSettings       -- {}
     ///   requestStreamCentre     -- {"sliceId": Int64, "centreHz": Double}
     QList<MirrorUpdate> arguments;
 

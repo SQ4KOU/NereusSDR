@@ -223,6 +223,11 @@
 //                                    invokeCommand() had zero callers.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the amp's and
+//                                    tuner's own settings (requests,
+//                                    `accessorySettings`, refusals routed
+//                                    to the Advanced pages). AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -443,6 +448,9 @@ public:
     bool remoteRfKitControlAvailable() const override;
     // R-R3-47 / R-R3-22: see IStationLink.
     bool accessoryDataAvailable() const override;
+    // R-R3-47 / R-R3-22: see IStationLink.
+    bool pgxlDeviceSettingsAvailable() const override;
+    bool tgxlDeviceSettingsAvailable() const override;
     bool stationTciAvailable() const override;
     bool coreServesTciOnThisComputer() const override;
     /// Test seam: whether the Core counts as on this computer (a session
@@ -561,6 +569,17 @@ public:
                                             double swrGateMax) override;
     CommandOutcome requestPgxlPowerCap(bool enabled, int watts) override;
     CommandOutcome requestClearAccessoryFaults(const QString& device) override;
+    CommandOutcome requestPgxlName(const QString& name) override;
+    CommandOutcome requestPgxlHardware(const QString& setting, const QString& value) override;
+    CommandOutcome requestPgxlNetwork(bool dhcp, const QString& address,
+                                      const QString& netmask, const QString& gateway) override;
+    CommandOutcome requestPgxlSaveAndRestart() override;
+    CommandOutcome requestPgxlReadSettings() override;
+    CommandOutcome requestTgxlName(const QString& name) override;
+    CommandOutcome requestTgxlNetwork(bool dhcp, const QString& address,
+                                      const QString& netmask, const QString& gateway) override;
+    CommandOutcome requestTgxlSaveAndRestart() override;
+    CommandOutcome requestTgxlReadSettings() override;
     CommandOutcome requestApplyNnrModels(quint32 revision) override;
     bool nnrControlAvailable() const override;
     // R-R3-21: the Core advertised dspAssetVersion 2 on a session that
