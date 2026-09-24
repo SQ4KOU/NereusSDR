@@ -7032,6 +7032,15 @@ nereus_add_test(tst_session_transport_telemetry
 nereus_add_test(tst_station_session
     fakes/LoopbackTransport.cpp)
 
+# R-R3-46 / R-R3-11 / R-R3-13: the Core's step attenuator and preamp as the
+# mirrored `stepAtt` object, end to end: a DaemonApp Core on a primed board
+# with a fake radio connection, a StationServer, and a remote window over the
+# in-process loopback. A window's edit reaches the radio and is saved for its
+# band; each radio's range and settle reasons; a Core band change and ADC
+# overload reach the window.
+nereus_add_test(tst_remote_step_attenuator
+    fakes/LoopbackTransport.cpp)
+
 # R-R3-16/17: a connect that never finishes setting up gives up and retries.
 # The GUI's handshake deadline against a silent Core, a Core blocked past the
 # deadline that recovers, the Core Connections status and Cancel, and Core's

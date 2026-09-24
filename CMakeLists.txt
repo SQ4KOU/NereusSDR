@@ -869,6 +869,7 @@ set(CORE_SOURCES
     src/core/NoiseFloorTracker.cpp
     src/core/ClarityController.cpp
     src/core/StepAttenuatorController.cpp
+    src/core/StepAttenuatorFacade.cpp
     src/core/CalibrationController.cpp
     src/core/PaCalProfile.cpp
     src/core/PaGainProfile.cpp

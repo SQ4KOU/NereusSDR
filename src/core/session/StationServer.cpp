@@ -53,6 +53,12 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46: hpsdrModel, radioProtocol and
 //                                    radioAddress for a peer at minor 11.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the `stepAtt`
+//                                    object and radioHardwareVersion 1 for a
+//                                    peer at minor 11, its settle reasons,
+//                                    and the plain refusal of raw attenuator
+//                                    and preamp settings. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -75,6 +81,7 @@
 #include "core/dsp/DspAssetService.h"
 #include "PureSignalSessionFacade.h"
 #include "core/PureSignal.h"
+#include "core/StepAttenuatorFacade.h"
 #include <QScopeGuard>
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -189,6 +196,18 @@ bool fitNnrLimitToPeer(SessionMessage& message, quint16 agreedMinor)
         }
     }
     return worthSendingAfterNnrFit(message);
+}
+
+// R-R3-46: the Core's step attenuator and preamp, mirrored for a peer that
+// negotiated kRadioIdentitySessionProtocolMinor. An older peer never sees
+// the object, so the burst it receives is exactly the one it was built for.
+constexpr const char* kStepAttKey = "stepAtt";
+
+bool isStepAttMessage(const SessionMessage& message)
+{
+    return message.objectKey == kStepAttKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "StepAttenuatorFacade");
 }
 
 // The one reason a receive-only Core gives for every transmit
@@ -1089,6 +1108,9 @@ void StationServer::buildMirror()
     // older app has no object for this key; it records the schema as skew
     // and drops the object and its deltas, as with any newer object.
     m_mirror->watch("notches", m_radioModel->notchModel());
+    // R-R3-46 (radioHardwareVersion 1): the Core's step attenuator and
+    // preamp. Sent only to a peer at minor 11 (sendToSession).
+    m_mirror->watch(QByteArray(kStepAttKey), m_radioModel->stepAttFacade());
     m_mirror->watch("pureSignal", m_radioModel->pureSignalFacade());
     m_mirror->watch(QByteArray(kTransmitKey), &m_radioModel->transmitModel());
     if (m_radioModel->tunerModel() != nullptr) {
@@ -1176,6 +1198,18 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     }
     QHash<QByteArray, QString> refusals;
     const bool negotiated = m_peers.value(transport).agreedMinor >= kDspControlSessionProtocolMinor;
+    // R-R3-46: only a peer that was offered the object may change it, and
+    // only while the Core's controller is behind it.
+    const bool stepAttWrite = message.objectKey == kStepAttKey;
+    QString stepAttRefusal;
+    if (stepAttWrite
+        && m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+        stepAttRefusal =
+            QStringLiteral("Update this app to change the radio's attenuator on this Core.");
+    } else if (stepAttWrite
+               && (m_radioModel.isNull() || !m_radioModel->stepAttFacade()->isBound())) {
+        stepAttRefusal = QStringLiteral("The Core has no attenuator ready.");
+    }
     const bool receiveOnlyTransmitWrite = message.objectKey == QByteArray(kTransmitKey)
         && !m_radioModel.isNull() && m_radioModel->receiveOnlyStationPolicy();
     QSet<QByteArray> requested;
@@ -1192,6 +1226,10 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         }
         if (receiveOnlyTransmitWrite) {
             refusals.insert(update.name, QString::fromLatin1(kReceiveOnlyTransmitReason));
+            continue;
+        }
+        if (!stepAttRefusal.isEmpty()) {
+            refusals.insert(update.name, stepAttRefusal);
             continue;
         }
         if (!negotiated && (message.objectKey == "pureSignalSettings"
@@ -1229,7 +1267,14 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         }
         result.reason = refusals.value(update.name);
         if (result.reason.isEmpty() && (!result.hasValue || result.value.value != update.value)) {
-            result.reason = QStringLiteral("The station retained the returned value after validating this edit.");
+            // R-R3-46: the attenuator says in plain words why it kept
+            // another value (its range, what this radio offers).
+            if (stepAttWrite && !m_radioModel.isNull()) {
+                result.reason = m_radioModel->stepAttFacade()->settleReason(update.name);
+            }
+            if (result.reason.isEmpty()) {
+                result.reason = QStringLiteral("The station retained the returned value after validating this edit.");
+            }
         }
         result.accepted = result.reason.isEmpty();
         results.append(result);
@@ -1251,7 +1296,10 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             corrections.append(value);
         }
     }
-    if (!corrections.isEmpty()) {
+    // An older peer was never offered `stepAtt`; it gets nothing back for it.
+    const bool olderStepAttPeer = stepAttWrite
+        && m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor;
+    if (!corrections.isEmpty() && !olderStepAttPeer) {
         // A write's side effects can change nnrLimit (turning NNR off or
         // choosing a model clears it), so they are fitted to this peer too.
         SessionMessage delta = SessionMessages::delta(message.objectKey, corrections);
@@ -1307,7 +1355,9 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
             key.compare(QLatin1String("Nr3ModelPath"), Qt::CaseInsensitive) == 0;
         // R-R3-21: the notch keys, like Nr3ModelPath, carry their own plain
         // reason; every other model-owned key keeps its existing wire string.
-        const bool plainReason = nr3Path || isModelOwnedNotchSettingsKey(key);
+        // R-R3-46: so do the step attenuator and preamp keys.
+        const bool plainReason = nr3Path || isModelOwnedNotchSettingsKey(key)
+            || isModelOwnedStepAttenuatorSettingsKey(key);
         sendToSession(SessionMessages::settingsReject(key, value.isValid(), value.toString(),
             plainReason ? modelOwnedSettingsRefusal(key)
                     : QStringLiteral("Use the validated DSP controls to change these settings.")));
@@ -1366,6 +1416,13 @@ void StationServer::sendToSession(const SessionMessage& message)
         const auto peer = m_peers.constFind(m_session);
         const quint16 minor = peer != m_peers.cend() ? peer->agreedMinor
                                                      : kSessionProtocolMinor;
+        // A Core without its controller behind the object does not offer
+        // it (radioHardwareVersion 0), so it does not send it either.
+        if (isStepAttMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor || m_radioModel.isNull()
+                || !m_radioModel->stepAttFacade()->isBound())) {
+            return;
+        }
         if (!needsNnrFit(message, minor)) {
             // Most messages carry no NNR field: send them as they are.
             if (worthSendingAfterNnrFit(message)) {
@@ -1577,6 +1634,9 @@ StationCapabilities StationServer::buildCapabilities() const
         if (peer != m_peers.cend()
             && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor) {
             caps.radioIdentityEntries = true;
+            // R-R3-46 / R-R3-11: 1 once the Core's controller is behind the
+            // `stepAtt` object (DaemonApp binds it before the server starts).
+            caps.radioHardwareVersion = m_radioModel->stepAttFacade()->isBound() ? 1 : 0;
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();

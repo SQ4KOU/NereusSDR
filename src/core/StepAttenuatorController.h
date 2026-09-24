@@ -17,6 +17,14 @@
 //                 Thetis SetupForm.ATTOnTX (mi0bot setup.cs:3988-4017
 //                 [v2.10.3.13]); range clamped to [m_minAttDb, 31].
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23: R-R3-46 / R-R3-11 / R-R3-13: a change signal for every
+//                 setting (auto-attenuate mode, undo, undo delay, hold, the
+//                 attenuator range, the RX1 preamp), settingsReloaded() after
+//                 loadSettings(), an opt-in debounced per-MAC save for the
+//                 Core, and the RX1 preamp held here so a remote window can
+//                 set it through the Core.  NereusSDR-original; no new
+//                 Thetis logic.  J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -156,7 +164,37 @@ public:
     // setter pair setAutoAttHoldSeconds (Adaptive) / setAutoUndoDelaySec
     // (Classic) on the same spinbox.
     int adaptiveHoldSeconds() const noexcept { return m_adaptiveHoldMs / 1000; }
+    int adaptiveHoldMs() const noexcept { return m_adaptiveHoldMs; }
     int autoUndoDelaySec() const noexcept { return m_autoUndoDelaySec; }
+
+    // ADC-linked state (both RX share the same ADC).
+    bool adcLinked() const noexcept { return m_adcLinked; }
+
+    // RX1 (second ADC) preamp on dual-ADC P2 boards (OrionMKII family).
+    // Held here so the Core can apply it for a remote window; the local RX
+    // applet still drives P2RadioConnection::setRx1Preamp directly and
+    // never calls this.  Not persisted, like the local toggle.
+    bool rx1Preamp() const noexcept { return m_rx1Preamp; }
+    void setRx1Preamp(bool on);
+
+    // R-R3-46 / R-R3-11: save this radio's settings a short while after an
+    // operator change, not only at teardown.  Off by default; the Core
+    // (DaemonApp) turns it on so a change made from a remote window is on
+    // disk without waiting for the Core to stop.  Auto-attenuate's own
+    // moves never schedule a save.
+    void setDebouncedSaveEnabled(bool on);
+
+    // R-R3-46: on a band change, send the band's restored attenuation and
+    // preamp to the radio, as Thetis does (console.cs:17325 [v2.10.3.15],
+    // see setBand).  Off by default: a local window keeps today's behaviour
+    // (the restored value is shown, not sent); the Core turns it on so the
+    // radio runs what every window shows.
+    void setBandRestoreToRadio(bool on) noexcept { m_bandRestoreToRadio = on; }
+    bool bandRestoreToRadio() const noexcept { return m_bandRestoreToRadio; }
+    bool debouncedSaveEnabled() const noexcept { return m_debouncedSave; }
+    bool savePending() const { return m_saveTimer.isActive(); }
+    // Run a pending debounced save now (no-op when none is pending).
+    void flushPendingSave();
 
     // --- Configuration setters ---
 
@@ -370,6 +408,20 @@ signals:
     // Emitted when ADC-linked state changes (both RX share same ADC).
     void adcLinkedChanged(bool linked);
 
+    // R-R3-46: the remaining settings' change signals, so a mirrored
+    // object can follow every one of them.
+    void autoAttModeChanged(NereusSDR::AutoAttMode mode);
+    void autoAttUndoChanged(bool on);
+    void autoUndoDelayChanged(int seconds);
+    void autoAttHoldChanged(int ms);
+    void attenuationRangeChanged(int minDb, int maxDb);
+    void rx1PreampChanged(bool on);
+
+    // Emitted at the end of loadSettings(): every setting may have changed
+    // without its own signal (loadSettings stays silent so local widgets
+    // keep today's behaviour).
+    void settingsReloaded();
+
     // Emitted when the per-band ATT-on-TX dB value changes (either via
     // setAttOnTxValue user-side, or via PureSignal::autoAttentionTick
     // writing the new value back).  Bound by the Setup → Transmit → Power
@@ -390,6 +442,13 @@ private:
     // Tick interval (ms) — Thetis pollOverloadSyncSeqErr ~400ms,
     // NereusSDR uses 100ms for snappier response.
     static constexpr int kTickIntervalMs = 100;
+
+    // Debounce for the opt-in save.  NereusSDR-native value.
+    static constexpr int kSaveDebounceMs = 500;
+
+    // Start (or restart) the debounced save when it is enabled, a radio's
+    // settings are loaded, and the radio is not transmitting.
+    void scheduleSave();
 
     // Push a new ATT value to hardware + emit signal.  Used by auto-att
     // paths that bypass setAttenuation() (which also stores per-band state).
@@ -539,6 +598,15 @@ private:
 
     // Internal tick timer.
     QTimer m_tickTimer;
+
+    // RX1 (second ADC) preamp; see rx1Preamp().
+    bool m_rx1Preamp{false};
+
+    // Opt-in debounced save; see setDebouncedSaveEnabled().
+    bool m_debouncedSave{false};
+    // Opt-in band-restore push; see setBandRestoreToRadio().
+    bool m_bandRestoreToRadio{false};
+    QTimer m_saveTimer;
 
     // RadioConnection for adcOverflow wiring.
     QPointer<RadioConnection> m_connection;

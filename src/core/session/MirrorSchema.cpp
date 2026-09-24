@@ -18,6 +18,9 @@
 //                                    layer that does not perform it.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the Core's step
+//                                    attenuator and preamp (`stepAtt`).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
@@ -61,6 +64,9 @@ const char* const kMirroredClasses[] = {
     "NereusSDR::PanadapterModel",
     // R-R3-21 / R-R3-09 (notchControlVersion 1): the Core's notch list.
     "NereusSDR::NotchModel",
+    // R-R3-46 (radioHardwareVersion 1): the Core's step attenuator and
+    // preamp.
+    "NereusSDR::StepAttenuatorFacade",
 };
 
 // Per-property exclusions, as (class, property).

@@ -45,6 +45,10 @@
 //                                    NotchModel mirrors a notchControlVersion
 //                                    Core's list and sends notch.* requests.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the window holds a
+//                                    radioHardwareVersion Core's `stepAtt`
+//                                    object; its edits pass an edit gate.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -61,6 +65,7 @@
 #include "core/dsp/DspAssetService.h"
 #include "DspCommandValues.h"
 #include "PureSignalSessionFacade.h"
+#include "core/StepAttenuatorFacade.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -1561,6 +1566,31 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         }
     }
 
+    // R-R3-46 / R-R3-11: a Core with radioHardwareVersion 1 mirrors its step
+    // attenuator and preamp as `stepAtt` and applies the window's edits
+    // through its own controller. The window's edits pass only while that
+    // holds; against an older Core the key is not registered, so its object
+    // (if any) is dropped and nothing is sent.
+    if (StepAttenuatorFacade* stepAtt = m_radioModel->stepAttFacade()) {
+        stepAtt->setEditGate([self](QString* reason) {
+            const bool allowed = self
+                && (self->m_applyingInbound || self->remoteRadioHardwareAvailable());
+            if (!allowed && reason) {
+                *reason = QStringLiteral("This Core cannot change its radio's attenuator for this "
+                                         "app. Updating the Core may help.");
+            }
+            return allowed;
+        });
+        if (m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+            && m_capabilities.radioHardwareVersion >= 1) {
+            m_objects.insert("stepAtt", stepAtt);
+            watchForOutbound("stepAtt", stepAtt);
+        } else {
+            m_objects.remove("stepAtt");
+            m_outboundMirror->unwatch("stepAtt");
+        }
+    }
+
     const QByteArray transmitKey(kTransmitKey);
     m_objects.insert(transmitKey, &m_radioModel->transmitModel());
     watchForOutbound(transmitKey, &m_radioModel->transmitModel());
@@ -2160,6 +2190,10 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
         auto* notches = qobject_cast<NotchModel*>(target);
         return notches && notches->applyRemoteProperty(propertyName, native);
     }
+    if (className == "StepAttenuatorFacade") {
+        auto* stepAtt = qobject_cast<StepAttenuatorFacade*>(target);
+        return stepAtt && stepAtt->applyRemoteProperty(propertyName, native);
+    }
     if (className == "PureSignalSettings") {
         auto* settings = qobject_cast<PureSignalSettings*>(target);
         return settings && settings->applyStationDiagnostic(propertyName, native);
@@ -2522,6 +2556,12 @@ bool StationClient::remoteNotchControlAvailable() const
 {
     return m_handshakeComplete && m_agreedMinor >= kDspControlSessionProtocolMinor
         && m_capabilities.notchControlVersion >= 1;
+}
+
+bool StationClient::remoteRadioHardwareAvailable() const
+{
+    return propertyResultsAvailable() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.radioHardwareVersion >= 1;
 }
 
 bool StationClient::nnrControlAvailable() const

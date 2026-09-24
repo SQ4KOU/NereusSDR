@@ -87,6 +87,10 @@ bool isModelOwnedDspSettingsKey(QStringView key);
 // Notch<N>{Center,Width,Active}, NotchGlobalEnabled, NotchAutoIncrease).
 // NotchVisualEnabled is each window's display preference and is not one.
 bool isModelOwnedNotchSettingsKey(QStringView key);
+// R-R3-46 / R-R3-11: the Core's step attenuator and preamp settings,
+// hardware/<mac>/options/{stepAtt,autoAtt,preamp}/... A window changes them
+// through the mirrored `stepAtt` object.
+bool isModelOwnedStepAttenuatorSettingsKey(QStringView key);
 // The reason a raw write or remove of a model-owned key is refused, in the
 // operator's words.
 QString modelOwnedSettingsRefusal(QStringView key);

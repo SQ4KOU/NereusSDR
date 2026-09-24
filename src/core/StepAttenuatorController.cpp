@@ -17,6 +17,10 @@
 //                 Thetis SetupForm.ATTOnTX (mi0bot setup.cs:3988-4017
 //                 [v2.10.3.13]); range clamped to [m_minAttDb, 31].
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23: R-R3-46 / R-R3-11 / R-R3-13: change signals for every
+//                 setting, settingsReloaded(), the opt-in debounced save and
+//                 the RX1 preamp.  NereusSDR-original; no new Thetis logic.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -73,6 +77,7 @@
 #include "StepAttenuatorController.h"
 #include "AppSettings.h"
 #include "RadioConnection.h"
+#include "P2RadioConnection.h"
 #include "ReceiverManager.h"
 #include "WdspTypes.h"
 
@@ -87,6 +92,58 @@ StepAttenuatorController::StepAttenuatorController(QObject* parent)
     m_tickTimer.setInterval(kTickIntervalMs);
     connect(&m_tickTimer, &QTimer::timeout, this, &StepAttenuatorController::tick);
     m_tickTimer.start();
+
+    m_saveTimer.setSingleShot(true);
+    m_saveTimer.setInterval(kSaveDebounceMs);
+    connect(&m_saveTimer, &QTimer::timeout, this, [this]() {
+        saveSettings(m_loadedMac);
+    });
+}
+
+// --- Opt-in debounced save (R-R3-46 / R-R3-11) ---
+
+void StepAttenuatorController::setDebouncedSaveEnabled(bool on)
+{
+    m_debouncedSave = on;
+    if (!on) {
+        m_saveTimer.stop();
+    }
+}
+
+void StepAttenuatorController::scheduleSave()
+{
+    // A value moved during TX is the TX window's, not the operator's RX
+    // choice; the TX->RX restore and teardown save cover it.
+    if (!m_debouncedSave || m_loadedMac.isEmpty() || m_isMox) {
+        return;
+    }
+    m_saveTimer.start();
+}
+
+void StepAttenuatorController::flushPendingSave()
+{
+    if (!m_saveTimer.isActive()) {
+        return;
+    }
+    m_saveTimer.stop();
+    saveSettings(m_loadedMac);
+}
+
+void StepAttenuatorController::setRx1Preamp(bool on)
+{
+    if (m_rx1Preamp == on) {
+        return;
+    }
+    m_rx1Preamp = on;
+    // Same route as the local RX applet's toggle (RxApplet.cpp, Phase 3P-B
+    // Task 10): P2RadioConnection::setRx1Preamp on the connection thread.
+    // Only P2 dual-ADC boards have it; any other connection ignores it.
+    if (auto* conn = qobject_cast<P2RadioConnection*>(m_connection.get())) {
+        QMetaObject::invokeMethod(conn, [conn, on]() {
+            conn->setRx1Preamp(on);
+        });
+    }
+    emit rx1PreampChanged(on);
 }
 
 // --- Timer control ---
@@ -132,6 +189,7 @@ void StepAttenuatorController::setAutoAttEnabled(bool on)
     // mi0bot-Thetis console.cs:21342-21365 [v2.10.3.13-beta2] AutoAttRX1
     // setter — same convention, same label.
     emit autoAttEnabledChanged(on);
+    scheduleSave();
 }
 
 void StepAttenuatorController::setAutoAttMode(AutoAttMode mode)
@@ -143,22 +201,43 @@ void StepAttenuatorController::setAutoAttMode(AutoAttMode mode)
     if (mode == AutoAttMode::Adaptive && !m_hasStepAttCal) {
         mode = AutoAttMode::Classic;
     }
+    if (m_autoAttMode == mode) {
+        return;
+    }
     m_autoAttMode = mode;
+    emit autoAttModeChanged(mode);
+    scheduleSave();
 }
 
 void StepAttenuatorController::setAutoAttUndo(bool on)
 {
+    if (m_autoUndoEnabled == on) {
+        return;
+    }
     m_autoUndoEnabled = on;
+    emit autoAttUndoChanged(on);
+    scheduleSave();
 }
 
 void StepAttenuatorController::setAutoUndoDelaySec(int sec)
 {
+    if (m_autoUndoDelaySec == sec) {
+        return;
+    }
     m_autoUndoDelaySec = sec;
+    emit autoUndoDelayChanged(sec);
+    scheduleSave();
 }
 
 void StepAttenuatorController::setAutoAttHoldSeconds(double sec)
 {
-    m_adaptiveHoldMs = static_cast<int>(sec * 1000.0);
+    const int ms = static_cast<int>(sec * 1000.0);
+    if (m_adaptiveHoldMs == ms) {
+        return;
+    }
+    m_adaptiveHoldMs = ms;
+    emit autoAttHoldChanged(ms);
+    scheduleSave();
 }
 
 void StepAttenuatorController::setAdaptiveDecayMs(int ms)
@@ -171,6 +250,7 @@ void StepAttenuatorController::setStepAttEnabled(bool on)
     if (m_stepAttEnabled == on) { return; }
     m_stepAttEnabled = on;
     emit stepAttEnabledChanged(on);
+    scheduleSave();
 }
 
 void StepAttenuatorController::setBand(Band band)
@@ -185,14 +265,38 @@ void StepAttenuatorController::setBand(Band band)
     m_currentBand = band;
 
     // Restore ATT/preamp from new band (if any stored).
+    //
+    // R-R3-46: with setBandRestoreToRadio(true) (the Core) the restored
+    // values also go to the radio, as in Thetis's RX1Band setter:
+    // From Thetis console.cs:17325 [v2.10.3.15]:
+    //   SetupForm.ATTOnTX = getTXstepAttenuatorForBand(_tx_band); //[2.10.3.6]MW0LGE att_fixes
+    //   RX1PreampMode = rx1_preamp_by_band[(int)rx1_band];
+    //   RX1AttenuatorData = getRX1stepAttenuatorForBand(rx1_band);
+    //   //[2.10.3.6]MW0LGE this tmp is needed because RX1AGCMode causes an update to the setup form
+    // (RX1PreampMode and RX1AttenuatorData each send their value to the
+    // radio.)  NereusSDR's ATT-on-TX side is handled on MOX, not here.
     auto it = m_bandState.find(static_cast<int>(band));
     if (it != m_bandState.end()) {
         if (it->second.attDb != m_attDb) {
             m_attDb = it->second.attDb;
+            if (m_bandRestoreToRadio && !m_isMox && m_connection) {
+                RadioConnection* conn = m_connection.get();
+                const int dBcopy = m_attDb;
+                QMetaObject::invokeMethod(conn, [conn, dBcopy]() {
+                    conn->setAttenuator(dBcopy);
+                });
+            }
             emit attenuationChanged(m_attDb);
         }
         if (it->second.preamp != m_preampMode) {
             m_preampMode = it->second.preamp;
+            if (m_bandRestoreToRadio && !m_isMox && m_connection) {
+                RadioConnection* conn = m_connection.get();
+                const bool enabled = (m_preampMode != PreampMode::Off);
+                QMetaObject::invokeMethod(conn, [conn, enabled]() {
+                    conn->setPreamp(enabled);
+                });
+            }
             emit preampModeChanged(m_preampMode);
         }
     }
@@ -203,6 +307,9 @@ void StepAttenuatorController::setBand(Band band)
         setAutoAttApplied(false);
         m_classicSavedAttDb = -1;
     }
+
+    // The band just left keeps the value it had; persist it.
+    scheduleSave();
 }
 
 void StepAttenuatorController::setAttenuation(int dB, int rx)
@@ -254,6 +361,7 @@ void StepAttenuatorController::setAttenuation(int dB, int rx)
     if (!m_isMox) {
         m_bandState[static_cast<int>(m_currentBand)].attDb = m_attDb;
     }
+    scheduleSave();
 
     // ADC-linked: force the other RX to match.
     if (m_adcLinked && (rx == 0 || rx == 1)) {
@@ -286,16 +394,25 @@ void StepAttenuatorController::setPreampMode(PreampMode mode)
     }
 
     emit preampModeChanged(m_preampMode);
+    scheduleSave();
 }
 
 void StepAttenuatorController::setMaxAttenuation(int dB)
 {
+    if (m_maxAttDb == dB) {
+        return;
+    }
     m_maxAttDb = dB;
+    emit attenuationRangeChanged(m_minAttDb, m_maxAttDb);
 }
 
 void StepAttenuatorController::setMinAttenuation(int dB)
 {
+    if (m_minAttDb == dB) {
+        return;
+    }
     m_minAttDb = dB;
+    emit attenuationRangeChanged(m_minAttDb, m_maxAttDb);
 }
 
 // --- Per-band TX ATT storage (F.2) ---
@@ -1145,6 +1262,9 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     emit attenuationChanged(m_attDb);
     emit preampModeChanged(m_preampMode);
     emit stepAttEnabledChanged(m_stepAttEnabled);
+    // R-R3-46: auto-attenuate mode, undo, undo delay and hold changed
+    // silently above; a mirrored object re-reads everything here.
+    emit settingsReloaded();
 }
 
 }  // namespace NereusSDR

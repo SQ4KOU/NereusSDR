@@ -13,6 +13,9 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-40: SliceModel nnrLimit is
 //                                    Outbound. AI-assisted implementation
 //                                    via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the Core's step
+//                                    attenuator and preamp (`stepAtt`).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -325,6 +328,27 @@ const MirrorPolicy::Entry kEntries[] = {
     { "NotchModel", "revision", MirrorDirection::Outbound },
     { "NotchModel", "globalEnabled", MirrorDirection::Bidirectional },
     { "NotchModel", "autoIncrease", MirrorDirection::Bidirectional },
+
+    // R-R3-46 / R-R3-11 (radioHardwareVersion 1): the Core's step
+    // attenuator and preamp. The operator settings are two-way; the Core
+    // applies each through its own controller and answers with the value it
+    // kept. The range, auto-attenuate's own state, the overload readings and
+    // ADC sharing are the Core's to report.
+    { "StepAttenuatorFacade", "enabled", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "attenuationDb", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "preampMode", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "rx1Preamp", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "autoAttEnabled", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "autoAttMode", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "autoAttUndo", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "autoAttUndoDelayMs", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "autoAttHoldMs", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "minDb", MirrorDirection::Outbound },
+    { "StepAttenuatorFacade", "maxDb", MirrorDirection::Outbound },
+    { "StepAttenuatorFacade", "autoAttApplied", MirrorDirection::Outbound },
+    { "StepAttenuatorFacade", "overloadAdc0", MirrorDirection::Outbound },
+    { "StepAttenuatorFacade", "overloadAdc1", MirrorDirection::Outbound },
+    { "StepAttenuatorFacade", "adcLinked", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

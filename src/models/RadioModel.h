@@ -211,6 +211,7 @@ class PureSignalSettings;
 struct Ps3RoutingSnapshot;
 class DspAssetService;
 class PureSignalSessionFacade;
+class StepAttenuatorFacade;
 class PsccPump;
 // Phase 4 Agent 4A of issue #167: PaProfileManager forward declaration.
 // RadioModel owns the per-MAC PA gain profile bank (parallel to
@@ -1400,6 +1401,11 @@ public:
     // gate fires (Thetis console.cs:46740-46748 [v2.10.3.13] [2.10.3.5]MW0LGE).
     // Implementation in RadioModel.cpp.
     void setStepAttController(class StepAttenuatorController* c);
+    /// R-R3-46: the step attenuator and preamp as the mirrored `stepAtt`
+    /// object. A Local model binds it to its controller (the Core's, or a
+    /// local window's, where nothing reads it); a Remote model leaves it
+    /// unbound and it holds the Core's values.
+    StepAttenuatorFacade* stepAttFacade() const { return m_stepAttFacade; }
     NoiseFloorTracker* noiseFloorTracker() const { return m_noiseFloorTracker; }
     void setNoiseFloorTracker(NoiseFloorTracker* t) { m_noiseFloorTracker = t; }
 
@@ -4646,6 +4652,7 @@ private:
     PureSignalSettings* m_pureSignalSettings{nullptr};
     DspAssetService* m_dspAssets{nullptr};
     PureSignalSessionFacade* m_pureSignalFacade{nullptr};
+    StepAttenuatorFacade* m_stepAttFacade{nullptr};
     std::unique_ptr<PureSignal> m_pureSignal;
 
     // 3M-4 Task 17 chunk C: pscc() driver — pairs per-DDC IQ streams

@@ -44,6 +44,10 @@
 //   2026-09-23: cover the display load governor's wiring (R-R3-08,
 //               R-R3-37, R-R3-40), by J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-23: the Core's attenuator range, its mirrored `stepAtt`
+//               object and the debounced save (R-R3-46, R-R3-11), by J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -58,6 +62,7 @@
 #include "core/HpsdrModel.h"
 #include "core/MoxController.h"
 #include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
 #define private public
 #include "core/daemon/DaemonApp.h"
 #undef private
@@ -345,6 +350,108 @@ private slots:
         QCOMPARE(rejected.count(), 1);
         QVERIFY(!mox->isMox());
         QCOMPARE(controller->attenuatorDb(), 0);
+
+        app.stop();
+    }
+
+    // R-R3-46: the Core's range is the one the local RX applet gives the
+    // board (BoardCapsTable::stepAttMaxDb): an ANAN-100D (Angelia, Alex
+    // filters) reaches 61 dB, not the board row's 31. The mirrored object
+    // follows the Core's controller, and the Core saves an edit soon after.
+    void anan100dReachesSixtyOneDbAndTheObjectFollowsTheController()
+    {
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.sliceCount = 1;
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::Angelia, QStringLiteral("02:00:00:00:00:46"));
+        QVERIFY(app.start(cfg));
+        StepAttenuatorController* const controller = app.m_stepAttController.get();
+        StepAttenuatorFacade* const facade = app.m_radioModel->stepAttFacade();
+        QVERIFY(controller != nullptr);
+        QVERIFY(app.m_radioModel->boardCapabilities().hasAlexFilters);
+        QCOMPARE(controller->minAttenuation(), 0);
+        QCOMPARE(controller->maxAttenuation(), 61);
+        QVERIFY(controller->debouncedSaveEnabled());
+        QCOMPARE(facade->controller(), controller);
+        QCOMPARE(facade->minDb(), 0);
+        QCOMPARE(facade->maxDb(), 61);
+
+        facade->setAttenuationDb(45);
+        QCOMPARE(controller->attenuatorDb(), 45);
+        QCOMPARE(facade->attenuationDb(), 45);
+        QVERIFY(facade->settleReason("attenuationDb").isEmpty());
+        QVERIFY(controller->savePending());
+
+        facade->setAttenuationDb(70);
+        QCOMPARE(controller->attenuatorDb(), 61);
+        QCOMPARE(facade->attenuationDb(), 61);
+        QCOMPARE(facade->settleReason("attenuationDb"),
+                 QStringLiteral("This radio's attenuator goes from 0 to 61 dB."));
+
+        // A change made on the Core itself reaches the object too.
+        controller->setAttenuation(12);
+        QCOMPARE(facade->attenuationDb(), 12);
+
+        app.stop();
+    }
+
+    // R-R3-46: a board without Alex keeps its own row. The Hermes Lite 2
+    // runs -28..31 dB (its BoardCapabilities row, which carries the upstream
+    // citation) and has no Adaptive auto-attenuate.
+    void hermesLite2KeepsItsSignedRangeAndClassicAutoAttenuate()
+    {
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.sliceCount = 1;
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite, QStringLiteral("02:00:00:00:00:47"));
+        QVERIFY(app.start(cfg));
+        StepAttenuatorController* const controller = app.m_stepAttController.get();
+        StepAttenuatorFacade* const facade = app.m_radioModel->stepAttFacade();
+        QCOMPARE(controller->minAttenuation(), -28);
+        QCOMPARE(controller->maxAttenuation(), 31);
+        QCOMPARE(facade->minDb(), -28);
+        QCOMPARE(facade->maxDb(), 31);
+
+        facade->setAutoAttMode(static_cast<int>(AutoAttMode::Adaptive));
+        QCOMPARE(controller->autoAttMode(), AutoAttMode::Classic);
+        QCOMPARE(facade->autoAttMode(), static_cast<int>(AutoAttMode::Classic));
+        QCOMPARE(facade->settleReason("autoAttMode"),
+                 QStringLiteral("This radio offers only Classic auto-attenuate."));
+
+        // A Saturn stays at its row's 31 dB: it is not one of the Alex boards.
+        app.stop();
+        DaemonApp saturn;
+        saturn.primeBoardForTest(HPSDRHW::Saturn, QStringLiteral("02:00:00:00:00:48"));
+        QVERIFY(saturn.start(cfg));
+        QCOMPARE(saturn.m_stepAttController->maxAttenuation(), 31);
+        saturn.stop();
+    }
+
+    // R-R3-46: a band change on the Core restores that band's attenuation,
+    // and the mirrored object follows it.
+    void coreBandChangeRestoresTheBandsAttenuation()
+    {
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.sliceCount = 1;
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::Angelia, QStringLiteral("02:00:00:00:00:49"));
+        QVERIFY(app.start(cfg));
+        StepAttenuatorFacade* const facade = app.m_radioModel->stepAttFacade();
+        SliceModel* const txSlice = app.m_radioModel->txBoundSlice();
+        QVERIFY(txSlice != nullptr);
+
+        txSlice->setFrequency(7'100'000.0);
+        facade->setAttenuationDb(20);
+        txSlice->setFrequency(14'200'000.0);
+        facade->setAttenuationDb(5);
+        QCOMPARE(facade->attenuationDb(), 5);
+        txSlice->setFrequency(7'150'000.0);
+        QCOMPARE(facade->attenuationDb(), 20);
+        txSlice->setFrequency(14'100'000.0);
+        QCOMPARE(facade->attenuationDb(), 5);
 
         app.stop();
     }

@@ -717,8 +717,10 @@ private slots:
             } else {
                 QList<QByteArray> withReason = golden;
                 withReason.append("displayBudgetReason");
-                // R-R3-46: the Core's radio, same unreleased step, last.
-                withReason.append({"hpsdrModel", "radioProtocol", "radioAddress"});
+                // R-R3-46: the Core's radio, same unreleased step, last,
+                // closed by radioHardwareVersion (R-R3-46 / R-R3-11).
+                withReason.append({"hpsdrModel", "radioProtocol", "radioAddress",
+                                   "radioHardwareVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -738,7 +740,7 @@ private slots:
         capture(kDisplayBudgetReasonSessionProtocolMinor, &currentInitial, &currentPublished);
 
         // Byte for byte: the minor-11 descriptor with its reason entry (and
-        // R-R3-46's three radio entries) removed is exactly what the older
+        // R-R3-46's four radio entries) removed is exactly what the older
         // GUI got.
         for (const auto& [older, current] : {std::pair{olderInitial, currentInitial},
                                              std::pair{olderPublished, currentPublished}}) {
@@ -748,7 +750,8 @@ private slots:
             stripped.removeAt(updateIndex(stripped, QByteArrayLiteral("displayBudgetReason")));
             for (const QByteArray& name : {QByteArrayLiteral("hpsdrModel"),
                                            QByteArrayLiteral("radioProtocol"),
-                                           QByteArrayLiteral("radioAddress")}) {
+                                           QByteArrayLiteral("radioAddress"),
+                                           QByteArrayLiteral("radioHardwareVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

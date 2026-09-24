@@ -68,6 +68,7 @@
 
 #include "core/AppSettings.h"
 #include "core/StepAttenuatorController.h"
+#include "models/Band.h"
 
 using namespace NereusSDR;
 
@@ -602,6 +603,121 @@ private slots:
         QCOMPARE(ctrl.stepAttEnabled(), true);
         QVERIFY2(enableSpy.count() >= 1,
             "loadSettings must emit stepAttEnabledChanged even on fresh MAC");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // R-R3-46: every setting has a change signal, once per real change, so
+    // the Core's mirrored `stepAtt` object can follow all of them.
+    // ─────────────────────────────────────────────────────────────────────
+    void everySettingSignalsItsChangeOnce()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+
+        QSignalSpy mode(&ctrl, &StepAttenuatorController::autoAttModeChanged);
+        ctrl.setAutoAttMode(AutoAttMode::Adaptive);
+        ctrl.setAutoAttMode(AutoAttMode::Adaptive);
+        QCOMPARE(mode.count(), 1);
+        QCOMPARE(mode.last().at(0).value<AutoAttMode>(), AutoAttMode::Adaptive);
+
+        // A radio without per-step calibration (the Hermes Lite 2) settles
+        // Adaptive to Classic, and says so with the same signal.
+        ctrl.setHasStepAttenuatorCal(false);
+        ctrl.setAutoAttMode(AutoAttMode::Adaptive);
+        QCOMPARE(ctrl.autoAttMode(), AutoAttMode::Classic);
+        QCOMPARE(mode.count(), 2);
+
+        QSignalSpy undo(&ctrl, &StepAttenuatorController::autoAttUndoChanged);
+        ctrl.setAutoAttUndo(true);
+        ctrl.setAutoAttUndo(true);
+        QCOMPARE(undo.count(), 1);
+
+        QSignalSpy delay(&ctrl, &StepAttenuatorController::autoUndoDelayChanged);
+        ctrl.setAutoUndoDelaySec(9);
+        ctrl.setAutoUndoDelaySec(9);
+        QCOMPARE(delay.count(), 1);
+        QCOMPARE(delay.last().at(0).toInt(), 9);
+
+        QSignalSpy hold(&ctrl, &StepAttenuatorController::autoAttHoldChanged);
+        ctrl.setAutoAttHoldSeconds(4.0);
+        ctrl.setAutoAttHoldSeconds(4.0);
+        QCOMPARE(hold.count(), 1);
+        QCOMPARE(hold.last().at(0).toInt(), 4000);
+        QCOMPARE(ctrl.adaptiveHoldMs(), 4000);
+
+        QSignalSpy range(&ctrl, &StepAttenuatorController::attenuationRangeChanged);
+        ctrl.setMaxAttenuation(61);
+        ctrl.setMaxAttenuation(61);
+        ctrl.setMinAttenuation(-28);
+        QCOMPARE(range.count(), 2);
+        QCOMPARE(range.last().at(0).toInt(), -28);
+        QCOMPARE(range.last().at(1).toInt(), 61);
+
+        QSignalSpy rx1(&ctrl, &StepAttenuatorController::rx1PreampChanged);
+        ctrl.setRx1Preamp(true);
+        ctrl.setRx1Preamp(true);
+        QCOMPARE(rx1.count(), 1);
+        QVERIFY(ctrl.rx1Preamp());
+
+        QSignalSpy reloaded(&ctrl, &StepAttenuatorController::settingsReloaded);
+        ctrl.loadSettings(QStringLiteral("aa:bb:cc:de:ad:46"));
+        QCOMPARE(reloaded.count(), 1);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // R-R3-46 / R-R3-11: the Core saves an operator change shortly after it
+    // is made. Off by default, so a local window keeps today's teardown-only
+    // save; auto-attenuate's own moves never schedule one.
+    // ─────────────────────────────────────────────────────────────────────
+    void debouncedSaveWritesTheBandAfterAnOperatorChange()
+    {
+        auto& s = AppSettings::instance();
+        const QString mac = QStringLiteral("aa:bb:cc:de:ad:47");
+        const QString bandKey = QStringLiteral("options/stepAtt/rx1Band/")
+                                + bandKeyName(Band::Band40m);
+
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBand(Band::Band40m);
+        ctrl.loadSettings(mac);
+        // Start from known settings whatever an earlier run saved.
+        ctrl.setAutoAttUndo(false);
+        ctrl.setAutoAttEnabled(false);
+
+        // Default: nothing scheduled.
+        ctrl.setAttenuation(11);
+        QVERIFY(!ctrl.savePending());
+
+        ctrl.setDebouncedSaveEnabled(true);
+        ctrl.setAttenuation(20);
+        QVERIFY(ctrl.savePending());
+        QTRY_VERIFY(!ctrl.savePending());
+        QCOMPARE(s.hardwareValue(mac, bandKey).toInt(), 20);
+        QCOMPARE(s.hardwareValue(mac, QStringLiteral("options/stepAtt/rx1Value")).toInt(), 20);
+
+        // Every other operator setting schedules one too.
+        ctrl.setAutoAttUndo(true);
+        QVERIFY(ctrl.savePending());
+        ctrl.flushPendingSave();
+        QVERIFY(!ctrl.savePending());
+        QCOMPARE(s.hardwareValue(mac, QStringLiteral("options/autoAtt/rx1Undo")).toString(),
+                 QStringLiteral("True"));
+
+        // Auto-attenuate's bump is not an operator change.
+        ctrl.setAutoAttEnabled(true);
+        ctrl.flushPendingSave();
+        for (int i = 0; i < 5; ++i) {
+            ctrl.onAdcOverflow(0);
+            ctrl.tick();
+        }
+        QVERIFY(ctrl.autoAttApplied());
+        QVERIFY(ctrl.attenuatorDb() > 20);
+        QVERIFY(!ctrl.savePending());
+
+        // An unloaded controller never schedules.
+        ctrl.markSettingsUnloaded();
+        ctrl.setAutoAttUndo(false);
+        QVERIFY(!ctrl.savePending());
     }
 };
 

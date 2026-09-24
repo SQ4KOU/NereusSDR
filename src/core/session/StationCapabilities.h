@@ -107,6 +107,12 @@ struct StationCapabilities {
     int radioProtocol = 0;
     /// The radio's LAN address as the Core sees it. Empty: not reported.
     QString radioAddress;
+    /// R-R3-46 / R-R3-11: 1 means the Core mirrors its step attenuator and
+    /// preamp as the `stepAtt` object and applies a window's edits to it
+    /// through its own controller (2 will add the hardware settings). Sent
+    /// last in the same block as the three above, so only at minor 11. 0: a
+    /// window keeps today's behaviour and does not write `stepAtt`.
+    int radioHardwareVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

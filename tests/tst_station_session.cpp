@@ -80,6 +80,8 @@
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
 #include "core/meters/SliceMeterPump.h"
+#include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
 #include "models/NotchModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -89,6 +91,7 @@
 #include "core/SmartSdrApiListener.h"
 
 #include "fakes/LoopbackTransport.h"
+#include "OperatorWording.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::LoopbackTransport;
@@ -362,6 +365,11 @@ private slots:
     void coreSendsRadioIdentityOnlyFromMinorEleven();
     void remoteModelResolvesTheCoresRadio();
     void remoteModelSignalsOncePerIdentityChange();
+
+    // ---- R-R3-46 / R-R3-11: the Core's attenuator and preamp (stepAtt) ----
+    void coreOffersTheAttenuatorOnlyFromMinorEleven();
+    void appStepAttenuatorSettingsWritesAreRefused();
+    void windowAttenuatorEditsWaitForACoreThatOffersThem();
 
     // ---- Fix round 1 ----
     void reconnectSurvivesTheOldTransportClosing();
@@ -5113,15 +5121,19 @@ StationCapabilities g21kCaps()
 
 void TstStationSession::radioIdentityEntriesRoundTrip()
 {
-    // The three entries travel last and together, and come back as sent.
-    const StationCapabilities sent = g21kCaps();
+    // The three entries travel last and together, and come back as sent;
+    // radioHardwareVersion (R-R3-46, Task 2) closes the same block.
+    StationCapabilities sent = g21kCaps();
+    sent.radioHardwareVersion = 1;
     const QList<MirrorUpdate> updates = sent.toUpdates();
     const int model = updateIndexOf(updates, "hpsdrModel");
-    QCOMPARE(model, int(updates.size()) - 3);
+    QCOMPARE(model, int(updates.size()) - 4);
     QCOMPARE(updateIndexOf(updates, "radioProtocol"), model + 1);
     QCOMPARE(updateIndexOf(updates, "radioAddress"), model + 2);
+    QCOMPARE(updateIndexOf(updates, "radioHardwareVersion"), model + 3);
     const StationCapabilities received = StationCapabilities::fromUpdates(updates);
     QVERIFY(received.radioIdentityEntries);
+    QCOMPARE(received.radioHardwareVersion, 1);
     QCOMPARE(received.hpsdrModel, HPSDRModel::ANAN_G2_1K);
     QCOMPARE(received.radioProtocol, 2);
     QCOMPARE(received.radioAddress, QStringLiteral("192.168.1.50"));
@@ -5131,7 +5143,8 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     StationCapabilities older = sent;
     older.radioIdentityEntries = false;
     const QList<MirrorUpdate> olderUpdates = older.toUpdates();
-    for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress"}) {
+    for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
+                             "radioHardwareVersion"}) {
         QCOMPARE(updateIndexOf(olderUpdates, name), -1);
     }
     const StationCapabilities fromOlder = StationCapabilities::fromUpdates(olderUpdates);
@@ -5139,6 +5152,7 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     QCOMPARE(fromOlder.hpsdrModel, HPSDRModel::FIRST);
     QCOMPARE(fromOlder.radioProtocol, 0);
     QVERIFY(fromOlder.radioAddress.isEmpty());
+    QCOMPARE(fromOlder.radioHardwareVersion, 0);
 
     // Values this build cannot use read as not reported, never as a guess.
     QList<MirrorUpdate> odd = olderUpdates;
@@ -5204,13 +5218,15 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
 
     const QList<MirrorUpdate> older = capture(quint16(kRadioIdentitySessionProtocolMinor - 1));
     QVERIFY(!older.isEmpty());
-    for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress"}) {
+    for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
+                             "radioHardwareVersion"}) {
         QCOMPARE(updateIndexOf(older, name), -1);
     }
-    // Byte for byte: the minor-11 descriptor without the three (and the
+    // Byte for byte: the minor-11 descriptor without the four (and the
     // display budget reason, which is not sent here) is the minor-10 one.
     QList<MirrorUpdate> stripped = current;
-    for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress"}) {
+    for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
+                             "radioHardwareVersion"}) {
         stripped.removeAt(updateIndexOf(stripped, name));
     }
     QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)),
@@ -5331,6 +5347,186 @@ void TstStationSession::remoteModelSignalsOncePerIdentityChange()
     hl2.radioAddress = QStringLiteral("192.168.1.51");
     remote.applyStationCapabilities(hl2);
     QCOMPARE(radio.count(), 3);
+}
+
+void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
+{
+    // R-R3-46 / R-R3-11. An app at minor 11 is told radioHardwareVersion 1
+    // and gets the `stepAtt` object and its changes. An app at minor 10 gets
+    // neither: no entry, no schema, no object, no delta, so its burst is the
+    // one it was built for; a write it sends anyway is refused in plain words.
+    const auto run = [this](quint16 minor, QList<QByteArray>* wires,
+                            QList<SessionPropertyResult>* results) {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("step-att.settings")));
+        auto core = makeStationRadioModel(0);
+        StepAttenuatorController controller;
+        controller.setTickTimerEnabled(false);
+        core->setStepAttController(&controller);
+        StationServer server(core.get(), settings, m_securityDir.path());
+        auto* station = new LoopbackTransport(QStringLiteral("step-att-station"), this);
+        auto* peer = new LoopbackTransport(QStringLiteral("step-att-peer"), this);
+        station->linkTo(peer);
+        server.acceptTransport(station);
+        peer->sendText(SessionMessages::encode(SessionMessages::hello(
+            kSessionProtocolMajor, minor, 6, QStringLiteral("step-att-app"))));
+        peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+        [&] { QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"))); }();
+        controller.setAttenuation(7);
+        peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "stepAtt",
+            {MirrorUpdate{0, "attenuationDb", MirrorWireKind::Int64, QVariant(qlonglong(9))}},
+            41)));
+        [&] {
+            QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("property.result")));
+        }();
+        // Only the Core's own change happened; a refused write changed nothing.
+        [&] { QCOMPARE(controller.attenuatorDb(), minor >= 11 ? 9 : 7); }();
+        *wires = peer->received();
+        for (const QByteArray& wire : std::as_const(*wires)) {
+            const SessionMessage m = decodeOrFail(wire);
+            if (m.kind == SessionMessageKind::PropertyResult) {
+                *results = m.propertyResults;
+            }
+        }
+        core->setStepAttController(nullptr);
+    };
+    const auto aboutStepAtt = [](const QList<QByteArray>& wires) {
+        int count = 0;
+        for (const QByteArray& wire : wires) {
+            const SessionMessage m = decodeOrFail(wire);
+            if (m.kind == SessionMessageKind::PropertyResult) {
+                continue;
+            }
+            if (m.objectKey == "stepAtt"
+                || (m.kind == SessionMessageKind::Schema && m.className == "StepAttenuatorFacade")) {
+                ++count;
+            }
+        }
+        return count;
+    };
+    const auto capabilitiesIn = [](const QList<QByteArray>& wires) {
+        for (const QByteArray& wire : wires) {
+            const SessionMessage m = decodeOrFail(wire);
+            if (m.kind == SessionMessageKind::Capabilities) {
+                return m.updates;
+            }
+        }
+        return QList<MirrorUpdate>{};
+    };
+
+    QList<QByteArray> current;
+    QList<SessionPropertyResult> currentResults;
+    run(kRadioIdentitySessionProtocolMinor, &current, &currentResults);
+    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 1);
+    // Schema, object, the Core's change and the accepted write's echo.
+    QVERIFY(aboutStepAtt(current) >= 3);
+    QCOMPARE(currentResults.size(), 1);
+    QVERIFY(currentResults.first().accepted);
+
+    QList<QByteArray> older;
+    QList<SessionPropertyResult> olderResults;
+    run(quint16(kRadioIdentitySessionProtocolMinor - 1), &older, &olderResults);
+    QCOMPARE(updateIndexOf(capabilitiesIn(older), "radioHardwareVersion"), -1);
+    QCOMPARE(aboutStepAtt(older), 0);
+    QCOMPARE(olderResults.size(), 1);
+    QVERIFY(!olderResults.first().accepted);
+    QCOMPARE(olderResults.first().reason,
+             QStringLiteral("Update this app to change the radio's attenuator on this Core."));
+    QVERIFY(OperatorWording::isPlain(olderResults.first().reason));
+}
+
+void TstStationSession::appStepAttenuatorSettingsWritesAreRefused()
+{
+    // R-R3-46 / R-R3-11. The Core's attenuator and preamp settings are its
+    // controller's: a raw write or remove from an app (what an older app's
+    // Setup sends) is refused with the plain "update this app" reason, and
+    // the Core's saved value stays. Other hardware keys still land.
+    NotchSession s;
+    prepareNotchCore(s);
+    if (QTest::currentTestFailed()) { return; }
+    const QString mac = QStringLiteral("AA:BB:CC:DD:EE:01");
+    const QString value = QStringLiteral("hardware/%1/options/stepAtt/rx1Value").arg(mac);
+    const QString band = QStringLiteral("hardware/%1/options/stepAtt/rx1Band/40m").arg(mac);
+    const QString mode = QStringLiteral("hardware/%1/options/autoAtt/rx1Mode").arg(mac);
+    const QString preamp = QStringLiteral("hardware/%1/options/preamp/rx1Band/40m").arg(mac);
+    s.stationSettings->setValue(value, QStringLiteral("10"));
+    joinNotchWindow(s, this, m_securityDir.path());
+    if (QTest::currentTestFailed()) { return; }
+    QVERIFY(s.proxy->ready());
+
+    const QString reason = QStringLiteral(
+        "This Core keeps its own attenuator and preamp settings. Update this app to change them.");
+    QVERIFY(OperatorWording::isPlain(reason));
+    QSignalSpy rejected(s.proxy.get(), &SettingsProxy::valueRejected);
+    QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
+    int expected = 0;
+    for (const QString& key : {value, band, mode, preamp}) {
+        s.proxy->setValue(key, QStringLiteral("20"));
+        ++expected;
+        QTRY_COMPARE(rejected.count(), expected);
+        QCOMPARE(toast.last().at(0).toString(), reason);
+    }
+    QCOMPARE(s.stationSettings->value(value).toString(), QStringLiteral("10"));
+    QVERIFY(!s.stationSettings->contains(band));
+    QVERIFY(!s.stationSettings->contains(mode));
+    QVERIFY(!s.stationSettings->contains(preamp));
+
+    s.proxy->remove(value);
+    ++expected;
+    QTRY_COMPARE(rejected.count(), expected);
+    QCOMPARE(toast.last().at(0).toString(), reason);
+    QCOMPARE(s.stationSettings->value(value).toString(), QStringLiteral("10"));
+
+    const QString rate = QStringLiteral("hardware/%1/radioInfo/sampleRate").arg(mac);
+    s.proxy->setValue(rate, QStringLiteral("192000"));
+    QTRY_COMPARE(s.stationSettings->value(rate).toString(), QStringLiteral("192000"));
+    QCOMPARE(rejected.count(), expected);
+}
+
+void TstStationSession::windowAttenuatorEditsWaitForACoreThatOffersThem()
+{
+    // R-R3-46 / R-R3-11. Against a Core without radioHardwareVersion the
+    // window's attenuator object refuses an edit in plain words and sends
+    // nothing; with it, the edit goes to the Core as a property write.
+    for (const int version : {0, 1}) {
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        auto* station = new LoopbackTransport(QStringLiteral("step-att-station"), this);
+        auto* peer = new LoopbackTransport(QStringLiteral("step-att-client"), this);
+        station->linkTo(peer);
+        client.startSession(peer, QStringLiteral("test-token"));
+        station->sendText(SessionMessages::encode(SessionMessages::hello(
+            kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("station"))));
+        station->sendText(SessionMessages::encode(SessionMessages::authResult(true, {}, false)));
+        StationCapabilities caps;
+        caps.propertyResultVersion = 1;
+        caps.radioIdentityEntries = true;
+        caps.radioHardwareVersion = version;
+        station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
+        station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QCOMPARE(client.remoteRadioHardwareAvailable(), version >= 1);
+
+        StepAttenuatorFacade* stepAtt = remote.stepAttFacade();
+        QVERIFY(!stepAtt->isBound());
+        QSignalSpy refused(stepAtt, &StepAttenuatorFacade::editRejected);
+        station->clearReceived();
+        stepAtt->setAttenuationDb(15);
+        if (version == 0) {
+            QCOMPARE(refused.count(), 1);
+            const QString reason = refused.last().at(0).toString();
+            QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+            QCOMPARE(stepAtt->attenuationDb(), 0);
+            QTest::qWait(50);
+            QVERIFY(!station->receivedKinds().contains(QByteArrayLiteral("property.write")));
+        } else {
+            QCOMPARE(refused.count(), 0);
+            QCOMPARE(stepAtt->attenuationDb(), 15);
+            QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("property.write")));
+        }
+    }
 }
 
 QTEST_MAIN(TstStationSession)

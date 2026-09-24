@@ -61,6 +61,10 @@
 //                 move, setActive, delete) for remote windows, and a
 //                 remote window's add routed as a request.
 //                 NereusSDR-original; no Thetis logic.
+//   2026-09-23 : R-R3-46 / R-R3-11 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The step attenuator facade
+//                 (`stepAtt`), bound to the controller on a Local model.
+//                 NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -307,6 +311,7 @@ warren@wpratt.com
 #include "models/PureSignalSettings.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/session/PureSignalSessionFacade.h"
+#include "core/StepAttenuatorFacade.h"
 #include "core/PureSignal.h"
 #include "core/PsFeedbackChannel.h"
 #include "core/StepAttenuatorController.h"
@@ -639,6 +644,7 @@ RadioModel::RadioModel(Role role, QObject* parent)
     }
     m_pureSignalSettings = new PureSignalSettings(this);
     m_pureSignalFacade = new PureSignalSessionFacade(this, nullptr, this);
+    m_stepAttFacade = new StepAttenuatorFacade(this, this);
     if (role == Role::Local) {
         m_pureSignalSettings->load(AppSettings::instance().lastConnected());
         connect(m_pureSignalSettings, &PureSignalSettings::configurationChanged, this, [this]() {
@@ -2854,6 +2860,12 @@ void RadioModel::setStepAttController(StepAttenuatorController* c)
     // false unconditionally per Phase 3A).
     m_stepAttController = c;
     m_transmitModel.setStepAttenuatorController(c);
+    // R-R3-46: the mirrored `stepAtt` object follows the Core's controller.
+    // A Remote model's facade holds the Core's values instead, so a remote
+    // window's own (radio-less) controller is never bound to it.
+    if (m_role == Role::Local) {
+        m_stepAttFacade->bindController(c);
+    }
 
     // 2026-05-22 spectrum-calibration fix: rxMeterOffsetDb() depends on
     // the StepAttenuatorController state (preamp mode + step-att enable +
