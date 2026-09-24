@@ -889,6 +889,7 @@ set(CORE_SOURCES
     src/core/accessories/PennyLaneController.cpp
     src/core/audio/MasterMixer.cpp
     src/core/audio/VaxChannelMixer.cpp
+    src/core/audio/SpeakerFormatConverter.cpp
     src/core/audio/PcMicSource.cpp
     src/core/audio/RadeTxFilters.cpp
     src/core/audio/RadeTxFilters.h

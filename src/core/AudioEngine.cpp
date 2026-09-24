@@ -887,7 +887,11 @@ void AudioEngine::ensureSpeakersOpen()
     const AudioDeviceConfig cfg =
         AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/Speakers"));
 
-    m_speakersBus = makeBus(cfg, /*capture=*/false);
+    {
+        std::lock_guard<std::mutex> lk(m_speakersBusMutex);
+        m_speakersBus = makeBus(cfg, /*capture=*/false);
+        configureSpeakersConverter();
+    }
     if (m_speakersBus) {
         m_speakersFormat = m_speakersBus->negotiatedFormat();
         qCInfo(lcAudio) << "Speakers bus opened @"
@@ -1057,6 +1061,7 @@ void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
 
     m_speakersBus.reset();
     m_speakersBus = makeBus(cfg, /*capture=*/false);
+    configureSpeakersConverter();
 
     AudioDeviceConfig negotiated = cfg;  // carry non-bus fields through
     if (m_speakersBus) {
@@ -1310,7 +1315,21 @@ void AudioEngine::setVaxBusForTest(int channel, std::unique_ptr<IAudioBus> bus)
 
 void AudioEngine::setSpeakersBusForTest(std::unique_ptr<IAudioBus> bus)
 {
+    std::lock_guard<std::mutex> lk(m_speakersBusMutex);
     m_speakersBus = std::move(bus);
+    configureSpeakersConverter();
+}
+
+void AudioEngine::configureSpeakersConverter()
+{
+    // Caller holds m_speakersBusMutex. A closed or missing bus leaves the
+    // converter passing through (nothing is pushed to it anyway).
+    if (m_speakersBus) {
+        const AudioFormat format = m_speakersBus->negotiatedFormat();
+        m_speakersConverter.configure(format.sampleRate, format.channels);
+    } else {
+        m_speakersConverter.configure(0, 0);
+    }
 }
 
 void AudioEngine::setHeadphonesBusForTest(std::unique_ptr<IAudioBus> bus)
@@ -1843,9 +1862,22 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         if (speakersLk.owns_lock()) {
             IAudioBus* speakersBus = m_speakersBus.get();
             if (speakersBus != nullptr && speakersBus->isOpen()) {
-                speakersBus->push(
-                    reinterpret_cast<const char*>(mix.data()),
-                    static_cast<qint64>(stereoFloats) * sizeof(float));
+                if (m_speakersConverter.passthrough()) {
+                    speakersBus->push(
+                        reinterpret_cast<const char*>(mix.data()),
+                        static_cast<qint64>(stereoFloats) * sizeof(float));
+                } else {
+                    // R-R3-23 (fix wave): the device's own rate and channel
+                    // count, not the 48 kHz stereo mix read as if it were
+                    // (a 96 kHz device played it at twice the speed, a mono
+                    // one read interleaved stereo). Preallocated at open.
+                    const int samples = m_speakersConverter.convert(mix.data(), mixed);
+                    if (samples > 0) {
+                        speakersBus->push(
+                            reinterpret_cast<const char*>(m_speakersConverter.output()),
+                            static_cast<qint64>(samples) * sizeof(float));
+                    }
+                }
             }
         }
         // A contending writer holding m_speakersBusMutex

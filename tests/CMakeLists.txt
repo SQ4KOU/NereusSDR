@@ -1368,6 +1368,11 @@ nereus_add_test(tst_virtual_cable_detector)
 # backend required — runs on every platform.
 nereus_add_test(tst_audio_engine_vax_tee)
 
+# ── R3 receiver audio fix wave (R-R3-23): local speakers at any format ───────
+# The master mix reaches a fake speaker device at the device's own rate and
+# channel count (44.1 to 192 kHz, stereo and mono). No real device opened.
+nereus_add_test(tst_audio_engine_speaker_format)
+
 # ── Phase 3O Sub-Phase 10 Task 10a: AudioEngine master-mute API ──────────────
 # Covers setMasterMuted / masterMuted / masterMutedChanged. Verifies the
 # rxBlockReady mute check gates ONLY the speakers push (VAX taps must keep

@@ -140,6 +140,7 @@
 #include "audio/CaptureSupervisor.h"
 #include "audio/MasterMixer.h"
 #include "audio/VaxChannelMixer.h"
+#include "audio/SpeakerFormatConverter.h"
 
 #if defined(Q_OS_LINUX)
 #  include "core/audio/LinuxAudioBackend.h"
@@ -994,6 +995,13 @@ private:
     // each pushing its own. Membership rides the same setSliceStreaming
     // calls as the two mixers above.
     VaxChannelMixer m_vaxMix;
+
+    // R-R3-23 (fix wave): the master mix converted to the speaker device's
+    // own rate and channel count before the push. Configured wherever the
+    // speakers bus is replaced, under m_speakersBusMutex, which the DSP
+    // thread's push also holds.
+    SpeakerFormatConverter m_speakersConverter;
+    void configureSpeakersConverter();
 
     // Control-to-audio withdrawal handshake. The audio thread never waits:
     // it either enters a region or drops a block while admission is closed.
