@@ -188,28 +188,46 @@ from a client while another client holds transmit audio.
 
 ## Task 5: Angelia and Orion sample rates and wideband ADCs
 
-**Requirements:** CLAUDE.md's hardware-fact rules (gateware for receiver counts and rates);
-the Phase 3F design section 2 table.
+**Requirements:** CLAUDE.md's hardware-fact rules; the Phase 3F design section 2 table; the
+operator's ruling (2026-09-24, "follow thetis"): these boards get Thetis's values for the
+protocol they run.
 
-**Source first:** Thetis (the per-model sample-rate lists and wideband settings in `setup.cs`
-and `console.cs`) and the gateware.
+**Source first:** Thetis `setup.cs` `InitAudioTab` (the per-protocol rate lists,
+`setup.cs:847-853 [v2.10.3.15]`, with its `//DH1KLM` RedPitaya line);
+`ChannelMaster/networkproto1.c:181-201` (no Protocol 1 wideband); `console.cs`
+`wBToolStripMenuItem_Click` (`console.cs:43553-43559`, Protocol 2 wideband on ADC0) and wherever
+Thetis shows or hides that menu item; mi0bot-Thetis for the HL2's 384 kHz on Protocol 1. The
+pinned gateware is an OrionMKII-class build (board byte 5) and does not describe these boards;
+cite it only for what it says. The first attempt's source reading is in `task-5-report.md` in
+the controller's crew workspace.
 
-**Files:** `src/core/BoardCapabilities.cpp`, the Phase 3F design's section 2 table, any plan
-that states the old value, `tests/tst_board_capabilities_phase3f.cpp`.
+**Files:** `src/core/BoardCapabilities.{h,cpp}` (per-protocol rates and wideband for a board
+that runs both protocols); `src/core/SampleRateCatalog.cpp` if the rate filter changes;
+`src/core/RadioDiscovery.cpp` (the 384 kHz given to every Protocol 1 reply, line 329) and what
+reads it; the Radio Info tab (`RadioInfoTab.cpp`, the top rate shown); the Phase 3F design's
+section 2 table and any plan that states the old values; `tests/tst_board_capabilities_phase3f.cpp`,
+`tests/tst_wideband_chain_state.cpp`.
 
 **Acceptance:**
-- Today the code gives Angelia and Orion a 384 kHz top rate and `widebandAdcs = 0`, while the
-  design table says 192 kHz and 2. Each of the four values is settled from a cited source.
-- Whichever side is wrong is fixed in the same commit as the table it came from (the code row
-  or the design table), with the invariant asserted by a test.
-- No other board row changes.
+- An ANAN-100D (Angelia) or ANAN-200D (Orion) running Protocol 1 offers 48, 96 and 192 kHz and
+  no wideband. Running Protocol 2 it offers 48 to 1536 kHz and wideband as Thetis gives it
+  (ADC0, unless Thetis gates the menu by model).
+- Radio Info shows the top rate for the protocol the radio is running.
+- The top rate taken from a Protocol 1 discovery reply follows Thetis (384 kHz for the
+  RedPitaya) and mi0bot (384 kHz for the HL2), and 192 kHz for every other board.
+- The invariant test becomes "no board offers wideband while running Protocol 1", over every
+  row.
+- The design table and the code change in the same commit, with tests of every value per
+  protocol, cited.
+- No other board's offered rates change: a test lists every board's offered rates per
+  protocol and matches Thetis.
 
 **Verification:** a capability table; tests of the values. Hardware pending (no Angelia or
 Orion on the bench).
 
 **Execution note (advisory):** opus.
 
-- [ ] **Step 1:** Read the sources, fix, test, commit.
+- [ ] **Step 1:** Read the sources, test, fix, commit.
 
 ## Task 6: The Phase 3F design document says what shipped
 
@@ -235,8 +253,8 @@ Orion on the bench).
 **Requirements:** the 3M-1 transmit work (`docs/architecture/phase3m-1a-*`,
 `phase3m-1b-mic-ssb-voice-plan.md`).
 
-**Flag:** this task changes how transmit keys and unkeys. It is a candidate for an earlier
-independent review; the operator decides before it runs. It runs last.
+**Flag:** this task changes how transmit keys and unkeys. The operator chose (2026-09-24) an
+independent review of this task on its own before it merges. It runs last.
 
 **Source first:** Thetis `console.cs`:
 - `chkMOX_CheckedChanged` (the MOX button's PTT mode);
@@ -402,12 +420,47 @@ section 16.3.2 gains the per-model table.
 - The read loop's slot pairing agrees with the stream mapping for nddc 2, 4 and 5, so no user
   stream ever carries the PureSignal pair.
 - A wire byte change updates the P1 baseline in its own commit, with the reason.
+- HermesII (ANAN10E, ANAN100B) under PureSignal with MOX: Thetis gives `psrx = 0; pstx = 1`
+  and no `rx1` or `rx2` (`console.cs:8766-8779`), so neither user stream gets a DDC. Today
+  stream 0 still maps to DDC0 there, so slice A demodulates the PureSignal feedback (found by
+  the fix wave after the post-checkpoint review; the same defect class as its C1). A test per
+  model pins it.
 - If a mismatch cannot be settled from the sources (a model whose Protocol 1 firmware Thetis
   treats differently from its enum), stop and report NEEDS_CONTEXT with both readings.
 
 **Verification:** transmit-coupled; tests first. Bench pending for any Protocol 1 radio of
 these families; the operator's HL2 has its own codec and is not affected.
 
-**Execution note (advisory):** opus. After Task 7.
+**Execution note (advisory):** opus. Before Task 7, which runs last.
 
 - [ ] **Step 1:** The audit table, the table test, the port, commit.
+
+## Task 12: TCI apps get `if` with each VFO and centre change, as Thetis sends it
+
+**Requirements:** R-R3-49 (every control does what its label says); the TCI design
+(`docs/architecture/2026-05-09-phase3j-1-tci-port-design.md`). Found by the fix wave after the
+post-checkpoint review: the live path (`TciProtocol::enqueueLocalBroadcastVfo`) sends `vfo` and
+`dds` only, and `buildIfLine` is used only by the init burst, so an app's `if` goes stale after
+the first tune.
+
+**Source first:** Thetis `TCIServer.cs` `VFOChange` and `CentreChange` and the lines they send
+(`TCIServer.cs:1365-1400 [v2.10.3.15]`), and whatever computes the IF offset they carry.
+
+**Files:** `src/core/TciProtocol.{h,cpp}`; `src/core/TciServer.cpp` if the broadcast lives there;
+the TCI broadcast tests and `tests/tst_tci_update_gap.cpp`.
+
+**Acceptance:**
+- A VFO change sends its `vfo` and then its `if`; a centre change sends its `dds` and then its
+  `if`. Each names the receiver and channel Thetis names and carries the offset Thetis computes
+  (cited, with author tags).
+- Both go through the update gap on the gates the fix wave set: a centre change's `if` on the
+  centre gate, a VFO change's on the VFO gate.
+- The init burst and the live path build `if` with one builder.
+- Tests: an app sees the new `if` after a tune inside the pan and after a pan move; the gap
+  tests still pass.
+
+**Verification:** the TCI family. Bench pending: a TCI app that reads `if`, following a tune.
+
+**Execution note (advisory):** opus. Before Task 7, which runs last.
+
+- [ ] **Step 1:** Read the Thetis sends, test, fix, commit.
