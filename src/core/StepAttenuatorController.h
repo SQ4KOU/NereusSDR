@@ -351,7 +351,8 @@ public:
     // previously-loaded different radio.
     void saveSettings(const QString& mac);
     void loadSettings(const QString& mac);
-    void markSettingsUnloaded() { m_loadedMac.clear(); }
+    // R-R3-46: also drops the band memory, which is the unloaded radio's.
+    void markSettingsUnloaded() { m_loadedMac.clear(); m_bandState.clear(); }
     bool settingsLoaded() const { return !m_loadedMac.isEmpty(); }
 
     // --- Tick (public for testability) ---

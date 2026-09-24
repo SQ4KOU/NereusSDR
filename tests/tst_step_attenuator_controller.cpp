@@ -934,6 +934,49 @@ private slots:
         ctrl.setRadioConnection(nullptr);
         s.clearHardwareValues(mac);
     }
+
+    // R-R3-46 follow-up item 3. On a switch to another radio the window
+    // connects the new radio and selects the band before it loads the new
+    // radio's settings. Between the old radio's teardown and that load a
+    // band change must neither restore the old radio's band memory nor
+    // send it to the new radio.
+    void switchingRadiosSendsNothingBeforeTheNewRadioLoads()
+    {
+        const QString oldRadio = QStringLiteral("aa:bb:cc:de:ad:30");
+        const QString newRadio = QStringLiteral("aa:bb:cc:de:ad:31");
+        auto& s = AppSettings::instance();
+        s.clearHardwareValues(oldRadio);
+        s.clearHardwareValues(newRadio);
+
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBandRestoreToRadio(true);
+        RecordingConnection oldConn;
+        ctrl.setRadioConnection(&oldConn);
+        ctrl.loadSettings(oldRadio);
+        ctrl.setBand(Band::Band40m);
+        ctrl.setAttenuation(20);
+        ctrl.setBand(Band::Band20m);
+        ctrl.setAttenuation(0);
+        // Teardown of the old radio (RadioModel::teardownConnection).
+        ctrl.saveSettings(oldRadio);
+        ctrl.markSettingsUnloaded();
+
+        // The new radio's connect order (MainWindow): connection, band, load.
+        RecordingConnection newConn;
+        ctrl.setRadioConnection(&newConn);
+        ctrl.setBand(Band::Band40m);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+        QVERIFY(newConn.attenuator.isEmpty());
+        QVERIFY(newConn.preamp.isEmpty());
+        ctrl.loadSettings(newRadio);
+        ctrl.setBand(Band::Band20m);
+        ctrl.setBand(Band::Band40m);
+        QVERIFY(!newConn.attenuator.contains(20));
+        ctrl.setRadioConnection(nullptr);
+        s.clearHardwareValues(oldRadio);
+        s.clearHardwareValues(newRadio);
+    }
 };
 
 QTEST_MAIN(TestStepAttenuatorController)

@@ -25,6 +25,8 @@
 //                 setBand stores the old band only once a radio is loaded,
 //                 restored attenuation stays within the radio's range, and
 //                 the ATT-on-TX value follows its own transmit band.
+//                 2026-09-24: before a radio loads, setBand only notes the
+//                 band, and markSettingsUnloaded drops the band memory.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -267,13 +269,19 @@ void StepAttenuatorController::setBand(Band band)
         return;
     }
 
-    // Save current ATT/preamp to old band. R-R3-46: only once a radio's
-    // settings are loaded; before that the values are the starting
-    // defaults, not what the operator used on that band, and storing them
-    // would become that band's memory (then saved for the radio).
-    if (!m_loadedMac.isEmpty()) {
-        m_bandState[static_cast<int>(m_currentBand)] = { m_attDb, m_preampMode };
+    // R-R3-46: before a radio's settings are loaded (the first connect,
+    // or a new radio between the old one's teardown and this one's load)
+    // the band is only noted. The values in hand are not what the operator
+    // used on the band left, and the band memory is not this radio's, so
+    // nothing is stored, restored or sent; loadSettings then restores the
+    // noted band for the radio.
+    if (m_loadedMac.isEmpty()) {
+        m_currentBand = band;
+        return;
     }
+
+    // Save current ATT/preamp to old band.
+    m_bandState[static_cast<int>(m_currentBand)] = { m_attDb, m_preampMode };
 
     m_currentBand = band;
 

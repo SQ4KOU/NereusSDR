@@ -234,8 +234,8 @@
 //                 valid anti-VOX cancellation reference; there is no user
 //                 choice to expose.  J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
-//   2026-09-23 - R-R3-46 fix wave: setHpsdrModel moved out of line; it
-//                 clamps the stored tune power to the new model's range.
+//   2026-09-23 - R-R3-46 fix wave: setHpsdrModel moved out of line; the
+//                 tune power is clamped at the settings load (2026-09-24).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
@@ -404,11 +404,10 @@ public:
     /// Set the connected radio model.  Call before setTunePowerForBand or
     /// setPowerUsingTargetDbm to engage SKU-specific behaviour.
     /// No signal needed for Task 6 — wired from RadioModel in Task 10.
-    /// R-R3-46 fix wave: on a model that holds a radio's transmit settings
-    /// (loadFromSettings ran), the stored tune power (fixed and per band)
-    /// is clamped to the new model's range and saved, so it stays valid
-    /// without the Power page's spinbox writing it back.  A remote window's
-    /// copy (the Core's values) is left alone.
+    /// R-R3-46: sets the model only. The tune power (fixed and per band)
+    /// is clamped to it, and saved for that radio, when the radio's
+    /// settings load (loadFromSettings, load), which a connect runs after
+    /// this. A remote window's copy (the Core's values) is left alone.
     void setHpsdrModel(HPSDRModel m);
 
     /// Set the per-MAC AppSettings scope.  Must be called before load() / save().
