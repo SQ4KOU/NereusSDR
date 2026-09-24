@@ -27,6 +27,8 @@
 //                    other clients that each sent a wrong token before this
 //                    one connects (0); the lockout is the station's, not a
 //                    peer's
+//   otherConnections other clients connected and still connecting, which
+//                    send nothing (0); with 8 the station is at its limit
 //   clientAnswersPings, preemptingClient   read by the player itself
 //
 // NEREUS_LINK_TRACE_DIR, when set, receives every message the station sent
@@ -76,6 +78,7 @@
 
 #include <functional>
 #include <memory>
+#include <vector>
 
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
@@ -110,6 +113,7 @@ const QStringList kSetupKeys{
     QStringLiteral("stationTci"),      QStringLiteral("stepAttenuator"),
     QStringLiteral("media"),           QStringLiteral("priorFailedAuthentications"),
     QStringLiteral("clientAnswersPings"), QStringLiteral("preemptingClient"),
+    QStringLiteral("otherConnections"),
 };
 
 // The station a fixture's stationSetup describes. Members are declared in
@@ -122,6 +126,9 @@ struct Station {
     std::unique_ptr<ConnectableRadioModel> harness;
     std::unique_ptr<RadioModel> ownModel;
     RadioModel* model = nullptr;
+    // otherConnections: the far ends of connections still connecting,
+    // kept open until the fixture ends (the server goes first).
+    std::vector<std::unique_ptr<LoopbackTransport>> others;
     std::unique_ptr<StationServer> server;
 
     ~Station()
@@ -240,6 +247,19 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
             return QStringLiteral("the slices' signal readings did not settle");
         }
     }
+
+    // Other clients connected and still connecting (they send nothing), so
+    // the fixture's client is the next one to arrive.
+    const int others = setup.value(QStringLiteral("otherConnections")).toInt(0);
+    for (int i = 0; i < others; ++i) {
+        auto other = std::make_unique<LoopbackTransport>(QStringLiteral("conformance-waiting-client"));
+        auto* otherEnd =
+            new LoopbackTransport(QStringLiteral("conformance-waiting"), station->server.get());
+        otherEnd->linkTo(other.get());
+        station->server->acceptTransport(otherEnd);
+        station->others.push_back(std::move(other));
+    }
+    QCoreApplication::processEvents();
 
     const int failures = setup.value(QStringLiteral("priorFailedAuthentications")).toInt(0);
     for (int i = 0; i < failures; ++i) {
@@ -597,6 +617,12 @@ void TstLinkConformanceSession::sessionFixtures()
     const QJsonObject o =
         LinkFixtures::readObject(QDir(LinkFixtures::dataDirectory()).filePath(file), &error);
     QVERIFY2(error.isEmpty(), qPrintable(error));
+    if (o.value(QStringLiteral("stationSetup")).toObject()
+            .value(QStringLiteral("otherConnections")).toInt(0) > 0) {
+        // The station logs the connection it turns away; that is the case.
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("^Refusing connection from")));
+    }
     const QString failure = run(id, o, quint16(major));
     QVERIFY2(failure.isEmpty(), qPrintable(failure));
 }

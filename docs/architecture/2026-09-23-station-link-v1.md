@@ -190,7 +190,14 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
 2. The station sends `hello` first, as soon as it accepts the connection,
    before the client has sent anything (`StationServer::acceptTransport`).
    It names every link major the station supports (section 6.1), so a
-   client can pick one, or leave without having sent its token.
+   client can pick one, or leave without having sent its token. The one
+   exception: a station already holding its limit of connections (8,
+   `kMaxConcurrentPeers`, section 15) sends no `hello`. The first and only
+   message on the new connection is `session.end` "The Core already has
+   as many connections as it allows. Try again shortly.", `retryable`
+   true, and the station closes it. A client handles a `session.end` in
+   place of the `hello` as it would any other (fixture
+   `connection-limit`).
 3. The client answers with its own `hello`, naming the major it chose,
    then `auth.request` carrying the token (`StationClient.cpp`, after its
    pin check).
@@ -1706,6 +1713,7 @@ its client each station message with `"$string"` as `""`, `"$int"` as `0`,
 | `priorFailedAuthentications` | other clients that each sent a wrong token before this one connects | 0 |
 | `clientAnswersPings` | the client's transport answers the station's pings | true |
 | `preemptingClient` | `{"afterStep": i}`: a second client authenticates once step `i` is done | none |
+| `otherConnections` | other clients connected before this one, still connecting and sending nothing; 8 puts the station at its connection limit | 0 |
 
 The station runner starts every fixture from an empty settings profile,
 and the bundled NR3 model files count as absent, so a fixture reads the
@@ -1715,6 +1723,7 @@ same on every machine.
 | --- | --- |
 | `connect-connectable` | The whole connect sequence to `snapshot.complete` on a connected radio with one slice, every message in full, except: PureSignal's `statusJson` (`"$string"`, it carries a capture time) and `displayGeneration` (`"$int"`, a counter whose value depends on timing), and the slice's `signalStrengthDbm`, `signalPeakDbm` and `signalAverageDbm`, which the receiver measures: `"$within:1:-399.02"`, within 1 dB |
 | `wrong-token` | `auth.result` refused, `retryable` false, then the close |
+| `connection-limit` | With eight other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
 | `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This station runs link version 1 and this app runs version 2. Update the station.", `retryable` false |
 | `version-declares` | A `hello` with `majors` `[1]` and a declared feature is accepted, and authentication follows |

@@ -35,6 +35,7 @@
         {"id": "control-hello-majors-empty", "file": "control/hello-majors-empty.json", "kind": "control", "requires": {}},
         {"id": "control-hello-feature-not-whole", "file": "control/hello-feature-not-whole.json", "kind": "control", "requires": {}},
         {"id": "control-unknown-type", "file": "control/unknown-type.json", "kind": "control", "requires": {}},
+        {"id": "session-connection-limit", "file": "sessions/connection-limit.json", "kind": "session", "requires": {}},
         {"id": "session-connect-connectable", "file": "sessions/connect-connectable.json", "kind": "session", "requires": {}},
         {"id": "session-wrong-token", "file": "sessions/wrong-token.json", "kind": "session", "requires": {}},
         {"id": "session-lockout", "file": "sessions/lockout.json", "kind": "session", "requires": {}},
