@@ -6188,9 +6188,15 @@ void TstStationSession::windowFilterPolicyReachesTheCore()
     }
 
     // A wideband chain stays bypassed, but its new policy still reaches the
-    // Core, is saved and is shown.
+    // Core, is saved and is shown. The window has seen the chain go wide
+    // before the change, so the change's own publish is the only thing
+    // that can bring the new policy (the chain's effective filter and
+    // reason do not move, so AlexController's bpfStateChanged is quiet).
     s.core->alexControllerMutable().setWidebandActive(1, true);
     QTRY_VERIFY(s.window->filterChainStateAvailable(1));
+    QTRY_COMPARE(s.window->filterChainState(1).effective,
+                 AlexController::BpfEffective::WidebandLocked);
+    QCOMPARE(s.window->filterChainState(1).mode, AlexController::BpfMode::Auto);
     const IStationLink::CommandOutcome sent =
         s.client->requestFilterPolicy(1, int(AlexController::BpfMode::ForceBand));
     QVERIFY(sent.sent);
