@@ -594,6 +594,9 @@ private slots:
     void connectionRequestedByOperator();
     void showRemoteConnectionPanel();
     void refreshRemoteConnectionUi();
+    /// R-R3-38: places the stop message over the top of the window's
+    /// content, keeping the layout under it.
+    void placeCoreStopBanner();
     bool transmitControlsPermitted() const;
     /// R-R3-21 / R-R3-10: whether the Core's settings can be changed from
     /// this window (always in local direct mode; in a remote window only
@@ -624,6 +627,9 @@ private slots:
     void showAudioDiagnoseDialog();
     void showFeatureRequestDialog();
     void showFeatureRequestDialogImpl();
+    /// R-R3-38: the stop message's Check for updates: runs the same
+    /// version check and says the result in a notice.
+    void checkForUpdates();
     // Phase 3M-4 Task 8: open the modeless PureSignal dialog (Tools menu).
     // Lazy-constructs on first invocation; subsequent calls show + raise the
     // existing instance so geometry persists across opens.
@@ -967,6 +973,13 @@ private:
     class RemoteTelemetryController* m_remoteTelemetry{nullptr};
     class RemoteConnectionController* m_remoteConnection{nullptr};
     class RemoteConnectionPanel* m_remoteConnectionPanel{nullptr};
+    /// R-R3-38: the stop message over the content of a remote window.
+    class CoreStopBanner* m_coreStopBanner{nullptr};
+    /// The latest release's version from the release page, or an empty
+    /// string when it could not be read. Shared by the issue reporter's
+    /// version check and Check for updates (R-R3-38). Not a slot: moc
+    /// cannot carry the std::function parameter.
+    void fetchLatestReleaseVersion(std::function<void(const QString&)> done);
     /// R-R3-17: forget which link-lost reason was last toasted.
     void clearStationLinkToastMemory();
     QString m_lastReceiveLayoutWarning;

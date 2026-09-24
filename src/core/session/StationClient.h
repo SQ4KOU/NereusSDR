@@ -257,6 +257,31 @@ class RadioModel;
 class SessionTransport;
 class SettingsProxy;
 
+/// R-R3-21 / R-R3-23 / R-R3-38: how the last session ended, as far as it
+/// decides what a remote window offers next. Only an end that will not
+/// fix itself is recorded; a dropped link or any end the Core marks
+/// retryable leaves kind None, and the window retries as before.
+struct StationEndReport {
+    enum class Kind {
+        None,           ///< nothing recorded (still running, or a retryable end)
+        TakenOver,      ///< another app connected to the Core and took over
+        VersionRefused, ///< the link versions are too far apart
+        Refused,        ///< any other end the Core marked not retryable
+    };
+    Kind kind = Kind::None;
+    /// The reason as sent (the Core's own words, or this app's own for a
+    /// version refusal it made itself). Raw: for the log and for
+    /// OperatorReasonText, never shown as is.
+    QString reason;
+    /// TakenOver only: the network address of the app that took over, as
+    /// the Core names it in its reason. Empty when the Core does not say.
+    QString takenOverBy;
+    /// VersionRefused only: the major link versions of each side, or -1
+    /// when the reason did not carry them.
+    int appMajor = -1;
+    int coreMajor = -1;
+};
+
 /// QObject first, deliberately: moc requires the QObject base to come
 /// first, and IStationLink is a plain abstract interface with no metatype
 /// involvement, so the pair compose without any virtual-inheritance
@@ -404,6 +429,13 @@ public:
     /// mirrored radio state, this remains true when Core is reachable but
     /// its radio is offline. Used by the operator's Connect/Disconnect actions.
     bool isConnectionActive() const { return m_sessionActive || isReconnectPending(); }
+
+    /// R-R3-38: the last end that will not fix itself (a takeover, a
+    /// version refusal, or any other end the Core marked not retryable).
+    /// Cleared when the next link is attached, so it describes the end
+    /// that stopped this client, never an older one. Read from the Core's
+    /// session end reason and retryable flag as sent; no other wire data.
+    StationEndReport lastEndReport() const { return m_lastEndReport; }
 
     /// Test seam: production default is kDefaultReconnectBackoffUnitMs
     /// (real seconds). See scheduleReconnect() in the .cpp for the
@@ -819,6 +851,7 @@ private:
 
     QString m_token;
     QString m_lastError;
+    StationEndReport m_lastEndReport;
     bool m_handshakeComplete = false;
     bool m_authenticated = false;
     quint16 m_agreedMinor = 0;

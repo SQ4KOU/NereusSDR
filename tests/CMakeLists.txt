@@ -6993,6 +6993,8 @@ nereus_add_test(tst_settings_proxy)
 nereus_add_test(tst_remote_gui_gating)
 target_compile_definitions(tst_remote_gui_gating PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_remote_connection_controls fakes/LoopbackTransport.cpp)
+# R-R3-38 (R3 completion Task 5): the stop message of a remote window.
+nereus_add_test(tst_remote_core_stop_notice)
 nereus_add_test(tst_remote_tx_widgets)
 nereus_add_test(tst_remote_tx_presentation fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_remote_tx_presentation PRIVATE NEREUS_BUILD_TESTS)

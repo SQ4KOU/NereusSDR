@@ -4,6 +4,7 @@
 #include "gui/OperatorReasonText.h"
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteMediaController.h"
+#include "gui/StyleConstants.h"
 #include "models/RadioModel.h"
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -85,6 +86,7 @@ QString RemoteConnectionController::statusText() const
     case ConnectionState::Probing: return tr("Connecting to Core");
     case ConnectionState::LinkLost: return tr("Retrying Core (attempt %1)").arg(m_retryAttempt);
     case ConnectionState::Disconnected:
+        if (stopNotice() != CoreStopNotice::None) { return stopTitle(); }
         return m_operatorDisconnected ? tr("Core disconnected")
              : m_client && !m_client->lastError().isEmpty() ? tr("Core connection failed")
              : tr("Core disconnected");
@@ -112,13 +114,99 @@ QString RemoteConnectionController::detailText() const
         text += tr("\nRetry delay: %1 s. Disconnect cancels automatic retries.")
             .arg((m_retryDelayMs + 999) / 1000);
     }
-    if (m_client && !m_client->isHandshakeComplete() && !m_operatorDisconnected
+    if (stopNotice() != CoreStopNotice::None) {
+        // R-R3-38: the stop message's own words, not the raw reason.
+        text += QLatin1Char('\n') + stopText();
+    } else if (m_client && !m_client->isHandshakeComplete() && !m_operatorDisconnected
         && !m_client->lastError().isEmpty()) {
         // The raw reason is in the log; shown here in user words (R-R3-17).
         text += tr("\nLast failure: %1")
                     .arg(OperatorReasonText::forDisplay(m_client->lastError()));
     }
     return text;
+}
+
+CoreStopNotice RemoteConnectionController::stopNotice() const
+{
+    // Only a window that stopped by itself: an operator's Disconnect, a
+    // live or retrying link and a window never connected show nothing.
+    if (!m_client || m_operatorDisconnected || state() != ConnectionState::Disconnected) {
+        return CoreStopNotice::None;
+    }
+    const StationEndReport report = m_client->lastEndReport();
+    switch (report.kind) {
+    case StationEndReport::Kind::None: return CoreStopNotice::None;
+    case StationEndReport::Kind::TakenOver: return CoreStopNotice::TakenOver;
+    case StationEndReport::Kind::VersionRefused:
+        if (report.appMajor >= 0 && report.coreMajor >= 0) {
+            if (report.appMajor < report.coreMajor) { return CoreStopNotice::UpdateThisApp; }
+            if (report.appMajor > report.coreMajor) { return CoreStopNotice::UpdateCore; }
+        }
+        return CoreStopNotice::UpdateOlderSide;
+    case StationEndReport::Kind::Refused: return CoreStopNotice::Refused;
+    }
+    return CoreStopNotice::None;
+}
+
+QString RemoteConnectionController::stopTitle() const
+{
+    switch (stopNotice()) {
+    case CoreStopNotice::None: return {};
+    case CoreStopNotice::TakenOver: return tr("Core taken over");
+    case CoreStopNotice::UpdateThisApp: return tr("Update this app");
+    case CoreStopNotice::UpdateCore: return tr("Update the Core");
+    case CoreStopNotice::UpdateOlderSide: return tr("Core version does not match");
+    case CoreStopNotice::Refused: return tr("Core refused this window");
+    }
+    return {};
+}
+
+QString RemoteConnectionController::stopText() const
+{
+    const QString noRetry = tr("This window does not reconnect by itself.");
+    const QString reason = m_client ? m_client->lastEndReport().reason : QString();
+    switch (stopNotice()) {
+    case CoreStopNotice::None: return {};
+    case CoreStopNotice::TakenOver: {
+        // The Core names the other app by its network address only; it
+        // sends no device name (station link section 12.4).
+        const QString by = m_client->lastEndReport().takenOverBy;
+        const QString what = by.isEmpty()
+            ? tr("Another app connected to the Core and took over.")
+            : tr("Another app at %1 connected to the Core and took over.").arg(by);
+        return what + QLatin1Char(' ') + noRetry + QLatin1Char(' ')
+             + tr("Take it back to use the Core here again.");
+    }
+    case CoreStopNotice::UpdateThisApp:
+        return tr("This app is too old to work with this Core. Update NereusSDR on "
+                  "this computer to use it.") + QLatin1Char(' ') + noRetry;
+    case CoreStopNotice::UpdateCore:
+        return tr("This Core is too old to work with this app. Update NereusSDR on "
+                  "the Core's computer to use it.") + QLatin1Char(' ') + noRetry;
+    case CoreStopNotice::UpdateOlderSide:
+    case CoreStopNotice::Refused:
+        // The Core's own reason in user words (R-R3-17, R-R3-21).
+        return OperatorReasonText::forDisplay(reason) + QLatin1Char(' ') + noRetry;
+    }
+    return {};
+}
+
+bool RemoteConnectionController::offersTakeBack() const
+{
+    return stopNotice() == CoreStopNotice::TakenOver;
+}
+
+bool RemoteConnectionController::updateThisAppHelps() const
+{
+    const CoreStopNotice notice = stopNotice();
+    return notice == CoreStopNotice::UpdateThisApp || notice == CoreStopNotice::UpdateOlderSide;
+}
+
+void RemoteConnectionController::takeBack()
+{
+    // R-R3-38: connects again, which takes the Core back at once. Part G
+    // of the iPhone plan makes this ask the other device first.
+    connectToStation();
 }
 
 void RemoteConnectionController::connectToStation()
@@ -316,5 +404,90 @@ void RemoteConnectionPanel::hideEvent(QHideEvent* event)
         m_audioTimer->stop();
     }
     QDialog::hideEvent(event);
+}
+
+CoreStopBanner::CoreStopBanner(RemoteConnectionController* controller, QWidget* parent)
+    : QFrame(parent), m_controller(controller)
+{
+    setObjectName(QStringLiteral("coreStopBanner"));
+    // The same panel and amber accent as the window's warning notices.
+    setStyleSheet(QStringLiteral(
+        "QFrame#coreStopBanner { background: %1; border: 1px solid %2;"
+        " border-left: 3px solid %3; border-radius: 3px; }"
+        "QLabel { border: none; background: transparent; }")
+        .arg(QString::fromLatin1(Style::kPanelBg), QString::fromLatin1(Style::kBorder),
+             QString::fromLatin1(Style::kAmberText)));
+
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(14, 10, 14, 10);
+    layout->setSpacing(6);
+    m_title = new QLabel(this);
+    m_title->setObjectName(QStringLiteral("coreStopTitle"));
+    m_title->setTextFormat(Qt::PlainText);
+    m_title->setStyleSheet(QStringLiteral("color: %1; font-size: 13px; font-weight: bold;")
+                               .arg(QString::fromLatin1(Style::kTextPrimary)));
+    layout->addWidget(m_title);
+    m_text = new QLabel(this);
+    m_text->setObjectName(QStringLiteral("coreStopText"));
+    m_text->setTextFormat(Qt::PlainText);
+    m_text->setWordWrap(true);
+    m_text->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_text->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;")
+                              .arg(QString::fromLatin1(Style::kTextPrimary)));
+    layout->addWidget(m_text);
+
+    auto* row = new QHBoxLayout;
+    row->addStretch(1);
+    m_takeBack = new QPushButton(tr("Take it back"), this);
+    m_takeBack->setObjectName(QStringLiteral("coreStopTakeBack"));
+    m_chooseCore = new QPushButton(tr("Choose another Core"), this);
+    m_chooseCore->setObjectName(QStringLiteral("coreStopChooseCore"));
+    m_checkUpdates = new QPushButton(tr("Check for updates"), this);
+    m_checkUpdates->setObjectName(QStringLiteral("coreStopCheckUpdates"));
+    for (QPushButton* button : {m_takeBack, m_chooseCore, m_checkUpdates}) {
+        button->setStyleSheet(Style::buttonBaseStyle());
+        button->setAutoDefault(false);
+        row->addWidget(button);
+    }
+    layout->addLayout(row);
+
+    connect(m_takeBack, &QPushButton::clicked, this, [this] {
+        if (m_controller) { m_controller->takeBack(); }
+    });
+    connect(m_chooseCore, &QPushButton::clicked, this,
+            &CoreStopBanner::chooseAnotherCoreRequested);
+    connect(m_checkUpdates, &QPushButton::clicked, this,
+            &CoreStopBanner::checkForUpdatesRequested);
+    if (controller) {
+        connect(controller, &RemoteConnectionController::changed, this, &CoreStopBanner::refresh);
+    }
+    refresh();
+}
+
+void CoreStopBanner::setChooseAnotherCoreAvailable(bool available)
+{
+    m_chooseAvailable = available;
+    refresh();
+}
+
+void CoreStopBanner::setCheckForUpdatesAvailable(bool available)
+{
+    m_updatesAvailable = available;
+    refresh();
+}
+
+void CoreStopBanner::refresh()
+{
+    const bool shown = m_controller && m_controller->stopNotice() != CoreStopNotice::None;
+    if (shown) {
+        m_title->setText(m_controller->stopTitle());
+        m_text->setText(m_controller->stopText());
+        m_takeBack->setVisible(m_controller->offersTakeBack());
+        m_chooseCore->setVisible(m_chooseAvailable);
+        m_checkUpdates->setVisible(m_updatesAvailable && m_controller->updateThisAppHelps());
+    }
+    setVisible(shown);
+    if (shown) { raise(); }
+    emit contentChanged();
 }
 } // namespace NereusSDR
