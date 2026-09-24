@@ -9,6 +9,7 @@
 // scripted Core that speaks the link's own messages for the refusals.
 #include <QTest>
 #include <QCoreApplication>
+#include <QDockWidget>
 #include <QFile>
 #include <QLabel>
 #include <QPushButton>
@@ -430,6 +431,56 @@ private slots:
         QVERIFY(view.banner);
         QVERIFY(!view.banner->isVisibleTo(&window));
         controls->disconnectFromStation();
+    }
+
+    // R-R3-38: the stop message sits over the window's content. When that
+    // area changes size with the window itself unchanged (a dock opens),
+    // the message moves with it and never sits over the dock.
+    void stopMessageFollowsTheContentArea()
+    {
+        ScriptedCore core(kSessionProtocolMajor, QStringLiteral("undecodable message"));
+        QVERIFY(core.listen());
+        SettingsProxy proxy;
+        ScopedRemoteBackend remoteBackend(&proxy);
+        MainWindow window({core.url(), QStringLiteral("token"), {}, true}, nullptr,
+                          MainWindow::ConnectionStartup::Deferred);
+        StationClient* const client = window.findChild<StationClient*>();
+        QVERIFY(client);
+        client->setReconnectBackoffUnitMs(20);
+        window.resize(1200, 800);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.startInitialConnection();
+        QTRY_VERIFY(!client->isConnectionActive());
+        const StopBannerView view = bannerOf(window);
+        QVERIFY(view.banner && view.banner->isVisibleTo(&window));
+        QWidget* const content = window.centralWidget();
+        QVERIFY(content);
+        const auto placedOverContent = [&] {
+            const QRect area = content->geometry();
+            const QRect banner = view.banner->geometry();
+            return banner.top() == area.top() + 16
+                && banner.center().x() - area.center().x() >= -1
+                && banner.center().x() - area.center().x() <= 1;
+        };
+        QTRY_VERIFY(placedOverContent());
+        const QSize windowSize = window.size();
+
+        QDockWidget dock(QStringLiteral("Dock"), &window);
+        auto* body = new QWidget(&dock);
+        body->setFixedSize(300, 150);
+        dock.setWidget(body);
+        window.addDockWidget(Qt::TopDockWidgetArea, &dock);
+        dock.show();
+        QTRY_VERIFY(content->geometry().top() >= dock.geometry().bottom());
+        QCOMPARE(window.size(), windowSize);
+        QTRY_VERIFY(placedOverContent());
+        QVERIFY(!view.banner->geometry().intersects(dock.geometry()));
+
+        window.addDockWidget(Qt::LeftDockWidgetArea, &dock);
+        QTRY_VERIFY(content->geometry().left() >= dock.geometry().right());
+        QTRY_VERIFY(placedOverContent());
+        QVERIFY(!view.banner->geometry().intersects(dock.geometry()));
     }
 };
 

@@ -1260,6 +1260,11 @@ void MainWindow::ensureRemoteSession()
         m_coreStopBanner->setCheckForUpdatesAvailable(true);
         connect(m_coreStopBanner, &CoreStopBanner::contentChanged,
                 this, &MainWindow::placeCoreStopBanner);
+        // R-R3-38: place it again when the content area changes size or
+        // moves without the window resizing (a dock); see eventFilter.
+        if (QWidget* content = centralWidget()) {
+            content->installEventFilter(this);
+        }
         connect(m_coreStopBanner, &CoreStopBanner::chooseAnotherCoreRequested, this, [this] {
             if (m_shuttingDown || m_retiringSession) { return; }
             if (m_connectionPickerManaged) { emit connectionsRequested(); }
@@ -11027,6 +11032,14 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
+    // R-R3-38: the stop message sits over the content area, which moves
+    // and resizes on its own when a dock opens or closes; follow it so the
+    // message never sits over a dock. Observe only.
+    if (m_coreStopBanner && watched == centralWidget()
+     && (event->type() == QEvent::Resize || event->type() == QEvent::Move)) {
+        placeCoreStopBanner();
+    }
+
     // Phase 3Q Sub-PR-4 D.3: TitleBar ConnectionSegment hover tooltip.
     // The segment has installEventFilter(this) in the D.2 wiring block.
     // We intercept QHelpEvent (ToolTip) and delegate to RadioModel for the
