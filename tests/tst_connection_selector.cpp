@@ -277,7 +277,8 @@ void ConnectionSelectorTest::controlsRemainReadableAndReachable()
         for (const QRect& previous : rectangles) { QVERIFY(!previous.intersects(bounds)); }
         rectangles.append(bounds);
     }
-    QCOMPARE(rectangles.size(), 9);
+    // iPhone app Task 18: Add a Core by code joins the row.
+    QCOMPARE(rectangles.size(), 10);
     const QString captures = qEnvironmentVariable("NEREUS_SELECTOR_CAPTURE_DIR");
     if (!captures.isEmpty()) {
         QVERIFY(QDir().mkpath(captures));
@@ -297,7 +298,7 @@ void ConnectionSelectorTest::controlsRemainReadableAndReachable()
 // R-R3-17: seen natively as 820x572 growing to 1156x710 when a row with
 // more action buttons was selected. Showing a hidden button raised the
 // dialog's minimum width and Qt enlarged the window to fit. The window must
-// open wide enough for the full row of nine and then keep its size whichever
+// open wide enough for the full row of ten and then keep its size whichever
 // row is selected, with hidden buttons still hidden rather than disabled.
 void ConnectionSelectorTest::rowSelectionNeverResizesTheWindow()
 {
@@ -338,27 +339,27 @@ void ConnectionSelectorTest::rowSelectionNeverResizesTheWindow()
         }
     };
     // Nothing selected: the five row actions are hidden, not disabled.
-    QCOMPARE(visibleButtons(), 4);
+    QCOMPARE(visibleButtons(), 5);
 
     selector.setSelectedKey(detailsOnly.key);
     QCoreApplication::processEvents();
-    QCOMPARE(visibleButtons(), 5);
+    QCOMPARE(visibleButtons(), 6);
     QCOMPARE(selector.size(), opened);
     QCOMPARE(selector.minimumSize(), openedMinimum);
 
     selector.setSelectedKey(savedRow().key);
     QCoreApplication::processEvents();
-    QCOMPARE(visibleButtons(), 8);
+    QCOMPARE(visibleButtons(), 9);
     QCOMPARE(selector.size(), opened);
     QCOMPARE(selector.minimumSize(), openedMinimum);
 
-    // All nine, with the wider "Cancel retry" caption, still fit the
+    // All ten, with the wider "Cancel retry" caption, still fit the
     // window as it opened.
     selector.setCurrentConnection(QStringLiteral("Retrying Core (attempt 3)"),
         QStringLiteral("Core: 192.168.109.106:4433\nRadio state unavailable\n"
                        "Retry delay: 4 s. Disconnect cancels automatic retries."), true, true);
     QCoreApplication::processEvents();
-    QCOMPARE(visibleButtons(), 9);
+    QCOMPARE(visibleButtons(), 10);
     QCOMPARE(selector.size(), opened);
     QCOMPARE(selector.minimumSize(), openedMinimum);
     assertRowFits();

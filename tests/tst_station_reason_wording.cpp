@@ -838,6 +838,13 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/session/StationClient.cpp", "",
          "the app's end of the link: its own reasons are shown through OperatorReasonText"},
         {"src/core/session/StationClient.h", "", "the app's end of the link"},
+        // iPhone app Task 18: the desktop's side of pairing. Its own reasons
+        // are shown through OperatorReasonText; the one pair.fail it sends
+        // only tells the Core the code did not match, and the operator reads
+        // the Core's answer.
+        {"src/core/session/StationPairingClient.cpp", "",
+         "the app's end of pairing: its own reasons are shown through OperatorReasonText"},
+        {"src/core/session/StationPairingClient.h", "", "the app's end of pairing"},
         {"src/core/session/SessionMessages.cpp", "", "encodes a reason it is given"},
         {"src/core/session/SessionMessages.h", "", "declares the messages"},
         {"src/core/session/SessionCommandDispatcher.h", "", "declares emitResult"},

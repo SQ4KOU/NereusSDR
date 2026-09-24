@@ -1242,8 +1242,10 @@ list(APPEND CORE_SOURCES
     src/core/security/PairingCode.cpp
     src/core/security/PairingWindow.cpp
     src/core/security/SpakeExchange.cpp
-    # iPhone app Task 18 (R-IOS-08): the desktop's own device key.
+    # iPhone app Task 18 (R-IOS-08): the desktop's own device key and the
+    # client side of pairing.
     src/core/security/ClientDeviceIdentity.cpp
+    src/core/session/StationPairingClient.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the

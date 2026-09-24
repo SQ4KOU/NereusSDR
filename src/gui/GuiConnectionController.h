@@ -3,14 +3,17 @@
 
 #include "core/RadioDiscovery.h"
 #include "core/session/StationLanDiscovery.h"
+#include "core/session/StationPairingClient.h"
+#include "gui/ConnectionSelector.h"
 #include "gui/CoreTargetStore.h"
 #include "gui/GuiSessionCoordinator.h"
 
 #include <QMap>
 #include <QPointer>
 
+#include <memory>
+
 namespace NereusSDR {
-class ConnectionSelector;
 class RemoteConnectionController;
 
 // Application-scoped connection UI. Selecting/editing a row never replaces
@@ -25,6 +28,18 @@ public:
     void shutdown();
     GuiSessionCoordinator* sessions() { return &m_sessions; }
     ConnectionSelector* selector() const { return m_selector.get(); }
+
+    /// iPhone app Task 18 (R-IOS-08): a Core on this network as the
+    /// Connections window lists it when it is not the live one: by its
+    /// label, Pair for a Core that takes new devices, Connect for one this
+    /// computer has saved. `saved` is every saved Core.
+    static ConnectionTargetRow lanCoreRow(const StationLanEndpoint& endpoint,
+                                          const QList<SavedCoreTarget>& saved);
+    /// A saved Core as listed under Your Cores when it is not the live one.
+    static ConnectionTargetRow savedCoreRow(const SavedCoreTarget& target, bool storeLoaded);
+    /// True when a saved Core has what a sign-in needs: its identity (a
+    /// paired Core), or a token and a pin (or the bench flag).
+    static bool isReadyToConnect(const RemoteStationOptions& connection);
 
 public slots:
     void showConnections();
@@ -41,12 +56,20 @@ private:
     void forgetTarget(const QString& key);
     void showDetails(const QString& key);
     void rememberAuthenticatedRadio();
+    // iPhone app Task 18: pairing, and the key a token sign-in enrolled.
+    void pairTarget(const QString& key);
+    void addByCode(const QString& address = QString());
+    void onPaired(const PairedStationRecord& record);
+    void onPairingFailed(const QString& reason);
+    void rememberStationIdentity(const QByteArray& identityFingerprint);
+    StationPairingClient* pairingClient();
     bool choose(const StationStartupSelection&, bool startConnection);
 
     CoreTargetStore m_store;
     GuiSessionCoordinator m_sessions;
     StationLanDiscovery m_lan;
     std::unique_ptr<ConnectionSelector> m_selector;
+    std::unique_ptr<StationPairingClient> m_pairing;
     QPointer<RadioDiscovery> m_discovery;
     QPointer<RemoteConnectionController> m_remoteControls;
     QMap<QString, RadioInfo> m_radios;

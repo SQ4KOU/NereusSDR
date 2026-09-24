@@ -1,7 +1,17 @@
 // no-port-check: NereusSDR-original. R-R3-38 operator target selection.
+//
+// iPhone app Task 18 (R-IOS-08): pairing from the Connections window. A
+// Core on this network that no device has paired with yet offers Pair
+// (one click on the Core's own network, or its code when the Core takes
+// only the code); Add a Core by code pairs with any Core by the code it
+// shows. A pairing becomes a saved Core under Your Cores, trusted by its
+// identity, and is connected to at once by this computer's key. A saved
+// Core from before paired devices enrols this computer's key on its next
+// token sign-in and is saved with its identity from then on.
 #include "gui/GuiConnectionController.h"
 
 #include "core/AppSettings.h"
+#include "core/security/ClientDeviceIdentity.h"
 #include "core/session/StationClient.h"
 #include "gui/AddCustomRadioDialog.h"
 #include "gui/ConnectionPanel.h"
@@ -19,18 +29,38 @@
 
 namespace NereusSDR {
 namespace {
-QString endpointText(const RemoteStationOptions& connection)
+QString endpointText(const QUrl& url)
 {
-    const QUrl url(connection.url);
     QString host = url.host();
     if (host.contains(QLatin1Char(':'))) { host = QLatin1Char('[') + host + QLatin1Char(']'); }
     return url.port() >= 0 ? host + QLatin1Char(':') + QString::number(url.port()) : host;
 }
 
+QString endpointText(const RemoteStationOptions& connection)
+{
+    return endpointText(QUrl(connection.url));
+}
+
 bool sameConnection(const RemoteStationOptions& a, const RemoteStationOptions& b)
 {
     return QUrl(a.url) == QUrl(b.url) && a.token == b.token
-        && a.fingerprint == b.fingerprint && a.allowUnpinned == b.allowUnpinned;
+        && a.fingerprint == b.fingerprint && a.allowUnpinned == b.allowUnpinned
+        && a.identityFingerprint == b.identityFingerprint;
+}
+
+// iPhone app Task 18: whether a Core on this network takes this computer
+// as a new device, and how (an announcement from before pairing never
+// does).
+bool takesNewDevices(const StationLanAnnouncement& announcement)
+{
+    return announcement.schema >= kStationLanAnnouncementSchema2
+        && announcement.pairing != StationLanPairing::Closed;
+}
+
+bool oneClickPairs(const StationLanAnnouncement& announcement)
+{
+    return takesNewDevices(announcement) && !announcement.claimed
+        && announcement.pairing == StationLanPairing::Click;
 }
 
 bool selectionMatchesSaved(const StationStartupSelection& selection, const SavedCoreTarget& target)
@@ -62,6 +92,10 @@ GuiConnectionController::GuiConnectionController(QObject* parent)
             this, [this] { editCore(); });
     connect(m_selector.get(), &ConnectionSelector::addRadioRequested,
             this, [this] { editRadio(); });
+    connect(m_selector.get(), &ConnectionSelector::pairRequested,
+            this, &GuiConnectionController::pairTarget);
+    connect(m_selector.get(), &ConnectionSelector::addByCodeRequested,
+            this, [this] { addByCode(); });
     connect(m_selector.get(), &ConnectionSelector::editRequested, this, [this](const QString& key) {
         if (key.startsWith(QLatin1String("saved:"))) { editCore(key.mid(6)); }
         else if (key.startsWith(QLatin1String("radio:"))) { editRadio(key.mid(6)); }
@@ -98,6 +132,7 @@ void GuiConnectionController::shutdown()
     m_shuttingDown = true;
     ++m_request;
     m_selector->hide();
+    if (m_pairing) { m_pairing->cancel(); }
     m_lan.stop();
     m_sessions.shutdown();
 }
@@ -149,6 +184,12 @@ void GuiConnectionController::attachWindow(MainWindow* window)
         };
         m_windowConnections.append(connect(client, &StationClient::stateSnapshotApplied, this, remember));
         m_windowConnections.append(connect(client, &StationClient::handshakeComplete, this, remember));
+        m_windowConnections.append(connect(client, &StationClient::stationIdentityLearned, this,
+            [this, generation](const QByteArray& identity) {
+                if (generation == m_sessions.generation() && !m_shuttingDown) {
+                    rememberStationIdentity(identity);
+                }
+            }));
     }
     refresh();
     if (m_selector->isVisible()) { scan(); }
@@ -188,40 +229,27 @@ void GuiConnectionController::refresh()
     for (const SavedCoreTarget& target : m_store.targets()) {
         const bool selected = current.savedId == target.id;
         const bool exact = selected && selectionMatchesSaved(current, target);
-        const bool needsSetup = target.connection.token.isEmpty()
-            || (target.connection.fingerprint.isEmpty() && !target.connection.allowUnpinned);
-        QString state = needsSetup ? tr("Needs setup") : tr("Disconnected");
-        QString radio = target.lastRadioName.isEmpty() ? tr("Radio unknown")
-            : tr("%1 (last known)").arg(target.lastRadioName);
+        ConnectionTargetRow row = savedCoreRow(target, m_storeLoaded);
         if (selected && m_remoteControls) {
-            state = m_remoteControls->statusText();
-            radio = m_remoteControls->radioText();
-            if (!exact) { state += tr(" — saved changes pending"); }
-            else if (!current.savedAddressBeforeDiscovery.isEmpty()) { state += tr(" — LAN address"); }
+            row.state = m_remoteControls->statusText();
+            row.radioText = m_remoteControls->radioText();
+            if (!exact) { row.state += tr(" — saved changes pending"); }
+            else if (!current.savedAddressBeforeDiscovery.isEmpty()) { row.state += tr(" — LAN address"); }
         }
-        rows.append({QStringLiteral("saved:") + target.id, ConnectionTargetKind::SavedCore,
-            target.label.isEmpty() ? endpointText(target.connection) : target.label,
-            radio, endpointText(target.connection), state,
-            !exact || !m_remoteControls || m_remoteControls->canConnect(), m_storeLoaded, m_storeLoaded});
+        row.connectable = !exact || !m_remoteControls || m_remoteControls->canConnect();
+        rows.append(row);
     }
     for (const StationLanEndpoint& endpoint : m_lan.endpoints()) {
         const auto matches = matchingSavedCores(endpoint, m_store.targets());
         const bool exact = matches.size() == 1 && current.savedId == matches.first().id
             && selectionMatchesSaved(current, matches.first())
             && QUrl(current.connection.url) == endpoint.url();
-        const auto& advertised = endpoint.announcement;
-        const QString state = exact && m_remoteControls ? m_remoteControls->statusText()
-            : matches.size() > 1 ? tr("Choose a saved entry")
-            : matches.isEmpty() ? tr("Needs setup") : tr("Saved, ready to connect");
-        rows.append({QStringLiteral("lan:") + endpoint.key(), ConnectionTargetKind::LanCore,
-            // iPhone app Task 16: a Core is listed by its label (schema 2),
-            // or by its name when it sends none.
-            tr("%1 (advertised)").arg(advertised.displayName()),
-            advertised.radioConnected ? tr("%1 (advertised online)").arg(advertised.radioName)
-                : tr("%1 (advertised offline)").arg(advertised.radioName.isEmpty() ? tr("Radio") : advertised.radioName),
-            endpointText({endpoint.url().toString(), {}, {}, false}), state,
-            matches.size() < 2 && (!exact || !m_remoteControls || m_remoteControls->canConnect()),
-            false, false});
+        ConnectionTargetRow row = lanCoreRow(endpoint, m_store.targets());
+        if (exact && m_remoteControls) {
+            row.state = m_remoteControls->statusText();
+            row.connectable = m_remoteControls->canConnect();
+        }
+        rows.append(row);
     }
     m_selector->setDiscoveryStatus(m_lan.port() == 0
         ? tr("LAN discovery is not running. Saved and manual addresses remain available.")
@@ -243,6 +271,70 @@ void GuiConnectionController::refresh()
             : tr("This computer's Core — no radio connected"), model->connectionIpText(), active,
             model->connectionState() == ConnectionState::LinkLost);
     }
+}
+
+ConnectionTargetRow GuiConnectionController::savedCoreRow(const SavedCoreTarget& target,
+                                                         bool storeLoaded)
+{
+    const bool paired = !target.connection.identityFingerprint.isEmpty();
+    return {QStringLiteral("saved:") + target.id, ConnectionTargetKind::SavedCore,
+            target.label.isEmpty() ? endpointText(target.connection) : target.label,
+            target.lastRadioName.isEmpty() ? tr("Radio unknown")
+                                           : tr("%1 (last known)").arg(target.lastRadioName),
+            endpointText(target.connection),
+            // iPhone app Task 18: a Core this computer paired with says so.
+            !isReadyToConnect(target.connection) ? tr("Needs setup")
+                : paired                         ? tr("Paired")
+                                                 : tr("Disconnected"),
+            true, storeLoaded, storeLoaded};
+}
+
+ConnectionTargetRow GuiConnectionController::lanCoreRow(const StationLanEndpoint& endpoint,
+                                                       const QList<SavedCoreTarget>& saved)
+{
+    const auto matches = matchingSavedCores(endpoint, saved);
+    const auto& advertised = endpoint.announcement;
+    ConnectionTargetRow row{QStringLiteral("lan:") + endpoint.key(), ConnectionTargetKind::LanCore,
+        // iPhone app Task 16: a Core is listed by its label (schema 2),
+        // or by its name when it sends none.
+        tr("%1 (advertised)").arg(advertised.displayName()),
+        advertised.radioConnected ? tr("%1 (advertised online)").arg(advertised.radioName)
+            : tr("%1 (advertised offline)").arg(advertised.radioName.isEmpty() ? tr("Radio") : advertised.radioName),
+        endpointText(endpoint.url()), QString(),
+        matches.size() < 2, false, false};
+    if (matches.size() > 1) {
+        row.state = tr("Choose a saved entry");
+    } else if (matches.size() == 1) {
+        row.state = tr("Saved, ready to connect");
+    } else if (oneClickPairs(advertised)) {
+        // iPhone app Task 18: an unclaimed Core pairs with one click.
+        row.state = tr("Not paired yet");
+        row.pairable = true;
+        row.connectable = false;
+    } else if (takesNewDevices(advertised)) {
+        // It takes new devices by its code only (a Core set to, or one
+        // reopened for another device).
+        row.state = tr("Pairs with its code");
+        row.pairable = true;
+        row.connectable = false;
+    } else if (advertised.schema >= kStationLanAnnouncementSchema2) {
+        // Paired with other devices and not taking new ones: pairing opens
+        // on the Core or on one of its devices.
+        row.state = tr("Paired with other devices");
+        row.connectable = false;
+    } else {
+        row.state = tr("Needs setup");
+    }
+    return row;
+}
+
+bool GuiConnectionController::isReadyToConnect(const RemoteStationOptions& connection)
+{
+    if (!connection.identityFingerprint.isEmpty()) {
+        return true;
+    }
+    return !connection.token.isEmpty()
+        && (!connection.fingerprint.isEmpty() || connection.allowUnpinned);
 }
 
 void GuiConnectionController::showConnections()
@@ -307,8 +399,7 @@ void GuiConnectionController::connectTarget(const QString& key)
     } else if (key.startsWith(QLatin1String("saved:"))) {
         const auto target = m_store.target(key.mid(6));
         if (!target) { m_selector->setNotice(tr("That saved Core is no longer available.")); return; }
-        if (target->connection.token.isEmpty()
-            || (target->connection.fingerprint.isEmpty() && !target->connection.allowUnpinned)) {
+        if (!isReadyToConnect(target->connection)) {
             editCore(target->id);
             return;
         }
@@ -334,6 +425,8 @@ void GuiConnectionController::connectTarget(const QString& key)
                 } else {
                     choose(selection, true);
                 }
+            } else if (matches.isEmpty() && takesNewDevices(endpoint.announcement)) {
+                pairTarget(key);
             } else if (matches.isEmpty()) {
                 editCore(); // Address/name only. Never adopt an advertised pin.
             } else {
@@ -459,15 +552,27 @@ void GuiConnectionController::showDetails(const QString& key)
     if (key.startsWith(QLatin1String("saved:"))) {
         const auto target = m_store.target(key.mid(6));
         if (target) {
-            m_selector->setNotice(tr("Core: %1\nRadio: %2 (as of the last connection to this Core)")
-                .arg(endpointText(target->connection), target->lastRadioName.isEmpty() ? tr("unknown") : target->lastRadioName));
+            m_selector->setNotice(tr("Core: %1\nRadio: %2 (as of the last connection to this Core)%3")
+                .arg(endpointText(target->connection), target->lastRadioName.isEmpty() ? tr("unknown") : target->lastRadioName,
+                     target->connection.identityFingerprint.isEmpty() ? QString()
+                         : tr("\nPaired with this computer: it signs in with its own key.")));
         }
     } else if (key.startsWith(QLatin1String("lan:"))) {
         for (const StationLanEndpoint& endpoint : m_lan.endpoints()) {
             if (key == QStringLiteral("lan:") + endpoint.key()) {
-                m_selector->setNotice(tr("Core seen on this network, not yet verified: %1\nAddress: %2\nRadio MAC: %3\nUse a saved entry for it, or get its pairing token and certificate fingerprint from Core setup.")
-                    .arg(endpoint.announcement.displayName(), endpointText({endpoint.url().toString(), {}, {}, false}),
-                         endpoint.announcement.radioMac));
+                const auto& advertised = endpoint.announcement;
+                // iPhone app Task 18: what to do next depends on whether the
+                // Core takes new devices.
+                const QString next = oneClickPairs(advertised)
+                    ? tr("No device has paired with this Core yet. Select Pair to pair this computer with it.")
+                    : takesNewDevices(advertised)
+                    ? tr("This Core pairs with its code. Select Pair and type the code the Core shows.")
+                    : advertised.schema >= kStationLanAnnouncementSchema2
+                    ? tr("This Core is paired with other devices. Open pairing on the Core, or on a device paired with it, then add it by code.")
+                    : tr("Use a saved entry for it, or get its pairing token and certificate fingerprint from Core setup.");
+                m_selector->setNotice(tr("Core seen on this network, not yet verified: %1\nAddress: %2\nRadio MAC: %3\n%4")
+                    .arg(advertised.displayName(), endpointText(endpoint.url()),
+                         advertised.radioMac, next));
                 return;
             }
         }
@@ -491,5 +596,111 @@ void GuiConnectionController::rememberAuthenticatedRadio()
     target->lastRadioMac = caps.macAddress;
     QString error;
     if (!m_store.upsert(*target, &error)) { m_selector->setNotice(error); }
+}
+
+// ── iPhone app Task 18 (R-IOS-08): pairing ───────────────────────────────
+
+StationPairingClient* GuiConnectionController::pairingClient()
+{
+    if (!m_pairing) {
+        m_pairing = std::make_unique<StationPairingClient>(
+            ClientDeviceIdentity::forThisProfile(), ClientDeviceIdentity::machineName());
+        connect(m_pairing.get(), &StationPairingClient::paired,
+                this, &GuiConnectionController::onPaired);
+        connect(m_pairing.get(), &StationPairingClient::failed,
+                this, &GuiConnectionController::onPairingFailed);
+    }
+    return m_pairing.get();
+}
+
+void GuiConnectionController::pairTarget(const QString& key)
+{
+    if (m_shuttingDown) { return; }
+    if (!m_storeLoaded) {
+        m_selector->setNotice(tr("The saved Core list could not be loaded. Correct the settings file before pairing."));
+        return;
+    }
+    for (const StationLanEndpoint& endpoint : m_lan.endpoints()) {
+        if (key != QStringLiteral("lan:") + endpoint.key()) { continue; }
+        const QUrl url = endpoint.url();
+        if (oneClickPairs(endpoint.announcement)) {
+            m_selector->setNotice(tr("Pairing with %1…").arg(endpoint.announcement.displayName()));
+            pairingClient()->pairOnThisNetwork(url.host(), static_cast<quint16>(url.port()));
+        } else {
+            // The Core takes only its code: ask for it, the address filled in.
+            addByCode(endpointText(url));
+        }
+        return;
+    }
+    m_selector->setNotice(tr("That Core announcement has expired. Scan again or add it by code."));
+}
+
+void GuiConnectionController::addByCode(const QString& address)
+{
+    if (m_shuttingDown) { return; }
+    if (!m_storeLoaded) {
+        m_selector->setNotice(tr("The saved Core list could not be loaded. Correct the settings file before pairing."));
+        return;
+    }
+    AddCoreByCodeDialog dialog(address, m_selector.get());
+    if (dialog.exec() != QDialog::Accepted) { return; }
+    m_selector->setNotice(tr("Pairing with the Core by its code…"));
+    pairingClient()->pairByCode(dialog.code(), dialog.host(), dialog.port());
+}
+
+void GuiConnectionController::onPaired(const PairedStationRecord& record)
+{
+    if (m_shuttingDown) { return; }
+    // One saved Core per identity: pairing again with a Core already under
+    // Your Cores updates that entry's address rather than adding another.
+    SavedCoreTarget target;
+    target.id = CoreTargetStore::createId();
+    for (const SavedCoreTarget& existing : m_store.targets()) {
+        if (existing.connection.identityFingerprint == record.identityFingerprint) {
+            target = existing;
+            break;
+        }
+    }
+    if (!record.label.isEmpty()) { target.label = record.label; }
+    target.connection.url = StationPairingClient::coreUrl(record.host, record.port).toString();
+    target.connection.identityFingerprint = record.identityFingerprint;
+    if (target.label.isEmpty()) { target.label = endpointText(target.connection); }
+    QString error;
+    if (!m_store.upsert(target, &error)) {
+        m_selector->setNotice(error);
+        return;
+    }
+    refresh();
+    m_selector->setSelectedKey(QStringLiteral("saved:") + target.id);
+    m_selector->setNotice(tr("Paired with %1. Connecting…").arg(target.label));
+    queueConnect(QStringLiteral("saved:") + target.id);
+}
+
+void GuiConnectionController::onPairingFailed(const QString& reason)
+{
+    if (m_shuttingDown) { return; }
+    // The Core's reasons are plain words already; anything else is worded
+    // for the operator (R-R3-17).
+    m_selector->setNotice(OperatorReasonText::forDisplay(reason));
+}
+
+void GuiConnectionController::rememberStationIdentity(const QByteArray& identityFingerprint)
+{
+    // The saved Core this window signed in to is trusted by its identity
+    // from now on: it shows as paired and connects by key, nothing typed.
+    const StationStartupSelection current = m_sessions.selection();
+    auto target = m_store.target(current.savedId);
+    const bool matches = target && selectionMatchesSaved(current, *target);
+    m_sessions.noteStationIdentity(identityFingerprint);
+    if (!m_storeLoaded || !matches) {
+        refresh();
+        return;
+    }
+    target->connection.identityFingerprint = identityFingerprint;
+    QString error;
+    if (!m_store.upsert(*target, &error)) {
+        m_selector->setNotice(error);
+    }
+    refresh();
 }
 } // namespace NereusSDR

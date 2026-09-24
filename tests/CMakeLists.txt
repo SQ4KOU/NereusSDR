@@ -7091,6 +7091,12 @@ nereus_add_test(tst_station_lan_selection)
 # the test browses for it; nothing reaches a network.
 nereus_add_test(tst_dns_sd_advertiser)
 nereus_add_test(tst_gui_connection_controller)
+# iPhone app Task 18 (R-IOS-08): the desktop pairs with a Core. Its own
+# device key, one tap and the code against a real StationServer over the
+# loopback (IPv4 and IPv6), every refusal, then a sign-in by key.
+nereus_add_test(tst_station_pairing_client fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_station_pairing_client PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # R3 remote window harness plan, Task 2 (R-R3-16/17/21/24): one real remote
 # MainWindow dialling an in-process StationServer over a loopback ws://

@@ -12,6 +12,8 @@
 #include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
 #include "core/session/StationClient.h"
+#include "core/security/DeviceStore.h"
+#include "core/session/StationDevicesFacade.h"
 #include "core/session/StationServer.h"
 #include "gui/ConnectionSelector.h"
 #include "gui/CoreTargetEditor.h"
@@ -255,6 +257,125 @@ private slots:
         QVERIFY(!server.hasAuthenticatedSession());
         QVERIFY(store.load());
         QCOMPARE(store.target(saved.id)->connection.fingerprint, saved.connection.fingerprint);
+        controller.shutdown();
+    }
+    // iPhone app Task 18 (R-IOS-08): a Core on this network that no
+    // device has paired with offers Pair. One click pairs this computer
+    // over TLS, saves the Core under Your Cores by its identity and label,
+    // and connects to it by this computer's key: no token and no pin.
+    void unclaimedCorePairsWithOneClickThenConnectsByKey()
+    {
+        QTemporaryDir directory;
+        AppSettings stationSettings(directory.filePath(QStringLiteral("station.settings")));
+        stationSettings.setValue(QStringLiteral("StationCallsign"), QStringLiteral("KG4VCF"));
+        RadioModel radio;
+        StationServer server(&radio, stationSettings,
+                             NereusSDR::Test::seedCoreIdentity(directory.path()));
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+        GuiConnectionController controller;
+        controller.start({});
+        auto* discovery = controller.findChild<StationLanDiscovery*>();
+        QVERIFY(discovery && discovery->start(0));
+        controller.showConnections();
+        StationLanAnnouncement packet = advertisement(server);
+        packet.schema = kStationLanAnnouncementSchema;
+        packet.claimed = false;
+        packet.identity = server.stationIdentity().fingerprint();
+        packet.label = QStringLiteral("KG4VCF");
+        packet.pairing = StationLanPairing::Click;
+        QUdpSocket sender;
+        const auto bytes = encodeStationLanAnnouncement(packet);
+        QCOMPARE(sender.writeDatagram(bytes, QHostAddress::LocalHost, discovery->port()), bytes.size());
+        QTRY_COMPARE(discovery->endpoints().size(), 1);
+        const QString key = QStringLiteral("lan:") + discovery->endpoints().first().key();
+        controller.selector()->setSelectedKey(key);
+        QCOMPARE(connectButton(controller)->text(), QStringLiteral("Pair"));
+        QVERIFY(connectButton(controller)->isVisible() || !controller.selector()->isVisible());
+        connectButton(controller)->click();
+
+        QTRY_VERIFY_WITH_TIMEOUT(server.hasAuthenticatedSession(), 20000);
+        StationClient* client = controller.sessions()->window()->findChild<StationClient*>();
+        QVERIFY(client);
+        QTRY_VERIFY(client->isHandshakeComplete());
+        QCOMPARE(client->stationIdentityFingerprint(), server.stationIdentity().fingerprint());
+        QCOMPARE(server.deviceStore()->list().size(), 1);
+        QCOMPARE(server.deviceStore()->list().first().kind, QStringLiteral("computer"));
+        QVERIFY(!server.deviceStore()->list().first().enrolledThroughToken);
+
+        CoreTargetStore store(AppSettings::instance());
+        QVERIFY(store.load());
+        QCOMPARE(store.targets().size(), 1);
+        const SavedCoreTarget saved = store.targets().first();
+        QCOMPARE(saved.label, QStringLiteral("KG4VCF"));
+        QCOMPARE(saved.connection.identityFingerprint, server.stationIdentity().fingerprint());
+        QVERIFY(saved.connection.token.isEmpty());
+        QCOMPARE(store.selectedId(), saved.id);
+        QCOMPARE(QUrl(saved.connection.url).port(), int(server.serverPort()));
+        // The announcement now matches the saved Core by its identity.
+        QCOMPARE(matchingSavedCores(discovery->endpoints().first(), store.targets()).size(), 1);
+        controller.shutdown();
+    }
+
+    // An existing saved Core (address, token and pin) enrols this
+    // computer's key on its next sign-in, with nothing typed, shows as
+    // paired, and connects by key afterwards: even once its token is
+    // retired.
+    void savedCoreEnrolsOnItsNextSignInThenConnectsByKey()
+    {
+        QTemporaryDir directory;
+        AppSettings stationSettings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel radio;
+        StationServer server(&radio, stationSettings,
+                             NereusSDR::Test::seedUpgradedCoreToken(directory.path()));
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+        SavedCoreTarget saved = savedCore(server.certificateFingerprint(), server.token());
+        saved.connection.url = QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort());
+        {
+            CoreTargetStore store(AppSettings::instance());
+            QVERIFY(store.load());
+            QVERIFY(store.upsert(saved));
+            QVERIFY(store.select(QStringLiteral("local")));
+        }
+        QCOMPARE(GuiConnectionController::savedCoreRow(saved, true).state,
+                 QStringLiteral("Disconnected"));
+        GuiConnectionController controller;
+        controller.start({});
+        controller.showConnections();
+        controller.selector()->setSelectedKey(QStringLiteral("saved:") + saved.id);
+        connectButton(controller)->click();
+        QTRY_VERIFY_WITH_TIMEOUT(server.hasAuthenticatedSession(), 20000);
+        StationClient* client = controller.sessions()->window()->findChild<StationClient*>();
+        QVERIFY(client);
+        QTRY_VERIFY(client->isHandshakeComplete());
+        QTRY_VERIFY(!client->stationIdentityFingerprint().isEmpty());
+        QCOMPARE(server.deviceStore()->list().size(), 1);
+        QVERIFY(server.deviceStore()->list().first().enrolledThroughToken);
+
+        CoreTargetStore store(AppSettings::instance());
+        QTRY_VERIFY(store.load()
+                    && !store.target(saved.id)->connection.identityFingerprint.isEmpty());
+        const SavedCoreTarget enrolled = *store.target(saved.id);
+        QCOMPARE(enrolled.connection.identityFingerprint, server.stationIdentity().fingerprint());
+        // Its trust details are kept as they were.
+        QCOMPARE(enrolled.connection.url, saved.connection.url);
+        QCOMPARE(enrolled.connection.fingerprint, saved.connection.fingerprint);
+        QCOMPARE(GuiConnectionController::savedCoreRow(enrolled, true).state,
+                 QStringLiteral("Paired"));
+        QCOMPARE(controller.sessions()->selection().connection.identityFingerprint,
+                 enrolled.connection.identityFingerprint);
+
+        // Retiring the token ends this token sign-in with pairingRequired;
+        // Connect then signs in by key, and no new window is made.
+        const quint64 generation = controller.sessions()->generation();
+        QVERIFY(server.devicesFacade()->retireToken().accepted);
+        QTRY_VERIFY(!client->isConnectionActive());
+        QCOMPARE(client->lastEndReport().kind, StationEndReport::Kind::PairingRequired);
+        controller.selector()->setSelectedKey(QStringLiteral("saved:") + saved.id);
+        QTRY_VERIFY(connectButton(controller)->isEnabled());
+        connectButton(controller)->click();
+        QTRY_VERIFY_WITH_TIMEOUT(client->isHandshakeComplete(), 20000);
+        QCOMPARE(controller.sessions()->generation(), generation);
+        QCOMPARE(server.deviceStore()->list().size(), 1);
         controller.shutdown();
     }
 };

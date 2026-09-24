@@ -3,11 +3,19 @@
 // =================================================================
 //
 // no-port-check: NereusSDR-original. Remote-daemon R3 Task 4g.
+//
+// iPhone app Task 18 (R-IOS-08): the saved Cores live under
+// ConnectionTargets/V2, which adds each Core's identity fingerprint. A
+// ConnectionTargets/V1 document is migrated once, every record's trust
+// details carried over exactly and its identity left empty, and is never
+// read again while V2 exists. V1 itself is left as it was, so a build from
+// before V2 still finds its own list.
 // =================================================================
 
 #include "gui/CoreTargetStore.h"
 
 #include "core/AppSettings.h"
+#include "core/security/StationIdentity.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -26,7 +34,11 @@
 namespace NereusSDR {
 namespace {
 
-constexpr auto kStorageKey = "ConnectionTargets/V1";
+constexpr auto kStorageKey = "ConnectionTargets/V2";
+constexpr auto kV1StorageKey = "ConnectionTargets/V1";
+constexpr int kVersion = 2;
+constexpr int kV1Version = 1;
+constexpr qsizetype kIdentityBytes = 32;
 constexpr auto kLocalId = "local";
 constexpr qsizetype kMaxDocumentBytes = 1024 * 1024;
 constexpr qsizetype kMaxRecords = 128;
@@ -87,6 +99,11 @@ bool validateTarget(const SavedCoreTarget& target, QString* error)
         setError(error, QStringLiteral("Saved Core target has an invalid Core address."));
         return false;
     }
+    if (!target.connection.identityFingerprint.isEmpty()
+        && target.connection.identityFingerprint.size() != kIdentityBytes) {
+        setError(error, QStringLiteral("Saved Core target has an invalid Core identity."));
+        return false;
+    }
     return true;
 }
 
@@ -128,6 +145,8 @@ QJsonObject toJson(const SavedCoreTarget& target)
         {QStringLiteral("allowUnpinned"), target.connection.allowUnpinned},
         {QStringLiteral("lastRadioName"), target.lastRadioName},
         {QStringLiteral("lastRadioMac"), target.lastRadioMac},
+        {QStringLiteral("identity"),
+         StationIdentity::toBase64Url(target.connection.identityFingerprint)},
     };
 }
 
@@ -138,14 +157,16 @@ QString serialize(const QList<SavedCoreTarget>& targets, const QString& selected
         cores.append(toJson(target));
     }
     const QJsonObject document{
-        {QStringLiteral("version"), 1},
+        {QStringLiteral("version"), kVersion},
         {QStringLiteral("selectedId"), selectedId},
         {QStringLiteral("cores"), cores},
     };
     return QString::fromUtf8(QJsonDocument(document).toJson(QJsonDocument::Compact));
 }
 
-bool parseDocument(const QString& text, QList<SavedCoreTarget>* targets,
+// `version` is the document's own: kVersion reads V2 records (with their
+// identity), kV1Version reads V1 records (with none).
+bool parseDocument(const QString& text, int expectedVersion, QList<SavedCoreTarget>* targets,
                    QString* selectedId, QString* error)
 {
     if (text.size() > kMaxDocumentBytes) {
@@ -168,7 +189,7 @@ bool parseDocument(const QString& text, QList<SavedCoreTarget>* targets,
     const QJsonObject root = document.object();
     const QJsonValue version = root.value(QStringLiteral("version"));
     const QJsonValue cores = root.value(QStringLiteral("cores"));
-    if (!version.isDouble() || version.toDouble() != 1.0 || !cores.isArray()
+    if (!version.isDouble() || version.toDouble() != double(expectedVersion) || !cores.isArray()
         || !hasString(root, "selectedId", selectedId)) {
         setError(error, QStringLiteral("Saved Core targets document has an unsupported schema."));
         return false;
@@ -200,6 +221,22 @@ bool parseDocument(const QString& text, QList<SavedCoreTarget>* targets,
         }
         target.connection.allowUnpinned =
             object.value(QStringLiteral("allowUnpinned")).toBool();
+        if (expectedVersion == kVersion) {
+            QString identity;
+            bool decoded = true;
+            if (!hasString(object, "identity", &identity)) {
+                setError(error, QStringLiteral("Saved Core targets document has an invalid record."));
+                return false;
+            }
+            target.connection.identityFingerprint =
+                identity.isEmpty() ? QByteArray()
+                                   : StationIdentity::fromBase64Url(identity, &decoded);
+            if (!decoded || (!identity.isEmpty()
+                             && target.connection.identityFingerprint.size() != kIdentityBytes)) {
+                setError(error, QStringLiteral("Saved Core targets document has an invalid record."));
+                return false;
+            }
+        }
         parsed.append(target);
     }
 
@@ -226,12 +263,34 @@ bool CoreTargetStore::load(QString* error)
     if (m_settings.contains(key)) {
         QList<SavedCoreTarget> parsedTargets;
         QString parsedSelectedId;
-        if (!parseDocument(m_settings.value(key).toString(), &parsedTargets,
+        if (!parseDocument(m_settings.value(key).toString(), kVersion, &parsedTargets,
                            &parsedSelectedId, error)) {
             return false;
         }
         m_targets = std::move(parsedTargets);
         m_selectedId = std::move(parsedSelectedId);
+        m_loaded = true;
+        clearError(error);
+        return true;
+    }
+
+    // iPhone app Task 18: the V1 list moves to V2 once, each record as it
+    // was (address, token, pin, bench flag, label, last radio) and with no
+    // identity yet; the key is enrolled on the Core's next token sign-in.
+    // A V1 document that cannot be read writes nothing, like a bad V2.
+    const QString v1Key = QLatin1String(kV1StorageKey);
+    if (m_settings.contains(v1Key)) {
+        QList<SavedCoreTarget> v1Targets;
+        QString v1SelectedId;
+        if (!parseDocument(m_settings.value(v1Key).toString(), kV1Version, &v1Targets,
+                           &v1SelectedId, error)) {
+            return false;
+        }
+        if (!persist(v1Targets, v1SelectedId, error)) {
+            return false;
+        }
+        m_targets = std::move(v1Targets);
+        m_selectedId = std::move(v1SelectedId);
         m_loaded = true;
         clearError(error);
         return true;
