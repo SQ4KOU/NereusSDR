@@ -1739,6 +1739,9 @@ items 3 and 7.
   - `enum PairingCodeText { static func normalise(_:) -> String?; static func suggestions(forPrefix:) -> [String] }`
     rejecting a code whose words are not in the list before it is sent, so a typing
     mistake never burns the code.
+  - A successful pairing ends the pairing connection (Task 14): `pairOnThisNetwork` and
+    `pair(code:via:)` return the `PairedStation` once the Core has confirmed it, and the
+    caller then connects through the normal path, signing in with the device key.
 
 **Acceptance:**
 - The interop test pairs with `nereus_pairing_peer`: the right code yields a
@@ -4640,6 +4643,9 @@ R-IOS-17 (§5.3 items 12 and 13), R-IOS-08 (the app's pairing screens), D19, D21
   take over" in red; a reclaim of this phone's own session never shows it; being taken
   over shows who and when, stops the band, and Take it back asks the same question.
 - A typed code with a word not in the list is caught before sending, with suggestions.
+- After a successful pairing, by one tap or by code, the flow connects straight away
+  through the normal path, so the operator goes from Found it or the code to the band
+  (with the microphone question first, after the first pairing) without another tap.
 - When the Core removes this phone (`session.end` with the removal reason) the phone
   returns to the list of Cores, says the Core must be paired again, and drops that
   Core's stored identity (spec §7).
