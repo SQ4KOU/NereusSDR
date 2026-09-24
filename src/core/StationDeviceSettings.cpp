@@ -13,15 +13,14 @@
 //                                    and a netmask (R-R3-47). AI-assisted via
 //                                    Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  A request with no answer times out
-//                                    (R-R3-47). AI-assisted via Anthropic
-//                                    Claude Code.
+//                                    (R-R3-47), on a monotonic clock.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/StationDeviceSettings.h"
 
 #include "core/AppSettings.h"
 
-#include <QDateTime>
 #include <QHostAddress>
 #include <QRegularExpression>
 
@@ -52,8 +51,9 @@ const QStringList& fanModes()
 
 StationDeviceSettings::StationDeviceSettings(Device device, Wire wire, QObject* parent)
     : QObject(parent), m_device(device), m_wire(std::move(wire))
-    , m_now([] { return QDateTime::currentMSecsSinceEpoch(); })
+    , m_now([this] { return m_monotonic.elapsed(); })
 {
+    m_monotonic.start();
     m_timeoutTimer.setInterval(1000);
     connect(&m_timeoutTimer, &QTimer::timeout, this, &StationDeviceSettings::checkTimeouts);
 }

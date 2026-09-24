@@ -514,6 +514,12 @@ private slots:
 
         now += 1;
         settings.checkTimeouts();
+        // Follow-up 4: the Core's own clock is monotonic (a Pi or Rock has no
+        // real-time clock and its wall clock steps at boot): it counts from
+        // the object's start, not from 1970.
+        StationDeviceSettings fresh(StationDeviceSettings::Device::Tgxl, {});
+        QVERIFY(fresh.clockNowForTesting() >= 0);
+        QVERIFY(fresh.clockNowForTesting() < 60'000);
         QCOMPARE(model.pgxlAnswer(),
                  QStringLiteral("The Power Genius did not answer. Try again."));
         QVERIFY(!model.pgxlAnswerAccepted());

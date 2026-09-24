@@ -36,9 +36,9 @@
 // PGXL_BiasMode, PGXL_FanMode, PGXL_LedIntensity, TGXL_Nickname) are saved
 // on the Core the same way.
 //
-// M5: a request the device has not answered within kAnswerTimeoutMs is
-// given up with a plain answer ("The <device> did not answer. Try
-// again."), so "Waiting for its answer." never stays forever; a late
+// M5: a request the device has not answered within kAnswerTimeoutMs (on a
+// monotonic clock) is given up with a plain answer ("The <device> did not
+// answer. Try again."), so "Waiting for its answer." never stays forever; a late
 // answer to it is ignored.
 //
 // =================================================================
@@ -57,6 +57,7 @@
 #include <QMap>
 #include <QObject>
 #include <QPointer>
+#include <QElapsedTimer>
 #include <QString>
 #include <QTimer>
 
@@ -88,6 +89,7 @@ public:
     /// M5, tests: the clock (ms) the Core reads to time requests, and the
     /// check its timer runs once a second while a request waits.
     void setClockForTesting(std::function<qint64()> now) { m_now = std::move(now); }
+    qint64 clockNowForTesting() const { return m_now(); }
     void checkTimeouts();
 
     /// Where the Core publishes the device's settings and answers.
@@ -154,6 +156,9 @@ private:
     Wire m_wire;
     QPointer<AccessorySettingsModel> m_model;
     QHash<quint32, Pending> m_pending;
+    // A monotonic clock (a Pi or Rock Core has no real-time clock, and its
+    // wall clock steps at boot), counted from this object's start.
+    QElapsedTimer m_monotonic;
     std::function<qint64()> m_now;
     QTimer m_timeoutTimer;
 };
