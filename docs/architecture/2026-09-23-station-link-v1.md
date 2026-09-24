@@ -51,10 +51,16 @@ and the [R3 plan](2026-09-20-remote-daemon-r3-plan.md).
   minimum explicitly: `setProtocol(QSsl::TlsV1_2OrLater)`, TLS 1.2 or later,
   whatever Qt's default becomes. `tst_link_version` reads it back from the
   listener (`StationServer::tlsConfiguration()`), and offers the listener a
-  client that speaks only TLS 1.1: the station refuses it and serves a TLS
-  1.2 client. (That test first shows the TLS 1.1 client finishing a
-  handshake with a listener of its own that allows TLS 1.1, so the refusal
-  is the station's, not the TLS library's.) The station does not ask for
+  client that speaks only TLS 1.1 (at OpenSSL security level 0): the
+  station refuses it and serves a TLS 1.2 client. The test first shows
+  that same client finishing a TLS 1.1 handshake with a listener of its
+  own, which differs from the station's in two settings (protocol TLS 1.0
+  or later, and OpenSSL security level 0), so the client can speak TLS
+  1.1. What the test does not show is which of the station's two settings
+  refuses it: OpenSSL 3 at its default security level refuses TLS 1.0 and
+  1.1 whatever the protocol setting says, so on such a build either the
+  explicit minimum or the library's default would refuse this client. The
+  station does not ask for
   a client certificate (`setPeerVerifyMode(QSslSocket::VerifyNone)`); the
   client's proof of identity is the token (section 3.3).
 - The control port is set by `remote_port` in `nereusd.conf`

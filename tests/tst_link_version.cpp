@@ -754,9 +754,13 @@ void TstLinkVersion::stationRefusesATls11Handshake()
     QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
 
     // The control: a listener of this test's own, with the station's
-    // certificate and key, that allows TLS 1.1. If a TLS 1.1 client cannot
-    // finish a handshake even there, this platform's TLS library will not
-    // offer TLS 1.1 at all, and the refusal below would prove nothing.
+    // certificate and key, that allows TLS 1.1 (protocol TLS 1.0 or later
+    // and OpenSSL security level 0: two settings unlike the station's). If
+    // a TLS 1.1 client cannot finish a handshake even there, this
+    // platform's TLS library will not offer TLS 1.1 at all. The refusal
+    // below shows the station's listener refuses the client; it does not
+    // tell the explicit minimum from OpenSSL 3's default security level,
+    // which refuses TLS 1.0 and 1.1 on its own.
     QSslServer control;
     QSslConfiguration permissive = server.tlsConfiguration();
     QT_WARNING_PUSH
