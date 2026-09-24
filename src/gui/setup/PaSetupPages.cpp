@@ -1357,7 +1357,9 @@ constexpr std::array<Band, 11> kAutoCalHfBands = {
     Band::Band12m,  Band::Band10m, Band::Band6m,
 };
 
-// True if `b` is an HF band the auto-cal sweep iterates over.
+#ifdef NEREUS_BUILD_TESTS
+// True if `b` is an HF band the auto-cal sweep iterates over. Only the
+// test-only sweep driver below reads it.
 bool isAutoCalBand(Band b) noexcept
 {
     for (Band hf : kAutoCalHfBands) {
@@ -1365,6 +1367,7 @@ bool isAutoCalBand(Band b) noexcept
     }
     return false;
 }
+#endif
 
 // Default per-band max-watts ceiling per HPSDRModel for the safety check.
 // From Thetis console.cs:10270 [v2.10.3.13]:

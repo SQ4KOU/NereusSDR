@@ -259,7 +259,8 @@ void TunerAppletContextMenuTest::remoteConnectionActionNavigatesToPeripheralsAnd
     QVERIFY(remoteAdvancedAction != nullptr);
     QVERIFY(!remoteAdvancedAction->isEnabled());
     QCOMPARE(remoteAdvancedAction->toolTip(),
-             QStringLiteral("TGXL Advanced administration is unavailable from a remote Core."));
+             QStringLiteral("TGXL Advanced administration is unavailable in a window "
+                            "connected to a remote Core."));
     remoteAdvancedAction->trigger();
     QCOMPARE(remoteNavigation.count(), 0);
 

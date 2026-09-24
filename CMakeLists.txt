@@ -2715,6 +2715,18 @@ install(DIRECTORY packaging/third-party-licenses/
 install(FILES LICENSE LICENSE-DUAL-LICENSING
         DESTINATION share/doc/nereussdr
         COMPONENT licenses)
+# R-R3-50: the Core's install (--component nereusd) carries the same texts,
+# since nereusd ships most of the same libraries. EXCLUDE_FROM_ALL keeps a
+# plain `cmake --install` exactly as it was; the licenses component above
+# already installs these files to the same place.
+install(DIRECTORY packaging/third-party-licenses/
+        DESTINATION share/doc/nereussdr/licenses
+        COMPONENT nereusd
+        EXCLUDE_FROM_ALL)
+install(FILES LICENSE LICENSE-DUAL-LICENSING
+        DESTINATION share/doc/nereussdr
+        COMPONENT nereusd
+        EXCLUDE_FROM_ALL)
 
 # --------------------------------------------------------------------------
 # Tests (Qt6::Test). Opt-in via -DNEREUS_BUILD_TESTS=ON.

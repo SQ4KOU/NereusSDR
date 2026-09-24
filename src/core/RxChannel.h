@@ -861,6 +861,19 @@ public:
     bool isActive() const { return m_active.load(); }
     void setActive(bool active);
 
+    // Switch the channel off without waiting for WDSP to drain it
+    // (SetChannelState dmode 0), the form upstream uses for sub-receiver
+    // channels. It sets WDSP's slew-down and flush flags and leaves them for
+    // the channel's next exchange to clear, and in NereusSDR that exchange
+    // never comes: processIq returns early once the channel is off. Only a
+    // rebuild of the channel (SetInputSamplerate) clears them otherwise, so a
+    // channel stopped this way and restarted unrebuilt slews down on its
+    // first block and goes silent while isActive() reports true. Use it only
+    // where I/Q keeps reaching the channel through the stop. setActive(false)
+    // is the draining form, whose timeout clears those flags itself, and is
+    // what RadioModel::setSampleRateLive uses for every channel.
+    void deactivateWithoutDrain();
+
     // --- Audio processing (called from audio thread) ---
 
     // Process I/Q samples through the WDSP RX chain.
@@ -985,6 +998,9 @@ signals:
                          int n, int srcRate);
 
 private:
+    // Shared body of setActive / deactivateWithoutDrain.
+    void applyActive(bool active, bool drainOnStop);
+
     const int m_channelId;
     // m_bufferSize and m_sampleRate are mutated by setSampleRate() — they
     // were const in the original construction-time-immutable design, but

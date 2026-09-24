@@ -10,6 +10,11 @@
 #include <QtTest/QtTest>
 #include <QRegularExpression>
 #include <QSignalSpy>
+
+#include <algorithm>
+#include <cmath>
+#include <numbers>
+#include <vector>
 #include "core/DdcAssignment.h"
 #include "core/P1RadioConnection.h"
 #include "core/ReceiverManager.h"
@@ -63,6 +68,42 @@ struct DetachConnection {
     RadioModel* model{nullptr};
     ~DetachConnection() { if (model) { model->injectConnectionForTest(nullptr); } }
 };
+
+// The loudest output sample a running channel produces from a steady tone,
+// fed straight to RxChannel::processIq (the call RxDspWorker makes) at
+// `rateHz`: `settleBlocks` input blocks first, then the peak over the next
+// `measureBlocks`. Only the settled blocks count, because a channel WDSP is
+// about to silence still plays out its slew-down first. fexchange2 leaves the
+// output untouched when the channel's exchange flag is clear, so each block
+// starts from zeros: a channel WDSP has silenced reads 0.
+double settledPeakFromATone(RxChannel* rx, int rateHz,
+                            int settleBlocks = 100, int measureBlocks = 50)
+{
+    const int inSize = bufferSizeForRate(rateHz);
+    const int outSize = inSize * 48000 / rateHz;
+    std::vector<float> inI(inSize), inQ(inSize, 0.0f), outI(inSize), outQ(inSize);
+    double peak = 0.0;
+    long n = 0;
+    for (int block = 0; block < settleBlocks + measureBlocks; ++block) {
+        for (int i = 0; i < inSize; ++i, ++n) {
+            // A real-valued 1 kHz tone lands in both sidebands, so the test
+            // does not depend on the slice's mode.
+            inI[i] = static_cast<float>(
+                0.01 * std::cos(2.0 * std::numbers::pi * 1000.0
+                                * static_cast<double>(n) / rateHz));
+        }
+        std::fill(outI.begin(), outI.end(), 0.0f);
+        std::fill(outQ.begin(), outQ.end(), 0.0f);
+        rx->processIq(inI.data(), inQ.data(), outI.data(), outQ.data(), inSize, outSize);
+        if (block < settleBlocks) {
+            continue;
+        }
+        for (int i = 0; i < outSize; ++i) {
+            peak = std::max(peak, std::abs(static_cast<double>(outI[i])));
+        }
+    }
+    return peak;
+}
 
 } // namespace
 
@@ -1407,6 +1448,198 @@ private slots:
         const int c = model.addSlice();
         QCOMPARE(c, a);   // lowest free id
         QVERIFY(engine->rxChannel(c)->isActive());
+    }
+
+    // ── A radio-wide live rate change quiesces every slice's channel ─────
+    //
+    // setSampleRateLive used to switch off channel 0 alone before moving the
+    // rate on every slice's channel, and switched on channel 0 alone after.
+    // Every other slice's channel was re-rated while still running.  Thetis
+    // switches off every receiver channel first (subs, then the main channel
+    // last with a drain), changes the rate, then switches the main channel
+    // back on first and the others only if they had been running:
+    //   From Thetis setup.cs:7112-7115 and 7175-7179 [v2.10.3.15]
+    //
+    // Each activeChanged is recorded with the channel's input rate at that
+    // moment. A channel whose off event carries the old rate and whose on
+    // event carries the new one was re-rated only while it was stopped.
+    // This records the order only; whether each restarted channel actually
+    // plays is a_live_rate_change_leaves_every_running_channel_audible's
+    // job (fix wave 1, C1).
+    void a_live_rate_change_stops_and_restarts_every_slices_channel()
+    {
+        RadioModel model;
+        P1RadioConnection conn;
+        model.injectConnectionForTest(&conn);
+        DetachConnection detach{&model};
+
+        WdspEngine* engine = model.wdspEngine();
+        engine->m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+
+        model.configureStreamPool(5, 5, 192000);
+        const int a = model.addSlice();
+        model.sliceById(a)->setFrequency(14200000.0);
+        const int b = model.addSlice();
+        model.sliceById(b)->setFrequency(7150000.0);
+        const int c = model.addSlice();
+        model.sliceById(c)->setFrequency(3700000.0);
+        const int d = model.addSlice();
+        QVERIFY(d >= 0);
+        model.sliceById(d)->setFrequency(21200000.0);
+        model.openRxChannelPool(5, bufferSizeForRate(192000), 192000);
+
+        const int chA = model.sliceById(a)->sliceIndex();
+        const int chB = model.sliceById(b)->sliceIndex();
+        const int chC = model.sliceById(c)->sliceIndex();
+        const int chD = model.sliceById(d)->sliceIndex();
+        QCOMPARE(chA, 0);
+        QCOMPARE(chB, 1);
+        QCOMPARE(chC, 2);
+        QCOMPARE(chD, 3);
+
+        QVERIFY(engine->rxChannel(chA)->isActive());
+        QVERIFY(engine->rxChannel(chB)->isActive());
+        QVERIFY(engine->rxChannel(chC)->isActive());
+        // Slice D's channel is stopped before the change and must stay so.
+        engine->rxChannel(chD)->setActive(false);
+
+        struct Event { int ch; bool active; int rate; };
+        QVector<Event> events;
+        // Declared after `events` so it dies first and takes the recording
+        // connections with it before the model's teardown can emit.
+        QObject recorder;
+        for (int ch : {chA, chB, chC, chD}) {
+            RxChannel* rx = engine->rxChannel(ch);
+            connect(rx, &RxChannel::activeChanged, &recorder,
+                    [&events, rx, ch](bool on) {
+                        events.append({ch, on, rx->sampleRate()});
+                    });
+        }
+
+        QVERIFY(model.setSampleRateLive(384000, false) >= 0);
+
+        const QVector<Event> expected{
+            // Off: highest channel first, channel 0 last, every one drained.
+            {chC, false, 192000},
+            {chB, false, 192000},
+            {chA, false, 192000},
+            // On: channel 0 first, then the others that were running.
+            {chA, true, 384000},
+            {chB, true, 384000},
+            {chC, true, 384000},
+        };
+        QCOMPARE(events.size(), expected.size());
+        for (int i = 0; i < expected.size(); ++i) {
+            QVERIFY2(events[i].ch == expected[i].ch
+                         && events[i].active == expected[i].active
+                         && events[i].rate == expected[i].rate,
+                     qPrintable(QStringLiteral("event %1: got ch%2 %3 @%4, "
+                                               "want ch%5 %6 @%7")
+                                    .arg(i)
+                                    .arg(events[i].ch)
+                                    .arg(events[i].active ? "on" : "off")
+                                    .arg(events[i].rate)
+                                    .arg(expected[i].ch)
+                                    .arg(expected[i].active ? "on" : "off")
+                                    .arg(expected[i].rate)));
+        }
+
+        QVERIFY(engine->rxChannel(chA)->isActive());
+        QVERIFY(engine->rxChannel(chB)->isActive());
+        QVERIFY(engine->rxChannel(chC)->isActive());
+        QVERIFY(!engine->rxChannel(chD)->isActive());
+        QCOMPARE(engine->rxChannel(chD)->sampleRate(), 384000);
+    }
+
+    // One slice: channel 0 goes off at the old rate and back on at the new
+    // one, exactly as before the change above.
+    void a_live_rate_change_with_one_slice_cycles_channel_zero_only()
+    {
+        RadioModel model;
+        P1RadioConnection conn;
+        model.injectConnectionForTest(&conn);
+        DetachConnection detach{&model};
+
+        WdspEngine* engine = model.wdspEngine();
+        engine->m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+
+        model.configureStreamPool(5, 5, 192000);
+        const int a = model.addSlice();
+        model.sliceById(a)->setFrequency(14200000.0);
+        model.openRxChannelPool(5, bufferSizeForRate(192000), 192000);
+        QCOMPARE(model.sliceById(a)->sliceIndex(), 0);
+
+        QVector<QPair<bool, int>> events;
+        QObject recorder;   // dies before `events`; see the test above
+        RxChannel* rx0 = engine->rxChannel(0);
+        QVERIFY(rx0->isActive());
+        connect(rx0, &RxChannel::activeChanged, &recorder,
+                [&events, rx0](bool on) { events.append({on, rx0->sampleRate()}); });
+        for (int ch = 1; ch < 5; ++ch) {
+            connect(engine->rxChannel(ch), &RxChannel::activeChanged, &recorder,
+                    [ch](bool) { QFAIL(qPrintable(
+                        QStringLiteral("unbound channel %1 toggled").arg(ch))); });
+        }
+
+        QVERIFY(model.setSampleRateLive(384000, false) >= 0);
+
+        QCOMPARE(events.size(), 2);
+        QCOMPARE(events[0], qMakePair(false, 192000));
+        QCOMPARE(events[1], qMakePair(true, 384000));
+        QVERIFY(rx0->isActive());
+    }
+
+    // ── A live rate change leaves every running channel audible ─────────
+    //
+    // Fix wave 1, C1. A channel stopped without a drain keeps WDSP's
+    // slew-down and flush flags set (channel.c:288-290) until the channel's
+    // next exchange clears them, and NereusSDR never exchanges on a stopped
+    // channel (RxChannel::processIq returns early on !m_active). A channel
+    // already at the new rate is skipped by setRxChannelRate, so nothing
+    // rebuilds it; on restart its first block slews down and clears
+    // exchange (iobuffs.c:553-560) and it is silent while isActive() says
+    // true. On Protocol 2 that is a slice whose own rate (the per-slice rate
+    // menu, setStreamSampleRate) already equals the new radio-wide rate.
+    // Both channels here must produce audio after the change: slice B's,
+    // already at the target rate, and slice A's, which is re-rated.
+    void a_live_rate_change_leaves_every_running_channel_audible()
+    {
+        RadioModel model;
+        P1RadioConnection conn;
+        model.injectConnectionForTest(&conn);
+        DetachConnection detach{&model};
+
+        WdspEngine* engine = model.wdspEngine();
+        engine->m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+
+        model.configureStreamPool(5, 5, 192000);
+        const int a = model.addSlice();
+        model.sliceById(a)->setFrequency(14200000.0);
+        const int b = model.addSlice();
+        model.sliceById(b)->setFrequency(7150000.0);
+        model.openRxChannelPool(5, bufferSizeForRate(192000), 192000);
+
+        RxChannel* rxA = engine->rxChannel(model.sliceById(a)->sliceIndex());
+        RxChannel* rxB = engine->rxChannel(model.sliceById(b)->sliceIndex());
+        QVERIFY(rxA && rxA->isActive());
+        QVERIFY(rxB && rxB->isActive());
+
+        // Slice B's channel already runs at the rate the change moves to,
+        // as the per-slice rate menu leaves it on Protocol 2.
+        QVERIFY(engine->setRxChannelRate(rxB->channelId(), 384000));
+        QVERIFY2(settledPeakFromATone(rxA, 192000) > 0.0, "slice A silent before the change");
+        QVERIFY2(settledPeakFromATone(rxB, 384000) > 0.0, "slice B silent before the change");
+
+        QVERIFY(model.setSampleRateLive(384000, false) >= 0);
+
+        QCOMPARE(rxA->sampleRate(), 384000);
+        QCOMPARE(rxB->sampleRate(), 384000);
+        QVERIFY(rxA->isActive());
+        QVERIFY(rxB->isActive());
+        QVERIFY2(settledPeakFromATone(rxB, 384000) > 0.0,
+                 "slice B, already at the new rate, is silent after the change");
+        QVERIFY2(settledPeakFromATone(rxA, 384000) > 0.0,
+                 "slice A, re-rated, is silent after the change");
     }
 };
 

@@ -501,6 +501,7 @@ warren@wpratt.com
 #include <cmath>
 #include <limits>
 #include <tuple>
+#include <vector>
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -5530,6 +5531,95 @@ QString radeAudioAwaitsReceiver(int sliceId)
 
 } // namespace
 
+int RadioModel::sliceChannelLimit() const
+{
+    // One WDSP channel is opened per slice id below this (openRxChannelPool),
+    // from the ceiling the stream pool was sized with. Before any pool exists
+    // the absolute ceiling applies: no board takes more slices than the
+    // reserved channel block.
+    if (m_streamAllocator.streamCount() <= 0) {
+        return WdspEngine::kMaxSliceChannels;
+    }
+    return std::min(m_streamAllocator.maxSlices(), WdspEngine::kMaxSliceChannels);
+}
+
+QString RadioModel::closedSliceSentence(const SliceModel* slice, int channelLimit) const
+{
+    const QString mhz = QString::number(slice->frequency() / 1.0e6, 'f', 4);
+    return tr("Receiver %1 (%2\u00A0MHz %3) was closed because this radio supports "
+              "only %4. Add it again with +RX after closing another receiver.")
+        .arg(QString(slice->sliceLetter()), mhz, SliceModel::modeName(slice->dspMode()),
+             supportedReceivers(channelLimit));
+}
+
+void RadioModel::installReceiveFallbackSlice()
+{
+    if (sliceById(0)) {
+        return;
+    }
+    // Install a conventional receive fallback before retiring the last
+    // rejected member. Seed from existing constructor defaults, never by
+    // cloning an active RADE mode through its decoder-starting setter.
+    const SliceModel defaults;
+    const ReceiveSliceState seed{0, QStringLiteral("pan-0"),
+                                 defaults.frequency(), defaults.dspMode()};
+    if (addSliceImpl(0, seed.panKey, &seed) >= 0) {
+        SliceModel* fallback = sliceById(0);
+        bindSliceToStream(fallback, fallback->frequency(), true);
+    }
+}
+
+void RadioModel::closeSlicesPastChannelLimit()
+{
+    // Receiver and transmit gaps plan Task 1 (R-R3-34, R-R3-27): a Core that
+    // started before its radio was on can hold more slices than the board
+    // that then connects supports, and so can a window that reconnects to a
+    // smaller radio. A slice whose id has no WDSP channel would look
+    // configured and never play, so it is closed, highest id first, and the
+    // operator is told which ones and why on the same channel an unsupported
+    // restore uses (bindReceiveLayoutSlices; the Core mirrors it to every
+    // window). Startup admission of a saved layout does this itself.
+    if (m_streamAllocator.streamCount() <= 0) {
+        return;
+    }
+    const int channelLimit = sliceChannelLimit();
+    QList<SliceModel*> past;
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        if (slice && slice->sliceIndex() >= channelLimit) {
+            past.append(slice);
+        }
+    }
+    if (past.isEmpty()) {
+        return;
+    }
+    std::sort(past.begin(), past.end(), [](const SliceModel* a, const SliceModel* b) {
+        return a->sliceIndex() > b->sliceIndex();
+    });
+    QStringList notes;
+    QList<int> ids;
+    for (const SliceModel* slice : std::as_const(past)) {
+        notes.prepend(closedSliceSentence(slice, channelLimit));
+        ids.append(slice->sliceIndex());
+    }
+    const bool allClosed = past.size() == m_slices.size();
+    if (allClosed) {
+        installReceiveFallbackSlice();
+    }
+    // A saved layout is a per-radio record a temporary limit must not erase.
+    if (m_receiveLayoutManaged && m_receiveLayoutOverridesCount) {
+        m_receiveLayoutProtected = true;
+    }
+    for (int id : std::as_const(ids)) {
+        removeSliceImpl(id, false);
+    }
+    qCWarning(lcConnection) << "Closed slices" << ids << "past the board's slice limit"
+                            << channelLimit;
+    m_sliceClosureNotice = notes.join(QLatin1Char(' '));
+    setReceiveLayoutRestoreStatus(allClosed ? QStringLiteral("fallback")
+                                            : QStringLiteral("degraded"),
+                                  m_sliceClosureNotice);
+}
+
 void RadioModel::bindUnboundSlices()
 {
     if (m_receiveLayoutManaged && !m_receiveLayoutMac.isEmpty()) {
@@ -5537,6 +5627,7 @@ void RadioModel::bindUnboundSlices()
             bindReceiveLayoutSlices();
             return;
         }
+        closeSlicesPastChannelLimit();
 
         // Recovery preserves live objects rather than re-running destructive
         // startup admission.  Still give the first member of each distinct
@@ -5565,6 +5656,7 @@ void RadioModel::bindUnboundSlices()
         }
         return;
     }
+    closeSlicesPastChannelLimit();
     for (SliceModel* s : std::as_const(m_slices)) {
         if (s && s->streamIndex() < 0) {
             bindSliceToStream(s, s->frequency());
@@ -5580,6 +5672,13 @@ void RadioModel::bindReceiveLayoutSlices()
     m_receiveLayoutPendingAdmission = true;
     const int channelLimit = std::min(boardCapabilities().maxSlices,
                                        WdspEngine::kMaxSliceChannels);
+    // Slices that came from a saved layout are "restored"; slices a window
+    // added while the Core waited for its radio were never saved, so they
+    // are "closed". Fix wave 1, M2: decided per slice, from the ids the saved
+    // layout hydrated, so a window's own slice is never called restored
+    // beside a saved layout, and one refused only because every receiver is
+    // busy is called closed when nothing was saved.
+    const bool fromSavedLayout = m_receiveLayoutOverridesCount;
     // The saved layout records each slice's pan, not which slices shared a
     // receiver, so startup places slices exactly as recovery does
     // (panStreamCovering): rejoin a receiver of the same pan when one covers
@@ -5618,12 +5717,21 @@ void RadioModel::bindReceiveLayoutSlices()
         const QString letter(slice->sliceLetter());
         const QString mhz = QString::number(slice->frequency() / 1.0e6, 'f', 4);
         const QString mode = SliceModel::modeName(slice->dspMode());
-        refusals.append(idSupported
-            ? tr("Receiver %1 (%2\u00A0MHz %3) could not be restored because all of the "
-                 "radio's receivers are in use. Add it again with +RX after closing "
-                 "another receiver.").arg(letter, mhz, mode)
-            : tr("Receiver %1 (%2\u00A0MHz %3) could not be restored because this radio "
-                 "supports only %4.").arg(letter, mhz, mode, supportedReceivers(channelLimit)));
+        const bool restoredSlice = fromSavedLayout && m_receiveLayoutHydratedIds.contains(id);
+        if (!restoredSlice && !idSupported) {
+            refusals.append(closedSliceSentence(slice, channelLimit));
+        } else if (!restoredSlice) {
+            refusals.append(tr("Receiver %1 (%2\u00A0MHz %3) was closed because all of the "
+                               "radio's receivers are in use. Add it again with +RX after "
+                               "closing another receiver.").arg(letter, mhz, mode));
+        } else {
+            refusals.append(idSupported
+                ? tr("Receiver %1 (%2\u00A0MHz %3) could not be restored because all of the "
+                     "radio's receivers are in use. Add it again with +RX after closing "
+                     "another receiver.").arg(letter, mhz, mode)
+                : tr("Receiver %1 (%2\u00A0MHz %3) could not be restored because this radio "
+                     "supports only %4.").arg(letter, mhz, mode, supportedReceivers(channelLimit)));
+        }
         if (m_restoredRadeReceiveOwner == id) {
             refusals.append(radeAudioAwaitsReceiver(id));
         }
@@ -5634,29 +5742,30 @@ void RadioModel::bindReceiveLayoutSlices()
 
     // A temporary capability/resource limit must not erase the original
     // per-radio record. Protect it before retirement emits lifecycle signals.
-    m_receiveLayoutProtected = true;
+    // With no saved record there is nothing to protect, and blocking saves
+    // would only lose the slices that remain.
+    if (fromSavedLayout) {
+        m_receiveLayoutProtected = true;
+    }
     const bool allRefused = refusedIds.size() == m_slices.size();
     if (allRefused) {
         m_receiveLayoutOverridesCount = false;
     }
-    if (allRefused && channelLimit > 0 && !sliceById(0)) {
-        // Install a conventional receive fallback before retiring the last
-        // rejected member. Seed from existing constructor defaults, never by
-        // cloning an active RADE mode through its decoder-starting setter.
-        const SliceModel defaults;
-        const ReceiveSliceState seed{0, QStringLiteral("pan-0"),
-                                     defaults.frequency(), defaults.dspMode()};
-        if (addSliceImpl(0, seed.panKey, &seed) >= 0) {
-            SliceModel* fallback = sliceById(0);
-            bindSliceToStream(fallback, fallback->frequency(), true);
-        }
+    if (allRefused && channelLimit > 0) {
+        installReceiveFallbackSlice();
     }
     for (int id : refusedIds) {
         removeSliceImpl(id, false);
     }
-    setReceiveLayoutRestoreStatus(allRefused ? QStringLiteral("fallback")
-                                              : QStringLiteral("degraded"),
-                                  withKeptLayout(refusals));
+    const QString state = allRefused ? QStringLiteral("fallback") : QStringLiteral("degraded");
+    if (fromSavedLayout) {
+        setReceiveLayoutRestoreStatus(state, withKeptLayout(refusals));
+        return;
+    }
+    // completeReceiveLayoutStartup keeps this notice rather than reporting
+    // an accepted restore over it.
+    m_sliceClosureNotice = refusals.join(QLatin1Char(' '));
+    setReceiveLayoutRestoreStatus(state, m_sliceClosureNotice);
 }
 
 void RadioModel::republishAllStreamBindings()
@@ -7045,12 +7154,58 @@ int RadioModel::addSlice(const QString& initialPanId)
         return -1;
     }
 
+    // Receiver and transmit gaps plan Task 1 (Phase 3F design section 3;
+    // R-R3-21): the slice cap holds on this path too, not only in
+    // addSliceOnPan. This is the path the session verb `addSlice` and
+    // DaemonApp's startup top-up take, so without it a remote window could
+    // add slices past the board's limit whenever the new slice fitted an
+    // existing receiver window (the allocator then shares the window and
+    // never refuses), leaving a slice on an id with no WDSP channel.
+    //
+    // The ceiling is the one the stream pool was sized with, not
+    // maxSlices(): the pool and the WDSP channel pool are opened together
+    // from the board's caps (connectToRadio, configureStreamPool), while
+    // maxSlices() reads 1 until isConnected() turns true. Once connected
+    // the two agree.
+    //
+    // Only this minting path is gated. addSliceWithStationId reproduces a
+    // slice the Core already made, and the layout restore paths call
+    // addSliceImpl directly with their own admission checks.
+    //
+    // Before any pool exists (a Core started before its radio is on,
+    // R-R3-27) the absolute ceiling holds: no board takes more slices than
+    // WdspEngine::kMaxSliceChannels, and the reason names the Core, since no
+    // radio is there to name. Slices a smaller board cannot take are closed
+    // when it connects (closeSlicesPastChannelLimit, bindReceiveLayoutSlices).
+    const int sliceCap = sliceChannelLimit();
+    if (m_slices.size() >= sliceCap) {
+        emit sliceAddRejected(sliceCapReason(sliceCap));
+        return -1;
+    }
+
     // Remote-daemon R2 Task 18: -1 means "mint the lowest free id", which
     // is the only thing this entry point has ever done and the only thing
     // it does now. The body moved to addSliceImpl so a remote client can
     // reproduce the STATION's ids verbatim (addSliceWithStationId); no
     // behaviour changed on this path.
     return addSliceImpl(-1, initialPanId);
+}
+
+QString RadioModel::sliceCapReason(int cap) const
+{
+    // Fix wave 1, I1: plain and grammatical for any count.
+    const QString slices = cap == 1 ? tr("1 slice") : tr("%1 slices").arg(cap);
+    // Before a radio has sized the stream pool the ceiling is the Core's
+    // own (sliceChannelLimit), so the Core is named, not a radio.
+    if (m_streamAllocator.streamCount() <= 0) {
+        return tr("The Core supports a maximum of %1").arg(slices);
+    }
+    // RadioInfo.name carries the friendly product label (e.g. "ANAN-G2");
+    // fall back to a generic phrase when it has none.
+    const QString radioLabel = m_lastRadioInfo.name.isEmpty()
+                                   ? tr("This radio")
+                                   : m_lastRadioInfo.name;
+    return tr("%1 supports a maximum of %2").arg(radioLabel, slices);
 }
 
 int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
@@ -7565,6 +7720,8 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     if (m_slices.size() == 1) {
         return;
     }
+    // A later slice on this id was not restored from the saved layout.
+    m_receiveLayoutHydratedIds.remove(sliceId);
 
     // External diversity has one stable source owner: Slice A (id 0). Stop
     // while that object and its worker route are still intact, before list
@@ -7686,7 +7843,7 @@ void RadioModel::addSliceOnPan(const QString& panId)
     // addendum section 6.1: "routes pan-affecting creation through
     // addSliceOnPan".
     //
-    // Ahead of the maxSlices() cap check below, on purpose. On a remote
+    // Ahead of the slice cap check below, on purpose. On a remote
     // client that cap is the STATION's to enforce, and reading it here
     // before the handshake has landed a capability descriptor gives the
     // disconnected default of 1, so a local check would refuse every
@@ -7704,18 +7861,13 @@ void RadioModel::addSliceOnPan(const QString& panId)
         return;
     }
 
-    if (m_slices.size() >= maxSlices()) {
-        // Surface a human-readable cap reason for the status-bar / toast
-        // wiring landing in Sub-Epic C Tasks 8-9.  RadioInfo.name carries
-        // the friendly product label (e.g. "ANAN-G2"); fall back to a
-        // generic phrase when disconnected.
-        const QString radioLabel = m_lastRadioInfo.name.isEmpty()
-                                       ? QStringLiteral("This radio")
-                                       : m_lastRadioInfo.name;
-        const QString reason = QStringLiteral("%1 supports a maximum of %2 slices")
-                                   .arg(radioLabel)
-                                   .arg(maxSlices());
-        emit sliceAddRejected(reason);
+    // Fix wave 1, I1 (Phase 3F design section 3, R-R3-21, R-R3-27): the same
+    // ceiling and words as addSlice(). maxSlices() reads 1 until the radio
+    // connects, so a window's +RX was refused at one slice before connect
+    // while the session verb addSlice allowed the Core's own ceiling.
+    const int sliceCap = sliceChannelLimit();
+    if (m_slices.size() >= sliceCap) {
+        emit sliceAddRejected(sliceCapReason(sliceCap));
         return;
     }
 
@@ -8818,6 +8970,16 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // could run it.
     m_dspAssets->resolveNr3ModelPath();
     m_intentionalDisconnect = false;
+
+    // Fix wave 1, M3 (R-R3-34): in a window with no saved-layout management
+    // the receive-layout status carries only the slices one connect closed
+    // (closeSlicesPastChannelLimit). Clear the last connect's, so it does
+    // not linger past the connection it described, and a closure this
+    // connect repeats word for word is still reported (the status would
+    // otherwise not change, and the window would hear nothing).
+    if (!m_receiveLayoutManaged) {
+        setReceiveLayoutRestoreStatus(QString(), QString());
+    }
 
     // Compute HardwareProfile from model override (Phase 3I-RP).
     //
@@ -15012,18 +15174,40 @@ void RadioModel::completeReceiveLayoutStartup()
             return slice && slice->streamIndex() >= 0;
         });
     if (!allBound) {
-        m_receiveLayoutProtected = true;
         QStringList notes = reportedRestoreSentences(m_receiveLayoutRestoreMessage);
+        if (notes.isEmpty() && !m_sliceClosureNotice.isEmpty()) {
+            notes.append(m_sliceClosureNotice);
+        }
         notes.append(tr("Some receivers did not start; check the radio."));
-        setReceiveLayoutRestoreStatus(QStringLiteral("fallback"), withKeptLayout(notes));
+        // Fix wave 1, M1: a saved layout is kept (and saves held back) only
+        // when there is one: loaded (m_receiveLayoutOverridesCount) or found
+        // and protected. With none, blocking saves would only lose the
+        // receivers that did start, and nothing saved is there to keep; the
+        // notice rides m_sliceClosureNotice so the accepted-restore report
+        // below does not replace it.
+        if (m_receiveLayoutOverridesCount || m_receiveLayoutProtected) {
+            m_receiveLayoutProtected = true;
+            setReceiveLayoutRestoreStatus(QStringLiteral("fallback"), withKeptLayout(notes));
+        } else {
+            m_sliceClosureNotice = notes.join(QLatin1Char(' '));
+            setReceiveLayoutRestoreStatus(QStringLiteral("fallback"), m_sliceClosureNotice);
+        }
     }
     m_receiveLayoutPendingAdmission = false;
+    m_receiveLayoutHydratedIds.clear();
+    const QString closureNotice = std::exchange(m_sliceClosureNotice, QString());
     if (m_receiveLayoutProtected) {
         return;
     }
-    // Nothing to explain: the Core connection panel shows no receiver line
-    // and the GUI raises no warning for an accepted restore.
-    setReceiveLayoutRestoreStatus(QStringLiteral("accepted"), QString());
+    if (!closureNotice.isEmpty()) {
+        // Slices past the board's limit were closed at admission. Keep saying
+        // so; the remaining receivers are still saved as usual.
+        setReceiveLayoutRestoreStatus(m_receiveLayoutRestoreState, closureNotice);
+    } else {
+        // Nothing to explain: the Core connection panel shows no receiver
+        // line and the GUI raises no warning for an accepted restore.
+        setReceiveLayoutRestoreStatus(QStringLiteral("accepted"), QString());
+    }
     for (SliceModel* slice : std::as_const(m_slices)) {
         scheduleSettingsSave(slice);
     }
@@ -15159,6 +15343,10 @@ bool RadioModel::hydrateReceiveLayout(const QString& radioMac,
         }
     }
     m_slices = restored;
+    m_receiveLayoutHydratedIds.clear();
+    for (const ReceiveSliceState& state : layout.slices) {
+        m_receiveLayoutHydratedIds.insert(state.id);
+    }
     // Descriptor order is authoritative, so an unchanged active identity can
     // still have a different list position. Publish the final pair together.
     if (!m_activeSlice || !m_slices.contains(m_activeSlice)) {
@@ -17857,17 +18045,68 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
 
     const int newInSize = bufferSizeForRate(newRateHz);
 
-    // ── Step 1: Drain the RX channel ──────────────────────────────────────
-    // Thetis setup.cs:7010 / 7081 [v2.10.3.13]: SetChannelState(id, 0, 1)
-    // — off + drain to flush the slew envelope cleanly.  RxChannel is owned
-    // by WdspEngine; look it up by channel ID rather than caching a raw
-    // pointer (the previous pattern's failure mode is exactly what this
-    // fix replaces).
-    RxChannel* rxCh = m_wdspEngine->rxChannel(0);
-    if (rxCh && rxCh->isActive()) {
-        rxCh->setActive(false);
+    // Every receive channel this change re-rates: channel 0 plus one per
+    // slice (Phase 3F section 3, one WDSP channel per slice), ascending and
+    // without repeats. Steps 1, 6 and 9 all walk this one list, so no channel
+    // is re-rated that was not first stopped.
+    std::vector<int> rxChannelIds{0};
+    for (SliceModel* s : std::as_const(m_slices)) {
+        if (s) {
+            rxChannelIds.push_back(s->sliceIndex());
+        }
     }
-    QThread::msleep(10);  // setup.cs:7011 / 7082 [v2.10.3.13]: Thread.Sleep(10)
+    std::sort(rxChannelIds.begin(), rxChannelIds.end());
+    rxChannelIds.erase(std::unique(rxChannelIds.begin(), rxChannelIds.end()),
+                       rxChannelIds.end());
+
+    // ── Step 1: Stop every RX channel, draining channel 0 last ────────────
+    // Upstream switches off every receiver channel, the sub-receivers with
+    // no drain and the main channel last with a drain, while data is still
+    // flowing so each one slews down and flushes:
+    //   From Thetis setup.cs:7112-7115 [v2.10.3.15] (Protocol 1)
+    //     // turn OFF the RX DSP channels so they get flushed out (must do while data is flowing to get slew-down and flush)
+    //     WDSP.SetChannelState(3, 0, 0); // RX2_sub
+    //     WDSP.SetChannelState(2, 0, 0); // RX2_main
+    //     WDSP.SetChannelState(1, 0, 0); // RX1_sub
+    //     WDSP.SetChannelState(0, 0, 1);  // RX1_main
+    // Protocol 2 does the same for its pair at setup.cs:7043-7044
+    // [v2.10.3.15]: WDSP.id(0, 1) with no drain, then WDSP.id(0, 0) drained.
+    // Here that is every slice's channel from the highest id down, channel 0
+    // last, as upstream orders it. Every one is stopped with the drain,
+    // including the sub-receiver channels upstream stops with dmode 0.
+    //
+    // NereusSDR divergence (fix wave 1, C1): upstream's no-drain stop relies
+    // on I/Q still flowing into the stopped channel, which is what clears
+    // the flags the stop sets. SetChannelState(ch, 0, 0) sets slew.downflag
+    // and flushflag and leaves exchange set (WDSP channel.c:288-290); the
+    // channel's next fexchange2 runs the slew-down, then clears exchange and
+    // releases the flush that clears flushflag (iobuffs.c:553-560,
+    // channel.c:152-162). NereusSDR never exchanges on a stopped channel
+    // (RxChannel::processIq returns early on !isActive()), so those flags
+    // stay set. SetInputSamplerate rebuilds a re-rated channel and clears
+    // them, but setRxChannelRate skips a channel already at the new rate
+    // (the per-slice rate menu on Protocol 2 leaves one there). Restarted,
+    // such a channel slews down on its first block and clears exchange: it
+    // is silent while isActive() reports true. The draining stop cannot
+    // leave that behind: with no exchange to finish the flush it times out
+    // and clears exchange, flushflag and downflag itself (channel.c:299-304),
+    // at a cost of about 100 ms per running channel. Restarting a channel
+    // without that wait needs its I/Q kept flowing through the stop, as
+    // upstream's does.
+    //
+    // RxChannel is owned by WdspEngine; look each one up by channel ID rather
+    // than caching a raw pointer. Record which were running, because step 9
+    // restarts only those.
+    std::vector<int> rxChannelsWereActive;
+    for (auto it = rxChannelIds.rbegin(); it != rxChannelIds.rend(); ++it) {
+        RxChannel* rx = m_wdspEngine->rxChannel(*it);
+        if (!rx || !rx->isActive()) {
+            continue;
+        }
+        rxChannelsWereActive.push_back(*it);
+        rx->setActive(false);  // dmode 1: drain (see the divergence above)
+    }
+    QThread::msleep(10);  // From Thetis setup.cs:7116 [v2.10.3.15]: Thread.Sleep(10)
 
     // ── Step 2: Quiesce DSP worker ────────────────────────────────────────
     // Disconnect the I/Q feed so no new batches land while the WDSP channel
@@ -17913,8 +18152,7 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     // Thetis cmaster.c:473-474 [v2.10.3.13] via WdspEngine::setRxChannelRate.
     // No destroy-and-recreate — the RxChannel C++ wrapper stays alive,
     // m_rxChannel raw pointer (and every other holder) remains valid.
-    m_wdspEngine->setRxChannelRate(0, newRateHz);
-
+    //
     // Phase 3F Sub-Epic I closeout, defect H1: every slice's channel, not
     // just channel 0. This is a radio-wide rate, and step 7 below gives the
     // whole worker one drain size, so a channel left at the old rate would be
@@ -17924,11 +18162,9 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     //         SetInputSamplerate (chid (in_id, i), rate);
     //         SetInputBuffsize (chid (in_id, i), pcm->xcm_insize[in_id]);
     //     }
-    // Idempotent for channel 0, which the line above already moved.
-    for (SliceModel* s : std::as_const(m_slices)) {
-        if (s) {
-            m_wdspEngine->setRxChannelRate(s->sliceIndex(), newRateHz);
-        }
+    // Every channel in the list was stopped in step 1.
+    for (int ch : rxChannelIds) {
+        m_wdspEngine->setRxChannelRate(ch, newRateHz);
     }
 
     // ── Step 7: Reconfigure AudioEngine and DSP worker for new rate ───────
@@ -17972,11 +18208,26 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     //   Thread.Sleep(5);  // P1
     QThread::msleep(5);
 
-    // ── Step 9: Re-enable the RX channel ─────────────────────────────────
-    // Thetis setup.cs:7056 / 7141 [v2.10.3.13]: SetChannelState(id, 1, 0).
-    // Re-look-up rather than reuse rxCh in case the engine state shifted.
-    if (RxChannel* rx = m_wdspEngine->rxChannel(0)) {
-        rx->setActive(true);
+    // ── Step 9: Restart the RX channels that were running ────────────────
+    // Upstream switches the main channel on first, then each other channel
+    // only if it had been running:
+    //   From Thetis setup.cs:7175-7179 [v2.10.3.15] (Protocol 1)
+    //     WDSP.SetChannelState(0, 1, 0);              // RX1_main
+    //     if (console.radio.GetDSPRX(0, 1).Active)
+    //         WDSP.SetChannelState(1, 1, 0);          // RX1_sub
+    //     if (console.RX2Enabled)
+    //         WDSP.SetChannelState(2, 1, 0);          // RX2_main
+    // Protocol 2 gates its main channel on the state saved before the stop
+    // (setup.cs:7090-7091 [v2.10.3.15]), from setup.cs:7035 [v2.10.3.15]:
+    //     bool was_enabled = console.RX1Enabled;  //... was set to RX2 for some reason, it should be RX1 which always true. MW0LGE_21a
+    // Here: ascending, so channel 0 comes first, and only the channels step 1
+    // found running. A channel that was stopped before stays stopped.
+    // Re-look-up each one in case the engine state shifted.
+    std::sort(rxChannelsWereActive.begin(), rxChannelsWereActive.end());
+    for (int ch : rxChannelsWereActive) {
+        if (RxChannel* rx = m_wdspEngine->rxChannel(ch)) {
+            rx->setActive(true);
+        }
     }
 
     // ── Step 10: Reconnect I/Q feed ──────────────────────────────────────

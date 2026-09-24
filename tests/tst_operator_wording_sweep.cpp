@@ -1277,6 +1277,11 @@ private slots:
             // app compares; a wire value keeps its words. Kept for the
             // operator's checkpoint.
             {"src/models/SliceModel.cpp", "Station asset"},
+            // An older Core's version refusal, matched by
+            // SessionEndReasons::parse and never shown; OperatorReasonText
+            // words it for the operator.
+            {"src/core/session/SessionEndReasons.cpp",
+             "^Protocol major version mismatch: station speaks"},
             // Ambiguous (the Core, or the operator's station being ready);
             // kept for the operator's checkpoint.
             {"src/gui/PsForm.cpp",

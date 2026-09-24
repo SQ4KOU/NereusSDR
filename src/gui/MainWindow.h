@@ -97,6 +97,7 @@
 // m_station below, so it cannot be forward-declared.
 #include "core/session/RemoteStationOptions.h"
 #include "core/WdspTypes.h"
+#include "gui/ReceiveLayoutNotices.h"
 #include "gui/ReceiverStopNotices.h"
 #include "gui/RemoteReceiverAudioNote.h"
 
@@ -990,7 +991,9 @@ private:
     void fetchLatestReleaseVersion(std::function<void(const QString&)> done);
     /// R-R3-17: forget which link-lost reason was last toasted.
     void clearStationLinkToastMemory();
-    QString m_lastReceiveLayoutWarning;
+    // R-R3-34: the receive-layout notice, toasted once per distinct message
+    // in a remote window and in a local one.
+    ReceiveLayoutNotices m_receiveLayoutNotices;
     // R-R3-17: a failing redial repeats the same reason every backoff step
     // (up to once a minute). Toast each distinct reason once; the Connections
     // window, Core panel and title bar keep showing it persistently. Cleared

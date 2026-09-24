@@ -792,11 +792,17 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("applyNnrModelSelection"), QStringLiteral("addNotchFromStation"),
           QStringLiteral("moveNotchFromStation"), QStringLiteral("setNotchActiveFromStation"),
           QStringLiteral("deleteNotchFromStation"), QStringLiteral("requestIoBoardProbe"),
-          QStringLiteral("nr3CannotRunReason")},
+          QStringLiteral("nr3CannotRunReason"),
+          // The slice cap reason, relayed by the addSlice and addSliceOnPan
+          // verbs' results.
+          QStringLiteral("sliceCapReason")},
          {// This app's own branch in a remote window (role Remote), shown
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},
-         20, {},
+         20,
+         // sliceCapReason: the radio's product label and the slice count,
+         // worded "1 slice" or "N slices" from its own literals.
+         {QStringLiteral("radioLabel, slices"), QStringLiteral("slices"), QStringLiteral("cap")},
          {// The refuse lambdas' parameter (literals of these functions),
           // the facades' and allocators' results (scanned), and the notch
           // refusals, constants of this file checked in
@@ -909,14 +915,20 @@ const QList<ReasonSource>& propertyTextSources()
           QStringLiteral("plainReceiveLayoutProblem"), QStringLiteral("withKeptLayout"),
           QStringLiteral("captureReceiveLayout"),
           QStringLiteral("activateRestoredRadeReceiveOwner"),
-          QStringLiteral("radeAudioAwaitsReceiver")},
+          QStringLiteral("radeAudioAwaitsReceiver"),
+          // The notice for slices a smaller board cannot host.
+          QStringLiteral("closedSliceSentence"),
+          QStringLiteral("closeSlicesPastChannelLimit")},
          {}, 6,
          // activateRestoredRadeReceiveOwner's refusal, scanned here.
          {QStringLiteral("error")},
          // Sentences these functions word, joined by withKeptLayout; and
-         // captureReceiveLayout's refusal, both scanned here.
+         // captureReceiveLayout's refusal, both scanned here. The closure
+         // notice is closedSliceSentence's sentences (and the refusals
+         // bindReceiveLayoutSlices words), joined; also scanned here.
          {QStringLiteral("withKeptLayout(refusals)"), QStringLiteral("withKeptLayout(notes)"),
-          QStringLiteral("error")},
+          QStringLiteral("error"), QStringLiteral("m_sliceClosureNotice"),
+          QStringLiteral("closureNotice")},
          true},
         // The Power Genius's efficiency: the device's own reading (a
         // number and a unit), passed on as it reports it.

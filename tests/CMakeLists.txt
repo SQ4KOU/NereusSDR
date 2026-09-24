@@ -6922,6 +6922,16 @@ nereus_add_test(tst_session_verbs
     fakes/P1FakeRadio.cpp
     fakes/ConnectableRadioModel.cpp)
 
+# Receiver and transmit gaps plan, Task 1 (Phase 3F design section 3;
+# R-R3-21): every path that creates a slice on the Core's own side keeps to
+# the slice cap. A local addSlice() and the session verb addSlice are
+# refused at the cap with the same wording addSliceOnPan uses; a remote
+# window reproducing the Core's slices is never refused by its own count.
+nereus_add_test(tst_slice_cap_every_path
+    fakes/LoopbackStationLink.cpp
+    fakes/P1FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp)
+
 # Remote Daemon R2, Task 12: the per-slice S-meter gets a model home.
 # SliceMeterPump (src/core/meters/) replaces MeterPoller::pollSliceSMeters()
 # -- GUI-only, so a headless nereusd could never produce a per-slice S-meter

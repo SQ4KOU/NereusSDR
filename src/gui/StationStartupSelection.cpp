@@ -20,7 +20,9 @@ std::optional<StationStartupSelection> resolveStationStartup(
         || request.allowUnpinnedSpecified;
     if (request.local) {
         if (request.stationSpecified || hasCredentials) {
-            return fail(QStringLiteral("--local cannot be combined with --station options."));
+            return fail(QStringLiteral("--local cannot be combined with --station, "
+                                       "--station-fingerprint, --station-allow-unpinned "
+                                       "or --token."));
         }
         return StationStartupSelection{};
     }

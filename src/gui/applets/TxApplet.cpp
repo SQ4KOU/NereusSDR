@@ -2127,14 +2127,6 @@ void TxApplet::requestOpenCfcDialog()
     m_cfcDialog->activateWindow();
 }
 
-// ---------------------------------------------------------------------------
-// Remote-station transmit-permission presentation
-//
-// The Core remains the authority for transmit refusal and unwind. This gate
-// exists so a remote operator never receives a live-looking TX control before
-// the completed handshake explicitly grants that capability. Do not clear or
-// write any model state here: model-to-view updates must remain authoritative.
-// ---------------------------------------------------------------------------
 // R-R3-45: the MON output pair shows the choice; clicking the checked one
 // keeps it, as on the receiver flag.
 void TxApplet::showMonitorOutput(bool headphones)
@@ -2163,6 +2155,14 @@ void TxApplet::updateMonitorOutputNotice()
     m_monOutputNotice->setVisible(headphones && !m_headphonesAvailable);
 }
 
+// ---------------------------------------------------------------------------
+// Remote-station transmit-permission presentation
+//
+// The Core remains the authority for transmit refusal and unwind. This gate
+// exists so a remote operator never receives a live-looking TX control before
+// the completed handshake explicitly grants that capability. Do not clear or
+// write any model state here: model-to-view updates must remain authoritative.
+// ---------------------------------------------------------------------------
 void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableReason)
 {
     m_transmitPermitted = permitted;

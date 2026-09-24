@@ -96,10 +96,15 @@ public:
     // test initializer is installed, so it may replace it), letting a test
     // install capture supervisor options or policy flags that must be in
     // place before the connect path starts the AudioEngine.
+    //
+    // Receiver and transmit gaps plan Task 1: `board` is the board type the
+    // RadioInfo announces (Protocol 1, the P1FakeRadio's wire either way),
+    // so a test can connect a smaller board than the Hermes Lite 2 default.
     static std::unique_ptr<ConnectableRadioModel> create(
         int timeoutMs = 10000,
         NereusSDR::RadioModel::Role role = NereusSDR::RadioModel::Role::Local,
-        std::function<void(NereusSDR::RadioModel&)> beforeConnect = {});
+        std::function<void(NereusSDR::RadioModel&)> beforeConnect = {},
+        NereusSDR::HPSDRHW board = NereusSDR::HPSDRHW::HermesLite);
 
     NereusSDR::RadioModel&       model()       { return *m_model; }
     const NereusSDR::RadioModel& model() const { return *m_model; }

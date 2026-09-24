@@ -18,6 +18,22 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
+# R-R3-50: every shipped library has its licence text. Runs ahead of the
+# source-file gate below because what it guards (CMake files, third_party/,
+# the licence folder) is mostly not source. Fast: no build, no clone.
+if git diff --cached --name-only --diff-filter=ACMRD | \
+     grep -qE '(^|/)CMakeLists\.txt$|\.cmake$|^third_party/|^packaging/third-party-licenses/|^scripts/check-third-party-licenses\.py$'; then
+    echo "[pre-commit] check-third-party-licenses.py"
+    if ! python3 scripts/check-third-party-licenses.py; then
+        echo
+        echo "[pre-commit] BLOCKED: a shipped library is missing its licence"
+        echo "             text or its row. Add the upstream licence file byte"
+        echo "             for byte to packaging/third-party-licenses/ and a row"
+        echo "             in its README.md (see the sources table there)."
+        exit 1
+    fi
+fi
+
 # Skip if no source files are staged — these hooks only care about
 # source / docs provenance.
 if ! git diff --cached --name-only --diff-filter=ACMR | \

@@ -770,7 +770,8 @@ QMenu* TunerApplet::buildContextMenu(QObject* menuParent)
     if (m_model && m_model->role() == RadioModel::Role::Remote) {
         openAdvancedAction->setEnabled(false);
         openAdvancedAction->setToolTip(
-            QStringLiteral("TGXL Advanced administration is unavailable from a remote Core."));
+            QStringLiteral("TGXL Advanced administration is unavailable in a window "
+                           "connected to a remote Core."));
     }
     connect(openAdvancedAction, &QAction::triggered, this, [this]() {
         emit navigationRequested(QStringLiteral("tgxlAdvanced"));

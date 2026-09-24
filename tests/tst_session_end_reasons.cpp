@@ -15,6 +15,12 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  Created for review finding I1.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Final review M1 (R-R3-38, R-IOS-01):
+//                                    an older Core's two wordings parse to
+//                                    their kinds; partial and quoted forms
+//                                    of them do not. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -114,20 +120,78 @@ private slots:
                  qPrintable(OperatorWording::internalTermIn(reason)));
     }
 
-    // Anything else is neither, including the words these two replaced
-    // and a reason that only contains one of them.
+    // An older Core (the bench Cores until they are upgraded) words the
+    // same two ends its own way; they read as the same kinds.
+    void olderCoreWording_data()
+    {
+        QTest::addColumn<QString>("reason");
+        QTest::addColumn<int>("kind");
+        QTest::addColumn<QString>("address");
+        QTest::addColumn<int>("coreMajor");
+        QTest::addColumn<int>("appMajor");
+
+        QTest::newRow("takeover IPv4")
+            << QStringLiteral("Displaced by a newer authenticated connection from "
+                              "192.0.2.7:50123")
+            << int(Kind::TakenOver) << QStringLiteral("192.0.2.7") << -1 << -1;
+        QTest::newRow("takeover IPv4 written as IPv6")
+            << QStringLiteral("Displaced by a newer authenticated connection from "
+                              "::ffff:127.0.0.1:40000")
+            << int(Kind::TakenOver) << QStringLiteral("127.0.0.1") << -1 << -1;
+        QTest::newRow("takeover no address")
+            << QStringLiteral("Displaced by a newer authenticated connection from <unknown>")
+            << int(Kind::TakenOver) << QString() << -1 << -1;
+        QTest::newRow("version, Core newer")
+            << QStringLiteral("Protocol major version mismatch: station speaks 2.0, client "
+                              "speaks 1.11. A differing major means an incompatible wire "
+                              "contract.")
+            << int(Kind::VersionRefused) << QString() << 2 << 1;
+        QTest::newRow("version, app newer")
+            << QStringLiteral("Protocol major version mismatch: station speaks 1.4, client "
+                              "speaks 12.0. A differing major means an incompatible wire "
+                              "contract.")
+            << int(Kind::VersionRefused) << QString() << 1 << 12;
+    }
+
+    void olderCoreWording()
+    {
+        QFETCH(QString, reason);
+        QFETCH(int, kind);
+        QFETCH(QString, address);
+        QFETCH(int, coreMajor);
+        QFETCH(int, appMajor);
+        const SessionEndReasons::Parsed parsed = SessionEndReasons::parse(reason);
+        QCOMPARE(int(parsed.kind), kind);
+        QCOMPARE(parsed.otherAppAddress, address);
+        QCOMPARE(parsed.coreMajor, coreMajor);
+        QCOMPARE(parsed.appMajor, appMajor);
+    }
+
+    // Anything else is neither, including a reason that only contains one
+    // of them or only part of one, in either wording.
     void otherReasonsAreNeither_data()
     {
         QTest::addColumn<QString>("reason");
         QTest::newRow("empty") << QString();
         QTest::newRow("another refusal") << QStringLiteral("undecodable message");
-        QTest::newRow("old takeover words")
-            << QStringLiteral("Displaced by a newer authenticated connection from "
+        QTest::newRow("older takeover words, no address")
+            << QStringLiteral("Displaced by a newer authenticated connection from ");
+        QTest::newRow("older takeover words quoted inside another")
+            << QStringLiteral("Refused: Displaced by a newer authenticated connection from "
                               "192.0.2.7:50123");
-        QTest::newRow("old version words")
+        QTest::newRow("older version words, partial")
             << QStringLiteral("Protocol major version mismatch: station speaks 2.0, client "
-                              "speaks 1.11. A differing major means an incompatible wire "
-                              "contract.");
+                              "speaks 1.11.");
+        QTest::newRow("older version words quoted inside another")
+            << QStringLiteral("Refused: Protocol major version mismatch: station speaks 2.0, "
+                              "client speaks 1.11. A differing major means an incompatible "
+                              "wire contract.");
+        QTest::newRow("older client-side version words")
+            << QStringLiteral("Protocol major version mismatch: this client speaks 1.11, the "
+                              "station speaks 2.0. A differing major means an incompatible "
+                              "wire contract.");
+        QTest::newRow("partial new version words")
+            << QStringLiteral("This Core runs link version 1 and this app runs version 3.");
         QTest::newRow("station wording")
             << QStringLiteral("This station runs link version 1 and this app runs version 3. "
                               "Update the station.");
