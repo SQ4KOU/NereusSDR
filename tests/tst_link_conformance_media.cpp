@@ -17,6 +17,17 @@
 //   codec "ps3d"    one PureSignal display chunk, assembled by a fresh
 //                   Ps3DisplayAssembler for the expectation's
 //                   sessionGeneration; values are exact (tolerance 0)
+//   codec "nsdc1"   one display codec frame, decoded by DisplayCodecDecoder;
+//                   rows within the expectation's dBm tolerance
+//   codec "opus"    one RTP packet of Opus audio, decoded by
+//                   OpusAudioDecoder; PCM by SNR or by 16-bit steps, as the
+//                   expectation states
+//
+// A vector's expectation may name others in "after": a fresh decoder
+// decodes those first, in order (their own expectations are not checked
+// there), then this vector, and only this vector's expectation is
+// compared. "after" naming the vector itself, a vector of another codec, a
+// missing vector, or forming a cycle is a malformed vector.
 //
 //   cmake --build build --target tst_link_conformance_media
 //   QT_QPA_PLATFORM=offscreen ctest --test-dir build \
@@ -28,19 +39,30 @@
 //                                    conformance runner. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 3 (R-IOS-01): NSDC and
+//                                    Opus vectors, and "after" for the
+//                                    stateful decoders. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 
 #include <QDir>
 #include <QFile>
+#include <QHash>
+#include <QJsonArray>
 #include <QJsonObject>
+#include <QSet>
 
+#include <cmath>
 #include <optional>
 
 #include "core/dsp/Ps3Snapshot.h"
 #include "core/session/Ps3DisplayCodec.h"
 #include "core/session/StationLanAnnouncement.h"
+#include "core/session/media/DisplayCodec.h"
+#include "core/session/media/OpusAudioCodec.h"
 
 #include "LinkFixtures.h"
 
@@ -49,6 +71,124 @@ using NereusSDR::Test::LinkFixtures;
 using NereusSDR::Test::LinkMediaVectors;
 
 namespace {
+
+struct Vector {
+    QString id;
+    QByteArray bytes;
+    QJsonObject expectation;
+};
+using Vectors = QHash<QString, Vector>;
+
+QString codecOf(const Vector& vector)
+{
+    return vector.expectation.value(QStringLiteral("codec")).toString();
+}
+
+QJsonObject expectOf(const Vector& vector)
+{
+    return vector.expectation.value(QStringLiteral("expect")).toObject();
+}
+
+// The ids a vector's "after" names, checked: strings, present, the same
+// codec, not the vector itself, and no cycle through anyone's "after".
+QString resolveAfter(const Vectors& all, const Vector& vector, QStringList* after)
+{
+    after->clear();
+    const QJsonValue value = expectOf(vector).value(QStringLiteral("after"));
+    if (value.isUndefined()) {
+        return QString();
+    }
+    if (!value.isArray()) {
+        return QStringLiteral("%1: after must be an array of fixture ids").arg(vector.id);
+    }
+    for (const QJsonValue& entry : value.toArray()) {
+        const QString id = entry.toString();
+        if (!entry.isString() || !all.contains(id)) {
+            return QStringLiteral("%1: after names no media fixture \"%2\"").arg(vector.id, id);
+        }
+        if (id == vector.id) {
+            return QStringLiteral("%1: after names the fixture itself").arg(vector.id);
+        }
+        if (codecOf(all.value(id)) != codecOf(vector)) {
+            return QStringLiteral("%1: after names %2, a fixture of another codec")
+                .arg(vector.id, id);
+        }
+        after->append(id);
+    }
+    // A cycle: some vector reachable through "after" names this one again.
+    QStringList stack = *after;
+    QSet<QString> seen;
+    while (!stack.isEmpty()) {
+        const QString id = stack.takeLast();
+        if (id == vector.id) {
+            return QStringLiteral("%1: after forms a cycle").arg(vector.id);
+        }
+        if (seen.contains(id)) {
+            continue;
+        }
+        seen.insert(id);
+        for (const QJsonValue& next :
+             expectOf(all.value(id)).value(QStringLiteral("after")).toArray()) {
+            stack.append(next.toString());
+        }
+    }
+    return QString();
+}
+
+// Like LinkFixtures::match, with every number allowed to differ by up to
+// `tolerance`.
+QString matchWithin(const QJsonValue& expected, const QJsonValue& actual, double tolerance,
+                    const QString& path)
+{
+    if (expected.isDouble()) {
+        if (!actual.isDouble() || std::fabs(actual.toDouble() - expected.toDouble()) > tolerance) {
+            return QStringLiteral("%1: expected %2 within %3, got %4")
+                .arg(path)
+                .arg(expected.toDouble(), 0, 'g', 12)
+                .arg(tolerance)
+                .arg(actual.isDouble() ? QString::number(actual.toDouble(), 'g', 12)
+                                       : QStringLiteral("a non-number"));
+        }
+        return QString();
+    }
+    if (expected.isArray()) {
+        const QJsonArray e = expected.toArray();
+        const QJsonArray a = actual.toArray();
+        if (!actual.isArray() || e.size() != a.size()) {
+            return QStringLiteral("%1: expected %2 elements").arg(path).arg(e.size());
+        }
+        for (qsizetype i = 0; i < e.size(); ++i) {
+            const QString difference =
+                matchWithin(e.at(i), a.at(i), tolerance, QStringLiteral("%1[%2]").arg(path).arg(i));
+            if (!difference.isEmpty()) {
+                return difference;
+            }
+        }
+        return QString();
+    }
+    if (expected.isObject()) {
+        const QJsonObject e = expected.toObject();
+        const QJsonObject a = actual.toObject();
+        if (!actual.isObject()) {
+            return QStringLiteral("%1: expected an object").arg(path);
+        }
+        for (auto it = e.constBegin(); it != e.constEnd(); ++it) {
+            const QString difference =
+                matchWithin(it.value(), a.value(it.key()), tolerance, path + QLatin1Char('.') + it.key());
+            if (!difference.isEmpty()) {
+                return difference;
+            }
+        }
+        for (auto it = a.constBegin(); it != a.constEnd(); ++it) {
+            if (!e.contains(it.key())) {
+                return QStringLiteral("%1.%2: not expected").arg(path, it.key());
+            }
+        }
+        return QString();
+    }
+    LinkFixtures::Captures none;
+    return LinkFixtures::match(expected, actual, &none, path);
+}
 
 QString checkAnnouncement(const QByteArray& bytes, const QJsonObject& expect)
 {
@@ -76,7 +216,7 @@ QString checkAnnouncement(const QByteArray& bytes, const QJsonObject& expect)
     return QString();
 }
 
-QString checkPs3d(const QByteArray& bytes, QJsonObject expect)
+QString checkPs3d(const QList<QByteArray>& before, const QByteArray& bytes, QJsonObject expect)
 {
     if (expect.value(QStringLiteral("tolerance")).toObject()
         != QJsonObject{{QStringLiteral("absolute"), 0}}) {
@@ -90,6 +230,9 @@ QString checkPs3d(const QByteArray& bytes, QJsonObject expect)
         return error;
     }
     Ps3DisplayAssembler assembler(expected.sessionGeneration);
+    for (const QByteArray& earlier : before) {
+        assembler.accept(earlier);
+    }
     const std::optional<Ps3Snapshot> decoded = assembler.accept(bytes, &error);
     if (!decoded) {
         return QStringLiteral("the station's assembler refused the chunk: %1").arg(error);
@@ -109,20 +252,138 @@ QString checkPs3d(const QByteArray& bytes, QJsonObject expect)
     return QString();
 }
 
-QString checkMedia(const QByteArray& bytes, const QJsonObject& expectation)
+QString checkNsdc(const QList<QByteArray>& before, const QByteArray& bytes, QJsonObject expect)
 {
-    for (auto it = expectation.constBegin(); it != expectation.constEnd(); ++it) {
+    double tolerance = 0.0;
+    if (expect.contains(QStringLiteral("tolerance"))) {
+        const QJsonObject t = expect.take(QStringLiteral("tolerance")).toObject();
+        if (t.keys() != QStringList{QStringLiteral("dbm")} || !t.value(QStringLiteral("dbm")).isDouble()) {
+            return QStringLiteral("an NSDC tolerance is {\"dbm\": <number>}");
+        }
+        tolerance = t.value(QStringLiteral("dbm")).toDouble();
+    }
+    DisplayCodecDecoder decoder;
+    for (const QByteArray& earlier : before) {
+        decoder.decode(earlier);
+    }
+    QJsonObject decoded = LinkMediaVectors::toJson(decoder.decode(bytes));
+    decoded.insert(QStringLiteral("keyframe"), bytes.size() > 5 && (bytes.at(5) & 0x01) != 0);
+    // What the decoder did with the packet first, then the frame it made.
+    for (const QString& key : {QStringLiteral("disposition"), QStringLiteral("reason"),
+                               QStringLiteral("keyframe")}) {
+        LinkFixtures::Captures none;
+        const QString first = LinkFixtures::match(expect.value(key), decoded.value(key), &none,
+                                                  QStringLiteral("$.") + key);
+        if (!first.isEmpty()) {
+            return QStringLiteral("the decoded display frame differs at %1").arg(first);
+        }
+    }
+    const QString difference = matchWithin(expect, decoded, tolerance, QStringLiteral("$"));
+    return difference.isEmpty()
+               ? QString()
+               : QStringLiteral("the decoded display frame differs at %1").arg(difference);
+}
+
+QString checkOpus(const QList<QByteArray>& before, const QByteArray& bytes, QJsonObject expect)
+{
+    const QJsonObject tolerance = expect.take(QStringLiteral("tolerance")).toObject();
+    const bool bySnr = tolerance.keys() == QStringList{QStringLiteral("minSnrDb")};
+    const bool bySteps = tolerance.keys() == QStringList{QStringLiteral("lsb16")};
+    if (!bySnr && !bySteps) {
+        return QStringLiteral("an Opus tolerance is {\"minSnrDb\": <dB>} or {\"lsb16\": <steps>}");
+    }
+    const double limit = tolerance.value(tolerance.keys().first()).toDouble();
+    const QJsonValue ssrcValue = expect.value(QStringLiteral("ssrc"));
+    if (!ssrcValue.isDouble()) {
+        return QStringLiteral("an Opus expectation names the packets' ssrc");
+    }
+    const quint32 ssrc = static_cast<quint32>(ssrcValue.toDouble());
+    OpusAudioDecoder decoder;
+    if (!decoder.isReady()) {
+        return QStringLiteral("the station's Opus decoder is not ready");
+    }
+    for (const QByteArray& earlier : before) {
+        decoder.decodeRtp(earlier, ssrc);
+    }
+    QJsonObject decoded = LinkMediaVectors::toJson(decoder.decodeRtp(bytes, ssrc));
+    decoded.insert(QStringLiteral("ssrc"), static_cast<qint64>(ssrc));
+
+    const QJsonArray reference = expect.take(QStringLiteral("pcm16")).toArray();
+    const QJsonArray pcm = decoded.take(QStringLiteral("pcm16")).toArray();
+    LinkFixtures::Captures none;
+    const QString difference = LinkFixtures::match(expect, decoded, &none);
+    if (!difference.isEmpty()) {
+        return QStringLiteral("the decoded packet differs at %1").arg(difference);
+    }
+    if (pcm.size() != reference.size()) {
+        return QStringLiteral("$.pcm16: expected %1 samples, got %2")
+            .arg(reference.size())
+            .arg(pcm.size());
+    }
+    double signal = 0.0;
+    double noise = 0.0;
+    double worst = 0.0;
+    qsizetype worstAt = 0;
+    for (qsizetype i = 0; i < pcm.size(); ++i) {
+        const double r = reference.at(i).toDouble();
+        const double d = pcm.at(i).toDouble() - r;
+        signal += r * r;
+        noise += d * d;
+        if (std::fabs(d) > worst) {
+            worst = std::fabs(d);
+            worstAt = i;
+        }
+    }
+    if (bySteps && worst > limit) {
+        return QStringLiteral("$.pcm16[%1]: %2 steps from the reference, more than %3")
+            .arg(worstAt)
+            .arg(worst)
+            .arg(limit);
+    }
+    if (bySnr && noise > 0.0) {
+        const double snr = signal > 0.0 ? 10.0 * std::log10(signal / noise) : -INFINITY;
+        if (snr < limit) {
+            return QStringLiteral("$.pcm16: %1 dB from the reference, less than %2 dB "
+                                  "(largest difference at [%3])")
+                .arg(snr, 0, 'f', 1)
+                .arg(limit)
+                .arg(worstAt);
+        }
+    }
+    return QString();
+}
+
+QString checkVector(const Vectors& all, const QString& id)
+{
+    const Vector vector = all.value(id);
+    for (auto it = vector.expectation.constBegin(); it != vector.expectation.constEnd(); ++it) {
         if (it.key() != QStringLiteral("codec") && it.key() != QStringLiteral("expect")) {
             return QStringLiteral("media expectation: unknown field \"%1\"").arg(it.key());
         }
     }
-    const QString codec = expectation.value(QStringLiteral("codec")).toString();
-    const QJsonObject expect = expectation.value(QStringLiteral("expect")).toObject();
+    QStringList after;
+    const QString malformed = resolveAfter(all, vector, &after);
+    if (!malformed.isEmpty()) {
+        return malformed;
+    }
+    QList<QByteArray> before;
+    for (const QString& earlier : after) {
+        before.append(all.value(earlier).bytes);
+    }
+    QJsonObject expect = expectOf(vector);
+    expect.remove(QStringLiteral("after"));
+    const QString codec = codecOf(vector);
     if (codec == QStringLiteral("nrsc1")) {
-        return checkAnnouncement(bytes, expect);
+        return checkAnnouncement(vector.bytes, expect);
     }
     if (codec == QStringLiteral("ps3d")) {
-        return checkPs3d(bytes, expect);
+        return checkPs3d(before, vector.bytes, expect);
+    }
+    if (codec == QStringLiteral("nsdc1")) {
+        return checkNsdc(before, vector.bytes, expect);
+    }
+    if (codec == QStringLiteral("opus")) {
+        return checkOpus(before, vector.bytes, expect);
     }
     return QStringLiteral("media expectation: unknown codec \"%1\"").arg(codec);
 }
@@ -136,85 +397,175 @@ private slots:
     void initTestCase();
     void mediaVectors_data();
     void mediaVectors();
+    void vectorsCoverThePlan();
+    void nsdcVectorsAreTheStationsEncoderOutput();
+    void malformedAfterIsReported();
     void alteredVectorsFailReadably();
 
 private:
-    bool load(const QString& id, QByteArray* bytes, QJsonObject* expectation);
-    QJsonObject m_manifest;
+    Vectors m_vectors;
 };
 
 void TstLinkConformanceMedia::initTestCase()
 {
     QString error;
-    m_manifest = LinkFixtures::readObject(
+    const QJsonObject manifest = LinkFixtures::readObject(
         QDir(LinkFixtures::dataDirectory()).filePath(QStringLiteral("manifest.json")), &error);
     QVERIFY2(error.isEmpty(), qPrintable(error));
-}
-
-bool TstLinkConformanceMedia::load(const QString& id, QByteArray* bytes, QJsonObject* expectation)
-{
-    for (const LinkFixtures::Entry& entry :
-         LinkFixtures::entries(m_manifest, QStringLiteral("media"))) {
-        if (entry.id != id) {
-            continue;
-        }
-        const QDir root(LinkFixtures::dataDirectory());
+    const QDir root(LinkFixtures::dataDirectory());
+    for (const LinkFixtures::Entry& entry : LinkFixtures::entries(manifest, QStringLiteral("media"))) {
         QFile file(root.filePath(entry.file));
-        if (!file.open(QIODevice::ReadOnly)) {
-            return false;
-        }
-        *bytes = file.readAll();
-        QString error;
-        *expectation = LinkFixtures::readObject(
+        QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(entry.file));
+        Vector vector;
+        vector.id = entry.id;
+        vector.bytes = file.readAll();
+        vector.expectation = LinkFixtures::readObject(
             root.filePath(entry.file.chopped(4) + QStringLiteral(".expect.json")), &error);
-        return error.isEmpty();
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        m_vectors.insert(entry.id, vector);
     }
-    return false;
+    QVERIFY(!m_vectors.isEmpty());
 }
 
 void TstLinkConformanceMedia::mediaVectors_data()
 {
     QTest::addColumn<QString>("id");
-    const QList<LinkFixtures::Entry> entries =
-        LinkFixtures::entries(m_manifest, QStringLiteral("media"));
-    QVERIFY(!entries.isEmpty());
-    for (const LinkFixtures::Entry& entry : entries) {
-        QTest::newRow(qPrintable(entry.id)) << entry.id;
+    QStringList ids = m_vectors.keys();
+    ids.sort();
+    for (const QString& id : ids) {
+        QTest::newRow(qPrintable(id)) << id;
     }
 }
 
 void TstLinkConformanceMedia::mediaVectors()
 {
     QFETCH(QString, id);
-    QByteArray bytes;
-    QJsonObject expectation;
-    QVERIFY2(load(id, &bytes, &expectation), qPrintable(id));
-    const QString failure = checkMedia(bytes, expectation);
+    const QString failure = checkVector(m_vectors, id);
     QVERIFY2(failure.isEmpty(), qPrintable(failure));
+}
+
+void TstLinkConformanceMedia::vectorsCoverThePlan()
+{
+    // Three NSDC frames (full, delta, keyframe after loss) and four Opus
+    // packets, besides the announcement and the PS3D frame.
+    for (const QString& id :
+         {QStringLiteral("media-nsdc1-full"), QStringLiteral("media-nsdc1-delta"),
+          QStringLiteral("media-nsdc1-keyframe-after-loss"), QStringLiteral("media-opus-1"),
+          QStringLiteral("media-opus-2"), QStringLiteral("media-opus-3"),
+          QStringLiteral("media-opus-4"), QStringLiteral("media-lan-announcement"),
+          QStringLiteral("media-ps3d-frame")}) {
+        QVERIFY2(m_vectors.contains(id), qPrintable(id));
+    }
+    const QJsonObject delta = expectOf(m_vectors.value(QStringLiteral("media-nsdc1-delta")));
+    QCOMPARE(delta.value(QStringLiteral("keyframe")).toBool(), false);
+    const QJsonObject recovered =
+        expectOf(m_vectors.value(QStringLiteral("media-nsdc1-keyframe-after-loss")));
+    QCOMPARE(recovered.value(QStringLiteral("keyframe")).toBool(), true);
+    QCOMPARE(recovered.value(QStringLiteral("disposition")).toString(), QStringLiteral("accepted"));
+}
+
+void TstLinkConformanceMedia::nsdcVectorsAreTheStationsEncoderOutput()
+{
+    // The display codec is integer arithmetic, so the station's encoder
+    // writes the same bytes on every machine: a change to it shows here.
+    // (Opus is not held to its bytes: its floating-point encoder may differ
+    // between processors; its vectors hold the decoder to them instead.)
+    const QList<DisplayCodecFrame> frames = LinkMediaVectors::nsdcFrames();
+    DisplayCodecEncoder encoder;
+    const QByteArray full = encoder.encode(frames.at(0));
+    const QByteArray delta = encoder.encode(frames.at(1));
+    const QByteArray lost = encoder.encode(frames.at(2));
+    const QByteArray keyframe = encoder.encode(frames.at(3), true);
+    QCOMPARE(m_vectors.value(QStringLiteral("media-nsdc1-full")).bytes, full);
+    QCOMPARE(m_vectors.value(QStringLiteral("media-nsdc1-delta")).bytes, delta);
+    QCOMPARE(m_vectors.value(QStringLiteral("media-nsdc1-delta-after-loss")).bytes, lost);
+    QCOMPARE(m_vectors.value(QStringLiteral("media-nsdc1-keyframe-after-loss")).bytes, keyframe);
+}
+
+void TstLinkConformanceMedia::malformedAfterIsReported()
+{
+    const auto withAfter = [](Vector vector, const QJsonArray& after) {
+        QJsonObject expect = vector.expectation.value(QStringLiteral("expect")).toObject();
+        expect.insert(QStringLiteral("after"), after);
+        vector.expectation.insert(QStringLiteral("expect"), expect);
+        return vector;
+    };
+    Vectors all = m_vectors;
+    const QString delta = QStringLiteral("media-nsdc1-delta");
+    const QString full = QStringLiteral("media-nsdc1-full");
+
+    all.insert(delta, withAfter(m_vectors.value(delta), {delta}));
+    QString failure = checkVector(all, delta);
+    QVERIFY2(failure.contains(QStringLiteral("the fixture itself")), qPrintable(failure));
+
+    all.insert(delta, withAfter(m_vectors.value(delta), {QStringLiteral("media-opus-1")}));
+    failure = checkVector(all, delta);
+    QVERIFY2(failure.contains(QStringLiteral("another codec")), qPrintable(failure));
+
+    all.insert(delta, withAfter(m_vectors.value(delta), {QStringLiteral("media-no-such-vector")}));
+    failure = checkVector(all, delta);
+    QVERIFY2(failure.contains(QStringLiteral("names no media fixture")), qPrintable(failure));
+
+    all.insert(delta, withAfter(m_vectors.value(delta), {full}));
+    all.insert(full, withAfter(m_vectors.value(full), {delta}));
+    failure = checkVector(all, delta);
+    QVERIFY2(failure.contains(QStringLiteral("cycle")), qPrintable(failure));
 }
 
 void TstLinkConformanceMedia::alteredVectorsFailReadably()
 {
     // One byte of the announcement's core name changed: the decoded name
     // differs, and the failure names the field.
-    QByteArray bytes;
-    QJsonObject expectation;
-    QVERIFY(load(QStringLiteral("media-lan-announcement"), &bytes, &expectation));
-    const qsizetype at = bytes.indexOf(QByteArrayLiteral("Shack Core"));
+    Vectors all = m_vectors;
+    Vector announcement = all.value(QStringLiteral("media-lan-announcement"));
+    const qsizetype at = announcement.bytes.indexOf(QByteArrayLiteral("Shack Core"));
     QVERIFY(at >= 0);
-    bytes[at] = 'W';
-    QString failure = checkMedia(bytes, expectation);
+    announcement.bytes[at] = 'W';
+    all.insert(announcement.id, announcement);
+    QString failure = checkVector(all, announcement.id);
     QVERIFY2(failure.contains(QStringLiteral("$.coreName")), qPrintable(failure));
 
     // One expected PS3D value changed: the failure names the element.
-    QVERIFY(load(QStringLiteral("media-ps3d-frame"), &bytes, &expectation));
-    QJsonObject expect = expectation.value(QStringLiteral("expect")).toObject();
+    Vector ps3d = all.value(QStringLiteral("media-ps3d-frame"));
+    QJsonObject expect = expectOf(ps3d);
     QJsonArray x = expect.value(QStringLiteral("x")).toArray();
     x.replace(2, 99.0);
     expect.insert(QStringLiteral("x"), x);
-    expectation.insert(QStringLiteral("expect"), expect);
-    failure = checkMedia(bytes, expectation);
+    ps3d.expectation.insert(QStringLiteral("expect"), expect);
+    all.insert(ps3d.id, ps3d);
+    failure = checkVector(all, ps3d.id);
     QVERIFY2(failure.contains(QStringLiteral("$.x[2]")), qPrintable(failure));
+
+    // The delta decoded without the frame before it: the decoder has no
+    // history, and the failure names the disposition.
+    Vector delta = all.value(QStringLiteral("media-nsdc1-delta"));
+    expect = expectOf(delta);
+    expect.remove(QStringLiteral("after"));
+    delta.expectation.insert(QStringLiteral("expect"), expect);
+    all.insert(delta.id, delta);
+    failure = checkVector(all, delta.id);
+    QVERIFY2(failure.contains(QStringLiteral("$.disposition")), qPrintable(failure));
+
+    // A display value moved by more than 0.01 dB.
+    Vector keyframe = all.value(QStringLiteral("media-nsdc1-keyframe-after-loss"));
+    expect = expectOf(keyframe);
+    QJsonArray trace = expect.value(QStringLiteral("traceDbm")).toArray();
+    trace.replace(5, trace.at(5).toDouble() + 0.02);
+    expect.insert(QStringLiteral("traceDbm"), trace);
+    keyframe.expectation.insert(QStringLiteral("expect"), expect);
+    all.insert(keyframe.id, keyframe);
+    failure = checkVector(all, keyframe.id);
+    QVERIFY2(failure.contains(QStringLiteral("$.traceDbm[5]")), qPrintable(failure));
+
+    // Opus packet 3 decoded without packets 1 and 2: its PCM falls below
+    // the reference's SNR.
+    Vector opus = all.value(QStringLiteral("media-opus-3"));
+    expect = expectOf(opus);
+    expect.remove(QStringLiteral("after"));
+    opus.expectation.insert(QStringLiteral("expect"), expect);
+    all.insert(opus.id, opus);
+    failure = checkVector(all, opus.id);
+    QVERIFY2(failure.contains(QStringLiteral("$.pcm16")), qPrintable(failure));
 }
 
 QTEST_MAIN(TstLinkConformanceMedia)

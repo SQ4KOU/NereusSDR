@@ -15,8 +15,9 @@
 //   sessions/*.json {"stationSetup":{...},"steps":[...]}, a step being
 //                   {"from","message"}, {"advanceMs":N} or
 //                   {"expectClosed":{"retryable":bool}}
-//   media/*.bin     the encoded bytes, with *.expect.json
-//                   {"codec":...,"expect":{...}}
+//   media/*.bin     one packet as it travels, with *.expect.json
+//                   {"codec":...,"expect":{...}}; "after" in expect names
+//                   the vectors a fresh decoder takes first
 //
 // This file holds what every station runner shares: the loader, the
 // placeholder matcher ("$any", "$string", "$int", "$capture:<name>",
@@ -40,6 +41,11 @@
 #include <QString>
 
 #include <QJsonArray>
+
+#include <QVector>
+
+#include "core/session/media/DisplayCodec.h"
+#include "core/session/media/OpusAudioCodec.h"
 
 namespace NereusSDR {
 class StationServer;
@@ -132,6 +138,32 @@ public:
     static QJsonObject toJson(const NereusSDR::Ps3Snapshot& snapshot);
     static bool fromJson(const QJsonObject& json, NereusSDR::Ps3Snapshot* snapshot,
                          QString* error);
+
+    /// Four display frames one endpoint sends in order, sequences 1 to 4:
+    /// a keyframe, two deltas, and a keyframe the sender was asked for
+    /// after the third was lost (encode it with requestKeyframe = true).
+    static QList<NereusSDR::DisplayCodecFrame> nsdcFrames();
+    /// A decode result as the vector's expectation holds it: disposition
+    /// and reason by name, and the frame's fields when it was accepted.
+    static QJsonObject toJson(const NereusSDR::DisplayCodecDecodeResult& result);
+    static QString nsdcDispositionName(NereusSDR::DisplayCodecDisposition disposition);
+    static QString nsdcReasonName(NereusSDR::DisplayCodecReason reason);
+
+    /// The Opus vectors: RTP synchronisation source, first sequence and
+    /// first timestamp, and packet `index`'s stereo input, interleaved
+    /// (1920 frames of a 440 Hz tone left and 1000 Hz right, continuous
+    /// across packets).
+    static constexpr quint32 kOpusSsrc = 0x4E524553U;
+    static constexpr quint16 kOpusFirstSequence = 100;
+    static constexpr quint32 kOpusFirstTimestamp = 0;
+    static constexpr int kOpusPackets = 4;
+    static QVector<float> opusInput(int index);
+    /// A decode result as the vector's expectation holds it: status by
+    /// name, sequence, timestamp, the packet's channels, Opus bandwidth
+    /// constant and samples per channel, and the PCM as 16-bit values
+    /// (round(sample * 32767), clamped).
+    static QJsonObject toJson(const NereusSDR::OpusRtpDecodeResult& result);
+    static QString opusStatusName(NereusSDR::OpusAudioCodecStatus status);
 };
 
 } // namespace NereusSDR::Test

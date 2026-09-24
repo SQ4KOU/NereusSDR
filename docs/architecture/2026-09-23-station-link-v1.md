@@ -1368,8 +1368,11 @@ files against its own client.
 - `sessions/*.json`: `{"stationSetup":{<the fake radio model and settings>},"steps":[<steps>]}`,
   where a step is `{"from":"station"|"client","message":{<a message>}}`,
   `{"advanceMs":N}` or `{"expectClosed":{"retryable":true|false}}`.
-- `media/*.bin` with `*.expect.json`: the encoded bytes and
-  `{"codec":<codec>,"expect":{<decoded values>}}`.
+- `media/*.bin` with `*.expect.json`: the bytes of one packet exactly as
+  it travels, and `{"codec":<codec>,"expect":{<decoded values>}}`, where
+  `<codec>` is `nsdc1`, `ps3d`, `opus` or `nrsc1` (the LAN announcement of
+  section 14). `expect` may hold `"after": ["<fixture id>", ...]` for a
+  codec whose decoder keeps state (section 16.4).
 
 Expected messages may hold placeholders: `"$any"` (any value, the key must
 be present), `"$string"`, `"$int"` (a whole number), `"$capture:<name>"`
@@ -1476,20 +1479,41 @@ same on every machine.
 ### 16.4 Media vectors
 
 `tst_link_conformance_regen` writes every vector from the station's own
-encoders and fixed inputs, into `NEREUS_LINK_REGEN_OUT` only. The media
-runner decodes the bytes and compares the result with `expect`, then
-encodes `expect` again and compares that with the bytes, so a change to
-either the decoder or the encoder fails it.
+encoders and fixed inputs, into `NEREUS_LINK_REGEN_OUT` only. Each `.bin`
+is one packet as it travels.
 
-| Codec | Vector | Decoded values |
-| --- | --- | --- |
-| `nrsc1` | `media/lan-announcement.bin`: one LAN announcement datagram (section 14) | `controlPort`, `fingerprint`, `coreName`, `radioName`, `radioMac`, `radioConnected`, exact |
-| `ps3d` | `media/ps3d-frame.bin`: one PureSignal display chunk, eight points and four correction points | Every header field and the eight value lists; `tolerance` `{"absolute": 0}`, because the values travel as IEEE-754 binary64 |
+**Decoding a vector.** A runner decodes a vector on a fresh decoder. When
+`expect` holds `"after": ["<fixture id>", ...]`, it first decodes each
+named vector's bytes, in order, on that same decoder, without checking
+their own expectations, then decodes the vector itself and compares only
+its own expectation. A vector without `after` decodes on a fresh decoder
+alone. Loss is a packet left out of `after`: `nsdc1-keyframe-after-loss`
+is decoded after `nsdc1-full` only, with the delta that came between
+omitted. An `after` that names the vector itself, a missing vector, a
+vector of another codec, or that forms a cycle through the vectors it
+names, is a malformed vector, and the runner reports it.
 
-The format also names `nsdc1` (display frames, bins within 0.01 dB) and
-`opus` (audio, PCM within 2 least significant bits of the reference or at
-least 60 dB SNR, as the vector states). This version of the suite has no
-vectors for them yet.
+The station's media runner decodes the bytes and compares the result with
+`expect`. Where the encoder is exact (`nrsc1`, `ps3d`, `nsdc1`) it also
+holds the encoder to the bytes: it encodes `expect` (or, for `nsdc1`, the
+regen target's fixed input frames) again and compares. Opus is not held
+to its bytes, because its floating-point encoder may differ between
+processors; its vectors hold decoders to the reference PCM instead.
+
+| Codec | Vector | After | Decoded values |
+| --- | --- | --- | --- |
+| `nrsc1` | `lan-announcement`: one LAN announcement datagram (section 14) | none | `controlPort`, `fingerprint`, `coreName`, `radioName`, `radioMac`, `radioConnected`, exact |
+| `ps3d` | `ps3d-frame`: one PureSignal display chunk, eight points and four correction points | none | Every header field and the eight value lists; `tolerance` `{"absolute": 0}`, because the values travel as IEEE-754 binary64 |
+| `nsdc1` | `nsdc1-full`: frame 1, a keyframe | none | `disposition` `accepted`, `reason` `none`, `keyframe` (the header's keyframe flag), the context (`endpointId`, `contextGeneration`, `minDbm`, `maxDbm`), `encoderSequence`, `producerTimestamp`, `waterfallAdvance` and the reconstructed `traceDbm`, `waterfallDbm` and `wideDbm` rows; `tolerance` `{"dbm": 0.01}` |
+| `nsdc1` | `nsdc1-delta`: frame 2, a delta | `nsdc1-full` | As above, `keyframe` false |
+| `nsdc1` | `nsdc1-delta-after-loss`: frame 3, a delta, when frame 2 was lost | `nsdc1-full` | `disposition` `needKeyframe`, `reason` `sequenceGap`, no frame |
+| `nsdc1` | `nsdc1-keyframe-after-loss`: frame 4, the keyframe the sender was asked for | `nsdc1-full` | `accepted`, `keyframe` true, the frame |
+| `opus` | `opus-1` to `opus-4`: four consecutive RTP packets at the station's settings (48 kHz stereo, 1920 samples per packet, 24000 bit/s, wideband) | the packets before it | `status` `accepted`, `sequence`, `timestamp`, `channels` 2, `bandwidth` 1103 (Opus wideband), `samplesPerChannel` 1920, and `pcm16`, the station decoder's output as 16-bit values (`round(sample * 32767)`); `ssrc` is the packets' RTP source, which the decoder is given; `tolerance` `{"minSnrDb": 60}` |
+
+An NSDC `dbm` tolerance applies to every number of the decoded frame. An
+Opus tolerance is either `{"minSnrDb": N}` (the decoded PCM is at least N
+dB above its difference from `pcm16`) or `{"lsb16": N}` (no sample is more
+than N 16-bit steps from `pcm16`); the vector states which.
 
 ### 16.5 Running the station's runners
 
@@ -1499,7 +1523,8 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^tst_link_conformance_(cont
 ```
 
 Each runner also alters one of its fixtures in memory and checks that the
-failure names the step or field that differs. With
+failure names the step or field that differs; the media runner also checks
+that a malformed `after` is reported. With
 `NEREUS_LINK_TRACE_DIR` set, `tst_link_conformance_session` writes every
 message the station sent in each fixture to `<id>.jsonl` there, which is
 how a fixture is written to what the code does.

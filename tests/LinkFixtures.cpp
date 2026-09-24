@@ -32,6 +32,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -963,6 +964,146 @@ bool LinkMediaVectors::fromJson(const QJsonObject& json, Ps3Snapshot* snapshot, 
     }
     *snapshot = out;
     return true;
+}
+
+QList<DisplayCodecFrame> LinkMediaVectors::nsdcFrames()
+{
+    // One endpoint, one context: 32 trace and 32 waterfall samples between
+    // -140 and -40 dBm, no wide row. Each frame drifts the rows by 0.5 dB
+    // so the deltas carry small residuals.
+    DisplayCodecContext context;
+    context.endpointId = 1;
+    context.contextGeneration = 1;
+    context.minDbm = -140.0f;
+    context.maxDbm = -40.0f;
+    context.traceSamples = 32;
+    context.waterfallSamples = 32;
+    context.wideSamples = 0;
+    QList<DisplayCodecFrame> frames;
+    for (quint32 sequence = 1; sequence <= 4; ++sequence) {
+        DisplayCodecFrame frame;
+        frame.context = context;
+        frame.encoderSequence = sequence;
+        frame.producerTimestamp = 20'000'000ULL * sequence;
+        frame.waterfallAdvance = true;
+        const float drift = 0.5f * static_cast<float>(sequence - 1);
+        for (int i = 0; i < 32; ++i) {
+            frame.traceDbm.append(-120.0f + 20.0f * static_cast<float>(std::sin(0.3 * i)) + drift);
+            frame.waterfallDbm.append(-110.0f + 10.0f * static_cast<float>(std::cos(0.2 * i))
+                                      + drift);
+        }
+        frames.append(frame);
+    }
+    return frames;
+}
+
+QString LinkMediaVectors::nsdcDispositionName(DisplayCodecDisposition disposition)
+{
+    switch (disposition) {
+    case DisplayCodecDisposition::Accepted: return QStringLiteral("accepted");
+    case DisplayCodecDisposition::NeedKeyframe: return QStringLiteral("needKeyframe");
+    case DisplayCodecDisposition::Rejected: return QStringLiteral("rejected");
+    }
+    return QString();
+}
+
+QString LinkMediaVectors::nsdcReasonName(DisplayCodecReason reason)
+{
+    switch (reason) {
+    case DisplayCodecReason::None: return QStringLiteral("none");
+    case DisplayCodecReason::InvalidInput: return QStringLiteral("invalidInput");
+    case DisplayCodecReason::NoHistory: return QStringLiteral("noHistory");
+    case DisplayCodecReason::SequenceGap: return QStringLiteral("sequenceGap");
+    case DisplayCodecReason::StaleSequence: return QStringLiteral("staleSequence");
+    case DisplayCodecReason::OldContext: return QStringLiteral("oldContext");
+    case DisplayCodecReason::ContextMismatch: return QStringLiteral("contextMismatch");
+    case DisplayCodecReason::BadMagic: return QStringLiteral("badMagic");
+    case DisplayCodecReason::UnsupportedVersion: return QStringLiteral("unsupportedVersion");
+    case DisplayCodecReason::UnknownFlags: return QStringLiteral("unknownFlags");
+    case DisplayCodecReason::Truncated: return QStringLiteral("truncated");
+    case DisplayCodecReason::Oversized: return QStringLiteral("oversized");
+    case DisplayCodecReason::Malformed: return QStringLiteral("malformed");
+    }
+    return QString();
+}
+
+QJsonObject LinkMediaVectors::toJson(const DisplayCodecDecodeResult& result)
+{
+    QJsonObject out{
+        {QStringLiteral("disposition"), nsdcDispositionName(result.disposition)},
+        {QStringLiteral("reason"), nsdcReasonName(result.reason)},
+    };
+    if (result.disposition != DisplayCodecDisposition::Accepted) {
+        return out;
+    }
+    const auto rows = [](const QVector<float>& values) {
+        QJsonArray array;
+        for (const float value : values) {
+            array.append(static_cast<double>(value));
+        }
+        return array;
+    };
+    const DisplayCodecFrame& frame = result.frame;
+    out.insert(QStringLiteral("endpointId"), static_cast<qint64>(frame.context.endpointId));
+    out.insert(QStringLiteral("contextGeneration"),
+               static_cast<qint64>(frame.context.contextGeneration));
+    out.insert(QStringLiteral("minDbm"), static_cast<double>(frame.context.minDbm));
+    out.insert(QStringLiteral("maxDbm"), static_cast<double>(frame.context.maxDbm));
+    out.insert(QStringLiteral("encoderSequence"), static_cast<qint64>(frame.encoderSequence));
+    out.insert(QStringLiteral("producerTimestamp"), static_cast<qint64>(frame.producerTimestamp));
+    out.insert(QStringLiteral("waterfallAdvance"), frame.waterfallAdvance);
+    out.insert(QStringLiteral("traceDbm"), rows(frame.traceDbm));
+    out.insert(QStringLiteral("waterfallDbm"), rows(frame.waterfallDbm));
+    out.insert(QStringLiteral("wideDbm"), rows(frame.wideDbm));
+    return out;
+}
+
+QVector<float> LinkMediaVectors::opusInput(int index)
+{
+    constexpr double kPi = 3.14159265358979323846;
+    const int frames = OpusAudioCodecConfig::kFrameSamples;
+    QVector<float> pcm;
+    pcm.reserve(frames * OpusAudioCodecConfig::kChannels);
+    for (int i = 0; i < frames; ++i) {
+        const double t = static_cast<double>(index * frames + i)
+                         / static_cast<double>(OpusAudioCodecConfig::kSampleRate);
+        pcm.append(static_cast<float>(0.3 * std::sin(2.0 * kPi * 440.0 * t)));
+        pcm.append(static_cast<float>(0.2 * std::sin(2.0 * kPi * 1000.0 * t)));
+    }
+    return pcm;
+}
+
+QString LinkMediaVectors::opusStatusName(OpusAudioCodecStatus status)
+{
+    switch (status) {
+    case OpusAudioCodecStatus::Accepted: return QStringLiteral("accepted");
+    case OpusAudioCodecStatus::Concealed: return QStringLiteral("concealed");
+    case OpusAudioCodecStatus::InvalidInput: return QStringLiteral("invalidInput");
+    case OpusAudioCodecStatus::EncodeFailed: return QStringLiteral("encodeFailed");
+    case OpusAudioCodecStatus::DecodeFailed: return QStringLiteral("decodeFailed");
+    case OpusAudioCodecStatus::MalformedRtp: return QStringLiteral("malformedRtp");
+    case OpusAudioCodecStatus::UnexpectedSsrc: return QStringLiteral("unexpectedSsrc");
+    case OpusAudioCodecStatus::Oversized: return QStringLiteral("oversized");
+    }
+    return QString();
+}
+
+QJsonObject LinkMediaVectors::toJson(const OpusRtpDecodeResult& result)
+{
+    QJsonArray pcm;
+    for (const float sample : result.pcmInterleaved) {
+        const double scaled = std::round(static_cast<double>(sample) * 32767.0);
+        pcm.append(static_cast<qint64>(std::clamp(scaled, -32768.0, 32767.0)));
+    }
+    return QJsonObject{
+        {QStringLiteral("status"), opusStatusName(result.status)},
+        {QStringLiteral("sequence"), static_cast<qint64>(result.sequence)},
+        {QStringLiteral("timestamp"), static_cast<qint64>(result.timestamp)},
+        {QStringLiteral("channels"), result.packetInfo.channels},
+        {QStringLiteral("bandwidth"), result.packetInfo.bandwidth},
+        {QStringLiteral("samplesPerChannel"), result.packetInfo.samplesPerChannel},
+        {QStringLiteral("pcm16"), pcm},
+    };
 }
 
 } // namespace NereusSDR::Test
