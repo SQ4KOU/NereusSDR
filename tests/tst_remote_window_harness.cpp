@@ -70,6 +70,7 @@
 #include "core/StepAttenuatorFacade.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
+#include "gui/meters/MeterPoller.h"
 #include "gui/MainWindow.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/RemoteConnectionController.h"
@@ -926,6 +927,21 @@ private slots:
         QTest::qWait(kSettleMs);
         QCOMPARE(superseded.size(), 0);
         QCOMPARE(h.acceptedConnections(), 1);
+    }
+
+    // R-R3-21: the meter update interval (MultimeterDelayMs) is the Core's
+    // setting. The window's meter poller read it at startup, before the
+    // Core's settings arrived; it takes the Core's value once they do.
+    void meterIntervalFollowsTheCoresSetting()
+    {
+        RemoteWindowHarness h;
+        h.stationSettings().setValue(QStringLiteral("MultimeterDelayMs"), 250);
+        QVERIFY(h.start());
+        MeterPoller* poller = h.window()->radioModel()->meterPoller();
+        QVERIFY(poller != nullptr);
+        QCOMPARE(poller->intervalMs(), 100);  // no Core settings yet
+        QVERIFY(connectFromRadioMenu(h));
+        QTRY_COMPARE(poller->intervalMs(), 250);
     }
 
     // R-R3-46 / R-R3-21: a Core whose controller stands behind its

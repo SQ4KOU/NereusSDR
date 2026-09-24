@@ -1293,6 +1293,13 @@ void MainWindow::ensureRemoteSession()
         // been offline through a band change can have a dozen of these, and a
         // toast listing "hardware/aa:bb:.../alex/hpf/..." twelve times is
         // noise the operator will learn to dismiss unread.
+        // R-R3-21: the meter update interval is the Core's setting
+        // (MultimeterDelayMs, Station scope); the window's meter poller
+        // read it at startup, before the Core's settings arrived.
+        connect(proxy, &SettingsProxy::snapshotApplied, this, [this](int) {
+            MultimeterPage::applyPersistedMeterInterval(m_radioModel);
+        });
+
         connect(proxy, &SettingsProxy::offlineEditsSuperseded, this,
                 [this](const QStringList& keys) {
             showToast(tr("%n station setting(s) you changed while the link was down "
