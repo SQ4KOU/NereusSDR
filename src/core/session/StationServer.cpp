@@ -132,6 +132,10 @@
 //   2026-09-24 - iPhone app Task 4b (R-IOS-01, R-R3-21): the reasons this
 //                file sends an app are in operator words. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Part A fix wave (R-IOS-01): the hello's
+//                `major` is the oldest supported major, so a client built
+//                before `majors` is still served. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -966,11 +970,15 @@ void StationServer::acceptTransport(SessionTransport* transport)
     // that avoids exposing a secret to an incompatible peer is this
     // task's own choice, recorded here.
     //
-    // iPhone app Task 4 (R-IOS-01): the hello names this station's newest
-    // major and every major it accepts, and declares its features, so the
-    // client can pick the highest shared major before it answers.
+    // iPhone app Task 4 (R-IOS-01): the hello names every major this
+    // station accepts, and declares its features, so the client can pick
+    // the highest shared major before it answers. `major` is the OLDEST of
+    // them: a client built before `majors` existed reads only `major` and
+    // leaves unless it is the one major it speaks, so the newest there would
+    // turn away every such client this station could still serve (spec D39).
+    // A client that reads `majors` ignores `major`.
     send(transport,
-         SessionMessages::hello(m_supportedMajors.last(), kSessionProtocolMinor,
+         SessionMessages::hello(m_supportedMajors.first(), kSessionProtocolMinor,
                                 settingsSchemaVersionOf(m_settings),
                                 peerNameForThisProcess(), m_supportedMajors,
                                 m_declaredFeatures));

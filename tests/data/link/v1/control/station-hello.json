@@ -6,7 +6,7 @@
     "minor": 11,
     "settingsSchema": 0,
     "peer": "nereusd",
-    "majors": [1],
+    "majors": [1, 2],
     "features": {}
   },
   "decodes": true

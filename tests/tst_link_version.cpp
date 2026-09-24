@@ -27,6 +27,11 @@
 //                                    version negotiation and declared
 //                                    features. AI-assisted transformation
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
+//                                    a client built before `majors` is
+//                                    served by a station that still
+//                                    accepts its major. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -134,6 +139,8 @@ private slots:
     void stationNegotiation_data();
     void stationNegotiation();
     void peerDeclaresWhatItsHelloDeclared();
+    void aClientBuiltBeforeMajorsIsServedByATwoMajorStation_data();
+    void aClientBuiltBeforeMajorsIsServedByATwoMajorStation();
 
     // ---- The desktop client ----
     void clientNegotiation_data();
@@ -374,7 +381,8 @@ void TstLinkVersion::stationHelloDeclaresItsMajorsAndFeatures()
         QVERIFY(hello.value(QStringLiteral("features")).toObject().isEmpty());
     }
     {
-        // Injected: the station's hello names its newest major and the list.
+        // Injected: the station's hello names its oldest major, which a
+        // client built before `majors` existed reads, and the list.
         StationServer server(&model, settings, m_securityDir.path(), nullptr, MajorList{1, 2});
         auto* station = new LoopbackTransport(QStringLiteral("station"), this);
         auto* app = new LoopbackTransport(QStringLiteral("app"), this);
@@ -382,7 +390,7 @@ void TstLinkVersion::stationHelloDeclaresItsMajorsAndFeatures()
         server.acceptTransport(station);
         QTRY_VERIFY(!lastOfType(app->received(), QStringLiteral("hello")).isEmpty());
         const QJsonObject hello = lastOfType(app->received(), QStringLiteral("hello"));
-        QCOMPARE(hello.value(QStringLiteral("major")).toInt(), 2);
+        QCOMPARE(hello.value(QStringLiteral("major")).toInt(), 1);
         QCOMPARE(majorsOf(hello), (MajorList{1, 2}));
     }
 }
@@ -480,21 +488,71 @@ void TstLinkVersion::peerDeclaresWhatItsHelloDeclared()
     QVERIFY(!server.peerDeclares(olderStation, "deviceAuth", 1));
 }
 
+void TstLinkVersion::aClientBuiltBeforeMajorsIsServedByATwoMajorStation_data()
+{
+    QTest::addColumn<MajorList>("stationMajors");
+    QTest::addColumn<bool>("served");
+
+    QTest::newRow("station [1]") << MajorList{1} << true;
+    QTest::newRow("station [1, 2]") << MajorList{1, 2} << true;
+    QTest::newRow("station [2, 3]") << MajorList{2, 3} << false;
+}
+
+void TstLinkVersion::aClientBuiltBeforeMajorsIsServedByATwoMajorStation()
+{
+    // A client built before `majors` existed (before 4cd6a4d1) reads only
+    // the station hello's `major`, and leaves unless it equals the one
+    // major it speaks, 1 (StationClient::handleHello at 4cd6a4d1^:
+    // `message.protocolMajor != kSessionProtocolMajor` disconnects). A
+    // station that still accepts major 1 must therefore send 1 there, or
+    // it turns away every such client it could serve (spec D39).
+    QFETCH(MajorList, stationMajors);
+    QFETCH(bool, served);
+
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("station.settings")));
+    RadioModel model;
+    StationServer server(&model, settings, m_securityDir.path(), nullptr, stationMajors);
+    auto* station = new LoopbackTransport(QStringLiteral("station"), this);
+    auto* app = new LoopbackTransport(QStringLiteral("app"), this);
+    station->linkTo(app);
+    server.acceptTransport(station);
+    QTRY_VERIFY(!app->received().isEmpty());
+
+    SessionMessage hello;
+    QVERIFY(SessionMessages::decode(app->received().first(), &hello));
+    QCOMPARE(hello.kind, SessionMessageKind::Hello);
+    constexpr quint16 kOnlyMajorOfAnOlderClient = 1;
+    const bool olderClientStays = hello.protocolMajor == kOnlyMajorOfAnOlderClient;
+    QCOMPARE(olderClientStays, served);
+    if (!served) {
+        return;
+    }
+
+    // It stays, and answers as it always has: no `majors`, no `features`.
+    app->sendText(clientHello(kOnlyMajorOfAnOlderClient, MajorList{}));
+    app->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(server.hasAuthenticatedSession());
+    QCOMPARE(int(server.peerAgreedMajor(station)), 1);
+}
+
 // ── The desktop client ───────────────────────────────────────────────────
 
 void TstLinkVersion::clientNegotiation_data()
 {
     QTest::addColumn<MajorList>("clientMajors");
+    // A station's hello names the oldest of its majors in `major` (the
+    // link document's section 6.1); an older station's names its only one.
     QTest::addColumn<int>("stationMajor");
     QTest::addColumn<MajorList>("stationMajors"); // empty: an older station's hello
     QTest::addColumn<int>("sent");                // 0: leaves without sending
 
     QTest::newRow("older station, same major") << MajorList{1} << 1 << MajorList{} << 1;
     QTest::newRow("same major") << MajorList{1} << 1 << MajorList{1} << 1;
-    QTest::newRow("station one ahead") << MajorList{1, 2} << 3 << MajorList{2, 3} << 2;
-    QTest::newRow("station one behind") << MajorList{2, 3} << 2 << MajorList{1, 2} << 2;
+    QTest::newRow("station one ahead") << MajorList{1, 2} << 2 << MajorList{2, 3} << 2;
+    QTest::newRow("station one behind") << MajorList{2, 3} << 1 << MajorList{1, 2} << 2;
     QTest::newRow("older station one behind") << MajorList{1, 2} << 1 << MajorList{} << 1;
-    QTest::newRow("station two ahead") << MajorList{1} << 3 << MajorList{2, 3} << 0;
+    QTest::newRow("station two ahead") << MajorList{1} << 2 << MajorList{2, 3} << 0;
     QTest::newRow("station two behind") << MajorList{2, 3} << 1 << MajorList{} << 0;
 }
 

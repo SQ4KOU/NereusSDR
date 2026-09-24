@@ -243,8 +243,12 @@ share none.
   array of whole numbers from 0 to 65535, never empty. A `hello` without it
   stands for `[major]`, which is what every peer built before the key
   existed sends.
-- The station's `hello` has `major` set to its newest major and `majors` to
-  its whole list.
+- The station's `hello` has `major` set to the **oldest** major it supports
+  and `majors` to its whole list. A client built before `majors` existed
+  reads only `major` and leaves unless it is the one major it speaks, so
+  the oldest is the value every client the station can still serve
+  accepts. A client that reads `majors` ignores `major`. For example a
+  station supporting `[1, 2]` sends `"major": 1, "majors": [1, 2]`.
 - The client picks the highest major in both its list and the station's,
   and sends it as `major` in its own `hello`, with its own list as
   `majors`. The station accepts a client `major` that is in its own list,
@@ -1516,7 +1520,8 @@ travels: seven from the client (`hello`, `auth.request`, `command.invoke`,
 and sixteen from the station, with a `delta` carrying `"nan"` and `"-inf"`
 (section 4.2). The client's `hello` has two fixtures: an older app's,
 without `majors` or `features`, and one declaring both. The station's
-`hello` carries both, as the station sends it. The refusals are: a
+`hello` carries both, from a station supporting `[1, 2]`, so `major` is 1,
+the oldest (section 6.1). The refusals are: a
 `media.control` over its 128 KiB cap and a `station.metrics.v1` over its
 16 KiB cap (each an otherwise valid message padded past the cap), a
 missing required key (`command.invoke` without `id`), a wrong type (an
