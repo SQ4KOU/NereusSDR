@@ -2029,6 +2029,14 @@ nereus_add_test(tst_slice_stream_allocator)
 # hardware-exhaustion rejection path.
 nereus_add_test(tst_stream_pool_binding)
 
+# Task 8 (receiver and transmit gaps plan): a stopping WDSP receive channel is
+# fed until WDSP finishes its stop, so a draining stop takes a few blocks of
+# input instead of WDSP's 100 ms timeout, a no-drain stop can restart without
+# a rebuild, and a five-slice live rate change stops within one DSP block per
+# channel. REALTIME: the bounds are wall-clock times while a feeder thread
+# delivers I/Q paced in real time.
+nereus_add_test(tst_rx_channel_stop_feed REALTIME)
+
 # ── Tunable Notch Filter Task 1: the notch DB's tune frequency ─────────────
 # WDSP maps absolute-Hz notch centres into a channel's passband with
 # offset = tunefreq + shift (third_party/wdsp/src/nbp.c:192). tunefreq had

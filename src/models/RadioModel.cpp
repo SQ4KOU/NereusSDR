@@ -18071,28 +18071,22 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     //     WDSP.SetChannelState(0, 0, 1);  // RX1_main
     // Protocol 2 does the same for its pair at setup.cs:7043-7044
     // [v2.10.3.15]: WDSP.id(0, 1) with no drain, then WDSP.id(0, 0) drained.
-    // Here that is every slice's channel from the highest id down, channel 0
-    // last, as upstream orders it. Every one is stopped with the drain,
-    // including the sub-receiver channels upstream stops with dmode 0.
+    // Here that is every running slice's channel from the highest id down,
+    // each without a drain, and the lowest running channel (channel 0 while
+    // Slice A runs) last, drained, as upstream orders it.
     //
-    // NereusSDR divergence (fix wave 1, C1): upstream's no-drain stop relies
-    // on I/Q still flowing into the stopped channel, which is what clears
-    // the flags the stop sets. SetChannelState(ch, 0, 0) sets slew.downflag
-    // and flushflag and leaves exchange set (WDSP channel.c:288-290); the
-    // channel's next fexchange2 runs the slew-down, then clears exchange and
-    // releases the flush that clears flushflag (iobuffs.c:553-560,
-    // channel.c:152-162). NereusSDR never exchanges on a stopped channel
-    // (RxChannel::processIq returns early on !isActive()), so those flags
-    // stay set. SetInputSamplerate rebuilds a re-rated channel and clears
-    // them, but setRxChannelRate skips a channel already at the new rate
-    // (the per-slice rate menu on Protocol 2 leaves one there). Restarted,
-    // such a channel slews down on its first block and clears exchange: it
-    // is silent while isActive() reports true. The draining stop cannot
-    // leave that behind: with no exchange to finish the flush it times out
-    // and clears exchange, flushflag and downflag itself (channel.c:299-304),
-    // at a cost of about 100 ms per running channel. Restarting a channel
-    // without that wait needs its I/Q kept flowing through the stop, as
-    // upstream's does.
+    // Both forms rely on I/Q still reaching the stopping channels: WDSP
+    // finishes a stop inside the channel's own exchanges, and a channel that
+    // is not fed is left with its slew-down pending (a no-drain stop) or
+    // waits out WDSP's 100 ms timeout (a draining one). The I/Q feed stays
+    // connected until step 2, and RxChannel keeps exchanging on a stopping
+    // channel until WDSP reports the stop done (Task 8, RxChannel::
+    // applyActive and processIq). So the drain takes a few blocks of input,
+    // not 100 ms, and the no-drain stops complete alongside it. A channel no
+    // I/Q reached after its stop is finished by its rebuild in step 6, or,
+    // when it is already at the new rate, by its restart in step 9
+    // (RxChannel::finishPendingStop). Fix wave 1 (C1) drained every channel
+    // until this was in place.
     //
     // RxChannel is owned by WdspEngine; look each one up by channel ID rather
     // than caching a raw pointer. Record which were running, because step 9
@@ -18100,11 +18094,17 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     std::vector<int> rxChannelsWereActive;
     for (auto it = rxChannelIds.rbegin(); it != rxChannelIds.rend(); ++it) {
         RxChannel* rx = m_wdspEngine->rxChannel(*it);
-        if (!rx || !rx->isActive()) {
-            continue;
+        if (rx && rx->isActive()) {
+            rxChannelsWereActive.push_back(*it);   // descending
         }
-        rxChannelsWereActive.push_back(*it);
-        rx->setActive(false);  // dmode 1: drain (see the divergence above)
+    }
+    for (std::size_t i = 0; i < rxChannelsWereActive.size(); ++i) {
+        RxChannel* rx = m_wdspEngine->rxChannel(rxChannelsWereActive[i]);
+        if (i + 1 < rxChannelsWereActive.size()) {
+            rx->deactivateWithoutDrain();   // dmode 0, as upstream's subs
+        } else {
+            rx->setActive(false);           // dmode 1: the last, drained
+        }
     }
     QThread::msleep(10);  // From Thetis setup.cs:7116 [v2.10.3.15]: Thread.Sleep(10)
 

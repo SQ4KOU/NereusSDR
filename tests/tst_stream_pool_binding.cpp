@@ -1519,7 +1519,8 @@ private slots:
         QVERIFY(model.setSampleRateLive(384000, false) >= 0);
 
         const QVector<Event> expected{
-            // Off: highest channel first, channel 0 last, every one drained.
+            // Off: highest channel first, channel 0 last and drained (the
+            // others stop without a drain, Task 8).
             {chC, false, 192000},
             {chB, false, 192000},
             {chA, false, 192000},

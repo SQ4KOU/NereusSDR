@@ -29,6 +29,11 @@
 //                 reads busy time over wall time (R-R3-40, R-R3-37).
 //                 Later the same day: DspLoadCounters::consistent, false for
 //                 a read whose busy pair may be torn (R-R3-40).
+//   2026-09-24 - A stopping channel is fed until WDSP finishes its stop
+//                 (Task 8 of the receiver and transmit gaps plan, Phase 3F
+//                 section 3), after Thetis ChannelMaster cmaster.c:365-366
+//                 [v2.10.3.15], by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -288,8 +293,17 @@ extern "C" {
 #endif
 
 #include <cmath>
+#include <cstring>
 
 namespace NereusSDR {
+
+namespace {
+// Task 8: a quiet-NaN bit pattern processIq leaves in the first output
+// sample of a stopping channel's exchange. fexchange2 overwrites it whenever
+// the channel still exchanges; WDSP never produces this exact pattern. It is
+// compared as bits, so no floating-point mode can change the test.
+constexpr quint32 kStopSentinelBits = 0x7fc0beefu;
+} // namespace
 
 RxChannel::RxChannel(int channelId, int bufferSize, int sampleRate,
                      QObject* parent)
@@ -365,6 +379,14 @@ void RxChannel::setSampleRate(int newRateHz)
 
     m_sampleRate = newRateHz;
     m_bufferSize = bufferSizeForRate(newRateHz);
+
+    // Task 8: the caller rebuilds the WDSP channel next (WdspEngine::
+    // setRxChannelRate, SetInputSamplerate), which clears exchange and the
+    // flush and slew flags (pre_main_destroy channel.c:119, pre_main_build
+    // channel.c:69, the slews rebuilt at iobuffs.c:78-79) and leaves a
+    // stopped channel's exchange clear (post_main_build channel.c:73-78). A
+    // no-drain stop still pending is finished by that.
+    m_pendingStop.store(0, std::memory_order_release);
 
     // Propagate to NB1/NB2 so initBlanker()/init_nob() recompute time
     // constants for the new rate. Mirrors cmaster.c:464-470 [v2.10.3.13]
@@ -1817,12 +1839,56 @@ void RxChannel::applyActive(bool active, bool drainOnStop)
         return;
     }
 
-    m_active.store(active);
-
 #ifdef HAVE_WDSP
-    // state=1 on, state=0 off; dmode=0 for no drain, dmode=1 for drain
-    SetChannelState(m_channelId, active ? 1 : 0,
-                    (!active && drainOnStop) ? 1 : 0);
+    // Task 8 (receiver and transmit gaps plan): a stopping channel is fed
+    // until WDSP has finished the stop.
+    //
+    // SetChannelState(ch, 0, dmode) only asks for the stop. It sets
+    // slew.downflag and flushflag (third_party/wdsp/src/channel.c:288-290).
+    // The channel's following fexchange2 calls slew the output down, then
+    // clear exchange and release the flush thread, which flushes the buffers
+    // and clears flushflag (iobuffs.c:553-560, channel.c:146-166). With
+    // dmode 1 SetChannelState waits for flushflag, and after 100 Sleep(1)
+    // calls gives up and clears exchange, flushflag and downflag itself
+    // (channel.c:291-304). So the stop completes only if I/Q keeps reaching
+    // the channel through it, as it does upstream, where the receive loop
+    // calls fexchange0 on every sub-receiver channel on every pass whatever
+    // its state:
+    //   From Thetis ChannelMaster/cmaster.c:365-366 [v2.10.3.15]
+    //     for (j = 0; j < pcm->cmSubRCVR; j++)
+    //         fexchange0 (chid (stream, j), pcm->in[stream], pcm->rcvr[rx].audio[j], &error);		// dsp
+    // and the rate change stops its channels for that reason:
+    //   From Thetis Console/setup.cs:7042 [v2.10.3.15]
+    //     // turn OFF the DSP channels so they get flushed out (must do while data is flowing to get slew-down and flush)
+    //
+    // This channel used to mark itself inactive before the call, and
+    // processIq stopped exchanging on an inactive channel, so a draining
+    // stop always waited out the timeout and a no-drain stop left the flags
+    // for a restart to trip over.
+    if (active) {
+        finishPendingStop();
+        m_active.store(true);
+        // state=1 on, dmode=0
+        SetChannelState(m_channelId, 1, 0);
+    } else if (drainOnStop) {
+        // Still active while WDSP drains it: processIq keeps exchanging, so
+        // the slew-down and flush finish in a few blocks of input. When the
+        // call returns exchange is clear, whether the flush finished or the
+        // wait timed out.
+        SetChannelState(m_channelId, 0, 1);
+        m_active.store(false);
+    } else {
+        // Returns at once. processIq keeps exchanging on the stopping channel
+        // until WDSP reports the stop done (see processIq), and a restart
+        // before then finishes the stop first (finishPendingStop).
+        quint32 token = ++m_stopSerial;
+        if (token == 0) {
+            token = ++m_stopSerial;
+        }
+        m_pendingStop.store(token, std::memory_order_release);
+        SetChannelState(m_channelId, 0, 0);
+        m_active.store(false);
+    }
 
     // R-R3-41: nereusd gives an active receive worker a fast core of its own
     // and returns it when the channel stops (no-op in the GUI).
@@ -1839,11 +1905,36 @@ void RxChannel::applyActive(bool active, bool drainOnStop)
     if (active) {
         SetRXAPanelGain1(m_channelId, m_afGain.load());
     }
+#else
+    Q_UNUSED(drainOnStop);
+    m_active.store(active);
 #endif
 
     qCDebug(lcDsp) << "RxChannel" << m_channelId
                     << (active ? "activated" : "deactivated");
     emit activeChanged(active);
+}
+
+void RxChannel::finishPendingStop()
+{
+#ifdef HAVE_WDSP
+    if (m_pendingStop.load(std::memory_order_acquire) == 0) {
+        return;
+    }
+    // A no-drain stop WDSP has not reported done: no I/Q reached the channel
+    // after it (a stream that stopped delivering, or a feed disconnected
+    // straight after the stop). Its slew.downflag may still be set, and a
+    // restart over it would slew the first block down and clear exchange,
+    // leaving the channel silent while isActive() reports true (fix wave 1,
+    // C1). WDSP clears that flag only in a stop it finishes or times out
+    // (channel.c:291-304), and SetChannelState acts only on a change of
+    // state, so switch the channel on and stop it again, draining. With I/Q
+    // flowing processIq feeds that drain; without it, the wait times out
+    // and WDSP clears the flags itself.
+    SetChannelState(m_channelId, 1, 0);
+    SetChannelState(m_channelId, 0, 1);
+    m_pendingStop.store(0, std::memory_order_release);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -1864,6 +1955,29 @@ void RxChannel::processIq(float* inI, float* inQ,
         // Channel inactive — output silence
         std::memset(outI, 0, sampleCount * sizeof(float));
         std::memset(outQ, 0, sampleCount * sizeof(float));
+#ifdef HAVE_WDSP
+        // Task 8: a channel stopped without a drain is still fed until WDSP
+        // reports the stop done, so its slew-down runs and the flush thread
+        // clears its flags (see applyActive). fexchange2 writes both output
+        // legs whenever exchange is set, and returns without touching them
+        // once the slew-down has cleared it (iobuffs.c:525; channel.h:35,
+        // "when 0, it just returns"). A sentinel left in place is that
+        // report. The blanker and the post-DSP stages stay off: the channel
+        // is no longer running.
+        quint32 token = m_pendingStop.load(std::memory_order_acquire);
+        if (token != 0) {
+            std::memcpy(outI, &kStopSentinelBits, sizeof(float));
+            int error = 0;
+            fexchange2(m_channelId, inI, inQ, outI, outQ, &error);
+            quint32 first = 0;
+            std::memcpy(&first, outI, sizeof(float));
+            if (first == kStopSentinelBits) {
+                outI[0] = 0.0f;
+                m_pendingStop.compare_exchange_strong(token, 0,
+                                                      std::memory_order_acq_rel);
+            }
+        }
+#endif
         return;
     }
 
