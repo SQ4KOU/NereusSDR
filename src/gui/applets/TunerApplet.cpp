@@ -27,6 +27,11 @@
 //                 cycle button; TunerModel signal connections added;
 //                 antenna container added (hidden by default).
 //                 From AetherSDR src/gui/TunerApplet.cpp [@0cd4559].
+//   2026-09-24  R-R3-49 / R-R3-47 by J.J. Boyd (KG4VCF), with
+//                 AI-assisted transformation via Anthropic Claude Code.
+//                 In a remote window, ANT 1/2/3 and OPERATE ask the Core
+//                 (remoteTgxlControlVersion 2) and wait while the radio
+//                 is on the air; TUNE and the relay bars are unchanged.
 // =================================================================
 
 #include "TunerApplet.h"
@@ -36,6 +41,8 @@
 #include "models/RadioModel.h"
 #include "models/TunerModel.h"
 #include "core/session/IStationLink.h"
+#include "core/session/PureSignalSessionFacade.h"
+#include "models/TransmitModel.h"
 
 #include <QContextMenuEvent>
 #include <QDateTime>
@@ -83,6 +90,21 @@ TunerApplet::TunerApplet(RadioModel* model, TunerModel* tunerModel, QWidget* par
 
     if (tunerModel) {
         setTunerModel(tunerModel);
+    }
+    // R-R3-49 / R-R3-47: in a remote window ANT and OPERATE follow the
+    // Core's offer (the link's capabilities) and its transmit state (the
+    // mirrored transmit model's MOX and TUNE, and PureSignal's two-tone).
+    if (model && model->role() == RadioModel::Role::Remote) {
+        connect(model, &RadioModel::stationLinkStateChanged,
+                this, &TunerApplet::updateActuatingControls);
+        connect(&model->transmitModel(), &TransmitModel::moxChanged,
+                this, &TunerApplet::updateActuatingControls);
+        connect(&model->transmitModel(), &TransmitModel::tuneChanged,
+                this, &TunerApplet::updateActuatingControls);
+        if (PureSignalSessionFacade* facade = model->pureSignalFacade()) {
+            connect(facade, &PureSignalSessionFacade::statusChanged,
+                    this, &TunerApplet::updateActuatingControls);
+        }
     }
     updateActuatingControls();
     updateStationAvailability();
@@ -315,24 +337,13 @@ void TunerApplet::buildUI()
 
         // ANT buttons: 1-indexed to match AetherSDR upstream convention.
         // From AetherSDR src/gui/TunerApplet.cpp:buildUI() ant clicked [@0cd4559]
+        // R-R3-49 / R-R3-47: requestAntenna asks the Core in a remote window.
         connect(m_ant1Btn, &QPushButton::clicked, this,
-                [this]() {
-                    if (m_transmitPermitted && m_tunerModel) {
-                        m_tunerModel->setAntennaA(1);
-                    }
-                });
+                [this]() { requestAntenna(1); });
         connect(m_ant2Btn, &QPushButton::clicked, this,
-                [this]() {
-                    if (m_transmitPermitted && m_tunerModel) {
-                        m_tunerModel->setAntennaA(2);
-                    }
-                });
+                [this]() { requestAntenna(2); });
         connect(m_ant3Btn, &QPushButton::clicked, this,
-                [this]() {
-                    if (m_transmitPermitted && m_tunerModel) {
-                        m_tunerModel->setAntennaA(3);
-                    }
-                });
+                [this]() { requestAntenna(3); });
 
         vbox->addWidget(m_antContainer);
     }
@@ -400,6 +411,46 @@ bool TunerApplet::actuatingControlsEnabledForTesting() const
         && m_ant3Btn && m_ant3Btn->isEnabled();
 }
 
+QPushButton* TunerApplet::antennaButtonForTesting(int port) const
+{
+    switch (port) {
+    case 1: return m_ant1Btn;
+    case 2: return m_ant2Btn;
+    case 3: return m_ant3Btn;
+    default: return nullptr;
+    }
+}
+
+bool TunerApplet::remoteTunerControl() const
+{
+    if (!m_model || m_model->role() != RadioModel::Role::Remote) { return false; }
+    const IStationLink* link = m_model->stationLink();
+    return link && link->tgxlControlAvailable();
+}
+
+bool TunerApplet::coreOnAir() const
+{
+    if (!m_model) { return false; }
+    const TransmitModel& tx = m_model->transmitModel();
+    const PureSignalSessionFacade* facade = m_model->pureSignalFacade();
+    return tx.isMox() || tx.isTune() || (facade && facade->twoToneOn());
+}
+
+// R-R3-49 / R-R3-47: a remote window asks the Core, which switches its own
+// tuner; the button follows the Core's reported antenna, not the click.
+void TunerApplet::requestAntenna(int port)
+{
+    if (remoteTunerControl()) {
+        if (!coreOnAir()) {
+            m_model->stationLink()->requestTgxlAntenna(port);
+        }
+        return;
+    }
+    if (m_transmitPermitted && m_tunerModel) {
+        m_tunerModel->setAntennaA(port);
+    }
+}
+
 bool TunerApplet::staleIndicatorVisibleForTesting() const
 {
     return m_staleLabel && !m_staleLabel->isHidden();
@@ -445,10 +496,23 @@ void TunerApplet::updateActuatingControls()
         button->setToolTip(tooltip);
     };
     updateButton(m_tuneBtn);
-    updateButton(m_operateBtn);
-    updateButton(m_ant1Btn);
-    updateButton(m_ant2Btn);
-    updateButton(m_ant3Btn);
+
+    // R-R3-49 / R-R3-47: in a remote window on a Core that offers them, ANT
+    // and OPERATE ask the Core (they key nothing, so the receive-only
+    // station does not grey them) and wait while the radio is on the air.
+    // Otherwise they keep the transmit permission, with its reason.
+    bool switchable = m_transmitPermitted;
+    QString switchTip = tooltip;
+    if (remoteTunerControl()) {
+        const bool onAir = coreOnAir();
+        switchable = !onAir;
+        switchTip = onAir ? onAirReason() : QString();
+    }
+    for (QPushButton* button : {m_operateBtn, m_ant1Btn, m_ant2Btn, m_ant3Btn}) {
+        if (!button) { continue; }
+        button->setEnabled(switchable);
+        button->setToolTip(switchTip);
+    }
 
     const bool relayCommandsEnabled = m_transmitPermitted && m_tunerModel
         && m_tunerModel->hasDirectConnection();
@@ -687,18 +751,30 @@ void TunerApplet::cycleOperateState()
     // From AetherSDR src/gui/TunerApplet.cpp:cycleOperateState [@0cd4559]
     // Cycle: OPERATE -> BYPASS -> STANDBY -> OPERATE
     // (AetherSDR comment at line 184: "OPERATE -> BYPASS -> STANDBY -> OPERATE")
-    if (!m_transmitPermitted || !m_tunerModel) return;
+    // R-R3-49 / R-R3-47: a remote window reads the Core's reported state
+    // and asks the Core for the next one; its tuner switches, and the button
+    // follows its report.
+    if (!m_tunerModel) return;
+    const bool remote = remoteTunerControl();
+    if (remote ? coreOnAir() : !m_transmitPermitted) return;
+    IStationLink* link = remote ? m_model->stationLink() : nullptr;
+    const auto setBypass = [this, link](bool on) {
+        if (link) { link->requestTgxlBypass(on); } else { m_tunerModel->setBypass(on); }
+    };
+    const auto setOperate = [this, link](bool on) {
+        if (link) { link->requestTgxlOperate(on); } else { m_tunerModel->setOperate(on); }
+    };
 
     if (m_tunerModel->isOperate() && !m_tunerModel->isBypass()) {
         // Currently OPERATE -> go to BYPASS
-        m_tunerModel->setBypass(true);
+        setBypass(true);
     } else if (m_tunerModel->isOperate() && m_tunerModel->isBypass()) {
         // Currently BYPASS -> go to STANDBY
-        m_tunerModel->setOperate(false);
+        setOperate(false);
     } else {
         // Currently STANDBY -> go to OPERATE
-        m_tunerModel->setBypass(false);
-        m_tunerModel->setOperate(true);
+        setBypass(false);
+        setOperate(true);
     }
 }
 

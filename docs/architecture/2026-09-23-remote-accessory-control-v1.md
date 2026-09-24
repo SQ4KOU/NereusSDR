@@ -32,7 +32,12 @@ antenna names; the `setTxInterlockPolicy`, `setPgxlPowerCap` and
 `clearAccessoryFaults` commands), and the Power Genius's and Tuner
 Genius's own settings (the `accessorySettings` object and the commands the
 Core sends to the device as a local window's Advanced page does: name, the
-amp's bias, fan and LED, network, Save & Reboot and Revert).
+amp's bias, fan and LED, network, Save & Reboot and Revert). A later
+revision (plan
+[2026-09-24-remote-tgxl-controls-plan.md](2026-09-24-remote-tgxl-controls-plan.md),
+R-R3-49) adds the Tuner Genius's antenna, operate and bypass from a window
+(`remoteTgxlControlVersion` 2: `setTgxlAntenna`, `setTgxlOperate` and
+`setTgxlBypass`), refused while the radio is on the air.
 
 ## Wire conventions
 
@@ -79,12 +84,16 @@ contract; each feature has its own version.
 | `accessoryDataVersion` | 11 | 1 | The Core mirrors its accessory records and settings as the read-only `accessoryData` object, and `setTxInterlockPolicy`, `setPgxlPowerCap` and `clearAccessoryFaults` work |
 | `remotePgxlControlVersion` | 11 | 3 | Also: the amp's own settings. The `pgxl*` properties of the read-only `accessorySettings` object, and `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings` and `readPgxlSettings` work |
 | `remoteTgxlControlVersion` | 11 | 1 | The tuner's own settings: the `tgxl*` properties of `accessorySettings`, and `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings` and `readTgxlSettings` work |
+| `remoteTgxlControlVersion` | 11 | 2 | Also: the tuner's antenna, operate and bypass. `setTgxlAntenna`, `setTgxlOperate` and `setTgxlBypass` work whenever the radio is not on the air (see "Switching the Tuner Genius") |
 
 - The Core advertises `remotePgxlControlVersion` as 3,
-  `remoteRfKitControlVersion` as 3 and the TGXL and 4O3A versions
-  (`remoteTgxlConfigVersion`, `remoteFourO3AControlVersion`,
-  `remoteTgxlControlVersion`) as 1 when it owns its accessories (the
+  `remoteRfKitControlVersion` as 3, `remoteTgxlControlVersion` as 2 and
+  the other TGXL and 4O3A versions (`remoteTgxlConfigVersion`,
+  `remoteFourO3AControlVersion`) as 1 when it owns its accessories (the
   headless Core, `nereusd`, always does), and all of them as 0 otherwise. A
+  Core built before the remote TGXL controls plan says 1 for
+  `remoteTgxlControlVersion`: the tuner's own settings, but not its
+  antenna, operate or bypass, which stay greyed in a remote window. A
   Core built between Tasks 2 and 5 says 2 for the PGXL and sends no
   `remoteTgxlControlVersion`: the amp's and tuner's own settings are not
   offered there. A Core built before the fix wave says 2 for the RF2K-S:
@@ -113,6 +122,11 @@ contract; each feature has its own version.
   object the same way.
 - An app that sees version 0, or no entry, shows no Power Genius or RF-Kit
   readings from this Core and says so (see Window behaviour).
+- An app that sees `remoteTgxlControlVersion` below 2 (or no entry) does
+  not offer the Tuner Genius's antenna, operate and bypass on this Core:
+  the desktop app keeps them greyed with its transmit reason (see "What
+  waits for remote transmit"), and says "This Core does not let this app
+  switch the Tuner Genius. Updating the Core may help." if asked anyway.
 - An app that sees `remotePgxlControlVersion` below 3 (or
   `remoteTgxlControlVersion` 0, or no entry) does not offer to change the
   amp's (or tuner's) own settings on this Core and says why: "This Core does
@@ -199,6 +213,31 @@ Core's to report.
 
 Off `connected`, the Core clears the relays, operate, bypass, tuning,
 antenna and meters (1.0 SWR, 0 W).
+
+### Switching the Tuner Genius
+
+With `remoteTgxlControlVersion` 2 a window switches the Core's tuner with
+three commands (see Commands). The Core applies each through its own
+tuner model, the command slots a local window's Tuner Genius applet
+drives, so the tuner gets exactly the local window's line, framed
+`C<seq>|<command>`:
+
+| Command | Sent to the tuner | Local applet control |
+| --- | --- | --- |
+| `setTgxlAntenna` `port` | `activate ant=<port>` | ANT 1, ANT 2, ANT 3 |
+| `setTgxlOperate` `on` | `operate=1` or `operate=0` | OPERATE button (STANDBY to OPERATE, BYPASS to STANDBY) |
+| `setTgxlBypass` `on` | `bypass=1` or `bypass=0` | OPERATE button (OPERATE to BYPASS, STANDBY to OPERATE) |
+
+`accepted: true` means the line left for the tuner. The window's buttons
+follow the tuner's report on this object (`antennaA`, `isOperate`,
+`isBypass`), never the click. None of them keys a transmitter or starts a
+tune, so a receive-only Core takes them (operator ruling of 2026-09-24).
+Each waits while the radio is on the air (operator decision D60): the Core
+refuses it while its MOX, TUNE or two-tone test is on, and a window
+disables its buttons with the reason while the Core reports MOX or TUNE
+on the `transmit` object or the two-tone test on `pureSignal`. TUNE (the
+autotune) and the relay nudges still wait for remote transmit, because
+they put a carrier on the air.
 
 ## The `amplifier` object (PGXL)
 
@@ -697,9 +736,13 @@ the Core took the request (see "Accepted is not connected").
 | `savePgxlSettings`, `saveTgxlSettings` | none | minor 11, `remotePgxlControlVersion` 3 / `remoteTgxlControlVersion` 1 | Sends `save`: the device keeps its settings and restarts (about 20 seconds offline; the Core reconnects as for any drop) |
 | `readPgxlSettings`, `readTgxlSettings` | none | minor 11, `remotePgxlControlVersion` 3 / `remoteTgxlControlVersion` 1 | Revert: asks the device for its settings and network settings |
 | `setTgxlName` | `name` (as `setPgxlName`) | minor 11, `remoteTgxlControlVersion` 1 | Sends the tuner its new name and saves it on the Core |
+| `setTgxlAntenna` | `port` (i64, 1 to 3) | minor 11, `remoteTgxlControlVersion` 2 | Switches the tuner to that antenna (see "Switching the Tuner Genius") |
+| `setTgxlOperate` | `on` (bool) | minor 11, `remoteTgxlControlVersion` 2 | Puts the tuner in operate (true) or standby (false) |
+| `setTgxlBypass` | `on` (bool) | minor 11, `remoteTgxlControlVersion` 2 | Bypasses the tuner (true) or takes it out of bypass (false) |
 
 For these, `accepted: true` means the request left for the device; the
-device's answer arrives on `accessorySettings`. The desktop app shows a
+device's answer arrives on `accessorySettings` (for the last three, on
+`tuner`). The desktop app shows a
 refusal of one of them on the Advanced page that sent it (never the slice
 notice).
 
@@ -739,7 +782,7 @@ Property writes:
 | Any property of `accessorySettings` | "The Core reports the amplifier's and tuner's own settings. Change them from this app's Setup pages." |
 | `operate` on `amplifier`, on a receive-only Core (every `nereusd` today) | "Operating the station's amplifier or tuner waits for remote transmit. This station is receive-only." |
 | `tuner` telemetry (everything except the three below) | "TunerModel::<name> is hardware telemetry TunerModel only learns from the tuner itself; there is no remote-write path" |
-| `tuner` `isOperate`, `isBypass`, `antennaA`, on a receive-only Core | "Operating the station's amplifier or tuner waits for remote transmit. This station is receive-only." Nothing changes on the Core and nothing is sent to the tuner |
+| `tuner` `isOperate`, `isBypass`, `antennaA`, on a receive-only Core | "Operating the station's amplifier or tuner waits for remote transmit. This station is receive-only." Nothing changes on the Core and nothing is sent to the tuner. A current app uses `setTgxlOperate`, `setTgxlBypass` and `setTgxlAntenna` instead |
 
 Commands:
 
@@ -796,6 +839,16 @@ Commands:
 | `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and a gateway off the address's network, equal to it, or at the subnet's network or broadcast address | "Enter a gateway on the same network as the address, or leave it empty." |
 | `savePgxlSettings`, `saveTgxlSettings` with arguments | "The request to save and restart the Power Genius was not understood." (or Tuner Genius) |
 | `readPgxlSettings`, `readTgxlSettings` with arguments | "The request to read the Power Genius settings was not understood." (or Tuner Genius) |
+| `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass` below minor 11 | "Update this app to switch the Tuner Genius on this Core." |
+| `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass` on a Core that does not own its accessories | "This Core cannot change its amplifier and tuner settings." |
+| `setTgxlAntenna` with other arguments | "The request to switch the Tuner Genius antenna was not understood." |
+| `setTgxlOperate` with other arguments | "The request to put the Tuner Genius in operate or standby was not understood." |
+| `setTgxlBypass` with other arguments | "The request to bypass the Tuner Genius was not understood." |
+| `setTgxlAntenna` with a port outside 1 to 3 | "Choose Tuner Genius antenna 1, 2 or 3." |
+| `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass` while the radio is on the air (MOX, TUNE or two-tone) | "The radio is on the air. Try again when it stops." |
+| `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass` while the Core has not admitted a tuner | "The Core is not connected to the Tuner Genius." |
+| `setTgxlAntenna` on a tuner with no antenna switch | "This Tuner Genius has no antenna switch." |
+| `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass` from an app whose Core lacks `remoteTgxlControlVersion` 2 (the app's own words, nothing sent) | "This Core does not let this app switch the Tuner Genius. Updating the Core may help." |
 | `setFourO3AEnabled` below minor 4 | "Remote 4O3A control requires a newer station protocol." |
 | `configureTgxl` with other arguments | "invalid host or port argument" |
 | `disconnectTgxl` with arguments | "disconnectTgxl takes no arguments" |
@@ -805,7 +858,7 @@ Commands:
 | `configureTgxl` with 4O3A off | "Enable 4O3A on Core before connecting the TGXL." |
 | `configureTgxl` with a bad address | "Enter a valid TGXL IP address or hostname and TCP port 1–65535." |
 | `setFourO3AEnabled` with no radio | "Connect Core to a radio before changing its 4O3A integration." |
-| Any refusal without its own reason | "TGXL configuration was refused", "TGXL disconnect was refused", "4O3A master change was refused", "PGXL configuration was refused", "PGXL disconnect was refused", "PGXL settings change was refused", "The Core did not set up the RF-Kit amplifier.", "The Core did not disconnect the RF-Kit amplifier.", "The Core did not change its RF-Kit amplifier switch.", "The Core did not change its TCI server.", "The Core did not change the transmit interlock.", "The Core did not change the Power Genius output limit.", "The Core did not clear the fault history." |
+| Any refusal without its own reason | "The Core did not switch the Tuner Genius.", "TGXL configuration was refused", "TGXL disconnect was refused", "4O3A master change was refused", "PGXL configuration was refused", "PGXL disconnect was refused", "PGXL settings change was refused", "The Core did not set up the RF-Kit amplifier.", "The Core did not disconnect the RF-Kit amplifier.", "The Core did not change its RF-Kit amplifier switch.", "The Core did not change its TCI server.", "The Core did not change the transmit interlock.", "The Core did not change the Power Genius output limit.", "The Core did not clear the fault history." |
 
 The Core checks every network request itself: it is the only gate for the
 iPhone app and other apps, whatever a window asks first. A local window's
@@ -954,14 +1007,17 @@ the Core fills `device` from the key and `text` from `state` and
 
 ## What waits for remote transmit
 
-Nothing in this contract keys a transmitter, operates an amplifier, starts a
-tune carrier or changes a relay or antenna on a transmit path. Until remote
-transmit, the Core refuses or does not offer:
+Nothing in this contract keys a transmitter, operates an amplifier or
+starts a tune carrier. The Tuner Genius's antenna, operate and bypass are
+the one exception to "wait for remote transmit": they key nothing, so from
+`remoteTgxlControlVersion` 2 a window switches them whenever the radio is
+not on the air (operator ruling of 2026-09-24; see "Switching the Tuner
+Genius"). Until remote transmit, the Core refuses or does not offer:
 
 - PGXL OPERATE and STANDBY, and PGXL standby around a TGXL tune. A write of
   `amplifier` `operate` is refused with the receive-only reason above.
-- TGXL TUNE (autotune), operate, bypass, antenna choice, relay nudges, and
-  tune-memory recall on a band change.
+- TGXL TUNE (autotune), relay nudges, and tune-memory recall on a band
+  change.
 - RF2K-S OPERATE and STANDBY, antenna choice. (The Core does put an
   admitted RF2K-S into TCI mode once when band follow starts; that chooses
   where the amp reads the radio's frequency from and keys nothing. Its
@@ -979,7 +1035,9 @@ transmit, the Core refuses or does not offer:
 A `property.write` of `tuner` `isOperate`, `isBypass` or `antennaA` is
 refused on a receive-only Core with the receive-only reason, before it can
 reach the tuner (until Task 2 it reached `TunerModel::applyMirroredValue`, an
-R2 path, whatever the policy).
+R2 path, whatever the policy). It stays refused: a current app switches
+them with `setTgxlOperate`, `setTgxlBypass` and `setTgxlAntenna`, which
+carry the on-the-air check.
 
 Pairing is not operating: the Core pairs an admitted PGXL
 (`flexradio ... ptt=LAN`) automatically, by operator decision of
@@ -988,8 +1046,10 @@ Pairing is not operating: the Core pairs an admitted PGXL
 A remote window shows these controls disabled: the Power Genius tab's
 Operate button with the receive-only reason, the applets' OPERATE and
 antenna buttons with "Amplifier control is not available from a remote
-window yet." (Power Genius and RF-Kit) or their transmit-permission reason
-(Tuner Genius), and the RF-Kit page's "Set amp to TCI mode" button (the
+window yet." (Power Genius and RF-Kit), the Tuner Genius applet's TUNE
+button and relay bars with its transmit-permission reason (and its OPERATE
+and ANT buttons too on a Core below `remoteTgxlControlVersion` 2), and the
+RF-Kit page's "Set amp to TCI mode" button (the
 Core sets TCI mode itself while the station's TCI server is on). The
 RF-Kit page's "Reset amp error state" works from a remote window with
 `remoteRfKitControlVersion` 3 (`resetRfKitError`, by operator ruling in
@@ -1107,6 +1167,18 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   device's own controls are shown unchangeable with the reason (see
   Negotiation); the pairing settings, the output limit, the counters and
   the fault history work as before.
+- With `remoteTgxlControlVersion` 2 the desktop remote window's Tuner
+  Genius applet enables ANT 1, 2 and 3 and OPERATE while the Core reports
+  the radio off the air. ANT sends `setTgxlAntenna`; OPERATE cycles
+  OPERATE, BYPASS, STANDBY from the Core's reported state, as a local
+  click does, sending `setTgxlBypass` and `setTgxlOperate`. The highlighted
+  antenna and the button's label follow the `tuner` object. While the Core
+  reports MOX or TUNE (`transmit`) or the two-tone test (`pureSignal`
+  `twoToneOn`) the buttons are disabled with "The radio is on the air. Try
+  again when it stops." A refusal shows as a notice. TUNE and the relay
+  bars keep the transmit-permission reason. With the link down, or below
+  2, ANT and OPERATE are greyed with that reason too. A local window is
+  unchanged.
 - Every window (local or remote) shows the power-cap alert as a five-second
   notice when `powerCapAlertCount` moves while `powerCapExceeded` is true;
   a remote window's applet antenna names follow the Core's.
@@ -1293,7 +1365,32 @@ rewrite the fixtures, and update this document in the same commit.
   refused below minor 11, on a non-owning Core, with arguments and with no
   amp, in user words.
 
-Hardware evidence is pending for the operator checkpoint: readings from the
+- `tst_tgxl_station_identity` (R-R3-49): a window's antenna, operate and
+  bypass reach the Core's (fake) tuner as the local applet's lines
+  (`activate ant=2`, `operate=1`, `bypass=1`, `operate=0`) on a
+  receive-only Core; refused with nothing sent on a Core that does not own
+  its accessories, with no tuner admitted (and before admission), with a
+  port outside 1 to 3, on a tuner with no antenna switch, and while the
+  Core's MOX or TUNE is on; the model reports the tuner's answer, not the
+  request.
+- `tst_station_accessory_state` (R-R3-49): `remoteTgxlControlVersion` 2;
+  the three commands refused below minor 11, on a non-owning Core, with no
+  tuner, on the air, malformed and out of range, in plain words.
+- `tst_remote_peripherals` (R-R3-49): a remote window's Tuner Genius applet
+  over the loopback switches the Core's tuner antenna and OPERATE (the fake
+  tuner records the lines), follows the tuner's report and not the click,
+  disables ANT and OPERATE with the reason while the Core's MOX is on
+  (a request sent anyway refused with it on the accessory route, nothing
+  reaching the tuner), keeps TUNE greyed, and falls back to the transmit
+  reason with the link down; an older Core leaves them greyed and sends
+  nothing.
+- `session-verbs-tgxl-control` (`tests/data/link/v1/sessions/`): the three
+  commands right and wrong on a Core with no tuner, run by the station and
+  app conformance runners.
+
+Hardware evidence is pending for the operator checkpoint: ANT 1, 2 and 3,
+OPERATE and BYPASS switched on the real Tuner Genius from the Rock's
+remote window (R-R3-49), and readings from the
 real PGXL and RF2K-S reaching a remote window and the iPhone app; identity
 and pairing with the real PGXL on the Core (the discovery announcement and
 `info` reply used here are the real amp's, captured on 2026-05-19 and

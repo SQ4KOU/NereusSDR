@@ -79,6 +79,9 @@
 //                                    reason that calls the Core "the
 //                                    station" fails; the ham sense stays.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-47: the Tuner Genius's
+//                                    antenna, operate and bypass reasons.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -780,7 +783,11 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("readPgxlSettingsForStation"), QStringLiteral("setTgxlNameForStation"),
           QStringLiteral("setTgxlNetworkForStation"),
           QStringLiteral("saveTgxlSettingsForStation"),
-          QStringLiteral("readTgxlSettingsForStation"), QStringLiteral("setNnrDiagnosticMode"),
+          QStringLiteral("readTgxlSettingsForStation"),
+          // R-R3-49: the Tuner Genius's antenna, operate and bypass.
+          QStringLiteral("stationTgxlControlAllowed"),
+          QStringLiteral("setTgxlAntennaForStation"), QStringLiteral("setTgxlOperateForStation"),
+          QStringLiteral("setTgxlBypassForStation"), QStringLiteral("setNnrDiagnosticMode"),
           QStringLiteral("applyNnrModelSelection"), QStringLiteral("addNotchFromStation"),
           QStringLiteral("moveNotchFromStation"), QStringLiteral("setNotchActiveFromStation"),
           QStringLiteral("deleteNotchFromStation"), QStringLiteral("requestIoBoardProbe"),
@@ -841,6 +848,8 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/session/IStationLink.h", "pgxlDeviceSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "tgxlDeviceSettingsUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/session/IStationLink.h", "tgxlControlUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "filterPolicyUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},

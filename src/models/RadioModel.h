@@ -83,6 +83,11 @@
 //   2026-09-24 - R-R3-49: the Network Watchdog setting applied where the
 //                radio is (setNetworkWatchdogEnabled / applyNetworkWatchdog).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 / R-R3-47: the Tuner Genius's antenna, operate
+//                and bypass for a remote window (remoteTgxlControlVersion
+//                2), refused while the radio is on the air. NereusSDR-
+//                original. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2064,6 +2069,17 @@ public:
                                   const QString& gateway, QString* reason);
     bool saveTgxlSettingsForStation(QString* reason);
     bool readTgxlSettingsForStation(QString* reason);
+    // R-R3-49 / R-R3-47 (remoteTgxlControlVersion 2): a window switches the
+    // Core's Tuner Genius antenna (port 1 to 3), operate and bypass through
+    // the Core's own TunerModel, the local applet's command slots. Refused,
+    // with nothing sent to the tuner, while the radio is on the air (MOX,
+    // TUNE or two-tone), with no Tuner Genius admitted, and for the antenna
+    // on a tuner with no antenna switch or a port outside 1 to 3. True when
+    // the command left for the tuner; the tuner's report comes back on the
+    // mirrored `tuner` object.
+    bool setTgxlAntennaForStation(int port, QString* reason);
+    bool setTgxlOperateForStation(bool on, QString* reason);
+    bool setTgxlBypassForStation(bool on, QString* reason);
 
     // Phase 3G-9b: one-shot profile that sets the 7 smooth-default recipe
     // values on SpectrumWidget. Called from the constructor exactly once
@@ -3647,6 +3663,11 @@ private slots:
 
 private:
     void updateAutoAgc();
+
+    // R-R3-49 / R-R3-47: false, with the reason, when a window may not
+    // switch the Core's Tuner Genius now (not the Core's tuner, the radio
+    // on the air, or no tuner admitted).
+    bool stationTgxlControlAllowed(QString* reason) const;
 
     // Phase 3Q-1: drives the RadioModel-level connection state machine.
     // Guards against redundant transitions (no emit if state unchanged).

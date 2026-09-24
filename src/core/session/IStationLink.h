@@ -78,6 +78,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-21: the filter policy
 //                                    request (radioHardwareVersion 4).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-47: the Tuner Genius's antenna,
+//                                    operate and bypass requests
+//                                    (remoteTgxlControlVersion 2).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -248,6 +252,20 @@ public:
     { return { false, tgxlDeviceSettingsUnavailableReason() }; }
     virtual CommandOutcome requestTgxlReadSettings()
     { return { false, tgxlDeviceSettingsUnavailableReason() }; }
+    /// R-R3-49 / R-R3-47 (remoteTgxlControlVersion 2): the Core switches
+    /// its Tuner Genius's antenna (port 1 to 3), operate and bypass for this
+    /// window. Acceptance means the command left for the tuner; the tuner's
+    /// report comes back on the mirrored `tuner` object. The Core refuses
+    /// each while the radio is on the air.
+    virtual bool tgxlControlAvailable() const { return false; }
+    virtual CommandOutcome requestTgxlAntenna(int)
+    { return { false, tgxlControlUnavailableReason() }; }
+    virtual CommandOutcome requestTgxlOperate(bool)
+    { return { false, tgxlControlUnavailableReason() }; }
+    virtual CommandOutcome requestTgxlBypass(bool)
+    { return { false, tgxlControlUnavailableReason() }; }
+    static QString tgxlControlUnavailableReason()
+    { return QStringLiteral("This Core does not let this app switch the Tuner Genius. Updating the Core may help."); }
     static QString pgxlDeviceSettingsUnavailableReason()
     { return QStringLiteral("This Core does not let this app change the Power Genius's own settings. Updating the Core may help."); }
     static QString tgxlDeviceSettingsUnavailableReason()

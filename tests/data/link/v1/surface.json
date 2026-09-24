@@ -233,7 +233,7 @@
         {
             "kind": "i64",
             "name": "remoteTgxlControlVersion",
-            "value": 1
+            "value": 2
         }
     ],
     "commands": [
@@ -567,6 +567,45 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "readTgxlSettings"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "setTgxlAntenna"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "setTgxlOperate"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "setTgxlBypass"
         },
         {
             "arguments": [

@@ -19,6 +19,9 @@
 // 2026-09-24: Lane B takes integration (R-IOS-01, R-R3-21): the plain
 // refusals of a Core that does not own its accessories. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-49 / R-R3-47: remoteTgxlControlVersion 2 and the Tuner
+// Genius's antenna, operate and bypass refusals on the wire. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QFile>
 #include <QJsonArray>
@@ -679,8 +682,9 @@ private slots:
         // R-R3-47: 2 once the Core's PGXL commands are offered (Task 2), 3
         // with the amp's own settings (Task 6).
         QCOMPARE(caps.remotePgxlControlVersion, 3);
-        // R-R3-47: the Tuner Genius's own settings (Task 6).
-        QCOMPARE(caps.remoteTgxlControlVersion, 1);
+        // R-R3-47: the Tuner Genius's own settings (Task 6); 2 with its
+        // antenna, operate and bypass (R-R3-49).
+        QCOMPARE(caps.remoteTgxlControlVersion, 2);
         // R-R3-47: 2 once the Core's RF-Kit commands are offered (Task 3).
         QCOMPARE(caps.remoteRfKitControlVersion, 3);   // I4: Reset amp error
         // R-R3-47: the accessory records and settings (Task 4).
@@ -813,6 +817,89 @@ private slots:
             QStringLiteral("The request to change the Tuner Genius network settings was not "
                            "understood.")}));
         for (const QString& reason : current) {
+            QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        }
+    }
+
+    // R-R3-49 / R-R3-47 (remoteTgxlControlVersion 2): the Tuner Genius's
+    // antenna, operate and bypass on the wire. An older app, and a Core
+    // that does not own its accessories, are refused in plain words; a
+    // malformed request is not understood; a port outside 1 to 3 is
+    // refused; with no tuner the Core says so; on the air it says so, on a
+    // receive-only Core as well; nothing reaches a tuner.
+    void tunerSwitchingVerbsNeedTheirVersionAndAQuietRadio()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const auto results = [&](bool owns, quint16 minor, bool onAir,
+                                 const QList<SessionMessage>& invokes) {
+            RadioModel station;
+            if (owns) {
+                station.enableStationAccessoryIdentity();
+            }
+            AppSettings settings(dir.filePath(QStringLiteral("t-%1-%2-%3.settings")
+                                                  .arg(owns).arg(minor).arg(onAir)));
+            StationServer server(&station, settings, dir.path());
+            if (onAir) {
+                station.transmitModel().setMox(true);
+            }
+            LoopbackTransport* peer = nullptr;
+            connectRawPeer(this, server, minor, &peer);
+            [&] { QTRY_VERIFY(snapshotDone(peer)); }();
+            for (const SessionMessage& invoke : invokes) {
+                peer->sendText(SessionMessages::encode(invoke));
+            }
+            QStringList reasons;
+            // The comparison below says what was missing if one never came.
+            (void)QTest::qWaitFor([&] {
+                reasons.clear();
+                for (const SessionMessage& m : receivedMessages(peer)) {
+                    if (m.kind == SessionMessageKind::CommandResult) {
+                        reasons.append(m.accepted ? QStringLiteral("accepted") : m.reason);
+                    }
+                }
+                return reasons.size() == invokes.size();
+            }, 3000);
+            return reasons;
+        };
+        const auto intArg = [](const char* name, qlonglong v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Int64, QVariant(v)};
+        };
+        const auto boolArg = [](const char* name, bool v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Bool, QVariant(v)};
+        };
+        const QList<SessionMessage> right{
+            SessionMessages::commandInvoke("setTgxlAntenna", 31, {intArg("port", 2)}),
+            SessionMessages::commandInvoke("setTgxlOperate", 32, {boolArg("on", true)}),
+            SessionMessages::commandInvoke("setTgxlBypass", 33, {boolArg("on", false)}),
+        };
+        const QString update = QStringLiteral("Update this app to switch the Tuner Genius on "
+                                              "this Core.");
+        QCOMPARE(results(true, quint16(kRadioIdentitySessionProtocolMinor - 1), false, right),
+                 (QStringList{update, update, update}));
+        const QString notOwning = QStringLiteral("This Core cannot change its amplifier and "
+                                                 "tuner settings.");
+        QCOMPARE(results(false, kRadioIdentitySessionProtocolMinor, false, right),
+                 (QStringList{notOwning, notOwning, notOwning}));
+        const QString noTuner = QStringLiteral("The Core is not connected to the Tuner Genius.");
+        QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, false, right),
+                 (QStringList{noTuner, noTuner, noTuner}));
+        const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+        QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
+                 (QStringList{onAir, onAir, onAir}));
+        const QStringList wrong = results(true, kRadioIdentitySessionProtocolMinor, false, {
+            SessionMessages::commandInvoke("setTgxlAntenna", 41, {intArg("port", 4)}),
+            SessionMessages::commandInvoke("setTgxlAntenna", 42, {boolArg("port", true)}),
+            SessionMessages::commandInvoke("setTgxlOperate", 43, {intArg("on", 1)}),
+            SessionMessages::commandInvoke("setTgxlBypass", 44, {}),
+        });
+        QCOMPARE(wrong, (QStringList{
+            QStringLiteral("Choose Tuner Genius antenna 1, 2 or 3."),
+            QStringLiteral("The request to switch the Tuner Genius antenna was not understood."),
+            QStringLiteral("The request to put the Tuner Genius in operate or standby was not "
+                           "understood."),
+            QStringLiteral("The request to bypass the Tuner Genius was not understood.")}));
+        for (const QString& reason : wrong + QStringList{update, notOwning, noTuner, onAir}) {
             QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
         }
     }

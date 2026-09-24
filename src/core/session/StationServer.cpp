@@ -163,6 +163,10 @@
 //                                    takeover and version reasons come from
 //                                    SessionEndReasons, which the app parses.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-47: remoteTgxlControlVersion 2
+//                                    (the Tuner Genius's antenna, operate
+//                                    and bypass verbs).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -413,6 +417,13 @@ bool isTgxlDeviceSettingsVerb(const QByteArray& verb)
 {
     return verb == "setTgxlName" || verb == "setTgxlNetwork" || verb == "saveTgxlSettings"
         || verb == "readTgxlSettings";
+}
+
+// R-R3-49 / R-R3-47: the Tuner Genius's antenna, operate and bypass
+// (remoteTgxlControlVersion 2).
+bool isTgxlControlVerb(const QByteArray& verb)
+{
+    return verb == "setTgxlAntenna" || verb == "setTgxlOperate" || verb == "setTgxlBypass";
 }
 
 // R-R3-47: why a raw write of the RF-Kit switch is refused. A current app
@@ -1336,6 +1347,18 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                     : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
             break;
         }
+        // R-R3-49 / R-R3-47: the tuner's antenna, operate and bypass came
+        // with remoteTgxlControlVersion 2, in the same minor-11 block.
+        if (isTgxlControlVerb(message.commandVerb)
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || tgxlControlVersion() < 2)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to switch the Tuner Genius on this Core.")
+                    : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
+            break;
+        }
         if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")
             && it->agreedMinor < kRemoteTgxlConfigSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
@@ -2228,7 +2251,9 @@ int StationServer::pgxlControlVersion() const
 
 int StationServer::tgxlControlVersion() const
 {
-    return accessoryStatusVersion() >= 1 ? 1 : 0;
+    // 2: the tuner's antenna, operate and bypass (setTgxlAntenna,
+    // setTgxlOperate, setTgxlBypass), R-R3-49 / R-R3-47.
+    return accessoryStatusVersion() >= 1 ? 2 : 0;
 }
 
 int StationServer::rfKitControlVersion() const

@@ -234,6 +234,9 @@
 //                                    `accessorySettings`, refusals routed
 //                                    to the Advanced pages). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-47: the Tuner Genius's antenna,
+//                                    operate and bypass requests.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -507,6 +510,7 @@ public:
     // R-R3-47 / R-R3-22: see IStationLink.
     bool pgxlDeviceSettingsAvailable() const override;
     bool tgxlDeviceSettingsAvailable() const override;
+    bool tgxlControlAvailable() const override;
     bool stationTciAvailable() const override;
     bool coreServesTciOnThisComputer() const override;
     int coreStationTciStored() const override;
@@ -639,6 +643,9 @@ public:
                                       const QString& netmask, const QString& gateway) override;
     CommandOutcome requestTgxlSaveAndRestart() override;
     CommandOutcome requestTgxlReadSettings() override;
+    CommandOutcome requestTgxlAntenna(int port) override;
+    CommandOutcome requestTgxlOperate(bool on) override;
+    CommandOutcome requestTgxlBypass(bool on) override;
     CommandOutcome requestApplyNnrModels(quint32 revision) override;
     bool nnrControlAvailable() const override;
     // R-R3-21: the Core advertised dspAssetVersion 2 on a session that

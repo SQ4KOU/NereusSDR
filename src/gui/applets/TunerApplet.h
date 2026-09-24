@@ -26,6 +26,9 @@
 //                 with RelayBar; 3-button mode group replaced with single
 //                 cycle button; constructor wired to TunerModel*.
 //                 From AetherSDR src/gui/TunerApplet.h [@0cd4559].
+//   2026-09-24  R-R3-49 / R-R3-47 by J.J. Boyd (KG4VCF), with
+//                 AI-assisted transformation via Anthropic Claude Code.
+//                 Remote ANT/OPERATE through the Core (see .cpp).
 // =================================================================
 
 #pragma once
@@ -117,6 +120,16 @@ public:
         return m_carrierEngagedForTgxlTune;
     }
     bool actuatingControlsEnabledForTesting() const;
+    // R-R3-49 / R-R3-47: the antenna and OPERATE buttons, for tests.
+    QPushButton* antennaButtonForTesting(int port) const;
+    QPushButton* operateButtonForTesting() const { return m_operateBtn; }
+    QPushButton* tuneButtonForTesting() const { return m_tuneBtn; }
+
+    // R-R3-49 / R-R3-47: the Core's refusal while it transmits, and the
+    // tooltip on ANT and OPERATE in a remote window while the radio is on
+    // the air.
+    static QString onAirReason()
+    { return QStringLiteral("The radio is on the air. Try again when it stops."); }
     bool staleIndicatorVisibleForTesting() const;
 
     // R3 remote sessions are receive-only. MainWindow applies the negotiated
@@ -190,6 +203,14 @@ private:
     TuneMemory currentMem() const;
     void updateActuatingControls();
     void updateStationAvailability();
+    // R-R3-49 / R-R3-47: a remote window on a Core that switches its
+    // Tuner Genius for this app (remoteTgxlControlVersion 2). ANT and
+    // OPERATE then ask the Core and follow its transmit state; TUNE and the
+    // relay bars keep the transmit permission.
+    bool remoteTunerControl() const;
+    // The Core reports the radio on the air: MOX, TUNE or two-tone.
+    bool coreOnAir() const;
+    void requestAntenna(int port);
 
     TunerModel* m_tunerModel = nullptr;
 

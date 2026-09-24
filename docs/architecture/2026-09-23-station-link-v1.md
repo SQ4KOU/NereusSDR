@@ -386,7 +386,7 @@ change shows as surface drift and as a change to this table.
 | `remoteRfKitControlVersion` | 3 |
 | `stationTciVersion` | 1 |
 | `accessoryDataVersion` | 1 |
-| `remoteTgxlControlVersion` | 1 |
+| `remoteTgxlControlVersion` | 2 |
 
 <!-- /surface -->
 
@@ -417,9 +417,12 @@ When a feature is off, its version is 0:
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
   Power Genius's own settings and `remoteTgxlControlVersion` 1 the Tuner
   Genius's (the `accessorySettings` object and the device settings
-  commands, section 9.1); `remoteRfKitControlVersion` 3 adds
-  `resetRfKitError`, the RF-Kit amplifier's Reset amp error.
-  `remoteTgxlControlVersion` is the last capabilities entry.
+  commands, section 9.1); `remoteTgxlControlVersion` 2 adds the Tuner
+  Genius's antenna, operate and bypass (`setTgxlAntenna`,
+  `setTgxlOperate`, `setTgxlBypass`, section 9.1);
+  `remoteRfKitControlVersion` 3 adds `resetRfKitError`, the RF-Kit
+  amplifier's Reset amp error. `remoteTgxlControlVersion` is the last
+  capabilities entry.
 - `stationTciVersion`: sent only at agreed minor 11, and 0 unless the Core
   runs a station TCI server.
 - `accessoryDataVersion`: sent only at agreed minor 11, and 0 unless the
@@ -1259,6 +1262,9 @@ refused.
 | `setTgxlNetwork` | `dhcp` bool, `address` utf8, `netmask` utf8, `gateway` utf8 | `remoteTgxlControlVersion` | 1 | 11 |
 | `saveTgxlSettings` | none | `remoteTgxlControlVersion` | 1 | 11 |
 | `readTgxlSettings` | none | `remoteTgxlControlVersion` | 1 | 11 |
+| `setTgxlAntenna` | `port` i64 | `remoteTgxlControlVersion` | 2 | 11 |
+| `setTgxlOperate` | `on` bool | `remoteTgxlControlVersion` | 2 | 11 |
+| `setTgxlBypass` | `on` bool | `remoteTgxlControlVersion` | 2 | 11 |
 | `configureRfKit` | `host` utf8, `port` i64 | `remoteRfKitControlVersion` | 2 | 11 |
 | `disconnectRfKit` | none | `remoteRfKitControlVersion` | 2 | 11 |
 | `setRfKitEnabled` | `enabled` bool | `remoteRfKitControlVersion` | 2 | 11 |
@@ -1300,7 +1306,7 @@ refused.
 The table's capability columns are the gate the desktop client applies
 before sending (section 6.2).
 
-Three command groups need a sentence beyond the table:
+Four command groups need a sentence beyond the table:
 
 - **The filter policy.** `setAlexBpfMode` sets one receive filter chain's
   filter policy (`chain` 0 or 1; `mode` 0 Auto, 1 Force filter, 2 Force
@@ -1319,6 +1325,17 @@ Three command groups need a sentence beyond the table:
   object (`pgxlAnswer`, `pgxlAnswerAccepted` and `pgxlAnswerCount`, and
   the `tgxl` trio), with the settings the device last reported. A save
   restarts the device. None of them keys a transmitter.
+- **The tuner's antenna, operate and bypass.** `setTgxlAntenna` (`port`
+  1, 2 or 3), `setTgxlOperate` and `setTgxlBypass` (`on`) switch the
+  Core's Tuner Genius through its own tuner model, sending the tuner the
+  line a local window's Tuner Genius applet sends. `accepted` means the
+  command left for the tuner; the tuner's report arrives on the `tuner`
+  object (`antennaA`, `isOperate`, `isBypass`). They key nothing, so a
+  receive-only Core takes them, but each is refused while the radio is on
+  the air (MOX, TUNE or two-tone), with no tuner admitted, and for the
+  antenna on a tuner with no antenna switch or a port outside 1 to 3.
+  The reasons are in
+  [remote accessory control version 1](2026-09-23-remote-accessory-control-v1.md).
 - **One TCI switch.** The Core keeps one TCI switch and port for its own
   TCI server (`setStationTci`, the `stationTci` object). A desktop window
   connected to a Core with `stationTciVersion` 1 shows that switch and

@@ -112,6 +112,9 @@
 //                version reasons through SessionEndReasons, and a version
 //                this app refuses itself records the same end. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 / R-R3-47: remoteTgxlControlVersion 2 (the
+//                Tuner Genius's antenna, operate and bypass requests). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2758,7 +2761,8 @@ QString accessoryRefusalDevice(const QByteArray& verb, const QString& faultsDevi
         return QStringLiteral("pgxl");
     }
     if (verb == "setTgxlName" || verb == "setTgxlNetwork" || verb == "saveTgxlSettings"
-        || verb == "readTgxlSettings" || verb == "configureTgxl" || verb == "disconnectTgxl") {
+        || verb == "readTgxlSettings" || verb == "configureTgxl" || verb == "disconnectTgxl"
+        || verb == "setTgxlAntenna" || verb == "setTgxlOperate" || verb == "setTgxlBypass") {
         return QStringLiteral("tgxl");
     }
     if (verb == "configureRfKit" || verb == "disconnectRfKit" || verb == "setRfKitEnabled"
@@ -3255,6 +3259,35 @@ StationClient::CommandOutcome StationClient::requestTgxlReadSettings()
                        QStringLiteral("the request for the Tuner Genius settings"));
 }
 
+// R-R3-49 / R-R3-47 (remoteTgxlControlVersion 2): the Tuner Genius's
+// antenna, operate and bypass. A Core that did not offer them is not asked.
+StationClient::CommandOutcome StationClient::requestTgxlAntenna(int port)
+{
+    if (!tgxlControlAvailable()) {
+        return IStationLink::requestTgxlAntenna(port);
+    }
+    return sendCommand("setTgxlAntenna", -1, { intArgument("port", port) },
+                       QStringLiteral("the Tuner Genius antenna"));
+}
+
+StationClient::CommandOutcome StationClient::requestTgxlOperate(bool on)
+{
+    if (!tgxlControlAvailable()) {
+        return IStationLink::requestTgxlOperate(on);
+    }
+    return sendCommand("setTgxlOperate", -1, { boolArgument("on", on) },
+                       QStringLiteral("the Tuner Genius operate switch"));
+}
+
+StationClient::CommandOutcome StationClient::requestTgxlBypass(bool on)
+{
+    if (!tgxlControlAvailable()) {
+        return IStationLink::requestTgxlBypass(on);
+    }
+    return sendCommand("setTgxlBypass", -1, { boolArgument("on", on) },
+                       QStringLiteral("the Tuner Genius bypass"));
+}
+
 StationClient::CommandOutcome StationClient::requestDisconnectTgxl()
 {
     if (!remoteTgxlConfigAvailable()) {
@@ -3495,6 +3528,13 @@ bool StationClient::tgxlDeviceSettingsAvailable() const
 {
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.remoteTgxlControlVersion >= 1;
+}
+
+// R-R3-49 / R-R3-47: the Tuner Genius's antenna, operate and bypass.
+bool StationClient::tgxlControlAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remoteTgxlControlVersion >= 2;
 }
 
 bool StationClient::stationTciAvailable() const

@@ -3,6 +3,11 @@
 // 2026-09-24: R-R3-47 / R-R3-22: a window's requests for the tuner's own
 // settings reach the (fake) tuner as the local page's own commands. J.J.
 // Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-49 / R-R3-47: a window's antenna, operate and bypass
+// requests reach the (fake) tuner as the local applet's lines, and are
+// refused while the radio is on the air, with no tuner, with no antenna
+// switch or a port outside 1 to 3. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -553,6 +558,116 @@ private slots:
                          && !frame.contains(QStringLiteral("bypass"))
                          && !frame.contains(QStringLiteral("antenna")), qPrintable(frame));
         }
+        QVERIFY(model.disconnectTgxlForStation(&reason));
+    }
+
+    // R-R3-49 / R-R3-47 (remoteTgxlControlVersion 2): a window switches the
+    // Core's tuner antenna, operate and bypass whenever the radio is not on
+    // the air, on a receive-only Core too (they key nothing). Each refusal
+    // is in plain words and sends nothing to the tuner.
+    void windowSwitchesTheTunerOnlyWhenItMay()
+    {
+        QString reason;
+        {   // A Core that does not own its accessories.
+            RadioModel plain;
+            QVERIFY(!plain.setTgxlAntennaForStation(2, &reason));
+            QCOMPARE(reason, QStringLiteral("This Core cannot change its amplifier and tuner settings."));
+            QVERIFY(!plain.setTgxlOperateForStation(true, &reason));
+            QCOMPARE(reason, QStringLiteral("This Core cannot change its amplifier and tuner settings."));
+        }
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+        RadioModel model;
+        prepare(model);
+        QSignalSpy frames(model.tgxlConnection(), &TgxlConnection::testFrameWrittenForTesting);
+        const QString notConnected = QStringLiteral("The Core is not connected to the Tuner Genius.");
+        QVERIFY(!model.setTgxlAntennaForStation(2, &reason));
+        QCOMPARE(reason, notConnected);
+        QVERIFY(!model.setTgxlOperateForStation(true, &reason));
+        QCOMPARE(reason, notConnected);
+        QVERIFY(!model.setTgxlBypassForStation(true, &reason));
+        QCOMPARE(reason, notConnected);
+
+        QVERIFY(model.configureTgxlForStation(QStringLiteral("127.0.0.1"), server.serverPort(),
+                                              &reason));
+        QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(), 1500);
+        auto* peer = server.nextPendingConnection();
+        peer->write("V1.2.17\n"); peer->flush();
+        QTRY_VERIFY_WITH_TIMEOUT(infoSequence(frames) != 0, 1500);
+        auto* discovery = model.findChild<LanDiscovery*>();
+        QVERIFY(discovery);
+        sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
+        QTRY_COMPARE(model.tgxlConnection()->identityInfo().serial, QStringLiteral("241288-1"));
+        QVERIFY(!model.setTgxlOperateForStation(true, &reason));   // not admitted yet
+        QCOMPARE(reason, notConnected);
+        announce(discovery, server.serverPort(), QStringLiteral("TunerGeniusXL"),
+                 QStringLiteral("241288-1"));
+        QTRY_VERIFY(model.tgxlConnection()->isConnected());
+
+        const auto sentLine = [&](const QString& command) {
+            for (const auto& row : frames) {
+                if (row.first().toString().endsWith(QLatin1Char('|') + command)) { return true; }
+            }
+            return false;
+        };
+        const auto switchingSent = [&] {
+            for (const auto& row : frames) {
+                const QString frame = row.first().toString();
+                if (frame.contains(QStringLiteral("|operate=")) || frame.contains(QStringLiteral("|bypass="))
+                    || frame.contains(QStringLiteral("|activate ant="))) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // A port outside 1 to 3.
+        for (int port : {0, 4, -1}) {
+            QVERIFY(!model.setTgxlAntennaForStation(port, &reason));
+            QCOMPARE(reason, QStringLiteral("Choose Tuner Genius antenna 1, 2 or 3."));
+        }
+        // A tuner with no antenna switch.
+        peer->write("S0|state one_by_three=0\n"); peer->flush();
+        QTRY_VERIFY(!model.tunerModel()->hasAntennaSwitch());
+        QVERIFY(!model.setTgxlAntennaForStation(2, &reason));
+        QCOMPARE(reason, QStringLiteral("This Tuner Genius has no antenna switch."));
+        peer->write("S0|state one_by_three=1 antA=1 operate=0 bypass=0\n"); peer->flush();
+        QTRY_VERIFY(model.tunerModel()->hasAntennaSwitch());
+
+        // The radio on the air: MOX, then TUNE.
+        const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+        for (int keyed = 0; keyed < 2; ++keyed) {
+            if (keyed == 0) { model.transmitModel().setMox(true); }
+            else { model.transmitModel().setTune(true); }
+            QVERIFY(!model.setTgxlAntennaForStation(2, &reason));
+            QCOMPARE(reason, onAir);
+            QVERIFY(!model.setTgxlOperateForStation(true, &reason));
+            QCOMPARE(reason, onAir);
+            QVERIFY(!model.setTgxlBypassForStation(true, &reason));
+            QCOMPARE(reason, onAir);
+            model.transmitModel().setMox(false);
+            model.transmitModel().setTune(false);
+        }
+        QTest::qWait(50);
+        QVERIFY(!switchingSent());
+
+        // Off the air, on a receive-only Core: each reaches the tuner as the
+        // local applet's own line.
+        QVERIFY(model.receiveOnlyStationPolicy());
+        QVERIFY(model.setTgxlAntennaForStation(2, &reason));
+        QTRY_VERIFY(sentLine(QStringLiteral("activate ant=2")));
+        QVERIFY(model.setTgxlOperateForStation(true, &reason));
+        QTRY_VERIFY(sentLine(QStringLiteral("operate=1")));
+        QVERIFY(model.setTgxlBypassForStation(true, &reason));
+        QTRY_VERIFY(sentLine(QStringLiteral("bypass=1")));
+        QVERIFY(model.setTgxlOperateForStation(false, &reason));
+        QTRY_VERIFY(sentLine(QStringLiteral("operate=0")));
+        // The model reports what the tuner says, not the request.
+        QCOMPARE(model.tunerModel()->antennaA(), 1);
+        peer->write("S0|state antA=2 operate=1 bypass=1\n"); peer->flush();
+        QTRY_COMPARE(model.tunerModel()->antennaA(), 2);
+        QVERIFY(model.tunerModel()->isOperate());
+        QVERIFY(model.tunerModel()->isBypass());
         QVERIFY(model.disconnectTgxlForStation(&reason));
     }
 

@@ -170,6 +170,11 @@
 //                accessory settings and RF-Kit reset refusals in plain
 //                words. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-24 - R-R3-49 / R-R3-47: the Tuner Genius's antenna, operate
+//                and bypass for a remote window (remoteTgxlControlVersion
+//                2), refused while the radio is on the air. NereusSDR-
+//                original. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3677,6 +3682,62 @@ bool RadioModel::readTgxlSettingsForStation(QString* reason)
 {
     if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
     return m_stationTgxl->deviceSettings()->readBack(reason);
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-49 / R-R3-47 (remoteTgxlControlVersion 2): the Tuner Genius's
+// antenna, operate and bypass for a window. Applied through the Core's own
+// TunerModel command slots (setAntennaA, setOperate, setBypass), the ones
+// the local TunerApplet drives, so the tuner gets exactly the local
+// window's line. None keys a transmitter; each waits while the radio is on
+// the air (operator decision D60). NereusSDR-original; no Thetis logic.
+// ---------------------------------------------------------------------------
+
+bool RadioModel::stationTgxlControlAllowed(QString* reason) const
+{
+    if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
+    // On the air: MOX (the controller's or the transmit model's), TUNE, or
+    // the two-tone test.
+    const bool onAir = mox() || m_transmitModel.isMox() || isTune() || m_transmitModel.isTune()
+        || (m_twoToneController && m_twoToneController->isActive());
+    if (onAir) {
+        if (reason) { *reason = QStringLiteral("The radio is on the air. Try again when it stops."); }
+        return false;
+    }
+    if (!m_tgxlConnection || !m_tgxlConnection->isConnected() || !m_tunerModel) {
+        if (reason) { *reason = QStringLiteral("The Core is not connected to the Tuner Genius."); }
+        return false;
+    }
+    return true;
+}
+
+bool RadioModel::setTgxlAntennaForStation(int port, QString* reason)
+{
+    if (port < 1 || port > 3) {
+        if (reason) { *reason = QStringLiteral("Choose Tuner Genius antenna 1, 2 or 3."); }
+        return false;
+    }
+    if (!stationTgxlControlAllowed(reason)) { return false; }
+    if (!m_tunerModel->hasAntennaSwitch()) {
+        if (reason) { *reason = QStringLiteral("This Tuner Genius has no antenna switch."); }
+        return false;
+    }
+    m_tunerModel->setAntennaA(port);
+    return true;
+}
+
+bool RadioModel::setTgxlOperateForStation(bool on, QString* reason)
+{
+    if (!stationTgxlControlAllowed(reason)) { return false; }
+    m_tunerModel->setOperate(on);
+    return true;
+}
+
+bool RadioModel::setTgxlBypassForStation(bool on, QString* reason)
+{
+    if (!stationTgxlControlAllowed(reason)) { return false; }
+    m_tunerModel->setBypass(on);
+    return true;
 }
 
 namespace {

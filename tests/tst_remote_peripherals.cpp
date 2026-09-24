@@ -39,6 +39,11 @@
 // the Core's connection as it changes and a refusal's plain reason, and
 // say why when the Core does not offer them; a local window is unchanged.
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-49 / R-R3-47: a remote window's Tuner Genius applet
+// switches the Core's tuner antenna and OPERATE through the Core
+// (remoteTgxlControlVersion 2), follows the Core's report and its transmit
+// state, keeps TUNE with remote transmit, and stays greyed on an older
+// Core. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include <QtTest>
 
@@ -85,6 +90,7 @@
 #include "core/settings/SettingsProxy.h"
 #include "gui/applets/AmpApplet.h"
 #include "gui/applets/Rf2ksApplet.h"
+#include "gui/applets/TunerApplet.h"
 #include "gui/setup/CatNetworkSetupPages.h"
 #include "gui/setup/FourO3APage.h"
 #include "gui/setup/RfKitPage.h"
@@ -463,6 +469,8 @@ private slots:
     void olderCoreLeavesTheRfKitSettingsSayingWhy();
     void refusalClaimsEndWithTheLink();
     void ampAppletRefusalShownOnTheAppletIsNotToasted();
+    void remoteWindowSwitchesTheTunerThroughTheCore();
+    void olderCoreLeavesTheTunerSwitchesGreyed();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -3224,6 +3232,130 @@ void RemotePeripheralsTest::localPagesAskBeforeNetworkSettings()
         QVERIFY(tuner.waitFor(ifconf, mark) >= 0);
     }
     AppSettings::instance().clear();
+}
+
+// R-R3-49 / R-R3-47 (remoteTgxlControlVersion 2): in a remote window the
+// Tuner Genius applet's ANT 1/2/3 and OPERATE switch the Core's tuner
+// through the Core (the fake tuner records the local applet's own lines),
+// on a receive-only Core too; the buttons follow the tuner's report, not
+// the click; while the radio is on the air they are disabled with the
+// reason, and a request sent anyway is refused with it and reaches nothing.
+// TUNE keeps the remote transmit gate.
+void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
+{
+    AppSettings::instance().clear();
+    CoreAndWindow cw;
+    RadioModel& station = cw.station;
+    RadioModel& window = cw.window;
+    station.smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
+    station.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+    FakeGenius tuner;
+    QVERIFY(tuner.listen());
+    TunerApplet applet(&window, window.tunerModel());
+    const QString transmitReason =
+        QStringLiteral("Remote transmit controls are not available from this Core yet.");
+    applet.setTransmitPermitted(false, transmitReason);   // as MainWindow does
+    QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
+
+    LoopbackTransport* stationEnd = cw.connect(this);
+    QTRY_VERIFY(cw.client.tgxlControlAvailable());
+    window.reportStationLinkStateChanged();
+    QVERIFY(admitCoreTuner(station, tuner));
+    QVERIFY(station.receiveOnlyStationPolicy());
+    tuner.send(QStringLiteral("S0|state one_by_three=1 antA=1 operate=0 bypass=0"));
+    QTRY_VERIFY(window.tunerModel()->hasAntennaSwitch());
+    QTRY_COMPARE(window.tunerModel()->antennaA(), 1);
+
+    for (int port = 1; port <= 3; ++port) {
+        QVERIFY(applet.antennaButtonForTesting(port)->isEnabled());
+        QVERIFY(applet.antennaButtonForTesting(port)->toolTip().isEmpty());
+    }
+    QVERIFY(applet.operateButtonForTesting()->isEnabled());
+    QVERIFY(!applet.tuneButtonForTesting()->isEnabled());
+    QCOMPARE(applet.tuneButtonForTesting()->toolTip(), transmitReason);
+
+    // ANT 3: the Core's tuner gets the local applet's line; the window's
+    // antenna moves only when the tuner reports it.
+    const int mark = tuner.commands.size();
+    applet.antennaButtonForTesting(3)->click();
+    QVERIFY(tuner.waitFor(QStringLiteral("activate ant=3"), mark) >= 0);
+    QCOMPARE(window.tunerModel()->antennaA(), 1);
+    tuner.send(QStringLiteral("S0|state antA=3"));
+    QTRY_COMPARE(window.tunerModel()->antennaA(), 3);
+
+    // OPERATE from STANDBY: bypass off, then operate on, as a local click.
+    const int operateMark = tuner.commands.size();
+    QCOMPARE(applet.operateButtonForTesting()->text(), QStringLiteral("STANDBY"));
+    applet.operateButtonForTesting()->click();
+    const int bypassOff = tuner.waitFor(QStringLiteral("bypass=0"), operateMark);
+    const int operateOn = tuner.waitFor(QStringLiteral("operate=1"), operateMark);
+    QVERIFY(bypassOff >= 0 && operateOn > bypassOff);
+    QCOMPARE(applet.operateButtonForTesting()->text(), QStringLiteral("STANDBY"));
+    tuner.send(QStringLiteral("S0|state operate=1 bypass=0"));
+    QTRY_COMPARE(applet.operateButtonForTesting()->text(), QStringLiteral("OPERATE"));
+    // OPERATE to BYPASS.
+    const int bypassMark = tuner.commands.size();
+    applet.operateButtonForTesting()->click();
+    QVERIFY(tuner.waitFor(QStringLiteral("bypass=1"), bypassMark) >= 0);
+    QVERIFY(refused.isEmpty());
+
+    // On the air: disabled, with the reason; a request sent anyway is
+    // refused with it and nothing reaches the tuner.
+    station.transmitModel().setMox(true);
+    QTRY_VERIFY(window.transmitModel().isMox());
+    for (int port = 1; port <= 3; ++port) {
+        QVERIFY(!applet.antennaButtonForTesting(port)->isEnabled());
+        QCOMPARE(applet.antennaButtonForTesting(port)->toolTip(), TunerApplet::onAirReason());
+    }
+    QVERIFY(!applet.operateButtonForTesting()->isEnabled());
+    QCOMPARE(applet.operateButtonForTesting()->toolTip(), TunerApplet::onAirReason());
+    QVERIFY(OperatorWording::isPlain(TunerApplet::onAirReason()));
+    const int airMark = tuner.commands.size();
+    QVERIFY(cw.client.requestTgxlAntenna(2).sent);
+    QTRY_COMPARE(refused.count(), 1);
+    QCOMPARE(refused.first().at(0).toString(), QStringLiteral("tgxl"));
+    QCOMPARE(refused.first().at(1).toString(), TunerApplet::onAirReason());
+    QTest::qWait(100);
+    for (int i = airMark; i < tuner.commands.size(); ++i) {
+        QVERIFY2(!tuner.commands.at(i).startsWith(QStringLiteral("activate")),
+                 qPrintable(tuner.commands.at(i)));
+    }
+    station.transmitModel().setMox(false);
+    QTRY_VERIFY(applet.antennaButtonForTesting(2)->isEnabled());
+    QVERIFY(applet.operateButtonForTesting()->isEnabled());
+    QVERIFY(!applet.tuneButtonForTesting()->isEnabled());
+
+    // The link gone: back to the transmit gate, with its reason.
+    stationEnd->closeLink(QStringLiteral("test: Core lost"));
+    QTRY_VERIFY(!cw.client.tgxlControlAvailable());
+    window.reportStationLinkStateChanged();
+    QTRY_VERIFY(!applet.antennaButtonForTesting(1)->isEnabled());
+    QCOMPARE(applet.antennaButtonForTesting(1)->toolTip(), transmitReason);
+}
+
+// R-R3-49: a Core below remoteTgxlControlVersion 2 leaves ANT and OPERATE
+// greyed with the transmit reason, and a click sends nothing.
+void RemotePeripheralsTest::olderCoreLeavesTheTunerSwitchesGreyed()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    RecordingTgxlLink link;
+    link.linkReady = true;
+    model.attachStation(&link);
+    TunerApplet applet(&model, model.tunerModel());
+    const QString transmitReason =
+        QStringLiteral("Remote transmit controls are not available from this Core yet.");
+    applet.setTransmitPermitted(false, transmitReason);
+    for (int port = 1; port <= 3; ++port) {
+        QVERIFY(!applet.antennaButtonForTesting(port)->isEnabled());
+        QCOMPARE(applet.antennaButtonForTesting(port)->toolTip(), transmitReason);
+    }
+    QVERIFY(!applet.operateButtonForTesting()->isEnabled());
+    QCOMPARE(applet.operateButtonForTesting()->toolTip(), transmitReason);
+    const IStationLink::CommandOutcome outcome = link.requestTgxlAntenna(2);
+    QVERIFY(!outcome.sent);
+    QCOMPARE(outcome.reason, IStationLink::tgxlControlUnavailableReason());
+    QVERIFY(OperatorWording::isPlain(outcome.reason));
+    model.detachStation();
 }
 
 QTEST_MAIN(RemotePeripheralsTest)
