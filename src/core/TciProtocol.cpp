@@ -17,6 +17,9 @@
 //                J.J. Boyd (KG4VCF): remote-window branches in the init
 //                burst, trx, vfo and modulation. AI-assisted transformation
 //                via Anthropic Claude Code.
+//   2026-09-24 - R-R3-48 / R-R3-25: the Core's station server is
+//                receive-only too (transmitRefused()). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 
 #include "TciProtocol.h"
 #include "AppSettings.h"
@@ -266,8 +269,9 @@ QStringList TciProtocol::buildInitBurst() const
     // From Thetis TCIServer.cs:2529 [v2.10.3.13]
     // R-R3-42 / R-R3-25: a remote window's receivers belong to a Core that
     // does not transmit for it, so it tells the app it only receives.
-    lines << (m_remoteWindow ? QStringLiteral("receive_only:true;")
-                             : QStringLiteral("receive_only:false;"));
+    // R-R3-48: so does the Core's station server until remote transmit.
+    lines << (transmitRefused() ? QStringLiteral("receive_only:true;")
+                                : QStringLiteral("receive_only:false;"));
 
     // From Thetis TCIServer.cs:2530 [v2.10.3.13] — locked at 2 per design doc §1.2;
     // Slice C/D are NereusSDR-internal and not exposed via TCI in Phase 3J-1.
@@ -887,8 +891,8 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     lines << buildSplitEnableLine(0, split[0]);
     lines << buildSplitEnableLine(1, bRX2Enabled && split[1]);
     // R-R3-42 / R-R3-25: neither receiver can transmit from a remote window.
-    lines << buildTxEnableLine(0, !m_remoteWindow && !mox);
-    lines << buildTxEnableLine(1, !m_remoteWindow && bRX2Enabled && !mox);
+    lines << buildTxEnableLine(0, !transmitRefused() && !mox);
+    lines << buildTxEnableLine(1, !transmitRefused() && bRX2Enabled && !mox);
 
     // From Thetis TCIServer.cs:2478-2481 [v2.10.3.13]
     lines << buildRxChannelEnableLine(0, 0, true);
@@ -1892,11 +1896,12 @@ QString TciProtocol::handleTrxCommand(const QStringList& args)
             return {};
         }
         const bool mox = (boolStr == QStringLiteral("true"));
-        // R-R3-42 / R-R3-25: a remote window never keys the transmitter.
-        // No MOX write and no broadcast; the asking app alone hears that
-        // its receiver is not transmitting. TciServer tells the operator
-        // why, in plain words, off the wire.
-        if (m_remoteWindow) {
+        // R-R3-42 / R-R3-25: a remote window never keys the transmitter,
+        // nor does the Core's station server until remote transmit
+        // (R-R3-48). No MOX write and no broadcast; the asking app alone
+        // hears that its receiver is not transmitting. TciServer tells the
+        // operator why, in plain words, off the wire.
+        if (transmitRefused()) {
             (void)mox;
             return buildTrxLine(rx, false);
         }

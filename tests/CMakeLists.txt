@@ -6024,10 +6024,26 @@ target_compile_definitions(tst_station_accessory_state PRIVATE
 # objects over the in-process loopback.
 nereus_add_test(tst_remote_peripherals
     fakes/LoopbackTransport.cpp)
+# R-R3-48: the one TCI switch drives the Core's station server (TciServer).
+target_link_libraries(tst_remote_peripherals PRIVATE Qt6::WebSockets)
 # R-R3-47 / R-R3-22 / R-R3-25: the Core's Power Genius XL: identity before
 # admission (captured discovery and info replies), pairing only after it,
 # band follow, and cancellation in every phase. Loopback peers only.
 nereus_add_test(tst_station_pgxl_controller)
+# R-R3-47 / R-R3-48 / R-R3-22 / R-R3-25: the Core's RF-Kit RF2K-S: identity
+# from /info before admission, the Core's configure/disconnect/switch rules,
+# cancellation, faults, and TCI mode through the amp's web interface while
+# the station's TCI server is on. An in-process HTTP fake stands in for the
+# amp.
+nereus_add_test(tst_station_rfkit_controller)
+target_link_libraries(tst_station_rfkit_controller PRIVATE Qt6::Network)
+# R-R3-48 / R-R3-25: the Core's station TCI server (where it listens, the
+# switch it keeps, what an app at the station hears, transmit refused), the
+# RF-Kit's band follow over it, and the app's one TCI switch. Loopback only.
+if(Qt6WebSockets_FOUND)
+    nereus_add_test(tst_station_tci_server)
+    target_link_libraries(tst_station_tci_server PRIVATE Qt6::WebSockets Qt6::Network)
+endif()
 
 # Task 59: auto-reconnect exponential backoff (1/2/5/10/30/60 s, cap at 60 s).
 # Test: backoffSequence verifies 8 calls to testForceDisconnect() produce

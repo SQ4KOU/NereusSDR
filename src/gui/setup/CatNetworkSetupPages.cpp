@@ -15,6 +15,8 @@
 #include "core/session/RemoteStationOptions.h"
 #include "core/session/IStationLink.h"
 #include "models/AmplifierModel.h"
+#include "models/StationTciModel.h"
+#include "core/TciSwitch.h"
 #include "models/RadioModel.h"
 
 #include <QNetworkInterface>
@@ -294,7 +296,53 @@ void CatTciServerPage::buildServerGroup()
     m_statusLabel->setObjectName(QStringLiteral("tciStatusLabel"));
     form->addRow(tr("Status:"), m_statusLabel);
 
+    // R-R3-48: in a remote window on a Core that runs its own TCI server,
+    // where devices at the station (the RF-Kit amplifier) reach it. The
+    // switch and port above drive both servers.
+    m_stationLine = new QLabel(group);
+    m_stationLine->setObjectName(QStringLiteral("tciStationLine"));
+    m_stationLine->setTextFormat(Qt::PlainText);
+    m_stationLine->setWordWrap(true);
+    m_stationLine->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
+    m_stationLine->setVisible(false);
+    form->addRow(QString(), m_stationLine);
+
     contentLayout()->addWidget(group);
+}
+
+void CatTciServerPage::setRadioModel(NereusSDR::RadioModel* model)
+{
+    if (m_radioModelRef) {
+        disconnect(m_radioModelRef, nullptr, this, nullptr);
+        if (auto* station = m_radioModelRef->stationTciModel()) {
+            disconnect(station, nullptr, this, nullptr);
+        }
+    }
+    m_radioModelRef = model;
+    if (model) {
+        connect(model, &NereusSDR::RadioModel::stationLinkStateChanged,
+                this, &CatTciServerPage::refreshStationLine);
+        if (auto* station = model->stationTciModel()) {
+            connect(station, &NereusSDR::StationTciModel::stateChanged,
+                    this, &CatTciServerPage::refreshStationLine);
+        }
+    }
+    refreshStationLine();
+}
+
+void CatTciServerPage::refreshStationLine()
+{
+    if (!m_stationLine) {
+        return;
+    }
+    const QString line = NereusSDR::TciSwitch::stationLine(m_radioModelRef.data());
+    m_stationLine->setText(line);
+    m_stationLine->setVisible(!line.isEmpty());
+}
+
+QString CatTciServerPage::stationLineForTesting() const
+{
+    return m_stationLine && !m_stationLine->isHidden() ? m_stationLine->text() : QString();
 }
 
 // ---------------------------------------------------------------------------

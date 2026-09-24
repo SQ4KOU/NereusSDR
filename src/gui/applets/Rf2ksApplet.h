@@ -81,6 +81,7 @@ public:
     bool    connectedStateForTesting()                 const { return m_connected; }
     bool    staleIndicatorVisibleForTesting()          const;
     QString staleIndicatorTextForTesting()             const;
+    QString bandFollowTextForTesting()                 const;
 
 signals:
     // Emitted when the user clicks the OPERATE/STANDBY toggle button.
@@ -148,6 +149,8 @@ private:
     // saying they are stale (Core lost) or not offered (older Core).
     RfKitModel* m_rfKit{nullptr};
     QLabel*     m_staleLabel{nullptr};
+    // R-R3-48: the band-follow line.
+    QLabel*     m_bandFollowLabel{nullptr};
 };
 
 } // namespace NereusSDR

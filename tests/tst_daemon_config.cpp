@@ -194,6 +194,8 @@ private slots:
             QStringLiteral("display_adaptive"),
             // R-R3-23: reaches DaemonMediaController::setAudioLosslessAllowed().
             QStringLiteral("audio_lossless"),
+            // R-R3-48: reaches RadioModel::enableStationTci().
+            QStringLiteral("station_tci_bind"),
         };
 
         // Each documented key parses without an "unknown key" complaint.
@@ -214,7 +216,8 @@ private slots:
                 "audio_bitrate = 48000\n"
                 "thread_placement = off\n"
                 "display_adaptive = off\n"
-                "audio_lossless = deny\n");
+                "audio_lossless = deny\n"
+                "station_tci_bind = 192.168.1.20\n");
         f.flush();
         QString err;
         const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
@@ -230,6 +233,7 @@ private slots:
         QCOMPARE(c.threadPlacement, false);
         QCOMPARE(c.displayAdaptive, false);
         QCOMPARE(c.audioLosslessAllowed, false);
+        QCOMPARE(c.stationTciBind, QStringLiteral("192.168.1.20"));
         const std::optional<DisplayBudgetLimits> limits = c.displayBudgetLimits();
         QVERIFY(limits.has_value());
         QCOMPARE(limits->applicationBytesPerSecond, quint64(2400000));

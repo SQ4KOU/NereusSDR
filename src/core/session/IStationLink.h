@@ -60,6 +60,11 @@
 //                                    to this app, and whether the link to
 //                                    the Core is up. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-48: the RF-Kit's
+//                                    configure, disconnect and switch
+//                                    requests, and the station TCI
+//                                    switch. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QString>
@@ -148,6 +153,28 @@ public:
     { return { false, QStringLiteral("The station does not support remote PGXL configuration.") }; }
     virtual CommandOutcome requestPgxlConnectionSettings(bool, int, int)
     { return { false, QStringLiteral("The station does not support remote PGXL configuration.") }; }
+
+    /// R-R3-47 / R-R3-22 (remoteRfKitControlVersion 2): the Core's RF-Kit
+    /// RF2K-S is set up and switched through the Core. Acceptance means the
+    /// Core took the request; `rfkit`.connectionPhase and the `radio`
+    /// object's rfKitEnabled say what happened.
+    virtual bool remoteRfKitControlAvailable() const { return false; }
+    virtual CommandOutcome requestConfigureRfKit(const QString&, quint16)
+    { return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") }; }
+    virtual CommandOutcome requestDisconnectRfKit()
+    { return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") }; }
+    virtual CommandOutcome requestRfKitEnabled(bool)
+    { return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") }; }
+
+    /// R-R3-48 (stationTciVersion 1): the Core runs its own TCI server on
+    /// the station network, switched by this app's one TCI switch and port.
+    virtual bool stationTciAvailable() const { return false; }
+    virtual CommandOutcome requestStationTci(bool, quint16)
+    { return { false, QStringLiteral("This Core has no TCI server for the station.") }; }
+    /// R-R3-48: the Core this window uses runs on this computer and serves
+    /// TCI here, so the window runs no TCI server of its own. Kept while the
+    /// link is down (the Core keeps its server), false for another Core.
+    virtual bool coreServesTciOnThisComputer() const { return false; }
     virtual CommandOutcome requestApplyNnrModels(quint32)
     { return { false, QStringLiteral("NNR model application is not supported by this station link.") }; }
     virtual bool nnrControlAvailable() const { return false; }

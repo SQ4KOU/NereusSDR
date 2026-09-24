@@ -145,6 +145,8 @@ private:
     QSpinBox*             m_remotePgxlPing{nullptr};
     QPushButton*          m_remotePgxlApply{nullptr};
     QLabel*               m_remotePgxlResult{nullptr};
+    // R-R3-48: the Power Genius's band-follow line (General tab).
+    QLabel*               m_pgxlBandFollow{nullptr};
 };
 
 }  // namespace NereusSDR

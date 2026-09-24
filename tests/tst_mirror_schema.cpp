@@ -60,6 +60,7 @@
 #include "models/TunerModel.h"
 #include "models/AmplifierModel.h"
 #include "models/RfKitModel.h"
+#include "models/StationTciModel.h"
 
 using namespace NereusSDR;
 
@@ -864,7 +865,8 @@ private:
                  &AlexAntennaFacade::staticMetaObject,
                  &IoBoardHl2Facade::staticMetaObject,
                  &AmplifierModel::staticMetaObject,
-                 &RfKitModel::staticMetaObject };
+                 &RfKitModel::staticMetaObject,
+                 &StationTciModel::staticMetaObject };
     }
 };
 

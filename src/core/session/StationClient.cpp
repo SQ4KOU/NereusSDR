@@ -66,6 +66,12 @@
 //                 (setAlexRxAntenna), and the window's OC pin matrix copy
 //                 reloaded when the Core's OC settings arrive. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-48: remoteRfKitControlVersion 2 (the
+//                 configureRfKit, disconnectRfKit and setRfKitEnabled
+//                 requests; rfKitEnabled applied as plain state), and
+//                 stationTciVersion 1 (the `stationTci` object and the
+//                 setStationTci request). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 //   2026-09-24 - R-R3-47 / R-R3-22: remotePgxlControlVersion 2, the
 //                 configurePgxl, disconnectPgxl and setPgxlConnectionSettings
 //                 requests. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
@@ -83,6 +89,10 @@
 #include "models/AmplifierModel.h"
 #include "models/NotchModel.h"
 #include "models/RfKitModel.h"
+#include "models/StationTciModel.h"
+
+#include <QHostAddress>
+#include <QNetworkInterface>
 #include "models/PanadapterModel.h"
 #include "models/PureSignalSettings.h"
 #include "core/dsp/DspAssetService.h"
@@ -1701,6 +1711,10 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         { "rfkit", m_radioModel->rfKitModel(),
           m_agreedMinor >= kRadioIdentitySessionProtocolMinor
               && m_capabilities.remoteRfKitControlVersion >= 1 },
+        // R-R3-48: the Core's station TCI server.
+        { "stationTci", m_radioModel->stationTciModel(),
+          m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+              && m_capabilities.stationTciVersion >= 1 },
     };
     for (const auto& accessory : accessories) {
         const QByteArray key(accessory.key);
@@ -2268,6 +2282,8 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("RadioModel.fourO3AEnabled"),
         QByteArrayLiteral("RadioModel.fourO3AListening"),
         QByteArrayLiteral("RadioModel.fourO3AListenerError"),
+        // R-R3-47: likewise the Core's RF-Kit switch.
+        QByteArrayLiteral("RadioModel.rfKitEnabled"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),
         QByteArrayLiteral("SliceModel.signalAverageDbm"),
@@ -2347,6 +2363,11 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
     if (className == "RfKitModel") {
         auto* rfKit = qobject_cast<RfKitModel*>(target);
         return rfKit != nullptr && rfKit->applyStationValue(propertyName, native);
+    }
+    // R-R3-48: a plain state apply; the switch changes only by command.
+    if (className == "StationTciModel") {
+        auto* tci = qobject_cast<StationTciModel*>(target);
+        return tci != nullptr && tci->applyStationValue(propertyName, native);
     }
     if (className != "SliceModel") {
         return false;
@@ -2823,6 +2844,45 @@ StationClient::CommandOutcome StationClient::requestPgxlConnectionSettings(bool 
                        QStringLiteral("the Power Genius connection settings"));
 }
 
+// R-R3-47 / R-R3-22 (remoteRfKitControlVersion 2): the Core's RF-Kit.
+StationClient::CommandOutcome StationClient::requestConfigureRfKit(const QString& host, quint16 port)
+{
+    if (!remoteRfKitControlAvailable()) {
+        return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") };
+    }
+    return sendCommand("configureRfKit", -1,
+                       { stringArgument("host", host), intArgument("port", port) },
+                       QStringLiteral("the RF-Kit amplifier address"));
+}
+
+StationClient::CommandOutcome StationClient::requestDisconnectRfKit()
+{
+    if (!remoteRfKitControlAvailable()) {
+        return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") };
+    }
+    return sendCommand("disconnectRfKit", -1, {}, QStringLiteral("the RF-Kit amplifier disconnect"));
+}
+
+StationClient::CommandOutcome StationClient::requestRfKitEnabled(bool enabled)
+{
+    if (!remoteRfKitControlAvailable()) {
+        return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") };
+    }
+    return sendCommand("setRfKitEnabled", -1, { boolArgument("enabled", enabled) },
+                       QStringLiteral("the RF-Kit amplifier switch"));
+}
+
+// R-R3-48 (stationTciVersion 1): the one TCI switch and port.
+StationClient::CommandOutcome StationClient::requestStationTci(bool enabled, quint16 port)
+{
+    if (!stationTciAvailable()) {
+        return { false, QStringLiteral("This Core has no TCI server for the station.") };
+    }
+    return sendCommand("setStationTci", -1,
+                       { boolArgument("enabled", enabled), intArgument("port", port) },
+                       QStringLiteral("the station's TCI server switch"));
+}
+
 StationClient::CommandOutcome StationClient::requestDisconnectTgxl()
 {
     if (!remoteTgxlConfigAvailable()) {
@@ -3018,6 +3078,52 @@ bool StationClient::remoteRfKitStatusAvailable() const
 {
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.remoteRfKitControlVersion >= 1;
+}
+
+bool StationClient::remoteRfKitControlAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remoteRfKitControlVersion >= 2;
+}
+
+bool StationClient::stationTciAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.stationTciVersion >= 1;
+}
+
+bool StationClient::coreServesTciOnThisComputer() const
+{
+    // What the Core last said it offers, kept while the link is down: the
+    // Core keeps its server running whether or not this window is there.
+    if (m_agreedMinor < kRadioIdentitySessionProtocolMinor
+        || m_capabilities.stationTciVersion < 1) {
+        return false;
+    }
+    if (m_coreOnThisComputerForTest >= 0) {
+        return m_coreOnThisComputerForTest == 1;
+    }
+    const QString host = m_lastUrl.host();
+    if (host.isEmpty()) {
+        return false;
+    }
+    if (host.compare(QStringLiteral("localhost"), Qt::CaseInsensitive) == 0) {
+        return true;
+    }
+    const QHostAddress address(host);
+    if (address.isNull()) {
+        return false;
+    }
+    if (address.isLoopback()) {
+        return true;
+    }
+    const auto local = QNetworkInterface::allAddresses();
+    for (const QHostAddress& mine : local) {
+        if (mine.isEqual(address, QHostAddress::ConvertV4MappedToIPv4)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool StationClient::remoteFourO3AControlAvailable() const

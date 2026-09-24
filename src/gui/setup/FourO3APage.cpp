@@ -26,6 +26,9 @@
 //                 tab is a view of the Core's `amplifier` object plus the
 //                 Core's PGXL commands. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-24 -- R-R3-48: the Power Genius's band-follow line, local and
+//                 remote. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "FourO3APage.h"
@@ -208,6 +211,20 @@ QWidget* FourO3APage::buildGeneralTab()
     // bindings without duplication.
     m_peripheralsPage = new PeripheralsPage(m_model, tab);
     layout->addWidget(m_peripheralsPage);
+
+    // R-R3-48: whether the Power Genius follows the radio's band (the
+    // Core's `amplifier` object in a remote window).
+    m_pgxlBandFollow = new QLabel(tab);
+    m_pgxlBandFollow->setObjectName(QStringLiteral("pgxlBandFollowLabel"));
+    m_pgxlBandFollow->setTextFormat(Qt::PlainText);
+    m_pgxlBandFollow->setWordWrap(true);
+    m_pgxlBandFollow->setStyleSheet(QStringLiteral("color: #9aa5b1; font-size: 11px;"));
+    layout->addWidget(m_pgxlBandFollow);
+    if (AmplifierModel* amp = m_model ? m_model->amplifierModel() : nullptr) {
+        const auto refresh = [this, amp] { m_pgxlBandFollow->setText(amp->bandFollowText()); };
+        connect(amp, &AmplifierModel::bandFollowChanged, m_pgxlBandFollow, refresh);
+        refresh();
+    }
 
     // ── PGXL Interlock ────────────────────────────────────────────
     if (!m_model || m_model->role() != RadioModel::Role::Remote) {

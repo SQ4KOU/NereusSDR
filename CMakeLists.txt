@@ -933,6 +933,12 @@ set(CORE_SOURCES
     src/core/StationPgxlController.cpp
     # Phase 3P-III RF-Kit RF2K-S amplifier
     src/core/Rf2ksConnection.cpp
+    # R-R3-47 / R-R3-48: the Core's RF-Kit and station TCI server
+    src/core/StationRfKitController.cpp
+    src/core/StationTciController.cpp
+    src/core/StationNetwork.cpp
+    src/core/RfKitBandFollow.cpp
+    src/core/TciSwitch.cpp
     src/core/LanDiscovery.cpp
     src/core/SmartSdrApiListener.cpp
     src/core/ConnectionDiagnostics.cpp
@@ -941,6 +947,7 @@ set(CORE_SOURCES
     # R-R3-47: the Core's Power Genius and RF-Kit status objects
     src/models/AmplifierModel.cpp
     src/models/RfKitModel.cpp
+    src/models/StationTciModel.cpp
     # Phase 3P-II Phase 4 (Advanced UI + helpers)
     src/core/FaultLog.cpp
     src/core/TuneMemoryStore.cpp

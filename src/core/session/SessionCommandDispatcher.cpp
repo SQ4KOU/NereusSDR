@@ -47,6 +47,12 @@
 //                                    setPgxlConnectionSettings for the
 //                                    Core's Power Genius XL. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-48: configureRfKit,
+//                                    disconnectRfKit and setRfKitEnabled
+//                                    for the Core's RF-Kit RF2K-S, and
+//                                    setStationTci for the station's TCI
+//                                    server. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -347,6 +353,14 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleDisconnectPgxl(invoke);
     } else if (invoke.commandVerb == "setPgxlConnectionSettings") {
         handleSetPgxlConnectionSettings(invoke);
+    } else if (invoke.commandVerb == "configureRfKit") {
+        handleConfigureRfKit(invoke);
+    } else if (invoke.commandVerb == "disconnectRfKit") {
+        handleDisconnectRfKit(invoke);
+    } else if (invoke.commandVerb == "setRfKitEnabled") {
+        handleSetRfKitEnabled(invoke);
+    } else if (invoke.commandVerb == "setStationTci") {
+        handleSetStationTci(invoke);
     } else if (invoke.commandVerb == "requestIoBoardProbe") {
         handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "setAlexRxAntenna") {
@@ -976,6 +990,98 @@ void SessionCommandDispatcher::handleConfigurePgxl(const SessionMessage& invoke)
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    reason.isEmpty() ? QStringLiteral("PGXL configuration was refused") : reason,
                    {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-47 / R-R3-22: the RF-Kit's configure rule, as the Power Genius's.
+void SessionCommandDispatcher::handleConfigureRfKit(const SessionMessage& invoke)
+{
+    QString host;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "host", "port" })
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok
+        || port < 1 || port > 65535) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("invalid host or port argument"), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->configureRfKitForStation(host, static_cast<quint16>(port), &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not set up the RF-Kit amplifier.")
+                                    : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+void SessionCommandDispatcher::handleDisconnectRfKit(const SessionMessage& invoke)
+{
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The disconnect request for the RF-Kit amplifier was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->disconnectRfKitForStation(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not disconnect the RF-Kit "
+                                                     "amplifier.")
+                                    : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+void SessionCommandDispatcher::handleSetRfKitEnabled(const SessionMessage& invoke)
+{
+    QVariant enabled;
+    if (!hasExactlyArguments(invoke.arguments, { "enabled" })
+        || !findArgument(invoke.arguments, "enabled", &enabled)
+        || enabled.typeId() != QMetaType::Bool) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to turn the RF-Kit amplifier on or off was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setRfKitEnabledForStation(enabled.toBool(), &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change its RF-Kit "
+                                                     "amplifier switch.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-48: the one TCI switch and port, kept by the Core.
+void SessionCommandDispatcher::handleSetStationTci(const SessionMessage& invoke)
+{
+    QVariant enabled;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "enabled", "port" })
+        || !findArgument(invoke.arguments, "enabled", &enabled)
+        || enabled.typeId() != QMetaType::Bool
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to turn the station's TCI server on or off was "
+                                  "not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setStationTciForStation(enabled.toBool(), port, &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change its TCI server.")
+                                    : reason, {});
         return;
     }
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});

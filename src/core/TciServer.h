@@ -36,6 +36,12 @@
 //                rx_sensors from the mirrored meter; a late "cannot send"
 //                answer stops the apps. AI-assisted transformation via
 //                Anthropic Claude Code.
+//   2026-09-24 - R3 Core-owned accessories, Task 3 (R-R3-48, R-R3-25) by
+//                J.J. Boyd (KG4VCF): the Core's station TCI server listens
+//                on more than one address (the station network and this
+//                computer) and refuses transmit with a plain reason until
+//                remote transmit. AI-assisted transformation via Anthropic
+//                Claude Code.
 
 #pragma once
 #ifdef HAVE_WEBSOCKETS
@@ -118,6 +124,20 @@ public:
     static constexpr const char* kRemoteIqRefusedReason =
         "Apps cannot get the raw receiver signal (I/Q) through TCI from a remote window.";
 
+    // ── R-R3-48 / R-R3-25: the Core's station TCI server ────────────────────
+    //
+    // The Core serves TCI on the station network so devices like the RF-Kit
+    // RF2K-S follow its radio. Until remote transmit, it transmits for no
+    // app: the init burst says receive_only:true and tx_enable false, trx
+    // never touches MOX (the asking app hears trx:N,false) and no app gets
+    // the transmit audio lock. The reason goes to operatorNotice() and the
+    // Core's log, never onto the TCI wire. Receive (vfo:, split_enable:,
+    // audio, I/Q, sensors) is unchanged. Off by default.
+    void setStationReceiveOnly(bool receiveOnly);
+    bool stationReceiveOnly() const { return m_stationReceiveOnly; }
+    static constexpr const char* kStationTransmitRefusedReason =
+        "Apps cannot transmit through the station's TCI server until remote transmit is ready.";
+
     // The most recent reason given through operatorNotice(), or empty
     // after operatorNoticeCleared().
     QString operatorNoticeReason() const { return m_noticeReason; }
@@ -144,6 +164,12 @@ public:
     // overload at start time.
     bool start(quint16 port = 50001);
     bool start(const QHostAddress& bindAddress, quint16 port);
+    // R-R3-48: listen on every address in `bindAddresses` at one port (the
+    // first address picks it when `port` is 0). All or nothing: when any
+    // address cannot be bound, nothing listens and errorOccurred() says why.
+    bool start(const QList<QHostAddress>& bindAddresses, quint16 port);
+    // The addresses this server listens on (empty while stopped).
+    QList<QHostAddress> listenAddresses() const;
 
     // Stop the server and disconnect all clients.
     void stop();
@@ -410,6 +436,9 @@ private:
     // implicit conversion to T* for member access.
     QPointer<RadioModel> m_model;
     QWebSocketServer*  m_server{nullptr};
+    // R-R3-48: the other addresses' servers, same port, same clients table.
+    QList<QWebSocketServer*> m_extraServers;
+    bool m_stationReceiveOnly{false};
     QHash<QWebSocket*, std::shared_ptr<TciClientSession>> m_clients;
 
     QTimer* m_pingTimer{nullptr};

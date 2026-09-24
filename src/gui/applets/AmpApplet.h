@@ -86,6 +86,7 @@ public:
     bool    operateButtonShownForTesting() const;
     bool    staleIndicatorVisibleForTesting() const;
     QString staleIndicatorTextForTesting() const;
+    QString bandFollowTextForTesting() const;
 
 signals:
     // Emitted when the user clicks the OPERATE/STANDBY button.
@@ -169,6 +170,8 @@ private:
     // saying they are stale (Core lost) or not offered (older Core).
     AmplifierModel* m_amp{nullptr};
     QLabel*         m_staleLabel{nullptr};
+    // R-R3-48: the band-follow line.
+    QLabel*         m_bandFollowLabel{nullptr};
 };
 
 } // namespace NereusSDR

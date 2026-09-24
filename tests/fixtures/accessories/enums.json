@@ -19,8 +19,22 @@
     "transmitB": 6,
     "fault": 7
   },
+  "bandFollow": {
+    "off": 0,
+    "waiting": 1,
+    "following": 2,
+    "thisComputerOnly": 3
+  },
+  "rfkitTunerMode": {
+    "unknown": 0,
+    "bypass": 1,
+    "manual": 2,
+    "autoTuning": 3,
+    "auto": 4
+  },
   "refusals": {
     "amplifierReadOnly": "The Core reports the amplifier's readings. They cannot be changed from this app.",
-    "rfkitReadOnly": "The Core reports the RF-Kit amplifier's readings. They cannot be changed from this app."
+    "rfkitReadOnly": "The Core reports the RF-Kit amplifier's readings. They cannot be changed from this app.",
+    "stationTciReadOnly": "The Core reports its TCI server here. Turn it on or off with this app's TCI switch."
   }
 }

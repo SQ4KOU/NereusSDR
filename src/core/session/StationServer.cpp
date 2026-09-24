@@ -94,6 +94,15 @@
 //                                    writes and the amplifier's operate with
 //                                    one plain reason. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-48 / R-R3-25:
+//                                    remoteRfKitControlVersion 2 with the
+//                                    configureRfKit, disconnectRfKit and
+//                                    setRfKitEnabled verbs; a raw
+//                                    rfKitEnabled write refused in plain
+//                                    words; stationTciVersion 1 with the
+//                                    read-only `stationTci` object and the
+//                                    setStationTci verb. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -125,6 +134,7 @@
 #include "models/TransmitModel.h"
 #include "models/AmplifierModel.h"
 #include "models/RfKitModel.h"
+#include "models/StationTciModel.h"
 #include "models/TunerModel.h"
 
 #include <QLoggingCategory>
@@ -291,6 +301,22 @@ bool isRfKitMessage(const SessionMessage& message)
         || (message.kind == SessionMessageKind::Schema
             && message.className == "RfKitModel");
 }
+
+// R-R3-48 (stationTciVersion 1): the Core's station TCI server, read-only,
+// for a peer at kRadioIdentitySessionProtocolMinor on a Core that runs one.
+constexpr const char* kStationTciKey = "stationTci";
+
+bool isStationTciMessage(const SessionMessage& message)
+{
+    return message.objectKey == kStationTciKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "StationTciModel");
+}
+
+// R-R3-47: why a raw write of the RF-Kit switch is refused. A current app
+// sends setRfKitEnabled; an older one only ever wrote the value.
+constexpr const char* kRfKitSwitchWriteReason =
+    "Update this app to turn the RF-Kit amplifier on or off on this Core.";
 
 // The one reason a receive-only Core gives for every transmit
 // configuration write it refuses: direct TransmitModel property writes and
@@ -1054,6 +1080,27 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 QStringLiteral("Update this app to set up the Power Genius on this Core."), {}));
             break;
         }
+        // R-R3-47 / R-R3-48: the RF-Kit verbs came with
+        // remoteRfKitControlVersion 2 and the station TCI verb with
+        // stationTciVersion 1, in the same minor-11 block.
+        if ((message.commandVerb == "configureRfKit" || message.commandVerb == "disconnectRfKit"
+             || message.commandVerb == "setRfKitEnabled")
+            && it->agreedMinor < kRadioIdentitySessionProtocolMinor) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("Update this app to set up the RF-Kit amplifier on this Core."), {}));
+            break;
+        }
+        if (message.commandVerb == "setStationTci"
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || stationTciVersion() < 1)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to turn the station's TCI server on or off.")
+                    : QStringLiteral("This Core has no TCI server for the station."), {}));
+            break;
+        }
         if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")
             && it->agreedMinor < kRemoteTgxlConfigSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
@@ -1314,6 +1361,9 @@ void StationServer::buildMirror()
     // Sent only to a peer at minor 11 (sendToSession).
     m_mirror->watch(QByteArray(kAmplifierKey), m_radioModel->amplifierModel());
     m_mirror->watch(QByteArray(kRfKitKey), m_radioModel->rfKitModel());
+    // R-R3-48 (stationTciVersion 1): the Core's station TCI server.
+    // Sent only to a peer at minor 11 on a Core that runs one.
+    m_mirror->watch(QByteArray(kStationTciKey), m_radioModel->stationTciModel());
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
     for (int i = 0; i < pans.size(); ++i) {
         m_mirror->watch(panKey(i), pans.at(i));
@@ -1422,7 +1472,12 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         stepAttRefusal = AmplifierModel::readOnlyReason();
     } else if (message.objectKey == kRfKitKey) {
         stepAttRefusal = RfKitModel::readOnlyReason();
+    } else if (message.objectKey == kStationTciKey) {
+        // R-R3-48: the switch changes only through setStationTci.
+        stepAttRefusal = StationTciModel::readOnlyReason();
     }
+    // R-R3-47: the RF-Kit switch is the Core's, changed by setRfKitEnabled.
+    const bool radioWrite = message.objectKey == QByteArray(kRadioKey);
     const bool receiveOnlyTransmitWrite = message.objectKey == QByteArray(kTransmitKey)
         && !m_radioModel.isNull() && m_radioModel->receiveOnlyStationPolicy();
     // R-R3-25: the tuner's operate, bypass and antenna, and the amplifier's
@@ -1456,6 +1511,10 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         }
         if (!stepAttRefusal.isEmpty()) {
             refusals.insert(update.name, stepAttRefusal);
+            continue;
+        }
+        if (radioWrite && update.name == "rfKitEnabled") {
+            refusals.insert(update.name, QString::fromLatin1(kRfKitSwitchWriteReason));
             continue;
         }
         if (!negotiated && (message.objectKey == "pureSignalSettings"
@@ -1681,6 +1740,11 @@ void StationServer::sendToSession(const SessionMessage& message)
                 || accessoryStatusVersion() < 1)) {
             return;
         }
+        // R-R3-48: nor the station TCI object without a station server.
+        if (isStationTciMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor || stationTciVersion() < 1)) {
+            return;
+        }
         if (!needsNnrFit(message, minor)) {
             // Most messages carry no NNR field: send them as they are.
             if (worthSendingAfterNnrFit(message)) {
@@ -1875,6 +1939,16 @@ int StationServer::pgxlControlVersion() const
     return accessoryStatusVersion() >= 1 ? 2 : 0;
 }
 
+int StationServer::rfKitControlVersion() const
+{
+    return accessoryStatusVersion() >= 1 ? 2 : 0;
+}
+
+int StationServer::stationTciVersion() const
+{
+    return !m_radioModel.isNull() && m_radioModel->stationTciController() != nullptr ? 1 : 0;
+}
+
 int StationServer::radioHardwareVersion() const
 {
     if (m_radioModel.isNull() || !m_radioModel->stepAttFacade()->isBound()) {
@@ -1926,7 +2000,12 @@ StationCapabilities StationServer::buildCapabilities() const
             // there: also configurePgxl, disconnectPgxl and
             // setPgxlConnectionSettings.
             caps.remotePgxlControlVersion = pgxlControlVersion();
-            caps.remoteRfKitControlVersion = accessoryStatusVersion();
+            // R-R3-47: the RF-Kit is 2 there too: its interface, antenna,
+            // tuner and band-follow rows, and configureRfKit,
+            // disconnectRfKit and setRfKitEnabled.
+            caps.remoteRfKitControlVersion = rfKitControlVersion();
+            // R-R3-48: the Core's own station TCI server.
+            caps.stationTciVersion = stationTciVersion();
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();

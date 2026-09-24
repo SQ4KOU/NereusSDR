@@ -27,6 +27,9 @@
 //                 local and remote windows; a remote window shows a stale
 //                 line when it loses the Core. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24  R-R3-48: the band-follow line (paired with the radio or
+//                 not). J.J. Boyd (KG4VCF), with AI-assisted implementation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #include "AmpApplet.h"
@@ -162,6 +165,15 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
 
     vbox->addLayout(telRow);
 
+    // R-R3-48: whether the amp follows the radio's band (it does once it
+    // is paired with the radio), in local and remote windows alike.
+    m_bandFollowLabel = new QLabel(root);
+    m_bandFollowLabel->setObjectName(QStringLiteral("ampBandFollowLabel"));
+    m_bandFollowLabel->setTextFormat(Qt::PlainText);
+    m_bandFollowLabel->setWordWrap(true);
+    m_bandFollowLabel->setStyleSheet(QStringLiteral("color: #9aa5b1; font-size: 10px;"));
+    vbox->addWidget(m_bandFollowLabel);
+
     // R-R3-47: a remote window's readings come from the Core; this line
     // says when they are not live.
     m_staleLabel = new QLabel(root);
@@ -178,6 +190,8 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
         m_amp = m_model->amplifierModel();
         if (m_amp) {
             connect(m_amp, &AmplifierModel::statusChanged,
+                    this, &AmpApplet::syncFromAmplifier);
+            connect(m_amp, &AmplifierModel::bandFollowChanged,
                     this, &AmpApplet::syncFromAmplifier);
         }
         connect(m_model, &RadioModel::stationLinkStateChanged,
@@ -205,6 +219,9 @@ QString AmpApplet::remoteUnavailableReason()
 // values are shown as they are, zeros and STANDBY included.
 void AmpApplet::syncFromAmplifier()
 {
+    if (m_amp && m_bandFollowLabel) {
+        m_bandFollowLabel->setText(m_amp->bandFollowText());
+    }
     if (!m_amp || !m_amp->present()) {
         return;
     }
@@ -254,6 +271,11 @@ bool AmpApplet::staleIndicatorVisibleForTesting() const
 {
     return m_staleLabel && !m_staleLabel->isHidden();
 }
+QString AmpApplet::bandFollowTextForTesting() const
+{
+    return m_bandFollowLabel ? m_bandFollowLabel->text() : QString();
+}
+
 QString AmpApplet::staleIndicatorTextForTesting() const
 {
     return m_staleLabel ? m_staleLabel->text() : QString();

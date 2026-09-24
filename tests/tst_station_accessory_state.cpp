@@ -31,6 +31,7 @@
 #include "models/AmplifierModel.h"
 #include "models/RadioModel.h"
 #include "models/RfKitModel.h"
+#include "models/StationTciModel.h"
 #include "models/SliceModel.h"
 
 #include "fakes/LoopbackTransport.h"
@@ -592,10 +593,13 @@ private slots:
         for (const SessionMessage& m : current) {
             if (m.kind == SessionMessageKind::Capabilities) {
                 caps = StationCapabilities::fromUpdates(m.updates);
-                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
                          QByteArrayLiteral("remotePgxlControlVersion"));
-                QCOMPARE(m.updates.constLast().name,
+                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
                          QByteArrayLiteral("remoteRfKitControlVersion"));
+                // R-R3-48: the station TCI server's version travels last.
+                QCOMPARE(m.updates.constLast().name,
+                         QByteArrayLiteral("stationTciVersion"));
             }
             if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "amplifier") {
                 sawAmplifier = true;
@@ -621,7 +625,8 @@ private slots:
         }
         // R-R3-47: 2 once the Core's PGXL commands are offered (Task 2).
         QCOMPARE(caps.remotePgxlControlVersion, 2);
-        QCOMPARE(caps.remoteRfKitControlVersion, 1);
+        // R-R3-47: 2 once the Core's RF-Kit commands are offered (Task 3).
+        QCOMPARE(caps.remoteRfKitControlVersion, 2);
         QVERIFY(sawAmplifier);
         QVERIFY(sawRfKit);
         refusals.sort();
@@ -640,6 +645,7 @@ private slots:
             for (const MirrorUpdate& u : m.updates) {
                 QVERIFY(u.name != "remotePgxlControlVersion");
                 QVERIFY(u.name != "remoteRfKitControlVersion");
+                QVERIFY(u.name != "stationTciVersion");
             }
         }
 
@@ -678,6 +684,9 @@ private slots:
         recorder.flush();
         conn.injectLineForTesting(QString::fromLatin1(kPgxlStandby));
         recorder.flush();
+        // R-R3-48: paired with the radio, the amp follows its band.
+        amp.setBandFollow(TunerModel::BandFollow::Following);
+        recorder.flush();
         QString why;
         QVERIFY2(matchesFixture(QStringLiteral("amplifier.jsonl"), recorder.text(), &why),
                  qPrintable(why));
@@ -686,7 +695,7 @@ private slots:
         QFile file(fixturePath(QStringLiteral("amplifier.jsonl")));
         QVERIFY(file.open(QIODevice::ReadOnly));
         const QList<SessionMessage> messages = decodeLines(file.readAll());
-        QCOMPARE(messages.size(), 5);
+        QCOMPARE(messages.size(), 6);
         QCOMPARE(messages.at(0).kind, SessionMessageKind::Schema);
         QCOMPARE(messages.at(1).kind, SessionMessageKind::ObjectCreate);
         QCOMPARE(messages.at(2).kind, SessionMessageKind::SnapshotComplete);
@@ -701,6 +710,7 @@ private slots:
         QCOMPARE(window.state(), AmplifierModel::State::Standby);
         QCOMPARE(window.forwardPowerW(), 0.0);
         QCOMPARE(window.efficiencyText(), QStringLiteral("off"));
+        QCOMPARE(window.bandFollow(), TunerModel::BandFollow::Following);
     }
 
     void rfKitFixtureIsWhatTheCoreSends()
@@ -717,11 +727,29 @@ private slots:
         conn.injectJsonForTesting(QStringLiteral("/power"), kRfKitPower);
         conn.injectJsonForTesting(QStringLiteral("/operate-mode"),
                                   R"({"operate_mode":"OPERATE"})");
+        // R-R3-47: the interface, antenna and tuner rows (bodies as in
+        // tst_rf2ks_connection_parse).
+        conn.injectJsonForTesting(QStringLiteral("/operational-interface"),
+                                  R"({"operational_interface":"UDP","error":""})");
+        conn.injectJsonForTesting(QStringLiteral("/antennas"),
+            R"({"antennas":[{"type":"INTERNAL","number":1,"state":"ACTIVE"},{"type":"INTERNAL","number":2,"state":"AVAILABLE"},{"type":"INTERNAL","number":3,"state":"DISABLED"},{"type":"EXTERNAL","state":"AVAILABLE"}]})");
+        conn.injectJsonForTesting(QStringLiteral("/antennas/active"),
+                                  R"({"type":"INTERNAL","number":1})");
 
         MirrorRecorder recorder("rfkit", &rfKit);
         conn.injectJsonForTesting(QStringLiteral("/operate-mode"),
                                   R"({"operate_mode":"STANDBY"})");
         conn.injectJsonForTesting(QStringLiteral("/power"), kRfKitPowerIdle);
+        recorder.flush();
+        // R-R3-47 / R-R3-48: a tune lands, the amp is switched to TCI and
+        // the band-follow line names the address to enter on it.
+        conn.injectJsonForTesting(QStringLiteral("/tuner"),
+            R"({"mode":"AUTO","setup":"LC","L":{"value":1200,"unit":"nH"},"C":{"value":345,"unit":"pF"},"tuned_frequency":{"value":3891,"unit":"kHz"},"segment_size":{"value":9,"unit":"kHz"}})");
+        conn.injectJsonForTesting(QStringLiteral("/operational-interface"),
+                                  R"({"operational_interface":"TCI","error":""})");
+        conn.injectJsonForTesting(QStringLiteral("/antennas/active"),
+                                  R"({"type":"INTERNAL","number":2})");
+        rfKit.setBandFollow(TunerModel::BandFollow::Waiting, QStringLiteral("192.0.2.10"), 50001);
         recorder.flush();
         QString why;
         QVERIFY2(matchesFixture(QStringLiteral("rfkit.jsonl"), recorder.text(), &why),
@@ -730,7 +758,7 @@ private slots:
         QFile file(fixturePath(QStringLiteral("rfkit.jsonl")));
         QVERIFY(file.open(QIODevice::ReadOnly));
         const QList<SessionMessage> messages = decodeLines(file.readAll());
-        QCOMPARE(messages.size(), 4);
+        QCOMPARE(messages.size(), 5);
         RfKitModel window;
         for (const SessionMessage& m : messages) {
             for (const MirrorUpdate& u : m.updates) {
@@ -741,6 +769,23 @@ private slots:
         QVERIFY(window.present());
         QVERIFY(!window.operate());
         QCOMPARE(window.forwardPowerW(), 0.0);
+        QCOMPARE(window.operationalInterface(), QStringLiteral("TCI"));
+        QCOMPARE(window.antennaPresentMask(), 0b0111);
+        QCOMPARE(window.antennaDisabledMask(), 0b0100);
+        QCOMPARE(window.activeAntennaNumber(), 2);
+        QVERIFY(!window.activeAntennaExternal());
+        QCOMPARE(window.tunerMode(), RfKitModel::TunerMode::Auto);
+        QCOMPARE(window.tunerInductanceNh(), 1200);
+        QCOMPARE(window.tunerCapacitancePf(), 345);
+        QCOMPARE(window.tunerFrequencyKhz(), 3891);
+        QCOMPARE(window.tunerSegmentKhz(), 9);
+        QCOMPARE(window.tunerSetup(), QStringLiteral("LC"));
+        QCOMPARE(window.bandFollow(), TunerModel::BandFollow::Waiting);
+        QCOMPARE(window.bandFollowAddress(), QStringLiteral("192.0.2.10"));
+        QCOMPARE(window.bandFollowPort(), 50001);
+        QCOMPARE(window.bandFollowText(),
+                 QStringLiteral("Band follow: enter 192.0.2.10, port 50001 as the TCI server on "
+                                "the amplifier."));
     }
 
     // The fixed enum values, as the document and enums.json list them.
@@ -761,11 +806,16 @@ private slots:
         };
         check("connectionPhase", QMetaEnum::fromType<TunerModel::ConnectionPhase>());
         check("amplifierState", QMetaEnum::fromType<AmplifierModel::State>());
+        // R-R3-47 / R-R3-48: band follow and the RF-Kit tuner's mode.
+        check("bandFollow", QMetaEnum::fromType<TunerModel::BandFollow>());
+        check("rfkitTunerMode", QMetaEnum::fromType<RfKitModel::TunerMode>());
         const QJsonObject reasons = root.value(QLatin1String("refusals")).toObject();
         QCOMPARE(reasons.value(QLatin1String("amplifierReadOnly")).toString(),
                  AmplifierModel::readOnlyReason());
         QCOMPARE(reasons.value(QLatin1String("rfkitReadOnly")).toString(),
                  RfKitModel::readOnlyReason());
+        QCOMPARE(reasons.value(QLatin1String("stationTciReadOnly")).toString(),
+                 StationTciModel::readOnlyReason());
     }
 };
 QTEST_GUILESS_MAIN(StationAccessoryStateTest)

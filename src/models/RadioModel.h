@@ -56,6 +56,10 @@
 //                 Claude Code. setRemoteVaxChannelStore(): where a remote
 //                 window's slices keep their VAX channel. NereusSDR-original;
 //                 no Thetis logic.
+//   2026-09-24 - R-R3-47 / R-R3-48: RF-Kit station verbs,
+//                stationTciModel() / stationTciController(), rfKitEnabled
+//                read-only. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -280,6 +284,10 @@ class RadeChannel;
 class Resampler;
 class StationTgxlController;
 class StationPgxlController;
+class StationRfKitController;
+class StationTciController;
+class StationTciModel;
+class RfKitBandFollow;
 class AmplifierModel;
 class RfKitModel;
 
@@ -305,8 +313,9 @@ class RadioModel : public QObject {
     Q_PROPERTY(QString model       READ model       NOTIFY infoChanged)
     Q_PROPERTY(QString version     READ version     NOTIFY infoChanged)
     Q_PROPERTY(bool    connected   READ isConnected NOTIFY connectionStateChanged)
-    Q_PROPERTY(bool rfKitEnabled READ rfKitEnabled WRITE setRfKitEnabled
-               NOTIFY rfKitEnabledChanged)
+    // R-R3-47: the station's RF-Kit switch, Core to window only. A window
+    // changes it with the setRfKitEnabled command; a raw write is refused.
+    Q_PROPERTY(bool rfKitEnabled READ rfKitEnabled NOTIFY rfKitEnabledChanged)
     // R-R3-22: station-owned configuration/status; changes use a typed verb.
     Q_PROPERTY(bool fourO3AEnabled READ fourO3AEnabled NOTIFY fourO3AStatusChanged)
     Q_PROPERTY(bool fourO3AListening READ fourO3AListening NOTIFY fourO3AStatusChanged)
@@ -1748,6 +1757,14 @@ public:
     // Remote model's hold the Core's values only.
     AmplifierModel* amplifierModel() const { return m_amplifierModel; }
     RfKitModel*     rfKitModel()     const { return m_rfKitModel; }
+    // R-R3-48: the Core's station TCI server as the `stationTci` object.
+    // Non-null from construction; filled only on a Core that runs one
+    // (enableStationTci), and from the Core's values in a remote window.
+    StationTciModel* stationTciModel() const { return m_stationTciModel; }
+    // R-R3-48: the Core's station TCI server (nullptr outside the Core).
+    StationTciController* stationTciController() const { return m_stationTci; }
+    // R-R3-47: the Core's RF-Kit controller (nullptr outside the Core).
+    StationRfKitController* stationRfKitController() const { return m_stationRfKit; }
     // SmartSDR API server on TCP 4992. Owned by RadioModel; lifetime matches.
     // Used by MainWindow to push slice/transmit state so PGXL/TGXL pull the
     // current band/freq via the SmartSDR API rather than from a stale cache.
@@ -1789,6 +1806,21 @@ public:
     /// (0 turns it off, up to 3600).
     bool setPgxlConnectionSettingsForStation(bool autoReconnect, int keepaliveSec,
                                              int pingSec, QString* reason);
+    // R-R3-47 / R-R3-22: the Core's RF-Kit RF2K-S. configure saves the
+    // address for the Core's radio and starts identifying what answers
+    // there; the amp is admitted once its /info names an RF2K-S.
+    bool configureRfKitForStation(const QString& host, quint16 port, QString* reason);
+    bool disconnectRfKitForStation(QString* reason);
+    /// The station's RF-Kit switch, from a window's command.
+    bool setRfKitEnabledForStation(bool enabled, QString* reason);
+
+    // R-R3-48: the Core runs the app's TCI server on the station network
+    // (DaemonApp, before radio startup). `bindOverride` is nereusd.conf's
+    // station_tci_bind; empty picks this computer's address on the radio's
+    // subnet once the radio connects.
+    void enableStationTci(const QString& bindOverride);
+    /// The station's TCI switch and port, from a window's command.
+    bool setStationTciForStation(bool enabled, int port, QString* reason);
     static constexpr int kPgxlKeepaliveMinSec = 1;
     static constexpr int kPgxlKeepaliveMaxSec = 3600;
     static constexpr int kPgxlPingMaxSec = 3600;
@@ -4962,6 +4994,12 @@ private:
     TunerModel*     m_tunerModel{nullptr};
     AmplifierModel* m_amplifierModel{nullptr};
     RfKitModel*     m_rfKitModel{nullptr};
+    // R-R3-47 / R-R3-48: the Core's RF-Kit controller, station TCI server
+    // and its state, and the RF-Kit's band follow over that server.
+    StationRfKitController* m_stationRfKit{nullptr};
+    StationTciModel*        m_stationTciModel{nullptr};
+    StationTciController*   m_stationTci{nullptr};
+    RfKitBandFollow*        m_rfKitBandFollow{nullptr};
 
     // Phase 3P-III: RF-Kit RF2K-S connection. unique_ptr with Qt parent=this
     // so destruction order is deterministic and QObject hierarchy is intact.
@@ -5079,6 +5117,8 @@ private:
     // Phase 3P-II follow-up: replace with a full SmartSDR API server.
     class SmartSdrApiListener* m_smartSdrListener{nullptr};
     bool m_remoteFourO3AEnabled{false};
+    // R-R3-47: the Core's RF-Kit switch as a remote window last heard it.
+    bool m_remoteRfKitEnabled{false};
     bool m_remoteFourO3AListening{false};
     QString m_remoteFourO3AListenerError;
     QTimer* m_accessoryBandTimer{nullptr};

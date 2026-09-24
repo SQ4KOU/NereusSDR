@@ -121,6 +121,11 @@
 //                 configure, disconnect and connection settings for the
 //                 station. NereusSDR-original; no Thetis logic. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-48: the Core's RF-Kit through
+//                StationRfKitController (configure, disconnect, switch),
+//                rfKitEnabled Core to window, and the Core's station TCI
+//                server (enableStationTci, setStationTciForStation). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -436,9 +441,13 @@ warren@wpratt.com
 #include "core/SmartSdrApiListener.h"
 #include "core/StationTgxlController.h"
 #include "core/StationPgxlController.h"
+#include "core/StationRfKitController.h"
+#include "core/StationTciController.h"
+#include "core/RfKitBandFollow.h"
 #include "core/PgxlStatusGauges.h"
 #include "models/AmplifierModel.h"
 #include "models/RfKitModel.h"
+#include "models/StationTciModel.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1358,6 +1367,8 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // this computer's accessory connections.
     m_amplifierModel = new AmplifierModel(this);
     m_rfKitModel = new RfKitModel(this);
+    // R-R3-48: the Core's station TCI server state (`stationTci`).
+    m_stationTciModel = new StationTciModel(this);
     if (m_role == Role::Local) {
         m_amplifierModel->bindConnection(m_pgxlConnection);
         m_rfKitModel->bindConnection(m_rfKitConnection.get());
@@ -2486,6 +2497,12 @@ RadioModel::RadioModel(Role role, QObject* parent)
 
 RadioModel::~RadioModel()
 {
+    // R-R3-48: the station TCI server holds this model's slices and
+    // receivers; stop it while they still exist.
+    delete m_rfKitBandFollow;
+    m_rfKitBandFollow = nullptr;
+    delete m_stationTci;
+    m_stationTci = nullptr;
     teardownConnection();
     qDeleteAll(m_slices);
     qDeleteAll(m_panadapters);
@@ -2512,6 +2529,15 @@ QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVa
                 current = value.toBool();
                 if (propertyName == "fourO3AEnabled") { emit fourO3AEnabledChanged(current); }
                 emit fourO3AStatusChanged();
+            }
+            return {};
+        }
+        if (propertyName == "rfKitEnabled") {
+            // R-R3-47: the Core's RF-Kit switch, observed; never a request.
+            if (value.typeId() != QMetaType::Bool) { return QStringLiteral("Expected a boolean RF-Kit observation."); }
+            if (m_remoteRfKitEnabled != value.toBool()) {
+                m_remoteRfKitEnabled = value.toBool();
+                emit rfKitEnabledChanged(m_remoteRfKitEnabled);
             }
             return {};
         }
@@ -3257,6 +3283,39 @@ void RadioModel::enableStationAccessoryIdentity()
     // (and so before onPgxlConnected pairs it).
     m_stationPgxl = new StationPgxlController(m_pgxlConnection, m_amplifierModel, this);
     m_stationPgxl->cancel(!fourO3AEnabled());
+    // R-R3-47: the RF-Kit too: admitted once its /info names an RF2K-S.
+    m_stationRfKit = new StationRfKitController(m_rfKitConnection.get(), m_rfKitModel, this);
+    m_stationRfKit->cancel(!rfKitEnabled());
+    if (m_stationTciModel) {
+        connect(m_stationTciModel, &StationTciModel::stateChanged, m_stationRfKit, [this] {
+            if (m_stationRfKit) {
+                m_stationRfKit->setBandFollowWanted(m_stationTciModel->listening());
+            }
+        });
+    }
+}
+
+void RadioModel::enableStationTci(const QString& bindOverride)
+{
+    if (m_role != Role::Local || m_stationTci) { return; }
+    m_stationTci = new StationTciController(this, m_stationTciModel, this);
+    m_stationTci->setBindOverride(bindOverride);
+    if (isConnected() && !m_lastRadioInfo.address.isNull()) {
+        m_stationTci->setRadioAddress(m_lastRadioInfo.address);
+    }
+    // R-R3-48: the RF-Kit follows the band as an app of this server.
+    m_rfKitBandFollow = new RfKitBandFollow(m_rfKitModel, this);
+    m_rfKitBandFollow->setServer(m_stationTci->server());
+    m_stationTci->applySaved();
+}
+
+bool RadioModel::setStationTciForStation(bool enabled, int port, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTci) {
+        if (reason) { *reason = QStringLiteral("This Core has no TCI server for the station."); }
+        return false;
+    }
+    return m_stationTci->setEnabled(enabled, port, reason);
 }
 
 namespace {
@@ -3391,6 +3450,8 @@ bool RadioModel::setPgxlConnectionSettingsForStation(bool autoReconnect, int kee
 
 bool RadioModel::rfKitEnabled() const
 {
+    // R-R3-47: a remote window holds the Core's switch as it last heard it.
+    if (m_role == Role::Remote) { return m_remoteRfKitEnabled; }
     return peripheralValue(QStringLiteral("RfKit_Enabled"),
                            QStringLiteral("False"))
         == QStringLiteral("True");
@@ -3428,6 +3489,13 @@ void RadioModel::applyRfKitOperatorSettings()
 
 void RadioModel::setRfKitEnabled(bool enabled)
 {
+    if (m_role == Role::Remote) {
+        // R-R3-47: the switch lives on the Core; a remote window asks it
+        // with the setRfKitEnabled command (IStationLink).
+        qCWarning(lcConnection) << "setRfKitEnabled ignored in a remote window;"
+                                << "the Core owns the RF-Kit switch";
+        return;
+    }
     const bool current = rfKitEnabled();
     if (enabled == current) {
         return;
@@ -3442,13 +3510,86 @@ void RadioModel::setRfKitEnabled(bool enabled)
                             QStringLiteral("8080")).toUInt());
         if (!host.isEmpty() && m_rfKitConnection) {
             applyRfKitOperatorSettings();
-            m_rfKitConnection->connectToAmp(host, port);
+            if (m_stationRfKit) {
+                m_stationRfKit->start(host, port);   // R-R3-47: identity first
+            } else {
+                m_rfKitConnection->connectToAmp(host, port);
+            }
+        } else if (m_stationRfKit) {
+            m_stationRfKit->cancel(false);
         }
+    } else if (m_stationRfKit) {
+        m_stationRfKit->cancel(true);
     } else if (m_rfKitConnection) {
         m_rfKitConnection->disconnect();
     }
 
     emit rfKitEnabledChanged(enabled);
+}
+
+bool RadioModel::setRfKitEnabledForStation(bool enabled, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationRfKit) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    if (currentRadioMac().isEmpty()) {
+        if (reason) {
+            *reason = QStringLiteral("Connect the Core to a radio before turning its RF-Kit "
+                                     "amplifier on or off.");
+        }
+        return false;
+    }
+    setRfKitEnabled(enabled);
+    AppSettings::instance().save();
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+// R-R3-47 / R-R3-22: the Power Genius's configure rule for the RF-Kit.
+// Acceptance is "saved and identifying"; `rfkit`.connectionPhase says
+// whether it connected.
+bool RadioModel::configureRfKitForStation(const QString& inputHost, quint16 port, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    if (m_role != Role::Local || !m_stationRfKit) {
+        return refuse(QStringLiteral("Station accessory configuration is unavailable."));
+    }
+    if (currentRadioMac().isEmpty()) {
+        return refuse(QStringLiteral("Connect the Core to a radio before setting up its RF-Kit "
+                                     "amplifier."));
+    }
+    if (!rfKitEnabled()) {
+        return refuse(QStringLiteral("Turn on the RF-Kit amplifier on the Core before "
+                                     "connecting it."));
+    }
+    const QString host = inputHost.trimmed();
+    if (!validStationAccessoryHost(host) || port == 0) {
+        return refuse(QStringLiteral("Enter the RF-Kit amplifier's IP address or host name, "
+                                     "and a port from 1 to 65535."));
+    }
+    // Both fields are saved by one accepted command, validated first.
+    setPeripheralValue(QStringLiteral("RfKit_ManualIp"), host);
+    setPeripheralValue(QStringLiteral("RfKit_ManualPort"), QString::number(port));
+    AppSettings::instance().save();
+    applyRfKitOperatorSettings();
+    m_stationRfKit->start(host, port);
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+bool RadioModel::disconnectRfKitForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationRfKit) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    m_stationRfKit->cancel(!rfKitEnabled());
+    if (reason) { reason->clear(); }
+    return true;
 }
 
 // ── Per-radio peripherals helpers ──────────────────────────────────────────
@@ -3560,6 +3701,19 @@ void RadioModel::applyPeripheralsForCurrentMac()
     emit fourO3AStatusChanged();
 
     // ── RF-Kit RF2K-S ───────────────────────────────────────────────────
+    // R-R3-48: the Core's station TCI server faces this radio's network.
+    if (m_stationTci && !m_lastRadioInfo.address.isNull()) {
+        m_stationTci->setRadioAddress(m_lastRadioInfo.address);
+    }
+    // R-R3-47: publish this radio's saved RF-Kit address on the Core
+    // before anything can dial it, as for the Power Genius below.
+    if (m_stationRfKit) {
+        const QString savedHost = peripheralValue(QStringLiteral("RfKit_ManualIp"));
+        const quint16 savedPort = static_cast<quint16>(
+            peripheralValue(QStringLiteral("RfKit_ManualPort"),
+                            QStringLiteral("8080")).toUInt());
+        m_stationRfKit->resetScope(savedHost, savedPort, rfKitEnabled());
+    }
     if (rfKitEnabled() && m_rfKitConnection) {
         const QString host =
             peripheralValue(QStringLiteral("RfKit_ManualIp"));
@@ -3568,7 +3722,11 @@ void RadioModel::applyPeripheralsForCurrentMac()
                             QStringLiteral("8080")).toUInt());
         if (!host.isEmpty()) {
             applyRfKitOperatorSettings();
-            m_rfKitConnection->connectToAmp(host, port);
+            if (m_stationRfKit) {
+                m_stationRfKit->start(host, port);
+            } else {
+                m_rfKitConnection->connectToAmp(host, port);
+            }
             qCInfo(lcConnection)
                 << "RF-Kit auto-connect for MAC" << mac
                 << ":" << host << ":" << port;
@@ -3678,7 +3836,10 @@ void RadioModel::teardownPeripherals()
     // re-issue /info and restart polling. disconnect() is idempotent: it
     // stops both timers and only emits disconnected() if it had been
     // connected.
-    if (m_rfKitConnection) {
+    if (m_stationRfKit) {
+        m_stationRfKit->cancel(!rfKitEnabled());
+        qCInfo(lcConnection) << "Peripherals teardown: RF-Kit disconnected";
+    } else if (m_rfKitConnection) {
         m_rfKitConnection->disconnect();
         qCInfo(lcConnection) << "Peripherals teardown: RF-Kit disconnected";
     }

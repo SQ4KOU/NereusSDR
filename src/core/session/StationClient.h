@@ -439,6 +439,14 @@ public:
     bool remoteRfKitStatusAvailable() const override;
     // R-R3-47 / R-R3-22: see IStationLink.
     bool remotePgxlControlAvailable() const override;
+    // R-R3-47 / R-R3-48: see IStationLink.
+    bool remoteRfKitControlAvailable() const override;
+    bool stationTciAvailable() const override;
+    bool coreServesTciOnThisComputer() const override;
+    /// Test seam: whether the Core counts as on this computer (a session
+    /// started without a dial has no address to judge by).
+    void setCoreOnThisComputerForTest(bool onThisComputer)
+    { m_coreOnThisComputerForTest = onThisComputer ? 1 : 0; }
     bool telemetryAvailable() const;
     std::optional<SessionTransportTelemetry> transportTelemetry() const;
     bool sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch);
@@ -543,6 +551,10 @@ public:
     CommandOutcome requestDisconnectPgxl() override;
     CommandOutcome requestPgxlConnectionSettings(bool autoReconnect, int keepaliveSec,
                                                  int pingSec) override;
+    CommandOutcome requestConfigureRfKit(const QString& host, quint16 port) override;
+    CommandOutcome requestDisconnectRfKit() override;
+    CommandOutcome requestRfKitEnabled(bool enabled) override;
+    CommandOutcome requestStationTci(bool enabled, quint16 port) override;
     CommandOutcome requestApplyNnrModels(quint32 revision) override;
     bool nnrControlAvailable() const override;
     // R-R3-21: the Core advertised dspAssetVersion 2 on a session that
@@ -888,6 +900,8 @@ private:
     /// arming anything, which is what keeps a session with nothing latched
     /// from ever being auto-retried: there is nothing to redial.
     QUrl m_lastUrl;
+    // R-R3-48: -1 judge by m_lastUrl; 0 or 1 set by a test.
+    int m_coreOnThisComputerForTest = -1;
     QString m_lastFingerprint;
     bool m_lastAllowUnpinned = false;
 

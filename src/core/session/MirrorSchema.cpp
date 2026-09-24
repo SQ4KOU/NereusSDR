@@ -28,6 +28,8 @@
 //   2026-09-23 - R-R3-47 / R-R3-22: AmplifierModel and RfKitModel mirrored
 //                 (`amplifier`, `rfkit`). J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-24 - R-R3-48: StationTciModel mirrored (`stationTci`). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
@@ -83,6 +85,9 @@ const char* const kMirroredClasses[] = {
     // RF2K-S status, read-only.
     "NereusSDR::AmplifierModel",
     "NereusSDR::RfKitModel",
+    // R-R3-48 (stationTciVersion 1): the Core's station TCI server,
+    // read-only.
+    "NereusSDR::StationTciModel",
 };
 
 // Per-property exclusions, as (class, property).
