@@ -34,7 +34,8 @@
 //                listeners go through deleteLater, not raw delete. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-48 follow-up: quiet listen attempts while the Core
-//                retries its station listener. J.J. Boyd (KG4VCF),
+//                retries its station listener; the main listener goes
+//                through deleteLater, not raw delete. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
@@ -1366,7 +1367,9 @@ bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
                              << "port" << port << m_server->errorString();
         }
         const QString errStr = m_server->errorString();
-        delete m_server;
+        // Qt ownership (parented to this): it never listened, so a later
+        // deletion holds nothing.
+        m_server->deleteLater();
         m_server = nullptr;
         emit errorOccurred(errStr);
         return false;
@@ -1498,8 +1501,12 @@ void TciServer::stop()
         updateRemoteReceiverDemand(rx);
     }
 
+    // Closed now, so the port is free at once and no connection arrives;
+    // the clients above were already closed and released. Qt deletes the
+    // server (parented to this) after the current event, or with this
+    // object when it goes.
     m_server->close();
-    delete m_server;
+    m_server->deleteLater();
     m_server = nullptr;
     for (QWebSocketServer* extra : std::as_const(m_extraServers)) {
         // M6: closed now, so the port is free at once; Qt deletes it.
