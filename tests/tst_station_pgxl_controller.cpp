@@ -342,6 +342,12 @@ private slots:
                                                 QStringLiteral("ClassA"), &reason));
         seq = waitForCommand(peer, rx, QStringLiteral("setup bias=a"), &from);
         QVERIFY(seq != 0);
+        // M9: a refusal. 50000015 is the code a real Power Genius sent when it
+        // refused `amplifier create` (bench note of 2026-05-21 in
+        // RadioModel.cpp, above the PGXL_PairModel read); the design doc
+        // (2026-05-18-pgxl-tgxl-and-analog-smeter-design.md section 6.1, from
+        // the FlexRadio wiki) says only that non-zero is a failure. The amp's
+        // refusal of a `setup` command itself has not been observed.
         reply(peer, seq, QStringLiteral("50000015|"));
         QTRY_COMPARE(settings->pgxlAnswer(),
                      QStringLiteral("The Power Genius did not take the new setting."));
@@ -422,6 +428,14 @@ private slots:
         const quint32 setupSeq = waitForCommand(peer, rx, QStringLiteral("setup read"), &from);
         const quint32 ifconfSeq = waitForCommand(peer, rx, QStringLiteral("ifconf read"), &from);
         QVERIFY(setupSeq != 0 && ifconfSeq != 0);
+        // M9: reply shapes, none captured from a real amp (pending hardware
+        // evidence). `setup read`: the design doc's section 6.4 (verbatim
+        // from the FlexRadio wiki) documents `nickname= fan= meffa= led=`;
+        // `bias=` is not in that reply and is unobserved (the Core reads it
+        // only if the amp sends it). `ifconf read`: `dhcp=` 0/1 and `ip=`
+        // are the keys TgxlAdvancedPage::onIfconfResponse (the local page's
+        // parser, the only one in the tree) reads; the design doc's
+        // section 6.4 documents `address=` and `dhcp=false` instead.
         reply(peer, setupSeq, QStringLiteral("0|nickname=Amp2 bias=classa fan=continuous led=90"));
         reply(peer, ifconfSeq, QStringLiteral("0|dhcp=1 ip=10.0.0.5 netmask=255.0.0.0 "
                                               "gateway=10.0.0.1"));

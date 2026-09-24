@@ -1260,5 +1260,13 @@ and the Rock's fault history after a restart; the power-cap alert from a
 real transmit through the Power Genius (with remote transmit); and, only
 with the operator's go-ahead because it changes the devices' own settings,
 a name change and a Save & Reboot on the real Power Genius and Tuner Genius
-from the Rock's remote window (the setup and ifconf read replies used here
-are shaped as the local pages parse them; no capture of them exists yet).
+from the Rock's remote window. None of the device replies the settings
+tests use has been captured: the `setup read` reply follows the design
+doc's section 6.4 (verbatim from the FlexRadio wiki: `nickname= fan=
+meffa= led=`), and its `bias=` is unobserved; the `ifconf read` reply uses
+`dhcp=` (0 or 1) and `ip=`, the keys the local Tuner Genius page's parser
+reads, where the design doc documents `address=` and `dhcp=false` (the
+Core, like the local page, reads `ip=`: which one the devices send is part
+of the pending evidence); the refusal code 50000015 is the one a real
+Power Genius sent when it refused `amplifier create` (bench note of
+2026-05-21), and a refusal of a settings command has not been observed.

@@ -1933,6 +1933,12 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     editName(page.nicknameEditForTesting(), QStringLiteral("Refused"));
     at = amp.waitFor(QStringLiteral("setup nickname=Refused"), answerMark);
     QVERIFY(at >= 0);
+    // M9: a refusal. 50000015 is the code a real Power Genius sent when it
+    // refused `amplifier create` (bench note of 2026-05-21 in
+    // RadioModel.cpp, above the PGXL_PairModel read); the design doc
+    // (2026-05-18-pgxl-tgxl-and-analog-smeter-design.md section 6.1, from
+    // the FlexRadio wiki) says only that non-zero is a failure. The amp's
+    // refusal of a `setup` command itself has not been observed.
     amp.reply(at, QStringLiteral("50000015|"));
     QTRY_COMPARE(page.deviceAnswerForTesting(),
                  QStringLiteral("The Power Genius did not take the new name."));
@@ -1940,6 +1946,10 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     const int setupAt = amp.waitFor(QStringLiteral("setup read"), answerMark);
     const int ifconfAt = amp.waitFor(QStringLiteral("ifconf read"), answerMark);
     QVERIFY(setupAt >= 0 && ifconfAt >= 0);
+    // M9: unobserved reply shapes (see tst_station_pgxl_controller's
+    // Revert: the design doc's section 6.4 `setup read` reply carries no
+    // `bias=`; `dhcp=`/`ip=` are the local TGXL page's parser keys, where the
+    // design doc documents `address=` and `dhcp=false`). Pending hardware.
     amp.reply(setupAt, QStringLiteral("0|nickname=Amp2 bias=classab fan=continuous led=90"));
     amp.reply(ifconfAt, QStringLiteral("0|dhcp=0 ip=10.0.0.5 netmask=255.0.0.0 gateway=10.0.0.1"));
     QTRY_COMPARE(page.ipEditForTesting()->text(), QStringLiteral("10.0.0.5"));
@@ -2091,6 +2101,12 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
     // The tuner's values and answers.
     const int readAt = tuner.waitFor(QStringLiteral("setup read"), remoteMark);
     const int ifconfAt = tuner.waitFor(QStringLiteral("ifconf read"), remoteMark);
+    // M9: `nickname=` as TgxlAdvancedPage::onSetupResponse reads it, the
+    // value the captured `info` reply carries (captures/flex-tgxl-direct-
+    // NOTES.md); `dhcp=`/`ip=` as TgxlAdvancedPage::onIfconfResponse reads
+    // them. The tuner's `setup read` and `ifconf read` replies were never
+    // captured (the capture shows the `ifconf read` request only):
+    // unobserved, pending hardware.
     tuner.reply(readAt, QStringLiteral("0|nickname=Tuner_Genius_XL"));
     tuner.reply(ifconfAt, QStringLiteral("0|dhcp=1 ip=192.168.1.60 netmask=255.255.255.0 "
                                          "gateway=192.168.1.1"));
