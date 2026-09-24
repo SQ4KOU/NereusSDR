@@ -11,6 +11,9 @@
 // R-R3-36 Task 6 (2026-09-22): PC Mic controls edit the shared
 //   audio/TxInput config; Test Mic holds a real capture demand; microphone
 //   status and Retry beside Test Mic.
+// R-R3-36 (2026-09-23): usable in a remote window through
+//   RadioModel::localAudioDevices(); the controls held for the radio follow
+//   the transmit permission.
 //
 // Written by J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
@@ -284,7 +287,9 @@ void AudioTxInputPage::hideEvent(QHideEvent* event)
 
 AudioEngine* AudioTxInputPage::engine()
 {
-    return model() ? model()->audioEngine() : nullptr;
+    // R-R3-36: the PC microphone is this computer's, in a remote window
+    // too (Test Mic opens it there); see RadioModel::localAudioDevices().
+    return model() ? model()->localAudioDevices() : nullptr;
 }
 
 void AudioTxInputPage::applyTxInputConfigToControls(const AudioDeviceConfig& cfg)
@@ -361,6 +366,37 @@ void AudioTxInputPage::refreshCaptureStatus()
     }
 }
 
+// R-R3-36: the controls held for the radio follow the transmit permission;
+// this computer's microphone controls do not. See the header.
+void AudioTxInputPage::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    m_heldTransmitPermitted = permitted;
+    m_heldTransmitReason = reason.isEmpty()
+        ? tr("Remote transmit controls are not available from this Core yet.")
+        : reason;
+    applyHeldControlGate();
+}
+
+// R-R3-21 / R-R3-10: the held controls are the Core's settings as well.
+void AudioTxInputPage::setStationSettingsAvailable(bool available, const QString& reason)
+{
+    m_heldStationAvailable = available;
+    m_heldStationReason = reason.isEmpty()
+        ? tr("Connect to the Core to change these.") : reason;
+    applyHeldControlGate();
+}
+
+// One gate for both conditions: the save/restore helper keeps one saved
+// state per control, so the two are combined here rather than stacked.
+void AudioTxInputPage::applyHeldControlGate()
+{
+    const bool allowed = m_heldTransmitPermitted && m_heldStationAvailable;
+    gateTransmitControls({m_micSourceGroup, m_micGainSlider, m_micGainLabel,
+                          m_hermesGroup, m_orionGroup, m_saturnGroup},
+        allowed,
+        m_heldStationAvailable ? m_heldTransmitReason : m_heldStationReason);
+}
+
 // ---------------------------------------------------------------------------
 // Build helpers
 // ---------------------------------------------------------------------------
@@ -369,6 +405,7 @@ void AudioTxInputPage::buildPage(bool hasMicJack, HPSDRHW hw)
 {
     // ── Mic Source group box (I.1) ────────────────────────────────────────────
     auto* srcGrp = new QGroupBox(QStringLiteral("Mic Source"), this);
+    m_micSourceGroup = srcGrp;
     auto* srcLayout = new QVBoxLayout(srcGrp);
 
     m_pcMicBtn    = new QRadioButton(QStringLiteral("PC Mic"), srcGrp);

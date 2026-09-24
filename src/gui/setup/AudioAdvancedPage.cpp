@@ -7,6 +7,12 @@
 //
 // Sub-Phase 12 Task 12.4 (2026-04-20): Written by J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+//
+// 2026-09-23: R-R3-10 / R-R3-23 by J.J. Boyd (KG4VCF), with AI-assisted
+// implementation via Anthropic Claude Code. In a remote window, Reset
+// removes only this computer's audio/* keys (never a key the Core holds,
+// such as audio/DspRate and audio/DspBlockSize) and recreates no VAX
+// outputs; local Reset is unchanged.
 // =================================================================
 
 #include "AudioAdvancedPage.h"
@@ -14,6 +20,7 @@
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/LogCategories.h"
+#include "core/settings/SettingsScope.h"
 #include "core/audio/VirtualCableDetector.h"
 #include "gui/VaxFirstRunDialog.h"
 #include "models/RadioModel.h"
@@ -530,7 +537,28 @@ void AudioAdvancedPage::onResetClicked()
         return;
     }
 
-    if (m_engine) {
+    if (model() && !model()->ownsLocalDsp()) {
+        // R-R3-10 / R-R3-23: a remote window. AudioEngine::resetAudioSettings()
+        // removes every audio/* key AppSettings lists, which there includes
+        // the ones the Core holds (the settings proxy lists them too), and
+        // re-creates this computer's VAX outputs, which a remote window never
+        // opens. So only this computer's own audio/* keys are removed, and
+        // the speakers are reopened from defaults so remote playback follows
+        // (RemoteMediaController re-reads audio/Speakers on
+        // speakersConfigChanged). Nothing is written to the Core.
+        auto& s = AppSettings::instance();
+        const QStringList keys = s.allKeys();
+        for (const QString& key : keys) {
+            if (key.startsWith(QStringLiteral("audio/"))
+                && classifySettingsKey(key) == SettingsScope::OperatorLocal) {
+                s.remove(key);
+            }
+        }
+        s.save();
+        if (m_engine) {
+            m_engine->setSpeakersConfig(AudioDeviceConfig{});
+        }
+    } else if (m_engine) {
         m_engine->resetAudioSettings();
     } else {
         // Engine not wired — do a direct settings clear (test or early-init path).

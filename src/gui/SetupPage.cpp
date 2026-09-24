@@ -23,6 +23,12 @@
 //                 gateTransmitControls helper for transmit sections on
 //                 receive pages. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-21 / R-R3-10: setStationSettingsAvailable hook and
+//                 gateStationControls helper, so a page that mixes this
+//                 computer's settings with the Core's disables only the
+//                 Core's while the remote window is disconnected.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 #include "SetupPage.h"
@@ -120,32 +126,55 @@ void SetupPage::setTransmitPermitted(bool /*permitted*/, const QString& /*reason
 {
 }
 
-void SetupPage::gateTransmitControls(const QList<QWidget*>& controls, bool permitted,
-                                     const QString& reason)
+void SetupPage::setStationSettingsAvailable(bool /*available*/, const QString& /*reason*/)
 {
-    static constexpr auto kSavedTooltip = "SetupPageSavedTransmitTooltip";
-    static constexpr auto kSavedDescription = "SetupPageSavedTransmitDescription";
-    static constexpr auto kSavedEnabled = "SetupPageSavedTransmitEnabled";
+}
+
+namespace {
+
+// One save/restore routine, two property sets: a control follows one gate.
+// A page whose control is held for both transmit and the Core combines the
+// two itself and calls one helper (AudioTxInputPage does).
+void gateControlsWith(const QList<QWidget*>& controls, bool allowed, const QString& reason,
+                      const char* savedTooltip, const char* savedDescription,
+                      const char* savedEnabled)
+{
     for (QWidget* control : controls) {
         if (!control) { continue; }
-        if (!permitted) {
-            if (!control->property(kSavedTooltip).isValid()) {
-                control->setProperty(kSavedTooltip, control->toolTip());
-                control->setProperty(kSavedDescription, control->accessibleDescription());
-                control->setProperty(kSavedEnabled, control->isEnabled());
+        if (!allowed) {
+            if (!control->property(savedTooltip).isValid()) {
+                control->setProperty(savedTooltip, control->toolTip());
+                control->setProperty(savedDescription, control->accessibleDescription());
+                control->setProperty(savedEnabled, control->isEnabled());
             }
             control->setEnabled(false);
             control->setToolTip(reason);
             control->setAccessibleDescription(reason);
-        } else if (control->property(kSavedTooltip).isValid()) {
-            control->setEnabled(control->property(kSavedEnabled).toBool());
-            control->setToolTip(control->property(kSavedTooltip).toString());
-            control->setAccessibleDescription(control->property(kSavedDescription).toString());
-            control->setProperty(kSavedTooltip, QVariant());
-            control->setProperty(kSavedDescription, QVariant());
-            control->setProperty(kSavedEnabled, QVariant());
+        } else if (control->property(savedTooltip).isValid()) {
+            control->setEnabled(control->property(savedEnabled).toBool());
+            control->setToolTip(control->property(savedTooltip).toString());
+            control->setAccessibleDescription(control->property(savedDescription).toString());
+            control->setProperty(savedTooltip, QVariant());
+            control->setProperty(savedDescription, QVariant());
+            control->setProperty(savedEnabled, QVariant());
         }
     }
+}
+
+} // namespace
+
+void SetupPage::gateTransmitControls(const QList<QWidget*>& controls, bool permitted,
+                                     const QString& reason)
+{
+    gateControlsWith(controls, permitted, reason, "SetupPageSavedTransmitTooltip",
+                     "SetupPageSavedTransmitDescription", "SetupPageSavedTransmitEnabled");
+}
+
+void SetupPage::gateStationControls(const QList<QWidget*>& controls, bool available,
+                                    const QString& reason)
+{
+    gateControlsWith(controls, available, reason, "SetupPageSavedStationTooltip",
+                     "SetupPageSavedStationDescription", "SetupPageSavedStationEnabled");
 }
 
 QGroupBox* SetupPage::addSection(const QString& title)

@@ -12,6 +12,11 @@
 //                                              attribution notes. AI
 //                                              assistance: Anthropic Claude
 //                                              (claude-sonnet-4-6).
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 Setup fix wave (R-R3-17,
+//                                    R-R3-21): setActivePlan() writes
+//                                    BandPlanName only when it changes.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 
 #include "BandPlanManager.h"
 
@@ -73,7 +78,16 @@ void BandPlanManager::setActivePlan(const QString& name)
             m_activeName = name;
             m_segments   = p.segments;
             m_spots      = p.spots;
-            AppSettings::instance().setValue("BandPlanName", name);
+            // R-R3-17 / R-R3-21 (R3 Setup fix wave): persist only a real
+            // change. loadPlans() re-activates the plan it just read, and
+            // in a remote window that read comes from the Core before its
+            // settings have arrived; writing it back then counted as an
+            // edit made while the link was down and, on the first
+            // connect, as one that "did not stick".
+            auto& settings = AppSettings::instance();
+            if (settings.value("BandPlanName", QStringLiteral("ARRL (US)")).toString() != name) {
+                settings.setValue("BandPlanName", name);
+            }
             emit planChanged();
             return;
         }

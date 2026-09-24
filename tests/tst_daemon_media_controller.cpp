@@ -610,6 +610,7 @@ private slots:
     void coreBusyLowersThenRestoresTheBudget();
     void eightWidePansAtTheCeilingGetTheirPlannedFrameRates();
     void pureSignalKeepsItsDisplayShareWhileSpectrumIsContended();
+    void legacyPansOnTwoSourcesKeepTheirEvenShare();
     void failedDisplayAttemptDebitsCreditAndRecoversWithKeyframe();
     void exhaustedDisplayCreditDoesNotBlockAudioRtp();
     void mediaPeerReplacementDoesNotMintDisplayCredit();
@@ -1039,7 +1040,9 @@ void TstDaemonMediaController::coreBusyLowersThenRestoresTheBudget()
 namespace {
 
 // One deterministic run of eight wide pans at 4096 px asking for 60 fps on
-// one source (see eightWidePansAtTheCeilingGetTheirPlannedFrameRates).
+// one source, or split across two (see
+// eightWidePansAtTheCeilingGetTheirPlannedFrameRates and
+// legacyPansOnTwoSourcesKeepTheirEvenShare).
 struct EightPanRun {
     static constexpr int kPans = 8;
     static constexpr int kPixels = 4096;
@@ -1070,8 +1073,11 @@ struct EightPanRun {
 // (RemoteDisplayAllocator, with PureSignal's share when it is on), legacy
 // mode what the pans ask for. The test drives the source's 60 fps frames,
 // PureSignal's 100 ms snapshots and the 5 ms sender ticks on one simulated
-// clock, so nothing follows the computer's load.
-void runEightWidePans(bool budget, bool pureSignal, EightPanRun& result)
+// clock, so nothing follows the computer's load. With twoSources the last
+// four pans take the stream's fine tier, a second source whose 60 fps frames
+// fall a third of a frame after the first source's.
+void runEightWidePans(bool budget, bool pureSignal, EightPanRun& result,
+                      bool twoSources = false)
 {
     constexpr int kPans = EightPanRun::kPans;
     constexpr qint64 kStartNs = 1'000'000'000;
@@ -1108,8 +1114,10 @@ void runEightWidePans(bool budget, bool pureSignal, EightPanRun& result)
     const double centre = h.radio.streamCentreHz(h.streamIndex);
     for (int pan = 0; pan < kPans; ++pan) {
         if (result.fps.at(pan) == 0) { continue; }
-        QJsonObject request = subscription(quint32(pan + 1), 1, h.sliceId, centre,
-                                           EightPanRun::kPixels);
+        const bool second = twoSources && pan >= kPans / 2;
+        QJsonObject request = tieredSubscription(
+            quint32(pan + 1), 1, h.sliceId, centre,
+            second ? QStringLiteral("fine") : QStringLiteral("wide"), EightPanRun::kPixels);
         request.insert(QStringLiteral("pixels"), pixels.at(pan));
         request.insert(QStringLiteral("fps"), result.fps.at(pan));
         request.insert(QStringLiteral("spanHz"), 192000.0);
@@ -1124,28 +1132,40 @@ void runEightWidePans(bool budget, bool pureSignal, EightPanRun& result)
     auto* source = h.controller.findChild<DaemonSpectrumSource*>();
     QVERIFY(source);
     const QList<MediaSourceKey> keys = source->activeSources();
-    QCOMPARE(keys.size(), 1);
+    QCOMPARE(keys.size(), twoSources ? 2 : 1);
     const MediaSourceKey key = keys.constFirst();
     // The engine takes its configuration on its own thread; after that
     // every frame comes from here, never from I/Q (none is fed).
     h.nowNs = kStartNs;
     QTRY_VERIFY_WITH_TIMEOUT(source->publishFrameForTest(key, kStartNs), 10'000);
+    // The second source's frame k at kStartNs + phase + k / 60 s.
+    constexpr qint64 kSecondPhaseNs = 1'000'000'000 / kSourceFps / 3;
+    std::optional<MediaSourceKey> secondKey;
+    if (twoSources) {
+        secondKey = keys.at(1);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            source->publishFrameForTest(*secondKey, kStartNs + kSecondPhaseNs), 10'000);
+    }
 
     // Source frame k at kStartNs + k / 60 s, PureSignal snapshot n at
     // kStartNs + n x 100 ms, sender tick j at kStartNs + j x 5 ms. Events at
-    // the same instant: the frame, then the snapshot, then the tick.
+    // the same instant: the frames, then the snapshot, then the tick.
     const qint64 endNs = kStartNs + kWarmupNs + EightPanRun::kMeasureNs;
     const quint64 generation = facade->displayGeneration();
     qint64 frame = 1;
+    qint64 secondFrame = 1;
     qint64 snapshot = 0;
     qint64 tick = 1;
     qsizetype first = -1;
     for (;;) {
         const qint64 frameNs = kStartNs + frame * 1'000'000'000 / kSourceFps;
+        const qint64 secondFrameNs = secondKey
+            ? kStartNs + kSecondPhaseNs + secondFrame * 1'000'000'000 / kSourceFps
+            : std::numeric_limits<qint64>::max();
         const qint64 snapshotNs = pureSignal ? kStartNs + snapshot * kPs3DisplayPollIntervalNs
                                              : std::numeric_limits<qint64>::max();
         const qint64 tickNs = kStartNs + tick * kDisplaySenderIntervalNs;
-        const qint64 nowNs = std::min({frameNs, snapshotNs, tickNs});
+        const qint64 nowNs = std::min({frameNs, secondFrameNs, snapshotNs, tickNs});
         if (nowNs >= endNs) { break; }
         if (first < 0 && nowNs >= kStartNs + kWarmupNs) {
             first = h.mediaTransport->displays.size();
@@ -1154,6 +1174,9 @@ void runEightWidePans(bool budget, bool pureSignal, EightPanRun& result)
         if (frameNs == nowNs) {
             QVERIFY(source->publishFrameForTest(key, frameNs));
             ++frame;
+        } else if (secondFrameNs == nowNs) {
+            QVERIFY(source->publishFrameForTest(*secondKey, secondFrameNs));
+            ++secondFrame;
         } else if (snapshotNs == nowNs) {
             facade->displaySnapshotReady(maximumPs3Snapshot(generation, quint64(snapshot + 1)));
             ++snapshot;
@@ -1250,6 +1273,29 @@ void TstDaemonMediaController::pureSignalKeepsItsDisplayShareWhileSpectrumIsCont
         QVERIFY2(run.received.at(pan) >= int(run.fps.at(pan) * seconds) - 1,
                  qPrintable(run.line()));
     }
+}
+
+// R-R3-08, R-R3-37: an older app (no display budget) asks for more than
+// the sender can carry, and the Core has no plan to protect, so every pan
+// keeps an even share whichever receiver it shows. Eight pans at 60 fps,
+// four on each of two sources whose frames fall at different instants:
+// 480 frames a second asked of the sender's 200, so 25 fps each.
+void TstDaemonMediaController::legacyPansOnTwoSourcesKeepTheirEvenShare()
+{
+    constexpr int kPans = EightPanRun::kPans;
+    EightPanRun legacy;
+    runEightWidePans(false, false, legacy, true);
+    if (QTest::currentTestFailed()) { return; }
+    qInfo().noquote() << "legacy, two sources:" << legacy.line();
+    const double seconds = legacy.seconds();
+    QCOMPARE(legacy.admitted, kPans);
+    for (int pan = 0; pan < kPans; ++pan) {
+        QVERIFY2(legacy.received.at(pan)
+                     >= int(kDisplaySenderMessagesPerSecond / kPans * seconds) - 1,
+                 qPrintable(legacy.line()));
+    }
+    QVERIFY2(legacy.total >= int(195 * seconds), qPrintable(legacy.line()));
+    QVERIFY(legacy.total <= int(kDisplaySenderMessagesPerSecond * seconds));
 }
 
 void TstDaemonMediaController::failedDisplayAttemptDebitsCreditAndRecoversWithKeyframe()

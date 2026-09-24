@@ -89,6 +89,12 @@ private slots:
     void onTxGainChanged(int dB);
 
 private:
+    // Label and audio path only; the slots above add the save. The
+    // startup push uses these, so reading a saved value never writes it
+    // back (R3 Setup fix wave, R-R3-17 / R-R3-21).
+    void applySliceAGain(int dB);
+    void applyTxGain(int dB);
+
     void buildUI();
     void buildHeaderRow(QVBoxLayout* vbox);
     void buildSliceRow(QVBoxLayout* vbox);

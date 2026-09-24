@@ -75,7 +75,7 @@ operator receive session. The three exceptions found are listed under
 
 | Menu > item | Owner | Handler / property | Acceptance |
 | --- | --- | --- | --- |
-| File > Settings..., Tools > TCI Server... | GUI-local shell; pages per the Setup table | `createSetupDialog()` `:10129`, refused with a toast until the station settings snapshot is ready | `tst_remote_gui_gating` (`setupGateFollowsTheInstalledProxyThroughItsStates`) |
+| File > Settings..., Tools > TCI Server... | GUI-local shell; pages per the Setup table | `createSetupDialog()` opens in every state, connected or not (no refusal toast); it pushes `SetupDialog::setStationSettingsAvailable` (the Core's settings are available only while the session is ready and holds the Core's settings snapshot), and `applyRemoteRoleGating` pushes it again on every link change. While unavailable: Core pages disabled with "Connect to the Core to change these." (or, while connected to a Core that has not sent its settings, "The Core has not sent its settings."); a Core page opened before the Core's settings really arrived (a snapshot with content, or the Core's seed marker) is a stand-in, not built; Mixed pages disable only their Core controls; this computer's pages usable. Realized Core and Mixed pages are rebuilt from each new snapshot once available, except a page with its own dialog open (rebuilt once the dialog is gone), a page the local-DSP gate keeps disabled (not rebuilt) and a rebuild that yields nothing (the page is kept) | `tst_remote_gui_gating` (`disconnectedRemoteSetupPerPageTable`, `reconnectRebuildsSetupPagesFromTheCoresValues`, `setupPageRebuildIsGuardedAgainstReentry`, `coreSetupPagesWaitForTheCoresSettingsNotAnySnapshot`, `setupPageIsNotRebuiltUnderItsOwnOpenDialog`, `setupPageRebuildThatYieldsNothingKeepsThePage`, `pagesTheLocalDspGateDisablesAreNotRebuilt`, `localSetupIgnoresStationSettingsAvailability`, `setupGateFollowsTheInstalledProxyThroughItsStates`), `tst_remote_window_harness` (`disconnectedWindowSetupKeepsThisComputersSettings`, `setupOpenedWhileDisconnectedRecordsNoEdit`, `freshWindowFirstConnectRaisesNoOfflineEditWarning`) |
 | File > Profiles > (4 items); Radio > Antenna Setup, Transverters; View > Display Mode, UI Scale, Minimal Mode, Keyboard Shortcuts; DSP > Equalizer, Diversity...; Band > VHF, GEN, Band Stacking; Tools > CWX, Memory Manager, CAT Control, VAX Audio, MIDI Mapping, Macro Buttons; Help > Getting Started, Help, Data Modes, What's New | Placeholder | disabled "NYI" actions | n/a |
 | File > Quit | GUI-local | `QApplication::quit` | n/a |
 | Radio > Connect, Disconnect | Station-backed (session) | `connectToStation()` / `disconnectFromStation()` through RemoteConnectionController; enable rules `:10236-10245` | `tst_remote_connection_controls`, `tst_gui_connection_controller`; hardware pending (S1) |
@@ -135,7 +135,7 @@ operator receive session. The three exceptions found are listed under
 | Overlay: VAX channel combo | **Unavailable (gated here)** | as the flag's VAX selector | `tst_remote_gui_gating` (`remoteVaxSurfacesAreUnavailable`) |
 | Overlay: ATT, IQ combo, RF gain, WNB, zoom buttons | Placeholder / unwired | disabled or no consumer | n/a |
 | Title bar connection segment, audio pip, right-click | GUI-local, opens station session actions | `openNetworkDiagnostics`, `connectionRequestedByOperator`, `showSegmentContextMenu` remote branch | `tst_remote_connection_controls`; hardware pending (S1) |
-| Master output: volume, mute, output device | GUI-local, drives remote playback | local `AudioEngine`; `RemoteMediaController.cpp:534-541` follows mute and device | `tst_remote_audio_receiver`, `tst_remote_media_controller`; hardware pending (S1) |
+| Master output: volume, mute, output device | GUI-local, drives remote playback | local `AudioEngine` through `RadioModel::localAudioDevices()`; `RemoteMediaController.cpp:534-541` follows mute and device; the picked device is saved to `audio/Speakers/DeviceName` before it is announced, so remote playback re-reads the new device (`MasterOutputWidget::selectOutputDevice`) | `tst_remote_audio_receiver`, `tst_remote_media_controller`, `tst_master_output_widget` (`pickedDeviceIsSavedBeforeItIsAnnounced`); hardware pending (S1) |
 | Status bar: +PAN, panel toggle, station block, TCI indicator, RX dashboard, system tile, TGXL chip | GUI-local / station session | as above; station block -> `connectionRequestedByOperator` | `tst_station_block`, `tst_remote_receive_indicators` |
 | Status bar: PSA indicator menu | GUI-local preference (no local PureSignal remotely) | `InvertRedBluePsa`, `HideFeedbackLevel` | n/a |
 | Status bar: CWX, DVK, FDX | Placeholder | inert labels | n/a |
@@ -148,25 +148,26 @@ visible and are not listed.
 | Leaf | Owner | Handler / property | Acceptance |
 | --- | --- | --- | --- |
 | General > Startup & Preferences, UI Scale & Theme, Navigation | Placeholder | no writes | n/a |
-| General > Options: Hardware Configuration, Options groups | GUI-local, except `Region` (Station); `ExtendedTxAllowed`, `RxOnly`, `PreventTxOnDifferentBandToRx`, `NetworkWatchdogEnabled` are OperatorLocal and have no remote effect | AppSettings | hardware pending (S1) |
+| General > Options: Hardware Configuration, Options groups | GUI-local (scope Mixed), except `Region` (Station), whose combo is disabled with the Core reason while the Core's settings are unavailable; `ExtendedTxAllowed`, `RxOnly`, `PreventTxOnDifferentBandToRx`, `NetworkWatchdogEnabled` are OperatorLocal and have no remote effect | AppSettings; `GeneralOptionsPage::setStationSettingsAvailable` | `tst_remote_gui_gating` (`disconnectedRemoteSetupPerPageTable`); hardware pending (S1) |
 | General > Options: Step Attenuator, Auto Attenuate | **Unavailable (gated here)** | unwired local `StepAttenuatorController` | `tst_remote_gui_gating` (`remoteGeneralOptionsDisablesOnlyTheAttenuatorGroups`) |
 | Hardware > Hardware Config, DDC Routing | **Unavailable (gated here)** | `HardwarePage` never learns a MAC remotely (`currentRadioChanged` is local-connect only, `RadioModel.cpp:14541`), so `onTabSettingChanged` drops every edit; DDC override keys are per-MAC and unread | `tst_remote_gui_gating` (`remoteDeclaredUnavailableSetupLeavesSayWhy`) |
 | PA > PA Gain, Watt Meter, PA Values | Unavailable (not shown) | category hidden: remote capabilities are the Unknown board's, `hasPaProfile` false | `tst_remote_gui_gating` (`remotePaCategoryIsNotShown`) |
-| Audio > Devices, VAX, TCI, Advanced | Unavailable (local-DSP gate; reason added here) | pages and `AudioBackendStrip` reach `audioEngine()`. Speaker output for remote playback is chosen from the title bar master output. Devices carries the microphone status and Retry; a remote window never holds a capture lease | `tst_remote_gui_gating` (`remoteLocalDspSetupPagesShowAPlainReason`, `everyRemoteSetupPageIsEitherLocalDspFreeOrDisabled`) |
-| Audio > TX Input | Transmit and unavailable (both gates) | TX input device, Test Mic and Retry; transmit reason first, local reason once transmit is permitted | `tst_remote_gui_gating` (`remoteTxInputShowsTheReasonThatCurrentlyApplies`), `tst_remote_tx_presentation` |
+| Audio > Devices | GUI-local (scope ThisComputer), usable connected or not | Speakers, Headphones and Microphone cards pick this computer's devices through `RadioModel::localAudioDevices()`, which the local-DSP audit does not count; a card saves `audio/{Speakers,Headphones,TxInput}/*` then hands the config to the engine, and remote playback re-reads `audio/Speakers` on `speakersConfigChanged`. The title-bar picker is a shortcut to the same setting. Headphones behaves as it does locally. Remote playback still refuses speaker formats other than 48 kHz stereo (receiver audio plan). Microphone status and Retry follow this computer's capture | `tst_remote_gui_gating` (`remoteDevicesPageWorksOnThisComputer`, `everyRemoteSetupPageIsEitherLocalDspFreeOrDisabled`), `tst_settings_scope` (card keys); speaker restart on a real device hardware pending (S1) |
+| Audio > VAX, TCI, Advanced | Unavailable (local-DSP gate; reason added here) | VAX and Advanced reach `audioEngine()` themselves; TCI reached it only through the backend strip, which no longer counts, so it is declared unavailable with the same reason (`markRemoteUnavailable`). Advanced Reset in a remote window removes only this computer's `audio/*` keys (never `audio/DspRate`, `audio/DspBlockSize`) and re-creates no VAX output; local Reset unchanged | `tst_remote_gui_gating` (`remoteLocalDspSetupPagesShowAPlainReason`), `tst_audio_advanced_page` |
+| Audio > TX Input | Mixed: this computer's PC microphone usable; mic source, Mic Gain and radio microphone hardware **Transmit (gated here)** | PC Mic backend, device, buffer, Test Mic and Retry through `RadioModel::localAudioDevices()`, saved to `audio/TxInput/*`; Test Mic opens this computer's microphone and meters it. `AudioTxInputPage::setTransmitPermitted` gates the Mic Source group, Mic Gain and the Hermes / Orion-MkII / Saturn radio mic groups with the transmit reason; while the Core's settings are unavailable the same controls carry "Connect to the Core to change these." instead (`setStationSettingsAvailable`, one combined gate). No longer a whole-page transmit leaf | `tst_remote_gui_gating` (`remoteTxInputKeepsThisComputersMicrophoneUsable`), `tst_audio_tx_input_pc_mic_group` (`testMic_opensThisComputersMicrophoneInARemoteWindow`) |
 | Audio > TX Profile | Transmit | `MicProfileManager`, `TransmitModel` | `tst_remote_tx_presentation` |
 | DSP > AGC/ALC (RX AGC) | Station-backed | `SliceModel` AGC setters | mirror suites; hardware pending (S1) |
 | DSP > AGC/ALC (TX Leveler, TX ALC groups) | **Transmit (gated here)** | `TransmitModel::setTxLeveler*`, `setTxAlc*`, not mirrored; `AgcAlcSetupPage::setTransmitPermitted` (group enable, tooltip, accessible description), pushed by `SetupDialog` | `tst_remote_gui_gating` (`remoteAgcAlcTransmitGroupsFollowThePermission`) |
-| DSP > NR/ANF | Station-backed, except the NR3 model selector (F2) | `SliceModel` NR setters; NNR through the station NNR capability | `tst_nnr_controls`, mirror suites; hardware pending (S1) |
+| DSP > NR/ANF | Station-backed (scope Core since the R3 remote window Setup plan, Task 2: every control writes the active receiver or chooses among the Core's models), including the NR3 model selector (F2) | `SliceModel` NR setters; NNR through the station NNR capability | `tst_nnr_controls`, mirror suites; hardware pending (S1) |
 | DSP > NB/SNB | Station-backed | `SliceModel` NB/SNB setters | `tst_mirror_inbound` (peer NB cases); hardware pending (S1) |
 | DSP > CW, AM/SAM, FM | Placeholder | all groups disabled | n/a |
 | DSP > CFC | **Transmit (gated here)** | `TransmitModel` phase rotator, CFC, CESSB; opens the TX CFC editor | `tst_remote_gui_gating` (`remoteTransmitOnlySetupLeavesFollowThePermission`) |
 | DSP > TNF | Station-backed setting, not applied live (F1) | `NotchModel`, `addNotchForSlice` | see F1 |
-| DSP > Filter Presets | GUI-local | `FilterPresetStore` (`filters/...`, OperatorLocal); buttons then write `SliceModel::setFilter` | n/a |
+| DSP > Filter Presets | GUI-local (scope ThisComputer) | `FilterPresetStore` (`filters/...`, OperatorLocal); buttons then write `SliceModel::setFilter` | n/a |
 | DSP > Options | Station-backed settings, applied on the Core (F2); high-resolution graph unavailable; the nine TX combos **Transmit (gated here)** | `DspOptions*` keys; the Core applies an accepted RX write or remove to every slice whose mode group reads that key, once per 50 ms coalesce window (`RadioModel::scheduleRemoteDspOptionsApply`, `kDspOptionsApplyCoalesceMs`), with no mode change; the window's own `rebuildDspOptionsForMode` stays local; FIR graph checkbox disabled remotely; `DspOptionsPage::setTransmitPermitted` gates the SSB/AM, FM and Digital TX buffer, filter size and filter type combos; the receive-only Core refuses `DspOptions*Tx` settings writes and removes with the TransmitModel refusal reason (`StationServer::handleSettingsWrite`, `handleSettingsRemove`) and still accepts the RX keys | `tst_remote_gui_gating` (high-resolution cases, `remoteDspOptionsTransmitCombosFollowThePermission`), `tst_station_session` (`receiveOnlyStationRefusesTransmitDspOptionsSettingsWrites`, `receiveOnlyStationRefusesTransmitDspOptionsSettingsRemoves`, `acceptedReceiveDspOptionsWriteAppliesToMatchingSlices`), `tst_dsp_options_per_mode_apply` (`remote_rx_burst_applies_matching_slice_once`, `remote_rx_burst_across_groups_applies_each_slice_once`, `remote_unrelated_keys_apply_nothing`, `remote_apply_is_core_only`, `mode_group_mapping_is_pinned`); hardware pending (S1) |
-| Display > Spectrum Defaults, Spectrum Peaks, Waterfall Defaults, Grid & Scales, Multimeter, 3D View | GUI-local display; `DisplayFft*`, `DisplaySpectrumFps`, `MultimeterDelayMs` are Station keys; grid dB writes the mirrored `PanadapterModel` | `SpectrumWidget`, `FFTEngine`, `MeterPoller` setters | `tst_remote_fft_production`, `tst_remote_spectrum_render`; hardware pending (S1) |
+| Display > Spectrum Defaults, Spectrum Peaks, Waterfall Defaults, Grid & Scales, Multimeter, 3D View | GUI-local display (Spectrum Defaults, Grid & Scales and Multimeter scope Mixed; Spectrum Peaks, Waterfall Defaults and 3D View scope ThisComputer); `DisplayFft*`, `DisplaySpectrumFps`, `MultimeterDelayMs` are Station keys; grid dB writes the mirrored `PanadapterModel`. While the Core's settings are unavailable, only those controls are disabled with the Core reason: Spectrum Defaults FFT size, window, Hz/bin target and frame rate (slider and box); Grid & Scales dB max, dB min and the copy from the waterfall thresholds; Multimeter sample interval. Spectrum Peaks, Waterfall Defaults and 3D View write no Core key | `SpectrumWidget`, `FFTEngine`, `MeterPoller` setters; each page's `setStationSettingsAvailable` | `tst_remote_fft_production`, `tst_remote_spectrum_render`, `tst_remote_gui_gating` (`disconnectedRemoteSetupPerPageTable`); hardware pending (S1) |
 | Display > RX2 Display | Placeholder | all controls disabled | n/a |
-| Display > TX Display | GUI-local display of TX; TxAnalyzer absent remotely, setters null-guarded | `SpectrumWidget` TX setters | n/a |
+| Display > TX Display | GUI-local display of TX (scope Mixed); TxAnalyzer absent remotely, setters null-guarded. The nine TX analyzer controls (`DisplayTx*` Station keys) are disabled with the Core reason while the Core's settings are unavailable | `SpectrumWidget` TX setters; `TxDisplayPage::setStationSettingsAvailable` | `tst_remote_gui_gating` (`disconnectedRemoteSetupPerPageTable`) |
 | Transmit > Power, TX Profiles, Speech Processor, DEXP/VOX | Transmit | existing six-leaf pass | `tst_remote_tx_presentation` |
 | Appearance > Colors & Theme, Meter Styles | GUI-local | `SpectrumWidget` colours, `AppearanceSmallModeFilterOnVfos` | n/a |
 | Appearance > Gradients, Skins, Collapsible Display | Placeholder | disabled | n/a |
@@ -178,7 +179,7 @@ visible and are not listed.
 | Keyboard > Shortcuts | Placeholder | no writes | n/a |
 | Test > Two-Tone IMD | **Transmit (gated here)** | `TransmitModel::setTwoTone*` (not mirrored) | `tst_remote_gui_gating` (`remoteTransmitOnlySetupLeavesFollowThePermission`) |
 | Diagnostics > Radio Status, Connection Quality, Logs, Logging & Performance | GUI-local | read-only or local keys | n/a |
-| Diagnostics > Settings Validation, Export / Import | GUI-local file operations | `settingsHygiene()`, AppSettings file copy | hardware pending (S1) |
+| Diagnostics > Settings Validation, Export / Import | GUI-local file operations (Settings Validation scope Mixed, Export / Import scope ThisComputer); Settings Validation Reset and Forget change `hardware/*` (Station) keys and are disabled with the Core reason while the Core's settings are unavailable, and a Yes given after the link dropped under the open question changes nothing; Export / Import has no Core controls | `settingsHygiene()`, AppSettings file copy; `SettingsValidationPage::setStationSettingsAvailable` | `tst_remote_gui_gating` (`disconnectedRemoteSetupPerPageTable`, `settingsValidationYesAfterTheLinkDropsWritesNothing`); hardware pending (S1) |
 | Diagnostics > Signal Generator, Hardware Tests | Placeholder | NYI | n/a |
 
 ### Gating added by this pass
@@ -187,10 +188,51 @@ visible and are not listed.
   and leaf tooltip: DSP > CFC and Test > Two-Tone IMD follow the transmit
   permission; Hardware Config, DDC Routing and RF-Kit are declared
   unavailable in a remote session (`SetupDialog::markRemoteUnavailable`).
-- Pages the local-DSP gate disables (Audio > Devices, TX Input, VAX, TCI,
-  Advanced) now show the reason "These settings control audio and signal
-  processing on this computer. While connected to a Core, the Core does that
-  work, so they cannot be changed here." instead of an unexplained grey page.
+- Pages the local-DSP gate disables (Audio > VAX, TCI, Advanced) now show
+  the reason "These settings control audio and signal processing on this
+  computer. While connected to a Core, the Core does that work, so they
+  cannot be changed here." instead of an unexplained grey page. Audio >
+  Devices and TX Input were in this list until the R3 remote window Setup
+  plan (Task 1): every Setup page now declares a scope (`SetupScope`:
+  ThisComputer, Core, Mixed), the backend strip no longer counts as local
+  DSP, and those two pages work in a remote window (rows above). A
+  ThisComputer page that reaches an audited accessor is disabled, logged at
+  critical and fails the Setup sweep. A remote window also skips the VAX
+  first-run check (`tst_remote_gui_gating`,
+  `vaxFirstRunCheckRunsOnlyInALocalWindow`).
+- Setup in a disconnected remote window (R3 remote window Setup plan, Task
+  2): File > Settings... opens in every state. Pages declared ThisComputer
+  stay usable (a Devices change made while disconnected is saved on this
+  computer and used once connected); Core pages are disabled with "Connect
+  to the Core to change these." above the page and as the page and leaf
+  tooltip, and a Core page opened before the Core's settings first arrive
+  is an empty stand-in rather than a page built from this computer's
+  defaults; Mixed pages disable only their Core controls with that reason.
+  Nothing is sent to the Core, and nothing is held as an offline edit.
+  When the Core's settings return, every realized Core and Mixed page built
+  from an older snapshot is rebuilt (a later snapshot on a live session
+  rebuilds it again); after Disconnect the pages keep the Core's last
+  values, disabled. That reason comes before the transmit and local-DSP
+  reasons on a page that has several (`tst_remote_gui_gating`
+  `disconnectedRemoteSetupPerPageTable`,
+  `reconnectRebuildsSetupPagesFromTheCoresValues`,
+  `setupPageRebuildIsGuardedAgainstReentry`,
+  `localSetupIgnoresStationSettingsAvailability`; `tst_settings_scope`
+  `everyThisComputerPageKeyIsThisComputers`; `tst_remote_window_harness`
+  `disconnectedWindowSetupKeepsThisComputersSettings`).
+- Setup fix wave (R3 remote window Setup plan, final review): building a
+  remote window, or showing a Core page while disconnected, writes none of
+  the Core's settings, so the next connect never says that settings
+  changed while the link was down did not stick when the operator changed
+  none (the band plan name, the TCI compatibility flags and gains, and DSP
+  Options' high-resolution filter setting were the writers;
+  `tst_remote_window_harness` `freshWindowFirstConnectRaisesNoOfflineEditWarning`,
+  `setupOpenedWhileDisconnectedRecordsNoEdit`). Connected to a Core that
+  has not sent its settings, Core pages wait as stand-ins with "The Core
+  has not sent its settings." and nothing is sent
+  (`coreSetupPagesWaitForTheCoresSettingsNotAnySnapshot`). A page is never
+  rebuilt under its own open dialog
+  (`setupPageIsNotRebuiltUnderItsOwnOpenDialog`).
 - The RX applet ATT/S-ATT row and RX1 preamp, and the General > Options Step
   Attenuator and Auto Attenuate groups: "The attenuator and preamp cannot be
   changed from a remote window yet."
@@ -369,7 +411,7 @@ commands or Core's independent refusal of TX writes.
 | TX-slice badge and menu | Retain the indicator; suppress badge handoff and disable the actual dynamically constructed context action. Tests execute the nested menu and verify no remote handoff, with local handoff retained. |
 | RX-bypass-on-TX | Disable BYPS and its writer callback. Do not restrict the TX-labelled antenna selector used for TRX receive routing. |
 | TX Equalizer | Disable the actual Tools QAction and guard activation. The applet's alternate context callback is also guarded. Tests show no remote editor and successful local editor launch. |
-| TX-specific Setup | Six explicit leaves: Audio TX Input/TX Profile; Transmit Power/TX Profiles/Speech Processor/DEXP/VOX. Content remains readable with a visible reason; editing and TX-EQ cross-links are disabled. Tests cover each page, local enablement, permission changes and preservation of the independent local-DSP gate. |
+| TX-specific Setup | Six explicit leaves: Audio TX Input/TX Profile; Transmit Power/TX Profiles/Speech Processor/DEXP/VOX (since September 23, Audio TX Input gates only its controls held for the radio; see the Setup leaves table). Content remains readable with a visible reason; editing and TX-EQ cross-links are disabled. Tests cover each page, local enablement, permission changes and preservation of the independent local-DSP gate. |
 
 VAX Setup configures receive export through the audio engine. It retains its
 existing resource restriction; it is not newly labelled a TX-only page.

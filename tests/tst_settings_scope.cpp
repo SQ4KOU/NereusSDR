@@ -402,6 +402,134 @@ bool isCoreExempt(const QString& key)
     return false;
 }
 
+// ---------------------------------------------------------------------
+// R-R3-21 / R-R3-23: the ThisComputer page sweep.
+//
+// A Setup page registered SetupScope::ThisComputer works the same in a
+// remote window whether or not it is connected, and nothing on it is
+// disabled while the Core's settings are unavailable. That is only honest
+// if every setting it writes is this computer's own. The pages and their
+// classes are read from SetupDialog.cpp's registrations, so a new
+// ThisComputer page is covered the day it is added; each class's own
+// member-function bodies (out of line in any src/gui file, and inline in
+// its class declaration) are scanned with the same key regexes as the
+// completeness sweep.
+
+// Text from `open` (the index of an opening brace) through its matching
+// closing brace, or empty when unbalanced. Braces inside string and
+// character literals are skipped; comments are not special-cased, which
+// is good enough for these files (a stray brace in a comment would show
+// up as an unbalanced body, and the floors below would fail loudly).
+QString bracedBody(const QString& text, qsizetype open)
+{
+    int depth = 0;
+    QChar quote;
+    for (qsizetype i = open; i < text.size(); ++i) {
+        const QChar c = text.at(i);
+        if (!quote.isNull()) {
+            if (c == QLatin1Char('\\')) { ++i; continue; }
+            if (c == quote) { quote = QChar(); }
+            continue;
+        }
+        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { quote = c; continue; }
+        if (c == QLatin1Char('{')) { ++depth; }
+        if (c == QLatin1Char('}') && --depth == 0) {
+            return text.mid(open, i - open + 1);
+        }
+    }
+    return QString();
+}
+
+struct ThisComputerPage {
+    QString label;
+    QStringList classes;
+};
+
+// Every `registerPage(parent, "Label", SetupScope::ThisComputer, ...)` in
+// SetupDialog.cpp, with the classes its factory constructs (`new Class(`
+// up to the next registration).
+QList<ThisComputerPage> thisComputerPages(const QString& setupDialogSource)
+{
+    static const QRegularExpression registration(QStringLiteral(
+        "registerPage\\(\\s*[\\w>-]+\\s*,\\s*\"([^\"]+)\"\\s*,\\s*SetupScope::(\\w+)"));
+    static const QRegularExpression constructed(QStringLiteral("\\bnew\\s+([A-Z]\\w+)\\s*[({;]"));
+    QList<QRegularExpressionMatch> matches;
+    auto it = registration.globalMatch(setupDialogSource);
+    while (it.hasNext()) { matches << it.next(); }
+    QList<ThisComputerPage> pages;
+    for (int i = 0; i < matches.size(); ++i) {
+        if (matches.at(i).captured(2) != QStringLiteral("ThisComputer")) { continue; }
+        const qsizetype begin = matches.at(i).capturedEnd(0);
+        const qsizetype end = (i + 1 < matches.size()) ? matches.at(i + 1).capturedStart(0)
+                                                        : setupDialogSource.size();
+        ThisComputerPage page{matches.at(i).captured(1), {}};
+        auto classes = constructed.globalMatch(setupDialogSource.mid(begin, end - begin));
+        while (classes.hasNext()) {
+            const QString name = classes.next().captured(1);
+            if (!name.startsWith(QLatin1Char('Q')) && !page.classes.contains(name)) {
+                page.classes << name;
+            }
+        }
+        pages << page;
+    }
+    return pages;
+}
+
+// Member-function bodies (out of line) and the class declaration body
+// (inline members) of `className`, across every .h/.cpp under `root`.
+QStringList classBodies(const QString& root, const QString& className)
+{
+    const QRegularExpression definition(
+        QStringLiteral("\\b%1::~?\\w+\\s*\\(").arg(QRegularExpression::escape(className)));
+    const QRegularExpression declaration(
+        QStringLiteral("\\bclass\\s+%1\\b[^;{]*\\{").arg(QRegularExpression::escape(className)));
+    QStringList bodies;
+    QDirIterator it(root, {QStringLiteral("*.h"), QStringLiteral("*.cpp")},
+                    QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        QFile f(it.next());
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) { continue; }
+        const QString text = QString::fromUtf8(f.readAll());
+        if (!text.contains(className)) { continue; }
+        auto defs = definition.globalMatch(text);
+        while (defs.hasNext()) {
+            const QRegularExpressionMatch m = defs.next();
+            // A definition reaches its body's `{` before any `;`; a call
+            // or a declaration reaches `;` first.
+            const qsizetype brace = text.indexOf(QLatin1Char('{'), m.capturedEnd(0));
+            const qsizetype semi = text.indexOf(QLatin1Char(';'), m.capturedEnd(0));
+            if (brace < 0 || (semi >= 0 && semi < brace)) { continue; }
+            const QString body = bracedBody(text, brace);
+            if (!body.isEmpty()) { bodies << body; }
+        }
+        auto decls = declaration.globalMatch(text);
+        while (decls.hasNext()) {
+            const QRegularExpressionMatch m = decls.next();
+            const QString body = bracedBody(text, m.capturedEnd(0) - 1);
+            if (!body.isEmpty()) { bodies << body; }
+        }
+    }
+    return bodies;
+}
+
+QSet<QString> keysIn(const QString& text)
+{
+    QSet<QString> keys;
+    auto first = firstArgKeyRegex().globalMatch(text);
+    while (first.hasNext()) {
+        const QRegularExpressionMatch m = first.next();
+        if (isLineCommented(text, m.capturedStart(0))) { continue; }
+        keys.insert(reconstructFirstArgKey(m.captured(2)));
+    }
+    auto second = secondArgKeyRegex().globalMatch(text);
+    while (second.hasNext()) {
+        const QRegularExpressionMatch m = second.next();
+        if (isLineCommented(text, m.capturedStart(0))) { continue; }
+        keys.insert(kSyntheticMac + m.captured(2));
+    }
+    return keys;
+}
+
 } // namespace
 
 class TstSettingsScope : public QObject {
@@ -449,6 +577,42 @@ private slots:
             << QStringLiteral("audio/Speakers/DeviceName") << int(SettingsScope::OperatorLocal);
         QTest::newRow("tx/preconnect/Mic_Source is OperatorLocal (local mic device)")
             << QStringLiteral("tx/preconnect/Mic_Source") << int(SettingsScope::OperatorLocal);
+
+        // R-R3-23 / R-R3-36: Setup > Audio > Devices (a ThisComputer page)
+        // and the PC Mic half of TX Input save these in a remote window.
+        // Every field AudioDeviceConfig::saveToSettings writes under the
+        // three card prefixes, plus the Headphones enable, must stay on
+        // this computer: were one Station, picking a sound card in a
+        // remote window would write it to the Core. Built by concatenation
+        // (AudioDeviceConfig.cpp), so the completeness sweep cannot see
+        // them; these rows are their only cover.
+        for (const char* card : {"Speakers", "Headphones", "TxInput"}) {
+            for (const char* field : {"DriverApi", "DeviceName", "SampleRate", "BitDepth",
+                                      "Channels", "BufferSamples", "ExclusiveMode",
+                                      "EventDriven", "BypassMixer", "ManualLatencyMs"}) {
+                const QString key = QStringLiteral("audio/%1/%2")
+                                        .arg(QLatin1String(card), QLatin1String(field));
+                QTest::newRow(qPrintable(key + QStringLiteral(" is OperatorLocal (this computer's device)")))
+                    << key << int(SettingsScope::OperatorLocal);
+            }
+        }
+        QTest::newRow("audio/Headphones/Enabled is OperatorLocal (this computer's device)")
+            << QStringLiteral("audio/Headphones/Enabled") << int(SettingsScope::OperatorLocal);
+        // The radio's own microphone input stays with the radio: TX Input's
+        // mic source selector is a Core control in a remote window.
+        QTest::newRow("hardware/<mac>/tx/Mic_Source is Station (the radio's mic input)")
+            << QStringLiteral("hardware/00:1C:2D:05:37:2A/tx/Mic_Source")
+            << int(SettingsScope::Station);
+        // R-R3-10: what a remote window's Advanced Reset removes (this
+        // computer's audio/* keys) and what it leaves for the Core.
+        for (const char* key : {"audio/VacFeedback/1/Gain", "audio/SendIqToVax",
+                                "audio/TxMonitorToVax", "audio/MuteVaxDuringTxOnOtherSlice",
+                                "audio/FirstRunComplete", "audio/LastDetectedCables",
+                                "audio/Vax1/DeviceName"}) {
+            QTest::newRow(qPrintable(QStringLiteral("%1 is OperatorLocal (Advanced Reset removes it)")
+                                         .arg(QLatin1String(key))))
+                << QString::fromLatin1(key) << int(SettingsScope::OperatorLocal);
+        }
 
         // A realistic fully-qualified hardwareValue-routed key (a real
         // MAC-shaped segment this time, not "oc") -- proves the
@@ -607,6 +771,98 @@ private slots:
         QFETCH(bool, owned);
         QCOMPARE(isModelOwnedNotchSettingsKey(key), owned);
         QCOMPARE(isModelOwnedDspSettingsKey(key), owned);
+    }
+
+    // ---- R-R3-21 / R-R3-23: ThisComputer pages write only this
+    // computer's settings. A disconnected remote window leaves these
+    // pages fully usable, so a Core key here would be changed while the
+    // Core cannot hear about it. --------------------------------------
+    void everyThisComputerPageKeyIsThisComputers()
+    {
+        const QString root = QStringLiteral(NEREUS_SOURCE_DIR);
+        QFile dialog(root + QStringLiteral("/src/gui/SetupDialog.cpp"));
+        QVERIFY2(dialog.open(QIODevice::ReadOnly | QIODevice::Text),
+                 "SetupDialog.cpp not found; NEREUS_SOURCE_DIR is probably wrong");
+        const QList<ThisComputerPage> pages =
+            thisComputerPages(QString::fromUtf8(dialog.readAll()));
+
+        // Floors: Task 1 registered 19 ThisComputer leaves and the R3 Setup
+        // fix wave five more (Filter Presets, Spectrum Peaks, Waterfall
+        // Defaults, 3D View, Export / Import); a registration regex that
+        // stopped matching would otherwise pass vacuously.
+        QVERIFY2(pages.size() >= 22,
+                 qPrintable(QStringLiteral("only %1 ThisComputer registrations found")
+                                .arg(pages.size())));
+
+        QStringList offenders;
+        int bodiesScanned = 0;
+        QSet<QString> keysSeen;
+        for (const ThisComputerPage& page : pages) {
+            QVERIFY2(!page.classes.isEmpty(),
+                     qPrintable(QStringLiteral("no page class found for ThisComputer leaf \"%1\"")
+                                    .arg(page.label)));
+            for (const QString& className : page.classes) {
+                const QStringList bodies = classBodies(root + QStringLiteral("/src/gui"), className);
+                QVERIFY2(!bodies.isEmpty(),
+                         qPrintable(QStringLiteral("no source found for %1 (leaf \"%2\")")
+                                        .arg(className, page.label)));
+                bodiesScanned += bodies.size();
+                for (const QString& body : bodies) {
+                    for (const QString& key : keysIn(body)) {
+                        keysSeen.insert(key);
+                        if (classifySettingsKey(key) != SettingsScope::OperatorLocal) {
+                            offenders << QStringLiteral("%1 (%2, leaf \"%3\")")
+                                             .arg(key, className, page.label);
+                        }
+                    }
+                }
+            }
+        }
+        QVERIFY2(bodiesScanned > 40,
+                 qPrintable(QStringLiteral("only %1 function bodies scanned").arg(bodiesScanned)));
+        QStringList seen(keysSeen.cbegin(), keysSeen.cend());
+        seen.sort();
+        // Most ThisComputer leaves are placeholders or build their keys at
+        // run time (the Devices cards, "audio/<card>/..."), so the literal
+        // population is small: 4 when this was written. The canary is a key
+        // Appearance > Meter Styles writes directly; losing it means the
+        // class-body extraction broke, not that the page changed.
+        QVERIFY2(keysSeen.contains(QStringLiteral("AppearanceSmallModeFilterOnVfos"))
+                     && keysSeen.size() >= 3,
+                 qPrintable(QStringLiteral("only %1 keys found on ThisComputer pages; the "
+                                           "extraction probably broke: %2")
+                                .arg(keysSeen.size()).arg(seen.join(QStringLiteral(", ")))));
+        offenders.sort();
+        offenders.removeDuplicates();
+        QVERIFY2(offenders.isEmpty(),
+                 qPrintable(QStringLiteral("ThisComputer Setup pages write the Core's settings: %1")
+                                .arg(offenders.join(QStringLiteral(", ")))));
+    }
+
+    // The sweep above must be able to fail: a Core key in a ThisComputer
+    // class body is reported, an ordinary member call is not a definition.
+    void thisComputerSweepSeesKeysInClassBodies()
+    {
+        const QString source = QStringLiteral(
+            "    registerPage(general, \"Probe\", SetupScope::ThisComputer,\n"
+            "                 [this] { return new ProbePage(m_model); });\n"
+            "    registerPage(general, \"Other\", SetupScope::Core,\n"
+            "                 [this] { return new OtherPage(m_model); });\n");
+        const QList<ThisComputerPage> pages = thisComputerPages(source);
+        QCOMPARE(pages.size(), 1);
+        QCOMPARE(pages.first().label, QStringLiteral("Probe"));
+        QCOMPARE(pages.first().classes, QStringList{QStringLiteral("ProbePage")});
+
+        const QString body = QStringLiteral(
+            "void ProbePage::apply()\n{\n"
+            "    AppSettings::instance().setValue(QStringLiteral(\"Region\"), text);\n"
+            "    auto& s = AppSettings::instance();\n"
+            "    s.setValue(QStringLiteral(\"DisplayGridColor\"), \"}\");\n}\n");
+        const qsizetype brace = body.indexOf(QLatin1Char('{'));
+        const QSet<QString> keys = keysIn(bracedBody(body, brace));
+        QCOMPARE(keys, (QSet<QString>{QStringLiteral("Region"),
+                                      QStringLiteral("DisplayGridColor")}));
+        QCOMPARE(classifySettingsKey(QStringLiteral("Region")), SettingsScope::Station);
     }
 
     // ---- Step 4: the completeness sweep --------------------------------

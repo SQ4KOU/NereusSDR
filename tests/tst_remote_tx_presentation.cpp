@@ -60,7 +60,11 @@ private slots:
     void setupPagesFollowPermissionWithoutRemovingResourceGates_data()
     {
         QTest::addColumn<QString>("label");
-        for (const char* label : {"TX Input", "TX Profile", "Power", "TX Profiles",
+        // Audio > TX Input is not a whole-page transmit leaf since R-R3-36:
+        // its PC microphone controls are this computer's and stay live, and
+        // only its controls held for the radio follow the permission
+        // (tst_remote_gui_gating, remoteTxInputKeepsThisComputersMicrophoneUsable).
+        for (const char* label : {"TX Profile", "Power", "TX Profiles",
                                   "Speech Processor", "DEXP/VOX"}) {
             QTest::newRow(label) << QString::fromLatin1(label);
         }

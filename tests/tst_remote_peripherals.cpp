@@ -90,6 +90,7 @@ private slots:
     void unknownCapabilityKeepsRemoteTgxlInert();
     void remoteParentPageExposesOnlyStationBackedControls();
     void remoteMasterShowsPendingAndRefusalWithoutLocalActivation();
+    void coreTunerErrorsAreShownInUserWords();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -262,7 +263,9 @@ void RemotePeripheralsTest::unknownCapabilityKeepsRemoteTgxlInert()
     auto* status = page.findChild<QLabel*>(QStringLiteral("tgxlStatusLabel"));
     QVERIFY(connect && status);
     QVERIFY(!connect->isEnabled());
-    QVERIFY(status->text().contains(QStringLiteral("does not support")));
+    QCOMPARE(status->text(),
+             QStringLiteral("This Core does not offer Tuner Genius XL control to this app."));
+    QVERIFY2(OperatorWording::isPlain(status->text()), qPrintable(status->text()));
 
     // Capability negotiation can complete without a radio connection-state
     // change; the dedicated station-link signal must refresh this row.
@@ -276,6 +279,55 @@ void RemotePeripheralsTest::unknownCapabilityKeepsRemoteTgxlInert()
                                       Q_ARG(int, 0)));
     QCOMPARE(link.configureCalls, 0);
     QCOMPARE(link.disconnectCalls, 0);
+}
+
+// R-R3-17, R-R3-21: the Core's Tuner Genius XL errors reach the row in user
+// words; the Core's own text (here as StationTgxlController and
+// TgxlConnection word it) is unchanged on the wire and kept in the log.
+void RemotePeripheralsTest::coreTunerErrorsAreShownInUserWords()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    RecordingTgxlLink link;
+    model.attachStation(&link);
+
+    PeripheralsPage page(&model);
+    auto* status = page.findChild<QLabel*>(QStringLiteral("tgxlStatusLabel"));
+    QVERIFY(status);
+
+    const QString identity = QStringLiteral(
+        "Expected TunerGenius/TunerGeniusXL at the connected endpoint; observed PowerGeniusXL "
+        "(serial 1234-5678).");
+    for (const auto phase : {TunerModel::ConnectionPhase::Error,
+                             TunerModel::ConnectionPhase::Retrying}) {
+        model.tunerModel()->setStationConnectionState(state(phase, {}, 0, identity));
+        QCOMPARE(model.tunerModel()->connectionError(), identity);
+        QVERIFY2(status->text().contains(QStringLiteral(
+                     "The device at this address is not a Tuner Genius. Check the tuner's "
+                     "address and port.")),
+                 qPrintable(status->text()));
+        QVERIFY2(OperatorWording::isPlain(status->text()), qPrintable(status->text()));
+    }
+
+    for (const QString& raw :
+         {QStringLiteral("No matching TGXL discovery announcement for 192.0.2.40:9010. Check the "
+                         "tuner address, port and station LAN discovery."),
+          QStringLiteral("TGXL identity serial mismatch: expected 1234-5678, observed 8765-4321"),
+          QStringLiteral("TGXL identity was rejected by station discovery"),
+          QStringLiteral("TGXL native info failed with code 3"),
+          QStringLiteral("TGXL native info omitted a nonempty serial"),
+          QStringLiteral("TGXL native identity timed out"),
+          QStringLiteral("TGXL discovery approval timed out for serial 1234-5678")}) {
+        model.tunerModel()->setStationConnectionState(
+            state(TunerModel::ConnectionPhase::Error, {}, 0, raw));
+        QVERIFY2(!status->text().contains(raw), qPrintable(status->text()));
+        QVERIFY2(!status->text().contains(QStringLiteral("TGXL")), qPrintable(status->text()));
+        QVERIFY2(OperatorWording::isPlain(status->text()), qPrintable(status->text()));
+    }
+
+    // An error with no words says where the reason is, not "Error: ".
+    model.tunerModel()->setStationConnectionState(
+        state(TunerModel::ConnectionPhase::Error, {}, 0, {}));
+    QCOMPARE(status->text(), QStringLiteral("Error: The reason is in the log."));
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

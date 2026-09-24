@@ -1301,11 +1301,14 @@ void PeripheralsPage::refreshRemoteTgxlRow()
     ipEdit->setEnabled(available && !connected && !active);
     portSpin->setEnabled(available && !connected && !active);
     if (!available) {
-        const QString reason = tr("Remote TGXL control is unavailable because this station does not support it.");
+        const QString reason = tr("This Core does not offer Tuner Genius XL control to this app.");
         status->setText(reason);
         connectButton->setToolTip(reason);
         return;
     }
+    // The Core's own reason, shown in user words; the raw reason is logged.
+    const QString error = tuner->connectionError().isEmpty()
+        ? QString() : OperatorReasonText::forDisplay(tuner->connectionError());
     QString text;
     switch (phase) {
     case TunerModel::ConnectionPhase::Disabled: text = tr("Disabled at station"); break;
@@ -1314,13 +1317,15 @@ void PeripheralsPage::refreshRemoteTgxlRow()
     case TunerModel::ConnectionPhase::Connecting: text = tr("Connecting at station"); break;
     case TunerModel::ConnectionPhase::Identifying: text = tr("Identifying device"); break;
     case TunerModel::ConnectionPhase::Retrying:
-        text = tuner->connectionError().isEmpty()
+        text = error.isEmpty()
             ? tr("Retrying at station")
-            : tr("Retrying at station: %1").arg(tuner->connectionError());
+            : tr("Retrying at station: %1").arg(error);
         break;
     case TunerModel::ConnectionPhase::Connected:
         text = tr("Connected: %1 %2").arg(tuner->deviceModel(), tuner->deviceSerial()); break;
-    case TunerModel::ConnectionPhase::Error: text = tr("Error: %1").arg(tuner->connectionError()); break;
+    case TunerModel::ConnectionPhase::Error:
+        text = tr("Error: %1").arg(OperatorReasonText::forDisplay(tuner->connectionError()));
+        break;
     }
     status->setText(text);
     connectButton->setToolTip(QString());

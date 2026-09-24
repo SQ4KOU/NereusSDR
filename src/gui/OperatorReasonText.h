@@ -30,6 +30,11 @@
 //                                    and LAN discovery reasons; the table's
 //                                    keys for the source check. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  This app's "does not support"
+//                                    refusals in Core words, the NNR
+//                                    adapter's reasons and the Core's Tuner
+//                                    Genius XL checks. AI-assisted via
+//                                    Anthropic Claude Code.
 //   2026-09-23  J.J. Boyd / KG4VCF  Receiver audio stop reasons (R-R3-43).
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================

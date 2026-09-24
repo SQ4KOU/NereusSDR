@@ -37,6 +37,11 @@
 //                 Later the same day: one periodic sampler
 //                 (m_dspLoadSampler, m_dspLoadTimer) owns the intervals and
 //                 receiverDspLoad returns its cached snapshot.
+//   2026-09-23 : R-R3-23 / R-R3-16 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. localAudioDevices(), the audio
+//                 engine handed out uncounted for this computer's own
+//                 devices, and the setNameForTest seam. NereusSDR-original;
+//                 no Thetis logic.
 // =================================================================
 
 //=================================================================
@@ -486,6 +491,22 @@ public:
     ReceiverManager*  receiverManager()  { noteLocalDspHandOut("receiverManager"); return m_receiverManager; }
     AudioEngine*      audioEngine()      { noteLocalDspHandOut("audioEngine");     return m_audioEngine;     }
     WdspEngine*       wdspEngine()       { noteLocalDspHandOut("wdspEngine");      return m_wdspEngine;      }
+
+    // R-R3-23 / R-R3-36: this computer's own sound devices. The same
+    // AudioEngine audioEngine() returns, handed out WITHOUT bumping the
+    // local-DSP audit below. A remote window's engine is not inert for this
+    // purpose: it drives this computer's speakers for remote playback, and
+    // its capture supervisor opens this computer's microphone for Test Mic.
+    // So a Setup page that only picks those devices is working, not dead,
+    // and must not be caught by the SetupDialog gate.
+    //
+    // Allowed only where that is true. Check 3 of
+    // scripts/verify-no-gui-dsp-access.py lists the files that may call it
+    // (the audio backend strip helper in SetupDialog, the Devices and TX
+    // Input pages, MainWindow's title-bar wiring, RemoteMediaController)
+    // and fails on any other caller, so a new use has to come through that
+    // list and say why the object it reaches is live on a remote model.
+    AudioEngine*      localAudioDevices() { return m_audioEngine; }
 
     // ── Remote-daemon R2 Task 20: the reach-through audit ────────────────
     //
@@ -2004,6 +2025,12 @@ public:
 
 #ifdef NEREUS_BUILD_TESTS
 public:
+    // R-R3-16: the radio name a local model learns on connect
+    // (m_name = info.displayName()). MainWindow's automatic Connections
+    // open on a Disconnected state keys on a non-empty name, and a test has
+    // no other way to give a local model one without a live connection.
+    void setNameForTest(const QString& name) { m_name = name; }
+
     // Test-only: inject board caps without a live radio connection.
     // Mirrors P1RadioConnection::setBoardForTest pattern.
     void runAutoAgcTickForTest() { updateAutoAgc(); }

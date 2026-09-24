@@ -10,6 +10,15 @@
 //   2026-04-20 — Original implementation for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-21 / R-R3-10: Settings Validation's Reset and Forget change
+//                 the radio's settings, which a remote window holds on
+//                 the Core; they are disabled while it does not have them.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
+//   2026-09-23 - R3 Setup fix wave (R-R3-21, R-R3-10): Reset and Forget
+//                 re-check that availability after their question
+//                 returns. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "DiagnosticsPhaseHPages.h"
@@ -159,6 +168,12 @@ void SettingsValidationPage::refresh()
     }
 }
 
+void SettingsValidationPage::setStationSettingsAvailable(bool available, const QString& reason)
+{
+    m_stationSettingsAvailable = available;
+    gateStationControls({m_resetBtn, m_forgetBtn}, available, reason);
+}
+
 void SettingsValidationPage::onResetClicked()
 {
     if (m_model == nullptr) { return; }
@@ -166,7 +181,9 @@ void SettingsValidationPage::onResetClicked()
         this, QStringLiteral("Reset Settings"),
         QStringLiteral("Reset all per-board settings to defaults for this radio?"),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (reply == QMessageBox::Yes) {
+    // The Core's settings can go away while the question is open; Yes then
+    // changes nothing (R3 Setup fix wave, final review M2).
+    if (reply == QMessageBox::Yes && m_stationSettingsAvailable) {
         m_model->settingsHygiene().resetSettingsToDefaults(
             QString{}, m_model->boardCapabilities());
         refresh();
@@ -180,7 +197,8 @@ void SettingsValidationPage::onForgetClicked()
         this, QStringLiteral("Forget Radio"),
         QStringLiteral("Forget all settings for this radio?"),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (reply == QMessageBox::Yes) {
+    // See onResetClicked(): re-checked after the question returns.
+    if (reply == QMessageBox::Yes && m_stationSettingsAvailable) {
         m_model->settingsHygiene().forgetRadio(QString{});
         refresh();
     }

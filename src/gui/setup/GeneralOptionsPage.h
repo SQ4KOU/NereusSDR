@@ -10,6 +10,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - R-R3-21 / R-R3-10: the Region combo (a Core setting) is disabled
+//                 while a remote window does not have the Core's settings.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -85,6 +89,11 @@ public:
     /// update visibility correctly.  BoardCapabilities::isRxOnlySku
     /// (NereusSDR-original) is the authoritative source.
     void setReceiveOnlyVisible(bool visible);
+
+    // R-R3-21 / R-R3-10: the Region is the Core's setting (where the radio is),
+    // so its combo is disabled while the Core's settings are unavailable;
+    // the rest of the page is this computer's.
+    void setStationSettingsAvailable(bool available, const QString& reason) override;
 
 signals:
     // Phase 3M-4 Task 11: PureSignal Info Bar checkboxes.

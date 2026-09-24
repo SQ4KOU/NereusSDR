@@ -19,6 +19,10 @@
 //                level meters use placeholder values; real meter wiring
 //                + setup/show-clients navigation in Phase 23.
 //                AppSettings keys: TciSliceAGain, TciTxGain.
+//   2026-09-23 — R3 Setup fix wave (R-R3-17, R-R3-21) by J.J. Boyd
+//                (KG4VCF); AI-assisted transformation via Anthropic
+//                Claude Code. The startup gain push no longer writes the
+//                value it just read back to settings.
 // =================================================================
 
 #ifdef HAVE_WEBSOCKETS
@@ -133,12 +137,17 @@ TciApplet::TciApplet(TciServer* server, QWidget* parent)
     // (linear 1.0, no attenuation) which matches the TciServer defaults --
     // but persisted non-zero values must propagate or the slider's UI
     // position would lie about what the audio path is doing.
+    //
+    // Apply only, never save: the values were just read from settings, and
+    // in a remote window those keys belong to the Core, so writing them
+    // back before the Core's settings arrive would count as an edit made
+    // while the link was down (R3 Setup fix wave, R-R3-17 / R-R3-21).
     if (m_server) {
         if (m_sliceAGain) {
-            onSliceAGainChanged(m_sliceAGain->value());
+            applySliceAGain(m_sliceAGain->value());
         }
         if (m_txGain) {
-            onTxGainChanged(m_txGain->value());
+            applyTxGain(m_txGain->value());
         }
     }
 
@@ -572,13 +581,17 @@ void TciApplet::onShowClientsClicked()
 // (AF Gain on the speaker bus); this is a TCI-only trim.
 void TciApplet::onSliceAGainChanged(int dB)
 {
-    if (m_sliceAGainLabel) {
-        m_sliceAGainLabel->setText(QStringLiteral("%1").arg(dB));
-    }
     auto& s = AppSettings::instance();
     s.setValue(QLatin1String(kKeySliceAGain), QString::number(dB));
     s.save();
+    applySliceAGain(dB);
+}
 
+void TciApplet::applySliceAGain(int dB)
+{
+    if (m_sliceAGainLabel) {
+        m_sliceAGainLabel->setText(QStringLiteral("%1").arg(dB));
+    }
     if (m_server) {
         const float lin = std::pow(10.0f, dB / 20.0f);
         m_server->setSliceRxGainLinear(0, lin);  // slice "A" == rx 0
@@ -591,13 +604,17 @@ void TciApplet::onSliceAGainChanged(int dB)
 // PhoneCwApplet); both apply at different stages of the TXA chain.
 void TciApplet::onTxGainChanged(int dB)
 {
-    if (m_txGainLabel) {
-        m_txGainLabel->setText(QStringLiteral("%1").arg(dB));
-    }
     auto& s = AppSettings::instance();
     s.setValue(QLatin1String(kKeyTxGain), QString::number(dB));
     s.save();
+    applyTxGain(dB);
+}
 
+void TciApplet::applyTxGain(int dB)
+{
+    if (m_txGainLabel) {
+        m_txGainLabel->setText(QStringLiteral("%1").arg(dB));
+    }
     if (m_server) {
         const float lin = std::pow(10.0f, dB / 20.0f);
         m_server->setTciTxGainLinear(lin);

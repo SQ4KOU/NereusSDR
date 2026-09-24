@@ -14,6 +14,10 @@
 //                 disabled with a plain reason on a remote-station model.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-21 / R-R3-10: the Region combo (a Core setting) is disabled
+//                 while a remote window does not have the Core's settings.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -196,6 +200,11 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
 // the private m_chkGeneralRXOnly member.
 // Cite: Thetis setup.designer.cs:8535-8544 [v2.10.3.13] (Visible=false default);
 //       BoardCapabilities::isRxOnlySku (NereusSDR-original).
+
+void GeneralOptionsPage::setStationSettingsAvailable(bool available, const QString& reason)
+{
+    gateStationControls({m_comboFRSRegion}, available, reason);
+}
 
 void GeneralOptionsPage::setReceiveOnlyVisible(bool visible)
 {

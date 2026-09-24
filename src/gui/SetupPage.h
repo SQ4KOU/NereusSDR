@@ -41,6 +41,15 @@ public:
     // rest of the page live. The default does nothing.
     virtual void setTransmitPermitted(bool permitted, const QString& reason);
 
+    // R-R3-21 / R-R3-10: whether the Core's settings can be changed from
+    // this window right now. False in a remote window while it is not
+    // connected to its Core (or has not received the Core's settings yet).
+    // SetupDialog pushes it to every realized page; a Mixed page overrides
+    // this and gates just the controls that write the Core's settings,
+    // leaving this computer's own controls live. The default does nothing.
+    // Always true in a local window.
+    virtual void setStationSettingsAvailable(bool available, const QString& reason);
+
     // ── Static NYI marker ─────────────────────────────────────────────────────
     // Marks a widget as Not Yet Implemented: disables it and sets a tooltip.
     static void markNyi(QWidget* widget, const QString& phase);
@@ -81,6 +90,14 @@ protected:
     // to call repeatedly with the same state.
     static void gateTransmitControls(const QList<QWidget*>& controls, bool permitted,
                                      const QString& reason);
+
+    // R-R3-21 / R-R3-10: the same, for the controls that write the Core's
+    // settings on a Mixed page, while those settings are unavailable. It
+    // keeps its own saved state, so a control must follow only one of the
+    // two helpers; a page with a control held for both combines the two
+    // conditions and calls one of them.
+    static void gateStationControls(const QList<QWidget*>& controls, bool available,
+                                    const QString& reason);
 
     QVBoxLayout* contentLayout() { return m_contentLayout; }
     RadioModel*  model()         { return m_model; }

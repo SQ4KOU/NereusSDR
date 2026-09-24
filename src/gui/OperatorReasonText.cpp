@@ -332,12 +332,55 @@ constexpr Entry kEntries[] = {
      "The connection to the Core changed, so this file operation stopped."},
     {"There is no station session.", nullptr,
      "This app is not connected to the Core."},
+    // StationClient.cpp: a control this Core has not offered this app, or
+    // not yet (these are also refused before the Core has answered).
+    {"The station does not support PS3 settings.", nullptr,
+     "This Core does not offer PureSignal settings to this app."},
+    {"The station does not support remote C-Tune.", nullptr,
+     "This Core does not offer C-Tune to this app."},
+    {"The station does not support remote TGXL configuration.", nullptr,
+     "This Core does not offer Tuner Genius XL setup to this app."},
+    {"The station does not support NNR model application.", nullptr,
+     "This Core does not offer NNR model changes to this app."},
+    {"The station does not support NNR diagnostics.", nullptr,
+     "This Core does not offer NNR diagnostics to this app."},
+    {"The station does not support remote 4O3A control.", nullptr,
+     "This Core does not offer 4O3A control to this app."},
+    {"This station cannot try noise reduction again. Update the station software.", nullptr,
+     "This Core cannot try noise reduction again. Update the Core."},
+    // RadioModel.cpp: NNR diagnostics with no link to the Core.
+    {"The station is not connected.", nullptr,
+     "This app is not connected to the Core."},
 
-    // Noise reduction status, NnrAdapter.cpp: shown in the NNR panel and
-    // when turning NNR on is refused.
+    // The Core's Tuner Genius XL checks, TgxlConnection.cpp: shown on the
+    // Peripherals page's Tuner Genius XL row. The worded ones are patterns.
+    {"TGXL identity was rejected by station discovery", nullptr,
+     "The Core could not confirm that the device at this address is a Tuner Genius."},
+    {"TGXL native info omitted a nonempty serial", nullptr,
+     "The Tuner Genius at this address did not say which unit it is."},
+    {"TGXL native identity timed out", nullptr,
+     "The device at this address did not answer as a Tuner Genius in time."},
+
+    // Noise reduction status and refusals, NnrAdapter.cpp (two also in
+    // SliceModel.cpp and RadioModel.cpp): shown in the NNR panel and when
+    // turning NNR on is refused.
     {"NNR requires a DSP rate that is an integer multiple of its network rate.", nullptr,
      "NNR cannot run at this receiver's processing rate, which must be a whole multiple of "
      "the NNR model's rate. Use another noise reduction, or change the processing rate."},
+    {"NNR receiver is not available.", nullptr,
+     "NNR is not available on this receiver."},
+    {"The selected NNR model is unavailable.", nullptr,
+     "The chosen NNR model is not available, so NNR cannot run."},
+    {"NNR is not included in this build.", nullptr,
+     "NNR is not included in the NereusSDR software running this receiver."},
+    {"NNR values must be finite and within their supported ranges.", nullptr,
+     "One of the NNR settings is out of range, so nothing was changed."},
+    {"The requested NNR model is not ready; no tuning was changed.", nullptr,
+     "The chosen NNR model is not ready, so the NNR settings were not changed."},
+    {"Unsupported NNR diagnostic mode.", nullptr,
+     "That NNR diagnostic setting is not available."},
+    {"The NNR receiver is not ready.", nullptr,
+     "NNR is not ready on this receiver yet."},
 
     // The Core's certificate, StationClient.cpp: shown after "Last failure:"
     // and in the link-lost toast. "Certificate fingerprint" is the one name
@@ -473,6 +516,30 @@ const Pattern kPatterns[] = {
      "Refusing to connect to ws://192.0.2.7:4433: a station certificate fingerprint is "
      "pinned, but \"ws\" carries no TLS, so there is nothing to compare the fingerprint "
      "against and the pairing token would travel in cleartext. Use wss://."},
+
+    // The Core's Tuner Genius XL checks, StationTgxlController.cpp and
+    // TgxlConnection.cpp, each worded around a model, address or serial.
+    {R"(^Expected TunerGenius/TunerGeniusXL at the connected endpoint; observed .* \(serial .*\)\.$)",
+     nullptr,
+     "The device at this address is not a Tuner Genius. Check the tuner's address and port.",
+     "Expected TunerGenius/TunerGeniusXL at the connected endpoint; observed PowerGeniusXL "
+     "(serial 1234-5678)."},
+    {R"(^No matching TGXL discovery announcement for .+\. Check the tuner address, port and station LAN discovery\.$)",
+     nullptr,
+     "The Core did not find a Tuner Genius at this address on its network. Check the "
+     "tuner's address and port.",
+     "No matching TGXL discovery announcement for 192.0.2.40:9010. Check the tuner address, "
+     "port and station LAN discovery."},
+    {R"(^TGXL identity serial mismatch: expected .*, observed .*$)", nullptr,
+     "The Tuner Genius at this address is not the one the Core found on its network. Check "
+     "the tuner's address and port.",
+     "TGXL identity serial mismatch: expected 1234-5678, observed 8765-4321"},
+    {R"(^TGXL native info failed with code )", nullptr,
+     "The Tuner Genius at this address did not say which unit it is.",
+     "TGXL native info failed with code 3"},
+    {R"(^TGXL discovery approval timed out for serial )", nullptr,
+     "The Core did not see this Tuner Genius on its network in time.",
+     "TGXL discovery approval timed out for serial 1234-5678"},
 
     // StationClient.cpp: nothing was sent because the link is not up.
     {R"(^The station session is not established, so (.+) was not sent\.$)", nullptr,
