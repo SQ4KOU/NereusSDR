@@ -25,6 +25,13 @@
 //                 Code. kFilterDelayFrames names the varsamp FIR's delay
 //                 (varsamp.c:60-63, 122-123, 175), so the measured remote
 //                 audio delay (R-R3-35) counts it.
+//   2026-09-23: J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code. R-R3-23: configure() takes the output device's
+//                 rate, as ivac.c:41 creates rmatchOUT with audio_rate in
+//                 and vac_rate out, so remote playback matches 48 kHz
+//                 audio straight to a 44.1 or 96 kHz speaker's clock.
+//                 filterDelayFrames() is the varsamp FIR's delay at that
+//                 output rate (varsamp.c:41-60).
 // =================================================================
 //
 // === Verbatim Thetis Project Files/Source/ChannelMaster/ivac.c header ===
@@ -81,6 +88,33 @@ warren@wpratt.com
 
 */
 
+// === Verbatim Thetis Project Files/Source/wdsp/varsamp.c header ===
+/*  varsamp.c
+
+This file is part of a program that implements a Software-Defined Radio.
+
+Copyright (C) 2017 Warren Pratt, NR0V
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at  
+
+warren@wpratt.com
+
+*/
+
 #pragma once
 
 #include <QVector>
@@ -100,7 +134,9 @@ struct RemoteAudioRateMatcherStats {
     bool controlActive = false;
 };
 
-/// Bounded worker-thread-only bridge to WDSP rmatch for 48 kHz stereo audio.
+/// Bounded worker-thread-only bridge to WDSP rmatch from 48 kHz stereo audio
+/// to stereo audio at the output device's rate (48 kHz unless configured).
+/// take() returns, and the ring fill and capacity count, output-rate frames.
 ///
 /// The interleaved float channels map directly to WDSP's double complex pair:
 /// left is the real element and right is the imaginary element. push() and
@@ -125,6 +161,17 @@ public:
     // is j = 69 at h_offset 0 and moves by the fraction h_offset (under one
     // frame) while the ratio is adjusted.
     static constexpr int kFilterDelayFrames = 69;
+    // Output rates configure() accepts: the speaker rates this computer's
+    // Devices page offers lie between them.
+    static constexpr int kMinOutputRateHz = 8'000;
+    static constexpr int kMaxOutputRateHz = 384'000;
+    /// The FIR's delay, in 48 kHz input frames, when the output runs at
+    /// outputRateHz (kFilterDelayFrames at 48 kHz). From Thetis Project
+    /// Files/Source/wdsp/varsamp.c:41-60 [v2.10.3.15 @3759d09]: rsize =
+    /// (int)(140.0 * norm_rate / min_rate), where min_rate is the lower of
+    /// the two rates and norm_rate is the input rate; the centre tap is
+    /// rsize / 2 - 1 input frames old, as for kFilterDelayFrames.
+    static int filterDelayFrames(int outputRateHz);
 
     RemoteAudioRateMatcher();
     ~RemoteAudioRateMatcher();
@@ -132,8 +179,11 @@ public:
     RemoteAudioRateMatcher(const RemoteAudioRateMatcher&) = delete;
     RemoteAudioRateMatcher& operator=(const RemoteAudioRateMatcher&) = delete;
 
-    /// Rejects non-positive or resource-policy-exceeding dimensions.
-    bool configure(int inputFrames, int outputFrames, int ringFrames);
+    /// Rejects non-positive or resource-policy-exceeding dimensions. The
+    /// input is 48 kHz; outputFrames and ringFrames count frames at
+    /// outputRateHz, and the ring holds at most two seconds of them.
+    bool configure(int inputFrames, int outputFrames, int ringFrames,
+                   int outputRateHz = kSampleRateHz);
     bool push(const QVector<float>& pcmInterleaved);
     QVector<float> take();
     /// True when one public output block can be returned without asking WDSP
@@ -155,6 +205,9 @@ private:
     int m_inputFrames = 0;
     int m_outputFrames = 0;
     int m_ringFrames = 0;
+    int m_outputRateHz = kSampleRateHz;
+    // WDSP's output quantum at m_outputRateHz (cmsetup.c getbuffsize()).
+    int m_nativeOutputFrames = 0;
     QVector<double> m_inputCarry;
     QVector<double> m_nativeOutput;
     int m_inputCarryFrames = 0;

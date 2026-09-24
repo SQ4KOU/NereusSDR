@@ -143,6 +143,12 @@ REQUIRED_MARKERS: dict[str, list[str]] = {
 # WDSP-PROVENANCE.md "10 files with no license headers").
 TEXT_SUFFIXES = {".c", ".h", ".hpp", ".cpp", ".cc", ".py"}
 
+# The header markers must appear within this many lines of the top of the
+# file: the same window as HEADER_WINDOW in scripts/verify-thetis-headers.py,
+# the merge gate. A fixed character count failed files whose NereusSDR
+# modification history grew while the gate still passed them.
+HEADER_WINDOW = 160
+
 # Within wdsp-vendored, these basenames are documented as utility/data/no-
 # header files per WDSP-PROVENANCE.md and must not be flagged. Keep in
 # sync with WDSP_HEADER_EXEMPTIONS in scripts/verify-thetis-headers.py.
@@ -163,7 +169,11 @@ def _verify_markers(path: str, classification: str) -> list[str]:
     if classification == "wdsp-vendored" and abs_path.name in WDSP_NO_HEADER_BASENAMES:
         return []
     try:
-        head = abs_path.read_text(encoding="utf-8", errors="replace")[:8000]
+        head = "\n".join(
+            abs_path.read_text(encoding="utf-8", errors="replace").splitlines()[
+                :HEADER_WINDOW
+            ]
+        )
     except (IsADirectoryError, FileNotFoundError):
         return []
     return [m for m in markers if m not in head]

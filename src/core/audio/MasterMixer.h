@@ -46,6 +46,13 @@
 //                 small DSP block size. No prefill or barrier-policy change.
 //                 Authored by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via OpenAI Codex.
+//   2026-09-23 -- R-R3-45: two mixes from one barrier. Each slice is
+//                 routed to the speakers OR the headphones (VAX design
+//                 6.2) and both sums leave in the same drain, from the
+//                 same per-slice gain, pan and mute. A route change
+//                 crossfades over the anti-click ramp. NereusSDR-original.
+//                 Authored by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 // --- From aamix.c ---
@@ -248,8 +255,13 @@ public:
     // thread: setSliceMuted() takes the slice-map mutex and must not be
     // reached from there. Mute is applied as a ramp TARGET, so a muted
     // slice fades out over the ramp rather than cutting.
+    //
+    // R-R3-45: `headphones` rides in the same way and for the same reason.
+    // It picks which of the two sums tryDrain() builds the slice into
+    // (VAX design 6.2: speakers OR headphones). A change of route is a
+    // ramp too, so the slice crossfades from one output to the other.
     void accumulate(int sliceId, const float* samples, int frames,
-                    bool muted = false);
+                    bool muted = false, bool headphones = false);
 
 
     // Audio thread: sum one block if every barrier member has frames
@@ -259,7 +271,17 @@ public:
     // regardless of how many slices fed it.
     //
     // out is interleaved L/R float32 and must hold maxFrames * 2 floats.
+    //
+    // Only the speakers sum: slices routed to the headphones are drained
+    // (their rings keep time) but contribute nothing to out.
     int tryDrain(float* out, int maxFrames);
+
+    // R-R3-45: both sums from one barrier. speakersOut carries the slices
+    // routed to the speakers, headphonesOut those routed to the headphones,
+    // each at the slice's own gain, pan and mute. Either may be nullptr, in
+    // which case that sum is not written. Both hold maxFrames * 2 floats;
+    // the return value is the frame count written to each.
+    int tryDrain(float* speakersOut, float* headphonesOut, int maxFrames);
 
     // Test seam: ramp length in frames (default kDefaultRampFrames).
     void setRampFrames(int frames);
@@ -342,6 +364,9 @@ private:
         std::atomic<float> gain{1.0f};
         std::atomic<float> pan{0.0f};
         std::atomic<bool>  muted{false};
+        // R-R3-45: routed to the headphones sum instead of the speakers.
+        // Written by accumulate() on the audio thread.
+        std::atomic<bool>  headphones{false};
 
         // Lifecycle generation. The control thread increments the atomic
         // when it withdraws a slice; the audio thread acknowledges that
@@ -376,6 +401,9 @@ private:
         // in instead of stepping in.
         float curL{0.0f};
         float curR{0.0f};
+        // The same ramped gains into the headphones sum (R-R3-45).
+        float hpCurL{0.0f};
+        float hpCurR{0.0f};
 
         // Audio-thread-only transactional drain state. tryDrain computes
         // against these snapshots and commits them only after the control
@@ -384,6 +412,8 @@ private:
         int stagedAvail{0};
         float stagedCurL{0.0f};
         float stagedCurR{0.0f};
+        float stagedHpCurL{0.0f};
+        float stagedHpCurR{0.0f};
         bool drainStaged{false};
     };
 

@@ -9,6 +9,11 @@
 #include <functional>
 #include <mutex>
 
+// R-R3-23: the bus plays in the format it was opened with (48 kHz stereo
+// float when never opened): its queue, clock, capacity and `heard` count
+// frames of that rate and channel count. Its capacity is the ring a
+// PortAudio output stream of that format has (PortAudioBus::
+// outputRingSamples): 4800 frames at 48 kHz stereo.
 class PacedAudioBus final : public NereusSDR::IAudioBus {
 public:
     bool open(const NereusSDR::AudioFormat& f) override { format = f; active = true; return true; }
@@ -18,19 +23,21 @@ public:
         std::lock_guard<std::mutex> lock(mutex);
         const auto* samples = reinterpret_cast<const float*>(data);
         const int count = int(bytes / sizeof(float));
-        if (int(queue.size()) - 2 * playedAheadFramesLocked() + count > 9600) { return -1; }
+        const int channels = channelsLocked();
+        if (int(queue.size()) - channels * playedAheadFramesLocked() + count
+            > capacityFramesLocked() * channels) { return -1; }
         if (playClock) {
             // The device has taken past everything queued: it played silence
             // meanwhile, so these samples start at its next callback, not in
             // the past.
-            const qint64 dry = takenFramesLocked() - playedFrames - qint64(queue.size()) / 2;
+            const qint64 dry = takenFramesLocked() - playedFrames - qint64(queue.size()) / channels;
             if (dry > 0) {
-                queue.insert(queue.end(), std::size_t(dry * 2), 0.0f);
+                queue.insert(queue.end(), std::size_t(dry * channels), 0.0f);
                 playedDryFrames += dry;
             }
         }
         queue.insert(queue.end(), samples, samples + count);
-        peakQueued = qMax(peakQueued, int(queue.size()) / 2);
+        peakQueued = qMax(peakQueued, int(queue.size()) / channels);
         return bytes;
     }
     qint64 pull(char*, qint64) override { return 0; }
@@ -47,18 +54,19 @@ public:
         if (!outputPacingAvailable) { return std::nullopt; }
         const int ahead = playedAheadFramesLocked();
         return OutputPacing{consumed + quint64(ahead),
-                            std::max(0, int(queue.size()) / 2 - ahead), 4800, callbackFrames,
-                            deviceLatencyNs};
+                            std::max(0, int(queue.size()) / channelsLocked() - ahead),
+                            capacityFramesLocked(), callbackFrames, deviceLatencyNs};
     }
     // R-R3-35 test device clock. From this call the device plays one frame
-    // every 1/48000 s of `clockNs` continuously, as hardware does, and it
+    // every 1/rate s of `clockNs` continuously (its opened rate, R-R3-23),
+    // as hardware does, and it
     // takes frames from the queue the way the callback device it reports
     // does: `callbackFrames` at a time, each callback at the instant its
     // first frame starts to play (no device latency). So the queue and
     // consumed count it reports drop a callback at a time, following the
     // clock rather than the render() calls, and renderDue() moves exactly
     // the frames played so far into `heard`. Heard frame k (counted from
-    // this call) played at playClockOriginNs() + k / 48 kHz, however late
+    // this call) played at playClockOriginNs() + k / rate, however late
     // the caller's timer runs. Set before any render.
     void setPlayClockForTesting(std::function<qint64()> clockNs)
     {
@@ -123,7 +131,7 @@ public:
     }
     void render(int frames) {
         std::lock_guard<std::mutex> lock(mutex);
-        for (int i = 0; i < frames * 2; ++i) {
+        for (int i = 0; i < frames * channelsLocked(); ++i) {
             heard.append(queue.empty() ? 0.0f : queue.front());
             if (!queue.empty()) { queue.pop_front(); }
         }
@@ -158,7 +166,15 @@ private:
     qint64 playedDryFrames = 0;
     qint64 dueFramesLocked() const
     {
-        return playClock ? (playClock() - playOriginNs) * 48 / 1'000'000 : 0;
+        return playClock ? (playClock() - playOriginNs) * qint64(format.sampleRate)
+                / 1'000'000'000
+                         : 0;
+    }
+    int channelsLocked() const { return std::max(1, format.channels); }
+    int capacityFramesLocked() const
+    {
+        const int ringSamples = std::max(4800 * 2, (format.sampleRate / 10) * channelsLocked());
+        return ringSamples / channelsLocked();
     }
     // Frames the device has taken from the queue by now: every callback up
     // to and including the one that holds the frame now playing.

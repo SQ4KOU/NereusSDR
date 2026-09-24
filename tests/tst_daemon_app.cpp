@@ -48,6 +48,9 @@
 //               object and the debounced save (R-R3-46, R-R3-11), by J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-23: nereusd publishes no VAX device (R-R3-44), by J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -59,6 +62,7 @@
 
 #include <utility>
 
+#include "core/AudioEngine.h"
 #include "core/HpsdrModel.h"
 #include "core/MoxController.h"
 #include "core/StepAttenuatorController.h"
@@ -97,6 +101,33 @@ DaemonConfig listenerConfig()
 class TstDaemonApp : public QObject {
     Q_OBJECT
 private slots:
+    // R-R3-44: nereusd publishes no VAX device on the Core host, receive
+    // or transmit. Its engine refuses them before anything connects (the
+    // engine-level proof that start() then opens none is in
+    // tst_remote_vax_feeder, aCoreOpensNoVaxDeviceOfEitherDirection).
+    void publishesNoVaxDevices()
+    {
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(DaemonConfig::defaults()));
+        AudioEngine* const engine = app.m_radioModel->audioEngine();
+        QVERIFY(!engine->vaxOutputsAllowed());
+        // Even with devices on offer, none is made.
+        int asked = 0;
+        engine->setVaxBusFactoryForTest([&asked](int) -> std::unique_ptr<IAudioBus> {
+            ++asked;
+            return nullptr;
+        });
+        engine->openVaxOutputs();
+        engine->setVaxEnabled(1, true);
+        QCOMPARE(asked, 0);
+        for (int channel = 1; channel <= 4; ++channel) {
+            QVERIFY(!engine->isVaxBusOpen(channel));
+        }
+        engine->setVaxBusFactoryForTest({});
+        app.stop();
+    }
+
     void malformedDisplayLimitsCannotReplaceARunningDaemon()
     {
         DaemonApp app;

@@ -36,6 +36,12 @@
 //   2026-04-24 — Task 21 rebuild: spec §9.2 layout, NodeDescription
 //                persistence, telemetry placeholder. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-23: R-R3-44: works in a remote window (the VAX channels are
+//                this computer's; the page reaches the engine through
+//                RadioModel::localAudioDevices()), and the "Consumers:" row
+//                says whether an app is reading the channel where the
+//                platform reports it. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/audio/VirtualCableDetector.h"
@@ -47,6 +53,8 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QVector>
+
+#include <optional>
 
 namespace NereusSDR {
 
@@ -141,6 +149,12 @@ public:
     // the bus).
     void setBusOpen(bool open);
 
+    // R-R3-44: the "Consumers:" row. true / false where the platform
+    // reports whether an app is reading this channel's output (macOS,
+    // PipeWire), nullopt where it does not or the output is closed.
+    void setReaderState(std::optional<bool> reading);
+    QString readerText() const;
+
 signals:
     void configChanged(int channel, NereusSDR::AudioDeviceConfig cfg);
     void enabledChanged(int channel, bool on);
@@ -215,6 +229,8 @@ public:
 private:
     void buildPage();
     void wirePillFeedback();
+    // R-R3-44: refreshes each card's "Consumers:" row.
+    void refreshReaders();
 
     AudioEngine*                m_engine{nullptr};
     QVector<VaxChannelCard*>    m_channelCards;  // index 0 = channel 1

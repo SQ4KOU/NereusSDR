@@ -22,13 +22,19 @@
 //   2026-09-22: strict resolution accepts exact names only
 //               (matchNamedDevice), R-R3-36 fix wave. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23: R-R3-23 outputRingSamples(): an output stream's ring holds
+//               at least 100 ms at its own rate and channel count, so a
+//               remote window can play on a 176.4 to 384 kHz speaker.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
 
 #include "core/IAudioBus.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <memory>
 #include <vector>
 
@@ -181,6 +187,17 @@ public:
     /// its preallocated scratch.  channels <= 1 is a straight copy.
     static int downmixToMono(const float* interleaved, int frames,
                              int channels, float* out, int outCapacity);
+
+    /// Floats in an output stream's ring: kDefaultRingSamples (100 ms of
+    /// 48 kHz stereo, as every stream has had), or 100 ms at the stream's
+    /// own rate and channel count when that is more (R-R3-23: faster
+    /// speakers than 48 kHz stereo). An input stream keeps the default.
+    static constexpr std::size_t kDefaultRingSamples = 4800 * 2;
+    static std::size_t outputRingSamples(int sampleRate, int channels) {
+        const std::size_t perTenth = std::size_t(std::max(0, sampleRate) / 10)
+            * std::size_t(std::max(1, channels));
+        return std::max(kDefaultRingSamples, perTenth);
+    }
 
     /// One direction-valid device offered to matchNamedDevice().
     struct NamedDeviceCandidate {

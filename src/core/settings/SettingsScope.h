@@ -6,10 +6,10 @@
 // no-port-check: NereusSDR-original. Remote-daemon R2 Task 14.
 //
 // Some AppSettings keys describe the station: the radio's DSP
-// configuration, its TCI server port, which peripherals are attached and
-// how they are configured. Others describe the operator's own machine:
-// window geometry, trace colours, which local sound card feeds the
-// speakers. classifySettingsKey() is the pure function that decides which
+// configuration, which peripherals are attached and how they are
+// configured. Others describe the operator's own machine: window
+// geometry, trace colours, which local sound card feeds the speakers, and
+// (since R-R3-42) the TCI server that serves apps on that machine. classifySettingsKey() is the pure function that decides which
 // is which, so Task 15's SettingsProxy has one place to ask before
 // deciding whether a write crosses the wire.
 //
@@ -40,6 +40,11 @@
 //                                    completeness gate. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio plan, Task 4
+//                                    (R-R3-42): TCI settings are this
+//                                    computer's. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QString>
@@ -58,8 +63,8 @@ enum class SettingsScope {
 
     /// Belongs to the radio-owning daemon and must round-trip over the
     /// wire so every GUI connected to the same station sees and controls
-    /// the same value: DSP/radio hardware configuration, TCI server
-    /// config, peripheral (PGXL/TGXL/RF2K-S) state, per-slice VFO/AGC/
+    /// the same value: DSP/radio hardware configuration,
+    /// peripheral (PGXL/TGXL/RF2K-S) state, per-slice VFO/AGC/
     /// filter/NR state, TX safety interlocks.
     Station,
 };

@@ -11,6 +11,10 @@
 // macOS for the same end), not as a port.  No Thetis bytes ported.
 //
 // Modification history (NereusSDR):
+//   2026-09-23: R-R3-23 an output stream sizes its ring by
+//               outputRingSamples() before it starts, so a speaker faster
+//               than 48 kHz stereo still holds 100 ms. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-23: R-R3-35 outputPacing() reports the stream's output latency
 //               (Pa_GetStreamInfo) so remote audio delay can include the
 //               device. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
@@ -249,7 +253,7 @@ PortAudioBus::PortAudioBus() {
     // ring was 48000 * 2 (1 second) with no overrun handling, which
     // made the display drift up to a full second ahead of audio and
     // produced the "audio replays" symptom on stall recovery.
-    m_ring.resize(4800 * 2);
+    m_ring.resize(kDefaultRingSamples);
 
     // 2026-05-26 KG4VCF: pin the audio ring so heavy memory pressure
     // (parallel builds, Spotlight indexing) can not compress / page
@@ -403,6 +407,20 @@ bool PortAudioBus::open(const AudioFormat& format) {
                                                    !wantOutput && needResample);
     m_nativeSampleRate = openRate;
     m_inputStreamChannels = wantOutput ? 0 : effectiveChannels;
+
+    // R-R3-23: an output ring keeps 100 ms at the stream's own rate and
+    // channel count (never less than the default). No callback runs yet,
+    // and open() reset both cursors above, so the ring may be replaced.
+    if (wantOutput) {
+        const std::size_t ringSamples =
+            outputRingSamples(m_negFormat.sampleRate, m_negFormat.channels);
+        if (ringSamples != m_ring.size()) {
+            NereusSDR::unlockMemory(m_ring.data(), m_ring.size() * sizeof(float));
+            m_ring.assign(ringSamples, 0.0f);
+            NereusSDR::lockMemory(m_ring.data(), m_ring.size() * sizeof(float),
+                                  "PortAudioBus::m_ring");
+        }
+    }
 
     if (needResample) {
         // Worst-case per-callback input frames at the native rate:

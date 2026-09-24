@@ -13,6 +13,9 @@
 //   2026-09-21 -- Added queued-producer frame-conservation coverage for the
 //                 RADE RX DSP -> main -> DSP return path. J.J. Boyd / KG4VCF,
 //                 with AI assistance from OpenAI Codex.
+//   2026-09-23 -- R-R3-45: two mixes from one barrier, speakers or
+//                 headphones per slice. J.J. Boyd / KG4VCF, with AI
+//                 assistance from Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -37,6 +40,95 @@ using namespace NereusSDR;
 class TstMasterMixer : public QObject {
     Q_OBJECT
 private slots:
+    // ── R-R3-45: speakers OR headphones per slice (VAX design 6.2) ────
+    //
+    // Slice A on the speakers, slice B on the headphones: each sum carries
+    // only its own slice, at that slice's gain, pan and mute.
+    void twoMixesCarryOnlyTheirOwnSlices() {
+        MasterMixer mix;
+        mix.setRampFrames(1);
+        mix.setSlewUpFrames(0);
+        mix.setSliceGain(0, 0.5f, -1.0f);  // A: half gain, full left
+        mix.setSliceGain(1, 0.25f, 1.0f);  // B: quarter gain, full right
+        std::array<float, 2> a = {0.8f, 0.8f};
+        std::array<float, 2> b = {0.4f, 0.4f};
+        mix.accumulate(0, a.data(), 1, /*muted*/ false, /*headphones*/ false);
+        mix.accumulate(1, b.data(), 1, /*muted*/ false, /*headphones*/ true);
+
+        std::array<float, 2> spk{};
+        std::array<float, 2> hp{};
+        QCOMPARE(mix.tryDrain(spk.data(), hp.data(), 1), 1);
+        QCOMPARE(spk[0], 0.4f);   // A only: 0.8 * 0.5, left
+        QCOMPARE(spk[1], 0.0f);
+        QCOMPARE(hp[0], 0.0f);
+        QCOMPARE(hp[1], 0.1f);    // B only: 0.4 * 0.25, right
+    }
+
+    void muteSilencesASliceOnTheHeadphonesToo() {
+        MasterMixer mix;
+        mix.setRampFrames(1);
+        mix.setSlewUpFrames(0);
+        mix.setSliceGain(0, 1.0f, 0.0f);
+        mix.setSliceGain(1, 1.0f, 0.0f);
+        std::array<float, 2> a = {0.3f, 0.3f};
+        std::array<float, 2> b = {0.6f, 0.6f};
+        mix.accumulate(0, a.data(), 1, false, false);
+        mix.accumulate(1, b.data(), 1, /*muted*/ true, /*headphones*/ true);
+
+        std::array<float, 2> spk{};
+        std::array<float, 2> hp{};
+        QCOMPARE(mix.tryDrain(spk.data(), hp.data(), 1), 1);
+        QCOMPARE(spk[0], 0.3f);
+        QCOMPARE(hp[0], 0.0f);
+        QCOMPARE(hp[1], 0.0f);
+    }
+
+    // The speakers-only drain still drains a headphones slice's ring (so it
+    // keeps time) but adds nothing of it. The anti-VOX reference relies on
+    // this.
+    void speakersOnlyDrainLeavesHeadphonesSlicesOut() {
+        MasterMixer mix;
+        mix.setRampFrames(1);
+        mix.setSlewUpFrames(0);
+        mix.setSliceGain(0, 1.0f, 0.0f);
+        mix.setSliceGain(1, 1.0f, 0.0f);
+        std::array<float, 2> a = {0.3f, 0.3f};
+        std::array<float, 2> b = {0.6f, 0.6f};
+        mix.accumulate(0, a.data(), 1, false, false);
+        mix.accumulate(1, b.data(), 1, false, true);
+        std::array<float, 2> spk{};
+        QCOMPARE(mix.tryDrain(spk.data(), 1), 1);
+        QCOMPARE(spk[0], 0.3f);
+        // Both rings were drained: nothing is left to drain.
+        QCOMPARE(mix.tryDrain(spk.data(), 1), 0);
+    }
+
+    // Moving a slice from one output to the other crossfades over the
+    // anti-click ramp instead of stepping.
+    void routeChangeCrossfadesOverTheRamp() {
+        MasterMixer mix;
+        mix.setRampFrames(4);
+        mix.setSlewUpFrames(0);
+        mix.setSliceGain(0, 1.0f, 0.0f);
+        std::vector<float> in(16, 1.0f);   // 8 frames of 1.0
+        std::vector<float> spk(16, 0.0f);
+        std::vector<float> hp(16, 0.0f);
+
+        // Settle on the speakers.
+        mix.accumulate(0, in.data(), 8, false, false);
+        QCOMPARE(mix.tryDrain(spk.data(), hp.data(), 8), 8);
+        QCOMPARE(spk[14], 1.0f);
+        QCOMPARE(hp[14], 0.0f);
+
+        // Switch to the headphones.
+        mix.accumulate(0, in.data(), 8, false, true);
+        QCOMPARE(mix.tryDrain(spk.data(), hp.data(), 8), 8);
+        QCOMPARE(spk[0], 0.75f);
+        QCOMPARE(hp[0], 0.25f);
+        QCOMPARE(spk[14], 0.0f);
+        QCOMPARE(hp[14], 1.0f);
+    }
+
     void emptyMixDrainsNothing() {
         MasterMixer mix;
         std::array<float, 16> out{};

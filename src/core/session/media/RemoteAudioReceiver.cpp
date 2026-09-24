@@ -14,6 +14,7 @@
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <numeric>
 #include <thread>
 
 namespace NereusSDR {
@@ -122,6 +123,9 @@ struct RemoteAudioReceiver::Private {
     // reorderQueuedPackets it is reported only for a running context.
     std::atomic<bool> hasDriftRatio{false};
     std::atomic<double> driftRatio{1.0};
+    // R-R3-23: the speaker's rate for this context, which speakerQueuedFrames
+    // counts. Set by start() before the worker runs.
+    std::atomic<int> deviceRateHz{PcmAudioCodecConfig::kSampleRate};
     bool overflow = false; // under mutex
     // Until the first packet is released for playback, a full arrival queue
     // drops its oldest packet instead of raising overflow. startBacklog
@@ -154,13 +158,29 @@ struct RemoteAudioReceiver::Private {
     }
 };
 
+namespace {
+qint64 playoutDeviceRate(int deviceRateHz)
+{
+    return deviceRateHz > 0 ? qint64(deviceRateHz) : qint64(PcmAudioCodecConfig::kSampleRate);
+}
+}
+
 qint64 RemoteAudioPlayoutPoint::playoutNs() const
 {
-    // Doubled frame counts keep half a callback exact.
-    const qint64 halfFrames = 2 * (qint64(matcherFillFrames) + qint64(speakerQueuedFrames)
-                                   + qint64(pipelineDelayFrames))
+    // Doubled frame counts keep half a callback exact. R-R3-23: device-side
+    // frames run at deviceRateHz and the pipeline delay at 48 kHz, so both
+    // are put over their rates' common multiple before the one division
+    // (at 48 kHz the sum and the rounding are exactly the single-rate ones).
+    const qint64 deviceRate = playoutDeviceRate(deviceRateHz);
+    const qint64 streamRate = PcmAudioCodecConfig::kSampleRate;
+    const qint64 common = std::gcd(deviceRate, streamRate);
+    const qint64 deviceWeight = streamRate / common;
+    const qint64 streamWeight = deviceRate / common;
+    const qint64 deviceHalfFrames = 2 * (qint64(matcherFillFrames) + qint64(speakerQueuedFrames))
         + qint64(callbackFrames);
-    return measuredNs + halfFrames * 1'000'000'000 / (2 * PcmAudioCodecConfig::kSampleRate)
+    const qint64 weightedHalfFrames = deviceHalfFrames * deviceWeight
+        + 2 * qint64(pipelineDelayFrames) * streamWeight;
+    return measuredNs + weightedHalfFrames * 1'000'000'000 / (2 * deviceRate * deviceWeight)
         + deviceLatencyNs.value_or(0);
 }
 
@@ -178,8 +198,8 @@ qint64 RemoteAudioPlayoutPoint::matcherStretchNs() const
 
 qint64 RemoteAudioPlayoutPoint::accuracyNs() const
 {
-    return (qint64(callbackFrames) * 1'000'000'000 + 2 * PcmAudioCodecConfig::kSampleRate - 1)
-            / (2 * PcmAudioCodecConfig::kSampleRate)
+    const qint64 deviceRate = playoutDeviceRate(deviceRateHz);
+    return (qint64(callbackFrames) * 1'000'000'000 + 2 * deviceRate - 1) / (2 * deviceRate)
         + (readWindowNs + 1) / 2;
 }
 
@@ -249,7 +269,8 @@ RemoteAudioReceiverTelemetry RemoteAudioReceiver::telemetry() const
         if (snapshot.running) {
             const int queuedFrames = d->speakerQueuedFrames.load();
             if (queuedFrames >= 0) {
-                snapshot.speakerQueuedMs = double(queuedFrames) / 48.0;
+                snapshot.speakerQueuedMs = double(queuedFrames)
+                    / (double(d->deviceRateHz.load()) / 1000.0);
             }
             const int reorderQueued = d->reorderQueuedPackets.load();
             if (reorderQueued >= 0) {
@@ -311,6 +332,14 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                             Fault::SpeakerOpenFailed);
         return false;
     }
+    // R-R3-23: the speaker's rate and channel count, as begin accepted them.
+    // A PCM sink takes the stream's own 48 kHz stereo.
+    AudioFormat speakerFormat;
+    if (!d->sink) {
+        if (const auto accepted = d->engine->remotePlaybackFormat()) {
+            speakerFormat = *accepted;
+        }
+    }
     d->telemetrySequence.fetch_add(1);
     d->ssrc = ssrc;
     d->profile.store(profile);
@@ -340,6 +369,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
     d->reorderQueuedPackets.store(-1);
     d->hasDriftRatio.store(false);
     d->driftRatio.store(1.0);
+    d->deviceRateHz.store(speakerFormat.sampleRate);
     d->clearPoints();
     d->telemetryGeneration.fetch_add(1);
     {
@@ -350,10 +380,28 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
     d->running.store(true);
     d->telemetrySequence.fetch_add(1);
     const quint64 generation = d->generation;
-    d->worker = std::jthread([this, ssrc, firstTimestamp, generation, profile](std::stop_token stop) {
+    d->worker = std::jthread([this, ssrc, firstTimestamp, generation, profile,
+                              speakerFormat](std::stop_token stop) {
         const bool lossless = profile == RemoteAudioProfile::Lossless;
         const bool sinkMode = bool(d->sink);
         const int packetFrames = packetFramesFor(profile);
+        // R-R3-23: the speaker side runs at the device's rate. One worker
+        // block is 10 ms of it (480 frames at 48 kHz, 441 at 44.1 kHz, 960
+        // at 96 kHz), and every speaker-side size below is counted in such
+        // blocks, so the queue and reserve keep their times at any rate.
+        const int deviceRate = speakerFormat.sampleRate;
+        const int deviceChannels = speakerFormat.channels;
+        const int blockFrames = std::max(1, deviceRate / 100);
+        // A 48 kHz packet once the matcher has made it at the device's rate,
+        // rounded up.
+        const int packetDeviceFrames = int((qint64(packetFrames) * deviceRate
+                                            + PcmAudioCodecConfig::kSampleRate - 1)
+                                           / PcmAudioCodecConfig::kSampleRate);
+        // The speaker queue the worker keeps: two blocks, or the device's
+        // callback and one block when that is more.
+        const auto speakerTargetFrames = [blockFrames](int callbackFrames) {
+            return std::max(2 * blockFrames, callbackFrames + blockFrames);
+        };
         AudioJitterBuffer jitter(packetFrames, packetDurationNsFor(profile));
         jitter.reset(firstTimestamp);
         // Only an Opus context needs the Opus decoder; a lossless packet is
@@ -453,8 +501,8 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 return;
             }
             publishSpeakerQueue(initialPacing);
-            const int initialTarget = std::max(960, initialPacing->callbackFrames + 480);
-            if (initialTarget + 480 > initialPacing->capacityFrames) {
+            const int initialTarget = speakerTargetFrames(initialPacing->callbackFrames);
+            if (initialTarget + blockFrames > initialPacing->capacityFrames) {
                 notify(QStringLiteral("Speaker callback exceeds remote playback capacity"),
                        Fault::SpeakerCallbackTooLarge, true);
                 return;
@@ -462,11 +510,15 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
             // WDSP starts half full. Preserve the default 90 ms reserve when a
             // larger selected device quantum transfers extra frames into the
             // speaker ring at startup. This is queue sizing, not a change to the
-            // resampler feedback or its continuous interpolation.
-            const int deviceHighWater = ((initialTarget + 479) / 480) * 480;
-            const int matchRingFrames = 8640 + 2 * std::max(0, deviceHighWater - 960);
+            // resampler feedback or its continuous interpolation. R-R3-23:
+            // in device-rate blocks, so 18 blocks is the same 180 ms ring at
+            // any rate (8640 frames at 48 kHz).
+            const int deviceHighWater = ((initialTarget + blockFrames - 1) / blockFrames)
+                * blockFrames;
+            const int matchRingFrames = 18 * blockFrames
+                + 2 * std::max(0, deviceHighWater - 2 * blockFrames);
             if ((decoder && !decoder->isReady())
-                || !matcher.configure(packetFrames, 480, matchRingFrames)) {
+                || !matcher.configure(packetFrames, blockFrames, matchRingFrames, deviceRate)) {
                 notify(QStringLiteral("Could not initialize the remote audio decoder or rate matcher"),
                        Fault::DecoderUnavailable, true);
                 return;
@@ -542,7 +594,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
         // the speaker queue say it is heard: the codec's own delay (Opus
         // only) and the rate matcher's filter.
         const int codecDelayFrames = lossless ? 0 : opusCodecDelayFrames();
-        const int pipelineDelayFrames = RemoteAudioRateMatcher::kFilterDelayFrames
+        const int pipelineDelayFrames = RemoteAudioRateMatcher::filterDelayFrames(deviceRate)
             + codecDelayFrames;
         quint64 lastDeviceFrames = 0;
         const quint64 deviceConsumedBase = initialPacing ? initialPacing->consumedFrames : 0;
@@ -688,7 +740,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 // conservative bound above WDSP's maximum resampled block;
                 // never let its drop-oldest overflow repair handle a burst.
                 const auto room = matcher.stats();
-                if (room.ringCapacityFrames - room.ringFillFrames < 2 * packetFrames) { break; }
+                if (room.ringCapacityFrames - room.ringFillFrames < 2 * packetDeviceFrames) { break; }
                 const auto frame = jitter.takeReady(now);
                 if (!frame) { break; }
                 const QVector<float> audio = decodePacket(frame->packet);
@@ -735,15 +787,15 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
             // Cover the selected callback quantum plus one worker block.
             // Default 128-frame callbacks need 20-30 ms queued; a user-selected
             // 2048-frame callback needs more so one callback cannot exhaust it.
-            const int targetFrames = std::max(960, pacing->callbackFrames + 480);
-            if (targetFrames + 480 > pacing->capacityFrames) {
+            const int targetFrames = speakerTargetFrames(pacing->callbackFrames);
+            if (targetFrames + blockFrames > pacing->capacityFrames) {
                 notify(QStringLiteral("Speaker callback exceeds remote playback capacity"),
                        Fault::SpeakerCallbackTooLarge, true);
                 return;
             }
             // The timer only wakes us. Actual device queue consumption is the
             // output clock; at most one bounded ring can be replenished here.
-            for (int i = 0; i < pacing->capacityFrames / 480
+            for (int i = 0; i < pacing->capacityFrames / blockFrames
                  && pacing->queuedFrames < targetFrames; ++i) {
                 // A packet may already be admitted yet remain behind its
                 // per-arrival reorder hold while the independently clocked
@@ -766,8 +818,18 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                     ++d->decoded;
                     noteReleased(present->timestamp, false, d->now());
                 }
-                const QVector<float> pcm = matcher.take();
-                if (pcm.size() != 960 || !d->engine->writeRemotePlayback(pcm)) {
+                QVector<float> pcm = matcher.take();
+                if (pcm.size() != 2 * blockFrames) { pcm.clear(); }
+                if (deviceChannels == 1 && !pcm.isEmpty()) {
+                    // R-R3-23: a mono speaker hears both channels, mixed
+                    // as (left + right) / 2 like the VAX microphone's mix.
+                    QVector<float> mono(blockFrames);
+                    for (int frame = 0; frame < blockFrames; ++frame) {
+                        mono[frame] = 0.5f * (pcm[2 * frame] + pcm[2 * frame + 1]);
+                    }
+                    pcm = std::move(mono);
+                }
+                if (pcm.isEmpty() || !d->engine->writeRemotePlayback(pcm)) {
                     notify(QStringLiteral("Could not write remote audio to the speaker device"),
                            Fault::SpeakerWriteFailed, true);
                     return;
@@ -806,6 +868,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                     point.matcherFillFrames = std::max(0, stats.ringFillFrames);
                     point.speakerQueuedFrames = std::max(0, finalPacing->queuedFrames);
                     point.deviceLatencyNs = finalPacing->deviceLatencyNs;
+                    point.deviceRateHz = deviceRate;
                     point.pipelineDelayFrames = pipelineDelayFrames;
                     point.callbackFrames = std::max(0, finalPacing->callbackFrames);
                     point.readWindowNs = readEnd - readStart;

@@ -25,6 +25,17 @@
 // Modification history (NereusSDR):
 //   2026-05-10 — Phase 3J-1 Task 2.1 by J.J. Boyd (KG4VCF);
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-23 - R3 receiver audio plan, Task 4 (R-R3-42, R-R3-21,
+//                R-R3-25) by J.J. Boyd (KG4VCF): remote-window mode
+//                (receive audio from the Core's receiver streams, transmit
+//                and raw I/Q refused with a plain reason off the wire),
+//                per-client read positions and left-channel mono.
+//                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-23 - R3 receiver audio fix wave (R-R3-42, R-R3-21) by J.J.
+//                Boyd (KG4VCF): stereo resampled per channel; remote
+//                rx_sensors from the mirrored meter; a late "cannot send"
+//                answer stops the apps. AI-assisted transformation via
+//                Anthropic Claude Code.
 
 #pragma once
 #ifdef HAVE_WEBSOCKETS
@@ -37,10 +48,14 @@
 #include <QSet>
 #include <QVector>
 #include <array>
+#include <atomic>
+#include <functional>
 #include <memory>
+#include <vector>
 
 #include "TciClientSession.h"
 #include "core/audio/AudioRingSpsc.h"
+#include "core/session/media/IReceiverPcmSink.h"
 
 class QWebSocketServer;
 class QWebSocket;
@@ -63,12 +78,58 @@ class TciProtocol;
 // Threading: all methods must be called from the thread that owns this object
 // (the main GUI thread in the current NereusSDR architecture).  QWebSocket
 // callbacks fire on the same thread via the Qt event loop.
-class TciServer : public QObject {
+class TciServer : public QObject, public IReceiverPcmSink {
     Q_OBJECT
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
     ~TciServer() override;
+
+    // ── R-R3-42: TCI in a remote window ─────────────────────────────────────
+    //
+    // A TciServer built on a Role::Remote RadioModel serves apps on this
+    // computer while the receivers live on a Core. It then hooks no
+    // RxChannel and no I/Q tap; receive audio for TCI receiver N is the
+    // Core's slice N, asked for through RemoteReceiverAudio while at least
+    // one app listens to it and released when the last one stops. Transmit
+    // (trx) and raw I/Q (iq_start) are refused: nothing reaches MOX or the
+    // TX audio path, and the reason goes to operatorNotice(), never onto
+    // the TCI wire.
+    bool isRemoteWindow() const { return m_remoteWindow; }
+
+    // How a remote window reaches the Core's receiver streams. MainWindow
+    // wires request/release to RemoteMediaController (GUI thread only;
+    // never called from inside receiverAudioBlock). unavailableReason is
+    // the stop reason meaning "this Core cannot send a receiver's audio":
+    // an audio_start answered with it is not echoed.
+    struct RemoteReceiverAudio {
+        std::function<void(int sliceId, IReceiverPcmSink* sink)> request;
+        std::function<void(int sliceId, IReceiverPcmSink* sink)> release;
+        QString unavailableReason;
+    };
+    // Replaces the source; streams held through the old one are released
+    // through it first, and receivers apps still listen to are asked for
+    // again through the new one.
+    void setRemoteReceiverAudio(RemoteReceiverAudio source);
+
+    // The plain reasons this server gives the operator (never an app).
+    static constexpr const char* kRemoteTransmitRefusedReason =
+        "Apps cannot transmit through TCI from a remote window yet.";
+    static constexpr const char* kRemoteIqRefusedReason =
+        "Apps cannot get the raw receiver signal (I/Q) through TCI from a remote window.";
+
+    // The most recent reason given through operatorNotice(), or empty
+    // after operatorNoticeCleared().
+    QString operatorNoticeReason() const { return m_noticeReason; }
+
+    // Test and status hook: whether this server holds a request for the
+    // Core's receiver `rx` (at least one app listens to it).
+    bool remoteReceiverRequested(int rx) const;
+
+    // IReceiverPcmSink (remote window). receiverAudioBlock runs on a
+    // receive worker thread: it only copies into the receiver's ring.
+    void receiverAudioBlock(int sliceId, const float* interleavedStereo, int frames) override;
+    void receiverAudioStopped(int sliceId, const QString& reason) override;
 
     // Start listening on the given port.  Pass 0 to let the OS assign a port.
     // Returns true if the server started listening; false on failure or if
@@ -203,6 +264,24 @@ signals:
                        const QString& text,
                        qint64 epochMs);
 
+    // R-R3-42: something the operator should know about TCI that no app is
+    // told: a refused transmit or raw I/Q request, or a receiver's audio
+    // stopping in a remote window. `reason` is either one of this class's
+    // plain sentences or the Core's wire reason; show it through
+    // OperatorReasonText::forDisplay(). `peer` is the app's "host:port",
+    // empty when the notice is about a receiver rather than one app.
+    // raiseToast is false for a repeat of the same reason within 30 s, so
+    // an app retrying every transmit period does not stack toasts, and for
+    // "media-not-ready" (the window says so already; audio returns by
+    // itself).
+    void operatorNotice(const QString& peer, const QString& reason, bool raiseToast);
+    // The same notice when it is about receiver `rx`'s audio stopping (a
+    // remote window), so one stop heard by several apps on this computer
+    // can be told once (ReceiverStopNotices).
+    void receiverStopNotice(int rx, const QString& reason, bool raiseToast);
+    // The receiver audio the last notice was about is flowing again.
+    void operatorNoticeCleared();
+
 private slots:
     // From AetherSDR src/core/TciServer.cpp:247-273 [@0cd4559] — accept loop
     void onNewConnection();
@@ -243,6 +322,10 @@ private slots:
     // Destroys all RESAMPLEF instances for the given session and clears the map.
     // Called from onClientDisconnected and stop().
     void cleanupResamplers(std::shared_ptr<TciClientSession>& session);
+    // R-R3-42 fix wave: a receiver's left and right resamplers, made and
+    // destroyed together (both null when either could not be made).
+    static TciClientSession::RxAudioResamplers createRxAudioResamplers(int inRate, int outRate);
+    static void destroyRxAudioResamplers(TciClientSession::RxAudioResamplers& pair);
 
     // Phase 3J-1 review P2.3: connect RX audio tap (RxChannel::audioFrameReady
     // → onAudioFrameReady) and IQ tap (RadioModel::rawIqData →
@@ -360,6 +443,24 @@ private:
     static constexpr int kMaxTciRxSlices = 2;
     std::array<AudioRingSpsc<131072>, kMaxTciRxSlices> m_audioRing;
 
+    // R-R3-42: each 5 ms drain tick empties m_audioRing[rx] into this
+    // main-thread history (interleaved stereo, kRxHistoryFrames frames,
+    // allocated once), and every subscribed client reads it from its own
+    // TciClientSession::audioReadFrame. Before this, clients popped the
+    // shared ring directly, so two apps on one receiver each got about
+    // half the blocks. Sized like the ring (131072 bytes = 16384 stereo
+    // frames, ~341 ms at 48 kHz); a client that falls further behind
+    // skips to the oldest audio still held.
+    static constexpr int kRxHistoryFrames = 16384;
+    std::array<std::vector<float>, kMaxTciRxSlices> m_rxHistory;
+    std::array<quint64, kMaxTciRxSlices> m_rxFramesWritten{};
+
+    // Moves everything the producers pushed into m_rxHistory.
+    void collectRxAudio();
+    // One block of receiver `rx` for one client, or nothing when the
+    // client has not got a whole block waiting yet.
+    void sendRxAudioBlock(QWebSocket* ws, TciClientSession& session, int rx);
+
     // Phase 3J-1 closeout Item 12 (2026-05-12): per-slice RX gain applied
     // to the audio drained from m_audioRing BEFORE the resample + encode.
     // Driven by the TciApplet "Slice A gain" slider (currently slice 0 only;
@@ -400,6 +501,16 @@ private:
     // We size for the largest legal audioStreamSamples (2048) * 2 channels.
     static constexpr int kMaxDrainSamples = 2048 * 2;
     std::array<float, kMaxDrainSamples> m_drainScratch{};
+    // R-R3-42 fix wave: per-channel resampling scratch. Input: one channel
+    // of a block (up to 2048 frames); output: up to 8x that (384 kHz).
+    static constexpr int kMaxResampleFrames = 2048;
+    static constexpr int kMaxResampleOutFrames = kMaxResampleFrames * 8;
+    // Allocated once in the constructor.
+    std::vector<float> m_resampleInLeft;
+    std::vector<float> m_resampleInRight;
+    std::vector<float> m_resampleOutLeft;
+    std::vector<float> m_resampleOutRight;
+    std::vector<float> m_resampleOut;
 
     // Handle for the WdspEngine::initializedChanged connection so we can
     // disconnect it if TciServer is destroyed before WDSP initializes.
@@ -533,6 +644,45 @@ private:
     // NereusSDR uses a server-wide SPSC ring because only one client can
     // own the TX mutex at a time.
     AudioRingSpsc<131072> m_txAudioRing;
+
+    // ── R-R3-42: remote window state (GUI thread only) ──────────────────────
+    bool m_remoteWindow{false};
+    RemoteReceiverAudio m_remoteAudio;
+    // A request is held with the Core for this receiver.
+    std::array<bool, kMaxTciRxSlices> m_remoteRequested{};
+    // The Core cannot send this receiver's audio (an older Core); set from
+    // receiverAudioStopped, cleared when the request is released.
+    std::array<bool, kMaxTciRxSlices> m_remoteUnavailable{};
+    // The receiver's audio is stopped with a notice showing.
+    std::array<bool, kMaxTciRxSlices> m_rxStoppedNotice{};
+    // A request for this receiver is being made (the Core may answer it
+    // before request() returns); audio_start handles that answer itself.
+    std::array<bool, kMaxTciRxSlices> m_remoteRequesting{};
+    // The app whose audio_start is being handled, while it is.
+    const TciClientSession* m_subscribingSession{nullptr};
+
+    QString m_noticeReason;
+    bool m_noticeFromReceiverStop{false};
+    // When each notice ("rx:reason", rx -1 when not about a receiver) was
+    // last toasted, on m_noticeClock.
+    QHash<QString, qint64> m_noticeToastAtMs;
+    QElapsedTimer m_noticeClock;
+
+    // Asks for, or releases, receiver `rx` to match whether any app
+    // listens to it. Remote window only; never from receiverAudioBlock.
+    void updateRemoteReceiverDemand(int rx);
+    // The Core cannot send receiver `rx`'s audio: every app listening to
+    // it is told the stream stopped, and the request is released.
+    void stopUnavailableReceiver(int rx);
+    // Remote window: the level TCI reports for receiver 0, from the Core's
+    // meter reading the window mirrors for slice 0 (-140 dBm without one).
+    double remoteReceiverLevelDbm() const;
+    // receiverStop: the notice is about a receiver's audio stopping, and
+    // goes once that audio flows again. quiet: shown, never toasted.
+    // rx: the receiver a receiver stop is about (-1 otherwise). Returns
+    // whether the notice asked for a toast.
+    bool raiseOperatorNotice(const QString& peer, const QString& reason,
+                             bool receiverStop = false, bool quiet = false, int rx = -1);
 };
 
 } // namespace NereusSDR

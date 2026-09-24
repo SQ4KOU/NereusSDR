@@ -1797,7 +1797,7 @@ void TstStationSession::handshakeCompletesInSectionSevenZeroOrder()
     QVERIFY(settingsDir.isValid());
     AppSettings stationSettings(
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
-    stationSettings.setValue(QStringLiteral("TciServerPort"), QStringLiteral("50001"));
+    stationSettings.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50001"));
 
     auto stationModel = makeStationRadioModel(1);
     StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
@@ -2688,7 +2688,7 @@ void TstStationSession::settingsProxyIsNotReadyBeforeTheSnapshot()
     AppSettings stationSettings(
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
     // A Station-classified key with a distinctive value.
-    stationSettings.setValue(QStringLiteral("TciServerPort"), QStringLiteral("50123"));
+    stationSettings.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50123"));
 
     auto stationModel = makeStationRadioModel(0);
     StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
@@ -2716,7 +2716,7 @@ void TstStationSession::settingsProxyIsNotReadyBeforeTheSnapshot()
     QVERIFY(proxy.ready());
     QVERIFY(proxy.hasReceivedSnapshot());
     QVERIFY(proxy.setupDialogAllowed() || !proxy.hasNonEmptySnapshot());
-    QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("50001")).toString(),
+    QCOMPARE(proxy.value(QStringLiteral("StationCallsign"), QStringLiteral("50001")).toString(),
              QStringLiteral("50123"));
 
     // ── Fix round 1, Important 2 ─────────────────────────────────────────
@@ -2734,15 +2734,15 @@ void TstStationSession::settingsProxyIsNotReadyBeforeTheSnapshot()
     // Hand-relaying here would pass against exactly that broken build,
     // which is why this now goes through proxy.setValue() and nothing else.
     QSignalSpy outbound(&proxy, &SettingsProxy::outboundWriteRequested);
-    proxy.setValue(QStringLiteral("TciServerPort"), QStringLiteral("50999"));
+    proxy.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50999"));
     QCOMPARE(outbound.count(), 1);
-    QTRY_COMPARE(stationSettings.value(QStringLiteral("TciServerPort")).toString(),
+    QTRY_COMPARE(stationSettings.value(QStringLiteral("StationCallsign")).toString(),
                  QStringLiteral("50999"));
 
     // The removal half of the same seam.
-    QVERIFY(stationSettings.contains(QStringLiteral("TciServerPort")));
-    proxy.remove(QStringLiteral("TciServerPort"));
-    QTRY_VERIFY(!stationSettings.contains(QStringLiteral("TciServerPort")));
+    QVERIFY(stationSettings.contains(QStringLiteral("StationCallsign")));
+    proxy.remove(QStringLiteral("StationCallsign"));
+    QTRY_VERIFY(!stationSettings.contains(QStringLiteral("StationCallsign")));
 }
 
 // Whole-branch review, Important 4. A settings remove on the station used
@@ -2771,7 +2771,7 @@ void TstStationSession::aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmpt
     QVERIFY(settingsDir.isValid());
     AppSettings stationSettings(
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
-    stationSettings.setValue(QStringLiteral("TciServerPort"), QStringLiteral("50123"));
+    stationSettings.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50123"));
 
     auto stationModel = makeStationRadioModel(0);
     StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
@@ -2789,19 +2789,19 @@ void TstStationSession::aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmpt
     server.acceptTransport(stationEnd);
     QTRY_COMPARE(completed.count(), 1);
 
-    QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("fallback")).toString(),
+    QCOMPARE(proxy.value(QStringLiteral("StationCallsign"), QStringLiteral("fallback")).toString(),
              QStringLiteral("50123"));
-    QVERIFY(proxy.contains(QStringLiteral("TciServerPort")));
+    QVERIFY(proxy.contains(QStringLiteral("StationCallsign")));
 
     // ── Station to client ────────────────────────────────────────────────
     // A removal on the daemon, for any reason of its own.
-    stationSettings.remove(QStringLiteral("TciServerPort"));
+    stationSettings.remove(QStringLiteral("StationCallsign"));
 
-    QTRY_VERIFY2(!proxy.contains(QStringLiteral("TciServerPort")),
+    QTRY_VERIFY2(!proxy.contains(QStringLiteral("StationCallsign")),
                  "the client still holds a key the station removed");
-    QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("fallback")).toString(),
+    QCOMPARE(proxy.value(QStringLiteral("StationCallsign"), QStringLiteral("fallback")).toString(),
              QStringLiteral("fallback"));
-    QVERIFY2(!proxy.handledKeys().contains(QStringLiteral("TciServerPort")),
+    QVERIFY2(!proxy.handledKeys().contains(QStringLiteral("StationCallsign")),
              "a removed key must not still be listed");
 
     // ── Client to station, and the echo back ─────────────────────────────

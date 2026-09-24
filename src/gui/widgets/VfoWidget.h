@@ -23,6 +23,10 @@
 //   2026-09-23 : R-R3-40 NNR step-back indicator on the NNR button, by
 //                 J.J. Boyd (KG4VCF), with Anthropic Claude Code
 //                 assistance.
+//   2026-09-23 : R-R3-45 Speakers and Headphones buttons in the audio
+//                 block (VAX design 6.2), with a plain notice when the
+//                 headphones are chosen but none are set up. By J.J. Boyd
+//                 (KG4VCF), with Anthropic Claude Code assistance.
 // =================================================================
 
 //=================================================================
@@ -420,6 +424,16 @@ public:
     void setAgcThreshold(int dBu);
     void setBinauralEnabled(bool v);
 
+    // --- R-R3-45: speakers or headphones (VAX design 6.2) ---
+    // Model -> widget, guarded against re-emit. The buttons write the bound
+    // slice's route directly (wired in setSlice, like the VAX selector).
+    void setOutputRoute(NereusSDR::SliceModel::OutputRoute route);
+    // Whether a headphones output is open on this computer. With the
+    // headphones chosen and none open, the flag says why it is silent.
+    void setHeadphonesAvailable(bool available);
+    // The words the flag shows in that case.
+    static QString headphonesMissingText();
+
     // --- Auto AGC-T visual update (Task 6) ---
     void updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double offset,
                               bool noiseFloorValid = true);
@@ -792,6 +806,12 @@ private:
     QLabel*             m_panLabel{nullptr};
     QPushButton*        m_muteBtn{nullptr};
     QPushButton*        m_binBtn{nullptr};
+    // R-R3-45: exclusive Speakers / Headphones pair + the silent notice.
+    QPushButton*        m_speakersBtn{nullptr};
+    QPushButton*        m_headphonesBtn{nullptr};
+    QLabel*             m_outputNotice{nullptr};
+    bool                m_headphonesAvailable{false};
+    void updateOutputNotice();
     QPushButton*        m_sqlBtn{nullptr};
     QSlider*            m_sqlSlider{nullptr};
     QSlider*            m_agcTSlider{nullptr};

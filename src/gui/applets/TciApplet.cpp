@@ -23,6 +23,11 @@
 //                (KG4VCF); AI-assisted transformation via Anthropic
 //                Claude Code. The startup gain push no longer writes the
 //                value it just read back to settings.
+//   2026-09-23 - R3 receiver audio plan, Task 4 (R-R3-42) by J.J. Boyd
+//                (KG4VCF); AI-assisted transformation via Anthropic
+//                Claude Code. The TCI gains are this computer's settings
+//                now; a notice line shows, in plain words, what TCI
+//                refused or why a receiver's audio stopped.
 // =================================================================
 
 #ifdef HAVE_WEBSOCKETS
@@ -30,6 +35,7 @@
 #include "TciApplet.h"
 
 #include "core/AppSettings.h"
+#include "gui/OperatorReasonText.h"
 #include "core/LogCategories.h"
 #include "core/TciServer.h"
 #include "gui/HGauge.h"
@@ -138,10 +144,12 @@ TciApplet::TciApplet(TciServer* server, QWidget* parent)
     // but persisted non-zero values must propagate or the slider's UI
     // position would lie about what the audio path is doing.
     //
-    // Apply only, never save: the values were just read from settings, and
-    // in a remote window those keys belong to the Core, so writing them
-    // back before the Core's settings arrive would count as an edit made
-    // while the link was down (R3 Setup fix wave, R-R3-17 / R-R3-21).
+    // Apply only, never save: the values were just read from settings, so
+    // writing them back would be an edit nobody made. Since R-R3-42 these
+    // keys are this computer's in a remote window too (SettingsScope
+    // "Tci"); the R3 Setup fix wave's first reason, that a remote window's
+    // write would reach the Core, no longer applies, but the rule stands.
+    // In a remote window TciServer ignores the TX gain (no transmit).
     if (m_server) {
         if (m_sliceAGain) {
             applySliceAGain(m_sliceAGain->value());
@@ -149,6 +157,16 @@ TciApplet::TciApplet(TciServer* server, QWidget* parent)
         if (m_txGain) {
             applyTxGain(m_txGain->value());
         }
+    }
+
+    // R-R3-42: what TCI refused, or why a receiver's audio stopped. After
+    // buildUI(), which made the notice line.
+    if (m_server) {
+        connect(m_server, &TciServer::operatorNotice, this,
+                [this](const QString&, const QString& reason, bool) { showNotice(reason); });
+        connect(m_server, &TciServer::operatorNoticeCleared, this,
+                [this] { showNotice(QString()); });
+        showNotice(m_server->operatorNoticeReason());
     }
 
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
@@ -176,6 +194,14 @@ void TciApplet::buildUI()
         buildSliceRow(vbox);
         buildTxRow(vbox);
         vbox->addWidget(divider());
+        // R-R3-42: hidden until TciServer has something to tell the operator.
+        m_noticeLabel = new QLabel(this);
+        m_noticeLabel->setObjectName(QStringLiteral("tciNotice"));
+        m_noticeLabel->setWordWrap(true);
+        m_noticeLabel->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 9px; }").arg(Style::kTextSecondary));
+        m_noticeLabel->setVisible(false);
+        vbox->addWidget(m_noticeLabel);
         buildFooter(vbox);
         vbox->addStretch();
     }
@@ -446,6 +472,24 @@ void TciApplet::updateStatusWidgets()
             count == 1 ? QStringLiteral("1 client connected")
                        : QStringLiteral("%1 clients connected").arg(count));
     }
+}
+
+// ── R-R3-42: notice line ─────────────────────────────────────────────────────
+
+void TciApplet::showNotice(const QString& reason)
+{
+    if (!m_noticeLabel) { return; }
+    // The Core's wire reasons and this computer's own sentences, both shown
+    // in the operator's words.
+    const QString shown = reason.isEmpty() ? QString() : OperatorReasonText::forDisplay(reason);
+    m_noticeLabel->setText(shown);
+    m_noticeLabel->setToolTip(shown);
+    m_noticeLabel->setVisible(!shown.isEmpty());
+}
+
+QString TciApplet::noticeText() const
+{
+    return (m_noticeLabel && !m_noticeLabel->isHidden()) ? m_noticeLabel->text() : QString();
 }
 
 // ── AppletWidget override ─────────────────────────────────────────────────────

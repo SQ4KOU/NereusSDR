@@ -891,6 +891,8 @@ set(CORE_SOURCES
     src/core/accessories/N2adrPreset.cpp
     src/core/accessories/PennyLaneController.cpp
     src/core/audio/MasterMixer.cpp
+    src/core/audio/VaxChannelMixer.cpp
+    src/core/audio/SpeakerFormatConverter.cpp
     src/core/audio/PcMicSource.cpp
     src/core/audio/RadeTxFilters.cpp
     src/core/audio/RadeTxFilters.h
@@ -995,6 +997,9 @@ set(CORE_SOURCES
     # R-R3-23 Task 2: RFC 3550 jitter/sequence measurement for one receiver context.
     src/core/session/media/RtpReceptionStats.cpp
     src/core/session/media/RemoteAudioReceiver.cpp
+    # R-R3-44: a remote window's VAX channel fed by a receiver stream, paced
+    # by the VAX output's own clock.
+    src/core/audio/RemoteVaxFeeder.cpp
     # R1 Task 7: consumer-to-stream subscription set extracted from the
     # router-mutation half of MainWindow::rebuildFftRouting. Rebuilds an
     # FFTRouter from its own subscription set on demand, so the daemon can
@@ -1206,10 +1211,13 @@ set(GUI_SOURCES
     src/gui/SliceFlagPresentationBinding.cpp
     src/gui/SliceFlagPresentationBinding.h
     src/gui/RemoteMediaController.cpp
+    # R-R3-44: a remote window's VAX channels, fed by receiver streams.
+    src/gui/RemoteVaxRouter.cpp
     src/gui/RemoteAudioStatus.cpp
     src/gui/RemoteDisplayAllocator.cpp
     src/gui/PanStatusText.cpp
     src/gui/OperatorReasonText.cpp
+    src/gui/ReceiverStopNotices.cpp
     src/gui/RemoteTelemetryController.cpp
     src/gui/RemoteDiagnosticsDialog.cpp
     src/gui/RemoteConnectionController.cpp
@@ -2153,6 +2161,15 @@ add_executable(nereus-media-probe EXCLUDE_FROM_ALL
 target_link_libraries(nereus-media-probe PRIVATE NereusCore)
 nereus_apply_warnings(nereus-media-probe)
 nereus_apply_warnings(nereus-audio-capture)
+
+# Digital-mode decode bench codec stage (R-R3-43, R-R3-23). Developer
+# measurement tool, kept out of routine builds and installs: runs audio files
+# through the Core's own Opus and L16 codec objects for
+# tools/digital-mode-opus-bench/run-bench.py.
+add_executable(nereus-opus-bench-codec EXCLUDE_FROM_ALL
+    tools/digital-mode-opus-bench/opus-bench-codec.cpp)
+target_link_libraries(nereus-opus-bench-codec PRIVATE NereusCore)
+nereus_apply_warnings(nereus-opus-bench-codec)
 
 # NNR model cost benchmark (R-R3-40). Developer measurement tools, kept out
 # of routine builds and installs. nereus-nnr-bench links wdsp_static as the

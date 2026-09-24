@@ -18,6 +18,9 @@
 //                 src/gui/TitleBar.{h,cpp}. AetherSDR has no per-file
 //                 headers; project-level citation per docs/attribution/
 //                 HOW-TO-PORT.md rule 6.
+//   2026-09-23 - J.J. Boyd (KG4VCF). R3 receiver audio fix wave (R-R3-42,
+//                 R-R3-44): m_receiverStopNotices. AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -89,6 +92,7 @@
 // m_station below, so it cannot be forward-declared.
 #include "core/session/RemoteStationOptions.h"
 #include "core/WdspTypes.h"
+#include "gui/ReceiverStopNotices.h"
 
 class QProgressDialog;
 class QSplitter;
@@ -898,6 +902,12 @@ private:
     // stack (StationClient.h drags in the whole message codec).
     class StationClient* m_stationClient{nullptr};
     class RemoteMediaController* m_remoteMedia{nullptr};
+    // R-R3-44: this computer's VAX channels, fed from the Core's receiver
+    // streams. Remote windows only; deleted right after m_remoteMedia.
+    class RemoteVaxRouter* m_remoteVax{nullptr};
+    // R-R3-42, R-R3-44 fix wave: one toast per receiver-audio stop across
+    // TCI and the VAX channels.
+    ReceiverStopNotices m_receiverStopNotices;
     class RemoteTelemetryController* m_remoteTelemetry{nullptr};
     class RemoteConnectionController* m_remoteConnection{nullptr};
     class RemoteConnectionPanel* m_remoteConnectionPanel{nullptr};

@@ -21,6 +21,13 @@
 //   2026-09-23 - R-R3-21: unavailable, with a plain reason, on a
 //                 remote-station model. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23 - R-R3-44: usable in a remote window again. The VAX
+//                 channels there are this computer's, fed by the Core's
+//                 receiver streams (RemoteVaxRouter), so the gain, mute and
+//                 level rows work; the TX row follows the transmit
+//                 permission (setTransmitPermitted). J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude
+//                 Code.
 // =================================================================
 
 #include "VaxApplet.h"
@@ -40,6 +47,7 @@
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QTimer>
+#include <QVariant>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -105,13 +113,38 @@ VaxApplet::VaxApplet(RadioModel* model, AudioEngine* audio, QWidget* parent)
     connectSliceTagsTracking();
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 
-    // R-R3-21: VAX buses are fed by this computer's own receive DSP. While
-    // connected to a Core, received audio plays through the speakers only
-    // (AudioEngine::writeRemotePlayback) and the slice's VAX channel is not
-    // mirrored, so every gain and mute here would move nothing.
+    // R-R3-44: in a remote window the VAX channels are this computer's,
+    // fed by the Core's receiver streams through RemoteVaxRouter, which
+    // applies this applet's gain and mute (AudioEngine::writeVaxOutput). The
+    // TX row sets the level of VAX used as the microphone, which waits for
+    // remote transmit: it starts unavailable until MainWindow pushes the
+    // negotiated permission.
     if (m_model && !m_model->ownsLocalDsp()) {
-        setEnabled(false);
-        setToolTip(tr("VAX audio channels are not available while connected to a Core."));
+        setTransmitPermitted(false, QString());
+    }
+}
+
+void VaxApplet::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    if (!m_txMeter) {
+        return;
+    }
+    static constexpr auto kSavedTooltip = "VaxSavedTransmitTooltip";
+    if (!permitted) {
+        const QString shown = reason.isEmpty()
+            ? tr("Transmit controls are unavailable until the station confirms transmit permission.")
+            : reason;
+        if (!m_txMeter->property(kSavedTooltip).isValid()) {
+            m_txMeter->setProperty(kSavedTooltip, m_txMeter->toolTip());
+        }
+        m_txMeter->setEnabled(false);
+        m_txMeter->setToolTip(shown);
+        return;
+    }
+    m_txMeter->setEnabled(true);
+    if (m_txMeter->property(kSavedTooltip).isValid()) {
+        m_txMeter->setToolTip(m_txMeter->property(kSavedTooltip).toString());
+        m_txMeter->setProperty(kSavedTooltip, QVariant());
     }
 }
 

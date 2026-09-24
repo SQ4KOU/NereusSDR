@@ -30,6 +30,9 @@
 //                 convention, listening to SliceModel::vaxChannelChanged.
 //                 Settings keys per docs/architecture/2026-04-19-vax-design.md
 //                 §5.4 (PascalCase keys, "True"/"False" booleans).
+//   2026-09-23: R-R3-44: setTransmitPermitted() for the TX row, so the
+//                 applet works in a remote window. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -79,6 +82,11 @@ public:
     QString appletId()    const override { return QStringLiteral("vax"); }
     QString appletTitle() const override { return QStringLiteral("VAX"); }
     void    syncFromModel() override;
+
+    // R-R3-44: the TX row sets the level of VAX used as the microphone,
+    // so in a remote window it follows the negotiated transmit permission
+    // (MainWindow::applyRemoteRoleGating). The receive rows are unaffected.
+    void setTransmitPermitted(bool permitted, const QString& reason);
 
 protected:
     // Start/stop the level-poll timer with visibility so a hidden applet

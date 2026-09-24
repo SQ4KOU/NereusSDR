@@ -117,9 +117,17 @@ LOCAL_AUDIO_ALLOWLIST = {
     # Setup > Audio > TX Input: PC microphone device, backend, buffer and
     # Test Mic.
     "src/gui/setup/AudioTxInputPage.cpp": 1,
+    # Setup > Audio > VAX: this computer's VAX outputs, which a remote
+    # window feeds from the Core's receiver streams (R-R3-44).
+    "src/gui/setup/AudioVaxPage.cpp": 1,
+    # Setup > Audio > Advanced: VAX feedback tuning, the VAX flags and Reset
+    # of this computer's audio (R-R3-44). Its DSP group writes the Core's
+    # settings through AppSettings and follows the Core's availability.
+    "src/gui/setup/AudioAdvancedPage.cpp": 1,
     # The title-bar master output (volume, mute, output device picker):
-    # the TitleBar's engine and the speaker-change wiring beside it.
-    "src/gui/MainWindow.cpp": 2,
+    # the TitleBar's engine and the speaker-change wiring beside it; and a
+    # remote window's VAX outputs and their feeders (R-R3-44).
+    "src/gui/MainWindow.cpp": 3,
 }
 
 # A double-quoted C++ string literal, escapes included. Removed from a line

@@ -8,12 +8,15 @@
 #include <mutex>
 #include <thread>
 #include "core/AudioEngine.h"
+#include "core/audio/PortAudioBus.h"
 #include "core/session/media/AudioJitterBuffer.h"
 #include "core/session/media/OpusAudioCodec.h"
 #include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteAudioRateMatcher.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "fakes/PacedAudioBus.h"
+#include "OperatorWording.h"
+#include <functional>
 using namespace NereusSDR;
 namespace {
 // One lossless packet of the two-tone test signal: 997 Hz left, 1703 Hz
@@ -63,6 +66,43 @@ struct CollectedPcm {
         return blocks.size();
     }
 };
+
+// R-R3-23: one lossless packet whose stereo frame f (counted from the
+// stream's start) is `frameAt(f)`.
+QByteArray losslessPacketOf(int packet, quint32 ssrc,
+                            const std::function<std::pair<float, float>(qint64)>& frameAt)
+{
+    QVector<float> pcm(PcmAudioCodecConfig::kPacketFrames * 2);
+    for (int i = 0; i < PcmAudioCodecConfig::kPacketFrames; ++i) {
+        const auto [left, right] =
+            frameAt(qint64(packet) * PcmAudioCodecConfig::kPacketFrames + i);
+        pcm[2 * i] = left;
+        pcm[2 * i + 1] = right;
+    }
+    const PcmRtpEncodeResult encoded = PcmAudioPacketiser{}.encode(
+        pcm, quint16(packet), quint32(packet) * quint32(PcmAudioCodecConfig::kPacketFrames), ssrc);
+    return encoded.status == OpusAudioCodecStatus::Accepted ? encoded.packet : QByteArray{};
+}
+
+// R-R3-23: the amplitude of a `hz` tone in one channel of audio heard at
+// `rateHz` with `channels` interleaved, over `frames` frames from
+// `firstFrame`.
+double heardToneAmplitude(const QVector<float>& heard, int channels, int channel, double hz,
+                          int rateHz, qint64 firstFrame, qint64 frames)
+{
+    double cosine = 0.0;
+    double sine = 0.0;
+    qint64 counted = 0;
+    for (qint64 frame = firstFrame; frame < firstFrame + frames
+         && frame * channels + channel < heard.size(); ++frame) {
+        const double phase = 2.0 * 3.141592653589793 * hz * double(frame) / double(rateHz);
+        const double sample = heard.at(frame * channels + channel);
+        cosine += sample * std::cos(phase);
+        sine += sample * std::sin(phase);
+        ++counted;
+    }
+    return counted > 0 ? 2.0 * std::hypot(cosine, sine) / double(counted) : 0.0;
+}
 
 double blockRms(const QVector<float>& block)
 {
@@ -1603,6 +1643,279 @@ private slots:
         QVERIFY(receiver.start(kSsrc, 0, RemoteAudioProfile::Lossless));
         QVERIFY(!receiver.telemetry().playout);
         QVERIFY(!receiver.telemetry().release);
+        receiver.stop();
+    }
+
+    // R-R3-23: remote playback begins on every rate and channel count the
+    // Devices page offers (DeviceCard kSampleRates x kChannels), names the
+    // accepted format, and writes blocks in it. A PortAudio output ring
+    // holds 100 ms at that format, so even 384 kHz leaves room for the
+    // receiver's queue.
+    void remotePlaybackAcceptsEveryOfferedSpeakerFormat_data()
+    {
+        QTest::addColumn<int>("rate");
+        QTest::addColumn<int>("channels");
+        for (int rate : {44100, 48000, 88200, 96000, 176400, 192000, 384000}) {
+            for (int channels : {1, 2}) {
+                QTest::addRow("%d Hz, %d ch", rate, channels) << rate << channels;
+            }
+        }
+    }
+    void remotePlaybackAcceptsEveryOfferedSpeakerFormat()
+    {
+        QFETCH(int, rate);
+        QFETCH(int, channels);
+        const AudioFormat format{rate, channels, AudioFormat::Sample::Float32};
+        AudioEngine engine;
+        engine.setVolume(0.5f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        QVERIFY(bus->open(format));
+        engine.setSpeakersBusForTest(std::move(sink));
+        QVERIFY(!engine.remotePlaybackFormat());
+        QString error;
+        QVERIFY2(engine.beginRemotePlayback(&error), qPrintable(error));
+        QCOMPARE(engine.remotePlaybackFormat(), std::optional<AudioFormat>(format));
+
+        // The ring a real PortAudio stream of this format gets, which the
+        // paced bus reports as its capacity.
+        const std::size_t ringSamples = PortAudioBus::outputRingSamples(rate, channels);
+        QCOMPARE(ringSamples, std::max<std::size_t>(9600, std::size_t(rate / 10 * channels)));
+        const auto pacing = engine.remotePlaybackPacing();
+        QVERIFY(pacing);
+        QCOMPARE(pacing->capacityFrames, int(ringSamples) / channels);
+        // Two 10 ms blocks, a callback and one more block fit (the
+        // receiver's queue and write, see playsOnEverySpeakerFormat).
+        const int block = rate / 100;
+        QVERIFY(4 * block + bus->callbackFrames <= pacing->capacityFrames);
+
+        const QVector<float> pcm(qsizetype(block) * channels, 0.8f);
+        QVERIFY(engine.writeRemotePlayback(pcm));
+        QCOMPARE(engine.remotePlaybackPacing()->queuedFrames, block);
+        bus->render(block);
+        QCOMPARE(bus->heard.size(), qsizetype(block) * channels);
+        for (float value : bus->heard) { QVERIFY(std::abs(value - 0.4f) < 0.00001f); }
+        // Not a whole frame of this format.
+        if (channels == 2) { QVERIFY(!engine.writeRemotePlayback(QVector<float>(3, 0.1f))); }
+        // At most kMaxRemotePlaybackFrames frames a write.
+        QVERIFY(!engine.writeRemotePlayback(
+            QVector<float>(qsizetype(AudioEngine::kMaxRemotePlaybackFrames) * 2 + 2, 0.1f)));
+
+        // The device reopens in another format: this playback's pacing and
+        // writes stop, so the receiver asks for a fresh start.
+        const AudioFormat other{rate == 48000 ? 44100 : 48000, channels,
+                                AudioFormat::Sample::Float32};
+        QVERIFY(bus->open(other));
+        QVERIFY(!engine.remotePlaybackPacing());
+        QVERIFY(!engine.writeRemotePlayback(pcm));
+        engine.endRemotePlayback();
+        QVERIFY(!engine.remotePlaybackFormat());
+        QVERIFY(engine.beginRemotePlayback(&error));
+        QCOMPARE(engine.remotePlaybackFormat(), std::optional<AudioFormat>(other));
+        engine.endRemotePlayback();
+    }
+
+    // R-R3-23: what remote playback still refuses, in plain words: a
+    // channel count or rate no Devices page setting makes, and a device
+    // without playback timing.
+    void remotePlaybackRefusesOnlyWhatItCannotPlay()
+    {
+        const auto refusal = [](const AudioFormat& format, bool timing) {
+            AudioEngine engine;
+            auto sink = std::make_unique<PacedAudioBus>();
+            sink->open(format);
+            sink->setOutputPacingAvailableForTesting(timing);
+            engine.setSpeakersBusForTest(std::move(sink));
+            QString error;
+            const bool began = engine.beginRemotePlayback(&error);
+            return began ? QString() : error;
+        };
+        using Sample = AudioFormat::Sample;
+        const QString sixChannels = refusal({48000, 6, Sample::Float32}, true);
+        QCOMPARE(sixChannels, QStringLiteral(
+            "Remote audio cannot play on a speaker device set to 6 channels at 48000 Hz"));
+        QVERIFY(!refusal({4000, 2, Sample::Float32}, true).isEmpty());
+        QVERIFY(!refusal({768000, 2, Sample::Float32}, true).isEmpty());
+        QVERIFY(!refusal({48000, 2, Sample::Int16}, true).isEmpty());
+        const QString noTiming = refusal({44100, 2, Sample::Float32}, false);
+        QCOMPARE(noTiming,
+                 QStringLiteral("The selected speaker device does not report its playback timing"));
+        QVERIFY(OperatorWording::isPlain(sixChannels));
+        QVERIFY(OperatorWording::isPlain(noTiming));
+        QVERIFY(refusal({44100, 1, Sample::Float32}, true).isEmpty());
+    }
+
+    // R-R3-23 / R-R3-07: remote audio plays on a speaker at 44.1, 48, 96 or
+    // 192 kHz, stereo or mono. The speaker plays on the same steady clock
+    // that paces the stream, as a real device plays continuously. For each
+    // format: nothing restarts or runs short, the two tones come out at
+    // their own pitch and level at the device's rate (a mono device hears
+    // them mixed, each at half), and the delay readout places a sharp onset
+    // where the speaker actually played it, inside its stated accuracy.
+    void playsOnEverySpeakerFormat_data()
+    {
+        QTest::addColumn<int>("rate");
+        QTest::addColumn<int>("channels");
+        QTest::newRow("44.1 kHz stereo") << 44100 << 2;
+        QTest::newRow("48 kHz stereo") << 48000 << 2;
+        QTest::newRow("96 kHz stereo") << 96000 << 2;
+        QTest::newRow("192 kHz stereo") << 192000 << 2;
+        QTest::newRow("48 kHz mono") << 48000 << 1;
+        QTest::newRow("44.1 kHz mono") << 44100 << 1;
+    }
+    void playsOnEverySpeakerFormat()
+    {
+        QFETCH(int, rate);
+        QFETCH(int, channels);
+        constexpr quint32 kSsrc = 623;
+        constexpr qint64 kToneEndFrame = 72000;      // 1.5 s of two tones,
+        constexpr qint64 kOnsetFrame = 96000 + 177;  // then silence, then
+        constexpr double kOnsetHz = 200.0;           // a cosine mid-packet
+        constexpr double kOnsetAmplitude = 0.5;
+        // What the model leaves: where the half-height crossing falls after
+        // the rate matcher's reconstruction, and the frame conventions at
+        // each end (as tst_remote_audio_session's delay check allows).
+        constexpr double kToleranceMs = 0.5;
+
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        QVERIFY(bus->open(AudioFormat{rate, channels, AudioFormat::Sample::Float32}));
+        bus->callbackFrames = rate / 1000; // a 1 ms callback device
+        engine.setSpeakersBusForTest(std::move(sink));
+        // One steady timeline: the receiver's clock, the speaker's play
+        // clock and the source's capture clock.
+        QElapsedTimer clock;
+        clock.start();
+        RemoteAudioReceiver receiver(&engine, nullptr, [&clock] { return clock.nsecsElapsed(); });
+        QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
+        QSignalSpy restarts(&receiver, &RemoteAudioReceiver::restartRequested);
+        QVERIFY(receiver.start(kSsrc, 0, RemoteAudioProfile::Lossless));
+        bus->setPlayClockForTesting([&clock] { return clock.nsecsElapsed(); });
+        const qint64 playOriginNs = bus->playClockOriginNs();
+
+        const auto frameAt = [](qint64 f) -> std::pair<float, float> {
+            if (f < kToneEndFrame) {
+                const double t = double(f) / 48000.0;
+                return {float(0.2 * std::sin(t * 2 * 3.141592653589793 * 997)),
+                        float(0.2 * std::sin(t * 2 * 3.141592653589793 * 1703))};
+            }
+            if (f < kOnsetFrame) { return {0.0f, 0.0f}; }
+            const float v = float(kOnsetAmplitude
+                * std::cos(2.0 * 3.141592653589793 * kOnsetHz * double(f - kOnsetFrame) / 48000.0));
+            return {v, v};
+        };
+        // Each packet goes when its last frame is due on the timeline.
+        const qint64 sourceOriginNs = clock.nsecsElapsed();
+        int packet = 0;
+        QVector<float> toneHeard;
+        qint64 dryAtToneEnd = -1;
+        QTimer source;
+        source.setTimerType(Qt::PreciseTimer);
+        source.setInterval(1);
+        connect(&source, &QTimer::timeout, this, [&] {
+            const qint64 dueFrames = (clock.nsecsElapsed() - sourceOriginNs) * 48 / 1'000'000;
+            while (qint64(packet + 1) * PcmAudioCodecConfig::kPacketFrames <= dueFrames) {
+                receiver.submit(losslessPacketOf(packet, kSsrc, frameAt));
+                ++packet;
+            }
+        });
+        qint64 roughHeardFrame = -1;
+        std::optional<RemoteAudioReceiverTelemetry> atOnset;
+        QTimer speaker;
+        speaker.setTimerType(Qt::PreciseTimer);
+        speaker.setInterval(1);
+        connect(&speaker, &QTimer::timeout, this, [&] {
+            const qint64 before = bus->heard.size() / channels;
+            if (bus->renderDue() <= 0) { return; }
+            if (toneHeard.isEmpty()
+                && qint64(packet) * PcmAudioCodecConfig::kPacketFrames >= kToneEndFrame) {
+                toneHeard = bus->heard; // the source has just sent its last tone
+                dryAtToneEnd = bus->playedDryFramesForTesting();
+            }
+            if (qint64(packet) * PcmAudioCodecConfig::kPacketFrames < kOnsetFrame
+                || roughHeardFrame >= 0) {
+                return;
+            }
+            for (qint64 k = before; k < bus->heard.size() / channels; ++k) {
+                if (std::abs(bus->heard.at(k * channels)) > 0.02f) {
+                    roughHeardFrame = k;
+                    atOnset = receiver.telemetry();
+                    break;
+                }
+            }
+        });
+        source.start();
+        speaker.start();
+        QTRY_VERIFY_WITH_TIMEOUT(roughHeardFrame >= 0 || !errors.isEmpty() || !restarts.isEmpty(),
+                                 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(bus->heard.size() / channels >= roughHeardFrame + rate / 50
+                                     || !errors.isEmpty() || !restarts.isEmpty(), 5000);
+        source.stop();
+        speaker.stop();
+        QVERIFY2(errors.isEmpty(), errors.isEmpty() ? "" : qPrintable(errors.first().first().toString()));
+        QVERIFY2(restarts.isEmpty(), restarts.isEmpty() ? "" : qPrintable(restarts.first().first().toString()));
+
+        // Played at the device's rate: the tones at their own pitch and
+        // level over the last 250 ms heard before the tones ended.
+        const qint64 toneFrames = rate / 4;
+        const qint64 toneFirst = toneHeard.size() / channels - toneFrames;
+        QVERIFY(toneFirst > rate / 2);
+        const double leftLow = heardToneAmplitude(toneHeard, channels, 0, 997, rate, toneFirst, toneFrames);
+        const double leftHigh = heardToneAmplitude(toneHeard, channels, 0, 1703, rate, toneFirst, toneFrames);
+        if (channels == 2) {
+            const double rightHigh = heardToneAmplitude(toneHeard, channels, 1, 1703, rate, toneFirst, toneFrames);
+            const double rightLow = heardToneAmplitude(toneHeard, channels, 1, 997, rate, toneFirst, toneFrames);
+            QVERIFY2(std::abs(leftLow - 0.2) < 0.01, qPrintable(QString::number(leftLow)));
+            QVERIFY2(std::abs(rightHigh - 0.2) < 0.01, qPrintable(QString::number(rightHigh)));
+            QVERIFY2(leftHigh < 0.005 && rightLow < 0.005,
+                     qPrintable(QStringLiteral("%1 %2").arg(leftHigh).arg(rightLow)));
+        } else {
+            // (left + right) / 2: each tone at half its level.
+            QVERIFY2(std::abs(leftLow - 0.1) < 0.005, qPrintable(QString::number(leftLow)));
+            QVERIFY2(std::abs(leftHigh - 0.1) < 0.005, qPrintable(QString::number(leftHigh)));
+        }
+
+        // Once playing, the speaker never ran short: any silence it played
+        // for want of audio came before the first packet.
+        QCOMPARE(bus->playedDryFramesForTesting(), dryAtToneEnd);
+
+        // The delay readout at the moment the onset was first heard.
+        QVERIFY(atOnset && atOnset->playout);
+        const RemoteAudioPlayoutPoint& playout = *atOnset->playout;
+        QCOMPARE(playout.deviceRateHz, rate);
+        QCOMPARE(playout.callbackFrames, bus->callbackFrames);
+        QCOMPARE(playout.pipelineDelayFrames, RemoteAudioRateMatcher::filterDelayFrames(rate));
+        QVERIFY(atOnset->speakerQueuedMs);
+        QVERIFY(*atOnset->speakerQueuedMs > 0.0 && *atOnset->speakerQueuedMs < 100.0);
+        QCOMPARE(atOnset->underflows, 0);
+        QCOMPARE(atOnset->overflows, 0);
+        // The onset frame is heard where the newest matched frame's time
+        // says, less the stream time between them (and the matcher's
+        // stretch, zero on one steady clock but counted as the app does).
+        const qint64 predictedNs = playout.playoutNs() - playout.matcherStretchNs()
+            - (qint64(playout.rtpTimestamp) - kOnsetFrame) * 1'000'000'000 / 48000;
+        float peak = 0.0f;
+        for (qint64 k = roughHeardFrame; k < roughHeardFrame + rate / 50; ++k) {
+            peak = std::max(peak, bus->heard.at(k * channels));
+        }
+        QVERIFY(peak > 0.3f);
+        qint64 heardFrame = roughHeardFrame;
+        while (bus->heard.at(heardFrame * channels) < peak / 2.0f) { ++heardFrame; }
+        const qint64 heardNs = playOriginNs + heardFrame * 1'000'000'000 / rate;
+        const double missMs = double(predictedNs - heardNs) / 1e6;
+        const double accuracyMs = double(playout.accuracyNs()) / 1e6;
+        qInfo().noquote() << QStringLiteral(
+            "%1 Hz %2 ch: onset heard %3 ms after capture, readout misses by %4 ms "
+            "(accuracy %5 ms); matcher %6 + speaker %7 frames, dry %8 frames")
+            .arg(rate).arg(channels)
+            .arg(double(heardNs - (sourceOriginNs + kOnsetFrame * 1'000'000'000 / 48000)) / 1e6, 0, 'f', 2)
+            .arg(missMs, 0, 'f', 3).arg(accuracyMs, 0, 'f', 3)
+            .arg(playout.matcherFillFrames).arg(playout.speakerQueuedFrames)
+            .arg(bus->playedDryFramesForTesting());
+        QVERIFY2(std::abs(missMs) <= accuracyMs + kToleranceMs,
+                 qPrintable(QStringLiteral("missed by %1 ms, accuracy %2 ms").arg(missMs).arg(accuracyMs)));
         receiver.stop();
     }
 };

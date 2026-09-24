@@ -89,6 +89,18 @@
 //                 window's edits, and give the object's plain reason
 //                 otherwise. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-23 -- R3 receiver audio plan, Task 4 (R-R3-42): Audio > TCI
+//                 and TCI Server work in a remote window. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-09-23 -- R3 receiver audio plan, Task 5 (R-R3-44): the VAX rows
+//                 move to enabled. The VAX applet, the flag's VAX selector,
+//                 the overlay's VAX combo, Audio > VAX (now ThisComputer)
+//                 and Audio > Advanced work in a remote window; Send IQ to
+//                 VAX and the VAX TX row keep a plain reason. No real page
+//                 reaches local DSP any more, so the gate's cases use a
+//                 probe page that does. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -158,6 +170,7 @@
 #include "gui/applets/RxApplet.h"
 #include "gui/applets/TxApplet.h"
 #include "gui/applets/VaxApplet.h"
+#include "gui/setup/AudioAdvancedPage.h"
 #include "gui/HGauge.h"
 #include "gui/VaxFirstRunDialog.h"
 #include "gui/setup/AudioDevicesPage.h"
@@ -172,6 +185,7 @@
 #include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
 #include "core/accessories/AlexAntennaFacade.h"
 #include "models/TransmitModel.h"
+#include "gui/widgets/MeterSlider.h"
 #include "gui/widgets/VaxChannelSelector.h"
 #include "gui/widgets/VfoWidget.h"
 #include "models/RadioModel.h"
@@ -554,6 +568,15 @@ private slots:
     {
         RadioModel model(RadioModel::Role::Remote);
         SetupDialog dialog(&model);
+        // R-R3-44: since Audio > VAX and Advanced reach this computer's
+        // engine through localAudioDevices(), no real page reaches local
+        // DSP. A Core page that does keeps the gate exercised: it must come
+        // up disabled and is not an offender.
+        const QString probeLabel = QStringLiteral("Probe Core page reaching local DSP");
+        dialog.registerPageForTest(probeLabel, SetupScope::Core, [&model]() -> QWidget* {
+            (void)model.wdspEngine();
+            return new QWidget;
+        });
 
         // Iterate by INDEX, not by label. Two leaves are registered as
         // "Options" (General and DSP), and pageEntryIndex() returns the
@@ -593,6 +616,10 @@ private slots:
                  "no Setup page reached local DSP at all, so the gate above "
                  "was never exercised -- either the enumeration changed or "
                  "the audit stopped arming");
+        // Only the probe: every real page works in a remote window or is
+        // declared unavailable by name.
+        QCOMPARE(reachedCount, 1);
+        QVERIFY(!dialog.realizedPageForTest(probeLabel)->isEnabled());
 
         // And the scopes the plan fixes (R-R3-23).
         const QStringList labels = dialog.pageLabelsForTest();
@@ -602,6 +629,11 @@ private slots:
         QCOMPARE(scopeOf(QStringLiteral("Devices")), SetupScope::ThisComputer);
         QCOMPARE(scopeOf(QStringLiteral("TX Input")), SetupScope::Mixed);
         QCOMPARE(scopeOf(QStringLiteral("Advanced")), SetupScope::Mixed);
+        // R-R3-44: this computer's VAX channels.
+        QCOMPARE(scopeOf(QStringLiteral("VAX")), SetupScope::ThisComputer);
+        // R-R3-42: this computer's TCI server.
+        QCOMPARE(scopeOf(QStringLiteral("TCI")), SetupScope::ThisComputer);
+        QCOMPARE(scopeOf(QStringLiteral("TCI Server")), SetupScope::ThisComputer);
     }
 
     // R-R3-23: the sweep catches a ThisComputer page that reaches an
@@ -1497,27 +1529,27 @@ private slots:
     // The gate (SetupDialog::realizePage) disabled the Audio leaves on a
     // remote model but gave no reason, so the operator saw a greyed page
     // and nothing else. R-R3-23 narrowed the set: Devices and TX Input
-    // pick this computer's devices and now work (cases below). VAX and
-    // Advanced still reach this process's engine themselves; TCI reached it
-    // only through the backend strip, which no longer counts, so it keeps
-    // its remote behaviour by declaration, with the same reason.
+    // pick this computer's devices and now work (cases below). TCI reached
+    // it only through the backend strip, which no longer counts; since
+    // R-R3-42 it configures this computer's TCI server and works in a
+    // remote window (remoteTciPagesWorkOnThisComputer). Since R-R3-44 VAX
+    // and Advanced work too (remoteVaxAndAdvancedPagesWorkOnThisComputer),
+    // so the reason is proved on a probe Mixed page that reaches this
+    // process's engine on purpose.
     // ====================================================================
-    void remoteLocalDspSetupPagesShowAPlainReason_data()
-    {
-        QTest::addColumn<QString>("label");
-        QTest::addColumn<bool>("reachesLocalDsp");
-        QTest::newRow("VAX") << QStringLiteral("VAX") << true;
-        QTest::newRow("TCI") << QStringLiteral("TCI") << false;
-        QTest::newRow("Advanced") << QStringLiteral("Advanced") << true;
-    }
-
     void remoteLocalDspSetupPagesShowAPlainReason()
     {
-        QFETCH(QString, label);
-        QFETCH(bool, reachesLocalDsp);
+        const QString label = QStringLiteral("Probe page reaching local DSP");
+        const bool reachesLocalDsp = true;
         RadioModel remote(RadioModel::Role::Remote);
         SetupDialog dialog(&remote);
+        dialog.registerPageForTest(label, SetupScope::Mixed, [&remote]() -> QWidget* {
+            (void)remote.audioEngine();
+            return new QWidget;
+        });
         dialog.setTransmitPermitted(false, QStringLiteral("Remote transmit is unavailable"));
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(
+            QStringLiteral("Setup page.*reached local DSP on a remote-station model")));
 
         const int handOutsBefore = remote.localDspHandOutCount();
         dialog.selectPage(label);
@@ -1551,6 +1583,75 @@ private slots:
         dialog.selectPage(QStringLiteral("NR/ANF"));
         QVERIFY(localNotice->isHidden());
         QVERIFY(txNotice->isHidden());
+    }
+
+    // R-R3-44: Audio > VAX and Audio > Advanced work in a remote window.
+    // They reach this computer's engine (the VAX outputs a remote window
+    // feeds from the Core) through localAudioDevices(), which the local-DSP
+    // audit does not count, so neither page is disabled. The VAX page's
+    // "Consumers:" row says what the platform reports in plain words.
+    // Advanced refuses Send IQ to VAX with a plain reason, and its DSP group
+    // (the Core's settings) follows the Core's availability.
+    void remoteVaxAndAdvancedPagesWorkOnThisComputer()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        dialog.setTransmitPermitted(false, QStringLiteral("Remote transmit is unavailable"));
+        auto* const localNotice = dialog.findChild<QLabel*>(QStringLiteral("setupLocalUnavailable"));
+        QVERIFY(localNotice != nullptr);
+        for (const QString& label : {QStringLiteral("VAX"), QStringLiteral("Advanced")}) {
+            const int handOutsBefore = remote.localDspHandOutCount();
+            dialog.selectPage(label);
+            QWidget* const page = dialog.realizedPageForTest(label);
+            QVERIFY2(page != nullptr, qPrintable(label));
+            QCOMPARE(remote.localDspHandOutCount(), handOutsBefore);
+            QVERIFY2(page->isEnabled(), qPrintable(label));
+            QVERIFY2(page->toolTip().isEmpty(), qPrintable(label));
+            QVERIFY2(localNotice->isHidden(), qPrintable(label));
+        }
+
+        QWidget* const vaxPage = dialog.realizedPageForTest(QStringLiteral("VAX"));
+        const QList<QLabel*> consumers = vaxPage->findChildren<QLabel*>(QStringLiteral("vaxConsumerLabel"));
+        QCOMPARE(consumers.size(), 4);
+        for (QLabel* consumer : consumers) {
+            QVERIFY2(OperatorWording::isPlain(consumer->text()), qPrintable(consumer->text()));
+            QVERIFY(consumer->text() != QStringLiteral("\u2014"));
+        }
+
+        QWidget* const advanced = dialog.realizedPageForTest(QStringLiteral("Advanced"));
+        QCheckBox* sendIq = nullptr;
+        for (QCheckBox* box : advanced->findChildren<QCheckBox*>()) {
+            if (box->text() == QStringLiteral("Send IQ to VAX")) { sendIq = box; }
+        }
+        QVERIFY(sendIq != nullptr);
+        QVERIFY(!sendIq->isEnabled());
+        QCOMPARE(sendIq->toolTip(), AudioAdvancedPage::remoteSendIqReason());
+        QVERIFY2(OperatorWording::isPlain(sendIq->toolTip()), qPrintable(sendIq->toolTip()));
+        const bool wasChecked = sendIq->isChecked();
+        QTest::mouseClick(sendIq, Qt::LeftButton);
+        QCOMPARE(sendIq->isChecked(), wasChecked);
+        QVERIFY(!AppSettings::instance().contains(QStringLiteral("audio/SendIqToVax")));
+
+        dialog.setStationSettingsAvailable(false, kStationReason);
+        const QList<QWidget*> gated = controlsGatedWith(advanced, kStationReason);
+        QCOMPARE(gated.size(), 2);
+        for (QWidget* control : gated) {
+            QVERIFY(qobject_cast<QComboBox*>(control) != nullptr);
+            QVERIFY(!control->isEnabled());
+        }
+        dialog.setStationSettingsAvailable(true, QString());
+        for (QWidget* control : gated) {
+            QVERIFY(control->isEnabled());
+        }
+
+        // Locally Send IQ to VAX is stored as before.
+        RadioModel local;
+        AudioAdvancedPage localAdvanced(&local);
+        for (QCheckBox* box : localAdvanced.findChildren<QCheckBox*>()) {
+            if (box->text() == QStringLiteral("Send IQ to VAX")) {
+                QVERIFY(box->isEnabled());
+            }
+        }
     }
 
     // R-R3-23: Audio > Devices in a remote window picks this computer's
@@ -1599,6 +1700,33 @@ private slots:
                      .toString(),
                  QString::number(samples));
         QCOMPARE(remote.localDspHandOutCount(), handOutsBefore);
+    }
+
+    // R-R3-42: Audio > TCI and CAT & Network > TCI Server configure the TCI
+    // server that runs on this computer and serves apps here, in a remote
+    // window as in a local one. Both are usable, show no reason, reach no
+    // local DSP, and save to this computer's own settings.
+    void remoteTciPagesWorkOnThisComputer()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        dialog.setTransmitPermitted(false, QStringLiteral("Remote transmit is unavailable"));
+        const int handOutsBefore = remote.localDspHandOutCount();
+        for (const char* label : {"TCI", "TCI Server"}) {
+            const QString name = QString::fromLatin1(label);
+            dialog.selectPage(name);
+            QWidget* const page = dialog.realizedPageForTest(name);
+            QVERIFY2(page != nullptr, label);
+            QVERIFY2(page->isEnabled(), label);
+            QVERIFY2(page->toolTip().isEmpty(), label);
+            QVERIFY2(dialog.findChild<QLabel*>(QStringLiteral("setupLocalUnavailable"))->isHidden(),
+                     label);
+            QTreeWidgetItem* const leaf = setupLeaf(dialog, name);
+            QVERIFY2(leaf != nullptr, label);
+            QVERIFY2(leaf->toolTip(0).isEmpty(), label);
+        }
+        QCOMPARE(remote.localDspHandOutCount(), handOutsBefore);
+        QCOMPARE(classifySettingsKey(QStringLiteral("TciServerPort")), SettingsScope::OperatorLocal);
     }
 
     // R-R3-36: TX Input is Mixed. This computer's PC microphone (backend,
@@ -1737,11 +1865,10 @@ private slots:
         auto* const notice = dialog.findChild<QLabel*>(QStringLiteral("setupStationUnavailable"));
         QVERIFY(notice != nullptr);
 
-        // Mixed pages: how many Core controls each disables. A Mixed page
-        // not listed is already unavailable as a whole in a remote window
-        // (VAX, Advanced: local-DSP gate). Filter Presets, Spectrum Peaks,
-        // Waterfall Defaults, 3D View and Export / Import have no Core
-        // controls and are ThisComputer (R3 Setup fix wave, final review I4).
+        // Mixed pages: how many Core controls each disables. Filter
+        // Presets, Spectrum Peaks, Waterfall Defaults, 3D View and Export /
+        // Import have no Core controls and are ThisComputer (R3 Setup fix
+        // wave, final review I4); so is VAX (R-R3-44).
         const QMap<QString, int> coreControls{
             {QStringLiteral("Options"), 1},             // General: Region
             {QStringLiteral("Spectrum Defaults"), 5},   // FFT size, window, Hz/bin, fps x2
@@ -1749,8 +1876,8 @@ private slots:
             {QStringLiteral("Multimeter"), 1},          // sample interval
             {QStringLiteral("TX Display"), 9},          // TX analyzer
             {QStringLiteral("Settings Validation"), 2}, // Reset, Forget
+            {QStringLiteral("Advanced"), 2},            // DSP rate, DSP block size (R-R3-44)
         };
-        const QStringList wholePageLocalDsp{QStringLiteral("VAX"), QStringLiteral("Advanced")};
 
         const QStringList labels = dialog.pageLabelsForTest();
         int thisComputer = 0;
@@ -1783,10 +1910,6 @@ private slots:
                 ++mixed;
                 QVERIFY2(notice->isHidden(), qPrintable(label));
                 QCOMPARE(page->objectName() == QStringLiteral("setupStationPlaceholder"), false);
-                if (wholePageLocalDsp.contains(label)) {
-                    QVERIFY2(!page->isEnabled(), qPrintable(label));
-                    break;
-                }
                 QVERIFY2(page->isEnabled(), qPrintable(label));
                 if (label == QStringLiteral("TX Input")) {
                     // The controls held for the radio: the Core reason wins
@@ -1817,7 +1940,7 @@ private slots:
         }
         QVERIFY(thisComputer >= 20);
         QVERIFY(core >= 25);
-        QVERIFY(mixed >= 9);
+        QVERIFY(mixed >= 8);
 
         // Nothing towards the Core: nothing sent, and nothing held as an
         // edit to be reported as lost on the next connect.
@@ -2147,9 +2270,12 @@ private slots:
         QCOMPARE(showSetupLeafAt(dialog, probe), first.data());
     }
 
-    // R3 Setup fix wave (final review M5): VAX and Advanced stay disabled
-    // by the local-DSP gate for the whole remote session, so a new snapshot
-    // does not rebuild them (or log the gate's warning again).
+    // R3 Setup fix wave (final review M5): a page the local-DSP gate
+    // disables stays disabled for the whole remote session, so a new
+    // snapshot does not rebuild it (or log the gate's warning again).
+    // R-R3-44: no real page is gated that way any more (VAX and Advanced
+    // work in a remote window), so two probe pages that reach this
+    // process's DSP stand in for them.
     void pagesTheLocalDspGateDisablesAreNotRebuilt()
     {
         SettingsProxy proxy;
@@ -2157,9 +2283,22 @@ private slots:
         RadioModel remote(RadioModel::Role::Remote);
         SetupDialog dialog(&remote);
         connectDialog(proxy, dialog);
+        const QString mixedProbe = QStringLiteral("Probe Mixed page reaching local DSP");
+        const QString coreProbe = QStringLiteral("Probe Core page reaching local DSP");
+        int probeBuilds = 0;
+        dialog.registerPageForTest(mixedProbe, SetupScope::Mixed, [&remote, &probeBuilds]() -> QWidget* {
+            ++probeBuilds;
+            (void)remote.audioEngine();
+            return new QWidget;
+        });
+        dialog.registerPageForTest(coreProbe, SetupScope::Core, [&remote, &probeBuilds]() -> QWidget* {
+            ++probeBuilds;
+            (void)remote.wdspEngine();
+            return new QWidget;
+        });
 
         QMap<QString, QPointer<QWidget>> pages;
-        for (const QString& label : {QStringLiteral("VAX"), QStringLiteral("Advanced")}) {
+        for (const QString& label : {mixedProbe, coreProbe}) {
             QTest::ignoreMessage(QtWarningMsg, QRegularExpression(
                 QStringLiteral("Setup page.*reached local DSP on a remote-station model")));
             dialog.selectPage(label);
@@ -2175,6 +2314,8 @@ private slots:
             QVERIFY2(it.value(), qPrintable(it.key()));
             QCOMPARE(dialog.realizedPageForTest(it.key()), it.value().data());
         }
+        // Each probe was built once and never again.
+        QCOMPARE(probeBuilds, 2);
     }
 
     // Local direct mode: the push has no effect. Core pages are built and
@@ -2853,99 +2994,92 @@ private slots:
         QVERIFY(localSlice.xitEnabled());
     }
 
-    void remoteVaxSurfacesAreUnavailable()
+    // R-R3-44: VAX works in a remote window. The VAX channels are this
+    // computer's, fed from the Core's receiver streams, so the applet, the
+    // flag's VAX selector and the overlay's VAX combo are live. A pick lands
+    // on the remote slice and is kept on this computer, never in the Core's
+    // Slice<N>/VaxChannel. The applet's TX row (VAX as the microphone)
+    // waits for remote transmit with a plain reason.
+    void remoteVaxSurfacesWorkOnThisComputer()
     {
-        const QString vaxWord = QStringLiteral("VAX");
         RadioModel remote(RadioModel::Role::Remote);
         RadioModel local;
+        QVERIFY(remote.addSliceWithStationId(0) >= 0);
+        SliceModel* const slice = remote.sliceById(0);
+        QVERIFY(slice != nullptr);
+        QList<std::pair<int, int>> stored;
+        remote.setRemoteVaxChannelStore([&stored](int sliceId, int channel) {
+            stored.append({sliceId, channel});
+        });
 
-        // VAX applet: the whole applet.
-        VaxApplet remoteApplet(&remote, remote.audioEngine());
-        QVERIFY(!remoteApplet.isEnabled());
-        QVERIFY(remoteApplet.toolTip().contains(vaxWord));
-        QVERIFY2(OperatorWording::isPlain(remoteApplet.toolTip()),
-                 qPrintable(remoteApplet.toolTip()));
-        VaxApplet localApplet(&local, local.audioEngine());
-        QVERIFY(localApplet.isEnabled());
-
-        // Activation on the remote applet reaches no VAX bus.
-        {
-            QSignalSpy muted(remote.audioEngine(), &AudioEngine::vaxMutedChanged);
-            QSignalSpy rxGain(remote.audioEngine(), &AudioEngine::vaxRxGainChanged);
-            QSignalSpy txGain(remote.audioEngine(), &AudioEngine::vaxTxGainChanged);
-            int buttons = 0;
-            for (QAbstractButton* button : remoteApplet.findChildren<QAbstractButton*>()) {
-                ++buttons;
-                button->click();
-            }
-            QVERIFY(buttons > 0);
-            for (QWidget* w : remoteApplet.findChildren<QWidget*>()) {
-                QTest::keyClick(w, Qt::Key_Up);
-            }
-            QCOMPARE(muted.count(), 0);
-            QCOMPARE(rxGain.count(), 0);
-            QCOMPARE(txGain.count(), 0);
-            for (int ch = 1; ch <= 4; ++ch) {
-                QVERIFY(!remote.audioEngine()->vaxMuted(ch));
-            }
+        // VAX applet: live, with this computer's engine.
+        VaxApplet remoteApplet(&remote, remote.localAudioDevices());
+        QVERIFY(remoteApplet.isEnabled());
+        QVERIFY(remoteApplet.toolTip().isEmpty());
+        QPushButton* mute = nullptr;
+        for (QPushButton* b : remoteApplet.findChildren<QPushButton*>()) {
+            if (b->text() == QStringLiteral("Mute") && !mute) { mute = b; }
         }
+        QVERIFY(mute != nullptr);
+        QVERIFY(mute->isEnabled());
+        {
+            QSignalSpy muted(remote.localAudioDevices(), &AudioEngine::vaxMutedChanged);
+            mute->click();
+            QCOMPARE(muted.count(), 1);
+            QVERIFY(remote.localAudioDevices()->vaxMuted(1));
+            mute->click();
+            QVERIFY(!remote.localAudioDevices()->vaxMuted(1));
+        }
+        // The TX row waits for remote transmit, and says so plainly.
+        const QList<MeterSlider*> sliders = remoteApplet.findChildren<MeterSlider*>();
+        QCOMPARE(sliders.size(), 5);
+        MeterSlider* const txRow = sliders.constLast();
+        QVERIFY(!txRow->isEnabled());
+        QVERIFY2(OperatorWording::isPlain(txRow->toolTip()), qPrintable(txRow->toolTip()));
+        for (int i = 0; i < 4; ++i) {
+            QVERIFY(sliders.at(i)->isEnabled());
+        }
+        const QString reason = QStringLiteral("Remote transmit controls are not available from this Core yet.");
+        remoteApplet.setTransmitPermitted(false, reason);
+        QCOMPARE(txRow->toolTip(), reason);
+        remoteApplet.setTransmitPermitted(true, QString());
+        QVERIFY(txRow->isEnabled());
+        QVERIFY(txRow->toolTip() != reason);
+        VaxApplet localApplet(&local, local.localAudioDevices());
+        QVERIFY(localApplet.isEnabled());
+        QVERIFY(localApplet.findChildren<MeterSlider*>().constLast()->isEnabled());
 
-        // VFO flag's VAX tab selector.
+        // VFO flag's VAX tab selector: a pick moves the remote slice.
         VfoWidget remoteFlag;
         remoteFlag.setRadioModel(&remote);
+        remoteFlag.setSlice(slice);
         auto* selector = remoteFlag.findChild<VaxChannelSelector*>();
         QVERIFY(selector != nullptr);
-        QVERIFY(!selector->isEnabled());
-        QCOMPARE(selector->toolTip(), remoteApplet.toolTip());
-        {
-            QSignalSpy picked(selector, &VaxChannelSelector::valueChanged);
-            const int before = selector->value();
-            for (QAbstractButton* button : selector->findChildren<QAbstractButton*>()) {
-                QTest::mouseClick(button, Qt::LeftButton);
-            }
-            QCOMPARE(picked.count(), 0);
-            QCOMPARE(selector->value(), before);
-        }
-        VfoWidget localFlag;
-        localFlag.setRadioModel(&local);
-        auto* localSelector = localFlag.findChild<VaxChannelSelector*>();
-        QVERIFY(localSelector != nullptr);
-        QVERIFY(localSelector->isEnabled());
-        {
-            // Non-vacuity: the same clicks do pick a channel locally.
-            QSignalSpy picked(localSelector, &VaxChannelSelector::valueChanged);
-            for (QAbstractButton* button : localSelector->findChildren<QAbstractButton*>()) {
-                QTest::mouseClick(button, Qt::LeftButton);
-            }
-            QVERIFY(picked.count() > 0);
-        }
+        QVERIFY(selector->isEnabled());
+        QVERIFY(!selector->toolTip().contains(QStringLiteral("not available")));
+        selector->simulateClick(2);
+        QCOMPARE(slice->vaxChannel(), 2);
+        QCOMPARE(stored.constLast(), (std::pair<int, int>{0, 2}));
 
-        // Spectrum overlay VAX flyout, bound to a slice.
-        SliceModel slice(0);
+        // Spectrum overlay VAX flyout, bound to the remote slice.
         QWidget host;
         auto* panel = new SpectrumOverlayPanel(&host);
-        panel->setSliceResolver([&slice]() { return &slice; });
+        panel->setSliceResolver([slice]() { return slice; });
         panel->setRadioModel(&remote);
         auto* combo = host.findChild<QComboBox*>(QStringLiteral("vaxCombo"));
         QVERIFY(combo != nullptr);
-        QVERIFY(!combo->isEnabled());
-        QCOMPARE(combo->toolTip(), remoteApplet.toolTip());
-        {
-            QSignalSpy vaxChanged(&slice, &SliceModel::vaxChannelChanged);
-            const int before = slice.vaxChannel();
-            QTest::keyClick(combo, Qt::Key_Down);
-            QTest::keyClick(combo, Qt::Key_Down);
-            QCOMPARE(vaxChanged.count(), 0);
-            QCOMPARE(slice.vaxChannel(), before);
-        }
+        QVERIFY(combo->isEnabled());
+        QCOMPARE(combo->currentIndex(), 2);
+        combo->setCurrentIndex(4);
+        QCOMPARE(slice->vaxChannel(), 4);
+        QCOMPARE(stored.constLast(), (std::pair<int, int>{0, 4}));
+        // The IQ channel combo stays off: there is no I/Q for VAX.
+        auto* iqCombo = host.findChild<QComboBox*>(QStringLiteral("vaxIqCombo"));
+        QVERIFY(iqCombo != nullptr);
+        QVERIFY(!iqCombo->isEnabled());
 
-        QWidget localHost;
-        auto* localPanel = new SpectrumOverlayPanel(&localHost);
-        localPanel->setSliceResolver([&slice]() { return &slice; });
-        localPanel->setRadioModel(&local);
-        auto* localCombo = localHost.findChild<QComboBox*>(QStringLiteral("vaxCombo"));
-        QVERIFY(localCombo != nullptr);
-        QVERIFY(localCombo->isEnabled());
+        // Never the Core's key.
+        QVERIFY(!AppSettings::instance().contains(QStringLiteral("Slice0/VaxChannel")));
     }
 
     void remoteAmplifierAppletControlsAreUnavailable()

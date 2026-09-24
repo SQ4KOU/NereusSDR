@@ -1396,6 +1396,12 @@ if(UNIX AND NOT APPLE)
     nereus_add_test(tst_pipewire_stream_config)
 endif()
 
+# ── R3 receiver audio fix wave (R-R3-44): PipeWire output frames per cycle ───
+# Pure helper (no PipeWire headers): an output stream fills and counts the
+# frames the graph asked for (pw_buffer::requested), not the whole buffer.
+# Runs on every platform.
+nereus_add_test(tst_pipewire_output_frames)
+
 # ── Phase 3O Task 24: env-gated PipeWire stream integration test ─────────────
 # Real round-trip: PipeWireThreadLoop.connect() → PipeWireStream(Audio/Source)
 # → open() → wait for "streaming" signal → push 500 ms silence → close().
@@ -1414,6 +1420,14 @@ nereus_add_test(tst_virtual_cable_detector)
 # seam on AudioEngine. No real CoreAudioHalBus / LinuxPipeBus / PortAudio
 # backend required — runs on every platform.
 nereus_add_test(tst_audio_engine_vax_tee)
+
+# ── R3 receiver audio fix wave (R-R3-23): local speakers at any format ───────
+# The master mix reaches a fake speaker device at the device's own rate and
+# channel count (44.1 to 192 kHz, stereo and mono). No real device opened.
+nereus_add_test(tst_audio_engine_speaker_format)
+
+# ── R3 receiver audio fix wave (R-R3-42, R-R3-44): one notice per stop ───────
+nereus_add_test(tst_receiver_stop_notices)
 
 # ── Phase 3O Sub-Phase 10 Task 10a: AudioEngine master-mute API ──────────────
 # Covers setMasterMuted / masterMuted / masterMutedChanged. Verifies the
@@ -5210,6 +5224,17 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tst_tci_tx_mutex PRIVATE Qt6::WebSockets)
 endif()
 
+# ── R3 receiver audio plan, Task 4 (R-R3-42, R-R3-21, R-R3-25) ───────────────
+# TCI served by a remote window: no local taps, receive audio from the Core's
+# receiver streams (fake source and the real RemoteMediaController against an
+# in-process Core, Opus and lossless), every app on a receiver gets all of
+# it, an older Core leaves audio_start unanswered, vfo/modulation act on the
+# Core's slice. NereusSDR-native remote boundary; no upstream port applies.
+if(Qt6WebSockets_FOUND)
+    nereus_add_test(tst_tci_remote_window fakes/LoopbackTransport.cpp)
+    target_link_libraries(tst_tci_remote_window PRIVATE Qt6::WebSockets)
+endif()
+
 # ── Phase 3J-1 Task 1.1: TCI verification matrix runner ──────────────────────
 # Loads tests/data/tci/matrix.csv and feeds each row's command into
 # TciProtocol::handleCommand(), asserting the response + notification queue
@@ -5567,6 +5592,10 @@ nereus_add_test(tst_dspmode_rade)
 #   snrHiddenInNonRadeMode    - USB hides row; RADE_U shows it.
 #   snrVisibleInRadeLower     - RADE_L also shows the row.
 nereus_add_test(tst_vfo_widget_snr)
+
+# R-R3-45: the flag's Speakers / Headphones buttons and the plain notice
+# when the headphones are chosen and none are set up (VAX design 6.2).
+nereus_add_test(tst_vfo_widget_output_route)
 
 # ── Phase 3R Task L2: RadeApplet ────────────────────────────────────────────
 # Pins the RadeApplet UI contract:
@@ -7190,6 +7219,12 @@ nereus_add_test(tst_daemon_telemetry fakes/LoopbackTransport.cpp)
 nereus_add_test(tst_host_telemetry_sampler EXTRA_LABELS core)
 nereus_add_test(tst_remote_audio_receiver)
 nereus_add_test(tst_remote_audio_session fakes/LoopbackTransport.cpp)
+# R-R3-44 (R3 receiver audio plan, Task 5): VAX in a remote window. The
+# feed contract (two 10-minute runs of the harness clock at +/-200 ppm
+# through WDSP rmatch), the Core opening no VAX device, the per-Core
+# choice, and end to end against the in-process Core, Opus and lossless.
+nereus_add_test(tst_remote_vax_feeder fakes/LoopbackTransport.cpp)
+set_tests_properties(tst_remote_vax_feeder PROPERTIES TIMEOUT 300)
 # R-R3-23: the audio-context wire codec in both negotiated shapes.
 nereus_add_test(tst_remote_audio_context)
 # R-R3-01/08: the spectrum-context wire codec in both negotiated shapes.

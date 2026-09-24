@@ -27,6 +27,10 @@
 //               receive band, as Thetis rx1_band) instead of a copy of it
 //               (R-R3-46, R-R3-11), by J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-23: R-R3-44: nereusd publishes no VAX devices on the Core
+//               host (VAX belongs to the remote window's computer), by
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -36,6 +40,7 @@
 #include "models/ReceiverDspLoadSampler.h"
 
 #include "core/AppSettings.h"
+#include "core/AudioEngine.h"
 #include "core/CoreInit.h"
 #include "core/FFTRouter.h"
 #include "core/LogCategories.h"
@@ -120,6 +125,10 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     // can connect the model, so no local-session capture demand is ever
     // taken and the capture helper is never started.
     m_radioModel->setPcCaptureAllowed(false);
+    // R-R3-44: nor does it publish VAX devices. A remote window's VAX
+    // channels are on the operator's computer; outputs here would be
+    // devices nothing on the Core host feeds.
+    m_radioModel->audioEngine()->setVaxOutputsAllowed(false);
 #ifdef NEREUS_BUILD_TESTS
     m_radioModel->wdspEngine()->setSynchronousInitForTest(m_synchronousWdspForTest);
     if (m_radioInitializerForTest) {

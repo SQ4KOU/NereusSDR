@@ -10,6 +10,7 @@
 
 #include <QtTest/QtTest>
 #include <QSignalSpy>
+#include "core/AppSettings.h"
 #include "models/SliceModel.h"
 
 using namespace NereusSDR;
@@ -368,6 +369,91 @@ private slots:
         QCOMPARE(trans.count(), 0);
         QCOMPARE(mode.count(), 0);
         QCOMPARE(k1.count(), 0);
+    }
+
+    // ── R-R3-45: speakers or headphones (VAX design 6.2) ─────────────────
+    void output_route_defaults_to_speakers()
+    {
+        AppSettings::instance().clear();
+        SliceModel slice;
+        QCOMPARE(slice.outputRoute(), SliceModel::OutputRoute::Speakers);
+    }
+
+    void output_route_setter_emits_and_persists_per_slice()
+    {
+        AppSettings::instance().clear();
+        SliceModel slice;
+        slice.setSliceIndex(3);
+        QSignalSpy spy(&slice, &SliceModel::outputRouteChanged);
+
+        slice.setOutputRoute(SliceModel::OutputRoute::Headphones);
+        QCOMPARE(slice.outputRoute(), SliceModel::OutputRoute::Headphones);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).value<SliceModel::OutputRoute>(),
+                 SliceModel::OutputRoute::Headphones);
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("Slice3/OutputRoute")).toString(),
+                 QStringLiteral("Headphones"));
+
+        // Same value: no signal.
+        slice.setOutputRoute(SliceModel::OutputRoute::Headphones);
+        QCOMPARE(spy.count(), 1);
+
+        slice.setOutputRoute(SliceModel::OutputRoute::Speakers);
+        QCOMPARE(spy.count(), 2);
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("Slice3/OutputRoute")).toString(),
+                 QStringLiteral("Speakers"));
+    }
+
+    // The route restores on restart, per slice: a fresh model for the same
+    // slice id reads its own key and no other slice's.
+    void output_route_restores_on_restart_per_slice()
+    {
+        AppSettings::instance().clear();
+        {
+            SliceModel a;
+            a.setSliceIndex(0);
+            SliceModel b;
+            b.setSliceIndex(1);
+            b.setOutputRoute(SliceModel::OutputRoute::Headphones);
+        }
+
+        SliceModel a;
+        a.setSliceIndex(0);
+        SliceModel b;
+        b.setSliceIndex(1);
+        QSignalSpy spy(&b, &SliceModel::outputRouteChanged);
+        a.restoreOutputRoute();
+        b.restoreOutputRoute();
+        QCOMPARE(a.outputRoute(), SliceModel::OutputRoute::Speakers);
+        QCOMPARE(b.outputRoute(), SliceModel::OutputRoute::Headphones);
+        QCOMPARE(spy.count(), 1);
+
+        // loadFromSettings() restores it too.
+        SliceModel b2;
+        b2.setSliceIndex(1);
+        b2.loadFromSettings();
+        QCOMPARE(b2.outputRoute(), SliceModel::OutputRoute::Headphones);
+    }
+
+    void output_route_unknown_setting_means_speakers()
+    {
+        AppSettings::instance().clear();
+        AppSettings::instance().setValue(QStringLiteral("Slice2/OutputRoute"),
+                                         QStringLiteral("Subwoofer"));
+        SliceModel slice;
+        slice.setSliceIndex(2);
+        slice.restoreOutputRoute();
+        QCOMPARE(slice.outputRoute(), SliceModel::OutputRoute::Speakers);
+    }
+
+    void output_route_is_a_property()
+    {
+        SliceModel slice;
+        QVERIFY(slice.setProperty("outputRoute",
+                                  QVariant::fromValue(SliceModel::OutputRoute::Headphones)));
+        QCOMPARE(slice.property("outputRoute").value<SliceModel::OutputRoute>(),
+                 SliceModel::OutputRoute::Headphones);
+        AppSettings::instance().clear();
     }
 };
 

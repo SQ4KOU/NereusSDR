@@ -52,6 +52,10 @@
 //   2026-09-23 - R-R3-47 / R-R3-22: amplifierModel() and rfKitModel(), the
 //                 Power Genius and RF-Kit status objects. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-23 : R-R3-44 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. setRemoteVaxChannelStore(): where a remote
+//                 window's slices keep their VAX channel. NereusSDR-original;
+//                 no Thetis logic.
 // =================================================================
 
 //=================================================================
@@ -354,6 +358,13 @@ public:
     // lease. Owner thread only.
     void setPcCaptureAllowed(bool allowed);
     bool pcCaptureAllowed() const { return m_pcCaptureAllowed; }
+
+    // R-R3-44: Role::Remote only. Every slice of a remote model keeps its
+    // VAX channel through this store (SliceModel::setVaxChannelStore) and
+    // never writes the Core's Slice<N>/VaxChannel: a remote window's VAX
+    // channels are this computer's. Until one is set a pick is kept on the
+    // slice alone. Owner thread.
+    void setRemoteVaxChannelStore(SliceModel::VaxChannelStore store);
     // True when the mic source is Pc and local keying would read PC
     // capture (a Role::Local model with PC capture allowed).
     bool pcCaptureRequired() const;
@@ -520,9 +531,10 @@ public:
     // AudioEngine audioEngine() returns, handed out WITHOUT bumping the
     // local-DSP audit below. A remote window's engine is not inert for this
     // purpose: it drives this computer's speakers for remote playback, and
-    // its capture supervisor opens this computer's microphone for Test Mic.
-    // So a Setup page that only picks those devices is working, not dead,
-    // and must not be caught by the SetupDialog gate.
+    // its capture supervisor opens this computer's microphone for Test Mic,
+    // and (R-R3-44) it opens this computer's VAX outputs, which the Core's
+    // receiver streams feed. So a Setup page that only picks those devices
+    // is working, not dead, and must not be caught by the SetupDialog gate.
     //
     // Allowed only where that is true. Check 3 of
     // scripts/verify-no-gui-dsp-access.py lists the files that may call it
@@ -4357,6 +4369,7 @@ private:
     // moxChanging, cleared by any unkey).
     bool m_generatedKeyLive{false};
     bool m_pcCaptureAllowed{true};
+    SliceModel::VaxChannelStore m_remoteVaxChannelStore;  // R-R3-44
     bool m_pcCaptureSessionActive{false};
     CaptureSupervisor::Lease m_pcCaptureLease;
 

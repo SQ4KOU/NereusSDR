@@ -6,13 +6,13 @@
 //
 // The ordered rule table, first match wins:
 //   1. Explicit exceptions -- a key that would otherwise be caught by a
-//      prefix rule below but needs the opposite answer. Twelve entries
-//      qualify under that strict definition: the two TciLogWindow* keys
-//      (which would match the "Tci" prefix rule in step 2) and the ten
+//      prefix rule below but needs the opposite answer. The ten
 //      FreeDvReporter/* window-presentation keys (which would match
-//      "FreeDv"). A key that matches no prefix at all belongs in step 3
-//      below, even if it reads like an "exception" to some family's usual
-//      answer in prose.
+//      "FreeDv") qualify under that strict definition. The two
+//      TciLogWindow* keys are listed there too, unchanged, although since
+//      R-R3-42 the "Tci" prefix rule gives them the same answer. A key
+//      that matches no prefix at all belongs in step 3 below, even if it
+//      reads like an "exception" to some family's usual answer in prose.
 //   2. Prefixes -- a whole family that shares one scope regardless of
 //      what follows the prefix (checked with startsWith(), so ordering
 //      between prefixes only matters if one is a leading substring of
@@ -123,6 +123,19 @@
 //                                    (options/stepAtt, options/autoAtt,
 //                                    options/preamp) are Core-owned.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio plan, Task 4
+//                                    (R-R3-42): the "Tci" prefix moves
+//                                    from Station to OperatorLocal (the
+//                                    TCI server runs on this computer);
+//                                    values a Core stored are ignored, not
+//                                    migrated. AI-assisted transformation
+//                                    via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio plan, Task 5
+//                                    (R-R3-44): the "RemoteVax/" prefix, a
+//                                    remote window's VAX channel per Core
+//                                    and slice, is OperatorLocal.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -175,12 +188,11 @@ struct Rule {
 };
 
 // ---- 1. Explicit exceptions ---------------------------------------------
-// Both entries below are the ONLY keys in this whole table that would be
-// caught by a prefix rule in step 2 if this step didn't run first.
 const Rule kExceptions[] = {
     // TCI's own log-viewer dialog (Tools -> ... -> TCI Server Log,
-    // TciLogWindow.cpp): pure GUI chrome, escapes the "Tci" prefix rule
-    // below on purpose.
+    // TciLogWindow.cpp): pure GUI chrome. These escaped a Station "Tci"
+    // prefix rule until R-R3-42 made that rule OperatorLocal too; they stay
+    // here unchanged so their answer never depends on the prefix rule.
     { "TciLogWindowGeometry", SettingsScope::OperatorLocal },
     { "TciLogWindowAutoScroll", SettingsScope::OperatorLocal },
 
@@ -255,15 +267,18 @@ const Rule kPrefixes[] = {
     // that it looks like a MAC.
     { "hardware/", SettingsScope::Station },
 
-    // TCI server configuration (CatTciServerPage / TciServer /
-    // TciProtocol / TciSensorManager): server bind address/port/enabled,
-    // ExpertSDR3/SunSDR2Pro/CWLU compatibility flags, IQ/audio stream
-    // shape, sensor poll intervals, rate limiting. All of it configures
-    // the TCI WebSocket server, which in the R2 split lives in the
-    // daemon (it needs live RxChannel/RadioModel access no remote GUI
-    // has). The two GUI-only log-window keys are explicit exceptions
-    // above, checked first.
-    { "Tci", SettingsScope::Station },
+    // TCI server configuration (CatTciServerPage / AudioTciPage /
+    // TciServer / TciProtocol / TciApplet): server bind address/port/
+    // enabled, ExpertSDR3/SunSDR2Pro/CWLU compatibility flags, IQ/audio
+    // stream shape, sensor poll intervals, rate limiting, the TCI gain
+    // sliders. R-R3-42: all of it configures the TCI WebSocket server,
+    // which runs in the window on this computer (only MainWindow builds a
+    // TciServer; the Core runs none) and serves apps on this computer. A
+    // remote window's TCI settings are therefore its own, like a local
+    // window's; Tci values a Core stored while this rule said Station are
+    // ignored, not migrated. The rule is explicit rather than left to the
+    // default so the family's answer is written down in one place.
+    { "Tci", SettingsScope::OperatorLocal },
 
     // Per-slice-per-band DSP/VFO state (AppSettings.h's documented
     // "Slice<N>/Band<key>/..." and "Slice<N>/..." families: AGC, filter,
@@ -311,6 +326,12 @@ const Rule kPrefixes[] = {
     // R-R3-38: client target selection and each Core's trust tuple never
     // belong to the selected station's settings snapshot.
     { "ConnectionTargets/", SettingsScope::OperatorLocal },
+
+    // R-R3-44: which of this computer's VAX channels a remote window gives
+    // each of a Core's slices (RemoteVaxRouter::settingsKey,
+    // "RemoteVax/<core>/Slice<N>/Channel"). This computer's VAX, kept per
+    // Core; never the Core's own Slice<N>/VaxChannel.
+    { "RemoteVax/", SettingsScope::OperatorLocal },
 
     // PGXL / TGXL / RF2K-S: physically attached to the station (the
     // amplifier/tuner sits at the radio site, not on an operator's
