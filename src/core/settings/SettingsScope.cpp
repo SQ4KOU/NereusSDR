@@ -145,6 +145,8 @@
 //   2026-09-24 - iPhone app Task 4b (R-IOS-01, R-R3-21): the reasons this
 //                file sends an app are in operator words. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: NetworkWatchdogEnabled is Station scope. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -507,19 +509,26 @@ const Rule kWholeKeys[] = {
     // actually samples the WDSP meter, not a rendering choice.
     { "MultimeterDelayMs", SettingsScope::Station },
 
+    // R-R3-49: the Network Watchdog is a radio setting, applied where the
+    // radio is: by the window on a local radio, by the Core on the Core's.
+    // RadioModel applies it at connect and on change. Until R-R3-49 it was
+    // pinned OperatorLocal below as a write-only setting with no consumer.
+    { "NetworkWatchdogEnabled", SettingsScope::Station },
+
     // ---- Reviewed and deliberately pinned OperatorLocal --------------
     // Each of these has a name that reads as a TX-safety or station-
     // behaviour flag, which is exactly the shape of key this table
     // exists to get right -- and each was checked, not guessed. Fix
     // round 1 (review) confirmed this narrower and stronger than
     // originally claimed: grepping the quoted literal for each of the
-    // five across src/core and src/models (not just the same-named
+    // five (four since R-R3-49 wired NetworkWatchdogEnabled, above)
+    // across src/core and src/models (not just the same-named
     // identifier -- an earlier pass's cruder grep matched things like
     // HPSDRHW::HermesLiteRxOnly, BoardCapabilities::isRxOnlySku, and the
     // Alex.cs-ported RxOnlyAnt[] family, none of which are this setting)
     // finds zero AppSettings accessor call sites anywhere outside the
     // Setup page that defines each one (TransmitSetupPages.cpp /
-    // GeneralOptionsPage.cpp): all five are write-only settings with no
+    // GeneralOptionsPage.cpp): all of them are write-only settings with no
     // runtime consumer at all, not settings with a consumer this table
     // just doesn't happen to route to the daemon. Pinned explicitly,
     // rather than left to the bare default below, so that a future
@@ -528,7 +537,6 @@ const Rule kWholeKeys[] = {
     { "DisableHfPa", SettingsScope::OperatorLocal },
     { "ExtendedTxAllowed", SettingsScope::OperatorLocal },
     { "PreventTxOnDifferentBandToRx", SettingsScope::OperatorLocal },
-    { "NetworkWatchdogEnabled", SettingsScope::OperatorLocal },
     { "RxOnly", SettingsScope::OperatorLocal },
 };
 

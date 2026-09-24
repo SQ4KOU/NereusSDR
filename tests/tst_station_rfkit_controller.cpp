@@ -175,20 +175,43 @@ private slots:
         QCOMPARE(amp.count(QStringLiteral("GET /info")), 1);
     }
 
-    // A reply with no device at all is refused the same way.
-    void refusesAnAnswerThatNamesNoDevice()
+    // M2 (R-R3-47): a reply with no device is a failed answer, retried; it
+    // never drops an admitted amp for good. Only a reply that names another
+    // product is refused.
+    void answerThatNamesNoDeviceIsRetried()
     {
         FakeAmp amp;
         amp.info = R"({"hello":"world"})";
         Rf2ksConnection connection;
+        connection.setPollIntervalMs(250);
         RfKitModel model;
         model.bindConnection(&connection);
         StationRfKitController controller(&connection, &model);
+        QSignalSpy faults(&connection, &Rf2ksConnection::faultObserved);
         controller.start(QStringLiteral("127.0.0.1"), amp.serverPort());
-        QTRY_COMPARE_WITH_TIMEOUT(model.connectionPhase(), Phase::Error, 3000);
-        QCOMPARE(model.connectionError(),
-                 QStringLiteral("The device at this address did not say it is an RF-Kit RF2K-S "
-                                "amplifier."));
+        QTRY_COMPARE_WITH_TIMEOUT(model.connectionPhase(), Phase::Retrying, 3000);
+        QVERIFY(connection.reconnectPending());
+        QVERIFY(!connection.isConnected());
+        QCOMPARE(faults.count(), 0);
+
+        // The amp answers properly on a later try: admitted.
+        amp.info = kRf2ksInfo;
+        QTRY_COMPARE_WITH_TIMEOUT(model.connectionPhase(), Phase::Connected, 5000);
+        QCOMPARE(model.deviceModel(), QStringLiteral("RF2K-S"));
+
+        // One /info re-poll without a device: the amp stays admitted.
+        amp.info = R"({"hello":"world"})";
+        const int infos = amp.count(QStringLiteral("GET /info"));
+        QTRY_VERIFY_WITH_TIMEOUT(amp.count(QStringLiteral("GET /info")) > infos, 6000);
+        amp.info = kRf2ksInfo;
+        QTest::qWait(200);
+        QVERIFY(connection.isConnected());
+        QCOMPARE(model.connectionPhase(), Phase::Connected);
+        QCOMPARE(model.deviceModel(), QStringLiteral("RF2K-S"));
+        for (const auto& fault : faults) {
+            QVERIFY(fault.at(0).toString() != QStringLiteral("identity"));
+        }
+        controller.cancel();
     }
 
     // Nothing answering: the Core keeps trying (Retrying) unless automatic
@@ -280,6 +303,74 @@ private slots:
                                         amp.operationalInterface);
         QTest::qWait(100);
         QCOMPARE(amp.count(put), 1);
+    }
+
+    // I4 (R-R3-47): a window's Reset amp error reaches the admitted amp as
+    // the request the local page's button sends (POST /error/reset);
+    // refused, with nothing sent, while no amp is admitted.
+    void resetErrorReachesTheAdmittedAmp()
+    {
+        FakeAmp amp;
+        RadioModel model;
+        prepare(model);
+        QString reason;
+        QVERIFY(model.setRfKitEnabledForStation(true, &reason));
+        QVERIFY(!model.resetRfKitErrorForStation(&reason));
+        QCOMPARE(reason, QStringLiteral("The Core is not connected to the RF-Kit amplifier."));
+        QVERIFY(model.configureRfKitForStation(QStringLiteral("127.0.0.1"), amp.serverPort(),
+                                               &reason));
+        QTRY_COMPARE_WITH_TIMEOUT(model.rfKitModel()->connectionPhase(), Phase::Connected, 3000);
+        QCOMPARE(amp.count(QStringLiteral("POST /error/reset")), 0);
+        QVERIFY(model.resetRfKitErrorForStation(&reason));
+        QTRY_COMPARE_WITH_TIMEOUT(amp.count(QStringLiteral("POST /error/reset")), 1, 3000);
+        // Nothing else changed the amp's state.
+        for (const QString& request : amp.requests) {
+            QVERIFY2(request.startsWith(QStringLiteral("GET "))
+                         || request == QStringLiteral("POST /error/reset"),
+                     qPrintable(request));
+        }
+    }
+
+    // M3 (R-R3-48): the Core switches the amp to TCI once when band follow
+    // starts, not again after every link blip (an operator who chose
+    // another interface on the amp's front panel keeps it). Turning the
+    // station's TCI switch on again is band follow starting again.
+    void tciModeIsNotForcedAgainAfterALinkBlip()
+    {
+        FakeAmp amp;
+        Rf2ksConnection connection;
+        RfKitModel model;
+        model.bindConnection(&connection);
+        StationRfKitController controller(&connection, &model);
+        const QString put = QStringLiteral(
+            R"(PUT /operational-interface {"operational_interface":"TCI"})");
+        controller.start(QStringLiteral("127.0.0.1"), amp.serverPort());
+        QTRY_COMPARE_WITH_TIMEOUT(model.connectionPhase(), Phase::Connected, 3000);
+        connection.injectJsonForTesting(QStringLiteral("/operational-interface"),
+                                        amp.operationalInterface);
+        controller.setBandFollowWanted(true);
+        QTRY_COMPARE_WITH_TIMEOUT(amp.count(put), 1, 3000);
+
+        // The link blips: three failed polls, then the amp answers again.
+        // The operator has set it back to UDP on its front panel.
+        QSignalSpy reconnected(&connection, &Rf2ksConnection::connected);
+        connection.testMarkPollFailure();
+        connection.testMarkPollFailure();
+        connection.testMarkPollFailure();
+        QVERIFY(!connection.isConnected());
+        QTRY_VERIFY_WITH_TIMEOUT(reconnected.count() >= 1, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(model.connectionPhase(), Phase::Connected, 3000);
+        connection.injectJsonForTesting(QStringLiteral("/operational-interface"),
+                                        amp.operationalInterface);
+        QTest::qWait(200);
+        QCOMPARE(amp.count(put), 1);
+
+        // The station's TCI switch off and on again: band follow starts
+        // again, so the amp is switched once more.
+        controller.setBandFollowWanted(false);
+        controller.setBandFollowWanted(true);
+        QTRY_COMPARE_WITH_TIMEOUT(amp.count(put), 2, 3000);
+        controller.cancel();
     }
 
     // The amp's own interface errors and a lost link are faults.

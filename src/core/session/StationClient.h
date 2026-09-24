@@ -229,6 +229,11 @@
 //                                    without retrying; stationDeclares().
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the amp's and
+//                                    tuner's own settings (requests,
+//                                    `accessorySettings`, refusals routed
+//                                    to the Advanced pages). AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -467,8 +472,12 @@ public:
     bool remoteRfKitControlAvailable() const override;
     // R-R3-47 / R-R3-22: see IStationLink.
     bool accessoryDataAvailable() const override;
+    // R-R3-47 / R-R3-22: see IStationLink.
+    bool pgxlDeviceSettingsAvailable() const override;
+    bool tgxlDeviceSettingsAvailable() const override;
     bool stationTciAvailable() const override;
     bool coreServesTciOnThisComputer() const override;
+    int coreStationTciStored() const override;
     /// Test seam: whether the Core counts as on this computer (a session
     /// started without a dial has no address to judge by).
     void setCoreOnThisComputerForTest(bool onThisComputer)
@@ -579,12 +588,25 @@ public:
                                                  int pingSec) override;
     CommandOutcome requestConfigureRfKit(const QString& host, quint16 port) override;
     CommandOutcome requestDisconnectRfKit() override;
+    bool rfKitSettingsAvailable() const override;
+    CommandOutcome requestResetRfKitError() override;
     CommandOutcome requestRfKitEnabled(bool enabled) override;
     CommandOutcome requestStationTci(bool enabled, quint16 port) override;
     CommandOutcome requestTxInterlockPolicy(int mode, int graceMs, bool swrGateEnabled,
                                             double swrGateMax) override;
     CommandOutcome requestPgxlPowerCap(bool enabled, int watts) override;
     CommandOutcome requestClearAccessoryFaults(const QString& device) override;
+    CommandOutcome requestPgxlName(const QString& name) override;
+    CommandOutcome requestPgxlHardware(const QString& setting, const QString& value) override;
+    CommandOutcome requestPgxlNetwork(bool dhcp, const QString& address,
+                                      const QString& netmask, const QString& gateway) override;
+    CommandOutcome requestPgxlSaveAndRestart() override;
+    CommandOutcome requestPgxlReadSettings() override;
+    CommandOutcome requestTgxlName(const QString& name) override;
+    CommandOutcome requestTgxlNetwork(bool dhcp, const QString& address,
+                                      const QString& netmask, const QString& gateway) override;
+    CommandOutcome requestTgxlSaveAndRestart() override;
+    CommandOutcome requestTgxlReadSettings() override;
     CommandOutcome requestApplyNnrModels(quint32 revision) override;
     bool nnrControlAvailable() const override;
     // R-R3-21: the Core advertised dspAssetVersion 2 on a session that
@@ -616,6 +638,11 @@ public:
     /// one band's RX antenna (rxOnly false, 1..3) or RX-only antenna
     /// (rxOnly true, 0..3) on the Core.
     CommandOutcome requestAlexRxAntenna(Band band, int antenna, bool rxOnly);
+    /// R-R3-46 / R-R3-21 (radioHardwareVersion 4). Verb "setAlexBpfMode":
+    /// one receive filter chain's filter policy on the Core.
+    bool filterPolicyEditAvailable() const override;
+    QString filterPolicyUnavailableReason() const override;
+    CommandOutcome requestFilterPolicy(int chain, int mode) override;
     CommandOutcome requestNnrDiagnostics(int sliceId, int testMode, int outputMode) override;
     /// R-R3-40: the station can clear a runtime NNR limit on request
     /// (negotiated minor 11 and NNR control).
@@ -906,6 +933,8 @@ private:
         int sliceId = -1;
         quint64 streamEpoch = 0;
         bool requestedPin = false;
+        // clearAccessoryFaults: which device's history (L1 routing).
+        QString faultsDevice;
     };
     QHash<quint32, PendingCommand> m_pendingCommands;
     std::optional<QPair<quint32, bool>> m_pendingPs3Display;
@@ -915,6 +944,15 @@ private:
     /// See isStale(). Once true, never cleared: it records that a session
     /// has EVER fully established, not that one is established now.
     bool m_everConnected = false;
+
+    /// Rework follow-up 4 (R-R3-48): this link has applied a settings
+    /// snapshot (reset on every attach and link loss), so a rule about the
+    /// Core's settings reads this Core's, not a previous one's.
+    bool m_settingsSnapshotThisLink = false;
+    /// Whether this link's Core keeps StationTci_Enabled (from its snapshot
+    /// and later changes; the proxy's cache may still hold a previous
+    /// Core's keys).
+    bool m_coreKeepsTciSwitch = false;
 
     /// See sessionEpoch(). Bumped in attachTransport().
     quint32 m_sessionEpoch = 0;

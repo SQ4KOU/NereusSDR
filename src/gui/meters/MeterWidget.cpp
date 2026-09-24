@@ -10,6 +10,14 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-49: an item whose feature is not built yet
+//                 (the Voice Rec/Play control) is kept and saved but not
+//                 drawn and takes no clicks. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Discord control was removed; a saved one is
+//                 dropped on load with one log line and the rest of the
+//                 container loads. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -55,6 +63,7 @@ mw0lge@grange-lane.co.uk
 #include "MeterWidget.h"
 #include "MeterItem.h"
 #include "core/LogCategories.h"
+#include "gui/UnbuiltFeatures.h"
 
 // All item types for deserializeItems() registry
 #include "SpacerItem.h"
@@ -76,7 +85,6 @@ mw0lge@grange-lane.co.uk
 #include "TuneStepButtonItem.h"
 #include "OtherButtonItem.h"
 #include "VoiceRecordPlayItem.h"
-#include "DiscordButtonItem.h"
 #include "VfoDisplayItem.h"
 #include "ClockItem.h"
 #include "ClickBoxItem.h"
@@ -323,7 +331,11 @@ bool MeterWidget::deserializeItems(const QString& data)
         } else if (type == QStringLiteral("VOICERECPLAY")) {
             item = new VoiceRecordPlayItem();
         } else if (type == QStringLiteral("DISCORDBTNS")) {
-            item = new DiscordButtonItem();
+            // R-R3-49: the Discord control was removed. A saved one is
+            // dropped here; the rest of the container loads normally.
+            qCInfo(lcMeter) << "Dropped a saved Discord control from a container:"
+                               " that control has been removed";
+            continue;
         } else if (type == QStringLiteral("VFO")) {
             item = new VfoDisplayItem();
         } else if (type == QStringLiteral("CLOCK")) {
@@ -501,7 +513,7 @@ void MeterWidget::mousePressEvent(QMouseEvent* event)
 
     for (int i = m_items.size() - 1; i >= 0; --i) {
         MeterItem* item = m_items[i];
-        if (item->hitTest(pos, w, h)) {
+        if (itemFeatureBuilt(item) && item->hitTest(pos, w, h)) {
             if (item->handleMousePress(event, w, h)) {
                 update();
                 return;
@@ -519,7 +531,7 @@ void MeterWidget::mouseReleaseEvent(QMouseEvent* event)
 
     for (int i = m_items.size() - 1; i >= 0; --i) {
         MeterItem* item = m_items[i];
-        if (item->hitTest(pos, w, h)) {
+        if (itemFeatureBuilt(item) && item->hitTest(pos, w, h)) {
             if (item->handleMouseRelease(event, w, h)) {
                 update();
                 return;
@@ -537,7 +549,7 @@ void MeterWidget::mouseMoveEvent(QMouseEvent* event)
 
     for (int i = m_items.size() - 1; i >= 0; --i) {
         MeterItem* item = m_items[i];
-        if (item->hitTest(pos, w, h)) {
+        if (itemFeatureBuilt(item) && item->hitTest(pos, w, h)) {
             if (item->handleMouseMove(event, w, h)) {
                 update();
                 return;
@@ -555,7 +567,7 @@ void MeterWidget::wheelEvent(QWheelEvent* event)
 
     for (int i = m_items.size() - 1; i >= 0; --i) {
         MeterItem* item = m_items[i];
-        if (item->hitTest(pos, w, h)) {
+        if (itemFeatureBuilt(item) && item->hitTest(pos, w, h)) {
             if (item->handleWheel(event, w, h)) {
                 update();
                 return;
@@ -575,11 +587,24 @@ void MeterWidget::drawItems(QPainter& p)
     }
 }
 
+// R-R3-49: false for an item that fronts a feature not built yet (the
+// Voice Rec/Play control while the voice recorder is not built).
+bool MeterWidget::itemFeatureBuilt(const MeterItem* item)
+{
+    if (qobject_cast<const VoiceRecordPlayItem*>(item) != nullptr) {
+        return UnbuiltFeatures::isBuilt(UnbuiltFeature::Voice);
+    }
+    return true;
+}
+
 // From Thetis MeterManager.cs:31366-31368 — the per-item render gate
 // evaluated by the container's paint loop for every meter item.
 bool MeterWidget::shouldRender(const MeterItem* item) const
 {
     if (!item) { return false; }
+    // NereusSDR R-R3-49 (not in Thetis): an item whose feature is not built
+    // yet stays in the container, and is saved with it, but is not drawn.
+    if (!itemFeatureBuilt(item)) { return false; }
     const bool baseOk =
         ((m_mox && item->onlyWhenTx()) || (!m_mox && item->onlyWhenRx()))
         || (!item->onlyWhenTx() && !item->onlyWhenRx());

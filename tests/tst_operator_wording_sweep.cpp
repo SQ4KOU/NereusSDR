@@ -4,6 +4,8 @@
 // sentence the reason table can produce, every rule for a reason it does
 // not know, the remote audio words, and the rewritten controls on the NNR
 // panel and the 4O3A page are checked against the one internal-term list.
+// The TCI Server page and the meter data source (MMIO) windows read in the
+// words the operator approved on 2026-09-24 (R-R3-21, R-R3-48).
 // Wire reasons themselves are never touched: the table's left column is the
 // Core's and this computer's text byte for byte.
 
@@ -17,6 +19,8 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QRegularExpression>
+#include <QTreeWidget>
+#include <QUuid>
 
 #include "OperatorWording.h"
 #include "PanStatusSamples.h"
@@ -28,6 +32,9 @@
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteMediaController.h"
 #include "gui/applets/TxApplet.h"
+#include "gui/containers/MmioEndpointsDialog.h"
+#include "gui/containers/MmioVariablePickerPopup.h"
+#include "gui/setup/CatNetworkSetupPages.h"
 #include "gui/setup/FourO3APage.h"
 #include "gui/widgets/NnrControls.h"
 #include "models/Band.h"
@@ -258,6 +265,27 @@ QStringList codeLiterals(const QString& path)
         found.append(it.next().captured(1));
     }
     return found;
+}
+
+// The jargon the TCI and meter data source surfaces no longer show
+// (R-R3-21, operator decision of 2026-09-24): endpoint, binding, bind
+// interface / bind IP and WebSocket.
+const QRegularExpression& tciAndMmioJargon()
+{
+    static const QRegularExpression pattern(
+        QStringLiteral("\\bendpoint|\\bbinding|\\bbind (interface|ip)\\b|websocket"),
+        QRegularExpression::CaseInsensitiveOption);
+    return pattern;
+}
+
+// A tree widget's column headings.
+QStringList headings(const ::QTreeWidget& tree)
+{
+    QStringList texts;
+    for (int i = 0; i < tree.columnCount(); ++i) {
+        texts << tree.headerItem()->text(i);
+    }
+    return texts;
 }
 
 } // namespace
@@ -856,9 +884,9 @@ private slots:
              {"Task 24+", "override \u2014 no consumer", "no consumer"},
              {"Whether an app such as WSJT-X has this VAX channel open.",
               "No program is using this device"}},
+            // R-R3-49: the IQ channel combo (and its tooltip) was removed.
             {"src/gui/SpectrumOverlayPanel.cpp", true,
-             {"design spec", "reserved for future phase"},
-             {"Sending I/Q to a VAX channel is not available yet."}},
+             {"design spec", "reserved for future phase"}, {}},
             {"src/gui/diagnostics/DiagnosticsPhaseHPages.cpp", true,
              {"QT_LOGGING_TO_CONSOLE", "follow-up phase"},
              {"The 60 s history graph is not shown yet.",
@@ -1050,6 +1078,139 @@ private slots:
         QVERIFY(guard.checkMoxAllowed(region, kInBandHz, DSPMode::FM, Band::Band20m,
                                       Band::Band20m, false, false)
                     .reason.contains(QLatin1String("FM")));
+    }
+
+    // R-R3-21, R-R3-48 (operator decision of 2026-09-24): the TCI Server
+    // page keeps the words another program shows (TCI, TCP, port, IP
+    // address) and says the rest in plain words. The same page serves a
+    // local window and a window on a Core.
+    void tciServerPageIsInApprovedWords()
+    {
+        CatTciServerPage page;
+        const QStringList shown = shownText(page);
+        QVERIFY2(shown.size() >= 20, qPrintable(QString::number(shown.size())));
+        QVERIFY(shown.contains(QStringLiteral("Listen on:")));
+        QVERIFY(shown.contains(QStringLiteral(
+            "Turn on the TCI server so programs like WSJT-X or JTDX can control this radio.")));
+        QVERIFY(shown.contains(QStringLiteral("Port:")));
+        QVERIFY(shown.contains(QStringLiteral("This computer only (127.0.0.1)")));
+        QVERIFY(shown.contains(QStringLiteral("Any IPv4 address (0.0.0.0), open to your network")));
+        for (const QString& text : shown) {
+            QVERIFY2(!tciAndMmioJargon().match(text).hasMatch(), qPrintable(text));
+            QVERIFY2(!text.contains(QChar(0x2014)), qPrintable(text));
+        }
+        // The saved address is still the address itself.
+        const auto* listenOn = page.findChildren<QComboBox*>().value(0);
+        QVERIFY(listenOn);
+        QCOMPARE(listenOn->itemData(0).toString(), QStringLiteral("127.0.0.1"));
+        QCOMPARE(listenOn->itemData(1).toString(), QStringLiteral("0.0.0.0"));
+    }
+
+    void meterDataSourceWindowsAreInApprovedWords()
+    {
+        MmioEndpointsDialog sources;
+        QCOMPARE(sources.windowTitle(), QStringLiteral("Meter Data Sources (MMIO)"));
+        QStringList shown = shownText(sources) << sources.windowTitle();
+        const auto* received = sources.findChild<::QTreeWidget*>();
+        QVERIFY(received);
+        QCOMPARE(headings(*received), (QStringList{QStringLiteral("Name"), QStringLiteral("Value")}));
+        shown << headings(*received);
+        for (const char* text :
+             {"Data sources", "Data source settings", "Connection type", "Values received",
+              // Kept as other programs show them.
+              "UDP listener", "TCP listener", "TCP client", "Serial", "JSON", "XML",
+              "RAW (key:value)", "Port"}) {
+            QVERIFY2(shown.contains(QLatin1String(text)), text);
+        }
+        for (const QString& text : std::as_const(shown)) {
+            QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+            QVERIFY2(!tciAndMmioJargon().match(text).hasMatch(), qPrintable(text));
+        }
+
+        MmioVariablePickerPopup picker{QUuid(), QString()};
+        QCOMPARE(picker.windowTitle(), QStringLiteral("Choose a value"));
+        QStringList picked = shownText(picker) << picker.windowTitle();
+        const auto* values = picker.findChild<::QTreeWidget*>();
+        QVERIFY(values);
+        QCOMPARE(headings(*values), (QStringList{QStringLiteral("Name"), QStringLiteral("Value")}));
+        picked << headings(*values);
+        QVERIFY(picked.contains(QStringLiteral("Unlink from this meter")));
+        for (const QString& text : std::as_const(picked)) {
+            QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+            QVERIFY2(!tciAndMmioJargon().match(text).hasMatch(), qPrintable(text));
+        }
+    }
+
+    // Every surface that showed the same words, read at the source: the
+    // replaced words are gone, the new ones are written, and no text a user
+    // reads there says endpoint, binding, bind interface or WebSocket.
+    void tciAndMeterDataSourceJargonIsGoneAtTheSource()
+    {
+        const struct {
+            const char* file;
+            QStringList gone;
+            QStringList shown;
+        } sites[] = {
+            {"src/gui/setup/CatNetworkSetupPages.cpp",
+             {"Bind interface:", "Bind IP:", "Loopback only (127.0.0.1)"},
+             {"Listen on:",
+              "Turn on the TCI server so programs like WSJT-X or JTDX can control this radio.",
+              "The IP address the TCI server listens on. 127.0.0.1 accepts programs on this "
+              "computer only. 0.0.0.0 accepts them from anywhere on your network. TCI has no "
+              "password, so choose a network address or 0.0.0.0 only on a network you trust."}},
+            {"src/gui/containers/MmioEndpointsDialog.cpp",
+             {"MMIO Endpoints", "Endpoints", "New endpoint", "Endpoint properties", "Transport",
+              "Discovered variables", "Variable", "Applied. Worker restarted."},
+             {"Meter Data Sources (MMIO)", "Data sources", "New data source",
+              "Data source settings", "Connection type", "Values received",
+              "Applied. The data source restarted with the new settings.", "JSON", "XML",
+              "RAW (key:value)"}},
+            {"src/gui/containers/MmioVariablePickerPopup.cpp",
+             {"Pick MMIO Variable", "Clear binding", "Variable"},
+             {"Choose a value", "Unlink from this meter",
+              "Choose a value from one of your meter data sources for this item to show, or "
+              "click Unlink from this meter to stop showing one."}},
+            {"src/gui/containers/ContainerSettingsDialog.cpp",
+             {"MMIO Variables\\u2026"}, {"Meter Data Sources (MMIO)\\u2026"}},
+            {"src/gui/containers/meter_property_editors/BaseItemEditor.cpp",
+             {"MMIO Variable\\u2026", "Variable\\u2026", "Binding"},
+             {"Choose a value\\u2026", "Reading"}},
+            {"src/gui/containers/meter_property_editors/HistoryGraphItemEditor.cpp",
+             {"Axis 1 Binding", "Binding axis 1"}, {"Axis 1 Reading", "Axis 1 shows"}},
+            {"src/gui/containers/meter_property_editors/DataOutItemEditor.cpp",
+             {"Transport", "MMIO binding", "MMIO GUID", "Variable name"},
+             {"Connection type", "Data source (MMIO)", "Data source ID", "Value name"}},
+            {"src/gui/applets/TciApplet.cpp",
+             {"Start the TCI WebSocket server"},
+             {"Turn on the TCI server so programs like WSJT-X or JTDX can control this radio."}},
+            {"src/gui/SpotHubDialog.cpp", {"qso.freedv.org (WebSocket)"}, {"qso.freedv.org"}},
+            {"src/gui/setup/PgxlAdvancedPage.cpp", {"Slice Binding:"}, {"Follows slice:"}},
+            {"src/gui/setup/AudioAdvancedPage.cpp", {}, {}},
+        };
+        for (const auto& site : sites) {
+            const QStringList literals = userVisibleLiterals(sourcePath(site.file));
+            QVERIFY2(literals.size() >= 5, site.file);
+            for (const QString& old : site.gone) {
+                QVERIFY2(!literals.contains(old),
+                         qPrintable(QStringLiteral("%1 still shows: %2")
+                                        .arg(QLatin1String(site.file), old)));
+            }
+            for (const QString& text : site.shown) {
+                QVERIFY2(literals.contains(text),
+                         qPrintable(QStringLiteral("%1 lacks: %2")
+                                        .arg(QLatin1String(site.file), text)));
+                QVERIFY2(OperatorWording::isPlain(text),
+                         qPrintable(text + QStringLiteral(" [")
+                                    + OperatorWording::internalTermIn(text) + QLatin1Char(']')));
+                QVERIFY2(developerWordingIn(text).isEmpty(),
+                         qPrintable(text + QStringLiteral(" [") + developerWordingIn(text)
+                                    + QLatin1Char(']')));
+            }
+            for (const QString& text : literals) {
+                QVERIFY2(!tciAndMmioJargon().match(text).hasMatch(),
+                         qPrintable(QStringLiteral("%1: %2").arg(QLatin1String(site.file), text)));
+            }
+        }
     }
 
     void remoteFourO3APageIsInUserWords()

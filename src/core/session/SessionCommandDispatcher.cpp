@@ -42,6 +42,10 @@
 //                                    3): setAlexRxAntenna, one band's RX or
 //                                    RX-only antenna. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-21 (radioHardwareVersion
+//                                    4): setAlexBpfMode, one receive filter
+//                                    chain's filter policy. AI-assisted via
+//                                    Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: configurePgxl,
 //                                    disconnectPgxl and
 //                                    setPgxlConnectionSettings for the
@@ -77,6 +81,16 @@
 //                                    a PureSignal request's arguments are
 //                                    read before the transmit gate.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the amp's and
+//                                    tuner's own settings (setPgxlName,
+//                                    setPgxlHardware, setPgxlNetwork,
+//                                    savePgxlSettings, readPgxlSettings and
+//                                    the four setTgxl* / *TgxlSettings
+//                                    verbs). AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47: resetRfKitError (the RF-Kit
+//                                    page's Reset amp error). AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -288,6 +302,9 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
     const auto arg = [](const char* name, MirrorWireKind kind) {
         return CommandArgumentSpec{QByteArray(name), kind, false};
     };
+    const auto optionalArg = [](const char* name, MirrorWireKind kind) {
+        return CommandArgumentSpec{QByteArray(name), kind, true};
+    };
     static const QList<CommandVerbSpec> specs{
         // Slices (R2 Task 11).
         {"addSlice", {arg("initialPanId", kUtf8)}, {}, 0, 0},
@@ -314,6 +331,32 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"setPgxlConnectionSettings",
          {arg("autoReconnect", kBool), arg("keepaliveSec", kInt), arg("pingSec", kInt)},
          "remotePgxlControlVersion", 2, kRadioIdentitySessionProtocolMinor},
+        // The amp's and the tuner's own settings (R-R3-47, R-R3-22).
+        // setPgxlHardware takes exactly one of its three arguments.
+        {"setPgxlName", {arg("name", kUtf8)}, "remotePgxlControlVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
+        {"setPgxlHardware",
+         {optionalArg("biasMode", kUtf8), optionalArg("fanMode", kUtf8),
+          optionalArg("ledIntensity", kInt)},
+         "remotePgxlControlVersion", 3, kRadioIdentitySessionProtocolMinor},
+        {"setPgxlNetwork",
+         {arg("dhcp", kBool), arg("address", kUtf8), arg("netmask", kUtf8),
+          arg("gateway", kUtf8)},
+         "remotePgxlControlVersion", 3, kRadioIdentitySessionProtocolMinor},
+        {"savePgxlSettings", {}, "remotePgxlControlVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
+        {"readPgxlSettings", {}, "remotePgxlControlVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
+        {"setTgxlName", {arg("name", kUtf8)}, "remoteTgxlControlVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"setTgxlNetwork",
+         {arg("dhcp", kBool), arg("address", kUtf8), arg("netmask", kUtf8),
+          arg("gateway", kUtf8)},
+         "remoteTgxlControlVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"saveTgxlSettings", {}, "remoteTgxlControlVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"readTgxlSettings", {}, "remoteTgxlControlVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
         // The Core's RF-Kit RF2K-S and the station TCI server (R-R3-47,
         // R-R3-48).
         {"configureRfKit", {arg("host", kUtf8), arg("port", kInt)},
@@ -321,6 +364,8 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"disconnectRfKit", {}, "remoteRfKitControlVersion", 2,
          kRadioIdentitySessionProtocolMinor},
         {"setRfKitEnabled", {arg("enabled", kBool)}, "remoteRfKitControlVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
+        {"resetRfKitError", {}, "remoteRfKitControlVersion", 3,
          kRadioIdentitySessionProtocolMinor},
         {"setStationTci", {arg("enabled", kBool), arg("port", kInt)}, "stationTciVersion", 1,
          kRadioIdentitySessionProtocolMinor},
@@ -338,6 +383,8 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"setAlexRxAntenna", {arg("band", kInt), arg("antenna", kInt), arg("rxOnly", kBool)},
          "radioHardwareVersion", 3, kRadioIdentitySessionProtocolMinor},
+        {"setAlexBpfMode", {arg("chain", kInt), arg("mode", kInt)}, "radioHardwareVersion", 4,
+         kRadioIdentitySessionProtocolMinor},
         // Neural noise reduction.
         {"nnr.setDiagnostics",
          {arg("sliceId", kInt), arg("testMode", kInt), arg("outputMode", kInt)},
@@ -527,6 +574,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleDisconnectRfKit(invoke);
     } else if (invoke.commandVerb == "setRfKitEnabled") {
         handleSetRfKitEnabled(invoke);
+    } else if (invoke.commandVerb == "resetRfKitError") {
+        handleResetRfKitError(invoke);
     } else if (invoke.commandVerb == "setStationTci") {
         handleSetStationTci(invoke);
     } else if (invoke.commandVerb == "setTxInterlockPolicy") {
@@ -535,10 +584,20 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetPgxlPowerCap(invoke);
     } else if (invoke.commandVerb == "clearAccessoryFaults") {
         handleClearAccessoryFaults(invoke);
+    } else if (invoke.commandVerb == "setPgxlName" || invoke.commandVerb == "setPgxlHardware"
+               || invoke.commandVerb == "setPgxlNetwork"
+               || invoke.commandVerb == "savePgxlSettings"
+               || invoke.commandVerb == "readPgxlSettings"
+               || invoke.commandVerb == "setTgxlName" || invoke.commandVerb == "setTgxlNetwork"
+               || invoke.commandVerb == "saveTgxlSettings"
+               || invoke.commandVerb == "readTgxlSettings") {
+        handleAccessoryDeviceSettings(invoke);
     } else if (invoke.commandVerb == "requestIoBoardProbe") {
         handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "setAlexRxAntenna") {
         handleSetAlexRxAntenna(invoke);
+    } else if (invoke.commandVerb == "setAlexBpfMode") {
+        handleSetAlexBpfMode(invoke);
     } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning"
                || invoke.commandVerb == "nnr.tryAgain") {
         handleNnrAction(invoke);
@@ -1222,6 +1281,28 @@ void SessionCommandDispatcher::handleDisconnectRfKit(const SessionMessage& invok
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
 }
 
+// I4 (R-R3-47, remoteRfKitControlVersion 3): the local page's Reset amp
+// error, sent by the Core to its admitted amp.
+void SessionCommandDispatcher::handleResetRfKitError(const SessionMessage& invoke)
+{
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to reset the RF-Kit amplifier's error was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->resetRfKitErrorForStation(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not reset the RF-Kit "
+                                                     "amplifier's error.")
+                                    : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
 void SessionCommandDispatcher::handleSetRfKitEnabled(const SessionMessage& invoke)
 {
     QVariant enabled;
@@ -1352,6 +1433,97 @@ void SessionCommandDispatcher::handleClearAccessoryFaults(const SessionMessage& 
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
 }
 
+// R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
+// 1): the amp's and the tuner's own settings. The Core sends each to the
+// device as the local Advanced page's own command (StationDeviceSettings);
+// accepted means it left for the device, and the device's answer comes
+// back on `accessorySettings`. None keys a transmitter or operates the amp.
+void SessionCommandDispatcher::handleAccessoryDeviceSettings(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    const bool pgxl = verb.contains("Pgxl");
+    const QString device = pgxl ? QStringLiteral("Power Genius") : QStringLiteral("Tuner Genius");
+    const auto notUnderstood = [&](const QString& what) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to %1 was not understood.").arg(what), {});
+    };
+    QString reason;
+    bool sent = false;
+    if (verb == "setPgxlName" || verb == "setTgxlName") {
+        QString name;
+        if (!hasExactlyArguments(invoke.arguments, { "name" })
+            || !findUtf8Argument(invoke.arguments, "name", &name)) {
+            notUnderstood(QStringLiteral("rename the %1").arg(device));
+            return;
+        }
+        sent = pgxl ? m_radioModel->setPgxlNameForStation(name, &reason)
+                    : m_radioModel->setTgxlNameForStation(name, &reason);
+    } else if (verb == "setPgxlHardware") {
+        // Exactly one of biasMode (utf8), fanMode (utf8), ledIntensity (i64).
+        const MirrorUpdate* only = invoke.arguments.size() == 1 ? &invoke.arguments.first()
+                                                                : nullptr;
+        QVariant value;
+        bool shape = false;
+        if (only && (only->name == "biasMode" || only->name == "fanMode")) {
+            QString text;
+            shape = findUtf8Argument(invoke.arguments, only->name, &text);
+            value = text;
+        } else if (only && only->name == "ledIntensity") {
+            int led = 0;
+            shape = hasWireKind(invoke.arguments, "ledIntensity", MirrorWireKind::Int64)
+                && findIntArgument(invoke.arguments, "ledIntensity", &led) == ArgumentStatus::Ok;
+            value = led;
+        }
+        if (!shape) {
+            notUnderstood(QStringLiteral("change the Power Genius hardware"));
+            return;
+        }
+        sent = m_radioModel->setPgxlHardwareForStation(QString::fromUtf8(only->name), value,
+                                                       &reason);
+    } else if (verb == "setPgxlNetwork" || verb == "setTgxlNetwork") {
+        QVariant dhcp;
+        QString address;
+        QString netmask;
+        QString gateway;
+        if (!hasExactlyArguments(invoke.arguments, { "dhcp", "address", "netmask", "gateway" })
+            || !findArgument(invoke.arguments, "dhcp", &dhcp)
+            || dhcp.typeId() != QMetaType::Bool
+            || !findUtf8Argument(invoke.arguments, "address", &address)
+            || !findUtf8Argument(invoke.arguments, "netmask", &netmask)
+            || !findUtf8Argument(invoke.arguments, "gateway", &gateway)) {
+            notUnderstood(QStringLiteral("change the %1 network settings").arg(device));
+            return;
+        }
+        sent = pgxl ? m_radioModel->setPgxlNetworkForStation(dhcp.toBool(), address, netmask,
+                                                             gateway, &reason)
+                    : m_radioModel->setTgxlNetworkForStation(dhcp.toBool(), address, netmask,
+                                                             gateway, &reason);
+    } else if (verb == "savePgxlSettings" || verb == "saveTgxlSettings") {
+        if (!hasExactlyArguments(invoke.arguments, {})) {
+            notUnderstood(QStringLiteral("save and restart the %1").arg(device));
+            return;
+        }
+        sent = pgxl ? m_radioModel->savePgxlSettingsForStation(&reason)
+                    : m_radioModel->saveTgxlSettingsForStation(&reason);
+    } else {
+        if (!hasExactlyArguments(invoke.arguments, {})) {
+            notUnderstood(QStringLiteral("read the %1 settings").arg(device));
+            return;
+        }
+        sent = pgxl ? m_radioModel->readPgxlSettingsForStation(&reason)
+                    : m_radioModel->readTgxlSettingsForStation(&reason);
+    }
+    if (!sent) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty()
+                       ? QStringLiteral("The Core did not send the request to the %1.").arg(device)
+                       : reason,
+                   {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
 void SessionCommandDispatcher::handleDisconnectPgxl(const SessionMessage& invoke)
 {
     if (!hasExactlyArguments(invoke.arguments, {})) {
@@ -1446,6 +1618,33 @@ void SessionCommandDispatcher::handleSetAlexRxAntenna(const SessionMessage& invo
     const bool receiveOnly = rxOnly.toBool();
     const QString reason = receiveOnly ? alex->setRxOnlyAntForBand(Band(band), antenna)
                                        : alex->setRxAntForBand(Band(band), antenna);
+    emitResult(invoke.commandVerb, invoke.commandId, reason.isEmpty(), reason, {});
+}
+
+// R-R3-46 / R-R3-21 (radioHardwareVersion 4): one receive filter chain's
+// filter policy from a remote window's filter policy dialog. The Core makes
+// the call its own dialog's Apply makes (AlexController::setBpfMode, through
+// its AlexAntennaFacade), saves it for its radio and publishes the chain's
+// state (rxFilter<N>Mode) to every window. The policy picks the receive
+// band-pass filter only, so a receive-only Core applies it too.
+void SessionCommandDispatcher::handleSetAlexBpfMode(const SessionMessage& invoke)
+{
+    int chain = 0;
+    int mode = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "chain", "mode" })
+        || findIntArgument(invoke.arguments, "chain", &chain) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "mode", &mode) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("setAlexBpfMode requires chain and mode whole numbers"), {});
+        return;
+    }
+    AlexAntennaFacade* const alex = m_radioModel->alexAntennaFacade();
+    if (alex == nullptr || !alex->isBound()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core has no filter settings ready."), {});
+        return;
+    }
+    const QString reason = alex->setBpfModeForChain(chain, mode);
     emitResult(invoke.commandVerb, invoke.commandId, reason.isEmpty(), reason, {});
 }
 

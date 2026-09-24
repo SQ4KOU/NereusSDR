@@ -397,7 +397,8 @@ void TciApplet::buildDisabledState(QVBoxLayout* vbox)
     m_enableBtn = new QPushButton(QStringLiteral("Enable Server"), this);
     m_enableBtn->setFixedHeight(24);
     m_enableBtn->setToolTip(
-        QStringLiteral("Start the TCI WebSocket server"));
+        QStringLiteral("Turn on the TCI server so programs like WSJT-X or JTDX "
+                       "can control this radio."));
     m_enableBtn->setStyleSheet(QStringLiteral(
         "QPushButton {"
         "  background: %1; border: 1px solid %2; border-radius: 3px;"

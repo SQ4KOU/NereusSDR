@@ -103,6 +103,16 @@
 //                 engine, so both work in a remote window. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-24: R-R3-49 / R-R3-21. Pages whose feature is not built yet
+//                 (UnbuiltFeatures) are not registered, and a category left
+//                 with no pages is not shown, so selectPage() finds none of
+//                 them. J.J. Boyd (KG4VCF), with AI-assisted implementation
+//                 via Anthropic Claude Code.
+//   2026-09-24: R-R3-49 / R-R3-21. RX2 Display and Gradients are removed;
+//                 Logging & Performance, left with only hidden logging
+//                 groups, is registered only once logging is built. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 //   2026-09-24: R-R3-47 / R-R3-48: CAT & Network > RF-Kit works in a remote
 //                 window through the Core; the TCI Server page shows the
 //                 Core's station TCI server. J.J. Boyd (KG4VCF), with
@@ -111,6 +121,7 @@
 
 #include "SetupDialog.h"
 #include "SetupPage.h"
+#include "UnbuiltFeatures.h"
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
 #include "core/settings/SettingsProxy.h"
@@ -415,6 +426,14 @@ void SetupDialog::setTciServer(NereusSDR::TciServer* server)
     m_pendingTciServer = server;
     if (m_tciServerPage) {
         m_tciServerPage->setTciServer(server);
+    }
+}
+
+void SetupDialog::setReceiverAudioNote(RemoteReceiverAudioNote note)
+{
+    m_receiverAudioNote = note;
+    if (m_vaxPage) {
+        m_vaxPage->setReceiverAudioNote(note);
     }
 }
 
@@ -980,10 +999,15 @@ void SetupDialog::buildTree()
     // operator identity (User/Callsign, User/GridSquare).
     registerPage(general, "Startup & Preferences", SetupScope::Mixed,
                  [this] { return new StartupPrefsPage(m_model); });
-    registerPage(general, "UI Scale & Theme", SetupScope::ThisComputer,
-                 [this] { return new UiScalePage(m_model); });
-    registerPage(general, "Navigation", SetupScope::ThisComputer,
-                 [this] { return new NavigationPage(m_model); });
+    // R-R3-49: a page whose feature is not built yet is not registered.
+    if (UnbuiltFeatures::isBuilt(UnbuiltFeature::UiScale)) {
+        registerPage(general, "UI Scale & Theme", SetupScope::ThisComputer,
+                     [this] { return new UiScalePage(m_model); });
+    }
+    if (UnbuiltFeatures::isBuilt(UnbuiltFeature::Navigation)) {
+        registerPage(general, "Navigation", SetupScope::ThisComputer,
+                     [this] { return new NavigationPage(m_model); });
+    }
     registerPage(general, "Options", SetupScope::Mixed, [this]() -> QWidget* {
         // Phase 3M-4 Task 11: forward GeneralOptionsPage's PureSignal Info
         // Bar checkbox signals to the live PureSignal coordinator so the
@@ -1040,9 +1064,14 @@ void SetupDialog::buildTree()
     // Phase 3F Sub-Epic E Tasks 8-10: DDC Routing power-user override page.
     // Skeleton-only landing; per-DDC table + override schema follow once
     // codec layer (Sub-Epic B) is in place.
-    markRemoteUnavailable(registerPage(hardware, "DDC Routing", SetupScope::Core, [this]() -> QWidget* {
-        return new HardwareDdcRoutingPage(m_model);
-    }), hardwareReason);
+    // R-R3-49 (ddc-routing): its choices do not steer the radio's receivers
+    // yet; the page is hidden until multi-panadapter receiver routing is
+    // built.
+    if (UnbuiltFeatures::isBuilt(UnbuiltFeature::DdcRouting)) {
+        markRemoteUnavailable(registerPage(hardware, "DDC Routing", SetupScope::Core, [this]() -> QWidget* {
+            return new HardwareDdcRoutingPage(m_model);
+        }), hardwareReason);
+    }
 
     // ── PA ────────────────────────────────────────────────────────────────────
     // Top-level PA category mirrors Thetis tpPowerAmplifier
@@ -1142,7 +1171,13 @@ void SetupDialog::buildTree()
     // streams), and the page writes only this computer's audio/Vax* keys,
     // so it works in every window, connected or not.
     registerPage(audio, "VAX", SetupScope::ThisComputer,
-                 [this] { return wrapWithAudioBackendStrip(new AudioVaxPage(m_model)); });
+                 [this] {
+                     auto* vaxPage = new AudioVaxPage(m_model);
+                     // R-R3-43 / R-R3-44: the compressed-audio note's state.
+                     m_vaxPage = vaxPage;
+                     vaxPage->setReceiverAudioNote(m_receiverAudioNote);
+                     return wrapWithAudioBackendStrip(vaxPage);
+                 });
     // R-R3-42: Audio > TCI configures the TCI server that runs on this
     // computer, in a remote window as in a local one, and its keys are this
     // computer's (SettingsScope "Tci"). It reaches no local DSP (the backend
@@ -1261,7 +1296,6 @@ void SetupDialog::buildTree()
         return multimeterPage;
     });
 
-    registerPage(display, "RX2 Display", SetupScope::ThisComputer, [this] { return new Rx2DisplayPage(m_model); });
     registerPage(display, "TX Display", SetupScope::Mixed,  [this] { return new TxDisplayPage(m_model);  });
 
     // 3D Stacked-Trace Spectrum Plan Task 15: mirrors the Task 13 overlay
@@ -1277,7 +1311,10 @@ void SetupDialog::buildTree()
     // ── Transmit ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* transmit = addCategory("Transmit");
     registerPage(transmit, "Power", SetupScope::Core,       [this] { return new PowerPage(m_model);      }, true);
-    registerPage(transmit, "TX Profiles", SetupScope::Core, [this] { return new TxProfilesPage(m_model); }, true);
+    if (UnbuiltFeatures::isBuilt(UnbuiltFeature::TxProfilesLeaf)) {
+        registerPage(transmit, "TX Profiles", SetupScope::Core,
+                     [this] { return new TxProfilesPage(m_model); }, true);
+    }
 
     // SpeechProcessorPage is the TX dashboard (3M-3a-i Batch 5).  Its
     // openSetupRequested(category, page) signal feeds straight back into
@@ -1326,18 +1363,23 @@ void SetupDialog::buildTree()
                 this, &SetupDialog::sMeterPeakDecayChanged);
         return page;
     });
-    registerPage(appearance, "Gradients", SetupScope::ThisComputer,
-                 [this] { return new GradientsPage(m_model); });
-    registerPage(appearance, "Skins", SetupScope::ThisComputer,
-                 [this] { return new SkinsPage(m_model); });
-    registerPage(appearance, "Collapsible Display", SetupScope::ThisComputer,
-                 [this] { return new CollapsibleDisplayPage(m_model); });
+    if (UnbuiltFeatures::isBuilt(UnbuiltFeature::Skins)) {
+        registerPage(appearance, "Skins", SetupScope::ThisComputer,
+                     [this] { return new SkinsPage(m_model); });
+    }
+    if (UnbuiltFeatures::isBuilt(UnbuiltFeature::MinimalMode)) {
+        registerPage(appearance, "Collapsible Display", SetupScope::ThisComputer,
+                     [this] { return new CollapsibleDisplayPage(m_model); });
+    }
 
     tick("Appearance");
 
     // ── CAT & Network ─────────────────────────────────────────────────────────
     QTreeWidgetItem* cat = addCategory("CAT & Network");
-    registerPage(cat, "Serial Ports", SetupScope::ThisComputer, [] { return new CatSerialPortsPage; });
+    if (UnbuiltFeatures::isBuilt(UnbuiltFeature::Cat)) {
+        registerPage(cat, "Serial Ports", SetupScope::ThisComputer,
+                     [] { return new CatSerialPortsPage; });
+    }
     // R-R3-42: this computer's TCI server and its own settings.
     registerPage(cat, "TCI Server", SetupScope::ThisComputer, [this]() -> QWidget* {
         // Phase 3J-1 review P2.4: forward CatTciServerPage::tciServerEnableToggled
@@ -1399,14 +1441,22 @@ void SetupDialog::buildTree()
     // connect and disconnect its amplifier (it never dials the amp from
     // this computer); a Core that does not offer that says so on the page.
     registerPage(cat, "RF-Kit", SetupScope::Core, [this] { return new RfKitPage(m_model); });
-    registerPage(cat, "TCP/IP CAT", SetupScope::ThisComputer,   [] { return new CatTcpIpPage;       });
-    registerPage(cat, "MIDI Control", SetupScope::ThisComputer, [] { return new CatMidiControlPage;  });
+    if (UnbuiltFeatures::isBuilt(UnbuiltFeature::Cat)) {
+        registerPage(cat, "TCP/IP CAT", SetupScope::ThisComputer, [] { return new CatTcpIpPage; });
+    }
+    if (UnbuiltFeatures::isBuilt(UnbuiltFeature::Midi)) {
+        registerPage(cat, "MIDI Control", SetupScope::ThisComputer,
+                     [] { return new CatMidiControlPage; });
+    }
 
     tick("CAT & Network");
 
     // ── Keyboard ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* keyboard = addCategory("Keyboard");
-    registerPage(keyboard, "Shortcuts", SetupScope::ThisComputer, [] { return new KeyboardShortcutsPage; });
+    if (UnbuiltFeatures::isBuilt(UnbuiltFeature::Keyboard)) {
+        registerPage(keyboard, "Shortcuts", SetupScope::ThisComputer,
+                     [] { return new KeyboardShortcutsPage; });
+    }
 
     tick("Keyboard");
 
@@ -1432,14 +1482,30 @@ void SetupDialog::buildTree()
                  [this] { return new ExportImportConfigPage(m_model); });
     registerPage(diagnostics, "Logs", SetupScope::ThisComputer,
                  [] { return new LogsPage; });
-    registerPage(diagnostics, "Signal Generator", SetupScope::Core,
-                 [] { return new DiagSignalGeneratorPage; });
-    registerPage(diagnostics, "Hardware Tests", SetupScope::Core,
-                 [] { return new DiagHardwareTestsPage; });
-    registerPage(diagnostics, "Logging & Performance", SetupScope::ThisComputer,
-                 [] { return new DiagLoggingPage; });
+    if (UnbuiltFeatures::isBuilt(UnbuiltFeature::SignalGenerator)) {
+        registerPage(diagnostics, "Signal Generator", SetupScope::Core,
+                     [] { return new DiagSignalGeneratorPage; });
+        registerPage(diagnostics, "Hardware Tests", SetupScope::Core,
+                     [] { return new DiagHardwareTestsPage; });
+    }
+    // R-R3-49: with its Performance checkboxes removed, this page holds only
+    // the logging groups, hidden until logging is built. A page with nothing
+    // to show is not registered, so neither the tree nor selectPage() finds it.
+    if (UnbuiltFeatures::isBuilt(UnbuiltFeature::Logging)) {
+        registerPage(diagnostics, "Logging & Performance", SetupScope::ThisComputer,
+                     [] { return new DiagLoggingPage; });
+    }
 
     tick("Diagnostics");
+
+    // R-R3-49: a category left with no pages (Keyboard, while shortcut
+    // editing is not built) is not shown.
+    for (int i = m_tree->topLevelItemCount() - 1; i >= 0; --i) {
+        QTreeWidgetItem* category = m_tree->topLevelItem(i);
+        if (category->childCount() == 0) {
+            delete m_tree->takeTopLevelItem(i);
+        }
+    }
 
     m_tree->expandAll();
     tick("expandAll");

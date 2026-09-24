@@ -23,6 +23,9 @@
 //                 shows the EP6 sequence error count, not the throttle
 //                 event count. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: Connection Quality's 60 s history group is
+//                 hidden until the history graph is built. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "DiagnosticsPhaseHPages.h"
@@ -33,6 +36,7 @@
 #include "core/SettingsHygiene.h"
 #include "models/RadioModel.h"
 #include "gui/SupportDialog.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include <QFile>
 #include <QFileDialog>
@@ -92,7 +96,8 @@ void ConnectionQualityPage::buildUI()
         QStringLiteral("The 60 s history graph is not shown yet."));
     m_historyPlaceholder->setStyleSheet(QStringLiteral("color: #888;"));
     histLayout->addWidget(m_historyPlaceholder);
-    SetupPage::markNyi(m_historyPlaceholder, QStringLiteral("3P-H follow-up"));
+    histGroup->setObjectName(QStringLiteral("connectionHistoryGroup"));
+    UnbuiltFeatures::hideUnlessBuilt(histGroup, UnbuiltFeature::ConnectionHistory);
 
     contentLayout()->addStretch();
 }
@@ -256,6 +261,10 @@ void ExportImportConfigPage::buildUI()
     radioLayout->addWidget(m_radioSummaryLabel);
     m_exportRadioBtn = new QPushButton(QStringLiteral("Export Connected Radio…"));
     radioLayout->addWidget(m_exportRadioBtn);
+    // R-R3-49 (export-radio): exporting one radio's settings is not built;
+    // the group is hidden until it is. The button's code stays.
+    radioGroup->setObjectName(QStringLiteral("exportRadioGroup"));
+    UnbuiltFeatures::hideUnlessBuilt(radioGroup, UnbuiltFeature::ExportRadio);
 
     connect(m_exportAllBtn,   &QPushButton::clicked, this,
             &ExportImportConfigPage::onExportAllClicked);

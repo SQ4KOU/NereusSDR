@@ -18,6 +18,10 @@
 //                 and Auto Attenuate groups follow the Core's `stepAtt`
 //                 object. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 / R-R3-21: the Network Watchdog checkbox is the
+//                 Core's in a remote window (gated, older-Core note).
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -97,7 +101,8 @@ public:
 
     // R-R3-21 / R-R3-10: the Region is the Core's setting (where the radio is),
     // so its combo is disabled while the Core's settings are unavailable;
-    // the rest of the page is this computer's.
+    // so is the Network Watchdog checkbox (R-R3-49). The rest of the page is
+    // this computer's.
     void setStationSettingsAvailable(bool available, const QString& reason) override;
 
 signals:
@@ -157,6 +162,8 @@ private:
     QLabel*    m_lblWarningRegionExtended{nullptr};
     QCheckBox* m_chkGeneralRXOnly{nullptr};
     QCheckBox* m_chkNetworkWDT{nullptr};
+    // R-R3-49: shown when an older Core refuses a window's change.
+    QLabel*    m_lblNetworkWDTCore{nullptr};
 
     // Options group
     // From Thetis setup.designer.cs:9050-9059 [v2.10.3.13] (grpGeneralOptions)

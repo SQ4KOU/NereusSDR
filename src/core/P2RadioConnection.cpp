@@ -7,6 +7,7 @@
 //   Project Files/Source/ChannelMaster/network.h, original licence from Thetis source is included below
 //   Project Files/Source/ChannelMaster/netInterface.c, original licence from Thetis source is included below
 //   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
+//   Project Files/Source/Console/setup.cs, original licence from Thetis source is included below
 //
 // --- From deskhpsdr/src/new_protocol.c (3M-1b G.1–G.6) ---
 // Byte 50 mic control bits: G.1 mic_boost (0x02), G.2 line_in (0x01),
@@ -57,6 +58,15 @@
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex. Also retire incomplete wideband bursts at capture/connection changes.
 //   2026-09-23 - Established silence judged only when no datagram is waiting (R-R3-29): Thetis ChannelMaster/network.c:656-671 [v2.10.3.15].
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Network Watchdog setting drives general packet byte 38, is sent at once on a change,
+//                 gates the 500 ms keepalive and the established-silence wait: Thetis network.c:656, 897-898, 1436 and
+//                 netInterface.c:1364-1372 [v2.10.3.15]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 fix wave: operator decision, the radio's safety timer stays on. Byte 38 is always 1 and the
+//                 keepalive always runs (deliberate divergence from network.c:897-898, 1436 [v2.10.3.15]); the setting
+//                 governs only the established-silence wait (network.c:656). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 fix wave: setup.cs's header added below, since setWatchdogEnabled quotes
+//                 setup.cs:18024-18028 [v2.10.3.15]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -172,6 +182,53 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //============================================================================================//
 
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+
+// --- From setup.cs ---
+
+//=================================================================
+// setup.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Continual modifications Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//=================================================================
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
 
 #include "P2RadioConnection.h"
 #include "LogCategories.h"
@@ -642,7 +699,16 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // captures a default-init state before SetADCCount(2) is applied.
     m_numAdc = m_hardwareProfile.caps ? m_hardwareProfile.adcCount : m_caps->adcCount;
     m_numDac = 1;
-    m_wdt = 1;  // Watchdog timer MUST be enabled — radio requires it for streaming
+    // R-R3-49: byte 38 enables the radio's own safety timer, which drops the
+    // radio out of transmit when general packets stop arriving. NereusSDR
+    // deliberately keeps it on whatever the Network Watchdog setting says: a
+    // radio left keyed when the computer dies is a hazard (operator decision
+    // 2026-09-24). Thetis lets byte 38 follow the setting instead:
+    // From Thetis network.c:897-898 [v2.10.3.15]:
+    //   // Watchdog Timer default = 0 disabled
+    //   packetbuf[38] = prn->wdt;
+    // The setting governs only the wait for data (onEstablishedSilenceTimeout).
+    m_wdt = 1;
 
     // From Thetis console.cs:8216 UpdateDDCs() — 2-ADC P2 boards (Angelia /
     // Orion / OrionMKII / Saturn / ANAN-G2) place RX1 on DDC2 because DDC0/
@@ -1303,44 +1369,33 @@ quint8 P2RadioConnection::effectiveLpfBitsAlex0() const
 }
 
 // ---------------------------------------------------------------------------
-// setWatchdogEnabled — Phase 3M-0 Task 5
+// setWatchdogEnabled
 //
-// Records the requested watchdog enable state in the base-class
-// m_watchdogEnabled field (shared with P1).
+// R-R3-49: the Network Watchdog setting (Setup > General > Options). It sets
+// how long an established stream waits for data before the radio is declared
+// lost: three seconds on, no limit off.
 //
-// From Thetis NetworkIOImports.cs:197-198 [v2.10.3.13]:
-//   [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
-//   public static extern void SetWatchdogTimer(int bits);
+// From Thetis setup.cs:18024-18028 [v2.10.3.15]:
+//   private void chkNetworkWDT_CheckedChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
+//   }
+// From Thetis network.c:656 [v2.10.3.15]:
+//   DWORD retVal = WSAWaitForMultipleEvents(1, &prn->hDataEvent, FALSE, prn->wdt ? 3000 : WSA_INFINITE, FALSE);
 //
-// The callsite (setup.cs:17986 [v2.10.3.13]):
-//   NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
+// Deliberate divergence (operator decision 2026-09-24): in Thetis the same
+// setting also turns off the radio's own safety timer (general packet byte
+// 38, network.c:897-898 [v2.10.3.15]) and the 500 ms keepalive that feeds it
+// (network.c:1436 [v2.10.3.15]), and SetWatchdogTimer sends the general
+// packet at once to carry the change (netInterface.c:1364-1372
+// [v2.10.3.15]). NereusSDR keeps byte 38 at 1 and the keepalive running
+// whatever the setting says, because a radio left keyed when the computer
+// dies is a hazard. Nothing on the wire changes here, so nothing is sent.
 //
-// NOTE: P2RadioConnection already carries m_wdt (int, maps to prn->wdt) which
-// is set to 1 unconditionally in connectToRadio() because the radio requires
-// the watchdog for streaming. m_watchdogEnabled records the *user* toggle from
-// Setup → Network WDT checkbox; the relationship to m_wdt is unresolved.
-//
-// 3M-1a Task E.8 — DEFERRED with documented blocker
-// (pre-code review §7.8, "P2 BPF2Gnd / Alex T/R / Network watchdog —
-//  DEFERRED to research"):
-//
-//   "deskhpsdr does not currently emit a P2 watchdog command.  Likely a
-//    Saturn-specific register; documented blocker."
-//   "P2 watchdog wire bit stays a state-tracking stub.  Update the TODO
-//    comment to reference this pre-code review §7.8 and file a tracking
-//    issue."
-//
-// State-only stub: setWatchdogEnabled stores the requested value in the
-// base-class m_watchdogEnabled field (default true, set by E.5).  No P2
-// wire emission.  P1 wire bit was resolved in E.5 (RUNSTOP pkt[3] bit 7).
-//
-// Tracking: see GitHub issue (filed post-merge — link to be added when
-// the issue number is known).  Re-port path: when Saturn register layout
-// is identified (likely via deskhpsdr saturndrivers.c / saturnregisters.c
-// once they document the watchdog control register), restore the wire-bit
-// emission via sendCmdGeneral() and remove the deferral note.
-// Cite: NetworkIOImports.cs:197-198 [v2.10.3.13] (DllImport entry that
-// indirects through ChannelMaster.dll's closed-source watchdog handler).
+// Turning the watchdog off stops a wait in progress; turning it on starts the
+// wait from then, so the radio is not declared lost the moment the box is
+// ticked.
 // ---------------------------------------------------------------------------
 void P2RadioConnection::setWatchdogEnabled(bool enabled)
 {
@@ -1348,6 +1403,20 @@ void P2RadioConnection::setWatchdogEnabled(bool enabled)
         return;
     }
     m_watchdogEnabled = enabled;
+
+    if (!enabled) {
+        if (m_establishedSilenceTimer) {
+            m_establishedSilenceTimer->stop();
+        }
+    } else if (m_running && !m_linkLossLatched
+               && state() == ConnectionState::Connected
+               && m_establishedSilenceTimer) {
+        m_establishedSilenceGeneration = m_connectionGeneration;
+        m_establishedSilenceDeadline = QDeadlineTimer(
+            std::chrono::milliseconds(m_establishedSilenceTimeoutMs),
+            Qt::PreciseTimer);
+        m_establishedSilenceTimer->start(m_establishedSilenceTimeoutMs);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2253,6 +2322,12 @@ bool P2RadioConnection::isSelectedSourceAddress(const QHostAddress& sender) cons
 // authoritative and status/mic/wideband traffic cannot establish the link.
 void P2RadioConnection::noteAcceptedInboundDatagram(quint64 datagramGeneration)
 {
+    // R-R3-49: with the Network Watchdog off the wait has no limit.
+    // From Thetis network.c:656 [v2.10.3.15]:
+    //   prn->wdt ? 3000 : WSA_INFINITE
+    if (!m_watchdogEnabled) {
+        return;
+    }
     if (!m_running || m_linkLossLatched
         || datagramGeneration != m_connectionGeneration
         || state() != ConnectionState::Connected
@@ -2274,6 +2349,9 @@ void P2RadioConnection::noteAcceptedInboundDatagram(quint64 datagramGeneration)
 
 void P2RadioConnection::onEstablishedSilenceTimeout()
 {
+    if (!m_watchdogEnabled) {
+        return; // R-R3-49: watchdog off, no limit (network.c:656 [v2.10.3.15])
+    }
     if (!m_running || m_linkLossLatched
         || state() != ConnectionState::Connected
         || m_establishedSilenceGeneration != m_connectionGeneration) {
@@ -2399,10 +2477,13 @@ void P2RadioConnection::stopForEstablishedSilence()
 // Fires every 500ms, sends CmdGeneral when running
 void P2RadioConnection::onKeepAliveTick()
 {
-    // From Thetis network.c:1436
-    // if (prn->run && prn->wdt) CmdGeneral();
-    // Note: we send CmdGeneral unconditionally when running (wdt=0 means no watchdog,
-    // but keepalive still runs per Thetis behavior)
+    // R-R3-49: the keepalive general packet feeds the radio's safety timer
+    // (byte 38, always on here), so it runs whatever the Network Watchdog
+    // setting says. Deliberate divergence (operator decision 2026-09-24: a
+    // radio left keyed when the computer dies is a hazard). Thetis stops it
+    // with the setting off:
+    // From Thetis network.c:1436 [v2.10.3.15]:
+    //   if (prn->run && prn->wdt) CmdGeneral();
     if (m_running && !m_radioInfo.address.isNull()) {
         sendCmdGeneral();
     }

@@ -20,6 +20,8 @@
 #include <QPointer>
 #include <QSet>
 
+#include "gui/RemoteReceiverAudioNote.h"
+
 #include <functional>
 #include <vector>
 
@@ -34,6 +36,7 @@ struct BoardCapabilities;
 struct RadioInfo;
 class TciServer;
 class CatTciServerPage;
+class AudioVaxPage;
 class SettingsProxy;
 
 // R-R3-21 / R-R3-23: what a Setup page's settings belong to. Every page
@@ -95,6 +98,13 @@ public:
     // page's setTciServer(); the page tracks via QPointer so the connection
     // is safe across server lifecycle changes.
     void setTciServer(class NereusSDR::TciServer* server);
+
+    // R-R3-43 / R-R3-44: whether this remote window's receiver streams (the
+    // ones feeding VAX) are Opus rather than lossless, and why (the choice,
+    // or Lossless chosen but not running). MainWindow pushes it live; the
+    // Audio > VAX page shows its compressed-audio note while it is not None.
+    // Never pushed in a local window, where it stays None.
+    void setReceiverAudioNote(RemoteReceiverAudioNote note);
 
 public:
     // R-R3-21: the S-meter's face, peak hold or decay changed (its
@@ -306,6 +316,11 @@ private:
     // non-WebSocket builds. Safe: MainWindow parents its single TciServer to
     // itself and never destroys it independently, so it outlives this dialog.
     TciServer* m_pendingTciServer = nullptr;
+
+    // R-R3-43 / R-R3-44: the value setReceiverAudioNote() last got,
+    // replayed into the VAX page when it is realized.
+    RemoteReceiverAudioNote m_receiverAudioNote = RemoteReceiverAudioNote::None;
+    QPointer<AudioVaxPage> m_vaxPage;
 
     // Phase 8 of #167: PA category nav-tree root + 3 child items, plus
     // the page widgets themselves so applyPaVisibility() can toggle each.

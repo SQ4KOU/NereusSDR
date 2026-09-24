@@ -38,6 +38,8 @@
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-47 / R-R3-22: AccessoryDataModel, all Outbound. J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: AccessorySettingsModel, all Outbound.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -512,6 +514,32 @@ const MirrorPolicy::Entry kEntries[] = {
     { "AccessoryDataModel", "rfkitAntenna2Label", MirrorDirection::Outbound },
     { "AccessoryDataModel", "rfkitAntenna3Label", MirrorDirection::Outbound },
     { "AccessoryDataModel", "rfkitAntenna4Label", MirrorDirection::Outbound },
+
+    // R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
+    // 1): the amp's and tuner's own settings as the Core last heard them,
+    // read-only. A window changes them only through the setPgxl* / setTgxl*,
+    // save and read commands.
+    { "AccessorySettingsModel", "pgxlNickname", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlBiasMode", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlFanMode", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlLedIntensity", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlNetworkKnown", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlDhcp", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlAddress", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlNetmask", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlGateway", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlAnswer", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlAnswerAccepted", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlAnswerCount", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlNickname", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlNetworkKnown", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlDhcp", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlAddress", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlNetmask", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlGateway", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlAnswer", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlAnswerAccepted", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlAnswerCount", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

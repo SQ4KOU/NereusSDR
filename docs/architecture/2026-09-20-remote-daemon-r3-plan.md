@@ -290,6 +290,13 @@ verification record under `docs/architecture/2026-09-20-remote-daemon-r3-verific
   encrypted loopback peers without an external STUN service. Stop/recreate
   peers, and capture packet sizes with the configured MTU. A small application
   payload alone does not prove the UDP-size requirement.
+  HARDWARE-PENDING: the loopback probe passed two rounds at MTU 1000
+  (transport-probe.md:86-88); RTP packets are capped at 940 bytes before
+  encryption (OpusAudioCodec.h:26, PcmAudioCodec.h:41, refused oversize at
+  LibDataChannelMediaTransport.cpp:770, from ea55d24a). Operator observes: a
+  packet capture of the encrypted audio (Opus 24k, Opus 48k and Lossless)
+  showing every packet at 1000 bytes or less, on loopback or the Rock LAN;
+  only the display capture exists so far (969 bytes).
 - [x] Validate a continuously adjustable resampling implementation from an
   existing source, preserving phase/history across ratio changes. Inspect the
   existing WDSP variable-rate path before proposing a new dependency. Record
@@ -321,13 +328,19 @@ integration exposes a difficult platform/linking failure.
 
 - [x] Give DaemonApp ownership of a live pool, connect the same per-stream
   I/Q producer used by local mode, and tear it down before RadioModel streams.
-- [ ] Add `(stream,tier)` lifecycle without changing existing local callers'
+- [x] Add `(stream,tier)` lifecycle without changing existing local callers'
   default Wide behavior. Derive FFT sizes from resolution targets, clamp to
   supported sizes, report unmet requests, and never resize an unrelated pan's
   wide engine to satisfy a fine request.
-- [ ] Validate subscription values and ownership; clamp output pixels to the
+  DONE: b4eefeda (sharing regression failed first), 2140d0ae (the Core
+  reports what each pan got), 69315721, follow-up gaps plan Task 1 (every
+  remaining pan gets its full grant back). Tests: tst_daemon_media_controller,
+  tst_display_budget.
+- [x] Validate subscription values and ownership; clamp output pixels to the
   available source bins and report the clamp. Keep a latest frame slot, not
   an unbounded Qt frame queue.
+  DONE: b4eefeda (matching validation, coalescing test), 2140d0ae (the clamp
+  is reported to the window).
 - [x] Use separate SpectrumReducers for trace and waterfall. Apply cadence
   before transport encoding and preserve independent averaging histories.
 - [x] Extract the existing 3D wide-crop/peak-preserving behavior into a
@@ -371,6 +384,11 @@ explicit. Parser failure never changes the last accepted frame/history.
 - [ ] Carry trace and waterfall independently, plus optional bounded 3D row.
   Measure maximum frame size and the peer library's fragmentation behavior;
   cap reassembly memory and transport backlog.
+  HARDWARE-PENDING: code done in ec47ce35 (send-buffer limits, stalled-receiver
+  test 1,376,067 B before vs 159,137 B after, frame-size logging) and
+  0eb8aa74 (PureSignal pacing). Operator observes: on the Rock at 4096 points,
+  60 fps with 3D, the Core log shows a largest frame of at most 9,361 B in
+  11 fragments, and a capture shows 1000 B or less.
 
 **Acceptance:** quantization error no greater than half one quantization step
 for clipped in-range samples at the precise setting; explicitly documented
@@ -399,9 +417,14 @@ SpectrumWidget; tests `tst_remote_media_session`, `tst_remote_spectrum_render`.
 - [x] Establish direct DTLS/SCTP and SRTP using libdatachannel. Retain current
   WSS command/state handling. Configure display unordered with no retries;
   keep RTP separate. Reject oversized signalling before library parsing.
-- [ ] Add subscribe/context/enable/unsubscribe/keyframe control messages with
+- [x] Add subscribe/context/enable/unsubscribe/keyframe control messages with
   explicit endpoint ownership. Late library callbacks cannot revive an old
   session. A failed peer stops its producers and leaves control responsive.
+  DONE: ea55d24a (DaemonMediaController.cpp:913-915) plus revision and session
+  checks in b4eefeda. Tests: staleEpochAndForeignConnectionLeaveEndpointsUntouched,
+  revisionedUnsubscribeCannotRetireOrResurrectNewerState,
+  failedDisplayAttemptDebitsCreditAndRecoversWithKeyframe. Live Saturn display
+  seen (README:172, 208).
 - [x] Decode into a dedicated external reduced-frame widget entry point.
   Do not feed reduced dBm into the local linear-FFT path and reduce it again.
   Advance 2D and 3D from the decoded waterfall cadence; use explicit supplied
@@ -409,6 +432,9 @@ SpectrumWidget; tests `tst_remote_media_session`, `tst_remote_spectrum_render`.
 - [ ] Preserve immediate crop/zoom within the negotiated margin and update
   endpoint coverage at the existing gesture boundary. Reconfiguration gets
   a new generation and keyframe; old-frequency frames cannot repaint it.
+  SUPERSEDED: operator decision D1 (questions file line 27) - the view
+  renews at the end of the gesture, final, with no 1.5x margin. The renewal
+  half is done (tuning waterfall continuity row, zoom flash hotfix 25df3195).
 
 **Acceptance:** one live Saturn pan and both waterfall modes advance;
 retune, zoom and band changes preserve frequency alignment; deliberate loss
@@ -447,15 +473,30 @@ state mirror and decoded remote display.
   each currently reaches the suppressed local ConnectionPanel. Keep explicit
   operator actions separate from automatic panel-open callbacks so a manual
   Disconnect cannot cause an immediate redial during session teardown.
+  HARDWARE-PENDING: c28e1565 (Connections selector), 1212d819
+  (tst_remote_window_harness covers title, station block and disconnected
+  pan), fb82f488 (Connections opens only after the operator's own
+  Disconnect). Operator observes: each click in the installed window starts
+  exactly one Core attempt; after a manual Disconnect nothing redials and
+  Connections opens.
 - [ ] Add persistent configured-Core identity and connection/retry/error
   feedback to the existing GUI chrome. Show Core connectivity and radio
   connectivity separately. Offer a clear retry action and cancellation;
   expiring toasts and log-only socket errors are insufficient.
+  HARDWARE-PENDING, plus open decision C: 95b19467, c28e1565 ("Retrying Core
+  (attempt N)", "Radio offline"), later wording plans. Still undecided: queue
+  item C, what a window refused permanently or taken over by another session
+  shows; today it reads "Core connection failed"
+  (RemoteConnectionController.cpp:89).
 - [ ] Verify all visible entry points during first connection, unreachable
   Core, retry backoff, manual cancellation, recovered Core, and connected
   Core with its radio offline. Repeat a manual disconnect after a successful
   session to catch retained-name auto-open callbacks. Treat this as a basic
   R3 usability gate before the two-hour receive acceptance run.
+  HARDWARE-PENDING: the automated half is in tst_remote_window_harness
+  (14 cases). Operator observes: first connection, Core unreachable (nereusd
+  stopped), attempt count rising, cancel, Core recovered, Core up with radio
+  down (stop p2app on the G2), manual Disconnect after a good session.
 
 **Verification:** real Core meter reads, read-only mirror round trips,
 source selection, stable slice IDs, disconnect/TX/lifetime tests, unchanged
@@ -541,16 +582,27 @@ reinterpret `FftTier::Wide` or transmit unrestricted full FFT arrays.
   another pan's capture or leave bypass enabled after the last consumer.
   Endpoint transport, shared demand and retirement are implemented and tested;
   the checkbox remains open for total-session allocation and live acceptance.
+  HARDWARE-PENDING: endpoint work is in the wideband design; the session
+  allocator (R-R3-37) charges the combined rows unchanged. Operator observes
+  on the Saturn: wings stay under the budget; hiding one pan leaves the
+  other's capture running; filter bypass clears after the last pan.
 - [ ] Composite the DDC island and wideband wings using their actual RF
   coverage. Preserve the existing local zoom range on capable hardware;
   keep the DDC fallback only when the remote source is unavailable. Wing
   tuning must use Core commands and preserve shared-slice constraints.
   Core composition and GUI availability/history wiring are implemented; real
   hardware zoom/wing gestures and shared-slice acceptance remain pending.
+  HARDWARE-PENDING: Core composition and window wiring done; zoom flash fix
+  25df3195. Operator observes: real zoom and wing gestures, including a
+  slice shared with another window.
 - [ ] Verify zoom across the DDC edge, release without snap-back, inward
   zoom, ADC changes, shared pans, rejected moves and reconnect. Reject stale
   wideband frames and apply calibration once. Verify real Saturn wideband
   capture and BPF transitions without transmitting.
+  HARDWARE-PENDING, plus a small follow-on: besides the operator
+  observations, no freshness limit has been set for wideband frames (no TTL
+  has been guessed, wideband design:411-413); it needs the Saturn's real
+  burst cadence measured first.
 
 **Verification:** meaningful integration tests for source identity, bounds,
 RF alignment, multi-pan demand and filter restoration; existing local-wing
@@ -585,11 +637,14 @@ warning to the operator. Keep actual display pauses, connection failures and
 unsupported actions visible with a useful explanation; retain technical details
 in diagnostics.
 
-- [ ] Inventory currently visible menus, applets and setup controls by owner:
+- [x] Inventory currently visible menus, applets and setup controls by owner:
   GUI-local, station-backed, or unavailable in remote receive. Record the
   concrete handler/property and acceptance case. Trace generic mirrored DSP
   setters before labelling them broken; the observed FIR-graph gap is a local
   visualization dependency, not evidence that all DSP settings fail.
+  DONE: f14e04e2 plus fix wave feb9dc59 (tst_remote_gui_gating 63/63;
+  remote-controls.md). The operator's "no silent disables" rule later turned
+  many "unavailable" rows into parity work.
 - [x] Wire Tools → Network Diagnostics to the existing
   `MainWindow::openNetworkDiagnostics()` role-aware handler. The Tools entry
   now opens the same local/remote dialog as the status segment. Production
@@ -610,12 +665,20 @@ in diagnostics.
   receive controls and the separate local-DSP resource gate. VAX Setup is
   receive export and is not classified as a TX page. See the
   [control matrix](2026-09-20-remote-daemon-r3-verification/remote-controls.md).
-- [ ] Reproduce the extra-slice startup through the actual connection,
+  HARDWARE-PENDING (operator's wording review): 46b01ebf
+  (tst_remote_tx_presentation, tst_remote_tx_widgets), feb9dc59, follow-up
+  gaps Task 2. The operator approves the disabled states and their reasons
+  at a checkpoint.
+- [x] Reproduce the extra-slice startup through the actual connection,
   snapshot and `populateEmptyPans` path. Separate hydration/layout restoration
   from explicit operator creation; do not delete an existing station slice
   to conceal an unintended create. Test reconnect and delayed snapshots.
-- [ ] Add a narrow injected session/presentation harness that exercises the
+  DONE: 1212d819 - the held-snapshot rows fail when the remote guard is
+  removed; the original fix was 95b19467.
+- [x] Add a narrow injected session/presentation harness that exercises the
   real action routing. Slot-existence checks alone do not close this task.
+  DONE: 1212d819 (tst_remote_window_harness, 14 cases); multi-pan halves
+  added in d9f4e362.
 - [ ] R-R3-30: retire SliceModel-to-VFO callbacks with their actual flag
   widget when a pan shrinks or a slice is rehomed. The observed AGC crash
   used a MainWindow-owned lambda capturing a deleted flag. Correct the
@@ -627,6 +690,10 @@ in diagnostics.
   The production lifetime correction and replacement-view regression now pass
   focused/full-suite verification and independent review; live layout acceptance is tracked
   in [VFO lifetime verification](2026-09-20-remote-daemon-r3-verification/vfo-lifetime.md).
+  HARDWARE-PENDING: 3075a5b9 (tst_slice_flag_presentation_lifetime: 45
+  handlers still live before the fix). Operator observes: shrink two pans to
+  one while the Core keeps sending AGC updates; no crash, and the
+  replacement flag keeps updating (vfo-lifetime.md:39-40).
 
 **Acceptance:** each connect entry point starts one configured-Core attempt;
 cancel during backoff leaves it stopped through delayed callbacks; Core-up /
@@ -770,6 +837,11 @@ for build, review and installation evidence.
   the current local TCP question, not remote Core ownership. The connect-time
   retry path also emitted invalid-descriptor/source-bind errors after timeouts;
   reproduce and correct its cancellation/lifecycle behavior.
+  HARDWARE-PENDING, cause unknown: the retry lifecycle is fixed, each attempt
+  uses a fresh socket (tgxl-recovery.md:219, 270-272). The Rock's connection
+  to .234:9010 still hung half-open with no reply while the Mac reached the
+  tuner. Operator observes: a network check first, the Rock's route and
+  interface, per the station-network rule from 2762d6ec.
 
 **Acceptance:** a PGXL banner/status never yields a connected tuner; supported
 tuner identity does, and unknown/timeout responses leave an actionable error.
@@ -862,11 +934,18 @@ measurements. Never equate transport send acceptance with packet delivery.
   delivery to the client from actual speaker playback, retain unknown/stale
   gaps, and validate against an independent timing measurement. Existing
   control RTT and sampled PCM buffering do not satisfy this follow-on.
+  HARDWARE-PENDING: built per decision D2 (02e7a217, 9e7134fa, 03291c21).
+  tst_audio_clock_estimator passed 2000 random trials; tst_remote_audio_session
+  measured 237.7 ms vs 238.0 ms heard (Opus). Operator observes: the readout
+  on the Rock with a real speaker.
 - [ ] Operator checkpoint for the empty-state labels and diagnostics menu:
   verify total/directional kbps or Mbps on Connection, separate Opus kbps on
   Audio, and RTT versus speaker-buffer ms on Round trip / buffering, both
   connected and disconnected. This remains pending installation of the current
   source; previous live graph acceptance does not cover these later fixes.
+  HARDWARE-PENDING: labels changed since this box was written (d5eae8b5,
+  99106153). Operator observes: the Connection, Audio and Round trip tabs,
+  connected and disconnected.
 
 **Verification:** follow the design's codec/lifecycle, real collector,
 history, widget and live acceptance cases. Register and build focused tests
@@ -913,6 +992,10 @@ alone and a Core restart are distinct lifecycle boundaries.
   receivers must be explicit and must retire stale media/control callbacks.
 - [ ] Test a real two-slice Core stop/start and authenticated client reconnect,
   then repeat the two-pan receive-only hardware checkpoint.
+  HARDWARE-PENDING: design and runtime evidence is in
+  receive-layout-runtime.md. Operator observes: restart nereusd with slices
+  A and B on two pans; both come back with the same IDs, frequency, mode and
+  pan, and the window creates no slices.
 
 **Verification:** meaningful persistence/snapshot/media lifecycle tests and
 real restart acceptance. Do not fix the observation by silently increasing a
@@ -963,6 +1046,11 @@ and identity/ownership acceptance. Persist client credentials locally.
   identity, unavailable Core, connected Core/offline radio, cancel/reconnect,
   settings isolation and visible selection/status. Use isolated fake/loopback
   tests first and then an operator checkpoint with actual radios/Core.
+  HARDWARE-PENDING: the automated part passes (station-selection.md:40,
+  two-Core encrypted tests). Operator observes (station-selection.md:95-103):
+  LAN announcements (IPv4 and IPv6), switching between the local radio and
+  the Rock with real display and audio, add/edit/forget, Core online with
+  radio offline.
 
 Full key pairing, revocation and administration remain tracked by R6 and the
 identity design; their absence must remain visible rather than represented by
@@ -1065,19 +1153,27 @@ listening and long-session acceptance remain separate.
   higher-rate stereo settings during listening; report actual channels,
   packet bandwidth, bytes and CPU. Do not reinterpret the old mono benchmark
   as a measured stereo result.
+  HARDWARE-PENDING: code done, the 24k profile, 5f06fce2 (48k passes sound up
+  to 20 kHz), afa926a8 (audio_bitrate setting and a matching SDP). FT8 decode
+  cost measured (digital-modes-over-opus.md). Operator observes: Rock CPU at
+  24k and 48k, bytes on the wire, operator listening.
 - [x] Add bounded ordering/jitter, Opus loss concealment and continuous clock
   correction with preserved interpolation state. Start near the design's
   180 ms receive-buffer target; make timing injectable for tests.
 - [x] Drive a client playback bus independently of local RadioModel DSP.
   Local output trim/mute must work, mute flushes queued samples, and encoding
   suspension is a session operation. Resume starts a fresh audio generation.
-- [ ] Sample-rate, mode, band and slice transitions preserve a 48 kHz mixed
+- [x] Sample-rate, mode, band and slice transitions preserve a 48 kHz mixed
   output contract or explicitly reset audio context when required. Include
   cold startup with exactly one slice: the P2 codec assignment must reach the
   radio while connecting and converge on Connected, without depending on a
   later GUI slice creation or retune. Verify wire DDC rate and host DSP geometry
   agree. Close cancels pending work before rings, codec and device storage
   are destroyed.
+  DONE: 7ee6d985 (tst_daemon_audio_transitions: 192k to 384k, SSB to RADE,
+  band change, slice add/remove), 8c011066 (tst_p2_ddc_assignment_marshalling,
+  tst_daemon_audio_session), live wire rate at 192 kHz
+  (startup-audio.md:104). Limit: the transition test uses a P1 fixture only.
 
 **Acceptance:** two test slices yield one stereo block per period, retain
 left/right placement and mute, and work with no daemon sound device. Offline
@@ -1129,10 +1225,17 @@ The currently fixed 24 kbit/s profile is not a negotiated quality selector.
 - [ ] Complete the 24/48 kbit/s mixed-stereo listening/CPU/wire-rate comparison
   in task 5. Decide the offered quality profiles from those results. Preserve
   the selected mixed stereo ownership; do not silently substitute mono.
-- [ ] If profiles are offered, add acknowledged Core configuration with bounded
+  HARDWARE-PENDING: Rock CPU at 48k fullband still pending. 48k can only be
+  set in nereusd.conf; the app's choice today is Opus or Lossless.
+- [x] If profiles are offered, add acknowledged Core configuration with bounded
   reconfiguration and reconnect replay. Display accepted settings on refusal;
   never present raw frame-size/FEC/complexity controls without a working wire
   contract. The addendum's three-tier example is not a mandatory profile list.
+  DONE (shape set by decision D3): Lossless choice with Core acceptance,
+  plain refusal reasons and replay on reconnect: eda5c0d5, 714e9f88,
+  2607265b, d5eae8b5. A real encrypted session carried lossless at
+  1537 kbit/s; the link trial fell back to Opus in about 6 s. Lossless to
+  the Rock still to be observed.
 
 **Acceptance:** mute and device failures remain understandable after a toast
 expires; client trim/mute does not change Core slice gain/pan. Displayed codec
@@ -1184,16 +1287,23 @@ clear a replacement owner, including when a slice ID is reused.
 - [x] Cover stale queued I/Q/speech, old-owner destruction, removed/reused
   slice IDs and worker teardown/restart. Prove a failed/warming/unsynced B
   decoder cannot stall A's mixed output.
-- [ ] Preserve every mixed source frame under bounded queued RADE delivery.
+- [x] Preserve every mixed source frame under bounded queued RADE delivery.
   The live check exposed a 39–44k/s mixed-source deficit at nominal 48k/s;
   the prior 256-frame ring discarded ordinary receiver audio while RADE was
   delayed. Adopt Thetis's 4096-frame RX/anti-VOX capacity independently of
   block size, keep immediate readiness drainage, and verify exact frame count
   and sequence contents through repeated/clumped producer delivery. Recheck
   the actual Core rate and listening before accepting the repair.
+  DONE: 0b408427 (4096-frame minimum ring, MasterMixer.h:327; frame count and
+  sequence tests). Core rate observed at about 48,000 frames/s
+  (rade-multislice.md:163-165); zero source drops at 08:39 on 2026-09-23
+  after the contention fix. The listening check goes with the next box.
 - [ ] Run affected RADE/mixer/audio regressions, consolidated review and full
   suite; install a signed matching checkpoint and perform the receive-only
   two-pan RADE smoke with the user.
+  HARDWARE-PENDING: operator observes A on SSB and B on RADE-U on the second
+  pan; A stays audible as B enters and leaves RADE, even with nothing to
+  decode; B's speech joins the mix.
 
 **Acceptance:** A remains audible when B enters/leaves RADE-U, including
 without a decodable signal; only B's post-demodulated input reaches its decoder.
@@ -1265,6 +1375,9 @@ rules, configuration sample and the R3 verification ledger.
   and Core enforcement are implemented and component-tested; real-hardware
   exercise remains open. No production byte/sample limits have been measured; do not derive them from
   the single-pan 969-byte observation or the eight-endpoint admission cap.
+  HARDWARE-PENDING: allocator (R-R3-37), CPU-adaptive plan, 9e8ae810 (older
+  apps get their even share again). Operator observes on the Rock: background
+  pans slow down first and show why.
 - [x] Verify the budget against actual sender time, including rapid endpoint
   replacement and context renewal. `SpectrumEndpoint::configure()` resets
   per-endpoint cadence, so an admission sum alone cannot enforce the session's
@@ -1279,9 +1392,17 @@ rules, configuration sample and the R3 verification ledger.
 - [ ] Measure full-span/noise and deep-zoom cases with both FFT tiers, WDSP,
   stereo Opus and 3D enabled on the Rock 5C. Report actual effective limits;
   preserve the separate Pi 4 hardware-floor obligation until measured there.
+  HARDWARE-PENDING, plus a small follow-on: after measuring, set the
+  production display limits in nereusd.conf (display-capacity.md:125-129)
+  and settle the CPU-adaptive thresholds. The Pi 4 cannot be upgraded to
+  current code: install-core-pi4.sh refuses an existing install.
 - [ ] Verify the combined full desktop suite once after integration, plus
   ARM-sensitive focused tests and Linux daemon-component staged install.
   Do not hide known failures through exclusions or call a partial run green.
+  REMAINING (a gate run): earlier runs - Mac 791/791 at 5c369c79; Linux
+  arm64 Debian 13 container 778/778 at 31176d0b and 788/790 at 37072945
+  (both flakes fixed in 8f8ae6d6, 5766dd36, 93567686). Must run once more at
+  the final merged head.
 - [ ] R-R3-26: reproduce configured-listener bind failure followed by address/
   port availability; recover without restarting the radio service or changing
   the configured bind/security scope. Stop/reconfiguration cancels stale retry
@@ -1292,6 +1413,9 @@ rules, configuration sample and the R3 verification ledger.
   Software recovery/cancellation and capped-backoff regressions now pass,
   including the full 682-test suite. It is installed; controlled late-network
   board acceptance remains pending (see the verification ledger).
+  HARDWARE-PENDING: code e518b63d. Operator observes: boot the Rock with its
+  wired address arriving after nereusd starts; the control listener comes up
+  with no service restart.
 - [ ] R-R3-28: reproduce established media loss with a healthy control session,
   then route typed terminal transport failures through cancellable authenticated
   reconnect. Installed checkpoint 706b9a5f now requests the existing
@@ -1303,6 +1427,11 @@ rules, configuration sample and the R3 verification ledger.
   and repeated media failures across successful control handshakes separately:
   the current control backoff resets at handshake, so it cannot by itself prove
   growing backoff across those media failures. See [recovery evidence](2026-09-20-remote-daemon-r3-verification/media-recovery.md).
+  HARDWARE-PENDING: code 706b9a5f, then f62ea04e, 0c9521dc, 010a123f,
+  6461a788, 2aba5f05. Tests: tst_remote_connection_controls,
+  tst_remote_media_controller. Operator observes: block the media UDP while
+  TCP 50055 stays up; the window says it is retrying, waits longer each
+  time, Disconnect cancels, the slice survives, display and audio return.
 - [ ] R-R3-29: established P2 receive-silence recovery is implemented and
   passes real-loopback checks and the full 698-test suite. Matching Core/GUI
   `55e7d49f` is installed; physical radio-loss/resume acceptance remains pending
@@ -1315,6 +1444,9 @@ rules, configuration sample and the R3 verification ledger.
   same-radio recovery, cancellation and receive-only safety. Valid status-only
   traffic still keeps the sourced all-inbound watchdog alive. See
   [recovery evidence](2026-09-20-remote-daemon-r3-verification/radio-recovery.md).
+  HARDWARE-PENDING: code 55e7d49f. Operator observes: stop p2app on the G2's
+  Pi for more than 3 s, then start it; the same Core recovers the same radio
+  and the window resumes.
 - [ ] R-R3-27: cancellable discovery recovery is implemented for startup
   with the configured radio absent, then present. A worker replaces one-shot
   startup discovery; Core control stays responsive and existing GUI sessions
@@ -1323,17 +1455,34 @@ rules, configuration sample and the R3 verification ledger.
   pass, including the full 698-test suite. Matching `55e7d49f` is installed;
   the GUI authenticated before radio arrival during normal startup, but actual
   absent-radio startup acceptance remains pending; established-radio loss is tested separately under R-R3-29.
+  HARDWARE-PENDING (written up in radio-recovery.md): recovery code
+  55e7d49f. Observed twice on 2026-09-23. First at build ac4c63aa, installed
+  while the G2's p2app was down: the Core ignored the other radio (.107), the
+  window authenticated at 08:24:43, the G2 was found at 08:35:42 and audio
+  played at 08:35:53, with no restart. Again at build 44584133 (20:15); the
+  audit records nothing more about that session. Recorded in
+  [radio-recovery.md](2026-09-20-remote-daemon-r3-verification/radio-recovery.md);
+  acceptance still needs the slice-retention check from the window's log.
 - [ ] Install a signed checkpoint with a recoverable previous binary/library
   set, preserve private station configuration, and verify boot, clean stop,
   client reconnect and live media. Provide a launcher using private pairing
   configuration outside the repository.
+  HARDWARE-PENDING (repeat at the final checkpoint): done many times
+  (80f45e28 with rollback to 44584133; the installer now refuses an empty
+  service unit). Still unexplained: the earlier empty-files incident
+  (station-selection.md:105-115).
 - [ ] Run at least two hours of real audio with counters for underrun,
   overflow, loss, jitter, drift ratio, CPU, memory and thermal state. Include
   an explicit client disconnect/reconnect and verify stale audio is flushed.
+  SUPERSEDED: operator decision on 2026-09-23 at 09:50, soak runs are
+  removed as gates. The counters exist (38f79249, the 60 s periodic log
+  line).
 - [ ] Record one-pan and four-pan on-wire budgets and delivered quality.
   The parent screenshot figures are comparison targets, not acceptance data
   for this implementation. Complete its internet-capable receive evidence
   separately from LAN success; CGNAT-to-CGNAT remains the R5 acceptance case.
+  HARDWARE-PENDING: a measurement; internet evidence (the Pi 4 profile over
+  public IPv6) exists only informally.
 
 **Verification:** fresh software results, real transport observations and
 hardware/operator observations recorded separately as passed, failed or
@@ -1352,11 +1501,11 @@ whole-plan review loops.
 | --- | --- | --- |
 | R2 baseline | Preserved rollback checkpoint `14124e7c` | Authenticated control/tuning/meter baseline retained; installed runtime advanced to `ea55d24a` |
 | Combined open-PR recovery | Complete source checkpoint `14124e7c` | GUI/Core build and unfiltered 662/662 desktop tests pass; fixture-path workaround recorded separately |
-| Native combined Core | Installed signed `200d2a0e`, rollback `0b408427` | Matching Core/GUI include telemetry, the RADE mixer cadence correction and packet-burst playout repair; 692 desktop tests and the native production build pass. Automatic full-Core restart recovery is observed; live media-only loss and the soak remain open. See [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md). |
+| Native combined Core | Installed signed `200d2a0e`, rollback `0b408427` | Matching Core/GUI include telemetry, the RADE mixer cadence correction and packet-burst playout repair; 692 desktop tests and the native production build pass. Automatic full-Core restart recovery is observed; live media-only loss remains open. The soak is superseded (operator decision, 2026-09-23 09:50): removed as a gate. See [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md). |
 | Plan review and mixed-stereo choice | Lead, recorded | Current review; user confirmed mixed stereo and Opus |
 | Direct media transport | Production adapter and MediaPeer integrated | Real encrypted peers, bounded callbacks, stop/restart/delete regressions pass; live display capture passes: Ethernet, 969-byte maximum IP packet; separate SRTP-size proof pending |
 | Headless FFT and display codec | Implemented and component-tested | Independent Wide/Fine sources, retune input reset, independent planes, crop clamp, bounded codec and recovery tests pass; authenticated daemon-to-GUI regression and live Saturn display pass |
-| Audio | User accepted smooth audio and waterfall at `706b9a5f` | Mixed stereo Opus is live. Startup wire/host mismatch was fixed at `8c011066`; source diagnostics show 48 kHz and about 25 Opus packets/s. Earlier Starlink/ZeroTier gaps and underflows still require sustained acceptance, profile comparison and the two-hour soak. |
+| Audio | User accepted smooth audio and waterfall at `706b9a5f` | Mixed stereo Opus is live. Startup wire/host mismatch was fixed at `8c011066`; source diagnostics show 48 kHz and about 25 Opus packets/s. Earlier Starlink/ZeroTier gaps and underflows still require sustained acceptance and profile comparison. The two-hour soak is superseded (operator decision, 2026-09-23 09:50): removed as a gate; the counters exist (38f79249, the 60 s periodic log line). |
 | GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane, shared-window and reconnect regressions pass; live GPU spectrum/2D observed; operator 3D confirmation and gesture refinement pending |
 | Tuning waterfall continuity | Visual regression corrected; focused tests pass | R-R3-04/09/10: subscription/context renewal preserves painted 2D/3D history while rejecting stale incoming planes; accepted RF geometry reprojects existing rows. Full-suite and live tuning gates remain recorded in the verification ledger. |
 | Remote C-Tune control parity | R-R3-18 installed at `501b2701`; reported gestures accepted | Authenticated stream pin/centre commands, stream-lifetime guards, gesture-time pan selection, refusal rollback and reducer initialization pass the 681/681 combined suite. Matching Core/GUI are running; operator confirmed both wheel tuning and in-band scale zoom behave smoothly. Broader multi-slice hardware checks remain in task 6. |
@@ -1371,4 +1520,5 @@ whole-plan review loops.
 | Second-pan RADE | R-R3-31 playback correction installed at signed `200d2a0e`; listening acceptance still open | Owning-slice routing, lifecycle guards, the upstream 4096-frame mixer correction, and demand-only admitted-packet release are installed. The burst/loss regression, consolidated review and 692 desktop tests pass. Ordinary receive has shown no further GUI underflow restart after startup recovery; the one-SSB/one-RADE operator check remains pending. Leaving RADE on both receivers resolved the earlier audible problem. Sender scheduling and sustained operation remain open; see [RADE verification](2026-09-20-remote-daemon-r3-verification/rade-multislice.md). |
 | Core banner and telemetry graphs | R-R3-32/33/35 installed; all three tabs and restart gaps observed live | Aether graph/history port uses fetched source `0dea0dd7`. Total/directional Core application traffic, separate Opus bandwidth and speaker buffering are visible in matching `3402d171`; RTT is separately labeled. All 696 desktop tests and native build passed. CPU/memory history and capture-to-playback latency remain follow-on work; see [design](2026-09-21-core-telemetry-design.md). |
 | Audio controls and diagnostics | R-R3-23 source complete for status/health/retry; task 5a items 2 and 3 open | Persistent codec/status/health display and Retry are implemented and evidenced; see [remote audio status verification](2026-09-20-remote-daemon-r3-verification/remote-audio-status.md). Fixed 24 kbit/s stereo is still active; the measured 24/48 comparison and any quality selector remain open. A selectable quality profile needs an acknowledged Core contract; no adaptive-rate claim. |
-| Boot and radio recovery | R-R3-26 installed; R-R3-27/29 installed in `55e7d49f`; physical acceptance open | All 698 executables pass. Normal restart exercised GUI authentication before Saturn I/Q arrival. The Rock then became unreachable by SSH/ping; host diagnosis, late-network boot and physical radio-loss recovery remain pending. See [evidence](2026-09-20-remote-daemon-r3-verification/radio-recovery.md). |
+| Boot and radio recovery | R-R3-26 installed; R-R3-27/29 installed in `55e7d49f`; physical acceptance open | All 698 executables pass. Normal restart exercised GUI authentication before Saturn I/Q arrival. The Rock then became unreachable by SSH/ping; host diagnosis, late-network boot and physical radio-loss recovery remain pending. R-R3-27 was observed twice on 2026-09-23 (08:24-08:35 at build ac4c63aa, where a Core started while its radio was down found it later and played audio with no restart, and again at 20:15 at build 44584133); acceptance still needs the slice-retention check. See [evidence](2026-09-20-remote-daemon-r3-verification/radio-recovery.md). |
+| R3 completion plan and 2026-09-23 hotfix plans | Stacked on this plan, third lane worktree, branch codex/remote-filter-policy | The 2026-09-24 R3 completion plan (docs/architecture/2026-09-24-r3-completion-plan.md) closed the amplifier applets' Disconnect/Reconnect in a remote window (Task 1, 16ba6687), corrected the Network Watchdog setting to follow Thetis source (Task 2, f92f19db), and added the VAX page's remote-audio-compressed note (Task 3, c236a9a0). The 2026-09-23 plans delivered, ahead of this plan's own boxes: the R3 NR3 model crash hotfix, the R3 controls-that-work plan and its fix wave, the R3 receiver-load hotfix, the R3 unfinished-controls plan and its fix wave, the R3 remote zoom-flash hotfix (25df3195, closing part of the D1 crop/zoom box above), the R3 remote radio hardware plan's Task 6, and the R3 Linux suite fixes plan (the two flakes closed in 8f8ae6d6, 5766dd36, 93567686, credited above against the full-suite gate row). |

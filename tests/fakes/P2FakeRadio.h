@@ -58,6 +58,10 @@ public:
     int stopCount() const { return m_stopCount; }
     int moxAssertedCount() const { return m_moxAssertedCount; }
     quint8 lastHighPriorityFlags() const { return m_lastHighPriorityFlags; }
+    // General command packets (60 bytes, command byte 0x00, outbound base
+    // port) and byte 38 of the last one, the network watchdog (R-R3-49).
+    int generalDatagrams() const { return m_generalDatagrams; }
+    int lastGeneralWatchdog() const { return m_lastGeneralWatchdog; }
 
 private:
     static constexpr int kRoleSocketCount = 18; // outbound base .. base+17
@@ -83,6 +87,8 @@ private:
     int m_stopCount{0};
     int m_moxAssertedCount{0};
     quint8 m_lastHighPriorityFlags{0};
+    int m_generalDatagrams{0};
+    int m_lastGeneralWatchdog{-1};
     quint32 m_ddcSequence{0};
     quint32 m_statusSequence{0};
     std::array<quint32, 8> m_widebandSequence{};

@@ -33,6 +33,9 @@
 //   2026-09-24 - R-R3-47 / R-R3-22: AccessoryDataModel mirrored
 //                 (`accessoryData`). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: AccessorySettingsModel mirrored
+//                 (`accessorySettings`). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
@@ -94,6 +97,10 @@ const char* const kMirroredClasses[] = {
     // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory
     // records and settings, read-only.
     "NereusSDR::AccessoryDataModel",
+    // R-R3-47 / R-R3-22 (remotePgxlControlVersion 3 and
+    // remoteTgxlControlVersion 1): the amp's and tuner's own settings as the
+    // Core last heard them, read-only.
+    "NereusSDR::AccessorySettingsModel",
 };
 
 // Per-property exclusions, as (class, property).

@@ -26,15 +26,24 @@
 // Nothing here keys a transmitter or operates an accessory: the interlock
 // policy's enforcement stays in MoxController and is unchanged.
 //
+// I3: a fault captured or cleared, and the interlock policy or output limit
+// a window sets, reach the settings file within kSaveDelayMs (one save for
+// a burst), not only at a clean stop, so a power loss at the station does
+// not lose them.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-47, R-R3-22). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Saves the records soon after a change
+//                                    (R-R3-47). AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QTimer>
 
 namespace NereusSDR {
 
@@ -61,8 +70,13 @@ public:
     static constexpr int kPowerCapMinW = 100;
     static constexpr int kPowerCapMaxW = 2000;
 
+    // How long after a change the settings file is written (a burst of
+    // changes is one write).
+    static constexpr int kSaveDelayMs = 500;
+
     StationAccessoryData(AccessoryDataModel* model, const Sources& sources,
                          QObject* parent = nullptr);
+    ~StationAccessoryData() override;
 
     /// The alert a window shows when the amp's output passes the limit.
     static QString powerCapAlertText(int forwardW, int limitW);
@@ -90,8 +104,11 @@ private:
     void publishPowerCapSettings();
     void publishTuneMemory();
     void publishLabels();
+    void scheduleSave();
+    void saveNow();
 
     QPointer<AccessoryDataModel> m_model;
+    QTimer m_saveTimer;
     Sources m_sources;
     bool m_alertArmed{true};
 };

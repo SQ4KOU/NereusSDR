@@ -3,11 +3,15 @@
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
 // 2026-09-24: R-R3-22 / R-R3-47: identity announcements from the station
 // network only (setStationBind).
+// 2026-09-24: R-R3-47 / R-R3-22: the amp's own settings for a window
+// (deviceSettings, StationDeviceSettings.h). J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #pragma once
 
 #include "core/PgxlConnection.h"
 #include "models/AmplifierModel.h"
 #include "core/StationNetwork.h"
+#include "core/StationDeviceSettings.h"
 #include <QPointer>
 
 #include <optional>
@@ -56,6 +60,10 @@ public:
     /// Connection settings changed on the Core: apply them to a running
     /// connection (automatic retry, keepalive interval, ping interval).
     void applyConnectionSettings();
+    /// R-R3-47 / R-R3-22: a window's requests for the amp's own settings
+    /// (name, bias, fan, LED, network, Save & Reboot, Revert), sent as the
+    /// local Advanced page sends them, answered on AccessorySettingsModel.
+    StationDeviceSettings* deviceSettings() const { return m_settings; }
 
 private:
     void identify(quint64 attempt, const QString& peer, quint16 port);
@@ -68,6 +76,7 @@ private:
     QPointer<PgxlConnection> m_connection;
     QPointer<AmplifierModel> m_model;
     QPointer<LanDiscovery> m_discovery;
+    StationDeviceSettings* m_settings{nullptr};
     std::optional<StationNetwork::StationBind> m_stationBind;
     AmplifierModel::StationConnectionState m_state;
     PgxlIdentityInfo m_nativeInfo;

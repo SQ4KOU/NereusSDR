@@ -22,6 +22,12 @@
 //   2026-09-23 - R-R3-46: the CW sidetone row reads the Core's radio
 //                 at build in a remote window. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: controls whose feature is not built yet are
+//                 hidden through UnbuiltFeatures: the CW keyer and timing
+//                 groups, the APF bandwidth and gain, the SAM group, the AM
+//                 squelch maximum tail, the FM receive deviation and
+//                 de-emphasis. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -83,6 +89,7 @@
 #include "models/TransmitModel.h"
 #include "gui/widgets/NnrControls.h"
 #include "gui/DspAssetDialog.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -1794,6 +1801,10 @@ CwSetupPage::CwSetupPage(RadioModel* model, QWidget* parent)
     addLabeledSlider(keyerLay, "Dot-Dash Ratio", dotDashRatio);
 
     disableGroup(keyerGrp);
+    // R-R3-49: the CW keyer settings are hidden until CWX and CW transmit
+    // are built.
+    keyerGrp->setObjectName(QStringLiteral("cwKeyerGroup"));
+    UnbuiltFeatures::hideUnlessBuilt(keyerGrp, UnbuiltFeature::Cwx);
 
     // ── Timing ────────────────────────────────────────────────────────────────
     QGroupBox* timingGrp = addSection("Timing");
@@ -1840,6 +1851,9 @@ CwSetupPage::CwSetupPage(RadioModel* model, QWidget* parent)
     m_sidetoneRow->setVisible(false);
 
     disableGroup(timingGrp);
+    // R-R3-49: break-in delay and sidetone are keyer settings too.
+    timingGrp->setObjectName(QStringLiteral("cwTimingGroup"));
+    UnbuiltFeatures::hideUnlessBuilt(timingGrp, UnbuiltFeature::Cwx);
 
     // ── APF ───────────────────────────────────────────────────────────────────
     QGroupBox* apfGrp = addSection("APF");
@@ -1868,12 +1882,17 @@ CwSetupPage::CwSetupPage(RadioModel* model, QWidget* parent)
     auto* apfBw = new QSlider(Qt::Horizontal);
     apfBw->setRange(10, 500);
     apfBw->setEnabled(false);
-    addLabeledSlider(apfLay, "Bandwidth", apfBw);
+    apfBw->setObjectName(QStringLiteral("apfBandwidthSlider"));
+    // R-R3-49: hidden until a slice setting holds them.
+    UnbuiltFeatures::hideLayoutUnlessBuilt(addLabeledSlider(apfLay, "Bandwidth", apfBw),
+                                           UnbuiltFeature::ApfParams);
 
     auto* apfGain = new QSlider(Qt::Horizontal);
     apfGain->setRange(0, 100);
     apfGain->setEnabled(false);
-    addLabeledSlider(apfLay, "Gain", apfGain);
+    apfGain->setObjectName(QStringLiteral("apfGainSlider"));
+    UnbuiltFeatures::hideLayoutUnlessBuilt(addLabeledSlider(apfLay, "Gain", apfGain),
+                                           UnbuiltFeature::ApfParams);
 
     bindToActiveSlice(this, model, [apfEnable, apfCenter, apfCenterValue](SliceModel* s) {
         SliceBindings conns;
@@ -1992,6 +2011,9 @@ AmSamSetupPage::AmSamSetupPage(RadioModel* model, QWidget* parent)
     addLabeledCombo(samLay, "DSB Mode", dsbMode);
 
     disableGroup(samGrp);
+    // R-R3-49: the synchronous AM options are hidden until they are built.
+    samGrp->setObjectName(QStringLiteral("samGroup"));
+    UnbuiltFeatures::hideUnlessBuilt(samGrp, UnbuiltFeature::Sam);
 
     // ── Squelch ───────────────────────────────────────────────────────────────
     QGroupBox* sqGrp = addSection("Squelch");
@@ -2013,7 +2035,10 @@ AmSamSetupPage::AmSamSetupPage(RadioModel* model, QWidget* parent)
     sqMaxTail->setRange(1, 1000);
     sqMaxTail->setSuffix(" ms");
     sqMaxTail->setEnabled(false);
-    addLabeledSpinner(sqLay, "Max Tail", sqMaxTail);
+    sqMaxTail->setObjectName(QStringLiteral("amSquelchMaxTailSpin"));
+    // R-R3-49: hidden until a slice setting holds it.
+    UnbuiltFeatures::hideLayoutUnlessBuilt(addLabeledSpinner(sqLay, "Max Tail", sqMaxTail),
+                                           UnbuiltFeature::AmSquelchTail);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2033,7 +2058,10 @@ FmSetupPage::FmSetupPage(RadioModel* model, QWidget* parent)
 
     auto* rxDeviation = new QComboBox;
     rxDeviation->addItems({"5k", "2.5k"});
-    addLabeledCombo(rxLay, "Deviation", rxDeviation);
+    rxDeviation->setObjectName(QStringLiteral("fmRxDeviationCombo"));
+    // R-R3-49: hidden until a slice setting holds it.
+    UnbuiltFeatures::hideLayoutUnlessBuilt(addLabeledCombo(rxLay, "Deviation", rxDeviation),
+                                           UnbuiltFeature::FmDeviation);
 
     // R-R3-21: the active slice's FM squelch threshold (SliceModel
     // fmsqThresh, dB; RxChannel::setFmsqThresh converts it for WDSP).
@@ -2050,7 +2078,9 @@ FmSetupPage::FmSetupPage(RadioModel* model, QWidget* parent)
     rxDeviation->setEnabled(false);
     auto* deEmphasis = new QPushButton("Enable");
     deEmphasis->setEnabled(false);
-    addLabeledToggle(rxLay, "De-Emphasis", deEmphasis);
+    deEmphasis->setObjectName(QStringLiteral("fmDeEmphasisButton"));
+    UnbuiltFeatures::hideLayoutUnlessBuilt(addLabeledToggle(rxLay, "De-Emphasis", deEmphasis),
+                                           UnbuiltFeature::FmDeviation);
 
     // ── TX ────────────────────────────────────────────────────────────────────
     QGroupBox* txGrp = addSection("TX");
@@ -2069,6 +2099,9 @@ FmSetupPage::FmSetupPage(RadioModel* model, QWidget* parent)
     addLabeledCombo(txLay, "Emphasis Position", emphasisPos);
 
     disableGroup(txGrp);
+    // R-R3-49 (fm-tx): hidden until FM transmit is built.
+    txGrp->setObjectName(QStringLiteral("fmTxGroup"));
+    UnbuiltFeatures::hideUnlessBuilt(txGrp, UnbuiltFeature::FmTransmit);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

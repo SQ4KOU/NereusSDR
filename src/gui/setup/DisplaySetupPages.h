@@ -303,27 +303,6 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Display > RX2 Display
-// ---------------------------------------------------------------------------
-class Rx2DisplayPage : public SetupPage {
-    Q_OBJECT
-public:
-    explicit Rx2DisplayPage(RadioModel* model, QWidget* parent = nullptr);
-
-private:
-    void buildUI();
-
-    // Section: RX2 Spectrum
-    QSpinBox*  m_dbMaxSpin{nullptr};
-    QSpinBox*  m_dbMinSpin{nullptr};
-    QComboBox* m_colorSchemeCombo{nullptr}; // Enhanced/Grayscale/Spectrum
-
-    // Section: RX2 Waterfall
-    QSlider*   m_highThresholdSlider{nullptr};
-    QSlider*   m_lowThresholdSlider{nullptr};
-};
-
-// ---------------------------------------------------------------------------
 // Forward decl for the Custom-palette gradient picker (Phase 3M-5c).
 class GradientPickerWidget;
 

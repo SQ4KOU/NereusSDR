@@ -1,5 +1,7 @@
 // no-port-check: NereusSDR-original. R-R3-48 RF-Kit band follow over TCI.
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-48 rework: refresh when the server adds a listener.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/RfKitBandFollow.h"
 
 #include "core/StationNetwork.h"
@@ -31,6 +33,7 @@ void RfKitBandFollow::setServer(TciServer* server)
     if (server) {
         connect(server, &TciServer::serverStarted, this, &RfKitBandFollow::scheduleRefresh);
         connect(server, &TciServer::serverStopped, this, &RfKitBandFollow::scheduleRefresh);
+        connect(server, &TciServer::listenersChanged, this, &RfKitBandFollow::scheduleRefresh);
         connect(server, &TciServer::clientConnected, this, &RfKitBandFollow::scheduleRefresh);
         connect(server, &TciServer::clientDisconnected, this, &RfKitBandFollow::scheduleRefresh);
     }

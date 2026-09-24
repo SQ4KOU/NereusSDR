@@ -11,6 +11,7 @@
 //   Project Files/Source/ChannelMaster/bandwidth_monitor.c, original licence from Thetis source is included below
 //   Project Files/Source/ChannelMaster/bandwidth_monitor.h, original licence from Thetis source is included below
 //   Project Files/Source/Console/HPSDR/IoBoardHl2.cs (mi0bot/OpenHPSDR-Thetis fork), original licence from upstream included below
+//   Project Files/Source/Console/setup.cs, original licence from Thetis source is included below
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -21,6 +22,16 @@
 //                 networkproto1.c MetisReadDirect [v2.10.3.15] for
 //                 Diagnostics > Connection Quality. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Network Watchdog setting sets the wait for
+//                 data before the radio is declared lost (3000 ms on, none
+//                 off) and no longer reaches the start/stop packet, from
+//                 Thetis networkproto1.c:50, 85, 294 and setup.cs:18024
+//                 [v2.10.3.15]. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 fix wave: setup.cs's header added below, since
+//                 setWatchdogEnabled quotes setup.cs:18024-18028
+//                 [v2.10.3.15]. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -262,6 +273,53 @@ mw0lge@grange-lane.co.uk
 // has been ported into NereusSDR's P1 path.)
 
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+
+// --- From setup.cs ---
+
+//=================================================================
+// setup.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to: 
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Continual modifications Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//=================================================================
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
 
 #include "P1RadioConnection.h"
 #include "LogCategories.h"
@@ -1406,30 +1464,39 @@ quint8 P1RadioConnection::effectiveAlexLpfBits() const
 }
 
 // ---------------------------------------------------------------------------
-// setWatchdogEnabled — 3M-1a Task E.5
+// setWatchdogEnabled
 //
-// Records the requested watchdog enable state in the base-class
-// m_watchdogEnabled field (shared with P2). The wire bit is emitted by
-// sendMetisStart() and sendMetisStop() on the next start/stop cycle — not
-// immediately — matching deskhpsdr behavior (no re-send on toggle).
+// R-R3-49: the Network Watchdog setting (Setup > General > Options). On
+// Protocol 1 Thetis sends nothing for it: the start and stop packets are the
+// same whatever it says (sendMetisStart / sendMetisStop). It sets how long
+// the read loop waits for data before it declares the radio lost: three
+// seconds with it on, for ever with it off. onWatchdogTick applies the wait.
 //
-// Wire format (HL2 firmware primary cite):
-//   Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400
-//     watchdog_disable <= eth_data[7]; // Bit 7 can be used to disable watchdog
-//   Inverted semantic: bit 7 = 1 means disabled, bit 7 = 0 means enabled.
+// From Thetis setup.cs:18024-18028 [v2.10.3.15]:
+//   private void chkNetworkWDT_CheckedChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
+//   }
+// From Thetis netInterface.c:1364-1372 [v2.10.3.15]:
+//   void SetWatchdogTimer(int enable)
+//   {
+//       if (prn->wdt != enable)
+//       {
+//           prn->wdt = enable;
+//           if (listenSock != INVALID_SOCKET)
+//               CmdGeneral();
+//       }
+//   }
+// (CmdGeneral is the Protocol 2 general packet; nothing is sent on P1.)
+// From Thetis networkproto1.c:292-294 [v2.10.3.15]:
+//   //MW0LGE_21g WSAWaitForMultipleEvents(1, &prn->hDataEvent, FALSE, WSA_INFINITE, FALSE);
+//   //added similar timout code from ReadThreadMainLoop
+//   DWORD retVal = WSAWaitForMultipleEvents(1, &prn->hDataEvent, FALSE, prn->wdt ? 3000 : WSA_INFINITE, FALSE);
+// (mi0bot-Thetis networkproto1.c:297 and 443 [@c26a8a4] are the same.)
 //
-// Thetis call-site (setup.cs:17986 [v2.10.3.13]):
-//   NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
-//   chkNetworkWDT.Checked == true => value 1 => watchdog ENABLED => bit 7 = 0.
-//
-// Thetis DllImport (NetworkIOImports.cs:197-198 [v2.10.3.13]):
-//   public static extern void SetWatchdogTimer(int bits);
-//
-// deskhpsdr reference (deskhpsdr/src/old_protocol.c:3811 [@120188f]):
-//   buffer[3] = command;  // no bit-7 OR -- watchdog always enabled (bit 7 = 0)
-//   deskhpsdr has no user-configurable watchdog disable; it never re-sends
-//   RUNSTOP on a watchdog toggle.  NereusSDR matches: state stored here,
-//   picked up on the next sendMetisStart() / sendMetisStop() call.
+// Turning it on while data has stopped starts the wait from then, so the
+// radio is not declared lost the moment the box is ticked.
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setWatchdogEnabled(bool enabled)
 {
@@ -1437,9 +1504,9 @@ void P1RadioConnection::setWatchdogEnabled(bool enabled)
         return;
     }
     m_watchdogEnabled = enabled;
-    // No immediate re-send: matches deskhpsdr pattern (no standalone RUNSTOP
-    // packet for watchdog toggle). The new state is included in the next
-    // sendMetisStart() or sendMetisStop() call.
+    if (enabled && m_lastEp6At.isValid()) {
+        m_lastEp6At = QDateTime::currentDateTimeUtc();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2726,6 +2793,16 @@ void P1RadioConnection::onWatchdogTick()
     // If we haven't received any ep6 frame yet, don't trip the watchdog.
     if (!m_lastEp6At.isValid()) { return; }
 
+    // R-R3-49: with the Network Watchdog off an established link waits for
+    // data for ever, as Thetis does. A reconnect attempt (Connecting) that
+    // got no answer still times out: that is this program's own retry, run
+    // only after a loss was declared.
+    // From Thetis networkproto1.c:292-294 [v2.10.3.15]:
+    //   //MW0LGE_21g WSAWaitForMultipleEvents(1, &prn->hDataEvent, FALSE, WSA_INFINITE, FALSE);
+    //   //added similar timout code from ReadThreadMainLoop
+    //   DWORD retVal = WSAWaitForMultipleEvents(1, &prn->hDataEvent, FALSE, prn->wdt ? 3000 : WSA_INFINITE, FALSE);
+    if (cs == ConnectionState::Connected && !m_watchdogEnabled) { return; }
+
     const qint64 silenceMs = m_lastEp6At.msecsTo(QDateTime::currentDateTimeUtc());
     if (silenceMs > m_watchdogSilenceMs) {
         qCWarning(lcConnection) << "P1: Watchdog — ep6 silent for" << silenceMs
@@ -2911,33 +2988,19 @@ void P1RadioConnection::sendMetisStart(bool iqAndMic)
     pkt[1] = static_cast<char>(0xFE);
     pkt[2] = static_cast<char>(0x04);
 
-    // RUNSTOP byte (pkt[3]) encodes three independent fields from the same byte:
-    //   eth_data[0] = run         (1 = start IQ/mic stream)
-    //   eth_data[1] = wide_spectrum (iqAndMic path sets 0x02)
-    //   eth_data[7] = watchdog_disable (1 = disabled, 0 = enabled -- inverted)
-    //
-    // Source: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:200-203
-    //   RUNSTOP: begin
-    //     run_next = eth_data[0];
-    //     wide_spectrum_next = eth_data[1];
-    //     runstop_watchdog_valid = 1'b1;
-    //   end
-    //
-    // Source: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400
-    //   watchdog_disable <= eth_data[7]; // Bit 7 can be used to disable watchdog
-    //
-    // deskhpsdr reference (deskhpsdr/src/old_protocol.c:3811 [@120188f]):
-    //   buffer[3] = command;  // 0x01 start -- bit 7 = 0 implicitly (watchdog enabled)
-    //   deskhpsdr never sets bit 7; watchdog is always enabled there.
-    //
-    // Thetis (setup.cs:17986 [v2.10.3.13]):
-    //   NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
-    //   When checked (enabled): passes 1 -> bit 7 = 0 (not disabled).
-    const quint8 runBits     = iqAndMic ? quint8(0x02) : quint8(0x01);
-    // From Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400 [@7472bd1]:
-    //   watchdog_disable <= eth_data[7]; -- 1=disabled, 0=enabled (inverted)
-    const quint8 watchdogBit = m_watchdogEnabled ? quint8(0x00) : quint8(0x80);
-    pkt[3] = static_cast<char>(runBits | watchdogBit);
+    // R-R3-49: the Network Watchdog setting never reaches this byte. Thetis
+    // and mi0bot-Thetis send the same start command whatever the setting;
+    // on Protocol 1 the setting only sets how long the read loop waits for
+    // data (onWatchdogTick).
+    // From Thetis networkproto1.c:47-50 [v2.10.3.15]:
+    //   outpacket.packetbuf[0] = 0xef;
+    //   outpacket.packetbuf[1] = 0xfe;
+    //   outpacket.packetbuf[2] = 0x04;
+    //   outpacket.packetbuf[3] = 0x01;
+    // (mi0bot-Thetis networkproto1.c:50 [@c26a8a4] is the same.)
+    // iqAndMic=true sends 0x02 (IQ + mic), as before this change.
+    const quint8 runBits = iqAndMic ? quint8(0x02) : quint8(0x01);
+    pkt[3] = static_cast<char>(runBits);
 
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);
 }
@@ -2960,20 +3023,12 @@ void P1RadioConnection::sendMetisStop()
     pkt[1] = static_cast<char>(0xFE);
     pkt[2] = static_cast<char>(0x04);
 
-    // Stop packet (run = 0).  Watchdog bit still emitted for consistency:
-    //   eth_data[0] = 0 (stop)
-    //   eth_data[7] = watchdog_disable (inverted -- see sendMetisStart for full cite)
-    //
-    // Source: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400
-    //   watchdog_disable <= eth_data[7]; // Bit 7 can be used to disable watchdog
-    //
-    // deskhpsdr reference (deskhpsdr/src/old_protocol.c:3811 [@120188f]):
-    //   buffer[3] = command;  // 0x00 stop -- bit 7 = 0 implicitly
-    //   deskhpsdr doesn't set bit 7 on stop either; NereusSDR emits it
-    //   explicitly so the watchdog state is preserved if the radio re-reads
-    //   the last RUNSTOP byte on reconnect.
-    const quint8 watchdogBit = m_watchdogEnabled ? quint8(0x00) : quint8(0x80);
-    pkt[3] = static_cast<char>(watchdogBit); // run = 0; watchdog bit set if disabled
+    // Stop packet (run = 0). R-R3-49: the Network Watchdog setting is not
+    // sent (see sendMetisStart).
+    // From Thetis networkproto1.c:85 [v2.10.3.15] (mi0bot-Thetis
+    // networkproto1.c:85 [@c26a8a4] is the same):
+    //   outpacket.packetbuf[3] = 0x00;
+    pkt[3] = static_cast<char>(0x00);
 
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);
 }

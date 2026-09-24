@@ -77,6 +77,7 @@ public:
     int     rttAvgLast10Ms()      const noexcept { return m_rttAvgMs; }
     int     reconnectAttempts()   const noexcept { return m_reconnectAttempts; }
     bool    autoReconnect()       const noexcept { return m_autoReconnect; }
+    int     pollIntervalMs()      const noexcept { return m_pollIntervalMs; }
     /// A retry of the amp's address is scheduled.
     bool    reconnectPending()    const { return m_reconnectTimer.isActive(); }
 

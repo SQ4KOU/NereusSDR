@@ -136,6 +136,24 @@
 //                `major` is the oldest supported major, so a client built
 //                before `majors` is still served. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22:
+//                                    remotePgxlControlVersion 3 and
+//                                    remoteTgxlControlVersion 1 with the
+//                                    read-only `accessorySettings` object
+//                                    and the amp's and tuner's own settings
+//                                    verbs. AI-assisted via Anthropic Claude
+//                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47: remoteRfKitControlVersion 3
+//                                    with the resetRfKitError verb.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-21: radioHardwareVersion
+//                                    4 with the setAlexBpfMode verb, the
+//                                    filter policy from a remote window.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49: a window's Network Watchdog
+//                                    change is applied to the Core's radio
+//                                    when it arrives. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -171,6 +189,7 @@
 #include "models/RfKitModel.h"
 #include "models/StationTciModel.h"
 #include "models/AccessoryDataModel.h"
+#include "models/AccessorySettingsModel.h"
 #include "models/TunerModel.h"
 
 #include <QLoggingCategory>
@@ -361,6 +380,31 @@ bool isAccessoryDataMessage(const SessionMessage& message)
             && message.className == "AccessoryDataModel");
 }
 
+// R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
+// 1): the amp's and tuner's own settings, read-only, for a peer at
+// kRadioIdentitySessionProtocolMinor on a Core that owns its accessories.
+constexpr const char* kAccessorySettingsKey = "accessorySettings";
+
+bool isAccessorySettingsMessage(const SessionMessage& message)
+{
+    return message.objectKey == kAccessorySettingsKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "AccessorySettingsModel");
+}
+
+// R-R3-47 / R-R3-22: the verbs for the amp's and the tuner's own settings.
+bool isPgxlDeviceSettingsVerb(const QByteArray& verb)
+{
+    return verb == "setPgxlName" || verb == "setPgxlHardware" || verb == "setPgxlNetwork"
+        || verb == "savePgxlSettings" || verb == "readPgxlSettings";
+}
+
+bool isTgxlDeviceSettingsVerb(const QByteArray& verb)
+{
+    return verb == "setTgxlName" || verb == "setTgxlNetwork" || verb == "saveTgxlSettings"
+        || verb == "readTgxlSettings";
+}
+
 // R-R3-47: why a raw write of the RF-Kit switch is refused. A current app
 // sends setRfKitEnabled; an older one only ever wrote the value.
 constexpr const char* kRfKitSwitchWriteReason =
@@ -490,7 +534,7 @@ QString peerNameForThisProcess()
 // Each side's own AppSettings schema version, read by the key name
 // AppSettings::ensureSettingsAtVersion() writes it under. Read rather than
 // hardcoded: the literal lives at exactly one place today (CoreInit.cpp's
-// ensureSettingsAtVersion(6) call), and duplicating it here would create a
+// ensureSettingsAtVersion(7) call), and duplicating it here would create a
 // second copy free to drift from the migrations that actually ran.
 qint32 settingsSchemaVersionOf(const AppSettings& settings)
 {
@@ -637,6 +681,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 sendToSession(
                     SessionMessages::settingsValue(key, value.toString(), originTag));
             });
+    // R-R3-49: the Network Watchdog is a radio setting, applied where the
+    // radio is. A window's change lands in the Core's settings above; the
+    // Core's radio takes it here, whichever path stored it.
+    connect(m_settingsServer, &SettingsProxyServer::outboundValueChanged, this,
+            [this](const QString& key, const QVariant& value, const QString&) {
+                if (key == QLatin1String("NetworkWatchdogEnabled") && m_radioModel) {
+                    m_radioModel->applyNetworkWatchdog(value.toString() == QLatin1String("True"));
+                }
+            });
     // Whole-branch review, Important 4. A removal has its own signal and
     // its own frame. It used to arrive here as an outboundValueChanged
     // carrying an INVALID QVariant, and the value.toString() above turned
@@ -646,6 +699,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
             [this](const QString& key) {
                 sendToSession(SessionMessages::settingsValueAbsent(key, QString()));
+            });
+    // R-R3-49: a removal (a settings reset on the Core, or the schema v7
+    // reset) leaves the settings reading the default, so the radio takes
+    // the default too rather than keep the last value it was given.
+    connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
+            [this](const QString& key) {
+                if (key == QLatin1String("NetworkWatchdogEnabled") && m_radioModel) {
+                    m_radioModel->applyNetworkWatchdog(RadioModel::kNetworkWatchdogDefault);
+                }
             });
 
     // A daemon can authenticate a GUI before its configured radio is
@@ -1188,6 +1250,30 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 QStringLiteral("Update this app to set up the RF-Kit amplifier on this Core."), {}));
             break;
         }
+        // R-R3-46 / R-R3-21: the filter policy verb came with
+        // radioHardwareVersion 4, in the minor-11 block.
+        if (message.commandVerb == "setAlexBpfMode"
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || radioHardwareVersion() < 4)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change the filter policy on this Core.")
+                    : QStringLiteral("The Core has no filter settings ready."), {}));
+            break;
+        }
+        // I4 (R-R3-47): Reset amp error came with remoteRfKitControlVersion 3.
+        if (message.commandVerb == "resetRfKitError"
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || rfKitControlVersion() < 3)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to reset the RF-Kit amplifier's error on "
+                                     "this Core.")
+                    : QStringLiteral("Station accessory configuration is unavailable."), {}));
+            break;
+        }
         if (message.commandVerb == "setStationTci"
             && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
                 || stationTciVersion() < 1)) {
@@ -1211,6 +1297,31 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                     ? QStringLiteral("Update this app to change the station's amplifier and "
                                      "tuner settings on this Core.")
                     : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
+            break;
+        }
+        // R-R3-47 / R-R3-22: the amp's own settings came with
+        // remotePgxlControlVersion 3 and the tuner's with
+        // remoteTgxlControlVersion 1, in the same minor-11 block.
+        if (isPgxlDeviceSettingsVerb(message.commandVerb)
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || pgxlControlVersion() < 3)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change the Power Genius's own settings "
+                                     "on this Core.")
+                    : QStringLiteral("Station accessory configuration is unavailable."), {}));
+            break;
+        }
+        if (isTgxlDeviceSettingsVerb(message.commandVerb)
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || tgxlControlVersion() < 1)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change the Tuner Genius's own settings "
+                                     "on this Core.")
+                    : QStringLiteral("Station accessory configuration is unavailable."), {}));
             break;
         }
         if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")
@@ -1485,6 +1596,10 @@ void StationServer::buildMirror()
     // records and settings. Sent only to a peer at minor 11 on a Core that
     // owns its accessories.
     m_mirror->watch(QByteArray(kAccessoryDataKey), m_radioModel->accessoryDataModel());
+    // R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
+    // 1): the amp's and tuner's own settings. Sent only to a peer at minor
+    // 11 on a Core that owns its accessories.
+    m_mirror->watch(QByteArray(kAccessorySettingsKey), m_radioModel->accessorySettingsModel());
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
     for (int i = 0; i < pans.size(); ++i) {
         m_mirror->watch(panKey(i), pans.at(i));
@@ -1599,6 +1714,10 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     } else if (message.objectKey == kAccessoryDataKey) {
         // R-R3-47: changed only through its commands.
         stepAttRefusal = AccessoryDataModel::readOnlyReason();
+    } else if (message.objectKey == kAccessorySettingsKey) {
+        // R-R3-47 / R-R3-22: the devices' own settings change only through
+        // their commands, which the Core sends to the device.
+        stepAttRefusal = AccessorySettingsModel::readOnlyReason();
     }
     // R-R3-47: the RF-Kit switch is the Core's, changed by setRfKitEnabled.
     const bool radioWrite = message.objectKey == QByteArray(kRadioKey);
@@ -1894,6 +2013,12 @@ void StationServer::sendToSession(const SessionMessage& message)
             && (minor < kRadioIdentitySessionProtocolMinor || accessoryDataVersion() < 1)) {
             return;
         }
+        // R-R3-47 / R-R3-22: nor the amp's and tuner's own settings.
+        if (isAccessorySettingsMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor
+                || (pgxlControlVersion() < 3 && tgxlControlVersion() < 1))) {
+            return;
+        }
         if (!needsNnrFit(message, minor)) {
             // Most messages carry no NNR field: send them as they are.
             if (worthSendingAfterNnrFit(message)) {
@@ -2085,12 +2210,21 @@ int StationServer::accessoryStatusVersion() const
 
 int StationServer::pgxlControlVersion() const
 {
-    return accessoryStatusVersion() >= 1 ? 2 : 0;
+    // 3: the amp's own settings (`accessorySettings` and its verbs), sent
+    // by the Core's station controller (R-R3-47 / R-R3-22).
+    return accessoryStatusVersion() >= 1 ? 3 : 0;
+}
+
+int StationServer::tgxlControlVersion() const
+{
+    return accessoryStatusVersion() >= 1 ? 1 : 0;
 }
 
 int StationServer::rfKitControlVersion() const
 {
-    return accessoryStatusVersion() >= 1 ? 2 : 0;
+    // 3: Reset amp error (resetRfKitError), and the Core applies a window's
+    // RF-Kit auto-reconnect and poll interval at once (R-R3-47 fix wave).
+    return accessoryStatusVersion() >= 1 ? 3 : 0;
 }
 
 int StationServer::stationTciVersion() const
@@ -2114,8 +2248,10 @@ int StationServer::radioHardwareVersion() const
         return 1;
     }
     // 3: the `ioBoard` object and the per-band antenna verb
-    // (setAlexRxAntenna), R-R3-46 fix wave.
-    return m_radioModel->ioBoardFacade()->isBound() ? 3 : 2;
+    // (setAlexRxAntenna), R-R3-46 fix wave. 4: the filter policy verb
+    // (setAlexBpfMode), R-R3-46 / R-R3-21, applied through the same
+    // `alexAntennas` facade.
+    return m_radioModel->ioBoardFacade()->isBound() ? 4 : 2;
 }
 
 StationCapabilities StationServer::buildCapabilities() const
@@ -2149,7 +2285,8 @@ StationCapabilities StationServer::buildCapabilities() const
             // `stepAtt` object (DaemonApp binds it before the server starts);
             // 2 once its Alex antennas are behind `alexAntennas` too, with
             // the hardware apply step and the I/O board probe; 3 with the
-            // read-only `ioBoard` object and the per-band antenna verb.
+            // read-only `ioBoard` object and the per-band antenna verb; 4
+            // with the filter policy verb.
             caps.radioHardwareVersion = radioHardwareVersion();
             // R-R3-47 / R-R3-22: 1 on a Core that owns its accessories: the
             // read-only `amplifier` and `rfkit` objects. The Power Genius is 2
@@ -2164,6 +2301,8 @@ StationCapabilities StationServer::buildCapabilities() const
             caps.stationTciVersion = stationTciVersion();
             // R-R3-47 / R-R3-22: the Core's accessory records and settings.
             caps.accessoryDataVersion = accessoryDataVersion();
+            // R-R3-47 / R-R3-22: the Tuner Genius's own settings, last.
+            caps.remoteTgxlControlVersion = tgxlControlVersion();
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();

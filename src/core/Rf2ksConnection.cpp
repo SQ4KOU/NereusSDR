@@ -11,6 +11,9 @@
 //                 connection failures and retries reported, faults
 //                 emitted. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-24  R-R3-47: an /info reply naming no device is retried, not
+//                 refused. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 #include "Rf2ksConnection.h"
 
@@ -412,6 +415,17 @@ void Rf2ksConnection::onReplyFinished()
     }
     const QByteArray body = reply->readAll();
     reply->deleteLater();
+
+    // M2 (R-R3-47): with identity admission on, an /info reply that names no
+    // device proves nothing either way: a failed answer, retried like one,
+    // and not parsed (so an admitted amp's identity stays). Only a reply
+    // that names another product is refused (below).
+    if (!isWrite && m_identityRequired && path == QStringLiteral("/info")
+        && QJsonDocument::fromJson(body).object().value(QStringLiteral("device"))
+               .toString().isEmpty()) {
+        markPollFailure();
+        return;
+    }
 
     // Review blocker [P2] on PR #291: only GET replies carry state.  The amp
     // answers a write with Content-Length: 0, and QJsonDocument::fromJson("")

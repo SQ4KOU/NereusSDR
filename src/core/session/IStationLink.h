@@ -70,6 +70,14 @@
 //                                    (accessoryDataVersion 1): interlock
 //                                    policy, output limit, fault history.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the amp's and
+//                                    tuner's own settings
+//                                    (remotePgxlControlVersion 3,
+//                                    remoteTgxlControlVersion 1).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-21: the filter policy
+//                                    request (radioHardwareVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -92,6 +100,13 @@ public:
     struct CommandOutcome {
         bool sent = false;
         QString reason;
+        /// The id the command went out under, when sent and the link
+        /// numbers its commands (0 otherwise). Its result arrives as
+        /// RadioModel::stationCommandFinished with the same id, so a sender
+        /// can tell its own command's result apart (the amp applets, the
+        /// TCI switch), and a page that sent it can claim the Core's
+        /// refusal (RadioModel::noteAccessoryRequestShownOnPage).
+        quint32 commandId = 0;
     };
 
     /// SessionCommandDispatcher verb "addSlice", argument initialPanId.
@@ -170,6 +185,13 @@ public:
     { return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") }; }
     virtual CommandOutcome requestRfKitEnabled(bool)
     { return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") }; }
+    /// I4 (R-R3-47, remoteRfKitControlVersion 3): the RF-Kit page's
+    /// connection settings, antenna names and Reset amp error work from a
+    /// remote window. The settings and names travel as station settings,
+    /// which the Core applies at once; Reset amp error is its own request.
+    virtual bool rfKitSettingsAvailable() const { return false; }
+    virtual CommandOutcome requestResetRfKitError()
+    { return { false, QStringLiteral("This Core does not let this app reset the RF-Kit amplifier's error. Updating the Core may help.") }; }
 
     /// R-R3-48 (stationTciVersion 1): the Core runs its own TCI server on
     /// the station network, switched by this app's one TCI switch and port.
@@ -180,6 +202,10 @@ public:
     /// TCI here, so the window runs no TCI server of its own. Kept while the
     /// link is down (the Core keeps its server), false for another Core.
     virtual bool coreServesTciOnThisComputer() const { return false; }
+    /// Rework part 2 (R-R3-48): whether the Core keeps a station TCI switch
+    /// of its own yet (1), not yet (0: this window's switch seeds it), or
+    /// its settings have not arrived on this link (-1).
+    virtual int coreStationTciStored() const { return -1; }
 
     /// R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core shares its
     /// accessory records and settings (`accessoryData`) and takes these
@@ -192,6 +218,41 @@ public:
     { return { false, QStringLiteral("This Core does not share its amplifier and tuner settings with this app.") }; }
     virtual CommandOutcome requestClearAccessoryFaults(const QString&)
     { return { false, QStringLiteral("This Core does not share its amplifier and tuner settings with this app.") }; }
+
+    /// R-R3-47 / R-R3-22 (remotePgxlControlVersion 3): the Core sends the
+    /// Power Genius's own settings (name, hardware, network, Save & Reboot,
+    /// Revert) to the amp as the local Advanced page does. Acceptance means
+    /// the request left for the amp; the amp's answer and values come back
+    /// on `accessorySettings`.
+    virtual bool pgxlDeviceSettingsAvailable() const { return false; }
+    virtual CommandOutcome requestPgxlName(const QString&)
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    /// `setting` is "biasMode" (ClassA or ClassAB), "fanMode" (Auto, Quiet
+    /// or Continuous) or "ledIntensity" (0 to 100, as a number).
+    virtual CommandOutcome requestPgxlHardware(const QString&, const QString&)
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestPgxlNetwork(bool, const QString&, const QString&, const QString&)
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestPgxlSaveAndRestart()
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestPgxlReadSettings()
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    /// R-R3-47 / R-R3-22 (remoteTgxlControlVersion 1): the same for the
+    /// Tuner Genius's own settings (name, network, Save & Reboot, Revert).
+    virtual bool tgxlDeviceSettingsAvailable() const { return false; }
+    virtual CommandOutcome requestTgxlName(const QString&)
+    { return { false, tgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestTgxlNetwork(bool, const QString&, const QString&, const QString&)
+    { return { false, tgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestTgxlSaveAndRestart()
+    { return { false, tgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestTgxlReadSettings()
+    { return { false, tgxlDeviceSettingsUnavailableReason() }; }
+    static QString pgxlDeviceSettingsUnavailableReason()
+    { return QStringLiteral("This Core does not let this app change the Power Genius's own settings. Updating the Core may help."); }
+    static QString tgxlDeviceSettingsUnavailableReason()
+    { return QStringLiteral("This Core does not let this app change the Tuner Genius's own settings. Updating the Core may help."); }
+
     virtual CommandOutcome requestApplyNnrModels(quint32)
     { return { false, QStringLiteral("NNR model application is not supported by this station link.") }; }
     virtual bool nnrControlAvailable() const { return false; }
@@ -203,6 +264,17 @@ public:
     // the Core's hardware settings.
     virtual CommandOutcome requestIoBoardProbe()
     { return { false, QStringLiteral("This Core cannot probe its radio's I/O board for this app.") }; }
+
+    // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the filter policy dialog
+    // in a remote window. Whether the Core takes a filter policy change from
+    // this app now, why not in plain words, and the request itself (chain
+    // 0 or 1; mode 0 Auto, 1 Force filter, 2 Force bypass). The defaults
+    // refuse, for links that did not negotiate it.
+    virtual bool filterPolicyEditAvailable() const { return false; }
+    virtual QString filterPolicyUnavailableReason() const
+    { return QStringLiteral("This Core cannot change its filter policy for this app. Updating the Core may help."); }
+    virtual CommandOutcome requestFilterPolicy(int /*chain*/, int /*mode*/)
+    { return { false, filterPolicyUnavailableReason() }; }
 };
 
 } // namespace NereusSDR

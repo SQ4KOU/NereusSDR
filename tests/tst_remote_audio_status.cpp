@@ -533,6 +533,85 @@ private slots:
                  QStringLiteral("This connection could not set up lossless audio; staying on Opus."));
     }
 
+    // R-R3-43 / R-R3-44: whether the receiver streams feeding apps are
+    // Opus. They follow the one choice and its fallback: a running stream
+    // says what it runs; before one runs, what the Core runs for the
+    // speakers; before that, the choice. Lossless chosen but falling back
+    // is compressed whatever ran last. No media session: not compressed.
+    void receiverAudioCompressionFollowsChoiceAndFallback()
+    {
+        RemoteAudioStatus status;
+        QVERIFY(!remoteReceiverAudioIsCompressed(status));  // NotConnected
+
+        status.state = State::WaitingForAudio;
+        status.chosenProfile = RemoteAudioProfile::Opus;
+        QVERIFY(remoteReceiverAudioIsCompressed(status));
+        status.chosenProfile = RemoteAudioProfile::Lossless;
+        QVERIFY(!remoteReceiverAudioIsCompressed(status));
+
+        status.state = State::Playing;
+        status.runningProfile = RemoteAudioProfile::Lossless;
+        QVERIFY(!remoteReceiverAudioIsCompressed(status));
+        status.runningProfile = RemoteAudioProfile::Opus;
+        QVERIFY(remoteReceiverAudioIsCompressed(status));
+
+        // A running receiver stream wins over the speakers' profile.
+        RemoteReceiverAudioStatus receiver;
+        receiver.sliceId = 0;
+        receiver.state = RemoteReceiverAudioStatus::State::Receiving;
+        receiver.runningProfile = RemoteAudioProfile::Lossless;
+        status.receivers = {receiver};
+        QVERIFY(!remoteReceiverAudioIsCompressed(status));
+        receiver.runningProfile = RemoteAudioProfile::Opus;
+        status.receivers = {receiver};
+        QVERIFY(remoteReceiverAudioIsCompressed(status));
+
+        // A waiting or stopped stream says nothing; the speakers' does.
+        receiver.state = RemoteReceiverAudioStatus::State::Waiting;
+        receiver.runningProfile.reset();
+        status.receivers = {receiver};
+        status.runningProfile = RemoteAudioProfile::Lossless;
+        QVERIFY(!remoteReceiverAudioIsCompressed(status));
+
+        // Lossless chosen, the network could not carry it.
+        receiver.state = RemoteReceiverAudioStatus::State::Receiving;
+        receiver.runningProfile = RemoteAudioProfile::Lossless;
+        status.receivers = {receiver};
+        status.qualityReason = RemoteAudioQualityReason::NetworkTooSlow;
+        QVERIFY(remoteReceiverAudioIsCompressed(status));
+
+        status.state = State::NotConnected;
+        QVERIFY(!remoteReceiverAudioIsCompressed(status));
+    }
+
+    // R-R3-43 / R-R3-44 fix wave: which note the VAX page shows. None
+    // without receiver streams from the Core or while they are lossless;
+    // OpusChosen when Opus is the choice; LosslessUnavailable when Lossless
+    // is the choice but Opus runs (a fallback or a refusal).
+    void receiverAudioNoteSaysWhyItIsCompressed()
+    {
+        RemoteAudioStatus status;
+        status.state = State::Playing;
+        status.chosenProfile = RemoteAudioProfile::Opus;
+        status.runningProfile = RemoteAudioProfile::Opus;
+        QCOMPARE(remoteReceiverAudioNote(status, /*receiverAudioNegotiated=*/false),
+                 RemoteReceiverAudioNote::None);
+        QCOMPARE(remoteReceiverAudioNote(status, true), RemoteReceiverAudioNote::OpusChosen);
+
+        status.chosenProfile = RemoteAudioProfile::Lossless;
+        status.runningProfile = RemoteAudioProfile::Lossless;
+        QCOMPARE(remoteReceiverAudioNote(status, true), RemoteReceiverAudioNote::None);
+
+        status.runningProfile = RemoteAudioProfile::Opus;
+        status.qualityReason = RemoteAudioQualityReason::NetworkTooSlow;
+        QCOMPARE(remoteReceiverAudioNote(status, true),
+                 RemoteReceiverAudioNote::LosslessUnavailable);
+        QCOMPARE(remoteReceiverAudioNote(status, false), RemoteReceiverAudioNote::None);
+
+        status.state = State::NotConnected;
+        QCOMPARE(remoteReceiverAudioNote(status, true), RemoteReceiverAudioNote::None);
+    }
+
     // Everything the quality choice puts in front of the operator stays in
     // user words: no wire or engineering terms.
     void qualityWordingCarriesNoInternalTerms()

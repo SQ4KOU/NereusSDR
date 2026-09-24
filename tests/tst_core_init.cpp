@@ -71,7 +71,7 @@ private slots:
     // (reasonable, to check a real round-trip), that mechanism breaks
     // silently: this test would load an already-migrated store and never
     // exercise CoreInit's actual migration path, while still reporting
-    // PASS on the >= 6 assertion below. Anyone adding that save() should
+    // PASS on the >= 7 assertion below. Anyone adding that save() should
     // also give it its own isolated AppSettings(tempPath) instance, the way
     // tst_settings_migration_v0_3_0.cpp already does.
     void migratesSettingsToCurrentVersion()
@@ -79,7 +79,7 @@ private slots:
         QVERIFY(NereusSDR::CoreInit::initialize());
         const QString v = NereusSDR::AppSettings::instance()
                               .value("SettingsSchemaVersion", "0").toString();
-        QVERIFY(v.toInt() >= 6);
+        QVERIFY(v.toInt() >= 7);
     }
 
     void isIdempotent()

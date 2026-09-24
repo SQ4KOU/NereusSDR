@@ -21,10 +21,18 @@
 //   2026-09-24 -- R-R3-47 / R-R3-48: remote window through the Core
 //                 (switch, connect, disconnect), band-follow line. J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 -- R-R3-47: every control works from a remote window: the
+//                 connection settings and antenna names as station
+//                 settings, Reset amp error through the Core
+//                 (remoteRfKitControlVersion 3); the page follows another
+//                 window's changes to them, except fields the operator
+//                 changed and the Core has not yet taken. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "RfKitPage.h"
 
+#include "models/AccessoryDataModel.h"
 #include "models/RadioModel.h"
 #include "models/RfKitModel.h"
 #include "core/AppSettings.h"
@@ -214,11 +222,7 @@ QWidget* RfKitPage::buildRf2ksTab()
                 QStringLiteral("TCI"));
         }
     });
-    connect(m_resetErrBtn, &QPushButton::clicked, this, [this] {
-        if (m_model && m_model->rfKitConnection()) {
-            m_model->rfKitConnection()->resetError();
-        }
-    });
+    connect(m_resetErrBtn, &QPushButton::clicked, this, &RfKitPage::onResetErrorClicked);
 
     // --- Antenna labels group ---
     auto* labelsBox = new QGroupBox(tr("Antenna labels"), tab);
@@ -273,20 +277,47 @@ QWidget* RfKitPage::buildRf2ksTab()
                 m_portSpin->setValue(rfKit->configuredPort());
             }
         }
-        const QString coreKeeps = tr("The Core keeps this setting. It cannot be changed from "
-                                     "this app.");
-        for (QWidget* w : std::initializer_list<QWidget*>{
-                 m_autoReconnect, m_pollIntervalSpin, m_saveBtn,
-                 m_antLabelEdits[0], m_antLabelEdits[1], m_antLabelEdits[2],
-                 m_antLabelEdits[3]}) {
-            w->setEnabled(false);
-            w->setToolTip(coreKeeps);
-        }
         m_setTciBtn->setEnabled(false);
         m_setTciBtn->setToolTip(tr("The Core puts the amplifier in TCI mode itself while the "
                                    "station's TCI server is on."));
-        m_resetErrBtn->setEnabled(false);
-        m_resetErrBtn->setToolTip(tr("Reset the amplifier's error on its front panel."));
+        // I4: the Core's settings and names, and whether it takes them.
+        connect(m_model, &RadioModel::stationLinkStateChanged,
+                this, &RfKitPage::refreshRemoteSettings);
+        // Follow-up 6: another window's change to automatic retry or the
+        // poll interval on the Core shows here too.
+        connect(m_model, &RadioModel::stationSettingChanged, this,
+                [this](const QString& key) {
+            // Rework follow-up 3: a saved value the Core now has ends its
+            // field's mark (checked before the refresh reads the Core).
+            settleSaved(key);
+            if (key.isEmpty() || key == QLatin1String("RfKit_AutoReconnect")
+                || key == QLatin1String("RfKit_PollIntervalMs")) {
+                refreshRemoteSettings();
+            }
+        });
+        if (AccessoryDataModel* data = m_model->accessoryDataModel()) {
+            connect(data, &AccessoryDataModel::labelsChanged,
+                    this, &RfKitPage::refreshRemoteSettings);
+        }
+        // A request the Core refused (connect, switch, Reset amp error):
+        // its words show in the status line.
+        connect(m_model, &RadioModel::accessoryRequestRefused, this,
+                [this](const QString& device, const QString& reason) {
+            if (device == QLatin1String("rfkit")) {
+                m_remoteResult = OperatorReasonText::forDisplay(reason);
+                refreshLiveStatus();
+            }
+        });
+        // Rework part 6: what the operator changes stays until Save.
+        connect(m_autoReconnect, &QCheckBox::toggled, this,
+                [this] { m_touchedAutoReconnect = true; });
+        connect(m_pollIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+                [this] { m_touchedPoll = true; });
+        for (int i = 0; i < 4; ++i) {
+            connect(m_antLabelEdits[i], &QLineEdit::textEdited, this,
+                    [this, i] { m_touchedLabel[i] = true; });
+        }
+        refreshRemoteSettings();
     }
     return tab;
 }
@@ -302,6 +333,97 @@ bool RfKitPage::remoteControlAvailable() const
     return link && link->remoteRfKitControlAvailable();
 }
 
+bool RfKitPage::remoteSettingsAvailable() const
+{
+    const IStationLink* link = m_model ? m_model->stationLink() : nullptr;
+    return link && link->rfKitSettingsAvailable();
+}
+
+void RfKitPage::refreshRemoteSettings()
+{
+    if (!isRemote()) {
+        return;
+    }
+    // I4 (R-R3-47): the station's values (the Core's settings, read through
+    // the station settings), unless the operator is changing one.
+    const bool available = remoteSettingsAvailable();
+    const QString unavailable = tr("This Core does not let this app change these settings. "
+                                   "Updating the Core may help.");
+    for (QWidget* w : std::initializer_list<QWidget*>{
+             m_autoReconnect, m_pollIntervalSpin, m_saveBtn, m_resetErrBtn,
+             m_antLabelEdits[0], m_antLabelEdits[1], m_antLabelEdits[2],
+             m_antLabelEdits[3]}) {
+        w->setEnabled(available);
+        w->setToolTip(available ? QString() : unavailable);
+    }
+    if (available) {
+        m_resetErrBtn->setToolTip(tr("Ask the Core to clear the amplifier's error."));
+        auto& s = AppSettings::instance();
+        if (!m_autoReconnect->hasFocus() && !m_touchedAutoReconnect) {
+            const QSignalBlocker block(m_autoReconnect);
+            m_autoReconnect->setChecked(
+                s.value(QStringLiteral("RfKit_AutoReconnect"), QStringLiteral("True"))
+                    .toString() == QStringLiteral("True"));
+        }
+        if (!m_pollIntervalSpin->hasFocus() && !m_touchedPoll) {
+            const QSignalBlocker block(m_pollIntervalSpin);
+            m_pollIntervalSpin->setValue(
+                s.value(QStringLiteral("RfKit_PollIntervalMs"), QStringLiteral("1000")).toInt());
+        }
+        const QStringList labels = m_model->accessoryDataModel()
+            ? m_model->accessoryDataModel()->rfkitAntennaLabels() : QStringList{};
+        for (int i = 0; i < 4; ++i) {
+            if (m_antLabelEdits[i] && !m_antLabelEdits[i]->hasFocus() && !m_touchedLabel[i]
+                && i < labels.size()) {
+                m_antLabelEdits[i]->setText(labels.at(i));
+            }
+        }
+    }
+}
+
+void RfKitPage::settleSaved(const QString& key)
+{
+    auto& s = AppSettings::instance();
+    for (auto it = m_savedPending.begin(); it != m_savedPending.end();) {
+        if ((key.isEmpty() || key == it.key()) && s.value(it.key()).toString() == it.value()) {
+            const QString& k = it.key();
+            if (k == QLatin1String("RfKit_AutoReconnect")) {
+                m_touchedAutoReconnect = false;
+            } else if (k == QLatin1String("RfKit_PollIntervalMs")) {
+                m_touchedPoll = false;
+            } else {
+                const int n = k.mid(9, 1).toInt();   // RfKit_Ant<N>_Label
+                if (n >= 1 && n <= 4) {
+                    m_touchedLabel[n - 1] = false;
+                }
+            }
+            it = m_savedPending.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void RfKitPage::onResetErrorClicked()
+{
+    if (!m_model) { return; }
+    if (isRemote()) {
+        // I4 (R-R3-47): the Core sends the amp the request this button sends
+        // locally.
+        IStationLink* link = m_model->stationLink();
+        const auto outcome = link ? link->requestResetRfKitError()
+            : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);
+        m_remoteResult = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
+        refreshLiveStatus();
+        return;
+    }
+    if (m_model->rfKitConnection()) {
+        m_model->rfKitConnection()->resetError();
+    }
+}
+
 void RfKitPage::onConnectClicked()
 {
     if (!m_model) { return; }
@@ -310,6 +432,8 @@ void RfKitPage::onConnectClicked()
         if (!link) { return; }
         const auto outcome = link->requestConfigureRfKit(
             m_hostEdit->text().trimmed(), static_cast<quint16>(m_portSpin->value()));
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);
         m_remoteResult = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
         refreshLiveStatus();
         return;
@@ -328,6 +452,8 @@ void RfKitPage::onDisconnectClicked()
         IStationLink* link = m_model->stationLink();
         if (!link) { return; }
         const auto outcome = link->requestDisconnectRfKit();
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);
         m_remoteResult = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
         refreshLiveStatus();
         return;
@@ -356,6 +482,35 @@ QString RfKitPage::liveStatusTextForTesting() const
 
 void RfKitPage::saveRf2ksSettings()
 {
+    if (isRemote()) {
+        // I4 (R-R3-47): the connection settings and antenna names are the
+        // station's; written as station settings, which the Core applies at
+        // once (remoteRfKitControlVersion 3). The address goes with Connect.
+        if (!remoteSettingsAvailable()) {
+            return;
+        }
+        auto& s = AppSettings::instance();
+        s.setValue(QStringLiteral("RfKit_AutoReconnect"),
+                   m_autoReconnect->isChecked() ? QStringLiteral("True")
+                                                : QStringLiteral("False"));
+        s.setValue(QStringLiteral("RfKit_PollIntervalMs"),
+                   QString::number(m_pollIntervalSpin->value()));
+        for (int i = 0; i < 4; ++i) {
+            s.setValue(QStringLiteral("RfKit_Ant%1_Label").arg(i + 1),
+                       m_antLabelEdits[i]->text());
+            m_savedPending.insert(QStringLiteral("RfKit_Ant%1_Label").arg(i + 1),
+                                  m_antLabelEdits[i]->text());
+        }
+        // Rework follow-up 3: the marks stay until the Core has these values
+        // (its settings echo them); writes that never reach it (the link
+        // not ready) leave the operator's values in place.
+        m_savedPending.insert(QStringLiteral("RfKit_AutoReconnect"),
+                              m_autoReconnect->isChecked() ? QStringLiteral("True")
+                                                           : QStringLiteral("False"));
+        m_savedPending.insert(QStringLiteral("RfKit_PollIntervalMs"),
+                              QString::number(m_pollIntervalSpin->value()));
+        return;
+    }
     // Per-radio peripherals refactor (2026-05-26): the three connection
     // keys are scoped under hardware/<mac>/peripherals/ via
     // RadioModel::setPeripheralValue.  Auto-reconnect / poll-interval
@@ -510,6 +665,8 @@ void RfKitPage::onMasterToggled(bool checked)
         IStationLink* link = m_model->stationLink();
         const auto outcome = link ? link->requestRfKitEnabled(checked)
             : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        // Follow-up 3: this page shows the Core's refusal; no toast too.
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);
         m_remoteResult = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
         if (!outcome.sent && m_master) {
             const QSignalBlocker block(m_master);

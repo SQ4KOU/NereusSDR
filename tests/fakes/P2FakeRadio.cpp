@@ -168,6 +168,14 @@ void P2FakeRadio::drainRoleSocket(int offset)
         ++m_totalEgressDatagrams;
         learnClient(datagram.senderAddress(), datagram.senderPort());
 
+        // Host general commands use the outbound base port, are 60 bytes
+        // and carry command 0x00 in byte 4; byte 38 is the watchdog.
+        if (offset == 0 && datagram.data().size() == 60
+            && datagram.data().at(4) == 0x00) {
+            ++m_generalDatagrams;
+            m_lastGeneralWatchdog = static_cast<quint8>(datagram.data().at(38));
+        }
+
         // Host high-priority commands use outbound base + 3 and are 1444
         // bytes. Byte 4 carries run bit 0 and MOX bit 1.
         if (offset == 3 && datagram.data().size() == 1444) {

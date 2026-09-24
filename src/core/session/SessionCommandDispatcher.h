@@ -213,6 +213,8 @@ private:
     void handleConfigureRfKit(const NereusSDR::SessionMessage& invoke);
     void handleDisconnectRfKit(const NereusSDR::SessionMessage& invoke);
     void handleSetRfKitEnabled(const NereusSDR::SessionMessage& invoke);
+    // I4 (R-R3-47, remoteRfKitControlVersion 3): Reset amp error.
+    void handleResetRfKitError(const NereusSDR::SessionMessage& invoke);
     // R-R3-48 (stationTciVersion 1): the station's TCI switch and port.
     void handleSetStationTci(const NereusSDR::SessionMessage& invoke);
     // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory
@@ -220,10 +222,17 @@ private:
     void handleSetTxInterlockPolicy(const NereusSDR::SessionMessage& invoke);
     void handleSetPgxlPowerCap(const NereusSDR::SessionMessage& invoke);
     void handleClearAccessoryFaults(const NereusSDR::SessionMessage& invoke);
+    // R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
+    // 1): the amp's and tuner's own settings, sent by the Core to the device
+    // as the local Advanced page's own commands.
+    void handleAccessoryDeviceSettings(const NereusSDR::SessionMessage& invoke);
     void handleRequestIoBoardProbe(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 fix wave (radioHardwareVersion 3): one band's RX or RX-only
     // antenna, applied through the Core's AlexAntennaFacade.
     void handleSetAlexRxAntenna(const NereusSDR::SessionMessage& invoke);
+    // R-R3-46 / R-R3-21 (radioHardwareVersion 4): one receive filter
+    // chain's filter policy, applied through the Core's AlexAntennaFacade.
+    void handleSetAlexBpfMode(const NereusSDR::SessionMessage& invoke);
     // nnr.setDiagnostics, nnr.resetTuning and (R-R3-40, minor 11)
     // nnr.tryAgain, each addressed to one slice ID.
     void handleNnrAction(const NereusSDR::SessionMessage& invoke);

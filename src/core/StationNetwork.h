@@ -1,6 +1,8 @@
 // no-port-check: NereusSDR-original. R-R3-48 station network address choice;
 // R-R3-22 / R-R3-47 one bind rule for every station listener (StationBind).
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-47: offNetworkReason, how to allow a device on another
+// network. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #pragma once
 
 #include <QHostAddress>
@@ -64,5 +66,10 @@ struct StationBind {
     /// hear broadcasts, and filter instead).
     bool acceptsPeer(const QHostAddress& peer) const;
 };
+
+/// M7 (R-R3-47): why a station device (`deviceName`, "Power Genius" or
+/// "Tuner Genius") heard at `address` is not admitted, in plain words, and
+/// the Core setting that allows it.
+QString offNetworkReason(const QString& deviceName, const QString& address);
 
 } // namespace NereusSDR::StationNetwork

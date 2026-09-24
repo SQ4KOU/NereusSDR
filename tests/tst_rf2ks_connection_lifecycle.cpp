@@ -258,9 +258,11 @@ void Rf2ksConnectionLifecycleTest::deviceChangingMidSessionIsRefused()
     QVERIFY(connSpy.wait(2000));
     QSignalSpy disSpy(&conn, &Rf2ksConnection::disconnected);
     QSignalSpy failSpy(&conn, &Rf2ksConnection::connectionFailed);
-    // The /info refresh (every ten poll cycles) finds something else at
-    // the address. Ask for /info now rather than wait for the poller.
-    server.infoBody = R"({"custom_device_name":"not an amp"})";
+    // The /info refresh (every ten poll cycles) finds another product at
+    // the address. Ask for /info now rather than wait for the poller. (A
+    // reply naming no device is retried, not refused: M2, R-R3-47;
+    // tst_station_rfkit_controller answerThatNamesNoDeviceIsRetried.)
+    server.infoBody = R"({"device":"SPE Expert","custom_device_name":"not an amp"})";
     QVERIFY(QMetaObject::invokeMethod(&conn, "onReconnectTimeout", Qt::DirectConnection));
     QVERIFY(failSpy.wait(2000));
     QCOMPARE(disSpy.count(), 1);

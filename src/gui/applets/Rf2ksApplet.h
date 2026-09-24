@@ -8,10 +8,14 @@
 //   RadioModel's RfKitModel (the Core's `rfkit` object in a remote
 //   window), with a stale line when a remote window loses the Core.
 //   J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24  R-R3-22: a remote window's Disconnect and Reconnect ask
+//   the Core, with a line for its connection and any refusal. J.J. Boyd
+//   (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 #include "AppletWidget.h"
 #include "core/Rf2ksConnection.h"
+#include "models/TunerModel.h"
 
 #include <QHash>
 #include <QPushButton>
@@ -82,6 +86,8 @@ public:
     bool    staleIndicatorVisibleForTesting()          const;
     QString staleIndicatorTextForTesting()             const;
     QString bandFollowTextForTesting()                 const;
+    // R-R3-22: a remote window's connection line ("" when hidden).
+    QString connectionLineTextForTesting()             const;
 
 signals:
     // Emitted when the user clicks the OPERATE/STANDBY toggle button.
@@ -93,6 +99,7 @@ signals:
 
     // Right-click context menu signals (filled in Task 9).
     void navigationRequested(const QString& pageKey);
+    // Local windows only: a remote window asks the Core itself (R-R3-22).
     void connectionToggleRequested();
     void diagnosticsCopyRequested();
 
@@ -119,10 +126,18 @@ private slots:
     void syncFromRfKit();
     // R-R3-47: a remote window says when its readings are not live.
     void updateStationState();
+    // R-R3-22: a remote window's connection line: the Core's phase, or the
+    // plain reason its last Disconnect or Reconnect was not taken.
+    void updateConnectionLine();
+    // R-R3-22 fix wave: the Core's answer to a command, by id; only the
+    // applet's own Disconnect or Reconnect (m_pendingCommandId) is shown.
+    void onStationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
 
 private:
     QMenu* buildContextMenu(QObject* menuParent);
     bool   isRemoteModel() const;
+    // R-R3-22: a remote window's Disconnect or Reconnect, sent to the Core.
+    void   requestRemoteConnectionToggle();
 
     // Section A widgets.
     QLabel*      m_deviceLabel{nullptr};
@@ -151,6 +166,12 @@ private:
     QLabel*     m_staleLabel{nullptr};
     // R-R3-48: the band-follow line.
     QLabel*     m_bandFollowLabel{nullptr};
+    // R-R3-22: a remote window's connection line, the id of its own request
+    // while it waits on the Core, and the reason one was not taken.
+    QLabel*     m_connectionLabel{nullptr};
+    quint32     m_pendingCommandId{0};  // 0: nothing of the applet's own waiting
+    QString     m_requestReason;
+    TunerModel::ConnectionPhase m_lastPhase{TunerModel::ConnectionPhase::Disabled};
 };
 
 } // namespace NereusSDR

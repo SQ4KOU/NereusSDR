@@ -41,6 +41,11 @@
 //                                    are ignored. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49: the Core page floor drops by
+//                                    the three leaves not registered while
+//                                    their features are not built.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -56,6 +61,7 @@
 #include <QSpinBox>
 #include <QLabel>
 #include <QStackedWidget>
+#include <QTabWidget>
 #include <QLoggingCategory>
 #include <QMenu>
 #include <QMessageBox>
@@ -885,7 +891,10 @@ private slots:
             QVERIFY2(!page->isEnabled(), qPrintable((*it)->text(0)));
             ++corePages;
         }
-        QVERIFY(corePages >= 25);
+        // R-R3-49: three Core leaves are not registered while their
+        // features are not built (TX Profiles, Signal Generator, Hardware
+        // Tests).
+        QVERIFY(corePages >= 22);
         QCOMPARE(writes.size(), 0);
         QCOMPARE(removes.size(), 0);
         const QSet<QString> held = h.proxy().droppedWhileOffline() - heldBefore;
@@ -1109,8 +1118,8 @@ private slots:
 
         // R-R3-46 fix wave (radioHardwareVersion 3): the HL2 I/O board tab
         // shows the Core's board, whose readings arrive on the Core after a
-        // probe.
-        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 3);
+        // probe. (4 since the filter policy verb, R-R3-46 / R-R3-21.)
+        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 4);
         auto* ioTab = hardware->findChild<Hl2IoBoardTab*>();
         QVERIFY(ioTab);
         const auto statusText = [ioTab]() {
@@ -1219,8 +1228,12 @@ private slots:
         const BoardCapabilities& saturn = BoardCapsTable::forBoard(HPSDRHW::Saturn);
         QCOMPARE(hardware->isTabVisibleForTest(HardwarePage::Tab::AntennaAlex),
                  saturn.hasAlexFilters);
-        QCOMPARE(hardware->isTabVisibleForTest(HardwarePage::Tab::Diversity),
-                 saturn.hasDiversityReceiver);
+        // R-R3-49: the Diversity tab was removed, remote as well as local.
+        for (const QTabWidget* tabs : hardware->findChildren<QTabWidget*>()) {
+            for (int i = 0; i < tabs->count(); ++i) {
+                QVERIFY(tabs->tabText(i) != QStringLiteral("Diversity"));
+            }
+        }
         QVERIFY(!hardware->isTabVisibleForTest(HardwarePage::Tab::Hl2Options));
         QCOMPARE(hardware->tabTextForTest(HardwarePage::Tab::OcOutputs),
                  QStringLiteral("OC Outputs"));

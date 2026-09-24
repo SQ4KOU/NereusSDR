@@ -4,9 +4,15 @@
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via OpenAI Codex.
 // 2026-09-24: R-R3-47 / R-R3-22: faultObserved. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-47 / R-R3-22: deviceSettings, the tuner's own settings
+// for a window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-47: one connection fault per outage; a tuner on another
+// network is refused saying how to allow it. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include "core/StationTgxlController.h"
 #include "core/LanDiscovery.h"
 #include "core/LogCategories.h"
+#include "core/StationNetwork.h"
 #include <QHostAddress>
 
 namespace NereusSDR {
@@ -17,6 +23,27 @@ StationTgxlController::StationTgxlController(TgxlConnection* connection,
     : QObject(parent), m_connection(connection), m_model(model)
 {
     connection->setIdentityAdmissionRequired(true);
+    // R-R3-47 / R-R3-22: the tuner's own settings, through the
+    // connection's own command methods (the local Advanced page's commands).
+    StationDeviceSettings::Wire wire;
+    wire.connected = [this] { return m_connection && m_connection->isConnected(); };
+    wire.writeSetup = [this](const QMap<QString, QString>& fields) {
+        return m_connection ? m_connection->writeSetup(fields) : quint32(0);
+    };
+    wire.readSetup = [this] { return m_connection ? m_connection->readSetup() : quint32(0); };
+    wire.writeIfconf = [this](const QString& ip, const QString& netmask,
+                              const QString& gateway, bool dhcp) {
+        return m_connection ? m_connection->writeIfconf(ip, netmask, gateway, dhcp)
+                            : quint32(0);
+    };
+    wire.readIfconf = [this] { return m_connection ? m_connection->readIfconf() : quint32(0); };
+    wire.save = [this] { return m_connection ? m_connection->save() : quint32(0); };
+    m_settings = new StationDeviceSettings(StationDeviceSettings::Device::Tgxl, std::move(wire),
+                                           this);
+    connect(connection, &TgxlConnection::replyReceived, m_settings,
+            &StationDeviceSettings::onReply);
+    connect(connection, &TgxlConnection::disconnected, m_settings,
+            &StationDeviceSettings::onDisconnected);
     connect(connection, &TgxlConnection::identityProtocolProgress, this,
             [this](quint64 token, const QString& peer, quint16 port, const QString&) {
         if (m_running) { identify(token, peer, port); }
@@ -36,6 +63,7 @@ StationTgxlController::StationTgxlController(TgxlConnection* connection,
         m_state.phase = Phase::Connected;
         m_state.error.clear();
         m_state.peerAddress = m_peer;
+        m_outageFaulted = false;   // I2: the outage, if any, is over
         publish();
     });
     connect(connection, &TgxlConnection::disconnected, this, [this] {
@@ -52,9 +80,13 @@ StationTgxlController::StationTgxlController(TgxlConnection* connection,
             m_state.phase = Phase::Disconnected;
         }
         m_state.peerAddress.clear();
+        const bool record = wasConnected && !m_outageFaulted;
+        if (wasConnected) {
+            m_outageFaulted = true;   // I2: this drop is the outage's fault
+        }
         QPointer<StationTgxlController> self(this);
         publish();
-        if (self && wasConnected) {
+        if (self && record) {
             emit faultObserved(QStringLiteral("link"),
                                QStringLiteral("The Tuner Genius stopped answering."), QString());
         }
@@ -64,7 +96,10 @@ StationTgxlController::StationTgxlController(TgxlConnection* connection,
         if (!m_running) { return; }
         stopDiscovery();
         m_attempt = 0;
-        const bool newError = m_state.phase != Phase::Error || m_state.error != reason;
+        // I2: every backoff step fails again and passes through Retrying;
+        // only the outage's first failure is a fault.
+        const bool newError = !m_outageFaulted;
+        m_outageFaulted = true;
         m_state.phase = Phase::Error;
         m_state.error = reason;
         m_state.peerAddress.clear();
@@ -123,6 +158,8 @@ void StationTgxlController::resetScope(const QString& host, quint16 port,
     if (!self || m_generation != generation) { return; }
 
     clearIdentity();
+    m_settings->reset();
+    m_outageFaulted = false;
     m_state = {};
     m_state.configuredHost = host;
     m_state.configuredPort = port;
@@ -135,6 +172,7 @@ void StationTgxlController::start(const QString& host, quint16 port)
     cancel();
     const auto generation = ++m_generation;
     m_running = true;
+    m_outageFaulted = false;
     m_state.configuredHost = host;
     m_state.configuredPort = port;
     m_state.phase = Phase::Connecting;
@@ -154,6 +192,8 @@ void StationTgxlController::cancel(bool disabled)
     stopDiscovery();
     if (m_connection) { m_connection->disconnect(); }
     clearIdentity();
+    m_settings->reset();
+    m_outageFaulted = false;
     m_state.phase = disabled ? Phase::Disabled : Phase::Disconnected;
     m_state.error.clear();
     publish();
@@ -218,6 +258,30 @@ void StationTgxlController::identify(quint64 attempt, const QString& peer, quint
         if (m_discoveredSerial.isEmpty()) {
             qCInfo(lcConnection) << "No matching TGXL discovery announcement for"
                                     << m_peer << m_peerPort;
+            // M7 (R-R3-47): heard, or configured, on another network than
+            // the radio's: say so, and which Core setting allows it.
+            QString offNetwork;
+            if (m_stationBind && !QHostAddress(m_peer).isNull()
+                && !m_stationBind->acceptsPeer(QHostAddress(m_peer))) {
+                offNetwork = m_peer;
+            }
+            // Follow-up 8: only this device: its configured address, or
+            // the serial it gave in its own info reply.
+            for (const auto& heard : discovery->ignoredOffNetwork()) {
+                const QString& product = heard.product;
+                const bool thisDevice = QHostAddress(heard.address) == QHostAddress(m_peer)
+                    || (!heard.serial.isEmpty() && heard.serial == m_nativeInfo.serial);
+                if (offNetwork.isEmpty() && thisDevice
+                    && (product == QStringLiteral("TunerGenius")
+                        || product == QStringLiteral("TunerGeniusXL"))) {
+                    offNetwork = heard.address;
+                }
+            }
+            if (!offNetwork.isEmpty()) {
+                m_connection->rejectIdentity(attempt,
+                    StationNetwork::offNetworkReason(QStringLiteral("Tuner Genius"), offNetwork));
+                return;
+            }
             m_connection->rejectIdentity(attempt,
                 QStringLiteral("The Core did not find a Tuner Genius at this address on its network. "
                                "Check the tuner's address and port."));

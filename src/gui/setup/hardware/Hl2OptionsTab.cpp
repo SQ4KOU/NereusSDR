@@ -19,6 +19,9 @@
 //   2026-09-23 - R-R3-46: the TX buffer latency and PTT hang follow the
 //                transmit permission. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the second I2C bus choice (bus 0) is hidden until
+//                 it is built (UnbuiltFeatures).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -61,6 +64,7 @@
 
 #include "Hl2OptionsTab.h"
 #include "HardwareTransmitGate.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include "core/BoardCapabilities.h"
 #include "core/Hl2OptionsModel.h"
@@ -301,13 +305,13 @@ void Hl2OptionsTab::buildI2cControl(QWidget* parent)
     // Bus radio — bus 0 deferred per design §4 (no NereusSDR I2cTxn path
     // for bus 0 today), so render as disabled with explanatory tooltip.
     grid->addWidget(new QLabel(tr("Bus:"), parent), row, 0);
-    auto* bus0 = new QCheckBox(tr("0 (deferred)"), parent);
+    auto* bus0 = new QCheckBox(tr("0"), parent);
     bus0->setEnabled(false);
-    bus0->setToolTip(tr(
-        "Bus 0 surface deferred to a Phase 3L follow-up — NereusSDR's "
-        "I2cTxn pipeline currently emits bus 1 only.  See "
-        "docs/architecture/phase3l-hl2-visibility-design.md §4."));
+    bus0->setToolTip(tr("I2C bus 0 on the HL2. NereusSDR reads and writes bus 1 only."));
     grid->addWidget(bus0, row, 1);
+    // R-R3-49: the second bus is hidden until it is built; bus 1 stays.
+    bus0->setObjectName(QStringLiteral("hl2I2cBus0"));
+    UnbuiltFeatures::hideUnlessBuilt(bus0, UnbuiltFeature::Hl2SecondI2cBus);
     auto* bus1 = new QCheckBox(tr("1 (HL2 daughterboard)"), parent);
     bus1->setChecked(true);
     bus1->setEnabled(false); // single supported value

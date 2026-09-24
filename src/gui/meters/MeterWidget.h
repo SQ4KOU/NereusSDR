@@ -108,6 +108,11 @@ public:
     // Mirrors Thetis MeterManager.cs:31366-31368 verbatim.
     bool shouldRender(const MeterItem* item) const;
 
+    // R-R3-49: false for an item that fronts a feature not built yet
+    // (UnbuiltFeatures). Such an item loads and is saved with its
+    // container, but is not drawn, takes no clicks and is not offered.
+    static bool itemFeatureBuilt(const MeterItem* item);
+
     QString serializeItems() const;
     bool deserializeItems(const QString& data);
 

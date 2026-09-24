@@ -6,6 +6,7 @@
 #include "core/Rf2ksConnection.h"
 #include "models/RfKitModel.h"
 #include <QPointer>
+#include <QSet>
 
 namespace NereusSDR {
 
@@ -25,8 +26,10 @@ namespace NereusSDR {
 // client (it parses only `vfo:` and `split_enable:`). When the station's
 // TCI server is on, the Core switches the amp into TCI mode through its web
 // interface (PUT /operational-interface, the page's "Set amp to TCI mode"),
-// once per admitted connection, so an operator who switches it back on the
-// amp's front panel is not fought. The TCI server's address itself is set
+// once when band follow starts: the first admission of this amp (address)
+// in this Core run with the switch on, or the station's TCI switch turned
+// on. Not again after a link blip or a reconnect, so an operator who
+// switches it back on the amp's front panel is not fought (M3). The TCI server's address itself is set
 // on the amp's touchscreen; the band-follow line says which one.
 class StationRfKitController final : public QObject {
     Q_OBJECT
@@ -48,12 +51,18 @@ public:
     /// TCI mode) or off.
     void setBandFollowWanted(bool wanted);
     bool bandFollowWanted() const { return m_bandFollowWanted; }
-    /// Whether this connection already asked the amp for TCI mode.
-    bool tciModeRequestedForTesting() const { return m_tciModeRequested; }
+    /// I4 (R-R3-47): a window's Reset amp error. The admitted amp gets the
+    /// request the local page's button sends (Rf2ksConnection::resetError,
+    /// POST /error/reset). Refused, in plain words, with no amp admitted.
+    bool resetError(QString* reason);
+    /// Whether this amp was already asked for TCI mode since band follow
+    /// started.
+    bool tciModeRequestedForTesting() const { return m_tciSwitched.contains(ampKey()); }
 
 private:
     void publish(RfKitModel::ConnectionPhase phase, const QString& error = {});
     void maybeRequestTciMode();
+    QString ampKey() const { return m_host + QLatin1Char(':') + QString::number(m_port); }
 
     QPointer<Rf2ksConnection> m_connection;
     QPointer<RfKitModel> m_model;
@@ -62,7 +71,9 @@ private:
     quint64 m_generation{0};
     bool m_running{false};
     bool m_bandFollowWanted{false};
-    bool m_tciModeRequested{false};
+    // M3: the amps (address:port) already switched to TCI since band follow
+    // last started; cleared only when band follow starts again.
+    QSet<QString> m_tciSwitched;
 };
 
 } // namespace NereusSDR

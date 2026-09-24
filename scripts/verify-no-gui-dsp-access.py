@@ -126,8 +126,10 @@ LOCAL_AUDIO_ALLOWLIST = {
     "src/gui/setup/AudioAdvancedPage.cpp": 1,
     # The title-bar master output (volume, mute, output device picker):
     # the TitleBar's engine and the speaker-change wiring beside it; and a
-    # remote window's VAX outputs and their feeders (R-R3-44).
-    "src/gui/MainWindow.cpp": 3,
+    # remote window's VAX outputs and their feeders (R-R3-44); and the
+    # container VAX 1 / VAX 2 buttons, which open and close this computer's
+    # VAX outputs as Setup > Audio > VAX does (R-R3-49).
+    "src/gui/MainWindow.cpp": 4,
 }
 
 # A double-quoted C++ string literal, escapes included. Removed from a line

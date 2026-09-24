@@ -317,11 +317,19 @@ struct SessionMessage {
     ///   configureRfKit         -- {"host": Utf8, "port": Int64}
     ///   disconnectRfKit        -- {}
     ///   setRfKitEnabled        -- {"enabled": Bool}
+    ///   resetRfKitError        -- {}
     ///   setStationTci          -- {"enabled": Bool, "port": Int64}
     ///   setTxInterlockPolicy   -- {"mode": Int64, "graceMs": Int64,
     ///                               "swrGateEnabled": Bool, "swrGateMax": Double}
     ///   setPgxlPowerCap        -- {"enabled": Bool, "watts": Int64}
     ///   clearAccessoryFaults   -- {"device": Utf8}
+    ///   setPgxlName, setTgxlName -- {"name": Utf8}
+    ///   setPgxlHardware        -- exactly one of {"biasMode": Utf8},
+    ///                               {"fanMode": Utf8}, {"ledIntensity": Int64}
+    ///   setPgxlNetwork, setTgxlNetwork -- {"dhcp": Bool, "address": Utf8,
+    ///                               "netmask": Utf8, "gateway": Utf8}
+    ///   savePgxlSettings, saveTgxlSettings, readPgxlSettings,
+    ///   readTgxlSettings       -- {}
     ///   requestStreamCentre     -- {"sliceId": Int64, "centreHz": Double}
     QList<MirrorUpdate> arguments;
 

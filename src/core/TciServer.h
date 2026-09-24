@@ -135,6 +135,10 @@ public:
     // audio, I/Q, sensors) is unchanged. Off by default.
     void setStationReceiveOnly(bool receiveOnly);
     bool stationReceiveOnly() const { return m_stationReceiveOnly; }
+    // Follow-up 1b (R-R3-48): while its owner retries a listener that could
+    // not start, the per-try listen, start and stop lines go to debug; the
+    // owner logs once per state change instead.
+    void setQuietListenAttempts(bool quiet) { m_quietListenAttempts = quiet; }
     static constexpr const char* kStationTransmitRefusedReason =
         "Apps cannot transmit through the station's TCI server until remote transmit is ready.";
 
@@ -170,6 +174,10 @@ public:
     bool start(const QList<QHostAddress>& bindAddresses, quint16 port);
     // The addresses this server listens on (empty while stopped).
     QList<QHostAddress> listenAddresses() const;
+    /// Rework part 3 (R-R3-48): while running, also listen on `address`
+    /// (the running port), without restarting; false when it cannot (the
+    /// server keeps what it has).
+    bool addListener(const QHostAddress& address);
 
     // Stop the server and disconnect all clients.
     void stop();
@@ -255,6 +263,8 @@ signals:
 
     // Emitted after stop() completes and all clients have been disconnected.
     void serverStopped();
+    /// A listener was added while running (addListener).
+    void listenersChanged();
 
     // Emitted when a new TCI client connects.
     void clientConnected(QWebSocket* socket);
@@ -439,6 +449,7 @@ private:
     // R-R3-48: the other addresses' servers, same port, same clients table.
     QList<QWebSocketServer*> m_extraServers;
     bool m_stationReceiveOnly{false};
+    bool m_quietListenAttempts{false};
     QHash<QWebSocket*, std::shared_ptr<TciClientSession>> m_clients;
 
     QTimer* m_pingTimer{nullptr};

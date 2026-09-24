@@ -46,6 +46,17 @@
 //                 VAX button's tooltip says what it does. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-49: the RF Gain slider and WNB button (ANT flyout)
+//                 and the IQ Ch combo (VAX flyout) are removed. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-09-24 - R-R3-49, R-R3-21: the ANT button is not shown on a board
+//                 with no antenna choices, where its flyout would be empty.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 / R-R3-21 fix wave: the VAX combo's tooltip before
+//                 a radio is set reads "waiting for the radio". J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "SpectrumOverlayPanel.h"
@@ -126,21 +137,6 @@ namespace OverlayColors {
 
 // File-local helpers for opaque styles that diverge from the canonical
 // Style:: helpers (per §A2 exception pattern — verified byte-by-byte):
-
-// overlaySliderStyle — diverges from Style::sliderHStyle() on two counts:
-//   - groove bg: #1a2a3a (Style::kButtonBg) vs Style::sliderHStyle() kGroove (#203040)
-//   - handle bg: #c8d8e8 (Style::kTextPrimary, grey-white) vs kAccent (#00b4d8, cyan)
-//   - handle margin: -4px 0 vs sliderHStyle()'s -3px 0
-// These are deliberate — the overlay slider uses a low-contrast white handle
-// that is legible against the translucent panel rather than the main spectrum
-// accent colour.
-static inline QString overlaySliderStyle()
-{
-    return QStringLiteral(
-        "QSlider::groove:horizontal { background: %1; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: %2; width: 10px; margin: -4px 0; border-radius: 5px; }"
-    ).arg(Style::kButtonBg, Style::kTextPrimary);
-}
 
 // overlayDisplayToggleStyle — diverges from Style::buttonBaseStyle() + Style::greenCheckedStyle():
 //   - padding: 2px 6px vs buttonBaseStyle()'s 2px 4px (wider pill shape for display toggles)
@@ -247,7 +243,7 @@ SpectrumOverlayPanel::SpectrumOverlayPanel(QWidget* parent)
     // Button 5: ANT — flyout
     {
         auto* btn = makeMenuBtn("ANT", this);
-        btn->setToolTip("Open antenna and RF gain controls");
+        btn->setToolTip("Open antenna controls");
         connect(btn, &QPushButton::clicked, this, &SpectrumOverlayPanel::toggleAntFlyout);
         m_menuBtns.append(btn);  // index 3
     }
@@ -360,17 +356,24 @@ void SpectrumOverlayPanel::updateLayout()
                                       : QStringLiteral("\u25b6")); // ▶
     m_collapseBtn->move(kPad, kPad);
 
+    // R-R3-49: a button whose flyout would be empty is not shown (the ANT
+    // button on a board with no antenna choices), as an empty Setup page
+    // is not offered.
     int y = kPad + kBtnH + kGap;
-    for (auto* btn : m_menuBtns) {
-        btn->setVisible(m_expanded);
-        if (m_expanded) {
+    int shownCount = 0;
+    for (int i = 0; i < m_menuBtns.size(); ++i) {
+        QPushButton* btn = m_menuBtns[i];
+        const bool offered = i != 3 || m_antAvailable;  // index 3 is ANT
+        btn->setVisible(m_expanded && offered);
+        if (m_expanded && offered) {
             btn->move(kPad, y);
             y += kBtnH + kGap;
+            ++shownCount;
         }
     }
 
     int totalH = m_expanded
-        ? (kPad + kBtnH + kGap + static_cast<int>(m_menuBtns.size()) * (kBtnH + kGap))
+        ? (kPad + kBtnH + kGap + shownCount * (kBtnH + kGap))
         : (kPad + kBtnH + kPad);
     setFixedSize(kPad + kBtnW + kPad, totalH);
 }
@@ -532,64 +535,6 @@ void SpectrumOverlayPanel::buildAntFlyout()
                 s->setTxAntenna(ant);
             }
         });
-    }
-
-    // RF Gain slider (-8 to +32 dB) — from AetherSDR buildAntPanel
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-        auto* lbl = new QLabel("RF Gain:");
-        lbl->setStyleSheet(OverlayColors::kLabelStyle);
-        lbl->setFixedWidth(kLabelW);
-        row->addWidget(lbl);
-
-        m_rfGainSlider = new QSlider(Qt::Horizontal);
-        m_rfGainSlider->setRange(-8, 32);
-        m_rfGainSlider->setValue(0);
-        m_rfGainSlider->setSingleStep(8);
-        m_rfGainSlider->setPageStep(8);
-        m_rfGainSlider->setTickInterval(8);
-        m_rfGainSlider->setTickPosition(QSlider::TicksBelow);
-        m_rfGainSlider->setStyleSheet(overlaySliderStyle());
-        m_rfGainSlider->setToolTip("RF Gain: −8 to +32 dB (8 dB steps)");
-        row->addWidget(m_rfGainSlider, 1);
-
-        m_rfGainLabel = new QLabel("0 dB");
-        m_rfGainLabel->setStyleSheet(OverlayColors::kLabelStyle);
-        m_rfGainLabel->setFixedWidth(36);
-        m_rfGainLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        row->addWidget(m_rfGainLabel);
-        vbox->addLayout(row);
-
-        connect(m_rfGainSlider, &QSlider::valueChanged, this, [this](int v) {
-            // Snap to nearest 8 dB step (from AetherSDR buildAntPanel)
-            constexpr int kStep = 8;
-            int snapped = qRound(static_cast<double>(v) / kStep) * kStep;
-            if (snapped != v) {
-                QSignalBlocker sb(m_rfGainSlider);
-                m_rfGainSlider->setValue(snapped);
-            }
-            m_rfGainLabel->setText(QString("%1 dB").arg(snapped));
-        });
-    }
-
-    // WNB toggle
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-        m_wnbBtn = new QPushButton("WNB");
-        m_wnbBtn->setCheckable(true);
-        m_wnbBtn->setFixedSize(48, 22);
-        m_wnbBtn->setStyleSheet(
-            "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
-            "border-radius: 2px; color: #c8d8e8; font-size: 11px; font-weight: bold; }"
-            "QPushButton:checked { background: #0070c0; color: #ffffff; "
-            "border: 1px solid #0090e0; }"
-            "QPushButton:hover { border: 1px solid #0090e0; }");
-        m_wnbBtn->setToolTip("Wideband noise blanker: suppresses impulse noise across the panadapter bandwidth");
-        row->addWidget(m_wnbBtn);
-        row->addStretch();
-        vbox->addLayout(row);
     }
 
     m_antFlyout->setFixedWidth(180);
@@ -918,7 +863,7 @@ void SpectrumOverlayPanel::buildVaxFlyout()
         // Disabled until setRadioModel() resolves a slice; retains the
         // pre-3O tooltip in that transient state.
         m_vaxCmb->setEnabled(false);
-        m_vaxCmb->setToolTip("VAX channel (not yet bound to a radio model)");
+        m_vaxCmb->setToolTip("VAX channel (waiting for the radio)");
         row->addWidget(m_vaxCmb, 1);
         vb->addLayout(row);
 
@@ -935,25 +880,6 @@ void SpectrumOverlayPanel::buildVaxFlyout()
                 s->setVaxChannel(idx);
             }
         });
-    }
-
-    // IQ Ch combo — reserved for a future phase (design spec §11.3).
-    // audio/SendIqToVax is stored-but-not-active per spec §6.7; the combo
-    // stays disabled until a consumer of the I/Q-to-VAX path exists.
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-        auto* lbl = new QLabel("IQ Ch");
-        lbl->setStyleSheet(OverlayColors::kLabelStyle);
-        row->addWidget(lbl);
-        m_vaxIqCmb = new QComboBox;
-        m_vaxIqCmb->setObjectName(QStringLiteral("vaxIqCombo"));
-        m_vaxIqCmb->addItems({"None", "1", "2", "3", "4"});
-        m_vaxIqCmb->setEnabled(false);
-        // R-R3-17: user words (reserved per design spec section 11.3).
-        m_vaxIqCmb->setToolTip("Sending I/Q to a VAX channel is not available yet.");
-        row->addWidget(m_vaxIqCmb, 1);
-        vb->addLayout(row);
     }
 
     m_vaxFlyout->setFixedWidth(140);
@@ -1003,7 +929,7 @@ void SpectrumOverlayPanel::setRadioModel(RadioModel* model)
     if (!m_radioModel) {
         // Unbound — revert to the pre-3O disabled state.
         m_vaxCmb->setEnabled(false);
-        m_vaxCmb->setToolTip("VAX channel (not yet bound to a radio model)");
+        m_vaxCmb->setToolTip("VAX channel (waiting for the radio)");
         if (m_rxAntCmb) { m_rxAntCmb->setEnabled(false); }
         if (m_txAntCmb) { m_txAntCmb->setEnabled(false); }
         showAttValues();
@@ -1189,6 +1115,14 @@ void SpectrumOverlayPanel::setBoardCapabilities(const BoardCapabilities& caps)
 
     if (m_rxAntRow) { m_rxAntRow->setVisible(show); }
     if (m_txAntRow) { m_txAntRow->setVisible(show); }
+
+    // R-R3-49: with both rows hidden the ANT flyout would open empty, so
+    // the ANT button is not shown on such a board (Hermes Lite 2, Atlas).
+    if (m_antAvailable != show) {
+        m_antAvailable = show;
+        if (!show && m_activeFlyout == m_antFlyout) { hideFlyout(); }
+        updateLayout();
+    }
 
     // Reseed from the resolved slice so the combo label matches persisted state.
     if (show && m_radioModel) {

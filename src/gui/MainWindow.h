@@ -72,6 +72,8 @@
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+#include <functional>
+#include <memory>
 #include <QMainWindow>
 #include <QLabel>
 #include <QAction>
@@ -93,6 +95,7 @@
 #include "core/session/RemoteStationOptions.h"
 #include "core/WdspTypes.h"
 #include "gui/ReceiverStopNotices.h"
+#include "gui/RemoteReceiverAudioNote.h"
 
 class QProgressDialog;
 class QSplitter;
@@ -106,6 +109,7 @@ enum class ToastSeverity : int;
 
 class RadioModel;
 class MeterItem;
+class ContainerButtonDispatcher;
 class ConnectionPanel;
 class SupportDialog;
 class WdspEngine;
@@ -138,6 +142,7 @@ class DiversityDialog;
 // Whether moc would accept the elaborated form in a return position was
 // not tested; the forward declaration is the form that is known to work.
 class SetupDialog;
+class RemoteMediaController;
 // Phase 3J-2 H1: Tools menu modeless singletons.
 class SpotHubDialog;
 class FreeDVReporterDialog;
@@ -256,6 +261,20 @@ public:
     // (empty when accepted). The menu is the one place a menu refusal is
     // shown; a VFO flag click shows its own.
     static QString applyNrMenuChoice(SliceModel* slice, NereusSDR::NrSlot slot);
+    // R-R3-43 / R-R3-44: the VAX page's note about the Core's receiver
+    // streams. receiverAudioNoteFor reads it from the audio status and
+    // whether the Core sends receiver streams (None without media).
+    // wireReceiverAudioNotePush pushes `source` to every SetupDialog under
+    // `dialogRoot` on an audio status change and on a station link change,
+    // which is how a capability change arrives (it need not change the
+    // audio status). seedReceiverAudioNote gives a dialog the value when
+    // Setup opens. Static seams: the constructor and createSetupDialog use
+    // them, and a test can reach them without booting a window.
+    using ReceiverAudioNoteSource = std::function<RemoteReceiverAudioNote()>;
+    static RemoteReceiverAudioNote receiverAudioNoteFor(const RemoteMediaController* media);
+    static void wireReceiverAudioNotePush(QObject* dialogRoot, RemoteMediaController* media,
+                                          RadioModel* model, ReceiverAudioNoteSource source);
+    static void seedReceiverAudioNote(SetupDialog* dialog, const ReceiverAudioNoteSource& source);
     static void applyAntennaChangeForTest(RadioModel* model, int sliceId,
                                           const QString& antennaName);
     // Production composition seam: flags remain per-slice while the RX
@@ -690,22 +709,31 @@ private slots:
     // Diversity and the VFO flag's right-click Diversity entry.
     void openDiversityDialog();
 
-    // R-R3-21: a container's Mode, Filter, Antenna and Tune Step buttons and
-    // its VFO display act on the active slice (the band buttons already
-    // did); refreshContainerControls() shows that slice's state on them.
+    // R-R3-21 / R-R3-49: a container's band, mode, filter, antenna, tune
+    // step and function buttons and its VFO display act on the container's
+    // own slice (ContainerWidget::rxSource(), slices A to D), never on the
+    // active slice; refreshContainerControls() shows each container its
+    // slice's state. A container set to a slice that is not open shows its
+    // buttons unavailable, and a click says why and changes nothing.
     void wireContainerControls(class ContainerWidget* container);
     // `only`: just that item (one added while the window runs).
     void refreshContainerControls(MeterItem* only = nullptr);
-    // Tuning: only the VFO display items (frequency and band).
-    void refreshContainerFrequency();
+    void refreshContainer(class ContainerWidget* container, MeterItem* only = nullptr);
+    // Tuning: only the VFO display and band items of the containers on
+    // `slice` (frequency and band).
+    void refreshContainerFrequency(SliceModel* slice);
     void watchContainerItems(QWidget* content);
     void onContainerItemAdded(MeterItem* item);
-    void followActiveSliceForContainers();
-    void onContainerModeClicked(int index);
-    void onContainerFilterClicked(int index);
-    void onContainerAntennaSelected(int index);
-    void onContainerTuneStepSelected(int index);
-    void onContainerFrequencyStep(int64_t deltaHz);
+    void watchSlicesForContainers();
+    SliceModel* containerSlice(const class ContainerWidget* container) const;
+    void onContainerModeClicked(class ContainerWidget* container, int index);
+    void onContainerFilterClicked(class ContainerWidget* container, int index);
+    void onContainerAntennaSelected(class ContainerWidget* container, int index);
+    void onContainerTuneStepSelected(class ContainerWidget* container, int index);
+    void onContainerFrequencyStep(class ContainerWidget* container, int64_t deltaHz);
+    void onContainerOtherButtonClicked(class ContainerWidget* container, int buttonId);
+    // A click that changed nothing: the reason, as a toast.
+    void showContainerButtonReason(const QString& reason);
 
     // Phase 3P-II Phase 4 Task 97: soft-alert toast when peak forward power
     // exceeds the PGXL cap. R-R3-47 / R-R3-22: the Core computes the alert
@@ -965,8 +993,11 @@ private:
     // built, so the second window reopened a dialog its first window had
     // already destroyed.
     QPointer<DiversityDialog> m_diversityDialog;
-    // R-R3-21: the active slice's signals the container controls follow.
+    // R-R3-21: every slice's signals the container controls follow.
     QList<QMetaObject::Connection> m_containerSliceConnections;
+    // R-R3-21 / R-R3-49: maps each container function and band button to
+    // its target on the container's own slice.
+    std::unique_ptr<ContainerButtonDispatcher> m_containerButtons;
     QAction* m_actPureSignal{nullptr};
     QAction* m_actTxEqualizer{nullptr};
     QAction* m_actDspPureSignal{nullptr};
@@ -1248,9 +1279,6 @@ private:
 
     // AGC menu action group (Task 12)
     QActionGroup* m_agcGroup = nullptr;
-
-    // Dark theme checkable action (Task 12)
-    QAction* m_darkThemeAction = nullptr;
 
     // Radio menu state-aware actions (3Q-9; trimmed in 3Q polish — Discover Now
     // dropped because Manage Radios already exposes a ↻ Scan button).

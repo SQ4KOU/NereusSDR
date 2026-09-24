@@ -74,6 +74,9 @@ public:
     // station TCI server ("Also at the station: <address>, port <port>").
     void setRadioModel(class NereusSDR::RadioModel* model);
     QString stationLineForTesting() const;
+    bool switchOnForTesting() const;
+    int portForTesting() const;
+    QSpinBox* portSpinForTesting() const { return m_portSpin; }
 
 signals:
     // Emitted when the operator toggles the Enable TCI Server checkbox.
@@ -134,6 +137,7 @@ private:
     QPointer<class NereusSDR::RadioModel> m_radioModelRef;
     QLabel* m_stationLine{nullptr};
     void refreshStationLine();
+    void reloadSwitchFromSettings();
 
     // Group 2: Compatibility
     QCheckBox*   m_emulateExpertSdr3Check{nullptr};

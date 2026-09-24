@@ -29,6 +29,9 @@
 //                 calibration; TX Display and Volts/Amps follow the transmit
 //                 permission. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-24 - R-R3-49 / R-R3-21: the frequency calibration Start button
+//                 is hidden until built (freq-cal). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -133,6 +136,7 @@
 
 #include "CalibrationTab.h"
 #include "HardwareTransmitGate.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include "core/BoardCapabilities.h"
 #include "core/CalibrationController.h"
@@ -220,9 +224,12 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     //   calibration routine on a background thread [@501e3f5]
     m_freqCalStartBtn = new QPushButton(tr("Start"), freqCalGroup);
     m_freqCalStartBtn->setToolTip(
-        tr("Start frequency calibration. Requires radio powered on.\n"
-           "Calibration logic deferred — emits calFreqStartRequested."));
+        tr("Start frequency calibration. The radio must be on."));
     freqCalForm->addRow(QString(), m_freqCalStartBtn);
+    m_freqCalStartBtn->setObjectName(QStringLiteral("freqCalStartButton"));
+    // R-R3-49 (freq-cal): nothing handles the frequency calibration request
+    // yet; the button's row is hidden until it is built.
+    UnbuiltFeatures::hideUnlessBuilt(m_freqCalStartBtn, UnbuiltFeature::FrequencyCalibration);
 
     // Source: setup.cs:6471 helptext above freq cal controls
     //   "Larger FFT sizes / lower sample rates give increased accuracy." [@501e3f5]

@@ -111,15 +111,6 @@ void SetupPage::syncFromModel()
     // Base implementation is a no-op; subclasses override to pull from RadioModel.
 }
 
-// ── Static NYI marker ─────────────────────────────────────────────────────────
-
-void SetupPage::markNyi(QWidget* widget, const QString& phase)
-{
-    if (widget == nullptr) { return; }
-    widget->setEnabled(false);
-    widget->setToolTip(QStringLiteral("NYI — %1").arg(phase));
-}
-
 // ── Section helper ────────────────────────────────────────────────────────────
 
 void SetupPage::setTransmitPermitted(bool /*permitted*/, const QString& /*reason*/)
