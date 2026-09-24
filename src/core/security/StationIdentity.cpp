@@ -140,8 +140,19 @@ StationIdentity::StationIdentity() = default;
 
 StationIdentity StationIdentity::loadOrCreate(const QString& profileDir)
 {
+    return loadOrCreateKeyFile(profileDir, QString::fromLatin1(kKeyFileName),
+                               QStringLiteral("The Core's"));
+}
+
+StationIdentity StationIdentity::loadOrCreateKeyFile(const QString& profileDir,
+                                                     const QString& fileName,
+                                                     const QString& whose)
+{
     StationIdentity identity;
-    identity.m_keyPath = QDir(profileDir).filePath(QString::fromLatin1(kKeyFileName));
+    identity.m_keyPath = QDir(profileDir).filePath(fileName);
+    // Only this function's own log text uses it ("The Core's", "This
+    // computer's"); the sentence below begins with it.
+    const QString lowerWhose = whose.isEmpty() ? whose : whose.at(0).toLower() + whose.mid(1);
 
     if (!QDir().mkpath(profileDir)) {
         identity.m_lastError = QStringLiteral("Could not create %1").arg(profileDir);
@@ -151,8 +162,8 @@ StationIdentity StationIdentity::loadOrCreate(const QString& profileDir)
     QFile file(identity.m_keyPath);
     if (file.exists()) {
         if (!file.open(QIODevice::ReadOnly)) {
-            identity.m_lastError = QStringLiteral("The Core's identity key %1 could not be read: %2")
-                                       .arg(identity.m_keyPath, file.errorString());
+            identity.m_lastError = QStringLiteral("%1 identity key %2 could not be read: %3")
+                                       .arg(whose, identity.m_keyPath, file.errorString());
             return identity;
         }
         const QByteArray pem = file.read(kMaxKeyFileBytes);
@@ -165,8 +176,8 @@ StationIdentity StationIdentity::loadOrCreate(const QString& profileDir)
             // Never regenerated over: a new key is a new Core, and every
             // paired device would have to pair again.
             identity.m_lastError =
-                QStringLiteral("The Core's identity key %1 is not a P-256 private key")
-                    .arg(identity.m_keyPath);
+                QStringLiteral("%1 identity key %2 is not a P-256 private key")
+                    .arg(whose, identity.m_keyPath);
             return identity;
         }
         identity.m_spki = spkiOf(key.get());
@@ -176,7 +187,7 @@ StationIdentity StationIdentity::loadOrCreate(const QString& profileDir)
 
     EvpPkeyPtr key(EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "P-256"), &EVP_PKEY_free);
     if (!key) {
-        identity.m_lastError = QStringLiteral("Could not create the Core's identity key");
+        identity.m_lastError = QStringLiteral("Could not create %1 identity key").arg(lowerWhose);
         return identity;
     }
     BioPtr bio(BIO_new(BIO_s_mem()), &BIO_free);
@@ -184,7 +195,7 @@ StationIdentity StationIdentity::loadOrCreate(const QString& profileDir)
     if (!bio || PEM_write_bio_PrivateKey(bio.get(), key.get(), nullptr, nullptr, 0, nullptr,
                                          nullptr)
                     != 1) {
-        identity.m_lastError = QStringLiteral("Could not encode the Core's identity key");
+        identity.m_lastError = QStringLiteral("Could not encode %1 identity key").arg(lowerWhose);
         return identity;
     }
     char* data = nullptr;
@@ -202,8 +213,8 @@ StationIdentity StationIdentity::loadOrCreate(const QString& profileDir)
     pem.fill('\0');
     if (!written) {
         out.cancelWriting();
-        identity.m_lastError = QStringLiteral("Could not write the Core's identity key %1")
-                                   .arg(identity.m_keyPath);
+        identity.m_lastError = QStringLiteral("Could not write %1 identity key %2")
+                                   .arg(lowerWhose, identity.m_keyPath);
         return identity;
     }
     identity.m_spki = spkiOf(key.get());

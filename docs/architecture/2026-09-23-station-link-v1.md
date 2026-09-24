@@ -227,7 +227,9 @@ sign-ins do not lock out the token.
 
 **Enrolment through the token.** On a Core upgraded with a token, a window
 that sends its `device` block together with the right `token` is admitted
-by the token; its block must still prove its key over this connection's
+by the token (the desktop sends it when the Core's hello carries its
+identity and `deviceAuth`, its binding verifies for the certificate, and
+the connection's pin was checked; iPhone app plan Task 18); its block must still prove its key over this connection's
 transcript (`DeviceAuthenticator::verifyPossession`), or the sign-in is
 refused `deviceProofFailed` and nothing is enrolled. A key not yet paired is
 added as kind `computer`, `enrolledThroughToken` true, named by its block
@@ -464,7 +466,9 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
    then `auth.request`: a paired device's `device` block with `token` `""`
    (section 3.5), or the token of a Core upgraded from before paired
    devices, with or without the window's `device` block to enrol
-   (`StationClient.cpp` sends the token after its pin check). A device
+   (`StationClient.cpp` sends the token after its pin check, and to a Core
+   it paired with only its `device` block, after checking the Core's
+   identity and certificate binding). A device
    that is not paired sends `pair.start` instead, and the connection
    pairs and ends (section 3.6).
 4. The station sends `auth.result`. On success, in this order
@@ -577,8 +581,11 @@ descriptions) is declared here, and asked with
 `StationServer::peerDeclares(peer, feature, minVersion)`; the desktop
 client asks `StationClient::stationDeclares(feature, minVersion)`. The station
 declares `deviceAuth` 1 (section 3.5) and `pairing` 1 (section 3.6) when
-its identity key is usable; the desktop client declares none yet and sends
-`{}`. A client's `deviceAuth` 1
+its identity key is usable. The desktop client declares `deviceAuth` 1
+when it holds its own device key (`device-identity.pem` in its profile
+directory, `ClientDeviceIdentity`; it always does unless that file cannot
+be read) and sends `{}` otherwise (iPhone app plan Task 18). A client's
+`deviceAuth` 1
 (or later) also asks for the `devices` object and its commands (section
 7.1): the station sends them to no other peer, so a window that declares
 nothing sees exactly the wire it was built for. A client never sends a
@@ -1873,7 +1880,12 @@ a client acts on is `pair.fail`'s.
 
 One code is defined for an end the station never sends:
 `identityChanged`, which a client uses for its own end when the Core's
-certificate binding or identity key is not the one it paired with.
+certificate binding or identity key is not the one it paired with. The
+desktop client ends that way before it sends its own `hello`: a saved Core
+whose `hello` shows no identity or another key, or whose `certBinding` does
+not verify for the certificate the connection presented, is refused and
+never trusted silently. A new certificate whose binding verifies is
+accepted without a question, whatever pin was saved.
 
 The takeover and version reasons are worded in one place,
 `src/core/session/SessionEndReasons.{h,cpp}`: "Another app at
@@ -1883,9 +1895,14 @@ it back." and "This Core runs link version *N* and this app runs version
 side). An app that offers its own next steps for these two (take the Core
 back, check for updates) tells them apart by the `code` (`takenOver`,
 `linkVersion`) and falls back to these exact words for an older station.
-The desktop client still reads the words (`SessionEndReasons::parse`);
-this is interim, and a later task of the iPhone plan (Task 18) moves it to
-the code.
+The desktop client reads the code (`SessionEndReasons::read`, iPhone app
+plan Task 18): `takenOver`, `linkVersion`, `deviceRemoved` (and
+`deviceNotPaired`, the same notice: pair this computer again),
+`pairingRequired`, and its own `identityChanged` each choose the window's
+stop message, whatever the words; the words give only the other app's
+address and the two versions where they are present. It reads the words
+(`SessionEndReasons::parse`) only for an end that carries no code, from a
+Core older than the code.
 
 Only one session is authenticated at a time. A second connection that
 authenticates takes the session: the station ends the first with

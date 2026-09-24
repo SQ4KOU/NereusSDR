@@ -36,6 +36,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: iPhone app Task 18 (R-IOS-08): loadOrCreateKeyFile(), so
+//               the desktop's device key shares this handling. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -64,6 +67,14 @@ public:
     /// hold a P-256 private key gives an invalid identity whose lastError()
     /// says why; the file is left as it is.
     static StationIdentity loadOrCreate(const QString& profileDir);
+
+    /// The same key handling for another key file in `profileDir`
+    /// (iPhone app Task 18: the desktop's own device key,
+    /// ClientDeviceIdentity). `whose` begins the log text ("The Core's",
+    /// "This computer's").
+    static StationIdentity loadOrCreateKeyFile(const QString& profileDir,
+                                               const QString& fileName,
+                                               const QString& whose);
 
     bool isValid() const { return m_key != nullptr; }
     QString lastError() const { return m_lastError; }

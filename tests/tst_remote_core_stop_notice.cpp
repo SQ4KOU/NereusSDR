@@ -64,8 +64,10 @@ public:
 // end after the app's hello: the order StationServer refuses in.
 class ScriptedCore final : public QObject {
 public:
-    explicit ScriptedCore(quint16 helloMajor, QString endReason = {}, bool retryable = false)
+    explicit ScriptedCore(quint16 helloMajor, QString endReason = {}, bool retryable = false,
+                          QString endCode = {})
         : m_helloMajor(helloMajor), m_endReason(std::move(endReason)), m_retryable(retryable)
+        , m_endCode(std::move(endCode))
     {
         connect(&m_server, &QWebSocketServer::newConnection, this, [this] {
             QWebSocket* socket = m_server.nextPendingConnection();
@@ -85,7 +87,7 @@ public:
                 if (m_endReason.isEmpty() || socket->property("ended").toBool()) { return; }
                 socket->setProperty("ended", true);
                 socket->sendTextMessage(QString::fromUtf8(SessionMessages::encode(
-                    SessionMessages::sessionEnd(m_endReason, m_retryable))));
+                    SessionMessages::sessionEnd(m_endReason, m_retryable, m_endCode))));
                 socket->close();
             });
         });
@@ -104,6 +106,7 @@ private:
     quint16 m_helloMajor;
     QString m_endReason;
     bool m_retryable;
+    QString m_endCode;
 };
 
 // The real Core on a loopback WebSocket listener, as the session tests run
@@ -474,6 +477,69 @@ private slots:
         QVERIFY(!view.takeBack->isVisibleTo(&window));
         QVERIFY(!view.checkUpdates->isVisibleTo(&window));
         verifyPlain(view);
+        QTest::qWait(200);
+        QCOMPARE(core.connections, 1);
+    }
+
+    // iPhone app Task 18 (R-IOS-08, R-IOS-17): the Core's end code chooses
+    // the stop message, whatever its words; an older Core that sends no
+    // code is still read by its words.
+    void endCodesChooseTheStopMessage_data()
+    {
+        QTest::addColumn<QString>("reason");
+        QTest::addColumn<QString>("code");
+        QTest::addColumn<int>("notice");
+        QTest::addColumn<QString>("title");
+        QTest::newRow("deviceRemoved")
+            << QStringLiteral("This device was removed from the Core.")
+            << QStringLiteral("deviceRemoved") << int(CoreStopNotice::DeviceRemoved)
+            << QStringLiteral("Removed from the Core");
+        QTest::newRow("deviceNotPaired")
+            << QStringLiteral("This device is not paired with this Core. Pair it first.")
+            << QStringLiteral("deviceNotPaired") << int(CoreStopNotice::DeviceRemoved)
+            << QStringLiteral("Removed from the Core");
+        QTest::newRow("pairingRequired")
+            << QStringLiteral("This Core uses paired devices. Pair this device first.")
+            << QStringLiteral("pairingRequired") << int(CoreStopNotice::PairingRequired)
+            << QStringLiteral("Pair with the Core");
+        QTest::newRow("no code: an older Core's takeover words")
+            << QStringLiteral("Displaced by a newer authenticated connection from "
+                              "192.0.2.9:5000")
+            << QString() << int(CoreStopNotice::TakenOver) << QStringLiteral("Core taken over");
+        QTest::newRow("no code: removal words alone choose nothing")
+            << QStringLiteral("This device was removed from the Core.") << QString()
+            << int(CoreStopNotice::Refused) << QStringLiteral("Core refused this window");
+    }
+
+    void endCodesChooseTheStopMessage()
+    {
+        QFETCH(QString, reason);
+        QFETCH(QString, code);
+        QFETCH(int, notice);
+        QFETCH(QString, title);
+        ScriptedCore core(kSessionProtocolMajor, reason, /*retryable=*/false, code);
+        QVERIFY(core.listen());
+        SettingsProxy proxy;
+        ScopedRemoteBackend remoteBackend(&proxy);
+        MainWindow window({core.url(), QStringLiteral("token"), {}, true}, nullptr,
+                          MainWindow::ConnectionStartup::Deferred);
+        window.setConnectionPickerManaged(true);
+        StationClient* const client = window.findChild<StationClient*>();
+        auto* const controls = window.findChild<RemoteConnectionController*>();
+        QVERIFY(client && controls);
+        client->setReconnectBackoffUnitMs(20);
+        window.startInitialConnection();
+        QTRY_VERIFY(!client->isConnectionActive());
+        QCOMPARE(int(controls->stopNotice()), notice);
+        const StopBannerView view = bannerOf(window);
+        QVERIFY(view.banner->isVisibleTo(&window));
+        QCOMPARE(view.title->text(), title);
+        QVERIFY(view.text->text().contains(
+            QStringLiteral("This window does not reconnect by itself.")));
+        QVERIFY(view.chooseCore->isVisibleTo(&window));
+        verifyPlain(view);
+        QVERIFY2(OperatorWording::coreCalledStationIn(view.text->text()).isEmpty(),
+                 qPrintable(view.text->text()));
         QTest::qWait(200);
         QCOMPARE(core.connections, 1);
     }

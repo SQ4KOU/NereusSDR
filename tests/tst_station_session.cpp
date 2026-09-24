@@ -53,6 +53,7 @@
 #include <QRadioButton>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QScopeGuard>
 #include <QSignalSpy>
@@ -73,6 +74,9 @@
 #include "core/MoxController.h"
 #include "core/P1RadioConnection.h"
 #include "core/security/CertificateStore.h"
+#include "core/security/ClientDeviceIdentity.h"
+#include "core/security/DeviceAuthenticator.h"
+#include "core/security/DeviceStore.h"
 #include "core/security/TokenStore.h"
 #include "core/session/LinkVersion.h"
 #include "core/session/SessionEndReasons.h"
@@ -429,6 +433,19 @@ private slots:
     void wssListenerComesUpAndCompletesAHandshake();
     void wssRefusesAMismatchedCertificateFingerprint();
     void failedInitialConnectReportsPromptly();
+
+    // ---- iPhone app Task 18 (R-IOS-08, R-IOS-17): the desktop's own key,
+    // identity trust and the end codes. Refusals first. ----
+    void pairedCoreShowingAnotherIdentityIsRefused();
+    void pairedCoreShowingNoIdentityIsRefused();
+    void certificateWithoutAValidBindingIsRefused();
+    void changedCertificateWhoseBindingVerifiesIsAccepted();
+    void helloDeclaresDeviceAuthOnlyWithAKey();
+    void coreWithNoIdentityGetsTheTokenAlone();
+    void tokenSignInEnrolsTheKeyThenSignsInByKey();
+    void endCodesChooseTheReport();
+    void revokedDeviceIsEndedWithDeviceRemoved();
+    void retiredTokenIsRefusedWithPairingRequired();
 
 private:
     /// One temp dir for the whole class so the RSA-3072 key pair is
@@ -6593,6 +6610,442 @@ void TstStationSession::hardwareConfigRx1RateGoesToTheCoresFirstReceiver()
     }
     QCOMPARE(sliceId, s.core->slices().first()->sliceIndex());
     QCOMPARE(rateHz, hz);
+}
+
+// ── iPhone app Task 18 (R-IOS-08, R-IOS-17) ─────────────────────────────
+
+namespace {
+
+// A Core's hello as the Core sends it (the link document, section 3.4):
+// `coreKey`'s identity, bound by `bindingKey` to `certSha256`, and a
+// challenge. `withIdentity` false is a Core from before identities.
+SessionMessage scriptedCoreHello(const StationIdentity& coreKey, const StationIdentity& bindingKey,
+                                 const QByteArray& certSha256, bool withIdentity = true)
+{
+    QHash<QByteArray, int> features;
+    if (withIdentity) {
+        features.insert("deviceAuth", 1);
+        features.insert("pairing", 1);
+    }
+    SessionMessage hello = SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 0,
+                                                  QStringLiteral("scripted core"),
+                                                  {kSessionProtocolMajor}, features);
+    if (withIdentity) {
+        hello.stationIdentity = SessionStationIdentity{
+            StationIdentity::toBase64Url(coreKey.publicKeySpki()),
+            StationIdentity::toBase64Url(bindingKey.certBinding(certSha256))};
+        hello.challenge = StationIdentity::toBase64Url(QByteArray(32, '\x07'));
+    }
+    return hello;
+}
+
+QByteArray randomSha()
+{
+    QByteArray bytes(32, '\0');
+    for (int i = 0; i < bytes.size(); ++i) {
+        bytes[i] = static_cast<char>(QRandomGenerator::global()->bounded(256));
+    }
+    return bytes;
+}
+
+QString pinOf(const QByteArray& sha)
+{
+    QStringList pairs;
+    for (const char byte : sha) {
+        pairs.append(QString::number(static_cast<quint8>(byte), 16).rightJustified(2, QLatin1Char('0'))
+                         .toUpper());
+    }
+    return pairs.join(QLatin1Char(':'));
+}
+
+QList<QJsonObject> sentOfType(const LoopbackTransport* station, const QString& type)
+{
+    QList<QJsonObject> out;
+    for (const QByteArray& wire : station->received()) {
+        const QJsonObject o = QJsonDocument::fromJson(wire).object();
+        if (o.value(QStringLiteral("type")).toString() == type) {
+            out.append(o);
+        }
+    }
+    return out;
+}
+
+// A window, its key, and a scripted Core end it can be linked to.
+struct KeyedWindow {
+    QTemporaryDir keyDir;
+    std::shared_ptr<const ClientDeviceIdentity> key = std::make_shared<const ClientDeviceIdentity>(
+        ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+    RadioModel remote{RadioModel::Role::Remote};
+    SettingsProxy proxy;
+    StationClient client{&remote, &proxy};
+
+    KeyedWindow() { client.setDeviceIdentity(key, QStringLiteral("Shack MacBook")); }
+
+    // Links a scripted Core end; `certificate` is what this window's side
+    // reports the Core presented.
+    LoopbackTransport* link(QObject* owner, const QByteArray& certificate, const QString& token,
+                            const QString& pin, const QByteArray& identity)
+    {
+        auto* station = new LoopbackTransport(QStringLiteral("scripted core"), owner);
+        auto* peer = new LoopbackTransport(QStringLiteral("window"), owner);
+        peer->setPeerCertificateSha256(certificate);
+        station->linkTo(peer);
+        client.startSession(peer, token, pin, identity);
+        return station;
+    }
+};
+
+void verifyIdentityRefusal(KeyedWindow& window, LoopbackTransport* station)
+{
+    QTRY_VERIFY(!window.client.isConnectionActive());
+    // Nothing went to that Core: not this window's hello, not a sign-in.
+    QVERIFY(sentOfType(station, QStringLiteral("hello")).isEmpty());
+    QVERIFY(sentOfType(station, QStringLiteral("auth.request")).isEmpty());
+    const StationEndReport report = window.client.lastEndReport();
+    QCOMPARE(report.kind, StationEndReport::Kind::IdentityChanged);
+    QCOMPARE(report.code, QString::fromLatin1(SessionEndCode::kIdentityChanged));
+    QVERIFY2(OperatorWording::isPlain(report.reason), qPrintable(report.reason));
+    QVERIFY2(OperatorWording::coreCalledStationIn(report.reason).isEmpty(),
+             qPrintable(report.reason));
+    QVERIFY(report.reason.contains(QLatin1String("Core")));
+    QVERIFY(!window.client.isReconnectPending());
+}
+
+} // namespace
+
+// A saved Core whose hello shows another identity key: refused with this
+// app's own identityChanged, before this window says anything, and never
+// trusted silently.
+void TstStationSession::pairedCoreShowingAnotherIdentityIsRefused()
+{
+    QTemporaryDir paired;
+    QTemporaryDir impostor;
+    const StationIdentity pairedKey = StationIdentity::loadOrCreate(paired.path());
+    const StationIdentity otherKey = StationIdentity::loadOrCreate(impostor.path());
+    const QByteArray certificate = randomSha();
+    KeyedWindow window;
+    LoopbackTransport* station =
+        window.link(this, certificate, QString(), QString(), pairedKey.fingerprint());
+    // The impostor's own identity, validly bound to the certificate.
+    station->sendText(SessionMessages::encode(scriptedCoreHello(otherKey, otherKey, certificate)));
+    verifyIdentityRefusal(window, station);
+    QVERIFY(window.client.lastEndReport().reason.startsWith(
+        QLatin1String("The Core at this address is not the Core this computer paired with")));
+}
+
+void TstStationSession::pairedCoreShowingNoIdentityIsRefused()
+{
+    QTemporaryDir paired;
+    const StationIdentity pairedKey = StationIdentity::loadOrCreate(paired.path());
+    const QByteArray certificate = randomSha();
+    KeyedWindow window;
+    LoopbackTransport* station =
+        window.link(this, certificate, QStringLiteral("a token"), QString(), pairedKey.fingerprint());
+    station->sendText(SessionMessages::encode(
+        scriptedCoreHello(pairedKey, pairedKey, certificate, /*withIdentity=*/false)));
+    verifyIdentityRefusal(window, station);
+}
+
+// The right key, but its binding is for another certificate than the one
+// this connection presented: refused with plain words.
+void TstStationSession::certificateWithoutAValidBindingIsRefused()
+{
+    QTemporaryDir paired;
+    const StationIdentity pairedKey = StationIdentity::loadOrCreate(paired.path());
+    const QByteArray presented = randomSha();
+    KeyedWindow window;
+    LoopbackTransport* station =
+        window.link(this, presented, QString(), QString(), pairedKey.fingerprint());
+    station->sendText(
+        SessionMessages::encode(scriptedCoreHello(pairedKey, pairedKey, randomSha())));
+    verifyIdentityRefusal(window, station);
+    QCOMPARE(window.client.lastEndReport().reason,
+             QStringLiteral("The Core's certificate is not signed by the Core this computer "
+                            "paired with, so this computer did not connect."));
+}
+
+// After pairing, a new certificate the Core's key binds is accepted with no
+// question asked, whatever pin was saved, and this window signs in by key.
+void TstStationSession::changedCertificateWhoseBindingVerifiesIsAccepted()
+{
+    QTemporaryDir paired;
+    const StationIdentity pairedKey = StationIdentity::loadOrCreate(paired.path());
+    const QByteArray newCertificate = randomSha();
+    KeyedWindow window;
+    LoopbackTransport* station = window.link(this, newCertificate, QStringLiteral("old token"),
+                                             pinOf(randomSha()), pairedKey.fingerprint());
+    const SessionMessage hello = scriptedCoreHello(pairedKey, pairedKey, newCertificate);
+    station->sendText(SessionMessages::encode(hello));
+    QTRY_COMPARE(sentOfType(station, QStringLiteral("auth.request")).size(), 1);
+    QCOMPARE(window.client.lastEndReport().kind, StationEndReport::Kind::None);
+
+    const QJsonObject windowHello = sentOfType(station, QStringLiteral("hello")).first();
+    QCOMPARE(windowHello.value(QStringLiteral("features")).toObject()
+                 .value(QStringLiteral("deviceAuth")).toInt(), 1);
+    const QJsonObject auth = sentOfType(station, QStringLiteral("auth.request")).first();
+    // The token is never sent to a paired Core.
+    QCOMPARE(auth.value(QStringLiteral("token")).toString(), QString());
+    const QJsonObject device = auth.value(QStringLiteral("device")).toObject();
+    QCOMPARE(device.value(QStringLiteral("kind")).toString(), QStringLiteral("computer"));
+    QCOMPARE(device.value(QStringLiteral("name")).toString(), QStringLiteral("Shack MacBook"));
+    QCOMPARE(device.value(QStringLiteral("publicKey")).toString(),
+             StationIdentity::toBase64Url(window.key->publicKeySpki()));
+    QCOMPARE(device.value(QStringLiteral("id")).toString(),
+             StationIdentity::toBase64Url(window.key->fingerprint()));
+    // Signed over this connection's challenge, certificate and Core key.
+    QVERIFY(StationIdentity::verify(
+        window.key->publicKeySpki(),
+        DeviceAuthenticator::transcript(StationIdentity::fromBase64Url(hello.challenge),
+                                        newCertificate, pairedKey.publicKeySpki(),
+                                        window.key->publicKeySpki()),
+        StationIdentity::fromBase64Url(device.value(QStringLiteral("signature")).toString())));
+    window.client.disconnectFromStation(QStringLiteral("test done"));
+}
+
+// With no key this window says nothing it cannot do; with one it declares
+// deviceAuth 1.
+void TstStationSession::helloDeclaresDeviceAuthOnlyWithAKey()
+{
+    QTemporaryDir coreDir;
+    const StationIdentity coreKey = StationIdentity::loadOrCreate(coreDir.path());
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        auto* station = new LoopbackTransport(QStringLiteral("scripted core"), this);
+        auto* peer = new LoopbackTransport(QStringLiteral("window"), this);
+        station->linkTo(peer);
+        client.startSession(peer, QStringLiteral("token"));
+        station->sendText(SessionMessages::encode(scriptedCoreHello(coreKey, coreKey, randomSha())));
+        QTRY_COMPARE(sentOfType(station, QStringLiteral("hello")).size(), 1);
+        QVERIFY(!sentOfType(station, QStringLiteral("hello")).first()
+                     .value(QStringLiteral("features")).toObject()
+                     .contains(QStringLiteral("deviceAuth")));
+        client.disconnectFromStation(QStringLiteral("test done"));
+    }
+    KeyedWindow window;
+    LoopbackTransport* station =
+        window.link(this, QByteArray(), QStringLiteral("token"), QString(), QByteArray());
+    station->sendText(SessionMessages::encode(scriptedCoreHello(coreKey, coreKey, randomSha())));
+    QTRY_COMPARE(sentOfType(station, QStringLiteral("hello")).size(), 1);
+    QCOMPARE(sentOfType(station, QStringLiteral("hello")).first()
+                 .value(QStringLiteral("features")).toObject()
+                 .value(QStringLiteral("deviceAuth")).toInt(), 1);
+    window.client.disconnectFromStation(QStringLiteral("test done"));
+}
+
+// A Core with no identity (an older one), or a bench link whose pin was
+// never checked, gets the token alone: nothing is enrolled.
+void TstStationSession::coreWithNoIdentityGetsTheTokenAlone()
+{
+    QTemporaryDir coreDir;
+    const StationIdentity coreKey = StationIdentity::loadOrCreate(coreDir.path());
+    const QByteArray certificate = randomSha();
+    {
+        KeyedWindow window;
+        LoopbackTransport* station =
+            window.link(this, certificate, QStringLiteral("token"), pinOf(certificate), {});
+        station->sendText(SessionMessages::encode(
+            scriptedCoreHello(coreKey, coreKey, certificate, /*withIdentity=*/false)));
+        QTRY_COMPARE(sentOfType(station, QStringLiteral("auth.request")).size(), 1);
+        const QJsonObject auth = sentOfType(station, QStringLiteral("auth.request")).first();
+        QCOMPARE(auth.value(QStringLiteral("token")).toString(), QStringLiteral("token"));
+        QVERIFY(!auth.contains(QStringLiteral("device")));
+        window.client.disconnectFromStation(QStringLiteral("test done"));
+    }
+    {
+        // No pin (a bench link): the identity it shows is not learned.
+        KeyedWindow window;
+        LoopbackTransport* station =
+            window.link(this, certificate, QStringLiteral("token"), QString(), {});
+        station->sendText(SessionMessages::encode(scriptedCoreHello(coreKey, coreKey, certificate)));
+        QTRY_COMPARE(sentOfType(station, QStringLiteral("auth.request")).size(), 1);
+        QVERIFY(!sentOfType(station, QStringLiteral("auth.request")).first()
+                     .contains(QStringLiteral("device")));
+        window.client.disconnectFromStation(QStringLiteral("test done"));
+    }
+}
+
+// An existing saved Core (token and pin) enrols this computer's key on its
+// next token sign-in, nothing typed; afterwards it signs in by key alone.
+void TstStationSession::tokenSignInEnrolsTheKeyThenSignsInByKey()
+{
+    QTemporaryDir dir;
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("enrol.settings")));
+    auto model = makeStationRadioModel(0);
+    StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+    server.setHeartbeatIntervalMs(0);
+    QString pin = server.certificateFingerprint();
+    const QByteArray certificate = QByteArray::fromHex(pin.remove(QLatin1Char(':')).toLatin1());
+
+    KeyedWindow window;
+    QSignalSpy learned(&window.client, &StationClient::stationIdentityLearned);
+    auto* station = new LoopbackTransport(QStringLiteral("core"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("window"), this);
+    station->setPeerAddress(QStringLiteral("127.0.0.1"));
+    peer->setPeerCertificateSha256(certificate);
+    station->linkTo(peer);
+    window.client.startSession(peer, server.token(), server.certificateFingerprint());
+    server.acceptTransport(station);
+    QTRY_VERIFY(window.client.isHandshakeComplete());
+    QCOMPARE(learned.size(), 1);
+    QCOMPARE(learned.first().first().toByteArray(), server.stationIdentity().fingerprint());
+    QCOMPARE(window.client.stationIdentityFingerprint(), server.stationIdentity().fingerprint());
+    const auto enrolled = server.deviceStore()->find(window.key->fingerprint());
+    QVERIFY(enrolled.has_value());
+    QCOMPARE(enrolled->kind, QStringLiteral("computer"));
+    QCOMPARE(enrolled->name, QStringLiteral("Shack MacBook"));
+    QVERIFY(enrolled->enrolledThroughToken);
+    const QJsonObject firstAuth = sentOfType(station, QStringLiteral("auth.request")).first();
+    QCOMPARE(firstAuth.value(QStringLiteral("token")).toString(), server.token());
+    QVERIFY(firstAuth.contains(QStringLiteral("device")));
+    window.client.disconnectFromStation(QStringLiteral("test done"));
+    QTRY_VERIFY(!server.hasAuthenticatedSession());
+
+    // The next connection, by key alone: no token leaves this window.
+    auto* station2 = new LoopbackTransport(QStringLiteral("core"), this);
+    auto* peer2 = new LoopbackTransport(QStringLiteral("window"), this);
+    station2->setPeerAddress(QStringLiteral("127.0.0.1"));
+    peer2->setPeerCertificateSha256(certificate);
+    station2->linkTo(peer2);
+    window.client.startSession(peer2, server.token(), QString(),
+                               window.client.stationIdentityFingerprint());
+    server.acceptTransport(station2);
+    QTRY_VERIFY(window.client.isHandshakeComplete());
+    const QJsonObject secondAuth = sentOfType(station2, QStringLiteral("auth.request")).first();
+    QCOMPARE(secondAuth.value(QStringLiteral("token")).toString(), QString());
+    QVERIFY(secondAuth.contains(QStringLiteral("device")));
+    QCOMPARE(learned.size(), 1);
+    window.client.disconnectFromStation(QStringLiteral("test done"));
+}
+
+// The kind comes from the code where the Core sends one, and from the
+// words only where it sends none (an older Core).
+void TstStationSession::endCodesChooseTheReport()
+{
+    const struct {
+        const char* reason;
+        const char* code;
+        StationEndReport::Kind kind;
+    } cases[] = {
+        {"This device was removed from the Core.", "deviceRemoved",
+         StationEndReport::Kind::DeviceRemoved},
+        {"Anything at all.", "deviceRemoved", StationEndReport::Kind::DeviceRemoved},
+        {"This device is not paired with this Core. Pair it first.", "deviceNotPaired",
+         StationEndReport::Kind::DeviceRemoved},
+        {"This Core uses paired devices. Pair this device first.", "pairingRequired",
+         StationEndReport::Kind::PairingRequired},
+        {"Another app at 192.0.2.9:5000 connected to the Core and took over. "
+         "Connect again to take it back.", "takenOver", StationEndReport::Kind::TakenOver},
+        {"Some other words.", "takenOver", StationEndReport::Kind::TakenOver},
+        {"The Core could not read a message from this app.", "protocolError",
+         StationEndReport::Kind::Refused},
+        // No code: an older Core, read by its words.
+        {"Another app at 192.0.2.9:5000 connected to the Core and took over. "
+         "Connect again to take it back.", "", StationEndReport::Kind::TakenOver},
+        {"Displaced by a newer authenticated connection from 192.0.2.9:5000", "",
+         StationEndReport::Kind::TakenOver},
+        {"This device was removed from the Core.", "", StationEndReport::Kind::Refused},
+    };
+    for (const auto& entry : cases) {
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        auto* station = new LoopbackTransport(QStringLiteral("scripted core"), this);
+        auto* peer = new LoopbackTransport(QStringLiteral("window"), this);
+        station->linkTo(peer);
+        client.startSession(peer, QStringLiteral("token"));
+        station->sendText(SessionMessages::encode(SessionMessages::hello(
+            kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("scripted core"))));
+        QTRY_COMPARE(sentOfType(station, QStringLiteral("auth.request")).size(), 1);
+        station->sendText(SessionMessages::encode(SessionMessages::sessionEnd(
+            QString::fromLatin1(entry.reason), false, QString::fromLatin1(entry.code))));
+        QTRY_VERIFY(!client.isConnectionActive());
+        const StationEndReport report = client.lastEndReport();
+        QVERIFY2(report.kind == entry.kind, entry.reason);
+        QCOMPARE(report.code, QString::fromLatin1(entry.code));
+        if (report.kind == StationEndReport::Kind::TakenOver
+            && QString::fromLatin1(entry.reason).contains(QLatin1String("192.0.2.9"))) {
+            QCOMPARE(report.takenOverBy, QStringLiteral("192.0.2.9"));
+        }
+    }
+}
+
+// A device revoked while it is connected is ended with deviceRemoved, and
+// the report says so by the code.
+void TstStationSession::revokedDeviceIsEndedWithDeviceRemoved()
+{
+    QTemporaryDir dir;
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("revoke.settings")));
+    auto model = makeStationRadioModel(0);
+    StationServer server(model.get(), settings, NereusSDR::Test::seedCoreIdentity(dir.path()));
+    server.setHeartbeatIntervalMs(0);
+    QString pin = server.certificateFingerprint();
+    const QByteArray certificate = QByteArray::fromHex(pin.remove(QLatin1Char(':')).toLatin1());
+
+    KeyedWindow window;
+    PairedDevice device;
+    device.id = window.key->fingerprint();
+    device.publicKeySpki = window.key->publicKeySpki();
+    device.name = QStringLiteral("Shack MacBook");
+    device.kind = QStringLiteral("computer");
+    QVERIFY(server.deviceStore()->add(device));
+
+    auto* station = new LoopbackTransport(QStringLiteral("core"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("window"), this);
+    station->setPeerAddress(QStringLiteral("127.0.0.1"));
+    peer->setPeerCertificateSha256(certificate);
+    station->linkTo(peer);
+    window.client.startSession(peer, QString(), QString(), server.stationIdentity().fingerprint());
+    server.acceptTransport(station);
+    QTRY_VERIFY(window.client.isHandshakeComplete());
+
+    QVERIFY(server.deviceStore()->remove(device.id));
+    QTRY_VERIFY(!window.client.isConnectionActive());
+    QCOMPARE(window.client.lastEndReport().kind, StationEndReport::Kind::DeviceRemoved);
+    QCOMPARE(window.client.lastEndReport().code,
+             QString::fromLatin1(SessionEndCode::kDeviceRemoved));
+    QVERIFY(!window.client.isReconnectPending());
+
+    // Signing in again is refused as not paired, the same notice.
+    auto* station2 = new LoopbackTransport(QStringLiteral("core"), this);
+    auto* peer2 = new LoopbackTransport(QStringLiteral("window"), this);
+    station2->setPeerAddress(QStringLiteral("127.0.0.1"));
+    peer2->setPeerCertificateSha256(certificate);
+    station2->linkTo(peer2);
+    window.client.startSession(peer2, QString(), QString(), server.stationIdentity().fingerprint());
+    server.acceptTransport(station2);
+    QTRY_VERIFY(!window.client.isConnectionActive());
+    QCOMPARE(window.client.lastEndReport().kind, StationEndReport::Kind::DeviceRemoved);
+    QCOMPARE(window.client.lastEndReport().code,
+             QString::fromLatin1(SessionEndCode::kDeviceNotPaired));
+}
+
+// A saved Core from before paired devices whose token has been retired:
+// the sign-in is refused with pairingRequired and the report says so.
+void TstStationSession::retiredTokenIsRefusedWithPairingRequired()
+{
+    QTemporaryDir dir;
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("retired.settings")));
+    auto model = makeStationRadioModel(0);
+    // A Core with an identity and no token (new, or its token retired).
+    StationServer server(model.get(), settings, NereusSDR::Test::seedCoreIdentity(dir.path()));
+    server.setHeartbeatIntervalMs(0);
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    auto* station = new LoopbackTransport(QStringLiteral("core"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("window"), this);
+    station->linkTo(peer);
+    client.startSession(peer, QStringLiteral("the saved token"));
+    server.acceptTransport(station);
+    QTRY_VERIFY(!client.isConnectionActive());
+    QCOMPARE(client.lastEndReport().kind, StationEndReport::Kind::PairingRequired);
+    QCOMPARE(client.lastEndReport().code, QString::fromLatin1(SessionEndCode::kPairingRequired));
+    QVERIFY(!client.isReconnectPending());
 }
 
 QTEST_MAIN(TstStationSession)

@@ -28,6 +28,10 @@ enum class CoreStopNotice {
     UpdateCore,      // the Core's link version is older than this app's
     UpdateOlderSide, // too far apart, and the Core did not say which is older
     Refused,         // any other end the Core marked not retryable
+    // iPhone app Task 18 (R-IOS-08), chosen by the end's code:
+    DeviceRemoved,   // the Core removed this computer, or no longer has it paired
+    PairingRequired, // the Core now signs in paired devices only
+    IdentityChanged, // the Core at this address is not the one this computer paired with
 };
 
 // Uses session state, never radio connectivity, to decide whether an

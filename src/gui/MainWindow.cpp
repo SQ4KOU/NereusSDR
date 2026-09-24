@@ -480,6 +480,7 @@ warren@wpratt.com
 #include "UnbuiltFeatures.h"
 // Remote-daemon R2 Task 20: the wss client and the settings backend it
 // writes through. Both are used only on the m_station.isRemote() path.
+#include "core/security/ClientDeviceIdentity.h"
 #include "core/session/StationClient.h"
 #include "models/RfKitModel.h"
 #include "RemoteConnectionController.h"
@@ -1256,6 +1257,12 @@ void MainWindow::ensureRemoteSession()
         }
 
         m_stationClient = new StationClient(m_radioModel, proxy, this);
+        // iPhone app Task 18 (R-IOS-08): this computer's own device key.
+        // A Core it paired with is signed in to by key, and a token
+        // sign-in to a Core with an identity enrols the key (the link
+        // document, section 3.5). The Core lists it by the machine's name.
+        m_stationClient->setDeviceIdentity(ClientDeviceIdentity::forThisProfile(),
+                                           ClientDeviceIdentity::machineName());
         m_remoteConnection = new RemoteConnectionController(
             m_stationClient, m_radioModel, m_station, this);
         connect(m_remoteConnection, &RemoteConnectionController::changed,

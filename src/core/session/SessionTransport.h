@@ -42,6 +42,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08):
 //                                    peerAddress(). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 18 (R-IOS-08):
+//                                    peerCertificateSha256(). AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -102,6 +105,13 @@ public:
     /// relay's address, so a relay transport (Part E) returns empty.
     virtual QString peerAddress() const { return {}; }
 
+    /// iPhone app Task 18: SHA-256 of the DER certificate the far end
+    /// presented on this connection's TLS, 32 bytes; empty when the link
+    /// carries no TLS (ws://, an in-process link). What a device checks
+    /// the Core's certificate binding against (the link document, section
+    /// 3.4) and signs into its sign-in transcript (section 3.5).
+    virtual QByteArray peerCertificateSha256() const { return {}; }
+
     /// Read only on the transport's owner thread. Unsupported test/custom
     /// transports return absent rather than a fabricated zero measurement.
     virtual std::optional<SessionTransportTelemetry> telemetry() const { return std::nullopt; }
@@ -153,6 +163,7 @@ public:
     bool isOpen() const override;
     QString peerDescription() const override;
     QString peerAddress() const override;
+    QByteArray peerCertificateSha256() const override;
     std::optional<SessionTransportTelemetry> telemetry() const override;
 
     QWebSocket* socket() const { return m_socket; }

@@ -1,0 +1,82 @@
+// no-port-check: NereusSDR-original.
+// =================================================================
+// src/core/security/ClientDeviceIdentity.cpp  (NereusSDR)
+// =================================================================
+//
+// See ClientDeviceIdentity.h.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-24: original implementation for NereusSDR by J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+// =================================================================
+
+#include "core/security/ClientDeviceIdentity.h"
+
+#include "core/AppSettings.h"
+
+#include <QMutex>
+#include <QMutexLocker>
+#include <QSysInfo>
+
+namespace NereusSDR {
+
+ClientDeviceIdentity ClientDeviceIdentity::loadOrCreate(const QString& profileDir)
+{
+    ClientDeviceIdentity identity;
+    identity.m_key = StationIdentity::loadOrCreateKeyFile(
+        profileDir, QString::fromLatin1(kKeyFileName), QStringLiteral("This computer's"));
+    return identity;
+}
+
+std::shared_ptr<const ClientDeviceIdentity> ClientDeviceIdentity::forThisProfile()
+{
+    // One key per process and profile. The GUI thread asks; the mutex only
+    // keeps a second window's first ask from creating the file twice.
+    static QMutex mutex;
+    static std::shared_ptr<const ClientDeviceIdentity> identity;
+    QMutexLocker lock(&mutex);
+    if (!identity) {
+        identity = std::make_shared<const ClientDeviceIdentity>(loadOrCreate(
+            AppSettings::resolveConfigDir(AppSettings::profileOverride())));
+    }
+    return identity;
+}
+
+QString ClientDeviceIdentity::machineName()
+{
+    return deviceNameFrom(QSysInfo::machineHostName());
+}
+
+QString ClientDeviceIdentity::deviceNameFrom(const QString& hostName)
+{
+    QString name;
+    name.reserve(hostName.size());
+    for (const QChar c : hostName) {
+        // What DeviceStore::isValidName refuses.
+        const QChar::Category category = c.category();
+        if (c.isNull() || category == QChar::Other_Control || category == QChar::Other_Format
+            || category == QChar::Separator_Line || category == QChar::Separator_Paragraph) {
+            continue;
+        }
+        name.append(c);
+    }
+    // A lone surrogate does not survive the UTF-8 the Core stores.
+    name = QString::fromUtf8(name.toUtf8()).remove(QChar::ReplacementCharacter).trimmed();
+    if (name.endsWith(QLatin1String(".local"), Qt::CaseInsensitive)) {
+        name.chop(6);
+        name = name.trimmed();
+    }
+    // Cut at a character boundary so the UTF-8 form fits.
+    while (!name.isEmpty() && name.toUtf8().size() > kMaxNameBytes) {
+        name.chop(1);
+        if (!name.isEmpty() && name.back().isHighSurrogate()) {
+            name.chop(1);
+        }
+    }
+    name = name.trimmed();
+    return name.isEmpty() ? QStringLiteral("Computer") : name;
+}
+
+} // namespace NereusSDR

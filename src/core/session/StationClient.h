@@ -234,6 +234,16 @@
 //                                    `accessorySettings`, refusals routed
 //                                    to the Advanced pages). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 18 (R-IOS-08,
+//                                    R-IOS-17): the hello declares
+//                                    deviceAuth 1; this computer signs in
+//                                    by its own device key, enrols it on a
+//                                    token sign-in, trusts a paired Core by
+//                                    its identity key and certificate
+//                                    binding (identityChanged otherwise),
+//                                    and the end report reads the Core's
+//                                    end code. AI-assisted transformation
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -244,6 +254,8 @@
 #include <QSet>
 #include <QString>
 #include <QUrl>
+
+#include <memory>
 
 #include "core/session/IStationLink.h"
 #include "core/session/LinkVersion.h"
@@ -260,6 +272,7 @@ QT_END_NAMESPACE
 
 namespace NereusSDR {
 
+class ClientDeviceIdentity;
 class RadioModel;
 class SessionTransport;
 class SettingsProxy;
@@ -274,8 +287,17 @@ struct StationEndReport {
         TakenOver,      ///< another app connected to the Core and took over
         VersionRefused, ///< the link versions are too far apart
         Refused,        ///< any other end the Core marked not retryable
+        // iPhone app Task 18 (R-IOS-08), chosen by the end's code:
+        DeviceRemoved,   ///< deviceRemoved or deviceNotPaired: pair this computer again
+        PairingRequired, ///< pairingRequired: the Core signs in paired devices only
+        IdentityChanged, ///< identityChanged (this app's own end): not the Core it paired with
     };
     Kind kind = Kind::None;
+    /// The end's code as sent (SessionEndCode), or this app's own
+    /// identityChanged; empty from an older Core, which sends none, and
+    /// then the kind comes from the reason's words
+    /// (SessionEndReasons::parse).
+    QString code;
     /// The reason as sent (the Core's own words, or this app's own for a
     /// version refusal it made itself). Raw: for the log and for
     /// OperatorReasonText, never shown as is.
@@ -383,9 +405,19 @@ public:
     /// uppercase form; an empty one means "do not pin", which is refused
     /// unless allowUnpinned is true, because silently not pinning is the
     /// failure mode that makes the whole certificate model decorative.
+    ///
+    /// iPhone app Task 18: `stationIdentityFingerprint` (32 bytes) is the
+    /// identity key of the Core this computer paired with. When set, the
+    /// Core is trusted by that key and not by the pin (so the pin may be
+    /// empty): the hello must show that key, its certificate binding must
+    /// verify for the certificate this connection presents, and this
+    /// computer signs in with its device key (setDeviceIdentity()) instead
+    /// of the token. Anything else ends the attempt, not retryably, with
+    /// the end code identityChanged. Needs wss://.
     void connectToStation(const QUrl& url, const QString& token,
                           const QString& expectedFingerprint,
-                          bool allowUnpinned = false);
+                          bool allowUnpinned = false,
+                          const QByteArray& stationIdentityFingerprint = QByteArray());
 
     /// Drive the session over an already-open transport instead of dialing
     /// one. Same code path from the first message onward; this is how the
@@ -399,8 +431,28 @@ public:
     /// leave this process without the comparison connectToStation()
     /// guarantees. A non-empty value with a transport that cannot produce
     /// a peer certificate is refused rather than waved through.
+    ///
+    /// `stationIdentityFingerprint` is connectToStation()'s: the paired
+    /// Core's identity, checked against what `transport` presents
+    /// (SessionTransport::peerCertificateSha256()).
     void startSession(SessionTransport* transport, const QString& token,
-                      const QString& expectedFingerprint = QString());
+                      const QString& expectedFingerprint = QString(),
+                      const QByteArray& stationIdentityFingerprint = QByteArray());
+
+    /// iPhone app Task 18 (R-IOS-08): this computer's own device key and
+    /// the name the Core lists it by. With a usable key the hello declares
+    /// `features.deviceAuth` 1, a paired Core is signed in to by key, and
+    /// a token sign-in to a Core that has an identity enrols the key in
+    /// the same step (the link document, section 3.5). Without one this
+    /// client signs in with the token alone, as before. Not owned beyond
+    /// the shared pointer; applies from the next hello.
+    void setDeviceIdentity(std::shared_ptr<const ClientDeviceIdentity> identity,
+                           const QString& deviceName);
+
+    /// The identity fingerprint this client trusts the Core by: the one it
+    /// was given to connect with, or the one its key was just enrolled
+    /// with. Empty for a Core trusted by its pin.
+    QByteArray stationIdentityFingerprint() const { return m_stationIdentity; }
 
     /// `attemptReconnect` (Task 19) decides whether this closure re-arms
     /// the automatic reconnect timer once the session has ended. Defaults
@@ -447,7 +499,10 @@ public:
     /// version refusal, or any other end the Core marked not retryable).
     /// Cleared when the next link is attached, so it describes the end
     /// that stopped this client, never an older one. Read from the Core's
-    /// session end reason and retryable flag as sent; no other wire data.
+    /// session end or sign-in refusal as sent: its code (iPhone app Task
+    /// 18) chooses the kind, and a Core that sends no code is read by its
+    /// reason's words. This client's own identityChanged end is recorded
+    /// here too.
     StationEndReport lastEndReport() const { return m_lastEndReport; }
 
     /// Test seam: production default is kDefaultReconnectBackoffUnitMs
@@ -751,6 +806,13 @@ signals:
     /// that class.
     void reconnectScheduled(int attemptNumber, int delayMs);
 
+    /// iPhone app Task 18 (R-IOS-08): a token sign-in enrolled this
+    /// computer's device key with the Core whose identity has this
+    /// fingerprint (32 bytes). From now on this client trusts that Core by
+    /// the key and signs in with its own; the caller saves it with the
+    /// Core so later connections do the same.
+    void stationIdentityLearned(const QByteArray& identityFingerprint);
+
 private:
     void attachTransport(SessionTransport* transport, const QString& token);
 
@@ -764,7 +826,23 @@ private:
     /// NOT reset the attempt counter, or the backoff would never advance
     /// past its first step).
     void dialStation(const QUrl& url, const QString& token,
-                     const QString& expectedFingerprint, bool allowUnpinned);
+                     const QString& expectedFingerprint, bool allowUnpinned,
+                     const QByteArray& stationIdentityFingerprint);
+
+    /// iPhone app Task 18: the sign-in after the pin (or the identity)
+    /// holds: this hello, then `auth.request` with the token, the device
+    /// block, or both. Returns false when it ended the attempt instead.
+    bool signIn(const SessionMessage& hello);
+    /// The paired Core's checks (identity key, certificate binding),
+    /// ending the attempt with identityChanged when one fails. The Core's
+    /// key (SPKI DER) and this connection's certificate SHA-256 on
+    /// success.
+    bool verifyStationIdentity(const SessionMessage& hello, const QByteArray& expected,
+                               QByteArray* stationSpki, QByteArray* certSha256);
+    /// Ends this attempt, not retryably, with this app's own end `kind`
+    /// and `code`, before anything was sent.
+    void refuseStation(const QString& reason, StationEndReport::Kind kind,
+                       const QString& code);
 
     /// Compares the station's presented certificate against the pinned
     /// fingerprint, exactly once per attach, and ends the session
@@ -885,6 +963,15 @@ private:
     /// features, and what the current station's hello declared.
     QList<quint16> m_supportedMajors;
     QHash<QByteArray, int> m_declaredFeatures;
+
+    /// iPhone app Task 18: this computer's device key and name, the paired
+    /// Core's identity fingerprint this client trusts (latched across
+    /// redials; empty for a pin-trusted Core), and the identity a token
+    /// sign-in in flight is enrolling with (empty when none is).
+    std::shared_ptr<const ClientDeviceIdentity> m_deviceIdentity;
+    QString m_deviceName;
+    QByteArray m_stationIdentity;
+    QByteArray m_enrollingIdentity;
     quint16 m_agreedMajor = 0;
     QHash<QByteArray, int> m_stationFeatures;
 

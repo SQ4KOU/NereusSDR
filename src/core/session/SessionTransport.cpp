@@ -19,7 +19,10 @@
 
 #include "core/session/SessionTransport.h"
 
+#include <QCryptographicHash>
 #include <QHostAddress>
+#include <QSslCertificate>
+#include <QSslConfiguration>
 #include <QWebSocket>
 
 namespace NereusSDR {
@@ -147,6 +150,16 @@ QString WebSocketTransport::peerAddress() const
     }
     address.setScopeId(QString());
     return address.isNull() ? QString() : address.toString();
+}
+
+QByteArray WebSocketTransport::peerCertificateSha256() const
+{
+    if (m_socket == nullptr) {
+        return {};
+    }
+    const QSslCertificate certificate = m_socket->sslConfiguration().peerCertificate();
+    return certificate.isNull() ? QByteArray()
+                                : certificate.digest(QCryptographicHash::Sha256);
 }
 
 std::optional<SessionTransportTelemetry> WebSocketTransport::telemetry() const
