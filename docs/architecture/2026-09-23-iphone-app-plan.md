@@ -152,8 +152,13 @@ read for this plan at `4bb89b5d`.
   after `ios/scripts/generate-project.sh`.
 * **Secrets** never appear in the plan, the source, test fixtures, logs or support
   bundles: no tokens, private keys, pairing codes or device keys. Keys and codes in tests
-  are generated at run time. A pairing code appears only on the station's console output
-  and its status page, never through the logging categories.
+  are generated at run time. A pairing code appears only on the Core's console, on its
+  status page (served only to peers on directly connected networks, and only while the
+  Core is unclaimed), on the Remote Access page of a desktop running the Core, and over
+  the link only to sessions authenticated with a paired device's key (pairing design
+  §4.3 and §4.5; spec §5.3 items 10 and 11). It never goes to a session signed in with
+  the older access token, never into a log line or through the logging categories, and
+  never literally into a fixture (write `"$string"`).
 * **Devices** (the radios, the station computers, iPhones and iPads, the website's server)
   are touched only by the controller or JJ, never by an implementer on its own
   initiative. Confirm which device answers before writing to it; never restart or reflash
@@ -1358,8 +1363,10 @@ the reclaim rule, the time-out by device kind).
   `station-identity.pem` (PKCS#8), `paired-devices.json`.
 * The station listens on TCP 47910 on every interface (IPv4 and IPv6) once identity
   exists: pairing is what makes the listener safe to expose, and the pairing design's
-  first-run workflow (§11) needs it reachable with no configuration. `remote_port` and
-  `remote_bind` still override it; `remote_port = 0` still turns it off.
+  first-run workflow (§11) needs it reachable with no configuration. That default applies
+  only when the configuration file sets neither `remote_port` nor `remote_bind` (or there
+  is no file); a file that sets either keeps its old meaning (Task 12).
+  `remote_port = 0` still turns it off.
 
 ## Task 12: Station identity and device keys
 
@@ -1375,11 +1382,13 @@ same device key is how a reclaim is recognised).
   upgraded station stays claimed through its token until the token is retired, and each
   window that signs in with it enrols its own device key)
 - Modify: `src/core/session/SessionMessages.{h,cpp}` (`hello`: `identity`, `challenge`;
-  `auth.request`: `device`), `src/core/session/StationServer.{h,cpp}`
+  `auth.request`: `device`; `auth.result` and `session.end`: `code`),
+  `src/core/session/StationServer.{h,cpp}`
 - Modify: `src/core/daemon/DaemonConfig.{h,cpp}`, `src/core/daemon/DaemonApp.cpp`,
   `packaging/nereusd.conf.sample` (listener defaults above; `pairing_lan_click = allow|deny`)
 - Modify: `tests/data/link/v1/` (hello and device-auth fixtures), `surface.json`, the
-  link document (an Identity section)
+  link document (an Identity section; the `code` column in section 12.4; the
+  `stationSetup` keys and the `"$device:<case>"` placeholder in section 16)
 - Test: `tests/tst_station_identity.cpp`, `tests/tst_device_store.cpp`,
   `tests/tst_device_auth.cpp`, `tests/tst_station_label.cpp`, `tests/tst_daemon_config.cpp`,
   the conformance runners
@@ -1405,10 +1414,22 @@ same device key is how a reclaim is recognised).
     pairing design §3.3 (`<callsign>/<suffix>`, suffix at most 32 of `[A-Za-z0-9_-]`,
     case-insensitive comparison, display keeps what was typed, empty suffix is the bare
     callsign); the default label is the `StationCallsign` setting.
+  - `TokenStore::isActive()` (a token is loaded and not retired) and
+    `TokenStore::retire()` (deletes the token file for good).
   - `hello` (station) gains `identity: {publicKey, certBinding}` and `challenge`, and
     `features.deviceAuth: 1`; `auth.request` gains
     `device: {id, publicKey, name, kind, signature}` with `token: ""`; a sign-in with
     the station token that also carries `device` enrols that device in the same step.
+  - End codes: `SessionEndCode` in `SessionMessages.h` (`takenOver`, `linkVersion`,
+    `pairingRequired`, `wrongToken`, `deviceNotPaired`, `deviceProofFailed`,
+    `protocolError`, `deviceRemoved` for Task 13, and `identityChanged`, client-side
+    only), carried as an optional `code` on `session.end` and also on `auth.result`,
+    because the token and device refusals are `auth.result` refusals. Every permanent
+    end the station sends has one; retryable ends carry none.
+  - Fixture keys: `stationSetup` gains `token` (`"active"` or `"none"`) and
+    `pairedDevice` (the runner's own device, its key made at run time, is paired before
+    the client connects); the client placeholder `"$device:<case>"` (station runner
+    only) signs the device block.
   - Capability `stationIdentityVersion = 1`.
 
 **Acceptance:**
@@ -1428,14 +1449,18 @@ same device key is how a reclaim is recognised).
   token and sends its `device` block is enrolled as a paired device (kind `computer`,
   `enrolledThroughToken: true`) and connects by key from then on, with nothing typed.
   The token keeps working for windows that have not enrolled until `station.retireToken`
-  (Task 13) or the console retires it; after that, and on a new station (which creates
-  no token file), token sign-in is refused with "This station uses paired devices. Pair
-  this device first."
+  (Task 13) or the console retires it (`nereusd token retire`, Task 17); after that, and on a new station (which creates
+  no token file), token sign-in is refused with "This Core uses paired devices. Pair
+  this device first." (`auth.result` with `code: "pairingRequired"`).
 - `lastSeen` and `lastAddress` update on each authenticated connection; over the relay
   (Part E) `lastAddress` is empty rather than the relay's address.
-- `nereusd` with no `remote_port` line listens on 47910 on IPv4 and IPv6 and announces;
-  `remote_port = 0` turns both off; `tst_daemon_config` covers the new defaults and
-  `pairing_lan_click`.
+- A configuration file that sets neither `remote_port` nor `remote_bind`, or no file at
+  all, gets the new default: `nereusd` listens on TCP 47910 on every interface (IPv4 and
+  IPv6) and announces. A file that sets either key keeps its old meaning: the missing
+  key takes its old default (port off, bind 127.0.0.1), so no existing Core starts
+  listening on a network it did not listen on before. `remote_port = 0` turns both
+  off; `tst_daemon_config` covers the new defaults, the bind-only and port-only files,
+  and `pairing_lan_click`.
 - The conformance runners pass with the new fixtures; every new string passes
   `OperatorWording::isPlain`.
 
@@ -1459,38 +1484,78 @@ station-key backup prompt), spec §5.2 item 8.
 
 **Files:**
 - Create: `src/core/session/StationDevicesFacade.{h,cpp}` (the mirrored `devices` object)
-- Modify: `src/core/session/SessionCommandDispatcher.{h,cpp}`, `src/core/session/StationServer.{h,cpp}`,
+- Modify: `src/core/session/SessionCommandDispatcher.{h,cpp}`, `src/core/session/StationServer.{h,cpp}`
+  (ends a device's session on `DeviceStore::deviceRemoved`),
+  `src/core/session/StationCapabilities.{h,cpp}` (`deviceAdminVersion`),
   `src/core/session/MirrorSchema.cpp`, `src/core/session/MirrorPolicy.cpp`
-- Modify: `tests/data/link/v1/`, `surface.json`, the link document
+- Modify: `src/core/security/StationLabel.{h,cpp}` and `src/core/settings/SettingsScope.cpp`
+  (the Core-owned `StationLabel` key)
+- Modify: `tests/data/link/v1/`, `surface.json`, the link document (section 8.2's list,
+  section 12.4's rows, section 16.1's `stationSetup` table, the `connect-connectable`
+  exceptions)
 - Test: `tests/tst_station_devices.cpp`, the conformance runners
 
 **Interfaces:**
-- Consumes: `DeviceStore`, `StationIdentity` (Task 12).
+- Consumes: `DeviceStore`, `StationIdentity`, `StationLabel`, `SessionEndCode`,
+  `TokenStore::retire()` and `TokenStore::isActive()`, and the `stationSetup` key
+  `pairedDevice` (Task 12).
 - Produces:
-  - Object key `devices`, class `StationDevices`, all properties station to client:
-    `listJson` (a JSON array of `{id, name, kind, pairedAt, lastSeen, connected}`),
-    `revision` (uint32, serial-number arithmetic), `stationLabel`, `claimed`,
-    `tokenActive`, `keyBackupAcknowledged`, `keyPath`. Task 14 adds `pairingWindowOpen`
-    and `pairingCode`.
+  - Object key `devices`, class `StationDevicesFacade` (the wire class is the C++ class
+    name, as with `PureSignalSessionFacade`), all properties station to client:
+    `listJson` (utf8, a JSON array of `{id, name, kind, pairedAt, lastSeen, connected}`,
+    where `id` is the device's fingerprint as a base64url string), `revision` (`i64`,
+    serial-number arithmetic), `stationLabel`, `claimed`, `tokenActive`,
+    `keyBackupAcknowledged`, `keyPath`. Task 14 adds `pairingWindowOpen` and
+    `pairingCode`. The `devices` object goes only to peers at minor 11 that declare
+    `deviceAdminVersion`, so older peers see today's wire.
   - Verbs (all in `verbSpecs()`, capability `deviceAdminVersion = 1`):
     `devices.revoke {id}`, `station.rename {label}`, `station.acknowledgeKeyBackup {}`,
     `station.retireToken {}`.
+  - The label is stored under a Core-owned key, `StationLabel`, on the link document's
+    section 8.2 list, so no client writes it directly. It is empty until the first
+    rename, and while it is empty the label follows `StationCallsign`
+    (`StationLabel::defaultLabel`).
+  - A rename emits a label-changed signal; Task 16 makes the announcement and Bonjour
+    follow it.
+  - `StationServer` ends a device's live session on `DeviceStore::deviceRemoved`,
+    whatever removed the device: the verb, the console's revoke or a reset (Task 17).
+  - `stationSetup` key `otherPairedDevices` (a count, in section 16.1's table): that many
+    devices besides the runner's own are paired before the client connects, their keys
+    made at run time and never written in a fixture. The iPhone session agreed on
+    2026-09-24 (its runner ignores `stationSetup`).
+  - Section 12.4 gains the rows for a revoked device (`session.end`,
+    `code: "deviceRemoved"`) and for a token session ended by retiring the token
+    (`session.end`, `code: "pairingRequired"`).
 
 **Acceptance:**
 - `devices.revoke` of a connected device ends that device's connection at once with
   `session.end`, reason "This device was removed from the Core.", `retryable:false`,
-  and it can no longer authenticate.
+  `code: "deviceRemoved"`, and it can no longer authenticate. A device removed by the
+  console's revoke or by a reset is ended the same way.
 - `station.retireToken` is refused with a plain reason until at least one device key is
-  paired, so the owner cannot lock everyone out; once accepted it deletes the token
-  file, sets `tokenActive` false, and ends any connection still signed in by token with
-  Task 12's pairing text.
+  paired, so the owner cannot lock everyone out; once accepted it retires the token
+  (`TokenStore::retire()`, which deletes the file), sets `tokenActive` false, and ends
+  any connection still signed in by token with `session.end`, Task 12's pairing text
+  ("This Core uses paired devices. Pair this device first."), `retryable:false` and
+  `code: "pairingRequired"`. A later token sign-in gets Task 12's `auth.result`
+  refusal.
 - Revoking the device making the request is allowed and ends its own connection after
   the result is sent.
 - `station.rename` with an invalid label is refused with the reason naming the rule; a
-  valid one updates `stationLabel` for every connected device and the LAN announcement.
+  valid one stores `StationLabel`, updates `stationLabel` for every connected device and
+  emits the label-changed signal. A raw `settings.write` or `settings.remove` of
+  `StationLabel` is refused with `settings.reject`. Until the first rename,
+  `stationLabel` follows `StationCallsign`.
 - `keyBackupAcknowledged` starts false on a new station and becomes true only through
   `station.acknowledgeKeyBackup`.
 - Every change bumps `revision` once.
+- A peer at minor 11 without `deviceAdminVersion`, and an older peer, receive no
+  `devices` object.
+- Fixtures: every verb that takes arguments has a wrong leg, as the leg guard in
+  `tst_link_conformance_session` requires. A fixture that renames or revokes a device
+  other than the caller uses `otherPairedDevices`; the wrong leg comes before a
+  self-revoke. `keyPath`, `pairedAt` and `lastSeen` are written as `"$string"` and join
+  the link document's `connect-connectable` exceptions.
 
 **Verification:** authorisation: invariant tests first. Unit and conformance:
 `cmake --build build --target tst_station_devices tst_link_conformance_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_devices|tst_link_conformance_session)$' --output-on-failure`.
@@ -1498,8 +1563,10 @@ station-key backup prompt), spec §5.2 item 8.
 **Execution note (advisory):** opus. Authorisation (revoke): flag for earlier review
 with Task 12. Requires Task 12.
 
-- [ ] **Step 1:** The facade object and revoke with its connection-ending test.
-- [ ] **Step 2:** Rename, backup acknowledgement, token retirement, fixtures, document.
+- [ ] **Step 1:** The facade object, its capability gate, and revoke with its
+      connection-ending test (the verb, and removal from outside a verb).
+- [ ] **Step 2:** Rename and the `StationLabel` key, backup acknowledgement, token
+      retirement, fixtures, document.
 
 ## Task 14: The pairing window and code
 
@@ -1510,20 +1577,40 @@ while unclaimed with no timer, reopening from the console or a paired device), D
 pairing design §4.
 
 **Files:**
-- Create: `cmake/NereusPairing.cmake` (libsodium, the newest `-stable` release tag at
-  the time of the task, and `jedisct1/spake2-ee` at its newest commit, each fetched
-  from a codeload archive with `URL_HASH SHA256`, in the style of
-  `cmake/NereusRemoteMedia.cmake`)
+- Create: `cmake/NereusPairing.cmake`, in the style of `cmake/NereusRemoteMedia.cmake`,
+  with two pins:
+  - libsodium 1.0.22: git tag `1.0.22-RELEASE`, and the fixed release archive
+    `libsodium-1.0.22.tar.gz` from that GitHub release, pinned by `URL_HASH SHA256` and
+    checked against its minisign signature where minisign is available. Never a
+    `-stable` tarball: those are rolling snapshots, so a pinned hash would break.
+  - `jedisct1/spake2-ee` at commit `fd3ea61f27a75ff63b0f192c9e619b5a494d048e` (it has
+    no tags; BSD-2-Clause), as an archive pinned by `URL_HASH SHA256`.
+  - libsodium has no CMake build, so this task adds one. The implementer chooses how:
+    its sources compiled from the pinned archive by a small CMake list, or an external
+    build. It must build on macOS (arm64 and x86_64), Linux (x86_64, and arm64 through
+    the Rock and Pi Docker builder), Windows (MSVC) and in CI.
+  - The iPhone app's Task 15 vendors the same two pins.
 - Create: `docs/attribution/LIBSODIUM-PROVENANCE.md`, `docs/attribution/SPAKE2EE-PROVENANCE.md`
+- Create: `packaging/third-party-licenses/libsodium.txt` and
+  `packaging/third-party-licenses/spake2-ee.txt`, byte for byte from the pinned archives;
+  modify `packaging/third-party-licenses/README.md` with a row for each in both tables
+  (the licence table, and "Where each library comes from"), worded to cover the
+  desktop, the Core, and the iPhone and iPad app. The iPhone session's Task 15 takes
+  those bytes unchanged. The licence check (R-R3-50) fails CI without them.
 - Create: `resources/pairing-words-v1.txt` (256 words, NereusSDR-original)
 - Create: `src/core/security/PairingWindow.{h,cpp}`, `src/core/security/PairingCode.{h,cpp}`,
   `src/core/security/SpakeExchange.{h,cpp}`
 - Modify: `src/core/session/SessionMessages.{h,cpp}` (kinds `pair.start`, `pair.accept`,
   `pair.spake`, `pair.confirm`, `pair.fail`), `src/core/session/StationServer.{h,cpp}`,
-  `CMakeLists.txt`, `tests/data/link/v1/`, `surface.json`, the link document (a Pairing
-  section)
+  `CMakeLists.txt`, `tests/data/link/v1/` (control fixtures, decode and encode, for the
+  five `pair.*` kinds), `surface.json`, the link document (a Pairing section; `pair.fail`
+  joins section 17's list of messages that carry a reason), `tests/tst_station_reason_wording.cpp`
+  (`pair.fail`'s reason, in "Core" wording)
 - Create: `tests/tools/nereus_pairing_peer.cpp` (the station side of a pairing over
-  stdin and stdout, for the app's interop test in Task 15)
+  stdin and stdout, for the app's interop test in Task 15), registered in
+  `tests/CMakeLists.txt`. `tests/tools/` does not exist on this branch; the phone's
+  Task 10 creates it on its own branch, so the two meet in `tests/CMakeLists.txt`: keep
+  both at the merge.
 - Test: `tests/tst_pairing_window.cpp`, `tests/tst_pairing_code.cpp`,
   `tests/tst_spake_exchange.cpp`, `tests/tst_station_pairing.cpp`
 
@@ -1543,13 +1630,24 @@ pairing design §4.
     `pair.spake {step, data}` for steps 0 to 3 (base64url); `pair.confirm {box}` in each
     direction; `pair.fail {reason, retryAfterMs}`. A client sends `pair.start` after
     `hello` instead of `auth.request`, only to a station whose `hello` declares
-    `features.pairing: 1`; after `pair.accept` or a successful confirmation the same
-    connection continues with device authentication.
-  - Capability and hello feature `pairing = 1`.
+    `features.pairing: 1`. The device's `name` and `kind` sent inside the encrypted box
+    win over the plain ones in `pair.start`.
+  - After `pair.accept` or a successful confirmation the pairing connection ends. The
+    device then connects through the normal path (device authentication, Task 12).
+    This holds whatever the session model is: it fits today's single-holder rule and
+    the several-clients design alike. The phone's Tasks 15 and 56 connect straight
+    away after pairing, so the operator sees no difference. Agreed with the iPhone
+    session on 2026-09-24.
+  - Only the station declares the hello feature `features.pairing: 1`, and it never
+    requires that feature from a client. The capability is `pairingVersion = 1`.
   - On the `devices` object (Task 13): `pairingWindowOpen` (bool) and `pairingCode`
     (the current code, empty while closed). Verbs `pairing.open {}` (result values
-    carry `code`) and `pairing.close {}`, in `verbSpecs()` under
-    `deviceAdminVersion = 1`.
+    carry `code`) and `pairing.close {}`, in `verbSpecs()`, gated on
+    `pairingVersion = 1` (not `deviceAdminVersion`). Per the Global Constraints, the
+    code is mirrored in `pairingCode` and returned by `pairing.open` only to sessions
+    authenticated with a paired device's key; a session signed in with the access token
+    sees `pairingCode` empty. The code never goes into a log line, and fixtures carry
+    `"$string"` for it.
 
 **Acceptance:**
 - Word list: exactly 256 lowercase words of 4 to 7 letters, no two within one edit of
@@ -1573,18 +1671,28 @@ pairing design §4.
   is a PAKE.
 - The pairing code is printed on the station's console when it changes and is never
   written through the logging categories; `tst_station_pairing` captures the log
-  categories and asserts the code never appears in them.
-- `nereus_pairing_peer` pairs with the C++ client side in a loopback test, both with
-  the right code and with a wrong one.
+  categories and asserts the code never appears in them. A session signed in with the
+  access token never receives the code, in `pairingCode` or from `pairing.open`.
+- After a successful pairing in either mode the pairing connection ends, and the device
+  then signs in by key on a new connection.
+- The control fixtures decode and encode each of the five `pair.*` kinds. The live PAKE
+  exchange cannot be scripted in a fixture, so `nereus_pairing_peer` proves it. Any
+  change to the fixture format goes to the iPhone session first.
+- `pair.fail`'s reason passes `tst_station_reason_wording` and says "Core".
+- `nereus_pairing_peer` pairs with the C++ client side in a loopback test in code mode,
+  both with the right code and with a wrong one, and in LAN mode (Task 15 uses both).
 
 **Verification:** authorisation and cryptography: invariant tests first (refusal,
 burn, backoff), then the admit paths. Unit and integration:
-`cmake --build build --target tst_pairing_window tst_pairing_code tst_spake_exchange tst_station_pairing nereus_pairing_peer && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_pairing_window|tst_pairing_code|tst_spake_exchange|tst_station_pairing)$' --output-on-failure`.
+`cmake --build build --target tst_pairing_window tst_pairing_code tst_spake_exchange tst_station_pairing tst_link_conformance_control tst_station_reason_wording nereus_pairing_peer && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_pairing_window|tst_pairing_code|tst_spake_exchange|tst_station_pairing|tst_link_conformance_control|tst_station_reason_wording)$' --output-on-failure`.
+The libsodium build is proven on each platform by CI (macOS arm64 and x86_64, Linux
+x86_64, Windows MSVC) and on arm64 through the Rock and Pi Docker builder.
 
 **Execution note (advisory):** opus. Authorisation, new cryptographic dependencies:
 flag for earlier review. Requires Tasks 12 and 13.
 
-- [ ] **Step 1:** Dependencies, provenance, word list, code and window with tests.
+- [ ] **Step 1:** Dependencies and their CMake build on every platform, provenance and
+      licence texts, word list, code and window with tests.
 - [ ] **Step 2:** The exchange, the messages, LAN mode, the peer helper, fixtures and
       the document.
 
@@ -1664,35 +1772,54 @@ list), pairing design §6.
 
 **Files:**
 - Modify: `src/core/session/StationLanAnnouncement.{h,cpp}` (schema 2),
-  `src/core/session/StationLanAnnouncer.{h,cpp}` (sends schema 1 and schema 2 each
-  cycle, so older desktops still find the station),
-  `src/core/session/StationLanDiscovery.{h,cpp}` (reads both)
+  `src/core/session/StationLanAnnouncer.{h,cpp}` (sends schema 2 only),
+  `src/core/session/StationLanDiscovery.{h,cpp}` (reads schema 1 and schema 2),
+  `src/core/session/StationLanCache.{h,cpp}` (a schema-1 datagram never overwrites
+  schema-2 fields for the same key)
 - Create: `src/core/session/DnsSdAdvertiser.{h,cpp}` with backends
   `DnsSdAdvertiserApple.cpp` (`dns_sd.h`), `DnsSdAdvertiserAvahi.cpp` (libavahi-client,
   optional through `pkg-config avahi-client`, like the PipeWire bridge),
   `DnsSdAdvertiserWindows.cpp` (`DnsServiceRegister`)
 - Modify: `CMakeLists.txt`, `src/core/daemon/DaemonApp.cpp`
-- Modify: `tests/data/link/v1/` (announcement fixtures), the link document (a Discovery
-  section)
-- Test: `tests/tst_station_lan_announcement.cpp`, `tests/tst_dns_sd_advertiser.cpp`
+- Modify: `tests/data/link/v1/media/` (a schema-2 announcement vector, a `schema` field
+  in the `nrsc1` expect, and a vector for the Bonjour TXT record, which Task 16a
+  parses), the link document (a Discovery section, and a row in section 16.4)
+- Test: extend `tests/tst_station_lan_transport.cpp`, `tests/tst_station_lan_cache.cpp`
+  and `tests/tst_station_lan_selection.cpp`; create `tests/tst_dns_sd_advertiser.cpp`
 
 **Interfaces:**
-- Consumes: `StationIdentity`, `PairingWindow` (Tasks 12, 14).
+- Consumes: `StationIdentity` (Task 12), the `StationLabel` key and the label-changed
+  signal of a rename (Task 13), `PairingWindow` (Task 14).
 - Produces:
   - Announcement schema 2: schema 1's fields plus `claimed` (bool), `identity` (the
-    identity fingerprint, base64url), `label`, `pairing` (`"click"`, `"code"` or
-    `"closed"`), still at most 512 bytes.
+    identity fingerprint, the raw 32 bytes on the wire; base64url appears only in
+    `expect.json`), `label`, `pairing` (`"click"`, `"code"` or `"closed"`). The station
+    sends schema 2 only. Desktops read schema 1 and 2, so older Cores are still found;
+    no release has shipped LAN discovery, so no released window loses anything, and
+    sending both would make a pre-Task-16 build's status line flap.
+  - `label` is the `StationLabel` display; `coreName` stays the configured name or the
+    host name. The desktop lists Cores by `label`.
+  - Sizes: a label is at most 65 ASCII characters and a schema-2 datagram at most 479
+    bytes, so a label is never cut short and there is no truncation rule.
   - Bonjour service type `_nereus-station._tcp` on the listener's port, TXT keys
     `v=1`, `id=<identity fingerprint, first 22 base64url characters>`, `claimed=0|1`,
-    `pair=click|code|closed`, `name=<label>`.
+    `pair=click|code|closed`, `name=<label>`. Bonjour follows the announcer's rule: it
+    advertises only on addresses the listener serves, so a loopback-only listener is
+    never advertised.
   - `class DnsSdAdvertiser : public QObject` with `bool start(quint16 port, const DnsSdRecord&)`,
     `void update(const DnsSdRecord&)`, `void stop()`, `bool isAvailable() const`.
-  - The phone's browser is Task 16a.
+  - The phone's browser is Task 16a. Tell the iPhone session of the schema-2 vector,
+    the `schema` field and the TXT record vector.
 
 **Acceptance:**
-- An older schema-1 decoder still reads the station's schema-1 datagram; the new decoder
-  reads both; a schema-2 datagram over 512 bytes is never sent (a long label is
-  truncated to fit on a character boundary).
+- The station sends only schema-2 datagrams; the decoder reads schema 1 and schema 2;
+  the schema-2 vector round-trips through the `nrsc1` runner with `schema` in its
+  expect.
+- In the cache, a schema-1 datagram for a key already holding schema-2 fields never
+  overwrites them.
+- The announcement and Bonjour follow a rename (Task 13): after `station.rename`, the
+  next announcement's `label` and the TXT record's `name` carry the new label.
+- A listener bound to loopback only is neither announced nor advertised over Bonjour.
 - On macOS the Apple backend registers and a `DNSServiceBrowse` in the test sees the
   record with the right TXT keys; `update` after a claim changes `claimed` and `pair`.
 - On Linux without Avahi the build succeeds, `isAvailable()` is false and the station
@@ -1702,12 +1829,12 @@ list), pairing design §6.
 browse run in the tests; the Linux Avahi backend is checked by the controller on the
 Rock or the Pi (device step, pending until observed): `avahi-browse -rt _nereus-station._tcp`
 shows the station. Commands:
-`cmake --build build --target tst_station_lan_announcement tst_dns_sd_advertiser && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_lan_announcement|tst_dns_sd_advertiser)$' --output-on-failure`.
+`cmake --build build --target tst_station_lan_transport tst_station_lan_cache tst_station_lan_selection tst_dns_sd_advertiser tst_link_conformance_media && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_lan_transport|tst_station_lan_cache|tst_station_lan_selection|tst_dns_sd_advertiser|tst_link_conformance_media)$' --output-on-failure`.
 
-**Execution note (advisory):** opus. Networking. Requires Tasks 12 and 14.
+**Execution note (advisory):** opus. Networking. Requires Tasks 12, 13 and 14.
 
-- [ ] **Step 1:** Schema 2 and the dual announcement with fixtures.
-- [ ] **Step 2:** The three advertiser backends and the document.
+- [ ] **Step 1:** Schema 2, the cache rule and the vectors.
+- [ ] **Step 2:** The three advertiser backends, the rename wiring and the document.
 
 ## Task 16a: Finding stations on the phone
 
@@ -1757,45 +1884,73 @@ here).
   `src/core/daemon/StationControlSocket.{h,cpp}` (a local socket the daemon listens on),
   `src/core/daemon/StationControlCommands.{h,cpp}`
 - Modify: `src/server_main.cpp` (subcommands), `src/core/daemon/DaemonApp.cpp`,
-  `src/core/daemon/DaemonConfig.{h,cpp}`, `packaging/nereusd.conf.sample`
-- Test: `tests/tst_station_status_page.cpp`, `tests/tst_station_control_socket.cpp`
+  `src/core/daemon/DaemonConfig.{h,cpp}` (`status_page`, `status_port`),
+  `packaging/nereusd.conf.sample`
+- Modify: `src/core/security/DeviceStore.{h,cpp}` (a reset moves a damaged device file
+  aside and clears the devices)
+- Test: `tests/tst_station_status_page.cpp`, `tests/tst_station_control_socket.cpp`,
+  `tests/tst_daemon_config.cpp`
 
 **Interfaces:**
-- Consumes: `PairingWindow`, `DeviceStore`, `StationIdentity` (Tasks 12 to 14).
+- Consumes: `PairingWindow`, `DeviceStore`, `StationIdentity`, `TokenStore::retire()`
+  (Tasks 12 to 14); the session drop on `DeviceStore::deviceRemoved` and the rule that
+  refuses retiring the token until a device is paired (Task 13).
 - Produces:
-  - The status page on TCP 47911, same interfaces as the listener, `status_page = on|off`
-    (default on) and `status_port` (default 47911): `GET /` only, HTML that refreshes
-    every 5 s, showing the station's label, whether its radio is connected (model and
-    name) or off, whether it is claimed, and while the window is open the code with one
-    line on how to use it; every other method or path gets 404; no action is possible.
+  - The status page on TCP 47911, `status_page = on|off` (default on) and `status_port`
+    (default 47911), served only to peers on directly connected networks, by the same
+    LAN rule as Task 14's LAN mode; any other peer gets no page. `GET /` only, HTML that
+    refreshes every 5 s, showing the Core's label, whether its radio is connected (model
+    and name) or off, whether it is claimed, and, only while the Core is unclaimed, the
+    code with one line on how to use it; every other method or path gets 404; no action
+    is possible. This follows the designs: the pairing design calls it a "local status
+    page" (§4.3), the spec says "any browser on the network" (§5.3 item 11), and the
+    one-click risk is accepted only for a Core that has never been paired (pairing
+    design §4.2).
   - The control socket `QLocalServer` named `nereusd-control` in the daemon's state
-    directory, owner-only (`QLocalServer::UserAccessOption`).
+    directory, owner-only (`QLocalServer::UserAccessOption`). Subcommands find the
+    socket from `--config` or `--profile`, never from `$HOME`. On a packaged Core, whose
+    unit uses `DynamicUser` and `StateDirectory` `/var/lib/nereusd` (mode 0700), the
+    console text says to run them with sudo.
   - Subcommands of `nereusd` that talk to the running daemon and print its answer:
     `nereusd status`, `nereusd pairing show`, `nereusd pairing open`,
     `nereusd pairing close`, `nereusd devices`, `nereusd devices revoke <id>`,
-    `nereusd reset --unclaimed` (refuses without `--yes`), `nereusd release` (used by
-    Task 48's handover). With no subcommand, `nereusd` runs the station as today.
+    `nereusd token retire` (refused until a device is paired, as Task 13 refuses
+    `station.retireToken`; the console route Task 12 names), and
+    `nereusd reset --unclaimed` (refuses without `--yes`). With no subcommand, `nereusd`
+    runs the station as today. `nereusd release` is Task 48's, which defines it and
+    depends on Task 33.
+  - `reset --unclaimed --yes` moves a damaged device file aside, clears the devices and
+    retires the access token, so the window returns to open and unclaimed.
   - First-start console output: the label, the code, the status page address, and the
     key backup reminder naming `station-identity.pem`'s full path.
 
 **Acceptance:**
-- The page shows the code only while the window is open and never shows device names,
-  keys or addresses; a `POST` returns 404 and changes nothing.
-- Each subcommand works against a daemon started in the test; `reset --unclaimed --yes`
-  removes every device, drops any connected one, opens the window and prints the new
-  code; without `--yes` it changes nothing.
+- The page shows the code only while the Core is unclaimed (never while the window is
+  reopened on a claimed Core) and never shows device names, keys or addresses; a `POST`
+  returns 404 and changes nothing; a peer that is not on a directly connected network
+  gets no page.
+- The page and console text say "Core" and pass `OperatorWording::isPlain` in
+  `tst_station_status_page`.
+- Each subcommand works against a daemon started in the test, finding its socket from
+  `--config` or `--profile`; `reset --unclaimed --yes` removes every device (moving a
+  damaged device file aside first), retires the token, drops any connected session,
+  opens the window unclaimed and prints the new code; without `--yes` it changes
+  nothing.
+- `nereusd token retire` is refused while no device is paired; once one is, it retires
+  the token and ends token sessions as Task 13 does.
+- `tst_daemon_config` covers `status_page` and `status_port`.
 - A second user on the same machine cannot connect to the control socket (the test
   checks the socket's permissions).
 - `nereusd --config x --profile y` still runs the station exactly as before.
 
 **Verification:** authorisation (the socket, reset): invariant tests first. Unit and
 integration:
-`cmake --build build --target tst_station_status_page tst_station_control_socket nereusd && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_status_page|tst_station_control_socket)$' --output-on-failure`.
+`cmake --build build --target tst_station_status_page tst_station_control_socket tst_daemon_config nereusd && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_status_page|tst_station_control_socket|tst_daemon_config)$' --output-on-failure`.
 Device step (controller, pending until observed): on the Pi or the Rock, the page opens
-from a phone's browser on the LAN and shows the code.
+from a phone's browser on the LAN and shows the code while the Core is unclaimed.
 
 **Execution note (advisory):** opus. Authorisation and a new listener: flag for earlier
-review with Tasks 12 to 14. Requires Task 14.
+review with Tasks 12 to 14. Requires Tasks 13 and 14.
 
 - [ ] **Step 1:** The control socket and subcommands with tests.
 - [ ] **Step 2:** The status page and first-start output with tests.
@@ -1813,27 +1968,45 @@ desktop's remote window also holds its own key; pairing design §6 and §11), R-
   its profile directory, `device-identity.pem`, mode 0600)
 - Create: `src/core/session/StationPairingClient.{h,cpp}`
 - Modify: `src/gui/CoreTargetStore.{h,cpp}` (saved Cores move from `ConnectionTargets/V1`
-  to a V2 keyed by identity fingerprint, keeping the URL as the cached address and
-  carrying each record's trust details over exactly)
-- Modify: `src/core/session/StationClient.{h,cpp}` (device-key authentication; enrolling
-  its key the next time it signs in with a station token; identity trust with the
-  certificate binding; the token alone for stations with no identity),
+  to a V2 that keeps `id` as its key (`SavedCoreTarget`, `selectedId`) and gains an
+  identity-fingerprint field, keeping the URL as the cached address and carrying each
+  record's trust details over exactly; an entry with no identity stays valid)
+- Modify: `src/core/session/StationClient.{h,cpp}` (its hello declares
+  `features.deviceAuth: 1`; device-key authentication; enrolling its key the next time
+  it signs in with a station token; identity trust with the certificate binding; the
+  client-side `identityChanged` end; the token alone for stations with no identity),
   the R3 connection selection (`StationLanSelection`, `StationStartupSelection`) and the
-  Connections dialog it drives
+  Connections dialog it drives (`src/gui/ConnectionSelector.cpp`,
+  `src/gui/GuiConnectionController.cpp`)
+- Modify: the desktop's lost-Core notice (`StationEndReport`, `RemoteConnectionController`,
+  from R3 completion Task 5) and `SessionEndReasons`
+- Modify: the link document (section 6.1's sentence that the desktop client declares no
+  feature yet)
 - Test: `tests/tst_station_pairing_client.cpp`, `tests/tst_core_target_store.cpp`,
   `tests/tst_station_session.cpp`, the dialog's existing tests
 
 **Interfaces:**
-- Consumes: Tasks 12 to 16.
+- Consumes: Tasks 12 to 17.
 - Produces:
   - The Connections dialog shows the pairing design's three groups: "Radios on this
     network" (unchanged), "Cores on this network" (unclaimed ones with Pair), "Your
-    stations"; plus "Add a Core by code" and "Type an address".
+    Cores", with the empty lines "No Cores found on this network." and "No saved
+    Cores." (spec §5.3 item 6); plus "Add a Core by code" and "Type an address". The
+    existing "Add Core…" button is reconciled with "Type an address". R3 completion
+    Task 8 may already have made the list wording change on integration; keep it.
+  - `struct PairedStationRecord` in `StationPairingClient.h`, mirroring the app's
+    `PairedStation`: `QByteArray identityKey` (the Core's identity SPKI DER),
+    `QByteArray identityFingerprint` (32 bytes), `QString label`, `QString host`,
+    `quint16 port`. The dialog turns it into a saved Core.
   - `void StationPairingClient::pairOnThisNetwork(const QString& host, quint16 port)` and
-    `void StationPairingClient::pairByCode(const QString& code)` (direct to a station on
-    this network, or through the rendezvous once Task 27 lands), each ending in signal
-    `paired(PairedStationRecord)` or `failed(QString reason)`, mirroring the app's
-    `PairingClient`.
+    `void StationPairingClient::pairByCode(const QString& code, const QString& host, quint16 port)`
+    (direct to a Core's address until the rendezvous of Task 27 exists), each ending in
+    signal `paired(PairedStationRecord)` or `failed(QString reason)`, mirroring the
+    app's `PairingClient`.
+  - `StationClient`'s hello declares `features.deviceAuth: 1`.
+  - The lost-Core notice reads the `session.end` and `auth.result` `code` (Task 12);
+    `SessionEndReasons`' wording parse stays as the fallback for older Cores, which
+    send no code.
   - Saved Cores migrate: an existing entry keeps working, enrols this computer's key on
     its next token sign-in and connects by key afterwards; an entry for a station with no
     identity stays a URL, token and pin as today.
@@ -1848,6 +2021,15 @@ desktop's remote window also holds its own key; pairing design §6 and §11), R-
 - After pairing, a changed station certificate whose binding verifies is accepted
   without a prompt; a certificate without a valid binding is refused with a plain
   reason.
+- A saved Core whose hello shows a different identity key is refused with the
+  client-side `identityChanged` code and plain words, and is never trusted again
+  silently.
+- The lists read "Cores on this network" and "Your Cores", with the empty lines "No
+  Cores found on this network." and "No saved Cores."; no on-screen text in the dialog
+  calls a Core a station.
+- A revoke (`code: "deviceRemoved"`) and a retired token (`code: "pairingRequired"`)
+  show the lost-Core notice chosen by the code; an end with no code falls back to the
+  wording parse.
 - Screenshots of the dialog in each state (no stations; an unclaimed station; a paired
   station; the code entry) per `ui-verification`, rendered offscreen through the
   project's widget-render test pattern, looked at before they are reported.
@@ -1858,9 +2040,12 @@ Human smoke (JJ, pending until observed): pair the desktop with the Rock's stati
 click, then revoke it from the station and see the desktop drop.
 
 **Execution note (advisory):** opus. Authorisation and a changed dialog: flag for
-earlier review. Requires Tasks 12 to 17.
+earlier review. Requires Tasks 12 to 17, and that lane B has taken integration after
+the third lane's carry, which brings R3 completion Task 5 (`StationEndReport`,
+`RemoteConnectionController`) and `SessionEndReasons`. If it has not, the task stops.
 
-- [ ] **Step 1:** The desktop's key, device authentication and identity trust.
+- [ ] **Step 1:** The desktop's key, the `deviceAuth` feature, device authentication,
+      identity trust with `identityChanged`, and the end-code notice.
 - [ ] **Step 2:** The pairing client, the V2 store with migration, the dialog groups and
       their screenshots.
 
