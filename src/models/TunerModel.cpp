@@ -13,6 +13,9 @@
 //                 with AI-assisted transformation via Anthropic Claude Code.
 //                 Layout from AetherSDR src/models/TunerModel.{h,cpp} [@0cd4559].
 //                 See TunerModel.h for full divergence summary.
+//   2026-09-24 - iPhone app Task 4b (R-IOS-01, R-R3-21): the reasons this
+//                file sends an app are in operator words. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #include "models/TunerModel.h"
 #include "core/TgxlConnection.h"
@@ -317,16 +320,13 @@ QString TunerModel::applyMirroredValue(const QByteArray& propertyName, const QVa
         // silently swallowed by setAntennaA()'s own guard and reported as
         // applied.
         if (ant < 1 || ant > 3) {
-            return QStringLiteral("antennaA must be 1, 2 or 3");
+            return QStringLiteral("The tuner's antenna must be 1, 2 or 3.");
         }
         setAntennaA(ant);
         return QString();
     }
 
-    return QStringLiteral(
-        "TunerModel::%1 is hardware telemetry TunerModel only learns from "
-        "the tuner itself; there is no remote-write path")
-        .arg(QString::fromUtf8(propertyName));
+    return QStringLiteral("The tuner reports this itself; it cannot be changed from here.");
 }
 
 bool TunerModel::applyStationValue(const QByteArray& propertyName, const QVariant& value)

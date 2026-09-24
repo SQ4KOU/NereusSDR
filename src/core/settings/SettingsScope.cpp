@@ -142,6 +142,9 @@
 //                                    Code.
 //   2026-09-24 - R-R3-48: StationTci_ is Station scope. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 4b (R-IOS-01, R-R3-21): the reasons this
+//                file sends an app are in operator words. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -638,7 +641,7 @@ QString modelOwnedSettingsRefusal(QStringView rawKey)
         return QStringLiteral("This Core keeps its own antenna settings. "
                               "Update this app to change them.");
     }
-    return QStringLiteral("Use the station DSP controls; raw settings writes cannot bypass model validation.");
+    return QStringLiteral("The Core changes these settings only through their own controls.");
 }
 
 SettingsScope classifySettingsKey(QStringView rawKey)

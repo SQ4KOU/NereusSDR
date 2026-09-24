@@ -27,6 +27,9 @@
 //                                    nested applyInbound() reentrancy. AI-
 //                                    assisted transformation via Anthropic
 //                                    Claude Code.
+//   2026-09-24 - iPhone app Task 4b (R-IOS-01, R-R3-21): the reasons this
+//                file sends an app are in operator words. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StateMirror.h"
@@ -61,13 +64,17 @@ namespace {
 // state and the PureSignal coordinator, respectively -- SliceModel.h's own
 // property comments). All six stay honestly unassigned rather than
 // guessing at a name.
+// R-IOS-01: each hint is the reason in operator words, naming the control
+// that sends the verb (requestSliceSampleRate for sampleRateHz), never the
+// verb itself.
 struct VerbHint {
     const char* className;
     const char* property;
-    const char* verb;
+    const char* reason;
 };
 constexpr VerbHint kVerbHints[] = {
-    { "SliceModel", "sampleRateHz", "requestSliceSampleRate" },
+    { "SliceModel", "sampleRateHz",
+      "Choose the receiver's sample rate with its own control; it cannot be set directly." },
 };
 
 QString writableButOutboundReason(const QByteArray& shortClassName,
@@ -75,13 +82,10 @@ QString writableButOutboundReason(const QByteArray& shortClassName,
 {
     for (const VerbHint& hint : kVerbHints) {
         if (shortClassName == hint.className && property == hint.property) {
-            return QStringLiteral("daemon-authoritative; use %1 instead")
-                .arg(QString::fromLatin1(hint.verb));
+            return QString::fromLatin1(hint.reason);
         }
     }
-    return QStringLiteral(
-        "daemon-authoritative; not directly writable (no client command "
-        "assigned yet)");
+    return QStringLiteral("The Core sets this itself; it cannot be changed from here.");
 }
 
 // Task 11 review finding (Task 8's own review round flagged this Minor at
@@ -680,14 +684,14 @@ MirrorApplyResult StateMirror::applyInbound(const QByteArray& objectKey,
     const int index = indexOfKey(objectKey);
     if (index < 0 || m_watches.at(index).object == nullptr
         || m_watches.at(index).schema == nullptr) {
-        result.reason = QStringLiteral("no such watched object");
+        result.reason = QStringLiteral("The Core does not have this setting.");
         return result;
     }
     const Watch& watch = m_watches.at(index);
 
     const MirrorProperty* prop = watch.schema->byName(propertyName);
     if (prop == nullptr) {
-        result.reason = QStringLiteral("no such mirrored property");
+        result.reason = QStringLiteral("The Core does not have this setting.");
         return result;
     }
     return applyInboundToProperty(watch, *prop, wireValue);
@@ -703,14 +707,14 @@ MirrorApplyResult StateMirror::applyInbound(const QByteArray& objectKey,
     const int index = indexOfKey(objectKey);
     if (index < 0 || m_watches.at(index).object == nullptr
         || m_watches.at(index).schema == nullptr) {
-        result.reason = QStringLiteral("no such watched object");
+        result.reason = QStringLiteral("The Core does not have this setting.");
         return result;
     }
     const Watch& watch = m_watches.at(index);
 
     const MirrorProperty* prop = watch.schema->byOrdinal(ordinal);
     if (prop == nullptr) {
-        result.reason = QStringLiteral("no such mirrored property");
+        result.reason = QStringLiteral("The Core does not have this setting.");
         return result;
     }
     return applyInboundToProperty(watch, *prop, wireValue);
@@ -728,8 +732,7 @@ MirrorApplyResult StateMirror::applyInboundToProperty(const Watch& watch,
     // no NOTIFY, travel only in the connect-time snapshot, and must never
     // be treated as a live write -- including through the hook below.
     if (prop.isConstant) {
-        result.reason = QStringLiteral(
-            "constant; travels only in the connect-time snapshot, never inbound");
+        result.reason = QStringLiteral("The Core sets this itself; it cannot be changed from here.");
         return result;
     }
 
@@ -740,7 +743,7 @@ MirrorApplyResult StateMirror::applyInboundToProperty(const Watch& watch,
         // Most of the mirrored surface is Bidirectional and passes; the
         // SliceModel properties that carry WRITE but are daemon-
         // authoritative (MirrorPolicy.cpp) are refused here, naming the
-        // client command to use instead where the R2 plan has assigned one.
+        // control to use instead where the R2 plan has assigned a command.
         //
         // Whole-branch review, Minor 1: this used to quote "115 of 145
         // properties" and "the seven SliceModel properties". Both had
@@ -786,8 +789,7 @@ MirrorApplyResult StateMirror::applyInboundToProperty(const Watch& watch,
     // typed value rather than a raw wire one.
     const QVariant native = MirrorSchema::decode(prop, wireValue);
     if (!native.isValid()) {
-        result.reason = QStringLiteral(
-            "value could not be decoded for this property's type");
+        result.reason = QStringLiteral("The Core could not use this value for this setting.");
         return result;
     }
 
@@ -806,8 +808,7 @@ MirrorApplyResult StateMirror::applyInboundToProperty(const Watch& watch,
     }
 
     if (!invoked) {
-        result.reason = QStringLiteral(
-            "this model has no inbound hook for a property with no WRITE");
+        result.reason = QStringLiteral("The Core sets this itself; it cannot be changed from here.");
         return result;
     }
     if (!hookReason.isEmpty()) {

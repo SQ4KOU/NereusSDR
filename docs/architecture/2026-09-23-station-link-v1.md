@@ -202,9 +202,11 @@ also carry `majors` and `features` (sections 6.1 and 6.2); the station's
 `hello` always carries both.
 
 The station refuses, with `session.end` and `retryable` false: a second
-`hello` ("duplicate hello"), `auth.request` before `hello` ("auth before
-hello"), a second `auth.request` ("duplicate auth"), and any other message
-before authentication ("message sent before authentication").
+`hello` ("This app started connecting twice on one connection."),
+`auth.request` before `hello` or a second `auth.request` ("This app sent its
+pairing token out of order."), and any other message before authentication
+("This app sent a request before the Core had accepted its pairing
+token.").
 
 ### 5.2 Resends during a session
 
@@ -1109,10 +1111,10 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
   own value as the property entry when it has one, and a `reason`. The
   client puts that value back.
 
-The station refuses a write to a key outside the station scope ("key is not
-Station-scoped"), to another radio's `hardware/<mac>/` keys ("These settings
+The station refuses a write to a key outside the station scope ("Each app
+keeps this setting itself; the Core does not store it."), to another radio's `hardware/<mac>/` keys ("These settings
 are for a radio this Core is not connected to."), an out-of-range
-`SwrProtectionLimit` (1.0 to 5.0), and transmit-side keys on a receive-only
+`SwrProtectionLimit` ("Choose an SWR protection limit from 1.0 to 5.0."), and transmit-side keys on a receive-only
 station.
 
 ### 8.2 Keys the Core owns by code
@@ -1134,10 +1136,9 @@ They change only through their objects and commands; a raw
 | `hardware/<mac>/slices/<n>/nnr/...` | slice properties, `nnr.*` commands | generic (below) |
 
 Matching is case-insensitive. The reasons in the table are plain operator
-wording. The generic families keep an older wire reason: "Use the station
-DSP controls; raw settings writes cannot bypass model validation." for a
-write, and "Use the validated DSP controls to change these settings." for a
-remove.
+wording. The generic families give "The Core changes these settings only
+through their own controls." for a write, and "Change these settings with
+their own controls on this Core." for a remove.
 
 ## 9. Commands
 
@@ -1218,8 +1219,9 @@ before sending (section 6.2).
 ### 9.2 Unknown verbs
 
 A verb the station does not route gets `command.result` with `accepted`
-false and the reason "unrecognised command verb" (or "Unknown PureSignal
-action." and "Unknown DSP asset action." inside those families). The
+false and the reason "The Core does not know this request. Updating the
+Core may help." (or "The Core does not know this PureSignal action." and
+"The Core does not know this request." inside those families). The
 connection stays up.
 
 ### 9.3 Verbs from an older peer
@@ -1308,7 +1310,8 @@ Station to client:
 Each end sends a WebSocket ping every 20 s (`kDefaultHeartbeatIntervalMs`
 20000, the same on both ends). A pong clears the count. At a tick where 2
 pings (`kDefaultMaxMissedPongs`) are still unanswered, the station declares
-the link dead and ends it with "heartbeat timeout", `retryable` true. The
+the link dead and ends it with "This app stopped answering, so the Core
+closed the connection.", `retryable` true. The
 round-trip time of a pong is recorded for diagnostics only; a slow pong is
 never a missed one.
 
@@ -1317,7 +1320,8 @@ never a missed one.
 The whole connect sequence must finish within 30 s
 (`kStationHandshakeDeadlineMs` 30000) of the WebSocket opening. The
 station ends a connection that has not reached `snapshot.complete` by then
-with "handshake deadline expired", `retryable` true. The desktop client
+with "This app did not finish connecting to the Core in time.", `retryable`
+true. The desktop client
 runs the same deadline on its side.
 
 ### 12.3 Caps
@@ -1330,7 +1334,8 @@ runs the same deadline on its side.
   at 16 KiB, when encoded and when decoded.
 - The station accepts at most 8 connections at once
   (`kMaxConcurrentPeers`), counting those still connecting. The next one
-  gets `session.end` "Station is at its concurrent-connection limit",
+  gets `session.end` "The Core already has as many connections as it
+  allows. Try again shortly.",
   `retryable` true, because a reconnecting client meets it while its own
   dead sockets drain.
 
@@ -1342,16 +1347,16 @@ that is not retryable it stops and tells the operator.
 
 | Cause | Message | `retryable` |
 | --- | --- | --- |
-| Wrong token | `auth.result` accepted false, "Authentication failed", then the station closes | false |
-| Token checks locked out (section 3.3) | `auth.result` accepted false, "Too many failed authentication attempts; try again later" | true |
+| Wrong token | `auth.result` accepted false, "The Core did not accept this app's pairing token. Check the token saved for this Core.", then the station closes | false |
+| Token checks locked out (section 3.3) | `auth.result` accepted false, "The Core is refusing pairing tokens for a while after too many wrong ones. Try again later." | true |
 | No shared major (section 6.1) | `session.end` naming both sides' versions and the side to update | false |
-| Message the station cannot decode (section 13) | `session.end` "undecodable message" | false |
+| Message the station cannot decode (section 13) | `session.end` "The Core could not read a message from this app." | false |
 | Out-of-order handshake (section 5.1) | `session.end` | false |
-| Preempted by a newer authenticated connection | `session.end` "Displaced by a newer authenticated connection from ..." | false |
+| Preempted by a newer authenticated connection | `session.end` "Another app at ... connected to the Core and took over. Connect again to take it back." | false |
 | Connection limit reached | `session.end` | true |
 | Connect deadline expired | `session.end` | true |
 | Heartbeat timeout | `session.end` | true |
-| Station shutting down | `session.end` "station shutting down" | true |
+| Station shutting down | `session.end` "The Core is shutting down." | true |
 
 Only one session is authenticated at a time. A second connection that
 authenticates takes the session: the station ends the first with
@@ -1372,7 +1377,8 @@ The two ends treat a kind they do not know differently:
   newer station's new kind therefore costs an older client nothing.
 - **The station** ends the connection when it cannot decode a message: an
   unknown `type`, a missing or mistyped required key, or an oversized
-  `media.control`. It sends `session.end` "undecodable message" with
+  `media.control`. It sends `session.end` "The Core could not read a
+  message from this app." with
   `retryable` false (`StationServer::onTransportText`). A known kind meant
   for the other direction is logged and ignored.
 
@@ -1554,7 +1560,7 @@ matches what the client sends.
   ping the way a WebSocket stack does. `heartbeat-answered` passes three
   heartbeat intervals with the link up; `heartbeat-missed` has a client
   that never answers, and the station ends the session on the third
-  interval with `heartbeat timeout`, `retryable` true.
+  interval, `retryable` true (section 12.1).
 - **Summarised snapshots.** Outside `connect-connectable`, a `schema`
   message's `fields` and an `object.create` message's `properties` are
   `"$any"`: `connect-connectable` and `surface.json`'s `mirrorClasses`
@@ -1593,11 +1599,11 @@ same on every machine.
 | `lower-minor` | A `hello` with minor 4 agrees minor 4: the capabilities without the minor-11 entries, and a minor-11 verb refused with a plain reason |
 | `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
-| `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "handshake deadline expired", `retryable` true |
+| `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
 | `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound |
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry |
-| `unknown-verb` | `command.result` refused, "unrecognised command verb"; the connection stays up |
-| `unknown-kind` | `session.end` "undecodable message", `retryable` false |
+| `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
+| `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false |
 | `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments and, where it takes any, with one argument renamed |
 
 `tst_link_conformance_session` also checks that every verb in the
@@ -1680,4 +1686,14 @@ how a fixture is written to what the code does.
   and SWR gating. A reconnect, a snapshot replay, a path change or a
   property write never keys.
 - **Operator wording.** A reason a client may show an operator is plain
-  English with no protocol terms.
+  English with no protocol terms. Every reason the station sends (the
+  `reason` of `auth.result`, `session.end`, `command.result`,
+  `property.result`, `settings.reject` and the display's `rejected` and
+  `allocation-result`) passes `OperatorWording::isPlain` and names no
+  function, class, requirement or phase; `tst_station_reason_wording`
+  checks the sources that word them and every reason the session fixtures
+  record. An app shows these as sent. Codes are not reasons and keep their
+  spelling: an audio context's `reason` (`client-disabled`,
+  `receiver-limit`, ...), `displayBudgetReason`, and the display retire
+  reasons "slice removed" and "slice stream binding changed", which
+  windows in use compare as they are.

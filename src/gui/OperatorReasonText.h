@@ -37,6 +37,11 @@
 //                                    Anthropic Claude Code.
 //   2026-09-23  J.J. Boyd / KG4VCF  Receiver audio stop reasons (R-R3-43).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4b (R-IOS-01): the
+//                                    Core's reasons are in operator words
+//                                    now; each shows as before, and an
+//                                    older Core's text still does.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -79,6 +84,12 @@ QStringList knownReasons();
 /// still written in the sources, so a rewording there cannot silently fall
 /// back to the general sentence.
 QStringList tableKeys();
+
+/// The reasons only an older Core sends (R-IOS-01), byte for byte: the
+/// Core now words each in operator words, and this app still shows an older
+/// Core's text in the same words as before. None is still written in the
+/// sources; a test checks that.
+QStringList olderCoreKeys();
 
 /// The words nothing a user reads may use: internal subsystem, roadmap and
 /// wire terms. Each matches at the start of a word, case-insensitively, so

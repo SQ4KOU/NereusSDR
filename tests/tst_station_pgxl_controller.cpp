@@ -158,7 +158,7 @@ private slots:
         QVERIFY(!model.configurePgxlForStation(QStringLiteral("127.0.0.1"), 0, &reason));
         model.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("False"));
         QVERIFY(!model.configurePgxlForStation(QStringLiteral("127.0.0.1"), 9008, &reason));
-        QCOMPARE(reason, QStringLiteral("Enable 4O3A on Core before connecting the PGXL."));
+        QCOMPARE(reason, QStringLiteral("Turn on 4O3A on the Core before connecting the Power Genius."));
         model.setConnectionStateForTest(ConnectionState::Disconnected);
         QVERIFY(!model.configurePgxlForStation(QStringLiteral("127.0.0.1"), 9008, &reason));
         QVERIFY(model.disconnectPgxlForStation(&reason));
@@ -166,7 +166,7 @@ private slots:
         // A window with no Core controller has nothing to configure.
         RadioModel local;
         QVERIFY(!local.configurePgxlForStation(QStringLiteral("127.0.0.1"), 9008, &reason));
-        QCOMPARE(reason, QStringLiteral("Station accessory configuration is unavailable."));
+        QCOMPARE(reason, QStringLiteral("This Core cannot change its amplifier and tuner settings."));
     }
 
     // A real Power Genius (captured discovery plus the same serial in its own

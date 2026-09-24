@@ -44,6 +44,9 @@
 //                                    refusal of a write to `active` in plain
 //                                    operator words. AI-assisted via
 //                                    Anthropic Claude Code. NereusSDR-original.
+//   2026-09-24 - iPhone app Task 4b (R-IOS-01, R-R3-21): the reasons this
+//                file sends an app are in operator words. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -739,7 +742,7 @@ QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVa
     }
     if (propertyName == "stationAutoAgcNoiseFloorDbm") {
         const double dbm = value.toDouble();
-        if (!std::isfinite(dbm)) { return QStringLiteral("noise floor must be finite"); }
+        if (!std::isfinite(dbm)) { return QStringLiteral("The noise floor reading must be a number."); }
         setStationAutoAgcNoiseFloor(dbm, m_stationAutoAgcNoiseFloorValid,
                                    m_stationAutoAgcNoiseFloorGeneration);
         return {};
@@ -776,15 +779,13 @@ QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVa
     }
     if (propertyName == "txSlice") {
         return QStringLiteral(
-            "txSlice is arbitrated across slices by TxSliceArbiter; there is "
-            "no per-slice remote-write path");
+            "Choose the transmit slice with its own control; it cannot be set directly.");
     }
     if (propertyName == "band") {
-        return QStringLiteral("band is derived from frequency; write frequency instead");
+        return QStringLiteral("The band follows the frequency; change the frequency instead.");
     }
 
-    return QStringLiteral("SliceModel::%1 has no inbound mirror translation")
-        .arg(QString::fromUtf8(propertyName));
+    return QStringLiteral("The Core sets this itself; it cannot be changed from here.");
 }
 
 // ── Phase 3F Sub-Epic A: multi-panadapter / multi-slice identity ────────────

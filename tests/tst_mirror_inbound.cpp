@@ -196,7 +196,7 @@ private slots:
 
     // ── The seven writable-but-Outbound properties ──────────────────────────
 
-    void sampleRateHzIsRejectedNamingTheVerbAndLeavesThePropertyUnchanged()
+    void sampleRateHzIsRejectedNamingItsControlAndLeavesThePropertyUnchanged()
     {
         SliceModel slice(0);
         const int before = slice.sampleRateHz();
@@ -208,7 +208,9 @@ private slots:
             mirror.applyInbound("slice:0", "sampleRateHz", QVariant(768000));
 
         QVERIFY(!result.accepted);
-        QVERIFY2(result.reason.contains("requestSliceSampleRate"),
+        // R-IOS-01: in operator words, naming the control that sends
+        // requestSliceSampleRate rather than the verb.
+        QVERIFY2(result.reason.contains("sample rate with its own control"),
                  qPrintable(result.reason));
         QCOMPARE(slice.sampleRateHz(), before);
     }

@@ -25,16 +25,16 @@
         {"from": "station", "message": {"class": "SliceModel", "key": "slice:0", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"type": "snapshot.complete"}},
         {"from": "client", "message": {"type": "command.invoke", "verb": "requestStreamCtunPinned", "id": 113, "args": [{"ordinal": 0, "name": "sliceId", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "pinned", "kind": "bool", "value": true}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 113, "reason": "slice is not bound to an active stream", "type": "command.result", "verb": "requestStreamCtunPinned"}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 113, "reason": "That receiver is not running on the Core.", "type": "command.result", "verb": "requestStreamCtunPinned"}},
         {"advanceMs": 50},
         {"from": "client", "message": {"type": "command.invoke", "verb": "requestStreamCtunPinned", "id": 114, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "pinned", "kind": "bool", "value": true}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 114, "reason": "invalid sliceId or pinned argument", "type": "command.result", "verb": "requestStreamCtunPinned"}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 114, "reason": "The Core could not read this request.", "type": "command.result", "verb": "requestStreamCtunPinned"}},
         {"advanceMs": 50},
         {"from": "client", "message": {"type": "command.invoke", "verb": "requestStreamCentre", "id": 115, "args": [{"ordinal": 0, "name": "sliceId", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "centreHz", "kind": "f64", "value": 14100000.0}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 115, "reason": "C-Tune centre is invalid for this stream's cohosts", "type": "command.result", "verb": "requestStreamCentre"}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 115, "reason": "C-Tune cannot centre there while other receivers share this spectrum.", "type": "command.result", "verb": "requestStreamCentre"}},
         {"advanceMs": 50},
         {"from": "client", "message": {"type": "command.invoke", "verb": "requestStreamCentre", "id": 116, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "centreHz", "kind": "f64", "value": 14100000.0}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 116, "reason": "invalid sliceId or centreHz argument", "type": "command.result", "verb": "requestStreamCentre"}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 116, "reason": "The Core could not read this request.", "type": "command.result", "verb": "requestStreamCentre"}},
         {"advanceMs": 50}
     ]
 }

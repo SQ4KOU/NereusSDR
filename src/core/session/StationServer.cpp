@@ -129,6 +129,9 @@
 //                                    words; the peer's declared features;
 //                                    TLS 1.2 or later set explicitly.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 4b (R-IOS-01, R-R3-21): the reasons this
+//                file sends an app are in operator words. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -776,7 +779,7 @@ void StationServer::close()
     const bool wasListening = isListening();
     const QList<SessionTransport*> transports = m_peers.keys();
     for (SessionTransport* transport : transports) {
-        dropPeer(transport, QStringLiteral("station shutting down"), true,
+        dropPeer(transport, QStringLiteral("The Core is shutting down."), true,
                  /*retryable=*/true);
     }
     if (m_wsServer != nullptr) {
@@ -903,9 +906,9 @@ void StationServer::acceptTransport(SessionTransport* transport)
         // sockets are still draining. Sent as permanent, it told exactly
         // that client to stop trying forever.
         transport->sendText(SessionMessages::encode(SessionMessages::sessionEnd(
-            QStringLiteral("Station is at its concurrent-connection limit"),
+            QStringLiteral("The Core already has as many connections as it allows. Try again shortly."),
             /*retryable=*/true)));
-        transport->closeLink(QStringLiteral("peer limit reached"));
+        transport->closeLink(QStringLiteral("The Core already has as many connections as it allows. Try again shortly."));
         transport->deleteLater();
         return;
     }
@@ -933,7 +936,7 @@ void StationServer::acceptTransport(SessionTransport* transport)
             if (it == m_peers.end() || it->snapshotComplete) {
                 return;
             }
-            dropPeer(transport, QStringLiteral("handshake deadline expired"), true,
+            dropPeer(transport, QStringLiteral("This app did not finish connecting to the Core in time."), true,
                      /*retryable=*/true);
         });
         deadline->start();
@@ -977,7 +980,7 @@ void StationServer::acceptTransport(SessionTransport* transport)
 
 void StationServer::onTransportClosed(SessionTransport* transport)
 {
-    dropPeer(transport, QStringLiteral("peer closed the link"), false,
+    dropPeer(transport, QStringLiteral("The app closed the connection."), false,
              /*retryable=*/true);
 }
 
@@ -1081,7 +1084,7 @@ void StationServer::onHeartbeatTick()
                 << "Peer" << description << "missed" << it->pingsAwaitingPong
                 << "consecutive pongs; declaring the link dead";
             emit peerHeartbeatTimeout(description);
-            dropPeer(transport, QStringLiteral("heartbeat timeout"), true,
+            dropPeer(transport, QStringLiteral("This app stopped answering, so the Core closed the connection."), true,
                      /*retryable=*/true);
             continue;
         }
@@ -1101,7 +1104,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
 
     SessionMessage message;
     if (!SessionMessages::decode(wire, &message)) {
-        dropPeer(transport, QStringLiteral("undecodable message"), true,
+        dropPeer(transport, QStringLiteral("The Core could not read a message from this app."), true,
                  /*retryable=*/false);
         return;
     }
@@ -1120,7 +1123,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
     if (!it->authenticated) {
         // Everything below this line moves radio or settings state. A peer
         // that has not proved it holds the token gets exactly one answer.
-        dropPeer(transport, QStringLiteral("message sent before authentication"), true,
+        dropPeer(transport, QStringLiteral("This app sent a request before the Core had accepted its pairing token."), true,
                  /*retryable=*/false);
         return;
     }
@@ -1131,7 +1134,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             && it->agreedMinor < kRemoteFourO3AControlSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,
-                QStringLiteral("Remote 4O3A control requires a newer station protocol."), {}));
+                QStringLiteral("Update this app to control 4O3A on this Core."), {}));
             break;
         }
         if ((message.commandVerb.startsWith("nnr.") || message.commandVerb.startsWith("ps3.")
@@ -1139,15 +1142,14 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             && it->agreedMinor < kDspControlSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,
-                QStringLiteral("This DSP action requires a newer station protocol."), {}));
+                QStringLiteral("Update this app to use this control on this Core."), {}));
             break;
         }
         if (message.commandVerb == "nnr.tryAgain"
             && it->agreedMinor < kNnrLimitSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,
-                QStringLiteral("This station cannot try noise reduction again. "
-                               "Update the station software."), {}));
+                QStringLiteral("Update this app to try noise reduction again on this Core."), {}));
             break;
         }
         if (message.commandVerb.startsWith("notch.")
@@ -1200,14 +1202,14 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
                     ? QStringLiteral("Update this app to change the station's amplifier and "
                                      "tuner settings on this Core.")
-                    : QStringLiteral("Station accessory configuration is unavailable."), {}));
+                    : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
             break;
         }
         if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")
             && it->agreedMinor < kRemoteTgxlConfigSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,
-                QStringLiteral("Remote TGXL configuration requires a newer station protocol."), {}));
+                QStringLiteral("Update this app to set up the Tuner Genius XL on this Core."), {}));
             break;
         }
         if ((message.commandVerb == "requestStreamCtunPinned"
@@ -1215,7 +1217,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             && it->agreedMinor < kRemoteCtunSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,
-                QStringLiteral("Remote C-Tune requires a newer station protocol."), {}));
+                QStringLiteral("Update this app to use C-Tune on this Core."), {}));
             break;
         }
         m_dispatcher->dispatch(message);
@@ -1251,7 +1253,7 @@ void StationServer::handleHello(SessionTransport* transport, const SessionMessag
         return;
     }
     if (it->helloReceived) {
-        dropPeer(transport, QStringLiteral("duplicate hello"), true, /*retryable=*/false);
+        dropPeer(transport, QStringLiteral("This app started connecting twice on one connection."), true, /*retryable=*/false);
         return;
     }
     it->helloReceived = true;
@@ -1308,11 +1310,11 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
         return;
     }
     if (!it->helloReceived) {
-        dropPeer(transport, QStringLiteral("auth before hello"), true, /*retryable=*/false);
+        dropPeer(transport, QStringLiteral("This app sent its pairing token out of order."), true, /*retryable=*/false);
         return;
     }
     if (it->authenticated) {
-        dropPeer(transport, QStringLiteral("duplicate auth"), true, /*retryable=*/false);
+        dropPeer(transport, QStringLiteral("This app sent its pairing token out of order."), true, /*retryable=*/false);
         return;
     }
 
@@ -1341,8 +1343,8 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
         const bool rateLimited = result == TokenStore::VerifyResult::RateLimited;
         const QString reason =
             rateLimited
-                ? QStringLiteral("Too many failed authentication attempts; try again later")
-                : QStringLiteral("Authentication failed");
+                ? QStringLiteral("The Core is refusing pairing tokens for a while after too many wrong ones. Try again later.")
+                : QStringLiteral("The Core did not accept this app's pairing token. Check the token saved for this Core.");
         send(transport, SessionMessages::authResult(false, reason, rateLimited));
         qCWarning(lcStation) << "Authentication refused for" << description << ":" << reason;
         dropPeer(transport, reason, false, rateLimited);
@@ -1370,7 +1372,7 @@ void StationServer::promoteToSession(SessionTransport* transport)
                                       ? m_peers.value(m_session).description
                                       : QStringLiteral("<unknown>");
         const QString reason =
-            QStringLiteral("Displaced by a newer authenticated connection from %1")
+            QStringLiteral("Another app at %1 connected to the Core and took over. Connect again to take it back.")
                 .arg(description);
         qCInfo(lcStation) << "Preempting session" << displaced << "for" << description;
         // NOT retryable, and deliberately so even though the CONDITION is
@@ -1608,13 +1610,13 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     QSet<QByteArray> requested;
     for (const MirrorUpdate& update : message.updates) {
         if (requested.contains(update.name)) {
-            refusals.insert(update.name, QStringLiteral("Duplicate property in one write."));
+            refusals.insert(update.name, QStringLiteral("This change named the same setting twice."));
             continue;
         }
         requested.insert(update.name);
         const auto known = previous.constFind(update.name);
         if (known == previous.cend() || known->kind != update.kind) {
-            refusals.insert(update.name, QStringLiteral("Unknown property or incompatible value type."));
+            refusals.insert(update.name, QStringLiteral("The Core does not have this setting, or not in this form."));
             continue;
         }
         if (receiveOnlyTransmitWrite) {
@@ -1639,7 +1641,7 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         if (!negotiated && (message.objectKey == "pureSignalSettings"
             || update.name.startsWith("nnr")
             || (update.name == "activeNr" && update.value.toInt() == static_cast<int>(NrSlot::NNR)))) {
-            refusals.insert(update.name, QStringLiteral("This client has not negotiated DSP settings control."));
+            refusals.insert(update.name, QStringLiteral("Update this app to change these settings on this Core."));
             continue;
         }
         if (!outboundClass.isEmpty()
@@ -1688,7 +1690,7 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
                 result.reason = m_radioModel->alexAntennaFacade()->settleReason(update.name);
             }
             if (result.reason.isEmpty()) {
-                result.reason = QStringLiteral("The station retained the returned value after validating this edit.");
+                result.reason = QStringLiteral("The Core checked this change and kept the value shown.");
             }
         }
         result.accepted = result.reason.isEmpty();
@@ -1784,7 +1786,7 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
             || isModelOwnedAlexAntennaSettingsKey(key);
         sendToSession(SessionMessages::settingsReject(key, value.isValid(), value.toString(),
             plainReason ? modelOwnedSettingsRefusal(key)
-                    : QStringLiteral("Use the validated DSP controls to change these settings.")));
+                    : QStringLiteral("Change these settings with their own controls on this Core.")));
         return;
     }
     // A remove would reset a DSP > Options TX setting to its default, so a

@@ -25,6 +25,6 @@
         {"from": "station", "message": {"class": "SliceModel", "key": "slice:0", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"type": "snapshot.complete"}},
         {"from": "client", "message": {"type": "command.invoke", "verb": "conformanceUnknownVerb", "id": 102, "args": []}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 102, "reason": "unrecognised command verb", "type": "command.result", "verb": "conformanceUnknownVerb"}}
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 102, "reason": "The Core does not know this request. Updating the Core may help.", "type": "command.result", "verb": "conformanceUnknownVerb"}}
     ]
 }

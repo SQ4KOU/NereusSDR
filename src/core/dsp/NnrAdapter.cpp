@@ -4,6 +4,8 @@
 //   2026-09-21 — J.J. Boyd (KG4VCF), with OpenAI Codex assistance.
 //   2026-09-23 : requestLimit and the applied-limit readback (R-R3-40) by
 //                J.J. Boyd (KG4VCF), with Anthropic Claude Code assistance.
+//   2026-09-24 : the rate refusal in operator words (R-IOS-01) by
+//                J.J. Boyd (KG4VCF), with Anthropic Claude Code assistance.
 #include "NnrAdapter.h"
 
 #ifdef HAVE_WDSP
@@ -71,7 +73,8 @@ NnrDiagnostics NnrAdapter::diagnostics(int channelId)
     if (!result.ready)
         result.explanation = QStringLiteral("The selected NNR model is unavailable.");
     else if (!result.rateSupported)
-        result.explanation = QStringLiteral("NNR requires a DSP rate that is an integer multiple of its network rate.");
+        result.explanation = QStringLiteral("NNR cannot run at this receiver's processing rate. Use another "
+                                             "noise reduction, or change the processing rate.");
 #else
     Q_UNUSED(channelId);
     result.explanation = QStringLiteral("NNR is not included in this build.");

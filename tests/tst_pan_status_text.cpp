@@ -292,13 +292,14 @@ private slots:
 
     void theWireReasonsAreUnchanged()
     {
-        // Compared as exact text by older apps; the table translates them
-        // only for display.
+        // The first two are compared as exact text by apps in use; the
+        // table translates them only for display. The source retune is in
+        // operator words (R-IOS-01).
         QCOMPARE(QLatin1String(kRetireReasonSliceRemoved), QLatin1String("slice removed"));
         QCOMPARE(QLatin1String(kRetireReasonStreamBindingChanged),
                  QLatin1String("slice stream binding changed"));
         QCOMPARE(QLatin1String(kRetireReasonSourceRetune),
-                 QLatin1String("source retune no longer covers requested crop"));
+                 QLatin1String("The receiver was retuned away from this view."));
         for (const char* reason : {kRetireReasonSliceRemoved, kRetireReasonStreamBindingChanged,
                                    kRetireReasonSourceRetune}) {
             QVERIFY(OperatorReasonText::knownReasons().contains(QLatin1String(reason)));

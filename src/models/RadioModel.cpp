@@ -2642,11 +2642,7 @@ QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVa
             return {};
         }
     }
-    return QStringLiteral(
-        "RadioModel::%1 is hardware identity or connection-lifecycle state "
-        "this model only learns from the radio (or the session) itself; "
-        "there is no remote-write path")
-        .arg(QString::fromUtf8(propertyName));
+    return QStringLiteral("The radio reports this itself; it cannot be changed from here.");
 }
 
 // ── Phase 3J-2 H2: spot-adapter slot implementations ────────────────────────
@@ -3351,7 +3347,7 @@ QString RadioModel::fourO3AListenerError() const
 bool RadioModel::setFourO3AEnabledForStation(bool enabled, QString* reason)
 {
     if (m_role != Role::Local || !m_stationTgxl || currentRadioMac().isEmpty()) {
-        if (reason) { *reason = QStringLiteral("Connect Core to a radio before changing its 4O3A integration."); }
+        if (reason) { *reason = QStringLiteral("Connect the Core to a radio before turning 4O3A on or off."); }
         return false;
     }
     setFourO3AEnabled(enabled);
@@ -3506,7 +3502,7 @@ bool RadioModel::setTxInterlockPolicyForStation(int mode, int graceMs, bool swrG
                                                 double swrGateMax, QString* reason)
 {
     if (m_role != Role::Local || !m_stationAccessoryData) {
-        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        if (reason) { *reason = QStringLiteral("This Core cannot change its amplifier and tuner settings."); }
         return false;
     }
     return m_stationAccessoryData->setInterlockPolicy(mode, graceMs, swrGateEnabled, swrGateMax,
@@ -3516,7 +3512,7 @@ bool RadioModel::setTxInterlockPolicyForStation(int mode, int graceMs, bool swrG
 bool RadioModel::setPgxlPowerCapForStation(bool enabled, int watts, QString* reason)
 {
     if (m_role != Role::Local || !m_stationAccessoryData) {
-        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        if (reason) { *reason = QStringLiteral("This Core cannot change its amplifier and tuner settings."); }
         return false;
     }
     return m_stationAccessoryData->setPowerCap(enabled, watts, reason);
@@ -3525,7 +3521,7 @@ bool RadioModel::setPgxlPowerCapForStation(bool enabled, int watts, QString* rea
 bool RadioModel::clearAccessoryFaultsForStation(const QString& device, QString* reason)
 {
     if (m_role != Role::Local || !m_stationAccessoryData) {
-        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        if (reason) { *reason = QStringLiteral("This Core cannot change its amplifier and tuner settings."); }
         return false;
     }
     return m_stationAccessoryData->clearFaults(device, reason);
@@ -3563,18 +3559,18 @@ bool RadioModel::configureTgxlForStation(const QString& inputHost, quint16 port,
         return false;
     };
     if (m_role != Role::Local || !m_stationTgxl) {
-        return refuse(QStringLiteral("Station accessory configuration is unavailable."));
+        return refuse(QStringLiteral("This Core cannot change its amplifier and tuner settings."));
     }
     if (currentRadioMac().isEmpty()) {
-        return refuse(QStringLiteral("Connect Core to a radio before configuring its TGXL."));
+        return refuse(QStringLiteral("Connect the Core to a radio before setting up its Tuner Genius XL."));
     }
     if (!fourO3AEnabled()) {
-        return refuse(QStringLiteral("Enable 4O3A on Core before connecting the TGXL."));
+        return refuse(QStringLiteral("Turn on 4O3A on the Core before connecting the Tuner Genius XL."));
     }
     const QString host = inputHost.trimmed();
     const bool validHost = validStationAccessoryHost(host);
     if (!validHost || port == 0) {
-        return refuse(QStringLiteral("Enter a valid TGXL IP address or hostname and TCP port 1–65535."));
+        return refuse(QStringLiteral("Enter the Tuner Genius XL's IP address or host name, and a port from 1 to 65535."));
     }
 
     // One accepted command owns both endpoint fields. Neither persistence
@@ -3590,7 +3586,7 @@ bool RadioModel::configureTgxlForStation(const QString& inputHost, quint16 port,
 bool RadioModel::disconnectTgxlForStation(QString* reason)
 {
     if (m_role != Role::Local || !m_stationTgxl) {
-        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        if (reason) { *reason = QStringLiteral("This Core cannot change its amplifier and tuner settings."); }
         return false;
     }
     m_stationTgxl->cancel(!fourO3AEnabled());
@@ -3608,17 +3604,17 @@ bool RadioModel::configurePgxlForStation(const QString& inputHost, quint16 port,
         return false;
     };
     if (m_role != Role::Local || !m_stationPgxl) {
-        return refuse(QStringLiteral("Station accessory configuration is unavailable."));
+        return refuse(QStringLiteral("This Core cannot change its amplifier and tuner settings."));
     }
     if (currentRadioMac().isEmpty()) {
-        return refuse(QStringLiteral("Connect Core to a radio before configuring its PGXL."));
+        return refuse(QStringLiteral("Connect the Core to a radio before setting up its Power Genius."));
     }
     if (!fourO3AEnabled()) {
-        return refuse(QStringLiteral("Enable 4O3A on Core before connecting the PGXL."));
+        return refuse(QStringLiteral("Turn on 4O3A on the Core before connecting the Power Genius."));
     }
     const QString host = inputHost.trimmed();
     if (!validStationAccessoryHost(host) || port == 0) {
-        return refuse(QStringLiteral("Enter a valid PGXL IP address or hostname and TCP port 1 to 65535."));
+        return refuse(QStringLiteral("Enter the Power Genius's IP address or host name, and a port from 1 to 65535."));
     }
     // Both fields are saved by one accepted command, validated first; no
     // settings write on its own dials anything.
@@ -3633,7 +3629,7 @@ bool RadioModel::configurePgxlForStation(const QString& inputHost, quint16 port,
 bool RadioModel::disconnectPgxlForStation(QString* reason)
 {
     if (m_role != Role::Local || !m_stationPgxl) {
-        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        if (reason) { *reason = QStringLiteral("This Core cannot change its amplifier and tuner settings."); }
         return false;
     }
     m_stationPgxl->cancel(!fourO3AEnabled());
@@ -3649,7 +3645,7 @@ bool RadioModel::setPgxlConnectionSettingsForStation(bool autoReconnect, int kee
         return false;
     };
     if (m_role != Role::Local || !m_stationPgxl) {
-        return refuse(QStringLiteral("Station accessory configuration is unavailable."));
+        return refuse(QStringLiteral("This Core cannot change its amplifier and tuner settings."));
     }
     if (keepaliveSec < kPgxlKeepaliveMinSec || keepaliveSec > kPgxlKeepaliveMaxSec
         || pingSec < 0 || pingSec > kPgxlPingMaxSec) {
@@ -3750,7 +3746,7 @@ void RadioModel::setRfKitEnabled(bool enabled)
 bool RadioModel::setRfKitEnabledForStation(bool enabled, QString* reason)
 {
     if (m_role != Role::Local || !m_stationRfKit) {
-        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        if (reason) { *reason = QStringLiteral("This Core cannot change its amplifier and tuner settings."); }
         return false;
     }
     if (currentRadioMac().isEmpty()) {
@@ -3776,7 +3772,7 @@ bool RadioModel::configureRfKitForStation(const QString& inputHost, quint16 port
         return false;
     };
     if (m_role != Role::Local || !m_stationRfKit) {
-        return refuse(QStringLiteral("Station accessory configuration is unavailable."));
+        return refuse(QStringLiteral("This Core cannot change its amplifier and tuner settings."));
     }
     if (currentRadioMac().isEmpty()) {
         return refuse(QStringLiteral("Connect the Core to a radio before setting up its RF-Kit "
@@ -3804,7 +3800,7 @@ bool RadioModel::configureRfKitForStation(const QString& inputHost, quint16 port
 bool RadioModel::disconnectRfKitForStation(QString* reason)
 {
     if (m_role != Role::Local || !m_stationRfKit) {
-        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        if (reason) { *reason = QStringLiteral("This Core cannot change its amplifier and tuner settings."); }
         return false;
     }
     m_stationRfKit->cancel(!rfKitEnabled());

@@ -382,12 +382,16 @@ private slots:
     void wireReasonsAreUnchanged()
     {
         // The Core sends these and this app compares them as text; they are
-        // translated only when shown.
+        // translated only when shown. The source retune is in operator words
+        // since R-IOS-01; an older Core's words still show as before.
         QCOMPARE(QString::fromLatin1(kRetireReasonSliceRemoved), QStringLiteral("slice removed"));
         QCOMPARE(QString::fromLatin1(kRetireReasonStreamBindingChanged),
                  QStringLiteral("slice stream binding changed"));
         QCOMPARE(QString::fromLatin1(kRetireReasonSourceRetune),
-                 QStringLiteral("source retune no longer covers requested crop"));
+                 QStringLiteral("The receiver was retuned away from this view."));
+        QCOMPARE(OperatorReasonText::forDisplay(
+                     QStringLiteral("source retune no longer covers requested crop")),
+                 OperatorReasonText::forDisplay(QString::fromLatin1(kRetireReasonSourceRetune)));
         QVERIFY(OperatorReasonText::knownReasons().contains(QStringLiteral("heartbeat timeout")));
         QVERIFY(OperatorReasonText::knownReasons().contains(
             QStringLiteral("Remote 4O3A control requires a newer station protocol.")));
@@ -674,7 +678,8 @@ private slots:
         }
         QVERIFY2(files >= 500, qPrintable(QString::number(files)));
         const QStringList keys = OperatorReasonText::tableKeys();
-        QVERIFY2(keys.size() >= 140, qPrintable(QString::number(keys.size())));
+        // R-IOS-01 moved the Core's retired words to olderCoreKeys().
+        QVERIFY2(keys.size() >= 110, qPrintable(QString::number(keys.size())));
         const QString mediaStartPrefix = keys.constLast();
         QVERIFY(mediaStartPrefix.startsWith(QLatin1String("Station media could not start")));
         QStringList missing;
@@ -687,6 +692,22 @@ private slots:
             }
         }
         QVERIFY2(missing.isEmpty(), qPrintable(missing.join(QStringLiteral(" | "))));
+
+        // R-IOS-01: the reasons only an older Core sends are gone from the
+        // sources (the Core words them in operator words now), and each
+        // still shows in user words.
+        const QStringList older = OperatorReasonText::olderCoreKeys();
+        QVERIFY2(older.size() >= 80, qPrintable(QString::number(older.size())));
+        QStringList stillWritten;
+        for (const QString& key : older) {
+            QVERIFY2(!keys.contains(key), qPrintable(key));
+            if (sources.contains(QLatin1Char('"') + key + QLatin1Char('"'))) {
+                stillWritten.append(key);
+            }
+            const QString shown = OperatorReasonText::forDisplay(key);
+            QVERIFY2(shown != key && OperatorWording::isPlain(shown), qPrintable(key));
+        }
+        QVERIFY2(stillWritten.isEmpty(), qPrintable(stillWritten.join(QStringLiteral(" | "))));
     }
 
     // R3 post-merge follow-ups (R-R3-17, R-R3-21): this app's own "does not

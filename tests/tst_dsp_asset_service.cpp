@@ -172,7 +172,8 @@ void TestDspAssetService::savedMissingSelectionIsKeptWithBundledFallback()
     QString reason;
     const auto paths = service.resolveNnrModelPaths(&reason);
     QVERIFY(paths[0].isEmpty());
-    QVERIFY(reason.contains(QStringLiteral("fallback"), Qt::CaseInsensitive));
+    QVERIFY2(reason.contains(QStringLiteral("built-in one is used"), Qt::CaseInsensitive),
+             qPrintable(reason));
     service.markNnrModelsApplied();
     QCOMPARE(service.activeNnrModelAssets()[0], QStringLiteral("bundled:0"));
     QVERIFY(service.nnrModelSelectionPending());

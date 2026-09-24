@@ -260,7 +260,7 @@ private slots:
             QTRY_COMPARE(replies.size(), previous + 1);
             const SessionMessage reply = qvariant_cast<SessionMessage>(replies.last()[0]);
             QVERIFY(!reply.accepted);
-            QVERIFY(reply.reason.contains("R4"));
+            QVERIFY2(reply.reason.contains("remote window"), qPrintable(reply.reason));
         }
         QCOMPARE(started.size(), 0);
         QVERIFY(!coordinator->isPsEnabled());

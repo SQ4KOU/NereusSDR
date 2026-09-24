@@ -31,10 +31,10 @@
         {"from": "station", "message": {"class": "SliceModel", "key": "slice:0", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"type": "snapshot.complete"}},
         {"from": "client", "message": {"type": "command.invoke", "verb": "configurePgxl", "id": 122, "args": [{"ordinal": 0, "name": "host", "kind": "utf8", "value": ""}, {"ordinal": 0, "name": "port", "kind": "i64", "value": 9008}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 122, "reason": "Enable 4O3A on Core before connecting the PGXL.", "type": "command.result", "verb": "configurePgxl"}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 122, "reason": "Turn on 4O3A on the Core before connecting the Power Genius.", "type": "command.result", "verb": "configurePgxl"}},
         {"advanceMs": 50},
         {"from": "client", "message": {"type": "command.invoke", "verb": "configurePgxl", "id": 123, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "utf8", "value": ""}, {"ordinal": 0, "name": "port", "kind": "i64", "value": 9008}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 123, "reason": "invalid host or port argument", "type": "command.result", "verb": "configurePgxl"}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 123, "reason": "The Core could not read this request.", "type": "command.result", "verb": "configurePgxl"}},
         {"advanceMs": 50},
         {"from": "client", "message": {"type": "command.invoke", "verb": "disconnectPgxl", "id": 124, "args": []}},
         {"from": "station", "message": {"accepted": true, "affected": [], "id": 124, "reason": "", "type": "command.result", "verb": "disconnectPgxl"}},
@@ -43,7 +43,7 @@
         {"from": "station", "message": {"accepted": true, "affected": [], "id": 125, "reason": "", "type": "command.result", "verb": "setPgxlConnectionSettings"}},
         {"advanceMs": 50},
         {"from": "client", "message": {"type": "command.invoke", "verb": "setPgxlConnectionSettings", "id": 126, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "bool", "value": false}, {"ordinal": 0, "name": "keepaliveSec", "kind": "i64", "value": 30}, {"ordinal": 0, "name": "pingSec", "kind": "i64", "value": 10}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 126, "reason": "setPgxlConnectionSettings requires an autoReconnect boolean and keepaliveSec and pingSec whole numbers", "type": "command.result", "verb": "setPgxlConnectionSettings"}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 126, "reason": "The Core could not read this request.", "type": "command.result", "verb": "setPgxlConnectionSettings"}},
         {"advanceMs": 50}
     ]
 }

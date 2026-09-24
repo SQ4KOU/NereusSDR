@@ -7238,6 +7238,15 @@ nereus_add_test(tst_link_conformance_regen
 target_compile_definitions(tst_link_conformance_regen PRIVATE
     NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
 
+# iPhone app plan, Task 4b (R-IOS-01, R-R3-21): every reason the station
+# sends an app is plain operator words. A source scan of the reason sites,
+# a guard that fails on a new unplaced one, and the reasons the session
+# fixtures record.
+nereus_add_test(tst_station_reason_wording
+    EXTRA_LABELS session)
+target_compile_definitions(tst_station_reason_wording PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 # R-R3-46 / R-R3-11 / R-R3-13: the Core's step attenuator and preamp as the
 # mirrored `stepAtt` object, end to end: a DaemonApp Core on a primed board
 # with a fake radio connection, a StationServer, and a remote window over the

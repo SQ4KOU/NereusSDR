@@ -34,7 +34,7 @@
         {"from": "station", "message": {"accepted": false, "affected": [], "id": 127, "reason": "Turn on the RF-Kit amplifier on the Core before connecting it.", "type": "command.result", "verb": "configureRfKit"}},
         {"advanceMs": 50},
         {"from": "client", "message": {"type": "command.invoke", "verb": "configureRfKit", "id": 128, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "utf8", "value": ""}, {"ordinal": 0, "name": "port", "kind": "i64", "value": 8080}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 128, "reason": "invalid host or port argument", "type": "command.result", "verb": "configureRfKit"}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 128, "reason": "The Core could not read this request.", "type": "command.result", "verb": "configureRfKit"}},
         {"advanceMs": 50},
         {"from": "client", "message": {"type": "command.invoke", "verb": "disconnectRfKit", "id": 129, "args": []}},
         {"from": "station", "message": {"accepted": true, "affected": [], "id": 129, "reason": "", "type": "command.result", "verb": "disconnectRfKit"}},

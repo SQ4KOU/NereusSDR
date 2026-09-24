@@ -26,7 +26,7 @@
         {"from": "station", "message": {"type": "snapshot.complete"}},
         {"advanceMs": 40000},
         {"advanceMs": 20000},
-        {"from": "station", "message": {"reason": "heartbeat timeout", "retryable": true, "type": "session.end"}},
+        {"from": "station", "message": {"reason": "This app stopped answering, so the Core closed the connection.", "retryable": true, "type": "session.end"}},
         {"expectClosed": {"retryable": true}}
     ]
 }

@@ -103,9 +103,10 @@ QSet<QString> stringSet(const QJsonArray& array)
 bool isUnknownVerbRefusal(const SessionMessage& result)
 {
     return !result.accepted
-        && (result.reason == QStringLiteral("unrecognised command verb")
-            || result.reason == QStringLiteral("Unknown PureSignal action.")
-            || result.reason == QStringLiteral("Unknown DSP asset action."));
+        && (result.reason
+                == QStringLiteral("The Core does not know this request. Updating the Core may help.")
+            || result.reason == QStringLiteral("The Core does not know this PureSignal action.")
+            || result.reason == QStringLiteral("The Core does not know this request."));
 }
 
 MirrorUpdate defaultArgument(const CommandArgumentSpec& spec)

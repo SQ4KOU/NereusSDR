@@ -218,7 +218,7 @@ void PureSignalSessionFacade::setCoordinator(PureSignal* coordinator)
                     m_pending.remove(id);
                     if (pending.generation == m_actionGeneration) {
                         finishOperation(id, Ps3ActionPhase::Failed,
-                            QStringLiteral("The station session retired this file operation."));
+                            QStringLiteral("The connection to the Core changed, so this file operation stopped."));
                     }
                 }
             }
@@ -274,7 +274,7 @@ quint32 PureSignalSessionFacade::requestAction(Ps3Action action, const QVariantM
             || (action == Ps3Action::SetTwoTone && oneArgument(arguments, "enabled", QMetaType::Bool)
                 && !arguments.value("enabled").toBool());
         if (!stop && action != Ps3Action::SaveCorrection && !m_canActuate) {
-            m_lastError = QStringLiteral("Remote PureSignal actuation requires R4 transmit support.");
+            m_lastError = QStringLiteral("PureSignal cannot be run from a remote window yet.");
             emit statusChanged();
             return 0;
         }
@@ -322,7 +322,7 @@ Ps3ActionResult PureSignalSessionFacade::executeAction(Ps3Action action,
     }
     if (!valid || operationId == 0 || m_pending.contains(operationId) || m_queued.contains(operationId)
         || m_pending.size() >= 128) {
-        return fail(QStringLiteral("Invalid PureSignal action arguments or operation identity."));
+        return fail(QStringLiteral("The Core could not read this PureSignal request."));
     }
     const bool stop = action == Ps3Action::OffReset
         || (action == Ps3Action::SetTwoTone && !arguments.value("enabled").toBool());
@@ -340,7 +340,7 @@ Ps3ActionResult PureSignalSessionFacade::executeAction(Ps3Action action,
                     : fail(QStringLiteral("PureSignal is unavailable until the radio is ready."));
     }
     if (!stop && action != Ps3Action::SaveCorrection && !m_coordinator->canActuate()) {
-        return fail(QStringLiteral("PureSignal actuation is unavailable for this station or radio state."));
+        return fail(QStringLiteral("PureSignal cannot start in the radio's current state."));
     }
     if ((action == Ps3Action::Single || action == Ps3Action::StartAutomatic)
         && (!settings() || !settings()->runCalibrationProcessing())) {
@@ -352,7 +352,7 @@ Ps3ActionResult PureSignalSessionFacade::executeAction(Ps3Action action,
     if (action == Ps3Action::SaveCorrection || action == Ps3Action::RestoreCorrection) {
         DspAssetStore* store = m_radio ? m_radio->dspAssets()->store() : nullptr;
         if (!store || !store->isValid()) {
-            return fail(QStringLiteral("The station correction store is unavailable."));
+            return fail(QStringLiteral("The Core cannot store PureSignal corrections right now."));
         }
         QString reason;
         if (action == Ps3Action::SaveCorrection) {
@@ -373,7 +373,7 @@ Ps3ActionResult PureSignalSessionFacade::executeAction(Ps3Action action,
             ? m_coordinator->beginSaveCorrections(pending.path)
             : m_coordinator->beginRestoreCorrections(pending.path);
         if (!pending.file) {
-            return fail(QStringLiteral("PureSignal refused the file operation or another file is pending."));
+            return fail(QStringLiteral("PureSignal could not save or load the correction, or another one is still in progress."));
         }
         m_pending.insert(operationId, pending);
         return {operationId, Ps3ActionPhase::Pending, {}, {}};
@@ -385,7 +385,7 @@ Ps3ActionResult PureSignalSessionFacade::executeAction(Ps3Action action,
             const PendingOperation previous = m_pending.value(id);
             retainRetiredSave(previous);
             finishOperation(id, Ps3ActionPhase::Failed,
-                            QStringLiteral("The Off/reset request retired this operation."));
+                            QStringLiteral("PureSignal was turned off, so this action stopped."));
         }
         break;
     case Ps3Action::Single:
@@ -410,7 +410,7 @@ Ps3ActionResult PureSignalSessionFacade::executeAction(Ps3Action action,
         m_coordinator->setTwoToneOn(arguments.value("enabled").toBool());
         refreshStatus();
         if (m_twoToneOn != arguments.value("enabled").toBool()) {
-            return fail(QStringLiteral("The two-tone controller refused the request."));
+            return fail(QStringLiteral("The two-tone test did not change."));
         }
         return {operationId, Ps3ActionPhase::Completed, {}, {}};
     case Ps3Action::SaveCorrection:
@@ -472,7 +472,7 @@ void PureSignalSessionFacade::finishFile(int kind, int result, quint64 generatio
             if (!store || !file.open(QIODevice::ReadOnly)
                 || file.size() > DspAssetValidation::kMaxPs3CorrectionBytes) {
                 success = false;
-                reason = QStringLiteral("The completed correction file could not be read within its size limit.");
+                reason = QStringLiteral("The saved correction was too large to read back.");
             } else {
                 const auto imported = store->importBytes(DspAssetKind::Ps3Correction,
                     pending.label, file.readAll(), m_radio->currentRadioMac());
@@ -487,7 +487,7 @@ void PureSignalSessionFacade::finishFile(int kind, int result, quint64 generatio
             QFile::remove(pending.path);
         }
         if (!success && reason.isEmpty()) {
-            reason = QStringLiteral("PureSignal reported that the file operation failed or was retired.");
+            reason = QStringLiteral("PureSignal could not finish saving or loading the correction.");
         }
         finishOperation(id, success ? Ps3ActionPhase::Completed : Ps3ActionPhase::Failed, reason, values);
         return;

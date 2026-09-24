@@ -4,7 +4,7 @@
         {"from": "station", "message": {"features": {}, "major": 1, "majors": [1], "minor": 11, "peer": "nereusd", "settingsSchema": 0, "type": "hello"}},
         {"from": "client", "message": {"type": "hello", "major": 1, "minor": 11, "settingsSchema": 0, "peer": "NereusSDR iPhone"}},
         {"from": "client", "message": {"type": "auth.request", "token": "$ref:token"}},
-        {"from": "station", "message": {"accepted": false, "reason": "Too many failed authentication attempts; try again later", "retryable": true, "type": "auth.result"}},
+        {"from": "station", "message": {"accepted": false, "reason": "The Core is refusing pairing tokens for a while after too many wrong ones. Try again later.", "retryable": true, "type": "auth.result"}},
         {"expectClosed": {"retryable": true}}
     ]
 }

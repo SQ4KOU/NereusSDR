@@ -272,7 +272,7 @@ private slots:
         SettingsProxyServer server(settings);
         const auto result = server.applyInboundWrite(key, 99.0, "test");
         QVERIFY(!result.accepted);
-        QVERIFY(result.reason.contains("DSP controls"));
+        QVERIFY2(result.reason.contains("their own controls"), qPrintable(result.reason));
         QCOMPARE(settings.value(key).toDouble(), 1.75);
     }
 };

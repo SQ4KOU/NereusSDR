@@ -208,15 +208,23 @@ DspAssetServiceResult DspAssetService::reject(const QString& reason) const
     return {false, reason, {}};
 }
 
+DspAssetServiceResult DspAssetService::rejectDetail(const QString& detail,
+                                                    const QString& plain) const
+{
+    if (DspAssetValidation::isOperatorMessage(detail)) return reject(detail);
+    qCWarning(lcDsp).noquote() << "Model or correction file request refused:" << detail;
+    return reject(plain);
+}
+
 DspAssetServiceResult DspAssetService::execute(const QByteArray& verb,
                                                 const QVariantMap& args,
                                                 const QString& owner)
 {
-    if (!m_local || !m_store) return reject(QStringLiteral("DSP asset actions are station-local."));
-    if (owner.isEmpty()) return reject(QStringLiteral("DSP asset action owner is required."));
+    if (!m_local || !m_store) return reject(QStringLiteral("The Core could not read this request."));
+    if (owner.isEmpty()) return reject(QStringLiteral("The Core could not read this request."));
 
     if (verb == "dspAssets.list") {
-        if (!args.isEmpty()) return reject(QStringLiteral("dspAssets.list accepts no arguments."));
+        if (!args.isEmpty()) return reject(QStringLiteral("The Core could not read this request."));
         QJsonArray assets;
         const QList<DspAssetRecord> records = m_store->assets();
         const qsizetype recordCount = std::min(records.size(), qsizetype(kMaxRecords));
@@ -234,7 +242,7 @@ DspAssetServiceResult DspAssetService::execute(const QByteArray& verb,
 
     if (verb == "dspAssets.beginImport") {
         if (!hasOnlyKeys(args, {"kind", "label", "size", "hash", "radioIdentity"}))
-            return reject(QStringLiteral("dspAssets.beginImport has invalid or missing fields."));
+            return reject(QStringLiteral("The Core could not read this request."));
         qint64 kindValue = -1;
         qint64 size = 0;
         QString label, hash, radioIdentity;
@@ -247,33 +255,34 @@ DspAssetServiceResult DspAssetService::execute(const QByteArray& verb,
             || !exactInteger(args.value(QStringLiteral("size")), &size)
             || !exactString(args.value(QStringLiteral("hash")), &hash)
             || !exactString(args.value(QStringLiteral("radioIdentity")), &radioIdentity)) {
-            return reject(QStringLiteral("dspAssets.beginImport field types or ranges are invalid."));
+            return reject(QStringLiteral("The Core could not read this request."));
         }
         if (size <= 0 || size > kindLimit(kind))
-            return reject(QStringLiteral("Advertised DSP asset size is outside the format limit."));
+            return reject(QStringLiteral("The file is too large for this kind of model or correction."));
         static const QRegularExpression hex64(QStringLiteral("^[0-9A-Fa-f]{64}$"));
         if (!hex64.match(hash).hasMatch())
-            return reject(QStringLiteral("Advertised DSP asset hash must be 64 hexadecimal characters."));
+            return reject(QStringLiteral("The Core could not read this request."));
         const QString normalizedRadio = AppSettings::normalizedRadioMac(radioIdentity);
         if (kind == DspAssetKind::NnrModel && !radioIdentity.isEmpty())
-            return reject(QStringLiteral("NNR model imports cannot carry a radio identity."));
+            return reject(QStringLiteral("An NNR model cannot be tied to one radio."));
         if (kind == DspAssetKind::Nr3Model && !radioIdentity.isEmpty())
             return reject(QStringLiteral("NR3 models belong to the Core, not to one radio."));
         if (kind == DspAssetKind::Ps3Correction
             && (normalizedRadio.isEmpty() || m_radioIdentity.isEmpty()
                 || normalizedRadio != m_radioIdentity)) {
-            return reject(QStringLiteral("PS3 correction radio identity does not match the current radio."));
+            return reject(QStringLiteral("This PureSignal correction was made for a different radio."));
         }
         if (m_imports.size() >= kMaxImportsTotal)
-            return reject(QStringLiteral("At most four DSP asset imports may be active."));
+            return reject(QStringLiteral("The Core is already importing as many files as it can. Try again when one finishes."));
         int owned = 0;
         for (const auto& transfer : std::as_const(m_imports))
             if (transfer->owner == owner) ++owned;
         if (owned >= kMaxImportsPerOwner)
-            return reject(QStringLiteral("At most two DSP asset imports may be active for one owner."));
+            return reject(QStringLiteral("This app is already importing as many files as it can. Try again when one finishes."));
         QString error;
         const QString storeToken = m_store->beginImport(kind, label, normalizedRadio, &error);
-        if (storeToken.isEmpty()) return reject(error);
+        if (storeToken.isEmpty())
+            return rejectDetail(error, QStringLiteral("The Core could not start storing this file."));
         auto transfer = std::make_shared<ActiveImport>();
         transfer->owner = owner;
         transfer->storeToken = storeToken;
@@ -286,7 +295,7 @@ DspAssetServiceResult DspAssetService::execute(const QByteArray& verb,
 
     if (verb == "dspAssets.chunk") {
         if (!hasOnlyKeys(args, {"transferId", "offset", "data"}))
-            return reject(QStringLiteral("dspAssets.chunk has invalid or missing fields."));
+            return reject(QStringLiteral("The Core could not read this request."));
         QString transferId, encoded;
         qint64 offset = -1;
         if (!exactString(args.value(QStringLiteral("transferId")), &transferId)
@@ -294,31 +303,31 @@ DspAssetServiceResult DspAssetService::execute(const QByteArray& verb,
             || !exactInteger(args.value(QStringLiteral("offset")), &offset) || offset < 0
             || !exactString(args.value(QStringLiteral("data")), &encoded)
             || encoded.size() > 4 * ((DspAssetStore::kTransferChunkBytes + 2) / 3)) {
-            return reject(QStringLiteral("dspAssets.chunk field types or ranges are invalid."));
+            return reject(QStringLiteral("The Core could not read this request."));
         }
         const auto transfer = m_imports.value(transferId);
         if (!transfer || transfer->owner != owner)
-            return reject(QStringLiteral("DSP import transfer is missing, retired, or belongs to another owner."));
+            return reject(QStringLiteral("The import was lost on the Core. Start it again."));
         if (offset != transfer->received)
-            return reject(QStringLiteral("DSP import chunk offset is not the next expected offset."));
+            return reject(QStringLiteral("The import was interrupted. Start it again."));
         const QByteArray ascii = encoded.toLatin1();
         if (QString::fromLatin1(ascii) != encoded)
-            return reject(QStringLiteral("DSP import chunk data is not canonical bounded base64."));
+            return reject(QStringLiteral("The import was interrupted. Start it again."));
         const auto decodedResult = QByteArray::fromBase64Encoding(
             ascii, QByteArray::AbortOnBase64DecodingErrors);
         if (!decodedResult || decodedResult.decoded.size() > DspAssetStore::kTransferChunkBytes
             || decodedResult.decoded.toBase64() != ascii) {
-            return reject(QStringLiteral("DSP import chunk data is not canonical bounded base64."));
+            return reject(QStringLiteral("The import was interrupted. Start it again."));
         }
         if (decodedResult.decoded.size() > transfer->expectedSize - transfer->received) {
             m_store->cancelImport(transfer->storeToken);
             m_imports.remove(transferId);
-            return reject(QStringLiteral("DSP import exceeds its advertised size."));
+            return reject(QStringLiteral("The import was interrupted. Start it again."));
         }
         QString error;
         if (!m_store->appendImport(transfer->storeToken, decodedResult.decoded, &error)) {
             m_imports.remove(transferId);
-            return reject(error);
+            return rejectDetail(error, QStringLiteral("The Core could not store this file. Start the import again."));
         }
         transfer->hash.addData(decodedResult.decoded);
         transfer->received += decodedResult.decoded.size();
@@ -327,22 +336,24 @@ DspAssetServiceResult DspAssetService::execute(const QByteArray& verb,
 
     if (verb == "dspAssets.finishImport") {
         if (!hasOnlyKeys(args, {"transferId"}))
-            return reject(QStringLiteral("dspAssets.finishImport has invalid or missing fields."));
+            return reject(QStringLiteral("The Core could not read this request."));
         QString transferId;
         if (!exactString(args.value(QStringLiteral("transferId")), &transferId)
             || transferId.size() > 128)
-            return reject(QStringLiteral("DSP import transfer ID is invalid."));
+            return reject(QStringLiteral("The import was interrupted. Start it again."));
         const auto transfer = m_imports.value(transferId);
         if (!transfer || transfer->owner != owner)
-            return reject(QStringLiteral("DSP import transfer is missing, retired, or belongs to another owner."));
+            return reject(QStringLiteral("The import was lost on the Core. Start it again."));
         m_imports.remove(transferId);
         if (transfer->received != transfer->expectedSize
             || QString::fromLatin1(transfer->hash.result().toHex()) != transfer->expectedHash) {
             m_store->cancelImport(transfer->storeToken);
-            return reject(QStringLiteral("DSP import size or SHA-256 does not match its advertisement."));
+            return reject(QStringLiteral("The file did not reach the Core intact. Start the import again."));
         }
         const DspAssetImportResult imported = m_store->finishImport(transfer->storeToken);
-        if (!imported.accepted) return reject(imported.error);
+        if (!imported.accepted)
+            return rejectDetail(imported.error,
+                                QStringLiteral("This file is not a model or correction the Core can use."));
         QVariantMap values;
         values.insert(QStringLiteral("id"), imported.record.id);
         values.insert(QStringLiteral("kind"), static_cast<int>(imported.record.kind));
@@ -359,14 +370,14 @@ DspAssetServiceResult DspAssetService::execute(const QByteArray& verb,
 
     if (verb == "dspAssets.cancelImport") {
         if (!hasOnlyKeys(args, {"transferId"}))
-            return reject(QStringLiteral("dspAssets.cancelImport has invalid or missing fields."));
+            return reject(QStringLiteral("The Core could not read this request."));
         QString transferId;
         if (!exactString(args.value(QStringLiteral("transferId")), &transferId)
             || transferId.size() > 128)
-            return reject(QStringLiteral("DSP import transfer ID is invalid."));
+            return reject(QStringLiteral("The import was interrupted. Start it again."));
         const auto transfer = m_imports.value(transferId);
         if (!transfer || transfer->owner != owner)
-            return reject(QStringLiteral("DSP import transfer is missing, retired, or belongs to another owner."));
+            return reject(QStringLiteral("The import was lost on the Core. Start it again."));
         m_store->cancelImport(transfer->storeToken);
         m_imports.remove(transferId);
         return {true, {}, {}};
@@ -374,26 +385,27 @@ DspAssetServiceResult DspAssetService::execute(const QByteArray& verb,
 
     if (verb == "dspAssets.export") {
         if (!hasOnlyKeys(args, {"id", "offset"}))
-            return reject(QStringLiteral("dspAssets.export has invalid or missing fields."));
+            return reject(QStringLiteral("The Core could not read this request."));
         QString id;
         qint64 offset = -1;
         if (!exactString(args.value(QStringLiteral("id")), &id) || id.size() > 128
             || !exactInteger(args.value(QStringLiteral("offset")), &offset) || offset < 0)
-            return reject(QStringLiteral("DSP asset export fields are invalid."));
+            return reject(QStringLiteral("The Core could not read this request."));
         DspAssetRecord record;
         bool found = false;
         for (const auto& candidate : m_store->assets()) {
             if (candidate.id == id) { record = candidate; found = true; break; }
         }
-        if (!found) return reject(QStringLiteral("DSP asset ID is not present in this station store."));
+        if (!found) return reject(QStringLiteral("That file is no longer on the Core."));
         QString error;
         const QString path = m_store->resolvePath(id, record.kind,
             record.kind == DspAssetKind::Ps3Correction ? m_radioIdentity : QString(), &error);
-        if (path.isEmpty()) return reject(error);
-        if (offset > record.size) return reject(QStringLiteral("DSP asset export offset exceeds its size."));
+        if (path.isEmpty())
+            return rejectDetail(error, QStringLiteral("The Core could not read that file."));
+        if (offset > record.size) return reject(QStringLiteral("The export was interrupted. Start it again."));
         QFile file(path);
         if (!file.open(QIODevice::ReadOnly) || !file.seek(offset))
-            return reject(QStringLiteral("Could not read the validated DSP asset."));
+            return reject(QStringLiteral("The Core could not read that file."));
         const QByteArray chunk = file.read(DspAssetStore::kTransferChunkBytes);
         QVariantMap values;
         values.insert(QStringLiteral("data"), QString::fromLatin1(chunk.toBase64()));
@@ -406,12 +418,12 @@ DspAssetServiceResult DspAssetService::execute(const QByteArray& verb,
 
     if (verb == "dspAssets.selectNnrModel") {
         if (!hasOnlyKeys(args, {"slot", "id"}))
-            return reject(QStringLiteral("dspAssets.selectNnrModel has invalid or missing fields."));
+            return reject(QStringLiteral("The Core could not read this request."));
         qint64 slot = -1;
         QString id;
         if (!exactInteger(args.value(QStringLiteral("slot")), &slot) || slot < 0 || slot > 1
             || !exactString(args.value(QStringLiteral("id")), &id) || id.size() > 128)
-            return reject(QStringLiteral("NNR model selection fields are invalid."));
+            return reject(QStringLiteral("The Core could not read this model choice."));
         QString error;
         if (!setSelection(static_cast<int>(slot), id, &error)) return reject(error);
         return {true, {}, {{QStringLiteral("revision"), m_revision},
@@ -420,17 +432,17 @@ DspAssetServiceResult DspAssetService::execute(const QByteArray& verb,
 
     if (verb == "dspAssets.selectNr3Model") {
         if (!hasOnlyKeys(args, {"id"}))
-            return reject(QStringLiteral("dspAssets.selectNr3Model has invalid or missing fields."));
+            return reject(QStringLiteral("The Core could not read this request."));
         QString id;
         if (!exactString(args.value(QStringLiteral("id")), &id) || id.size() > 128)
-            return reject(QStringLiteral("NR3 model selection fields are invalid."));
+            return reject(QStringLiteral("The Core could not read this model choice."));
         QString error;
         if (!setNr3Selection(id, &error)) return reject(error);
         return {true, {}, {{QStringLiteral("id"), m_nr3Selected},
                            {QStringLiteral("status"), m_nr3Status}}};
     }
 
-    return reject(QStringLiteral("Unknown DSP asset action."));
+    return reject(QStringLiteral("The Core does not know this request."));
 }
 
 quint32 DspAssetService::allocateRequestId()
@@ -521,10 +533,10 @@ void DspAssetService::refreshSelectionStatus()
             if (m_selected[slot] == bundledId(slot)) continue;
             QString error;
             if (m_store->resolvePath(m_selected[slot], DspAssetKind::NnrModel, {}, &error).isEmpty())
-                problems.append(tr("Model %1 selection is missing or invalid; bundled fallback will be used.")
-                                    .arg(slot));
+                problems.append(tr("An added NNR model is missing or damaged, so the built-in one is used."));
         }
     }
+    problems.removeDuplicates();
     m_status = problems.isEmpty() ? tr("NNR model selections are available.")
                                   : problems.join(QLatin1Char(' '));
 }
@@ -534,7 +546,8 @@ bool DspAssetService::setSelection(int slot, const QString& id, QString* reason)
     if (id != bundledId(slot)) {
         QString error;
         if (!m_store || m_store->resolvePath(id, DspAssetKind::NnrModel, {}, &error).isEmpty()) {
-            if (reason) *reason = error.isEmpty() ? QStringLiteral("Selected NNR model asset is unavailable.") : error;
+            if (!error.isEmpty()) qCWarning(lcDsp).noquote() << "NNR model choice refused:" << error;
+            if (reason) *reason = QStringLiteral("The chosen NNR model is not on the Core.");
             return false;
         }
     }
@@ -567,8 +580,7 @@ std::array<QString, 2> DspAssetService::resolveNnrModelPaths(QString* reason)
             const QString path = m_store->resolvePath(m_selected[slot], DspAssetKind::NnrModel,
                                                       {}, &error);
             if (path.isEmpty()) {
-                problems.append(tr("Model %1 selection is missing or invalid; bundled fallback will be used.")
-                                    .arg(slot));
+                problems.append(tr("An added NNR model is missing or damaged, so the built-in one is used."));
             } else {
                 paths[slot] = path;
                 resolved[slot] = m_selected[slot];
@@ -576,6 +588,7 @@ std::array<QString, 2> DspAssetService::resolveNnrModelPaths(QString* reason)
         }
     }
     m_lastResolved = resolved;
+    problems.removeDuplicates();
     const QString newStatus = problems.isEmpty() ? tr("NNR model selections are available.")
                                                   : problems.join(QLatin1Char(' '));
     if (m_status != newStatus) {

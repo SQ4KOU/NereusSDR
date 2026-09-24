@@ -1127,7 +1127,7 @@ void TstStationSession::nnrLimitIsOmittedForMinorTenPeer()
     }());
     QVERIFY(!result.accepted);
     QCOMPARE(result.reason, QStringLiteral(
-        "This station cannot try noise reduction again. Update the station software."));
+        "Update this app to try noise reduction again on this Core."));
     QCOMPARE(coreSlice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
 }
 
@@ -1464,7 +1464,8 @@ void TstStationSession::remoteFourO3AServerRejectsPreAuthAndOldMinor()
     }
     QCOMPARE(result.kind, SessionMessageKind::CommandResult);
     QVERIFY(!result.accepted);
-    QVERIFY(result.reason.contains(QStringLiteral("newer station protocol")));
+    QVERIFY2(result.reason.startsWith(QStringLiteral("Update this app to ")),
+             qPrintable(result.reason));
 }
 
 void TstStationSession::remoteFourO3AAuthenticatedRoundTripMirrorsActualListenerState()
@@ -1628,7 +1629,8 @@ void TstStationSession::remoteTgxlCommandIsGatedAtAuthenticatedServerBoundary()
     }
     QCOMPARE(result.kind, SessionMessageKind::CommandResult);
     QVERIFY(!result.accepted);
-    QVERIFY(result.reason.contains(QStringLiteral("newer station protocol")));
+    QVERIFY2(result.reason.startsWith(QStringLiteral("Update this app to ")),
+             qPrintable(result.reason));
 
     // With the negotiated minor this reaches the dispatcher and model
     // policy. The fixture intentionally lacks station accessory identity,
@@ -1659,7 +1661,7 @@ void TstStationSession::remoteTgxlCommandIsGatedAtAuthenticatedServerBoundary()
     }
     QCOMPARE(currentResult.kind, SessionMessageKind::CommandResult);
     QVERIFY(!currentResult.accepted);
-    QVERIFY(currentResult.reason != QStringLiteral("unrecognised command verb"));
+    QVERIFY(currentResult.reason != QStringLiteral("The Core does not know this request. Updating the Core may help."));
     QVERIFY(!currentResult.reason.contains(QStringLiteral("newer station protocol")));
 }
 
@@ -2265,11 +2267,11 @@ void TstStationSession::badTokenIsRefusedAndThenRateLimited()
     // The first two are ordinary refusals; the third is the rate limiter,
     // which says something DIFFERENT on purpose. Collapsing the two would
     // leak, through the daemon's own answer, which guesses were close.
-    QVERIFY2(reasons.at(0).contains(QStringLiteral("Authentication failed")),
+    QVERIFY2(reasons.at(0).contains(QStringLiteral("did not accept this app's pairing token")),
              qPrintable(reasons.at(0)));
-    QVERIFY2(reasons.at(1).contains(QStringLiteral("Authentication failed")),
+    QVERIFY2(reasons.at(1).contains(QStringLiteral("did not accept this app's pairing token")),
              qPrintable(reasons.at(1)));
-    QVERIFY2(reasons.at(2).contains(QStringLiteral("Too many failed")),
+    QVERIFY2(reasons.at(2).contains(QStringLiteral("too many wrong ones")),
              qPrintable(reasons.at(2)));
 
     // Even the RIGHT token is refused while the lockout stands.
@@ -4845,7 +4847,7 @@ void TstStationSession::transientRefusalsStayRetryableAndABadTokenDoesNot()
         }
     }
     QCOMPARE(limitEnd.kind, SessionMessageKind::SessionEnd);
-    QVERIFY(limitEnd.reason.contains(QStringLiteral("concurrent-connection limit")));
+    QVERIFY(limitEnd.reason.contains(QStringLiteral("as many connections as it allows")));
     QVERIFY2(limitEnd.retryable,
              "the concurrent-connection cap was sent as permanent, so a "
              "reconnecting client that hits it gives up forever");
@@ -4886,7 +4888,7 @@ void TstStationSession::transientRefusalsStayRetryableAndABadTokenDoesNot()
     QTRY_VERIFY(firstEnd->receivedKinds().contains(QByteArrayLiteral("auth.result")));
     const SessionMessage firstBad = refusalOn(firstEnd);
     QCOMPARE(firstBad.kind, SessionMessageKind::AuthResult);
-    QCOMPARE(firstBad.reason, QStringLiteral("Authentication failed"));
+    QCOMPARE(firstBad.reason, QStringLiteral("The Core did not accept this app's pairing token. Check the token saved for this Core."));
     QVERIFY2(!firstBad.retryable,
              "a wrong token was marked retryable, so a client would redial it "
              "forever and feed the station's own rate limiter");
@@ -4894,7 +4896,7 @@ void TstStationSession::transientRefusalsStayRetryableAndABadTokenDoesNot()
     LoopbackTransport* secondEnd = refuse(QStringLiteral("still-not-the-token"));
     QTRY_VERIFY(secondEnd->receivedKinds().contains(QByteArrayLiteral("auth.result")));
     const SessionMessage secondBad = refusalOn(secondEnd);
-    QCOMPARE(secondBad.reason, QStringLiteral("Authentication failed"));
+    QCOMPARE(secondBad.reason, QStringLiteral("The Core did not accept this app's pairing token. Check the token saved for this Core."));
     QVERIFY(!secondBad.retryable);
 
     // Two failures at a limit of two: the next attempt is rate limited,
@@ -4904,7 +4906,7 @@ void TstStationSession::transientRefusalsStayRetryableAndABadTokenDoesNot()
     QTRY_VERIFY(lockedEnd->receivedKinds().contains(QByteArrayLiteral("auth.result")));
     const SessionMessage locked = refusalOn(lockedEnd);
     QCOMPARE(locked.kind, SessionMessageKind::AuthResult);
-    QVERIFY(locked.reason.contains(QStringLiteral("Too many failed")));
+    QVERIFY(locked.reason.contains(QStringLiteral("too many wrong ones")));
     QVERIFY2(locked.retryable,
              "a rate-limit lockout was sent as permanent, so a stranger's bad "
              "guesses lock the operator out with no automatic recovery");
@@ -4952,7 +4954,7 @@ void TstStationSession::lockedOutOperatorRetriesButABadTokenDoesNot()
     stranger.connectToStation(url, QStringLiteral("not-the-token"),
                               server.certificateFingerprint());
     QTRY_COMPARE_WITH_TIMEOUT(strangerEnded.count(), 1, 15000);
-    QVERIFY(stranger.lastError().contains(QStringLiteral("Authentication failed")));
+    QVERIFY(stranger.lastError().contains(QStringLiteral("did not accept this app's pairing token")));
     QVERIFY2(!stranger.isReconnectPending(),
              "a wrong token re-armed automatic reconnect, which would hammer the "
              "station's rate limiter and keep the operator locked out");
@@ -4964,7 +4966,7 @@ void TstStationSession::lockedOutOperatorRetriesButABadTokenDoesNot()
     QSignalSpy opEnded(&op, &StationClient::sessionEnded);
     op.connectToStation(url, server.token(), server.certificateFingerprint());
     QTRY_COMPARE_WITH_TIMEOUT(opEnded.count(), 1, 15000);
-    QVERIFY2(op.lastError().contains(QStringLiteral("Too many failed")),
+    QVERIFY2(op.lastError().contains(QStringLiteral("too many wrong ones")),
              qPrintable(op.lastError()));
     QVERIFY2(op.isReconnectPending(),
              "the operator's own client gave up permanently on a lockout that "

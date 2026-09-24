@@ -28,7 +28,7 @@
         {"from": "station", "message": {"accepted": true, "affected": ["pureSignal"], "id": 160, "reason": "", "type": "command.result", "verb": "ps3.subscribeDisplay"}},
         {"advanceMs": 50},
         {"from": "client", "message": {"type": "command.invoke", "verb": "ps3.subscribeDisplay", "id": 161, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "bool", "value": false}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 161, "reason": "A display subscription requires one boolean enabled value.", "type": "command.result", "verb": "ps3.subscribeDisplay"}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 161, "reason": "The Core could not read the PureSignal display request.", "type": "command.result", "verb": "ps3.subscribeDisplay"}},
         {"advanceMs": 50}
     ]
 }

@@ -594,7 +594,8 @@ void TstStationHandshakeDeadline::coreDetachesAGuiThatNeverSendsItsHelloWithOneL
     }
 
     QCOMPARE(dropped.count(), 1);
-    QCOMPARE(dropped.first().at(1).toString(), QStringLiteral("handshake deadline expired"));
+    QCOMPARE(dropped.first().at(1).toString(),
+             QStringLiteral("This app did not finish connecting to the Core in time."));
     QCOMPARE(mediaStarted.count(), 0);
     QVERIFY(!server.hasAuthenticatedSession());
     // Told why, and retryable: a GUI that does come back gets a new chance.
@@ -609,7 +610,8 @@ void TstStationHandshakeDeadline::coreDetachesAGuiThatNeverSendsItsHelloWithOneL
         }
     }
     QVERIFY2(aboutThePeer.size() == 1, qPrintable(aboutThePeer.join(QStringLiteral(" | "))));
-    QVERIFY2(aboutThePeer.first().contains(QStringLiteral("handshake deadline expired")),
+    QVERIFY2(aboutThePeer.first().contains(
+                 QStringLiteral("This app did not finish connecting to the Core in time.")),
              qPrintable(aboutThePeer.first()));
 }
 
