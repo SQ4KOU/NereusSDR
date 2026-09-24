@@ -876,21 +876,37 @@ draws them), R-IOS-01.
   NereusSDR-original) and the NSDC media fixtures (Task 3). PS3D fixtures are not run by
   the app: the phone shows PureSignal as on, off and status only (spec §5.2 item 3).
 - Produces:
-  - `struct DisplayFrame { let endpointId: UInt32; let sequence: UInt32; let isKeyframe: Bool; let firstBinHz: Double; let binWidthHz: Double; let bins: [Float] /* dBm */ }`
-  - `final class DisplayFrameDecoder { func decode(_ datagram: Data) throws -> DisplayFrame?; var needsKeyframe: Bool { get } }`,
-    one per endpoint; a lost or out-of-order delta sets `needsKeyframe` and returns
-    `nil` until the next keyframe.
-  - Bin reconstruction exactly as the document and the station's decoder do it:
-    `Float(min(max(minDb + Double(v) * (maxDb - minDb) / 255.0, minDb), maxDb))`.
+  - `struct DisplayFrame { let endpointId: UInt32; let contextGeneration: UInt32; let encoderSequence: UInt32; let producerTimestamp: UInt64 /* sender-monotonic ns */; let isKeyframe: Bool; let waterfallAdvance: Bool; let minDbm: Float; let maxDbm: Float; let traceDbm: [Float]; let waterfallDbm: [Float]; let wideDbm: [Float] /* empty without a wide row */ }`:
+    the NSDC v1 header and its trace, waterfall and optional wide planes. The frequency
+    axis is not a codec field; it comes with the endpoint's context (Task 11).
+  - `enum DisplayDecodeDisposition { case accepted, needKeyframe, rejected }` and
+    `enum DisplayDecodeReason { case none, invalidInput, noHistory, sequenceGap, staleSequence, oldContext, contextMismatch, badMagic, unsupportedVersion, unknownFlags, truncated, oversized, malformed }`,
+    the station's `DisplayCodecDisposition` and `DisplayCodecReason`
+    (`src/core/session/media/DisplayCodec.h`), whose names the vectors carry.
+  - `struct DisplayDecodeResult { let disposition: DisplayDecodeDisposition; let reason: DisplayDecodeReason; let frame: DisplayFrame? }`
+    and `final class DisplayFrameDecoder { func decode(_ datagram: Data) -> DisplayDecodeResult; var needsKeyframe: Bool { get } }`,
+    one per endpoint, with the document's "State and recovery" rules: a gap needs a
+    keyframe and leaves the history untouched until one arrives; an older or equal
+    sequence (the unsigned half-range rule) or an older context generation is refused; a
+    newer generation needs a keyframe; a malformed packet is refused without changing the
+    history.
+  - Reconstruction exactly as the document and the station's decoder do it: a quantised
+    value `q` in 0...255, absolute or the previous reconstructed plane's value plus a
+    residual, maps to
+    `Float(min(max(minDbm + Double(q) * (maxDbm - minDbm) / 255.0, minDbm), maxDbm))`.
 
 **Acceptance:**
-- Every NSDC fixture the app runs decodes to its expected bins within 0.01 dB and its
-  expected header fields, played as the link document's Conformance section says
-  (including fixtures that decode after others on one decoder).
-- A delta whose predecessor was dropped yields `nil` and `needsKeyframe == true`; the
-  following keyframe decodes and clears it.
-- A truncated datagram, a wrong magic, an unknown version and a bin count above 4096 each
-  throw a distinct error and never crash.
+- Every `nsdc1` vector decodes to its expected disposition, reason, header fields and
+  `traceDbm`, `waterfallDbm` and `wideDbm` rows within its `dbm` tolerance (0.01), played
+  as the link document's section 16.4 says, `after` chains included.
+- A delta whose predecessor was lost yields `needKeyframe` with `sequenceGap` and
+  `needsKeyframe == true`; the following keyframe is accepted and clears it (the
+  `nsdc1-delta-after-loss` and `nsdc1-keyframe-after-loss` vectors).
+- A truncated datagram, a wrong magic, an unknown version and a row longer than 4096
+  samples each come back `rejected` with the reason the station's decoder gives for the
+  same bytes (`truncated`, `badMagic`, `unsupportedVersion`, and whichever of `malformed`
+  or `oversized` `DisplayCodec.cpp` returns for the long row), leave the history
+  untouched, and never crash.
 - The decoder was written from the document, not translated from
   `src/core/session/media/DisplayCodec.cpp`; where the two disagree, the test follows
   the station's fixtures and the controller asks the Core/GUI session to correct the
