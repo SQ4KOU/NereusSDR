@@ -202,6 +202,10 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the pairing code is never printed
+//               to standard output (the journal on a packaged Core). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -795,16 +799,14 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
 
     // iPhone app Task 14 (R-IOS-08): the pairing window follows the device
     // store (open with no timer while unclaimed). The `devices` object
-    // shows it; a new code is printed on the console (never logged), and
-    // the stored data for the old one is wiped.
+    // shows it, and the stored data for the old code is wiped. The code is
+    // never printed or logged (Part C fix wave: standard output is the
+    // journal on a packaged Core); `nereusd pairing show` gives it.
     connect(m_pairingWindow.get(), &PairingWindow::codeChanged, this,
             [this](const QString& code) {
                 if (m_pairingStoredSerial != m_pairingWindow->codeSerial() || code.isEmpty()) {
                     SpakeExchange::wipe(m_pairingStored);
                     m_pairingStoredSerial = 0;
-                }
-                if (!code.isEmpty() && m_pairingConsole) {
-                    m_pairingConsole(formatPairingCodeNotice(code));
                 }
             });
 
@@ -1139,22 +1141,6 @@ PairingWindow* StationServer::pairingWindow() const
 int StationServer::pairingVersion() const
 {
     return m_declaredFeatures.value(QByteArrayLiteral("pairing"), 0) >= 1 ? 1 : 0;
-}
-
-void StationServer::setPairingConsole(std::function<void(const QString&)> console)
-{
-    m_pairingConsole = std::move(console);
-    const QString code = m_pairingWindow->currentCode();
-    if (m_pairingConsole && !code.isEmpty()) {
-        m_pairingConsole(formatPairingCodeNotice(code));
-    }
-}
-
-QString StationServer::formatPairingCodeNotice(const QString& code)
-{
-    return QStringLiteral("\n  Pairing code: %1\n"
-                          "  Type it into the NereusSDR app to pair a device with this Core.\n")
-        .arg(code);
 }
 
 void StationServer::printToConsole(const QString& text)

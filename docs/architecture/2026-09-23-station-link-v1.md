@@ -315,9 +315,11 @@ hyphens, whatever separators were typed. It refuses anything that is not
 a number from 1 to 999999 and two words of the list. The normalised text,
 as UTF-8, is the password.
 
-The code appears on the Core's console (standard output, never the logging
-categories), on its status page and on the Remote Access page of a desktop
-running the Core. The link carries it only to a connection signed in with
+The code is given on request by the Core's console (`nereusd pairing
+show`, over its owner-only control socket), on its status page while the
+Core is unclaimed, and (from iPhone app plan Task 49) on the Remote Access
+page of a desktop running the Core. It is never printed to standard output
+and never logged: on a packaged Core both land in the journal. The link carries it only to a connection signed in with
 a paired device's own key: in the `devices` object's `pairingCode` and in
 `pairing.open`'s result (section 7.1). A connection signed in with the
 token receives `""` in both, even when its hello declares `deviceAuth`. A

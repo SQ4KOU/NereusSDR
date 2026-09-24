@@ -46,6 +46,10 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave: the pairing code is never printed
+//               to standard output (the journal on a packaged Core). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QtTest>
@@ -742,7 +746,6 @@ private slots:
         }
         g_previousHandler = qInstallMessageHandler(captureLog);
         QStringList codes;
-        QStringList console;
         {
             Core core;
             QObject::connect(&core.window(), &PairingWindow::codeChanged, &core.window(),
@@ -752,7 +755,6 @@ private slots:
                                  }
                              });
             codes.append(core.window().currentCode());
-            core.server->setPairingConsole([&console](const QString& text) { console.append(text); });
             Device wrong;
             core.pairByCode(wrong, core.window().currentCode(), /*lie=*/true);
             core.advance(5000);
@@ -769,11 +771,10 @@ private slots:
             third.name = QStringLiteral("Shack iPad");
             QCOMPARE(core.pairByCode(third, core.window().currentCode()).type,
                      QStringLiteral("pair.confirm"));
-            // The console printed each code.
-            QCOMPARE(console.size(), codes.size());
-            for (int i = 0; i < codes.size(); ++i) {
-                QVERIFY(console.at(i) == StationServer::formatPairingCodeNotice(codes.at(i)));
-            }
+            // Part C fix wave: nothing prints the code either (standard
+            // output is the journal on a packaged Core); the console's
+            // `nereusd pairing show` gives it on request
+            // (tst_station_control_socket).
         }
         qInstallMessageHandler(g_previousHandler);
         QVERIFY(codes.size() >= 3);

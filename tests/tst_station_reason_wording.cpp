@@ -85,6 +85,10 @@
 //                                    other; the console's pairing code
 //                                    notice is not a reason.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the pairing code is never printed
+//               to standard output (the journal on a packaged Core). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -603,10 +607,7 @@ const QList<ReasonSource>& reasonSources()
          {// start(): the Core's own setup error and the WebSocket server's
           // name, and the pairing banner nereusd prints on its console.
           "Qt reports no working TLS backend", "No authentication token available",
-          "NereusSDR station", "\\n  =====",
-          // iPhone app Task 14: the new pairing code, printed on the
-          // Core's console (formatPairingCodeNotice), never sent to an app.
-          "\\n  Pairing code"},
+          "NereusSDR station", "\\n  ====="},
          30,
          // The other app's network address (WebSocketTransport::peerDescription).
          {QStringLiteral("description")},

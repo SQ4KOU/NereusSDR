@@ -200,6 +200,10 @@
 //                                    to a connection signed in with a
 //                                    paired device's key. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the pairing code is never printed
+//               to standard output (the journal on a packaged Core). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QHash>
@@ -456,14 +460,10 @@ public:
     /// pairingVersion 1. 0 otherwise.
     int pairingVersion() const;
 
-    /// Where the pairing code is printed when it changes: the Core's
-    /// console. Never the logging categories. nereusd installs
-    /// printToConsole(); a Core with none (a test, a desktop that shows the
-    /// code on its own page) prints nothing. Installing one prints the
-    /// current code at once.
-    void setPairingConsole(std::function<void(const QString&)> console);
-    /// The line printed for a new code, exactly.
-    static QString formatPairingCodeNotice(const QString& code);
+    /// The pairing code is never printed or logged (Part C fix wave: on a
+    /// packaged Core standard output lands in the journal). The console's
+    /// `nereusd pairing show` gives it on request, over the owner-only
+    /// control socket, and so does the status page while unclaimed.
     /// Writes `text` to standard output and flushes it: the Core's console,
     /// as the first-run banner is written.
     static void printToConsole(const QString& text);
@@ -770,7 +770,6 @@ private:
     std::unique_ptr<PairingWindow> m_pairingWindow;
     QByteArray m_pairingStored;
     quint64 m_pairingStoredSerial = 0;
-    std::function<void(const QString&)> m_pairingConsole;
     // The hash worker (one at a time), the code serial it hashes, and the
     // hash itself (SpakeExchange::storedData; a test may hold it).
     std::unique_ptr<QThread> m_pairingHashThread;

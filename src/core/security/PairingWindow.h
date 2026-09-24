@@ -50,9 +50,10 @@
 // single-shot timer calls poll() when a wait ends, and a test advances its
 // clock and calls poll() itself.
 //
-// The code is a secret while it is live. Nothing here logs it; the Core's
-// console prints it (StationServer), and the link carries it only to a
-// connection signed in with a paired device's key.
+// The code is a secret while it is live. Nothing logs or prints it; the
+// Core's console gives it on request (`nereusd pairing show`), and the
+// link carries it only to a connection signed in with a paired device's
+// key.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -66,6 +67,10 @@
 //               lasts 10 minutes, five burned codes in a row close any window,
 //               and reopening starts afresh. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the pairing code is never printed
+//               to standard output (the journal on a packaged Core). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QObject>

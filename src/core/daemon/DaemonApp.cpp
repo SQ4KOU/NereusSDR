@@ -60,6 +60,10 @@
 //               lasts 10 minutes, five burned codes in a row close any window,
 //               and reopening starts afresh. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the pairing code is never printed
+//               to standard output (the journal on a packaged Core). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -547,16 +551,14 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     }
     // The first start's notice, beside the identity key banner the server
     // printed (which names station-identity.pem's full path and asks for a
-    // backup): the Core's label and where its status page is. The code
-    // follows from setPairingConsole() below. Standard output, never the
-    // log.
+    // backup): the Core's label and where its status page is, and how to
+    // get the pairing code (nereusd pairing show). Standard output, never
+    // the log, and never the code itself: on a packaged Core standard
+    // output is the journal (Part C fix wave).
     if (m_stationServer->stationIdentity().wasCreatedThisRun()) {
         StationServer::printToConsole(
             StationStatusPage::formatFirstStartNotice(coreLabel(), statusPageAddress()));
     }
-    // iPhone app Task 14 (R-IOS-08): the pairing code is printed on the
-    // Core's console (standard output) whenever it changes, never logged.
-    m_stationServer->setPairingConsole(&StationServer::printToConsole);
     // R-R3-08/37/40: with display_adaptive on, the Core always advertises a
     // display budget, so apps plan in budget mode from the start and follow
     // it down when the Core is busy: the configured pair when there is one,
