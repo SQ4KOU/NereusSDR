@@ -19,15 +19,15 @@ directory alongside NereusSDR's own `LICENSE`.
 | libspecbleach 0.2.0 (41d3f583) | NR4 noise reduction | LGPL-2.1-or-later | `libspecbleach.txt` | `LGPLv2.1.txt` |
 | rnnoise 70f1d256 | NR3 noise reduction and its two bundled models | BSD-3-Clause | `rnnoise.txt`, `rnnoise-notices.txt` | `rnnoise.txt` |
 | DeepFilterNet d375b2d8 | DFNR noise reduction library and its bundled model | Apache-2.0 OR MIT | `deepfilternet.txt` | `deepfilternet-apache.txt`, `deepfilternet-mit.txt` |
-| PortAudio v19.7.0 | audio device input and output | MIT | `portaudio.txt` | `portaudio.txt` |
+| PortAudio v19.7.0 | audio device input and output | MIT | `portaudio.txt`, `portaudio-notices.txt` | `portaudio.txt` |
 | nlohmann json 55f93686 | JSON parsing for libdatachannel | MIT | `nlohmann-json.txt` | `nlohmann-json.txt` |
 | zlib v1.3.1 (Windows builds) | compression for stored equaliser settings | Zlib | `zlib.txt` | `zlib.txt` |
 | libASPL v3.1.2 (macOS audio driver) | the NereusSDR VAX audio driver installed by the macOS package | MIT | `libaspl.txt` | `libaspl.txt` |
-| libdatachannel 0.24.5 | direct DTLS/SCTP and SRTP media transport | MPL-2.0 | `libdatachannel.txt` | `MPLv2.txt` |
-| libjuice | direct ICE backend for libdatachannel | MPL-2.0 | `libjuice.txt` | `MPLv2.txt` |
+| libdatachannel 0.24.5 | direct DTLS/SCTP and SRTP media transport | MPL-2.0 | `libdatachannel.txt`, `libdatachannel-notices.txt` | `MPLv2.txt` |
+| libjuice | direct ICE backend for libdatachannel | MPL-2.0 | `libjuice.txt`, `libjuice-notices.txt` | `MPLv2.txt` |
 | plog | libdatachannel logging dependency | MIT | `plog.txt` | `plog.txt` |
-| usrsctp | SCTP implementation for libdatachannel | BSD-3-Clause | `usrsctp.txt` | `usrsctp.txt` |
-| libsrtp | SRTP implementation for libdatachannel | BSD-3-Clause | `libsrtp.txt` | `libsrtp.txt` |
+| usrsctp | SCTP implementation for libdatachannel | BSD-3-Clause | `usrsctp.txt`, `usrsctp-notices.txt` | `usrsctp.txt` |
+| libsrtp | SRTP implementation for libdatachannel | BSD-3-Clause | `libsrtp.txt`, `libsrtp-notices.txt` | `libsrtp.txt` |
 | OpenSSL 3 | certificate, DTLS, and application cryptography | Apache-2.0 | `openssl.txt` | `Apache-2.0.txt` |
 | Opus | audio codec (RADE on the desktop; receive audio and the microphone in the iPhone and iPad app) | BSD-3-Clause | `opus.txt` | `opus.txt` |
 
@@ -57,13 +57,13 @@ directory, or when a text file here is named by no row.
 | libspecbleach | `third_party/libspecbleach`, FetchContent `libspecbleach_upstream` | 41d3f58310391e05ecfb8b7c9efb62ea2ba8ef05 (v0.2.0) | desktop packages and the Core | `libspecbleach.txt` |
 | rnnoise | `third_party/rnnoise`, FetchContent `rnnoise_upstream` | 70f1d256acd4b34a572f999a05c87bf00b67730d | desktop packages and the Core (models too) | `rnnoise.txt`, `rnnoise-notices.txt` |
 | DeepFilterNet | `third_party/deepfilter`, built or downloaded by `setup-deepfilter.sh` and `setup-deepfilter.ps1` | d375b2d8309e0935d165700c91da9de862a99c31 | desktop packages, and the Core when its build has the library | `deepfilternet.txt` |
-| PortAudio | FetchContent `portaudio` | v19.7.0 | desktop packages and the Core | `portaudio.txt` |
+| PortAudio | FetchContent `portaudio` | v19.7.0 | desktop packages and the Core | `portaudio.txt`, `portaudio-notices.txt` |
 | zlib | FetchContent `zlib` on Windows; the system library elsewhere | v1.3.1 on Windows | Windows packages | `zlib.txt` |
-| libdatachannel | FetchContent `nereus_libdatachannel` | v0.24.5 | desktop packages and the Core | `libdatachannel.txt` |
-| libjuice | FetchContent `nereus_libjuice` | 3c40a3545b6b1b62c7adee7f8f2bd58aa290afd6 | desktop packages and the Core | `libjuice.txt` |
+| libdatachannel | FetchContent `nereus_libdatachannel` | v0.24.5 | desktop packages and the Core | `libdatachannel.txt`, `libdatachannel-notices.txt` |
+| libjuice | FetchContent `nereus_libjuice` | 3c40a3545b6b1b62c7adee7f8f2bd58aa290afd6 | desktop packages and the Core | `libjuice.txt`, `libjuice-notices.txt` |
 | plog | FetchContent `nereus_plog` | 94899e0b926ac1b0f4750bfbd495167b4a6ae9ef | desktop packages and the Core | `plog.txt` |
-| usrsctp | FetchContent `nereus_usrsctp` | fec583d54493f879d2ae44a743423bf8a04371ab | desktop packages and the Core | `usrsctp.txt` |
-| libsrtp | FetchContent `nereus_libsrtp` | 24b3bf8f19b6f5ab4cd2bcceb4f4064efca86fd5 | desktop packages and the Core | `libsrtp.txt` |
+| usrsctp | FetchContent `nereus_usrsctp` | fec583d54493f879d2ae44a743423bf8a04371ab | desktop packages and the Core | `usrsctp.txt`, `usrsctp-notices.txt` |
+| libsrtp | FetchContent `nereus_libsrtp` | 24b3bf8f19b6f5ab4cd2bcceb4f4064efca86fd5 | desktop packages and the Core | `libsrtp.txt`, `libsrtp-notices.txt` |
 | nlohmann json | FetchContent `nereus_json` | 55f93686c01528224f448c19128836e7df245f72 | desktop packages and the Core | `nlohmann-json.txt` |
 | OpenSSL 3 | vcpkg on Windows; Homebrew, or 3.0.21 built from source for Intel, on macOS; system package on Linux | the release workflow's OpenSSL | desktop packages and the Core | `openssl.txt` |
 | libASPL | FetchContent `libASPL` in `hal-plugin/CMakeLists.txt` | v3.1.2 | the macOS audio driver package | `libaspl.txt` |
@@ -95,7 +95,12 @@ in those files (modification histories, port notes, the headers of
 NereusSDR's own glue files) are left out. `scripts/collect-source-notices.py <library>` writes them;
 rerun it after a vendor update. libspecbleach has no such file: its source
 files carry only the notice `libspecbleach.txt` and `LGPLv2.1.txt` already
-hold. The DeepFilterNet header NereusSDR compiles carries no notice.
+hold. The DeepFilterNet header NereusSDR compiles carries no notice. The
+plog headers libdatachannel compiles carry no copyright notice, and
+libdatachannel's compiled files include no nlohmann json header. The
+fetched libraries' files are read from a built tree's
+`compile_commands.json`; zlib (Windows builds) and libASPL (the macOS
+audio driver) have not been surveyed yet.
 
 DeepFilterNet's library is compiled from Rust crates, each under its own
 licence. When `setup-deepfilter.sh` or `setup-deepfilter.ps1` builds the
@@ -208,6 +213,11 @@ the §6(b) fallback.
 - `opus-notices.txt`    notices in the Opus sources the RADE build compiles
 - `r8brain-notices.txt` notices in the r8brain-free-src headers NereusSDR compiles
 - `rnnoise-notices.txt` notices in the rnnoise sources NereusSDR compiles
+- `portaudio-notices.txt` notices in the PortAudio sources NereusSDR compiles
+- `libdatachannel-notices.txt` notices in the libdatachannel sources NereusSDR compiles
+- `libjuice-notices.txt` notices in the libjuice sources NereusSDR compiles
+- `usrsctp-notices.txt` notices in the usrsctp sources NereusSDR compiles
+- `libsrtp-notices.txt` notices in the libsrtp sources NereusSDR compiles
 
 This directory is installed to:
 

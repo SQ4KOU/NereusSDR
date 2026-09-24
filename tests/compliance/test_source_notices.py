@@ -6,6 +6,7 @@ files, so a vendor update that changes a notice fails here until the file
 is regenerated.
 """
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -211,3 +212,36 @@ def test_every_listed_notice_is_verbatim_in_its_files():
             text = sn.read_source(source_set.base / name)
             assert notice.text in text or sn.normalise(notice.text) in sn.normalise(text)
         assert notice.text in sn.read_source(source_set.base / notice.files[0])
+
+
+# --------------------------------------------------------------------------
+# Fetched libraries: files from a built tree's compile_commands.json
+
+def test_build_tree_files_come_from_compile_commands(tmp_path):
+    build = tmp_path / "build"
+    dc = build / "_deps" / "nereus_libdatachannel-src"
+    (dc / "src").mkdir(parents=True)
+    (dc / "deps" / "plog" / "include" / "plog").mkdir(parents=True)
+    (dc / "deps" / "libjuice" / "src").mkdir(parents=True)
+    (dc / "src" / "global.cpp").write_text('#include <plog/Log.h>\n#include "local.hpp"\n')
+    (dc / "src" / "local.hpp").write_text("/* Copyright (c) 2020 Someone */\n")
+    (dc / "src" / "unbuilt.cpp").write_text("/* Copyright (c) 1999 Nobody */\n")
+    (dc / "deps" / "plog" / "include" / "plog" / "Log.h").write_text("// plog\n")
+    (dc / "deps" / "libjuice" / "src" / "agent.c").write_text("int a;\n")
+    commands = [
+        {"directory": str(build), "file": str(dc / "src" / "global.cpp"),
+         "command": f"c++ -DX=1 -I{dc}/src -I {dc}/deps/plog/include -c global.cpp"},
+        {"directory": str(build), "file": str(dc / "deps" / "libjuice" / "src" / "agent.c"),
+         "arguments": ["cc", "-isystem", "/opt/homebrew/include", "-c", "agent.c"]},
+    ]
+    (build / "compile_commands.json").write_text(json.dumps(commands))
+
+    def names(files, base):
+        return sorted(f.relative_to(base.resolve()).as_posix() for f in files)
+
+    own = sn._from_build(build, dc, dc)
+    assert "src/unbuilt.cpp" not in names(own, dc)
+    assert names(own, dc) == ["deps/libjuice/src/agent.c", "deps/plog/include/plog/Log.h",
+                              "src/global.cpp", "src/local.hpp"]
+    plog = dc / "deps" / "plog"
+    assert names(sn._from_build(build, plog, dc), plog) == ["include/plog/Log.h"]

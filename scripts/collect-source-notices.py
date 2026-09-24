@@ -31,9 +31,15 @@ Usage:
       [--survey]
 
 LIBRARY is one of the presets: fftw3, rade, opus, r8brain, rnnoise,
-libspecbleach, wdsp. rnnoise and libspecbleach read the FetchContent sources under
---build-dir/_deps. opus needs --opus-source, an extracted Opus source tree
-at the pinned commit (a configured build has one at
+libspecbleach, wdsp, and the fetched libraries portaudio, libdatachannel,
+libjuice, usrsctp, libsrtp, plog and nlohmann-json. rnnoise and
+libspecbleach read the FetchContent sources under --build-dir/_deps. The
+fetched libraries need --build-dir to be a built tree: they read its
+compile_commands.json for the files the build compiled and each file's
+include path (libjuice, usrsctp, libsrtp, plog and json are built from
+the copies under nereus_libdatachannel-src/deps/). opus needs
+--opus-source, an extracted Opus source tree at the pinned commit (a
+built tree has one at
 <build>/third_party/rade/build_opus-prefix/src/build_opus).
 
 With --check FILE the script exits 1 when FILE differs from what it would
@@ -46,7 +52,9 @@ Exit 0 on success, 1 on a --check mismatch, 2 on a usage error.
 from __future__ import annotations
 
 import argparse
+import json
 import re
+import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -260,6 +268,7 @@ class SourceSet:
     files: list[Path]
     licence_files: list[str]   # names in packaging/third-party-licenses/
     extra: list[tuple[Path, str]] = field(default_factory=list)  # (file, label)
+    regen: str = ""            # extra arguments the regeneration command needs
 
 
 def _rade(root: Path, _args: argparse.Namespace) -> SourceSet:
@@ -316,7 +325,8 @@ def _opus(_root: Path, args: argparse.Namespace) -> SourceSet:
     # includes; no NereusSDR package targets those processors.
     files = [f for f in files
              if not re.search(r"/(mips|xtensa)/", f.relative_to(base).as_posix())]
-    return SourceSet("Opus", base, "opus", "940d4e5a", files, ["opus.txt"])
+    return SourceSet("Opus", base, "opus", "940d4e5a", files, ["opus.txt"],
+                     regen=" --opus-source <build>/third_party/rade/build_opus-prefix/src/build_opus")
 
 
 def _r8brain(root: Path, _args: argparse.Namespace) -> SourceSet:
@@ -347,7 +357,8 @@ def _rnnoise(root: Path, args: argparse.Namespace) -> SourceSet:
     files = resolve_includes(sources, [base / "include", base / "src"])
     shim = root / "third_party/rnnoise/rnnoise_model_init.c"
     return SourceSet("rnnoise", base, "rnnoise", "70f1d256", files,
-                     ["rnnoise.txt"], extra=[(shim, "third_party/rnnoise/rnnoise_model_init.c")])
+                     ["rnnoise.txt"], extra=[(shim, "third_party/rnnoise/rnnoise_model_init.c")],
+                     regen=" --build-dir <a configured build>")
 
 
 def _libspecbleach(_root: Path, args: argparse.Namespace) -> SourceSet:
@@ -356,7 +367,8 @@ def _libspecbleach(_root: Path, args: argparse.Namespace) -> SourceSet:
                if not re.search(r"/(test|example|demo)", p.as_posix())]
     files = resolve_includes(sources, [base / "include", base / "src"])
     return SourceSet("libspecbleach", base, "libspecbleach", "41d3f583", files,
-                     ["libspecbleach.txt", "LGPLv2.1.txt"])
+                     ["libspecbleach.txt", "LGPLv2.1.txt"],
+                     regen=" --build-dir <a configured build>")
 
 
 def _wdsp(root: Path, _args: argparse.Namespace) -> SourceSet:
@@ -366,6 +378,122 @@ def _wdsp(root: Path, _args: argparse.Namespace) -> SourceSet:
     files = resolve_includes([base / n for n in names], [base / "src"])
     return SourceSet("WDSP", base, "third_party/wdsp", "TAPR v1.29 with NereusSDR changes",
                      files, ["wdsp.txt", "GPLv2.txt"])
+
+
+def _compile_entries(build: Path) -> list[tuple[Path, list[Path]]]:
+    """(source file, include directories) for every compile command."""
+    path = build / "compile_commands.json"
+    if not path.is_file():
+        raise SystemExit(f"{path} is missing; configure and build the tree first")
+    entries: list[tuple[Path, list[Path]]] = []
+    for entry in json.loads(path.read_text(encoding="utf-8")):
+        args = entry.get("arguments") or shlex.split(entry["command"])
+        directory = Path(entry["directory"])
+        dirs: list[Path] = []
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            value = None
+            for flag in ("-I", "-isystem", "-iquote"):
+                if arg == flag and i + 1 < len(args):
+                    value = args[i + 1]
+                    i += 1
+                elif arg.startswith(flag) and len(arg) > len(flag) and flag == "-I":
+                    value = arg[2:]
+            if value is not None:
+                dirs.append((directory / value).resolve())
+            i += 1
+        entries.append(((directory / entry["file"]).resolve(), dirs))
+    return entries
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _from_build(build: Path, keep: Path, seeds: Path,
+                extra: list[str] | None = None,
+                extra_dirs: list[str] | None = None) -> list[Path]:
+    """Files under keep that the build compiled, or that the compiled files
+    under seeds include, resolved with each command's own include path.
+    extra adds sources (relative to keep) other platforms compile."""
+    keep = keep.resolve()
+    seeds = seeds.resolve()
+    found: set[Path] = set()
+    for source, dirs in _compile_entries(build):
+        if not _within(source, seeds):
+            continue
+        for path in resolve_includes([source], dirs):
+            if _within(path, keep):
+                found.add(path)
+    if extra:
+        dirs = [keep / d for d in (extra_dirs or [])]
+        for path in resolve_includes([keep / name for name in extra], dirs):
+            if _within(path, keep):
+                found.add(path)
+    return sorted(found)
+
+
+def _need_build(args: argparse.Namespace) -> Path:
+    if args.build_dir is None:
+        raise SystemExit("this library needs --build-dir (a built tree)")
+    return args.build_dir.resolve()
+
+
+# PortAudio host API and platform sources the Windows and Linux packages
+# compile (portaudio-src/CMakeLists.txt at v19.7.0 with NereusSDR's options:
+# ASIO off; MME, DirectSound, WASAPI and WDM-KS on Windows; ALSA and JACK
+# on Linux). A macOS build tree lists only the CoreAudio ones.
+_PORTAUDIO_OTHER_PLATFORMS = [
+    "src/os/win/pa_win_hostapis.c", "src/os/win/pa_win_util.c",
+    "src/os/win/pa_win_waveformat.c", "src/os/win/pa_win_wdmks_utils.c",
+    "src/os/win/pa_win_coinitialize.c", "src/os/win/pa_x86_plain_converters.c",
+    "src/hostapi/dsound/pa_win_ds.c", "src/hostapi/dsound/pa_win_ds_dynlink.c",
+    "src/hostapi/wmme/pa_win_wmme.c", "src/hostapi/wasapi/pa_win_wasapi.c",
+    "src/hostapi/wdmks/pa_win_wdmks.c",
+    "src/os/unix/pa_unix_hostapis.c", "src/os/unix/pa_unix_util.c",
+    "src/hostapi/alsa/pa_linux_alsa.c", "src/hostapi/jack/pa_jack.c",
+]
+
+
+def _portaudio(_root: Path, args: argparse.Namespace) -> SourceSet:
+    build = _need_build(args)
+    base = build / "_deps/portaudio-src"
+    files = _from_build(build, base, base, _PORTAUDIO_OTHER_PLATFORMS,
+                        ["include", "src/common", "src/os/win", "src/os/unix"])
+    return SourceSet("PortAudio", base, "portaudio", "v19.7.0", files,
+                     ["portaudio.txt"], regen=" --build-dir <a built tree>")
+
+
+def _datachannel_dep(name: str, library: str, pin: str, texts: list[str]):
+    """A library libdatachannel builds from its deps/<name> copy.
+
+    NereusRemoteMedia.cmake copies each fetched source into
+    nereus_libdatachannel-src/deps/<name> and builds it from there; the
+    header-only ones (plog, json) are reached through libdatachannel's
+    includes, so every compiled libdatachannel file seeds the search."""
+    def preset(_root: Path, args: argparse.Namespace) -> SourceSet:
+        build = _need_build(args)
+        dc = build / "_deps/nereus_libdatachannel-src"
+        base = dc / "deps" / name
+        files = _from_build(build, base, dc)
+        return SourceSet(library, base, name, pin, files, texts,
+                         regen=" --build-dir <a built tree>")
+    return preset
+
+
+def _libdatachannel(_root: Path, args: argparse.Namespace) -> SourceSet:
+    build = _need_build(args)
+    base = build / "_deps/nereus_libdatachannel-src"
+    files = [f for f in _from_build(build, base, base)
+             if not _within(f, (base / "deps").resolve())]
+    return SourceSet("libdatachannel", base, "libdatachannel", "v0.24.5", files,
+                     ["libdatachannel.txt", "MPLv2.txt"],
+                     regen=" --build-dir <a built tree>")
 
 
 def _fftw3(root: Path, _args: argparse.Namespace) -> SourceSet:
@@ -379,6 +507,15 @@ def _fftw3(root: Path, _args: argparse.Namespace) -> SourceSet:
 
 PRESETS = {
     "fftw3": _fftw3,
+    "portaudio": _portaudio,
+    "libdatachannel": _libdatachannel,
+    "libjuice": _datachannel_dep("libjuice", "libjuice", "3c40a354",
+                                 ["libjuice.txt", "MPLv2.txt"]),
+    "usrsctp": _datachannel_dep("usrsctp", "usrsctp", "fec583d5", ["usrsctp.txt"]),
+    "libsrtp": _datachannel_dep("libsrtp", "libsrtp", "24b3bf8f", ["libsrtp.txt"]),
+    "plog": _datachannel_dep("plog", "plog", "94899e0b", ["plog.txt"]),
+    "nlohmann-json": _datachannel_dep("json", "nlohmann json", "55f93686",
+                                      ["nlohmann-json.txt"]),
     "rade": _rade,
     "opus": _opus,
     "r8brain": _r8brain,
@@ -440,7 +577,8 @@ def render(source_set: SourceSet, notices: list[Notice], library_arg: str) -> st
         "",
         f"Source: {source_set.library} {source_set.pin}. File paths are relative to",
         f"{source_set.label}/ unless shown in full.",
-        f"Generated by: python3 scripts/collect-source-notices.py {library_arg}",
+        f"Generated by: python3 scripts/collect-source-notices.py {library_arg}"
+        f"{source_set.regen}",
         "",
     ]
     for index, notice in enumerate(notices, 1):
