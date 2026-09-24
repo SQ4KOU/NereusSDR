@@ -16,6 +16,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-24 — HL2 preamp items take mi0bot's HERMES/HERMESLITE branch
+//                 (console.cs:41709-41718 [v2.10.3.13-beta2]): on/off plus
+//                 the Alex items when Alex is present. J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  clsHardwareSpecific.cs
@@ -1365,10 +1369,22 @@ std::span<const PreampItem> preampItemsForBoard(HPSDRHW hw, bool alexPresent) no
         return items(kAnan100d);
 
     case HPSDRHW::HermesLite:
-        // HL2: anan100d 4-step set (Off / -10 / -20 / -30 dB). Not in Thetis
-        // SetComboPreampForHPSDR switch (HL2 postdates it); uses anan100d set
-        // per spec §8 and mi0bot HL2 LNA design [@c26a8a4]. Phase 3P-C Step 2.
-        return items(kAnan100d);
+        // HL2 shares HERMES's branch in mi0bot's SetComboPreampForHPSDR:
+        // with Alex, on/off plus the Alex items; without, the anan100d
+        // 4-step set (0 / -10 / -20 / -30 dB).
+        // From mi0bot console.cs:41709-41718 [v2.10.3.13-beta2]
+        //   case HPSDRModel.HERMES:
+        //   case HPSDRModel.HERMESLITE:         // MI0BOT: HL2
+        //       if (alexpresent)
+        //       {
+        //           comboPreamp.Items.AddRange(on_off_preamp_settings);
+        //           comboPreamp.Items.AddRange(alex_preamp_settings);
+        //       }
+        //       else
+        //           comboPreamp.Items.AddRange(anan100d_preamp_settings);
+        //       break;
+        return alexPresent ? items(kOnOffPlusAlex)
+                           : items(kAnan100d);
 
     default:
         return items(kAnan100d);
