@@ -1053,7 +1053,11 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   the Core's settings arrive the window decides nothing. The window reads the Core's
   change only once all its properties have arrived, and after sending a
   change it waits for the Core to report that same switch and port before
-  following again, so it never flips back to a stale value. The window's
+  following again, so it never flips back to a stale value. That wait
+  ends as soon as the request is over whatever became of it: the Core's
+  answer to `setStationTci` (accepted or refused), the link going down or
+  coming up, or a new connection; the window then follows the Core's
+  current switch and port. The window's
   own server follows the switch only when the Core runs on another
   computer; on the Core's own computer the window runs no server while
   connected, and apps there use the Core's (it listens on that computer

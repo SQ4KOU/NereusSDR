@@ -94,7 +94,7 @@ public:
         ++requests;
         requestedOn = on;
         requestedPort = port;
-        return {true, {}};
+        return {true, {}, quint32(100 + requests)};   // command ids 101, 102, ...
     }
 };
 
@@ -505,6 +505,79 @@ private slots:
         QVERIFY(tci.switchOn());
         QCOMPARE(tci.port(), port);
         QCOMPARE(link.requests, 1);
+    }
+
+    // Rework follow-up 1 (R-R3-48): a window that asked the Core for a
+    // switch and port follows the Core again once that request is over,
+    // whatever became of it: the link dropped before the Core's echo, the
+    // Core refused it, or another window's change landed in the same turn
+    // so the echo never matched.
+    void windowFollowsAgainAfterItsRequestEnds()
+    {
+        const quint16 port = freePort();
+        const quint16 other = freePort();
+        const auto coreSays = [](RadioModel& window, bool on, quint16 p) {
+            StationTciModel::State state;
+            state.enabled = on;
+            state.port = p;
+            state.listening = on;
+            window.stationTciModel()->setState(state);
+            QCoreApplication::processEvents();
+        };
+        // The link drops before the echo.
+        {
+            RadioModel window(RadioModel::Role::Remote);
+            FakeStationLink link;
+            window.attachStation(&link);
+            TciServer local(&window);
+            TciSwitch tci(&local, &window);
+            coreSays(window, false, port);
+            tci.setSwitch(true, port, QHostAddress(QHostAddress::LocalHost));
+            link.ready = false;
+            window.reportStationLinkStateChanged();
+            link.ready = true;
+            window.reportStationLinkStateChanged();
+            coreSays(window, false, other);
+            QVERIFY(!tci.switchOn());
+            QCOMPARE(tci.port(), other);
+        }
+        // The Core refuses the request (a hand-edited port below 1024).
+        {
+            RadioModel window(RadioModel::Role::Remote);
+            FakeStationLink link;
+            window.attachStation(&link);
+            TciServer local(&window);
+            TciSwitch tci(&local, &window);
+            coreSays(window, false, port);
+            tci.setSwitch(true, 900, QHostAddress(QHostAddress::LocalHost));
+            window.reportStationAccessoryRefusal(QStringLiteral("tci"),
+                QStringLiteral("Choose a TCI port from 1024 to 65535."), 101);
+            QCoreApplication::processEvents();
+            QVERIFY(!tci.switchOn());   // the Core's switch again
+            QCOMPARE(tci.port(), port);
+            coreSays(window, true, other);
+            QVERIFY(tci.switchOn());
+            QCOMPARE(tci.port(), other);
+            local.stop();
+        }
+        // Another window's change lands in the same turn: the echo never
+        // matches; the request's acceptance ends the wait.
+        {
+            RadioModel window(RadioModel::Role::Remote);
+            FakeStationLink link;
+            window.attachStation(&link);
+            TciServer local(&window);
+            TciSwitch tci(&local, &window);
+            coreSays(window, false, port);
+            tci.setSwitch(true, port, QHostAddress(QHostAddress::LocalHost));
+            coreSays(window, true, other);
+            QCOMPARE(tci.port(), port);   // still waiting for its own echo
+            window.forgetAccessoryRequest(101);   // the Core accepted it
+            QCoreApplication::processEvents();
+            QVERIFY(tci.switchOn());
+            QCOMPARE(tci.port(), other);
+            local.stop();
+        }
     }
 
     // Rework part 4 (R-R3-48): with the link to the Core down the switch

@@ -3,6 +3,9 @@
 // 2026-09-24: R-R3-48 rework: one switch and one port with the Core's
 // station server (operator decision 2026-09-23); the handover removed.
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-48 rework follow-up: a request's wait ends with its
+// answer, a link change or a new connection. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include "core/TciSwitch.h"
 
 #include "core/AppSettings.h"
@@ -19,6 +22,14 @@ TciSwitch::TciSwitch(TciServer* local, RadioModel* model, QObject* parent)
 {
     if (model) {
         connect(model, &RadioModel::stationLinkStateChanged, this, &TciSwitch::reevaluate);
+        // Rework follow-up 1: the Core answered this window's request.
+        connect(model, &RadioModel::accessoryRequestFinished, this,
+                [this](quint32 commandId, bool) {
+            if (commandId != 0 && commandId == m_askedCommandId) {
+                endRequest();
+                onStationTciChanged();
+            }
+        });
         // The Core's settings arriving tells whether it keeps a switch.
         connect(model, &RadioModel::stationSettingChanged, this, [this](const QString& key) {
             if (key.isEmpty() || key.startsWith(QLatin1String("StationTci_"))) {
@@ -48,10 +59,24 @@ void TciSwitch::onStationTciChanged()
     }
 }
 
+void TciSwitch::endRequest()
+{
+    m_asked.reset();
+    m_askedCommandId = 0;
+}
+
 void TciSwitch::syncAtConnect()
 {
-    if (!coreHasStationServer()) {
+    // Rework follow-up 1: the link going down or coming up (a new
+    // connection) ends any request in flight: its echo may never come.
+    // Repeated reports of the same link state do not.
+    const bool up = coreHasStationServer();
+    if (up != m_linkUp) {
+        m_linkUp = up;
+        endRequest();
         m_synced = false;   // a new connection settles again
+    }
+    if (!up) {
         return;
     }
     if (m_synced) {
@@ -86,7 +111,7 @@ void TciSwitch::followCore()
         if (m_asked->first != on || m_asked->second != port) {
             return;   // the Core has not taken this window's request yet
         }
-        m_asked.reset();
+        endRequest();
     }
     if (on == m_on && port == m_port) {
         return;
@@ -216,6 +241,12 @@ void TciSwitch::tellCore()
     if (!coreHasStationServer()) {
         return; // An older Core (or no link): this window's server only.
     }
+    // The link is up (this request goes over it): note it now, so its
+    // first report later is not taken as a new connection ending this wait.
+    if (!m_linkUp) {
+        m_linkUp = true;
+        m_synced = false;
+    }
     IStationLink* link = m_model->stationLink();
     const auto outcome = link->requestStationTci(m_on, m_port);
     if (!outcome.sent) {
@@ -223,6 +254,7 @@ void TciSwitch::tellCore()
         return;
     }
     m_asked = std::make_pair(m_on, m_port);
+    m_askedCommandId = outcome.commandId;
 }
 
 } // namespace NereusSDR

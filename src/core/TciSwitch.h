@@ -82,6 +82,7 @@ private:
     void onStationTciChanged();
     void followCore();
     void syncAtConnect();
+    void endRequest();
 
     QPointer<TciServer> m_local;
     QPointer<RadioModel> m_model;
@@ -91,7 +92,12 @@ private:
     // What this window last asked the Core for; the Core's state is not
     // followed until it says the same (its answer arrives a property at a
     // time), so the switch never flips back to the Core's old value.
+    // Cleared when that request is over (accepted or refused), when the
+    // link changes and at each new connection, so a request whose echo
+    // never matches cannot stop the window following the Core.
     std::optional<std::pair<bool, quint16>> m_asked;
+    quint32 m_askedCommandId{0};
+    bool m_linkUp{false};   // the link as last seen (for its changes)
     // The Core's object is read once its whole change has arrived.
     bool m_followQueued{false};
     // This connection's start was settled: the Core's stored switch wins,

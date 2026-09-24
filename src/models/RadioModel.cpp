@@ -4542,6 +4542,7 @@ void RadioModel::reportStationAccessoryRefusal(const QString& device, const QStr
     const bool shownOnPage = commandId != 0 && page
         && page->property("visible").toBool();
     emit accessoryRequestRefused(device, reason, shownOnPage);
+    emit accessoryRequestFinished(commandId, false);
 }
 
 void RadioModel::noteAccessoryRequestShownOnPage(quint32 commandId, QObject* page)
@@ -4564,6 +4565,7 @@ void RadioModel::reportStationLinkStateChanged()
 void RadioModel::forgetAccessoryRequest(quint32 commandId)
 {
     m_pageShownAccessoryRequests.remove(commandId);
+    emit accessoryRequestFinished(commandId, true);
 }
 
 void RadioModel::reportStationSettingChanged(const QString& key)

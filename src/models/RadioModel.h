@@ -3287,6 +3287,10 @@ signals:
                                  bool shownOnPage);
     /// Remote window: a Core station setting changed (empty: a snapshot).
     void stationSettingChanged(const QString& key);
+    /// Remote window: the Core answered accessory request `commandId`
+    /// (accepted or refused; a refusal also arrives on
+    /// accessoryRequestRefused).
+    void accessoryRequestFinished(quint32 commandId, bool accepted);
 
     /// Phase 3F Sub-Epic I closeout, defect F4: the operator retuned a slice
     /// to a frequency no DDC can reach, and the frequency has been rolled
