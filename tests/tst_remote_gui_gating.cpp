@@ -131,6 +131,7 @@
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QAbstractButton>
 #include <QPointer>
 #include <QStringList>
 #include <QTimer>
@@ -141,6 +142,7 @@
 #include <QWidget>
 
 #include <chrono>
+#include <functional>
 #include <memory>
 
 #include "core/AppSettings.h"
@@ -2576,6 +2578,134 @@ private slots:
         QVERIFY(localAntennas->txGridForTest()->isEnabled());
         QVERIFY(localAntennas->blockTxAnt2ForTest()->isEnabled());
         QVERIFY(localHardware->findChild<Hl2OptionsTab*>()->transmitTimingsEnabledForTest());
+    }
+
+    // R3 unfinished controls fix wave (R-R3-49, R-R3-21): the groups and
+    // rows hidden inside Setup pages the Core owns (DSP > CW, AM/SAM and
+    // FM; Hardware Config's OC Outputs extras, antenna conflict policy,
+    // XVTR and VHF tabs, HL2 bus 0 and Bandwidth Monitor) are hidden in a
+    // connected remote window, where those pages are built for real rather
+    // than as placeholders. Marking every feature built shows each of them,
+    // so the check cannot pass on a page that lacks them.
+    void coreScopedHiddenGroupsHideInAConnectedRemoteWindow_data()
+    {
+        QTest::addColumn<bool>("hl2");
+        QTest::newRow("ANAN-100D") << false;
+        QTest::newRow("Hermes Lite 2") << true;
+    }
+
+    void coreScopedHiddenGroupsHideInAConnectedRemoteWindow()
+    {
+        QFETCH(bool, hl2);
+        const auto shown = [](QWidget* w, QWidget* page) {
+            if (w == nullptr) { return false; }
+            for (QWidget* p = w; p != nullptr && p != page; p = p->parentWidget()) {
+                const bool stackPage = qobject_cast<QStackedWidget*>(p->parentWidget()) != nullptr;
+                if (p->isHidden() && !stackPage) { return false; }
+            }
+            return true;
+        };
+        const auto named = [shown](const char* name) {
+            return [shown, name](QWidget* page) {
+                return shown(page->findChild<QWidget*>(QString::fromLatin1(name)), page);
+            };
+        };
+        const auto text = [shown](const char* caption) {
+            return [shown, caption](QWidget* page) {
+                const QString want = QString::fromLatin1(caption);
+                for (QLabel* l : page->findChildren<QLabel*>()) {
+                    if (l->text() == want && shown(l, page)) { return true; }
+                }
+                for (QAbstractButton* b : page->findChildren<QAbstractButton*>()) {
+                    if (b->text() == want && shown(b, page)) { return true; }
+                }
+                return false;
+            };
+        };
+        const auto tab = [shown](const char* caption) {
+            return [shown, caption](QWidget* page) {
+                for (QTabWidget* tabs : page->findChildren<QTabWidget*>()) {
+                    for (int i = 0; i < tabs->count(); ++i) {
+                        if (tabs->tabText(i) == QLatin1String(caption) && tabs->isTabVisible(i)
+                            && shown(tabs, page)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
+        };
+        struct Check {
+            const char* page;
+            const char* what;
+            std::function<bool(QWidget*)> shown;
+        };
+        QList<Check> checks{
+            {"CW", "keyer group", named("cwKeyerGroup")},
+            {"CW", "timing group", named("cwTimingGroup")},
+            {"CW", "peak filter bandwidth", text("Bandwidth")},
+            {"CW", "peak filter gain", text("Gain")},
+            {"AM/SAM", "synchronous AM group", named("samGroup")},
+            {"AM/SAM", "maximum squelch tail", text("Max Tail")},
+            {"FM", "deviation", named("fmRxDeviationCombo")},
+            {"FM", "de-emphasis", named("fmDeEmphasisButton")},
+            {"FM", "FM transmit group", named("fmTxGroup")},
+            {"Hardware Config", "antenna conflict policy", named("antennaConflictPolicyGroup")},
+            {"Hardware Config", "OC hot switching", named("ocAllowHotSwitching")},
+            {"Hardware Config", "OC USB BCD", named("ocUsbBcdGroup")},
+            {"Hardware Config", "OC external PA", named("ocExternalPaGroup")},
+            {"Hardware Config", "OC VHF tab", tab("VHF")},
+        };
+        if (!hl2) {
+            // The XVTR tab is not offered for the Hermes Lite 2 at all.
+            checks << Check{"Hardware Config", "XVTR tab", tab("XVTR")};
+        } else {
+            checks << Check{"Hardware Config", "HL2 I2C bus 0", named("hl2I2cBus0")}
+                   << Check{"Hardware Config", "Bandwidth Monitor tab", tab("Bandwidth Monitor")};
+        }
+
+        const auto unmark = qScopeGuard([] { UnbuiltFeatures::resetForTest(); });
+        for (const bool allBuilt : {false, true}) {
+            UnbuiltFeatures::resetForTest();
+            if (allBuilt) {
+                for (const UnbuiltFeatures::Entry& entry : UnbuiltFeatures::all()) {
+                    UnbuiltFeatures::setBuiltForTest(entry.feature, true);
+                }
+            }
+            SettingsProxy proxy;
+            AppSettings::instance().setRemoteBackend(&proxy);
+            const auto detach = qScopeGuard([] { AppSettings::instance().setRemoteBackend(nullptr); });
+            RadioModel remote(RadioModel::Role::Remote);
+            StationCapabilities caps;
+            caps.macAddress = hl2 ? QStringLiteral("AA:BB:CC:DD:EE:49")
+                                  : QStringLiteral("AA:BB:CC:DD:EE:50");
+            caps.board = hl2 ? HPSDRHW::HermesLite : HPSDRHW::Angelia;
+            caps.radioConnected = true;
+            caps.radioIdentityEntries = true;
+            caps.hpsdrModel = hl2 ? HPSDRModel::HERMESLITE : HPSDRModel::ANAN100D;
+            caps.radioProtocol = 1;
+            remote.applyStationCapabilities(caps);
+            remote.alexAntennaFacade()->setWindowAvailability(true, {});
+            remote.stepAttFacade()->setWindowAvailability(true, {});
+
+            SetupDialog dialog(&remote);
+            connectDialog(proxy, dialog);
+            QStringList wrong;
+            for (const Check& check : checks) {
+                const QString label = QString::fromLatin1(check.page);
+                dialog.selectPage(label);
+                QWidget* const page = dialog.realizedPageForTest(label);
+                QVERIFY2(page != nullptr, check.page);
+                QVERIFY2(!dialog.isPagePlaceholderForTest(label), check.page);
+                if (check.shown(page) != allBuilt) {
+                    wrong << QStringLiteral("%1: %2").arg(label, QString::fromLatin1(check.what));
+                }
+            }
+            QVERIFY2(wrong.isEmpty(),
+                     qPrintable((allBuilt ? QStringLiteral("built, not shown: ")
+                                          : QStringLiteral("not built, shown: "))
+                                + wrong.join(QStringLiteral("; "))));
+        }
     }
 
     // R-R3-46 (carried from the remote window Setup re-review): with the
