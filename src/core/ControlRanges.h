@@ -23,6 +23,10 @@
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code. Moved from VfoWidget, RxApplet, SMeterWidget,
 //               PhoneCwApplet and TxApplet.
+//   2026-09-24: AGC-T range re-cited against Thetis v2.10.3.15 and its top
+//               raised from 0 to +2 dB to match Thetis's clamp. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <array>
@@ -49,9 +53,13 @@ inline constexpr std::array<AgcModeItem, 5> kAgcModes{{
 }};
 
 // AGC-T, the VFO flag's and the RX applet's AGC threshold slider, in dB.
-// From Thetis Project Files/Source/Console/console.cs:45977 — agc_thresh_point, range -160..0
+// Thetis clamps the threshold it hands WDSP to -160..+2 in setAGCThresholdPoint:
+// From Thetis Project Files/Source/Console/console.cs:46048-46049 [v2.10.3.15]
+//   // MW0LGE_21k9d values are already offset as part of Display
+//   if (agc_thresh_point > 2) agc_thresh_point = 2;
+//   if (agc_thresh_point < -160.0) agc_thresh_point = -160.0;
 inline constexpr int kAgcThresholdMinDb = -160;
-inline constexpr int kAgcThresholdMaxDb = 0;
+inline constexpr int kAgcThresholdMaxDb = 2;
 inline constexpr int kAgcThresholdStepDb = 1;
 
 // ── S-meter ───────────────────────────────────────────────────────────────

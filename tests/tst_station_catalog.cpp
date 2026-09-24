@@ -199,6 +199,10 @@ void checkDesktopValues(const QJsonObject& catalog, HPSDRModel model, ProtocolVe
     }
     QCOMPARE(agc.value(QStringLiteral("thresholdDb")).toObject(),
              range(kAgcThresholdMinDb, kAgcThresholdMaxDb, kAgcThresholdStepDb));
+    // Thetis's clamp in setAGCThresholdPoint, console.cs:46048-46049 [v2.10.3.15].
+    QCOMPARE(kAgcThresholdMinDb, -160);
+    QCOMPARE(kAgcThresholdMaxDb, 2);
+    QCOMPARE(kAgcThresholdStepDb, 1);
 
     // Meters: the S-meter's scale and the three transmit gauges.
     const QJsonObject meters = catalog.value(QStringLiteral("meters")).toObject();

@@ -947,7 +947,8 @@ void RxApplet::buildUi()
         containerLayout->addLayout(headerRow);
 
         // Slider row: full container width — no sibling widgets.
-        // From Thetis Project Files/Source/Console/console.cs:45977 — agc_thresh_point
+        // From Thetis Project Files/Source/Console/console.cs:46048-46049 [v2.10.3.15] — agc_thresh_point, -160..+2
+        // (MW0LGE_21k9d: values are already offset as part of Display)
         m_agcTSlider = new QSlider(Qt::Horizontal, m_agcTContainer);
         m_agcTSlider->setRange(ControlRanges::kAgcThresholdMinDb,
                                ControlRanges::kAgcThresholdMaxDb);

@@ -1382,7 +1382,8 @@ void VfoWidget::buildAudioTab()
     }
 
     // 6. AGC threshold slider row
-    // From Thetis Project Files/Source/Console/console.cs:45977 — agc_thresh_point, range -160..0
+    // From Thetis Project Files/Source/Console/console.cs:46048-46049 [v2.10.3.15] — agc_thresh_point, range -160..+2
+    // (MW0LGE_21k9d: values are already offset as part of Display)
     {
         m_agcTContainer = new QWidget(audioWidget);
         auto* containerLayout = new QVBoxLayout(m_agcTContainer);
@@ -2610,7 +2611,8 @@ void VfoWidget::setSsqlThresh(double dB)
 void VfoWidget::setAgcThreshold(int dBu)
 {
     if (m_agcTSlider) {
-        int val = std::max(-160, std::min(0, dBu));
+        int val = std::max(ControlRanges::kAgcThresholdMinDb,
+                           std::min(ControlRanges::kAgcThresholdMaxDb, dBu));
         if (m_agcTSlider->value() != val) {
             m_updatingFromModel = true;
             m_agcTSlider->setValue(val);
