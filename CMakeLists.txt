@@ -1028,6 +1028,9 @@ set(CORE_SOURCES
     # than reading widget geometry and widget member state, so the daemon
     # can run the same reduction with no widget in the process.
     src/core/spectrum/SpectrumReducer.cpp
+    # iPhone app Task 19 (R-IOS-06): the waterfall palettes, moved from
+    # SpectrumWidget so the Core's catalogue can send them to an app.
+    src/core/spectrum/WaterfallPalettes.cpp
     # R1 Task 6: per-stream FFTEngine pool extracted from
     # MainWindow::createFftEngineForStream / m_fftEngines / m_fftThread.
     # Owns engine lifecycle, the four global display AppSettings-sourced

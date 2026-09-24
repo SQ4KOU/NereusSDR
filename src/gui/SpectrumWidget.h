@@ -18,6 +18,10 @@
 //                 GPLv3).
 //   2026-09-24 : peakHoldEnabledChanged signal (R-R3-49, R-R3-21).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 : WfGradientStop and wfSchemeStops() moved to
+//                 core/spectrum/WaterfallPalettes.h (iPhone app Task 19,
+//                 R-IOS-06). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-08-08 — J.J. Boyd (KG4VCF). Two bench-reported defects.
 //                 (1) Extended pan: Sub-Epic F shipped the wideband DATA
 //                 path and never the paint, so the stored bins had no
@@ -199,6 +203,7 @@ mw0lge@grange-lane.co.uk
 #include "core/WdspTypes.h"  // DSPMode — for TX filter IQ-space mapping (Plan 4 D9)
 #include "core/spectrum/SpectrumDetectorMode.h"
 #include "core/spectrum/ISpectrumSink.h"  // R1 Task 4: also supplies WfColorScheme + AverageMode
+#include "core/spectrum/WaterfallPalettes.h"  // iPhone app Task 19: WfGradientStop, wfSchemeStops
 #include "core/session/media/DisplayCodec.h"
 
 QT_BEGIN_NAMESPACE
@@ -281,11 +286,9 @@ enum class SpectrumAveraging : int {
     Count
 };
 
-// Gradient stop for waterfall color mapping.
-struct WfGradientStop { float pos; int r, g, b; };
-
-// Returns gradient stops for a given color scheme.
-const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count);
+// WfGradientStop and wfSchemeStops() live in core/spectrum/WaterfallPalettes.h
+// (iPhone app Task 19), included above, so the Core's catalogue reads the
+// same palettes.
 
 // Interpolate a 0..1 position across a scheme's gradient stops. Extracted
 // from dbmToRgb()'s inline loop so the 3DSS palette can share the stops
