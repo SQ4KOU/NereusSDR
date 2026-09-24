@@ -24,14 +24,22 @@
 // (OperatorWording::isPlain), a refresh every 5 seconds, and the first
 // start's notice.
 //
-// The page is served on loopback only. Keys are made at run time in
-// scratch directories.
+// Then the bind (R-R3-26): a Core's page listens exactly where its remote
+// listener does, DaemonConfig::listenAddressFor(remote_bind); with "::" it
+// answers over IPv4 and IPv6.
+//
+// The page is served on loopback, except the "::" case, which binds every
+// address as the listener's own dual-stack test does. Keys are made at run
+// time in scratch directories.
 //
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: the page binds where the listener binds, dual stack for
+//               "::" (R-R3-26). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -39,13 +47,18 @@
 #include <QHostInfo>
 #include <QMutex>
 #include <QRegularExpression>
+#include <QTcpServer>
 #include <QTcpSocket>
+#include <QDir>
 #include <QTemporaryDir>
 
 #include <memory>
 
 #include "core/AppSettings.h"
+#include "core/daemon/DaemonApp.h"
+#include "core/daemon/DaemonConfig.h"
 #include "core/daemon/StationStatusPage.h"
+#include "core/security/CertificateStore.h"
 #include "core/security/DeviceStore.h"
 #include "core/security/PairingWindow.h"
 #include "core/security/StationIdentity.h"
@@ -175,12 +188,128 @@ QString visibleText(const QString& html)
     return text.simplified();
 }
 
+
+int freePort(const QHostAddress& address)
+{
+    QTcpServer probe;
+    if (!probe.listen(address, 0)) {
+        return 0;
+    }
+    const int port = probe.serverPort();
+    probe.close();
+    return port;
+}
+
+// A GET over `address`; the status code, 0 when nothing answered.
+int fetchStatus(const QHostAddress& address, quint16 port)
+{
+    QTcpSocket socket;
+    socket.connectToHost(address, port);
+    if (!socket.waitForConnected(3000)) {
+        return 0;
+    }
+    const QString host = address.protocol() == QAbstractSocket::IPv6Protocol
+                             ? QStringLiteral("[%1]").arg(address.toString())
+                             : address.toString();
+    socket.write("GET / HTTP/1.1\r\nHost: " + host.toLatin1() + "\r\n\r\n");
+    QByteArray received;
+    [[maybe_unused]] const bool closed = QTest::qWaitFor([&socket, &received]() {
+        received += socket.readAll();
+        return socket.state() == QAbstractSocket::UnconnectedState;
+    }, 5000);
+    received += socket.readAll();
+    return statusOf(received);
+}
+
+// A DaemonApp's page on `remoteBind`, its listener on a port of its own.
+struct DaemonCore {
+    DaemonApp app;
+    DaemonConfig config = DaemonConfig::defaults();
+
+    explicit DaemonCore(const QString& remoteBind)
+    {
+        QDir(CertificateStore::defaultDirectory()).removeRecursively();
+        NereusSDR::Test::seedCoreIdentity(CertificateStore::defaultDirectory());
+        const QHostAddress probe = DaemonConfig::listenAddressFor(remoteBind);
+        config.remoteBind = remoteBind;
+        config.remotePort = freePort(probe);
+        config.statusPort = freePort(probe);
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+    }
+
+    ~DaemonCore()
+    {
+        app.stop();
+        QDir(CertificateStore::defaultDirectory()).removeRecursively();
+    }
+};
+
 } // namespace
 
 class TstStationStatusPage : public QObject {
     Q_OBJECT
 
 private slots:
+    // ── Where it listens (R-R3-26) ────────────────────────────────────
+
+    void initTestCase()
+    {
+        // The daemon cases keep the Core's identity in a profile of this
+        // test's own.
+        AppSettings::setProfileOverride(
+            QStringLiteral("tssp-%1").arg(QCoreApplication::applicationPid()));
+    }
+
+    void cleanupTestCase()
+    {
+        QDir(AppSettings::resolveConfigDir(AppSettings::profileOverride())).removeRecursively();
+    }
+
+    void thePageBindsWhereTheListenerBinds_data()
+    {
+        QTest::addColumn<QString>("remoteBind");
+        QTest::newRow("127.0.0.1") << QStringLiteral("127.0.0.1");
+        QTest::newRow("::1") << QStringLiteral("::1");
+    }
+
+    void thePageBindsWhereTheListenerBinds()
+    {
+        QFETCH(QString, remoteBind);
+        const QHostAddress expected = DaemonConfig::listenAddressFor(remoteBind);
+        if (freePort(expected) == 0) {
+            QSKIP(qPrintable(QStringLiteral("This host cannot listen on %1.").arg(remoteBind)));
+        }
+        DaemonCore core(remoteBind);
+        QVERIFY(core.app.start(core.config));
+        StationStatusPage* page = core.app.statusPage();
+        QVERIFY2(page != nullptr, "the status page did not start");
+        QCOMPARE(page->serverAddress(), expected);
+        QCOMPARE(page->serverAddress(), DaemonApp::listenerAddressFor(core.config.remoteBind));
+        QCOMPARE(fetchStatus(expected, page->serverPort()), 200);
+        // Bound to one address: nothing on the other family's loopback.
+        const QHostAddress other = expected.protocol() == QAbstractSocket::IPv4Protocol
+                                       ? QHostAddress(QHostAddress::LocalHostIPv6)
+                                       : QHostAddress(QHostAddress::LocalHost);
+        QCOMPARE(fetchStatus(other, page->serverPort()), 0);
+    }
+
+    void aDualStackBindAnswersIpv4AndIpv6()
+    {
+        DaemonCore core(QStringLiteral("::"));
+        QVERIFY(core.app.start(core.config));
+        StationStatusPage* page = core.app.statusPage();
+        QVERIFY2(page != nullptr, "the status page did not start");
+        QCOMPARE(page->serverAddress(), DaemonConfig::listenAddressFor(QStringLiteral("::")));
+        QCOMPARE(page->serverAddress(), QHostAddress(QHostAddress::Any));
+        QCOMPARE(fetchStatus(QHostAddress(QHostAddress::LocalHost), page->serverPort()), 200);
+        QTcpServer ipv6Probe;
+        if (!ipv6Probe.listen(QHostAddress::LocalHostIPv6, 0)) {
+            QSKIP("This host has no IPv6 loopback; the IPv4 half passed.");
+        }
+        ipv6Probe.close();
+        QCOMPARE(fetchStatus(QHostAddress(QHostAddress::LocalHostIPv6), page->serverPort()), 200);
+    }
+
     // ── Who sees the code ──────────────────────────────────────────────
 
     void anUnclaimedCoreShowsItsCode()

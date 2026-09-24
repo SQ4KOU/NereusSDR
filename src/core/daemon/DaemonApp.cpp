@@ -53,6 +53,9 @@
 //   2026-09-24: iPhone app Task 17 (R-IOS-08): the status page, the first
 //               start's label and page address, and the console socket.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24: the status page binds with the listener's dual-stack rule
+//               (iPhone app Task 17, R-IOS-08, R-R3-26). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -516,10 +519,14 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     // iPhone app Task 12: nereusd.conf's pairing_lan_click, read by the
     // pairing window (Task 14) for the one-click pairing on this network.
     m_stationServer->setPairingLanClickAllowed(cfg.pairingLanClickAllowed);
-    // iPhone app Task 17 (R-IOS-08): the status page, bound where the
-    // listener binds (the same helper), answering only this computer's own
-    // networks whatever the bind. Its failure to listen is logged, never
-    // fatal: the Core still runs and the console still shows the code.
+    // iPhone app Task 17 (R-IOS-08): the status page, bound exactly where the
+    // listener binds: `bind` above, listenerAddressFor(remote_bind), which is
+    // DaemonConfig::listenAddressFor's rule (R-R3-26). A Core bound to one
+    // address shows its page, and its code while unclaimed, only there; "::"
+    // and an empty remote_bind take IPv4 and IPv6. It answers only this
+    // computer's own networks whatever the bind. Its failure to listen is
+    // logged, never fatal: the Core still runs and the console still shows
+    // the code.
     if (cfg.statusPage) {
         StationStatusPage::Sources sources;
         sources.server = [this]() { return m_stationServer.get(); };
