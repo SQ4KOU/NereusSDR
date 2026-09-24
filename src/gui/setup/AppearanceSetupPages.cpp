@@ -351,7 +351,7 @@ void MeterStylesPage::buildUI()
         s.value(QStringLiteral("AppearanceSmallModeFilterOnVfos"), QStringLiteral("False")).toString() == QStringLiteral("True"));
 
     connect(m_smallModeFilterToggle, &QCheckBox::toggled, this,
-        [this](bool v) {
+        [](bool v) {
             AppSettings::instance().setValue(
                 QStringLiteral("AppearanceSmallModeFilterOnVfos"),
                 v ? QStringLiteral("True") : QStringLiteral("False"));

@@ -614,6 +614,18 @@ if(WIN32)
 else()
     if(PkgConfig_FOUND)
         pkg_check_modules(FFTW3 fftw3)
+        # pkg-config names the library bare ("fftw3"), which reaches the
+        # link line as -lfftw3 twice: once for NereusSDR's own targets and
+        # again after the static libraries that also need it (wdsp_static).
+        # Apple's ld warns "ignoring duplicate libraries: '-lfftw3'" on
+        # that. Linking the full path, as fftw3f already is, keeps the
+        # ordering and drops the warning.
+        if(FFTW3_FOUND)
+            find_library(FFTW3_FULL_PATH fftw3 HINTS ${FFTW3_LIBRARY_DIRS} NO_DEFAULT_PATH)
+            if(FFTW3_FULL_PATH)
+                set(FFTW3_LIBRARIES ${FFTW3_FULL_PATH})
+            endif()
+        endif()
     endif()
     if(NOT FFTW3_FOUND)
         find_library(FFTW3_LIB fftw3)
