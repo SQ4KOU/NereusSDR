@@ -15,6 +15,12 @@
 //                                    Slice-to-DDC-stream placement
 //                                    policy. AI-assisted transformation
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Receiver and transmit gaps plan
+//                                    Task 1: the stored slice ceiling is
+//                                    now read (admitsAnotherSlice), so
+//                                    every path that adds a slice keeps
+//                                    to it. AI-assisted transformation
+//                                    via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -51,7 +57,19 @@ public:
     };
 
     /// Size the allocator to the connected SKU. Clears all stream state.
+    /// `maxSlices` is the slice ceiling: one WDSP channel is opened per
+    /// slice id below it, so a slice past it would have no demodulator.
     void configure(int userDdcCount, int maxSlices);
+
+    /// The slice ceiling handed to configure().
+    int  maxSlices() const { return m_maxSlices; }
+
+    /// May a new slice be admitted while `liveSlices` already exist?
+    /// Checked before placement on every path that mints a slice
+    /// (RadioModel::addSlice); a slice past the ceiling is refused no
+    /// matter how well its frequency fits an existing window, because
+    /// sharing a window saves a DDC but never a demodulator channel.
+    bool admitsAnotherSlice(int liveSlices) const { return liveSlices < m_maxSlices; }
 
     /// Mark a stream active at a centre frequency and sample rate.
     void activateStream(int streamIndex, double centreHz, int sampleRateHz);

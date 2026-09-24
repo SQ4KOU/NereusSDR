@@ -1295,7 +1295,10 @@ public:
     /// Returns the new slice's id — the lowest not currently in use, which
     /// is also its WDSP RX channel id and its A-E display letter. Returns
     /// -1 if the allocator refused to place it, in which case nothing is
-    /// added: see the rollback in the definition.
+    /// added: see the rollback in the definition. Also returns -1, adding
+    /// nothing, when the slices already fill the ceiling the stream pool
+    /// was sized with; sliceAddRejected then carries the same cap reason
+    /// addSliceOnPan() gives (sliceCapReason).
     ///
     /// Remote-daemon R2: on a Role::Remote model this SENDS the addSlice
     /// verb and always returns -1, because the id is the STATION's to
@@ -4224,6 +4227,12 @@ private:
     /// job (addSliceWithStationId does).
     int addSliceImpl(int requestedId, const QString& initialPanId,
                      const ReceiveSliceState* restoreSeed = nullptr);
+
+    /// The operator's reason for a refused add at the slice cap:
+    /// "<radio> supports a maximum of <cap> slices". One wording for
+    /// addSliceOnPan() and addSlice(), and so for the session verbs that
+    /// relay them (Phase 3F design section 3).
+    QString sliceCapReason(int cap) const;
 
     /// Remote-daemon R2: shared body of removeSlice() and
     /// removeSliceWithStationId(), for the same reason addSliceImpl above

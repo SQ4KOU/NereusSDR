@@ -7045,12 +7045,47 @@ int RadioModel::addSlice(const QString& initialPanId)
         return -1;
     }
 
+    // Receiver and transmit gaps plan Task 1 (Phase 3F design section 3;
+    // R-R3-21): the slice cap holds on this path too, not only in
+    // addSliceOnPan. This is the path the session verb `addSlice` and
+    // DaemonApp's startup top-up take, so without it a remote window could
+    // add slices past the board's limit whenever the new slice fitted an
+    // existing receiver window (the allocator then shares the window and
+    // never refuses), leaving a slice on an id with no WDSP channel.
+    //
+    // The ceiling is the one the stream pool was sized with, not
+    // maxSlices(): the pool and the WDSP channel pool are opened together
+    // from the board's caps (connectToRadio, configureStreamPool), while
+    // maxSlices() reads 1 until isConnected() turns true. Once connected
+    // the two agree. Before any pool exists nothing binds, and a restored
+    // layout is admitted against the channel limit later
+    // (bindReceiveLayoutSlices), so there is nothing to hold here yet.
+    //
+    // Only this minting path is gated. addSliceWithStationId reproduces a
+    // slice the Core already made, and the layout restore paths call
+    // addSliceImpl directly with their own admission checks.
+    if (m_streamAllocator.streamCount() > 0
+        && !m_streamAllocator.admitsAnotherSlice(static_cast<int>(m_slices.size()))) {
+        emit sliceAddRejected(sliceCapReason(m_streamAllocator.maxSlices()));
+        return -1;
+    }
+
     // Remote-daemon R2 Task 18: -1 means "mint the lowest free id", which
     // is the only thing this entry point has ever done and the only thing
     // it does now. The body moved to addSliceImpl so a remote client can
     // reproduce the STATION's ids verbatim (addSliceWithStationId); no
     // behaviour changed on this path.
     return addSliceImpl(-1, initialPanId);
+}
+
+QString RadioModel::sliceCapReason(int cap) const
+{
+    // RadioInfo.name carries the friendly product label (e.g. "ANAN-G2");
+    // fall back to a generic phrase when disconnected.
+    const QString radioLabel = m_lastRadioInfo.name.isEmpty()
+                                   ? QStringLiteral("This radio")
+                                   : m_lastRadioInfo.name;
+    return QStringLiteral("%1 supports a maximum of %2 slices").arg(radioLabel).arg(cap);
 }
 
 int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
@@ -7706,16 +7741,8 @@ void RadioModel::addSliceOnPan(const QString& panId)
 
     if (m_slices.size() >= maxSlices()) {
         // Surface a human-readable cap reason for the status-bar / toast
-        // wiring landing in Sub-Epic C Tasks 8-9.  RadioInfo.name carries
-        // the friendly product label (e.g. "ANAN-G2"); fall back to a
-        // generic phrase when disconnected.
-        const QString radioLabel = m_lastRadioInfo.name.isEmpty()
-                                       ? QStringLiteral("This radio")
-                                       : m_lastRadioInfo.name;
-        const QString reason = QStringLiteral("%1 supports a maximum of %2 slices")
-                                   .arg(radioLabel)
-                                   .arg(maxSlices());
-        emit sliceAddRejected(reason);
+        // wiring landing in Sub-Epic C Tasks 8-9.
+        emit sliceAddRejected(sliceCapReason(maxSlices()));
         return;
     }
 
