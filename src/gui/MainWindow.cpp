@@ -9598,6 +9598,8 @@ SliceModel* MainWindow::containerSlice(const ContainerWidget* c) const
 
 void MainWindow::watchSlicesForContainers()
 {
+    // Fix wave M4: sliceAdded / sliceRemoved during teardown reach here too.
+    if (m_shuttingDown) { return; }
     for (const QMetaObject::Connection& conn : std::as_const(m_containerSliceConnections)) {
         QObject::disconnect(conn);
     }
@@ -9627,6 +9629,11 @@ void MainWindow::watchSlicesForContainers()
 
 void MainWindow::refreshContainerControls(MeterItem* only)
 {
+    // Fix wave M4: the refresh connections (the global targets, sliceAdded
+    // and sliceRemoved, each slice's changes) can fire while the window is
+    // torn down, after m_containerButtons is destroyed and before the
+    // children that emit are.
+    if (m_shuttingDown) { return; }
     if (!m_containerManager || !m_radioModel || !m_containerButtons) { return; }
     for (ContainerWidget* c : m_containerManager->allContainers()) {
         if (!c) { continue; }
@@ -9644,6 +9651,7 @@ void MainWindow::refreshContainerControls(MeterItem* only)
 
 void MainWindow::refreshContainer(ContainerWidget* c, MeterItem* only)
 {
+    if (m_shuttingDown) { return; }  // fix wave M4, as refreshContainerControls
     if (!c || !m_radioModel || !m_containerButtons) { return; }
     MeterWidget* meter = containerMeter(c);
     if (!meter) { return; }
@@ -9783,6 +9791,7 @@ void MainWindow::refreshContainer(ContainerWidget* c, MeterItem* only)
 
 void MainWindow::refreshContainerFrequency(SliceModel* slice)
 {
+    if (m_shuttingDown) { return; }  // fix wave M4, as refreshContainerControls
     if (!m_containerManager || !m_radioModel || !m_containerButtons || !slice) { return; }
     const Band band = bandFromFrequency(slice->frequency());
     for (ContainerWidget* c : m_containerManager->allContainers()) {
