@@ -20036,11 +20036,13 @@ void RadioModel::publishDdcAssignment(const NereusSDR::DdcAssignment& assignment
     // DDC has been suspended: the radio has stopped streaming it. Announce
     // it, because until now it was completely silent.
     //
-    // The suspension itself is CORRECT and stays. It is what Thetis does.
-    // On the 1-ADC HERMES class -- the family P2CodecHermes and
-    // P1CodecStandard implement -- UpdateDDCs collapses to a single synced
-    // pair the moment PureSignal transmits or diversity engages, dropping
-    // every user receiver including RX1:
+    // The suspension itself is CORRECT and stays. It is what Thetis does,
+    // and how much it drops depends on the protocol and the model.
+    //
+    // On Protocol 2 the 1-ADC Hermes class (P2CodecHermes) collapses to a
+    // single synced pair the moment PureSignal transmits, dropping every
+    // user receiver including RX1. UpdateDDCs's PureSignal-transmit arm
+    // enables only the pair:
     //
     //   From Thetis console.cs:8448-8456 [v2.10.3.15]:
     //     else // transmitting and PS is ON
@@ -20055,6 +20057,17 @@ void RadioModel::publishDdcAssignment(const NereusSDR::DdcAssignment& assignment
     // agrees: for Hermes / HermesII / HermesC10 on P2 the MOX+PS cases are
     // literally empty, so rx1 and rx2 both come back -1
     // (console.cs:8635-8636 and 8641-8642 [v2.10.3.15]).
+    //
+    // Protocol 1 does not collapse that far. For the four Hermes-class
+    // models (HERMES, ANAN10, ANAN100, ANAN_G2E) P1CodecStandard keeps both
+    // user streams on DDC0 and DDC1 while PureSignal transmits, because the
+    // pair rides DDC2 + DDC3 there (P1 GetDDC cases 5 and 7: rx1 = 0;
+    // rx2 = 1; psrx = 2; pstx = 3). Every other Protocol 1 model it serves
+    // (ANAN10E, ANAN100B, and the Orion/G2 class) leaves stream 1
+    // unassigned while PureSignal transmits, so slice B is suspended here
+    // until those models' own layouts are ported. Under diversity stream 1
+    // is unassigned on every model the codec serves: DDC1 is DDC0's sync
+    // partner.
     //
     // What Thetis does NOT do is tell the operator. Nothing unchecks RX2,
     // nothing greys it, and the only trace is a label that quietly fails to

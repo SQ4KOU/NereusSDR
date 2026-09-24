@@ -975,7 +975,8 @@ DdcAssignment P1CodecStandard::applyDdcAssignment(
         // DDC in this branch.
         a.nDdc = 4;
     } else if (ctx.diversity) {
-        // From Thetis console.cs:8428-8437 [v2.10.3.15]:
+        // From Thetis console.cs:8438-8447 [v2.10.3.15] (8410-8419 is the
+        // same body while not transmitting):
         //   else if (diversity_enabled && !puresignal_enabled) {
         //       P1_DDCConfig = 5; DDCEnable = DDC0; SyncEnable = DDC1;
         //       Rate[0] = rx1_rate; Rate[1] = rx1_rate;
@@ -989,8 +990,35 @@ DdcAssignment P1CodecStandard::applyDdcAssignment(
         a.adcCtrl2    = 0;
         a.p1Diversity = 1;
         a.nDdc = 4;
-        // From Thetis console.cs:8716-8719 / 8734-8737 [v2.10.3.15] GetDDC()
-        // cases 2 and 6 (diversity, no PureSignal): rx1 = 0.
+        // Which DDC each receiver reads under diversity.
+        // From Thetis console.cs:8716-8723, 8734-8737 [v2.10.3.15] GetDDC(),
+        // P1 branch, case HPSDRHW.Hermes / HPSDRHW.HermesC10:
+        //   case 2: // off on off
+        //       rx1 = 0;
+        //       rx2 = 1;
+        //   case 3: // off on on
+        //       rx1 = 0;
+        //       rx2 = 1;
+        //   case 6: // on on off
+        //       rx1 = 0;
+        //       rx2 = 1;
+        // The case number packs three flags, and the comments read them from
+        // the high bit down. From Thetis console.cs:8556-8560 [v2.10.3.15]:
+        //   int nME = MOX ? 1 : 0; // [0]
+        //   int nDE = diversityForm != null && Diversity2 ? 1 : 0; // [1]
+        //   int nPSE = psform.PSEnabled ? 1 : 0; // [2]
+        //   int tot = nME + (nDE << 1) + (nPSE << 2);
+        // So case 2 is diversity, case 3 diversity with MOX, and case 6
+        // diversity with PureSignal armed but not transmitting. All three
+        // land in this branch (case 7, PureSignal transmitting, takes the
+        // branch above).
+        //
+        // Stream 0 follows rx1 = 0. Stream 1 does not follow rx2 = 1: it
+        // stays -1, because DDC1 is DDC0's sync partner here (SyncEnable =
+        // DDC1, both at rx1_rate). No slice controller parks slice B ahead of
+        // this; the -1 is what takes it off the air. RadioModel::
+        // publishDdcAssignment deactivates stream 1's receiver and reports
+        // its slices suspended ("no receiver while diversity is on").
         if (slices[0].live) { a.streamDdc[0] = 0; }
     } else {
         // From Thetis console.cs:8393-8407 [v2.10.3.15]:
