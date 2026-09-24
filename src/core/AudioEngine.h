@@ -21,6 +21,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 : R-R3-45 Task 2 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Headphones in a remote window: the
+//                 master tap can take the speakers' mix alone, a second tap
+//                 takes the headphones mix (the Core's headphones stream),
+//                 and remote playback can target the headphones output.
 //   2026-09-23 : R-R3-45 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code. Headphones output beside the speakers (VAX
 //                 design 5.3, 6.2, 6.3): opened at start() when Setup,
@@ -177,6 +182,11 @@ class SliceModel;
 // borrowed interleaved stereo float32 and is valid only for the duration of
 // consume().  Implementations run on the DSP thread and must not block,
 // allocate, encode, or queue this pointer for later use.
+// R-R3-45: which of this computer's outputs a remote playback context
+// plays on. The speakers carry master volume and mute; the headphones
+// carry neither (VAX design 6.3).
+enum class RemotePlaybackOutput : int { Speakers = 0, Headphones = 1 };
+
 class MasterMixAudioTap {
 public:
     virtual ~MasterMixAudioTap() = default;
@@ -316,8 +326,22 @@ public:
     // thread performs only atomic admission and a synchronous invoke.
     // `clearMasterMixAudioTap` removes the tap only when `tap` still owns the
     // slot, so stopping an old source cannot detach a newer source.
-    void setMasterMixAudioTap(MasterMixAudioTap* tap);
+    //
+    // R-R3-45: the tap takes the station's program (every receiver, on the
+    // speakers or the headphones, summed) unless `speakersOnly`, when it
+    // takes the speakers' mix alone. A Core sends the speakers' mix alone
+    // to an app that plays the headphones mix on its own stream. Either way
+    // it is taken before master volume and mute.
+    void setMasterMixAudioTap(MasterMixAudioTap* tap, bool speakersOnly = false);
     void clearMasterMixAudioTap(MasterMixAudioTap* tap);
+
+    // R-R3-45: the one non-owning synchronous headphones-mix tap: the
+    // receivers routed to the headphones, each at its gain, pan and mute,
+    // with no master volume or mute. Its own admission gate, as the master
+    // tap's, so installing or removing it never withholds a block from the
+    // master tap. clear removes `tap` only while it owns the slot.
+    void setHeadphonesMixAudioTap(MasterMixAudioTap* tap);
+    void clearHeadphonesMixAudioTap(MasterMixAudioTap* tap);
 
     // R-R3-43: per-slice receiver audio taps, at most kMaxSliceAudioTaps at
     // once. Each slot has its own admission gate, so installing or removing
@@ -385,11 +409,22 @@ public:
     static constexpr int kMinRemotePlaybackRateHz = 8'000;
     static constexpr int kMaxRemotePlaybackRateHz = 384'000;
     static constexpr int kMaxRemotePlaybackFrames = 4096;
-    bool beginRemotePlayback(QString* error = nullptr);
-    void endRemotePlayback();
-    std::optional<AudioFormat> remotePlaybackFormat();
-    std::optional<IAudioBus::OutputPacing> remotePlaybackPacing();
-    bool writeRemotePlayback(const QVector<float>& pcm);
+    //
+    // R-R3-45: `output` Headphones plays on the headphones output instead,
+    // under the same rules, with its own format, pacing and state, and
+    // without master volume or mute (VAX design 6.3). Begin needs the
+    // headphones output open (the Enabled box, or a remote window's start,
+    // opens it) and fails in plain words when none is. A context on one
+    // output never touches the other.
+    bool beginRemotePlayback(QString* error = nullptr,
+                             RemotePlaybackOutput output = RemotePlaybackOutput::Speakers);
+    void endRemotePlayback(RemotePlaybackOutput output = RemotePlaybackOutput::Speakers);
+    std::optional<AudioFormat> remotePlaybackFormat(
+        RemotePlaybackOutput output = RemotePlaybackOutput::Speakers);
+    std::optional<IAudioBus::OutputPacing> remotePlaybackPacing(
+        RemotePlaybackOutput output = RemotePlaybackOutput::Speakers);
+    bool writeRemotePlayback(const QVector<float>& pcm,
+                             RemotePlaybackOutput output = RemotePlaybackOutput::Speakers);
 
     // R-R3-45: stores the headphones device and, when the headphones are
     // enabled, reopens the output on it. Emits headphonesConfigChanged.
@@ -977,6 +1012,11 @@ private:
     AudioDeviceConfig m_headphonesConfig;  // owner thread
     bool m_headphonesEnabled{false};       // owner thread
     bool m_headphonesAvailable{false};     // owner thread
+    // R-R3-45: remote playback on the headphones; protected by
+    // m_headphonesBusMutex, as m_remotePlayback is by the speakers'.
+    bool m_remoteHeadphonesPlayback{false};
+    AudioFormat m_remoteHeadphonesFormat;
+    bool beginRemoteHeadphonesPlayback(QString* error);
     // Test-injected TX input only (setTxInputBusForTest); production reads
     // the capture supervisor's reader. R-R3-36.
     std::unique_ptr<IAudioBus> m_txInputBus;
@@ -1069,6 +1109,13 @@ private:
     std::atomic<bool> m_masterMixTapAdmissionClosed{false};
     std::atomic<unsigned> m_masterMixTapCallsInFlight{0};
     std::mutex m_masterMixTapControlMutex;
+    // R-R3-45: set with the tap, while its gate is closed and drained.
+    std::atomic<bool> m_masterMixTapSpeakersOnly{false};
+    // R-R3-45: the headphones-mix tap, gated exactly as the master tap.
+    std::atomic<MasterMixAudioTap*> m_headphonesMixAudioTap{nullptr};
+    std::atomic<bool> m_headphonesMixTapAdmissionClosed{false};
+    std::atomic<unsigned> m_headphonesMixTapCallsInFlight{0};
+    std::mutex m_headphonesMixTapControlMutex;
 
     // R-R3-43 receiver taps: the master tap's gate, one per slot. sliceId
     // is -1 while the slot is free; it and the tap change only while the

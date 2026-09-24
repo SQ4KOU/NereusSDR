@@ -13,6 +13,10 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-40: SliceModel nnrLimit is
 //                                    Outbound. AI-assisted implementation
 //                                    via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-45: SliceModel outputRoute is
+//                                    Bidirectional. AI-assisted
+//                                    implementation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -77,7 +81,7 @@ namespace {
 // WRITE. Listing them keeps the table total, so the guard can name a
 // newly added property instead of silently accepting it.
 const MirrorPolicy::Entry kEntries[] = {
-    // ---- SliceModel (109 entries) ----
+    // ---- SliceModel (144 entries) ----
     { "SliceModel", "frequency", MirrorDirection::Bidirectional },
     { "SliceModel", "dspMode", MirrorDirection::Bidirectional },
     { "SliceModel", "filterLow", MirrorDirection::Bidirectional },
@@ -124,6 +128,11 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "locked", MirrorDirection::Bidirectional },
     { "SliceModel", "muted", MirrorDirection::Bidirectional },
     { "SliceModel", "audioPan", MirrorDirection::Bidirectional },
+    // R-R3-45: speakers or headphones (VAX design 6.2). The Core owns it:
+    // the Core's mixer splits the two mixes and the Core saves the choice;
+    // a remote window writes it from the flag and plays the headphones mix
+    // the Core sends while any receiver is on the headphones.
+    { "SliceModel", "outputRoute", MirrorDirection::Bidirectional },
     { "SliceModel", "ssqlEnabled", MirrorDirection::Bidirectional },
     { "SliceModel", "ssqlThresh", MirrorDirection::Bidirectional },
     { "SliceModel", "amsqEnabled", MirrorDirection::Bidirectional },

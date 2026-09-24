@@ -70,6 +70,11 @@
 //                 Claude Code. A local slice restores its speakers or
 //                 headphones choice (Slice<N>/OutputRoute) when it is added.
 //                 NereusSDR-original; no Thetis logic.
+//   2026-09-23 : R-R3-45 Task 2 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. A local slice is restored through
+//                 SliceModel::loadFromSettings(), so its VAX channel comes
+//                 back too; a remote window's slice leaves its output route
+//                 to the Core. NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -6149,11 +6154,13 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
                                            ? m_receiveLayoutMac : m_lastRadioInfo.macAddress);
         // Restore before binding can activate a pooled receiver. Each stable
         // slice ID owns its NR selection even when another slice has focus.
-        slice->restoreNnrSettings();
+        // loadFromSettings() restores the NR selection, the VAX channel
+        // (Slice<N>/VaxChannel, which nothing restored before R-R3-45's
+        // follow-up) and, R-R3-45, speakers or headphones, all before the
+        // first block reaches AudioEngine so the receiver starts on its own
+        // output and VAX channel.
+        slice->loadFromSettings();
         wireNnrSettings(slice);
-        // R-R3-45: speakers or headphones, restored before the first block
-        // reaches AudioEngine so the receiver starts on its own output.
-        slice->restoreOutputRoute();
     } else {
         // R-R3-44: a remote window's VAX channels are this computer's. The
         // slice keeps its channel through the window's store (set by
@@ -6164,6 +6171,10 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
                 m_remoteVaxChannelStore(sliceIndex, channel);
             }
         });
+        // R-R3-45: speakers or headphones is the Core's slice property,
+        // mirrored both ways; the Core saves and restores it, so a remote
+        // window writes nothing of its own.
+        slice->setOutputRoutePersisted(false);
     }
     // Phase 3F: stamp the owning pan id BEFORE the sliceAdded() emit below,
     // so the MainWindow handler routes the new VfoWidget to the correct

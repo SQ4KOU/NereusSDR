@@ -166,6 +166,15 @@ struct StationCapabilities {
     /// receiver-audio-context. Nonzero only with media. A GUI that does not
     /// see it sends no receiver request and gets no receiver stream.
     int receiverAudioVersion = 0;
+    /// R-R3-45: 1 means the Core can send the headphones mix (the receivers
+    /// routed to the headphones) on its own stream beside the speakers'
+    /// mix. A GUI that sees it may add headphonesMixVersion to its media
+    /// start (the offer then declares the headphones stream id and the main
+    /// stream carries the speakers' mix alone) and send {op:
+    /// "headphones-audio", connectionId, revision, enabled, profile}; the
+    /// Core answers with a headphones-audio-context. Nonzero only with
+    /// media. A GUI that does not see it gets today's wire.
+    int headphonesMixVersion = 0;
 
     /// The daemon's own AppSettings SettingsSchemaVersion, read by that
     /// key name from its own store. See StationClient's schema-skew check.

@@ -681,11 +681,11 @@ private slots:
             "nnrVersion", "psAlgorithmVersion", "propertyResultVersion", "dspAssetVersion",
             "psDisplayVersion",
             // Lane B's per-feature versions (R-R3-21 notches, R-R3-23
-            // lossless audio, R-R3-35 audio clock, R-R3-43 receiver audio)
-            // go to every GUI whatever its minor, so they are part of
-            // today's shape too.
+            // lossless audio, R-R3-35 audio clock, R-R3-43 receiver audio,
+            // R-R3-45 headphones mix) go to every GUI whatever its minor,
+            // so they are part of today's shape too.
             "notchControlVersion", "audioProfileVersion", "audioClockVersion",
-            "receiverAudioVersion",
+            "receiverAudioVersion", "headphonesMixVersion",
             "settingsSchemaVersion",
             "displayApplicationBytesPerSecond", "spectrumSampleUnitsPerSecond",
             "displayBudgetGeneration", "remotePs3DisplaySubscribed",

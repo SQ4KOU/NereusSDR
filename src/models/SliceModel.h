@@ -29,6 +29,9 @@
 //                 or the headphones, persisted as Slice<N>/OutputRoute
 //                 (VAX design 6.2). By J.J. Boyd (KG4VCF), with Anthropic
 //                 Claude Code assistance.
+//   2026-09-23 : R-R3-45 Task 2 setOutputRoutePersisted(): a remote
+//                 window's slice leaves its route to the Core. By J.J. Boyd
+//                 (KG4VCF), with Anthropic Claude Code assistance.
 // =================================================================
 
 //=================================================================
@@ -1179,6 +1182,11 @@ public:
     }
     void setOutputRoute(OutputRoute route);
     void restoreOutputRoute();
+    // R-R3-45: whether setOutputRoute() writes Slice<N>/OutputRoute. True
+    // (the default) for a local slice. A remote window's RadioModel sets it
+    // false: the route is the Core's slice property, mirrored both ways, and
+    // the Core saves and restores it. Owner thread.
+    void setOutputRoutePersisted(bool persisted) { m_outputRoutePersisted = persisted; }
     static QString outputRouteSettingValue(OutputRoute route);
 
     // ── Phase 3J-2 Task D5: per-slice live SNR (NereusSDR-native) ──
@@ -1554,6 +1562,7 @@ private:
     std::atomic<int> m_vaxChannel{0};  // 0=Off, 1..4=VAX N. Atomic for audio-thread-safe reads.
     VaxChannelStore m_vaxChannelStore;  // R-R3-44: see setVaxChannelStore()
     std::atomic<int> m_outputRoute{0};  // R-R3-45: OutputRoute; 0 = speakers
+    bool m_outputRoutePersisted{true};  // R-R3-45: see setOutputRoutePersisted()
 
     // ── Phase 3J-2 Task D5: live SNR (NereusSDR-native) ──
     // Default NaN means "no SNR available." Populated by RadeChannel

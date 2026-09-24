@@ -62,6 +62,8 @@ QString remoteAudioOffReasonToWire(RemoteAudioOffReason reason)
         return QStringLiteral("slice-removed");
     case RemoteAudioOffReason::ReceiverLimit:
         return QStringLiteral("receiver-limit");
+    case RemoteAudioOffReason::NoHeadphonesReceiver:
+        return QStringLiteral("no-headphones-receiver");
     }
     return {};
 }
@@ -95,6 +97,19 @@ std::optional<RemoteAudioOffReason> receiverAudioOffReasonFromWire(const QJsonVa
         if (value.toString() == remoteAudioOffReasonToWire(reason)) {
             return reason;
         }
+    }
+    return std::nullopt;
+}
+
+std::optional<RemoteAudioOffReason> headphonesAudioOffReasonFromWire(const QJsonValue& value)
+{
+    if (const std::optional<RemoteAudioOffReason> main = remoteAudioOffReasonFromWire(value)) {
+        return main;
+    }
+    if (value.isString()
+        && value.toString()
+            == remoteAudioOffReasonToWire(RemoteAudioOffReason::NoHeadphonesReceiver)) {
+        return RemoteAudioOffReason::NoHeadphonesReceiver;
     }
     return std::nullopt;
 }
@@ -294,14 +309,20 @@ QJsonObject encodeRemoteAudioContext(const RemoteAudioContextMessage& message,
 
 namespace {
 
-// The shared decoder. `receiver` selects the receiver-audio-context: its op,
+// Which context decodeContext reads.
+enum class ContextKind { Main, Receiver, Headphones };
+
+// The shared decoder. Receiver selects the receiver-audio-context: its op,
 // one more key (sliceId, checked by the caller), ssrc 0 allowed while
-// disabled, and all six off reasons.
+// disabled, and all six off reasons. Headphones (R-R3-45) selects the
+// headphones-audio-context: its op, the profile shape's keys, a nonzero
+// ssrc, and the four main reasons plus no-headphones-receiver.
 std::optional<RemoteAudioContextMessage> decodeContext(const QJsonObject& payload,
                                                        bool detailNegotiated,
                                                        bool profileNegotiated,
-                                                       bool receiver)
+                                                       ContextKind kind)
 {
+    const bool receiver = kind == ContextKind::Receiver;
     profileNegotiated = profileNegotiated && detailNegotiated;
     // The profile shape adds "profile" and, beside profile opus only,
     // "profileRefusal"; the rest is checked as the detail shape.
@@ -326,7 +347,9 @@ std::optional<RemoteAudioContextMessage> decodeContext(const QJsonObject& payloa
                 + receiverKeys
         || !op.isString()
         || op.toString() != (receiver ? QLatin1String("receiver-audio-context")
-                                      : QLatin1String("audio-context"))
+                             : kind == ContextKind::Headphones
+                                 ? QLatin1String("headphones-audio-context")
+                                 : QLatin1String("audio-context"))
         || !connectionId.isString() || !enabled.isBool()
         || !integral(payload.value(QStringLiteral("revision")), 1.0, kMaxU32, revision)
         || !integral(payload.value(QStringLiteral("generation")), 1.0, kMaxU32, generation)
@@ -384,7 +407,9 @@ std::optional<RemoteAudioContextMessage> decodeContext(const QJsonObject& payloa
         }
         message.offReason = receiver
             ? receiverAudioOffReasonFromWire(payload.value(QStringLiteral("reason")))
-            : remoteAudioOffReasonFromWire(payload.value(QStringLiteral("reason")));
+            : kind == ContextKind::Headphones
+                ? headphonesAudioOffReasonFromWire(payload.value(QStringLiteral("reason")))
+                : remoteAudioOffReasonFromWire(payload.value(QStringLiteral("reason")));
         if (!message.offReason) {
             return std::nullopt;
         }
@@ -398,7 +423,7 @@ std::optional<RemoteAudioContextMessage> decodeRemoteAudioContext(const QJsonObj
                                                                   bool detailNegotiated,
                                                                   bool profileNegotiated)
 {
-    return decodeContext(payload, detailNegotiated, profileNegotiated, /*receiver=*/false);
+    return decodeContext(payload, detailNegotiated, profileNegotiated, ContextKind::Main);
 }
 
 QJsonObject encodeReceiverAudioContext(const RemoteReceiverAudioContextMessage& message)
@@ -422,7 +447,7 @@ std::optional<RemoteReceiverAudioContextMessage> decodeReceiverAudioContext(
     }
     std::optional<RemoteAudioContextMessage> context =
         decodeContext(payload, /*detailNegotiated=*/true, /*profileNegotiated=*/true,
-                      /*receiver=*/true);
+                      ContextKind::Receiver);
     if (!context) {
         return std::nullopt;
     }
@@ -430,6 +455,21 @@ std::optional<RemoteReceiverAudioContextMessage> decodeReceiverAudioContext(
     message.sliceId = static_cast<int>(sliceId);
     message.context = std::move(*context);
     return message;
+}
+
+QJsonObject encodeHeadphonesAudioContext(const RemoteAudioContextMessage& message)
+{
+    // The audio-profile shape, key for key, under this context's op.
+    QJsonObject payload = encodeRemoteAudioContext(message, /*detailNegotiated=*/true,
+                                                   /*profileNegotiated=*/true);
+    payload.insert(QStringLiteral("op"), QStringLiteral("headphones-audio-context"));
+    return payload;
+}
+
+std::optional<RemoteAudioContextMessage> decodeHeadphonesAudioContext(const QJsonObject& payload)
+{
+    return decodeContext(payload, /*detailNegotiated=*/true, /*profileNegotiated=*/true,
+                         ContextKind::Headphones);
 }
 
 } // namespace NereusSDR

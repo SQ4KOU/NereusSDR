@@ -931,9 +931,12 @@ private slots:
         QCOMPARE(app.stops().constLast().second, QStringLiteral("media-not-ready"));
 
         h.hideReceiverAudio = true;
+        // R-R3-45: such a Core predates the headphones mix too.
+        h.hideHeadphonesMix = true;
         h.connectSession();
         QVERIFY(remoteMedia.audioProfileNegotiated());
         QVERIFY(!remoteMedia.receiverAudioNegotiated());
+        QVERIFY(!remoteMedia.headphonesMixNegotiated());
         QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
                                   RemoteAudioStatus::State::Playing, 15000);
         QTRY_VERIFY(!app.stops().isEmpty()
@@ -995,6 +998,133 @@ private slots:
 
         source.stop();
         speaker.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-45: headphones in a remote window, over the real encrypted
+    // session. Routing slice B to the headphones on this computer's flag
+    // writes the Core's slice (the route is a mirrored slice property the
+    // Core owns and saves), and the Core starts a second mix on its own
+    // stream. The headphones play B's tone (1579 Hz) and not A's; the
+    // speakers keep A (617 Hz) and lose B. Routing B back stops the second
+    // stream and B returns to the speakers. The speakers' stream is never
+    // restarted by any of it.
+    void headphonesPlayTheirReceiverWhileTheSpeakersKeepTheOther()
+    {
+        Harness h;
+        const auto routes = qScopeGuard([&h] { h.resetOutputRoutes(); });
+        h.attachRemoteHeadphones();
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QSignalSpy remoteErrors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        QTimer source;
+        source.setInterval(10);
+        source.setTimerType(Qt::PreciseTimer);
+        connect(&source, &QTimer::timeout, &source, [&h] { h.feedMixedTone(); });
+        QTimer devices;
+        devices.setInterval(10);
+        devices.setTimerType(Qt::PreciseTimer);
+        connect(&devices, &QTimer::timeout, &devices, [&h] {
+            h.remoteBus->render(kFrames);
+            h.remoteHeadphonesBus->render(kFrames);
+        });
+        source.start();
+        devices.start();
+
+        h.connectSession();
+        QVERIFY(remoteMedia.headphonesMixNegotiated());
+        QVERIFY(remoteMedia.headphonesProblem().isEmpty());
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
+                                  RemoteAudioStatus::State::Playing, 15000);
+        const auto startsOf = [&coreControls] {
+            QList<QJsonObject> found;
+            for (const auto& call : coreControls) {
+                const QJsonObject control = call.at(0).toJsonObject();
+                if (control.value(QStringLiteral("op")) == QLatin1String("start")) {
+                    found << control;
+                }
+            }
+            return found;
+        };
+        QCOMPARE(startsOf().size(), 1);
+        QCOMPARE(startsOf().constFirst().value(QStringLiteral("headphonesMixVersion")).toInteger(),
+                 qint64{1});
+        // Asked for (this computer has headphones), off while nothing is
+        // routed there.
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.acceptedHeadphonesContext().has_value(), 5000);
+        QVERIFY(!remoteMedia.acceptedHeadphonesContext()->enabled);
+        QCOMPARE(remoteMedia.acceptedHeadphonesContext()->offReason,
+                 std::optional{RemoteAudioOffReason::NoHeadphonesReceiver});
+        const int mainContexts = int(audioContexts(controls).size());
+
+        // B to the headphones, from the remote window's flag.
+        SliceModel* const remoteB = h.remote.sliceById(h.sliceB);
+        QVERIFY(remoteB != nullptr);
+        remoteB->setOutputRoute(SliceModel::OutputRoute::Headphones);
+        QTRY_COMPARE_WITH_TIMEOUT(h.station.sliceById(h.sliceB)->outputRoute(),
+                                  SliceModel::OutputRoute::Headphones, 5000);
+        // The Core saved it (Core and window share one settings store in
+        // this test; tst_slice_model_phase3f_properties shows a remote
+        // window's slice writes none of its own).
+        QCOMPARE(AppSettings::instance()
+                     .value(QStringLiteral("Slice%1/OutputRoute").arg(h.sliceB)).toString(),
+                 QStringLiteral("Headphones"));
+        QTRY_VERIFY_WITH_TIMEOUT(daemonMedia.headphonesMixSending(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.acceptedHeadphonesContext()
+                                     && remoteMedia.acceptedHeadphonesContext()->enabled, 5000);
+        const int speakerFrom = int(h.remoteBus->heard.size() / 2);
+        const int headphonesFrom = int(h.remoteHeadphonesBus->heard.size() / 2);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            h.remoteHeadphonesBus->heard.size() / 2 >= headphonesFrom + 96000
+                && channelEnergy(h.remoteHeadphonesBus->heard, 1, headphonesFrom + 48000) > 1.0
+                && h.remoteBus->heard.size() / 2 >= speakerFrom + 96000,
+            20000);
+        // Past the codec's start and the route's own crossfade.
+        const int hpSettle = headphonesFrom + 48000;
+        const int spkSettle = speakerFrom + 48000;
+        const QVector<float> headphones = h.remoteHeadphonesBus->heard;
+        const QVector<float> speakers = h.remoteBus->heard;
+        const double hp1579 = toneAmplitude(headphones, 1, 1579.0, hpSettle);
+        const double hp617 = std::max(toneAmplitude(headphones, 0, 617.0, hpSettle),
+                                      toneAmplitude(headphones, 1, 617.0, hpSettle));
+        const double spk617 = toneAmplitude(speakers, 0, 617.0, spkSettle);
+        const double spk1579 = std::max(toneAmplitude(speakers, 0, 1579.0, spkSettle),
+                                        toneAmplitude(speakers, 1, 1579.0, spkSettle));
+        qInfo() << "headphones 1579/617" << hp1579 << hp617 << "speakers 617/1579" << spk617
+                << spk1579;
+        QVERIFY(hp1579 > 0.05);
+        QVERIFY(hp1579 > 8.0 * hp617);
+        QVERIFY(spk617 > 0.05);
+        QVERIFY(spk617 > 8.0 * spk1579);
+        // The speakers' stream carried on: no new context for it.
+        QCOMPARE(int(audioContexts(controls).size()), mainContexts);
+        QCOMPARE(remoteMedia.audioStatus().state, RemoteAudioStatus::State::Playing);
+        QVERIFY(remoteMedia.headphonesTelemetry().running);
+        QCOMPARE(remoteErrors.count(), 0);
+
+        // B back to the speakers: the second stream stops, B returns there.
+        remoteB->setOutputRoute(SliceModel::OutputRoute::Speakers);
+        QTRY_VERIFY_WITH_TIMEOUT(!daemonMedia.headphonesMixSending(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.acceptedHeadphonesContext()
+                                     && !remoteMedia.acceptedHeadphonesContext()->enabled, 5000);
+        QCOMPARE(remoteMedia.acceptedHeadphonesContext()->offReason,
+                 std::optional{RemoteAudioOffReason::NoHeadphonesReceiver});
+        QVERIFY(!remoteMedia.headphonesTelemetry().running);
+        const int backFrom = int(h.remoteBus->heard.size() / 2);
+        QTRY_VERIFY_WITH_TIMEOUT(h.remoteBus->heard.size() / 2 >= backFrom + 72000, 15000);
+        // B plays at its own gain there (0.45 of the tone, right-panned),
+        // well clear of the silence it had while on the headphones.
+        const double back1579 = toneAmplitude(h.remoteBus->heard, 1, 1579.0, backFrom + 24000);
+        qInfo() << "speakers 1579 after B came back" << back1579;
+        QVERIFY(back1579 > 0.02);
+        QVERIFY(back1579 > 100.0 * spk1579);
+        QCOMPARE(int(audioContexts(controls).size()), mainContexts);
+        QCOMPARE(remoteErrors.count(), 0);
+
+        source.stop();
+        devices.stop();
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 

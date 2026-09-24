@@ -433,6 +433,11 @@ public:
     void setHeadphonesAvailable(bool available);
     // The words the flag shows in that case.
     static QString headphonesMissingText();
+    // R-R3-45: in a remote window, why a receiver on the headphones is
+    // silent although this computer has headphones (plain words from
+    // RemoteMediaController::headphonesProblem()); empty when nothing is.
+    // Shown in the same notice while the headphones are chosen.
+    void setHeadphonesProblem(const QString& problem);
 
     // --- Auto AGC-T visual update (Task 6) ---
     void updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double offset,
@@ -804,6 +809,7 @@ private:
     QPushButton*        m_headphonesBtn{nullptr};
     QLabel*             m_outputNotice{nullptr};
     bool                m_headphonesAvailable{false};
+    QString             m_headphonesProblem;  // R-R3-45
     void updateOutputNotice();
     QPushButton*        m_sqlBtn{nullptr};
     QSlider*            m_sqlSlider{nullptr};

@@ -76,6 +76,7 @@ public:
         startedRole = options.role;
         startedSsrc = options.localAudioSsrc;
         startedReceiverSsrcs = options.receiverAudioSsrcs;
+        startedHeadphonesSsrc = options.headphonesAudioSsrc;
         return started;
     }
 
@@ -139,6 +140,7 @@ public:
     Role startedRole = Role::Answerer;
     quint32 startedSsrc = 0;
     QList<quint32> startedReceiverSsrcs;
+    quint32 startedHeadphonesSsrc = 0;
     QList<QPair<QString, QString>> descriptions;
     QList<QPair<QString, QString>> candidates;
     QList<QByteArray> sentDisplay;
@@ -173,6 +175,7 @@ private slots:
     void startRefusalsAreTyped();
     void receiverSsrcsAreDerivedAndDistinct();
     void receiverStreamsFollowTheStartOption();
+    void headphonesMixFollowsTheStartOption();
     void realPeersCarryDeclaredReceiverStreams();
 };
 
@@ -774,6 +777,66 @@ void TestMediaPeer::realPeersCarryDeclaredReceiverStreams()
         }
         QCOMPARE(rtpReceived.at(0).at(0).toByteArray(), main);
     }
+}
+
+// R-R3-45: the headphones mix SSRC is the first four big-endian bytes of
+// SHA-256("NereusSDR/media-headphones-ssrc/v1:" + connection id), distinct
+// from the main and every receiver SSRC. Without the start option the
+// transport is asked for nothing and the id is refused both ways; with it,
+// it passes both filters, receiver streams or not.
+void TestMediaPeer::headphonesMixFollowsTheStartOption()
+{
+    for (const char* connection : {kConnectionA, kConnectionB}) {
+        const QString connectionId = QLatin1String(connection);
+        const quint32 headphones = MediaPeer::headphonesAudioSsrcForConnection(connectionId);
+        const QByteArray digest = QCryptographicHash::hash(
+            QByteArray("NereusSDR/media-headphones-ssrc/v1:") + connectionId.toUtf8(),
+            QCryptographicHash::Sha256);
+        const quint32 derived = (quint32(quint8(digest[0])) << 24)
+            | (quint32(quint8(digest[1])) << 16)
+            | (quint32(quint8(digest[2])) << 8) | quint32(quint8(digest[3]));
+        QCOMPARE(headphones, derived);
+        QVERIFY(headphones != 0);
+        QVERIFY(!MediaPeer::receiverAudioSsrcsForConnection(connectionId).contains(headphones));
+    }
+
+    QList<QPointer<FakeTransport>> transports;
+    MediaPeer peer(nullptr, [&transports](QObject* parent) -> IMediaTransport* {
+        auto* transport = new FakeTransport(parent);
+        transports.push_back(transport);
+        return transport;
+    });
+    QSignalSpy received(&peer, &MediaPeer::rtpReceived);
+    QSignalSpy errors(&peer, &MediaPeer::errorOccurred);
+    const quint32 headphones =
+        MediaPeer::headphonesAudioSsrcForConnection(QLatin1String(kConnectionA));
+
+    // Today.
+    QVERIFY(peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
+    FakeTransport* today = transports.constLast();
+    QCOMPARE(today->startedHeadphonesSsrc, quint32{0});
+    QCOMPARE(peer.headphonesAudioSsrc(), quint32{0});
+    today->fireReady();
+    QVERIFY(!peer.sendRtp(rtpPacket(1, headphones)));
+    today->fireRtp(rtpPacket(2, headphones));
+    QCOMPARE(received.size(), 0);
+    QCOMPARE(errors.size(), 1);
+    peer.stop();
+
+    // Asked for, without receiver streams.
+    QVERIFY(peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA),
+                       IMediaTransport::kDefaultAudioTargetBitrate, false, false, true));
+    FakeTransport* asked = transports.constLast();
+    QCOMPARE(asked->startedHeadphonesSsrc, headphones);
+    QVERIFY(asked->startedReceiverSsrcs.isEmpty());
+    QCOMPARE(peer.headphonesAudioSsrc(), headphones);
+    asked->fireReady();
+    QVERIFY(peer.sendRtp(rtpPacket(3, headphones)));
+    asked->fireRtp(rtpPacket(4, headphones));
+    QCOMPARE(received.size(), 1);
+    QCOMPARE(errors.size(), 1);
+    peer.stop();
+    QCOMPARE(peer.headphonesAudioSsrc(), quint32{0});
 }
 
 QTEST_GUILESS_MAIN(TestMediaPeer)

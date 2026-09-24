@@ -533,6 +533,23 @@ private slots:
         QCOMPARE(h.radio->sliceById(b)->outputRoute(), SliceModel::OutputRoute::Headphones);
         AppSettings::instance().clear();
     }
+
+    // R-R3-45 (carried from Task 1): each local slice's VAX channel is
+    // restored when it is added, as its output route is. Nothing called
+    // SliceModel::loadFromSettings(), so the saved channel was lost on
+    // every restart.
+    void addedSliceRestoresItsVaxChannel()
+    {
+        AppSettings::instance().clear();
+        AppSettings::instance().setValue(QStringLiteral("Slice1/VaxChannel"),
+                                         QStringLiteral("3"));
+        Harness h = makeHarness();
+        const int a = h.radio->addSlice();
+        const int b = h.radio->addSlice();
+        QCOMPARE(h.radio->sliceById(a)->vaxChannel(), 0);
+        QCOMPARE(h.radio->sliceById(b)->vaxChannel(), 3);
+        AppSettings::instance().clear();
+    }
 };
 
 QTEST_MAIN(TstAudioEngineMultiSliceMix)

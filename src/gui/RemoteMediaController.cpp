@@ -88,6 +88,10 @@ RemoteAudioProfile storedAudioProfileChoice()
                == QLatin1String("Lossless")
         ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus;
 }
+// R-R3-45: the link trial's stream number for the headphones mix (the
+// speakers' mix is -1, a receiver stream its slice id).
+constexpr int kHeadphonesTrialStream = -2;
+
 // Speaker progress this recent means audio is playing now: the window the
 // title bar has always used.
 constexpr qint64 kPlaybackProgressWindowMs = 500;
@@ -512,6 +516,21 @@ struct RemoteMediaController::Private {
     QHash<int, quint32> receiverRevisions;
     // R-R3-43: the receiver stream ids this media connection declared.
     QList<quint32> receiverSsrcs;
+    // R-R3-45: the headphones mix, played on this computer's headphones
+    // with its own rate matching. Everything but the receiver belongs to
+    // the current media connection and is reset with it.
+    std::unique_ptr<RemoteAudioReceiver> headphones;
+    quint32 headphonesSsrc = 0;               // declared by this connection
+    std::optional<RemoteAudioContextMessage> headphonesContext;
+    quint32 headphonesRevision = 0;           // last request sent
+    quint32 headphonesGeneration = 0;         // newest accepted context
+    bool headphonesRequested = false;         // last request asked for it
+    // This computer's headphones failed: not asked for again until the
+    // device changes or the operator chooses the audio quality again.
+    bool headphonesFaulted = false;
+    bool headphonesRetryPending = false;
+    qint64 headphonesLastRequestMs = -1000;
+    QString headphonesProblem;
     bool destroying = false;
     std::optional<RemoteAudioContextMessage> acceptedAudioContext;
     quint32 audioRevision = 0;
@@ -696,6 +715,33 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     });
     connect(model->audioEngine(), &AudioEngine::masterMutedChanged,
             this, &RemoteMediaController::requestAudio);
+    // R-R3-45: the headphones mix plays on this computer's headphones with
+    // its own receiver and rate matcher. A failure there stops only it.
+    d->headphones = std::make_unique<RemoteAudioReceiver>(model->audioEngine(),
+                                                          RemotePlaybackOutput::Headphones);
+    connect(d->headphones.get(), &RemoteAudioReceiver::restartRequested,
+            this, &RemoteMediaController::onHeadphonesRestart);
+    connect(d->headphones.get(), &RemoteAudioReceiver::errorOccurred,
+            this, &RemoteMediaController::onHeadphonesError);
+    // Headphones opened, closed or moved to another device: a device that
+    // failed gets a fresh chance, and the Core is asked accordingly.
+    const auto headphonesDeviceChanged = [this] {
+        // Opened, closed or moved: whatever played stops now (so a device
+        // closed on purpose is not reported as a failure), a device that
+        // failed gets a fresh chance, and the Core is asked again so the
+        // mix starts on the device as it is now.
+        d->headphones->stop();
+        d->headphonesFaulted = false;
+        if (d->headphonesProblem != QLatin1String(kHeadphonesMixUnavailableReason)
+            && d->headphonesProblem != QLatin1String(kHeadphonesCoreCouldNotStart)) {
+            setHeadphonesProblem(QString());
+        }
+        requestHeadphonesAudio();
+    };
+    connect(model->audioEngine(), &AudioEngine::headphonesAvailableChanged,
+            this, headphonesDeviceChanged);
+    connect(model->audioEngine(), &AudioEngine::headphonesConfigChanged,
+            this, headphonesDeviceChanged);
     // R-R3-43: a slice id the Core had removed may come back (the Core
     // reuses ids); a consumer still waiting on it is asked for once more.
     connect(model, &RadioModel::sliceAdded, this, [this] {
@@ -1093,6 +1139,10 @@ void RemoteMediaController::setAudioProfileChoice(RemoteAudioProfile profile)
         const QPointer<RemoteMediaController> self(this);
         requestWantedReceiverAudio();
         if (!self) { return; }
+        // R-R3-45: the headphones mix too, muted speakers or not.
+        d->headphonesFaulted = false;
+        requestHeadphonesAudio();
+        if (!self) { return; }
     }
     if (askAgain && d->model && !d->model->audioEngine()->masterMuted()) {
         requestAudio();
@@ -1118,6 +1168,11 @@ void RemoteMediaController::checkLosslessLink()
             samples.push_back({sliceId, stream.receiver->telemetry()});
         }
     }
+    // R-R3-45: and the headphones mix.
+    if (d->headphonesContext && d->headphonesContext->enabled
+        && d->headphonesContext->losslessEncoder) {
+        samples.push_back({kHeadphonesTrialStream, d->headphones->telemetry()});
+    }
     if (d->linkTrial.observe(d->clock.elapsed(), samples)
         == RemoteAudioLinkTrial::Verdict::Failed) {
         fallBackToOpus(QStringLiteral("%1% of lossless packets lost or filled in over %2 s")
@@ -1141,6 +1196,194 @@ void RemoteMediaController::fallBackToOpus(const QString& cause)
     // R-R3-43: one fallback moves every receiver stream to Opus too, with
     // this one notice.
     requestWantedReceiverAudio();
+    if (!self) { return; }
+    // R-R3-45: and the headphones mix, with the same one notice.
+    requestHeadphonesAudio();
+    if (!self) { return; }
+    emit errorOccurred(text);
+}
+
+// ---- R-R3-45: the headphones mix ----
+
+QString RemoteMediaController::headphonesFaultText(RemoteAudioReceiver::Fault fault)
+{
+    // The receiver names its faults after the speaker; for the headphones
+    // receiver they mean the headphones device.
+    using Fault = RemoteAudioReceiver::Fault;
+    switch (fault) {
+    case Fault::SpeakerOpenFailed:
+        return QStringLiteral("The headphones could not be opened.");
+    case Fault::SpeakerTimingUnavailable:
+        return QStringLiteral("The headphones stopped reporting their timing.");
+    case Fault::SpeakerCallbackTooLarge:
+        return QStringLiteral("The headphones buffer is larger than remote playback "
+                              "supports. Choose a smaller buffer or other headphones.");
+    case Fault::SpeakerStalled:
+        return QStringLiteral("The headphones stopped playing audio.");
+    case Fault::SpeakerWriteFailed:
+        return QStringLiteral("Audio could not be sent to the headphones.");
+    case Fault::DecoderUnavailable:
+        return QStringLiteral("The audio decoder for the headphones could not start on "
+                              "this computer.");
+    case Fault::ArrivalBurst:
+    case Fault::StreamGap:
+    case Fault::NoPackets:
+    case Fault::DecodeFailed:
+    case Fault::ClockBuffer:
+        return QStringLiteral("Audio on the headphones was interrupted.");
+    }
+    return {};
+}
+
+bool RemoteMediaController::headphonesMixNegotiated() const
+{
+    return audioProfileNegotiated() && d->client->capabilities().headphonesMixVersion >= 1;
+}
+
+QString RemoteMediaController::headphonesProblem() const
+{
+    return d->headphonesProblem;
+}
+
+RemoteAudioReceiverTelemetry RemoteMediaController::headphonesTelemetry() const
+{
+    return d->headphones->telemetry();
+}
+
+std::optional<RemoteAudioContextMessage> RemoteMediaController::acceptedHeadphonesContext() const
+{
+    return d->headphonesContext;
+}
+
+void RemoteMediaController::setHeadphonesProblem(const QString& problem)
+{
+    if (problem == d->headphonesProblem) { return; }
+    d->headphonesProblem = problem;
+    emit headphonesProblemChanged(problem);
+}
+
+bool RemoteMediaController::headphonesWanted() const
+{
+    // This computer can play a headphones mix: headphones open here and
+    // none of them failed. The Core sends it only while some receiver is
+    // routed to the headphones.
+    return d->model && d->model->audioEngine()->headphonesAvailable()
+        && !d->headphonesFaulted;
+}
+
+void RemoteMediaController::requestHeadphonesAudio()
+{
+    if (!d->peer || !d->peer->isReady() || !headphonesMixNegotiated()) { return; }
+    const bool wanted = headphonesWanted();
+    // Nothing asked for yet on this connection: nothing to stop.
+    if (!wanted && d->headphonesRevision == 0) { return; }
+    ++d->headphonesRevision;
+    if (!d->headphonesRevision) { ++d->headphonesRevision; }
+    d->headphonesRequested = wanted;
+    d->headphonesRetryPending = false;
+    d->headphonesLastRequestMs = d->clock.elapsed();
+    // The one quality choice, as the speakers' stream asks for it.
+    const RemoteAudioProfile profile =
+        d->audioProfileChoice == RemoteAudioProfile::Lossless && !d->losslessFallback
+        ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus;
+    send(QJsonObject{{QStringLiteral("op"), QStringLiteral("headphones-audio")},
+                     {QStringLiteral("revision"), double(d->headphonesRevision)},
+                     {QStringLiteral("enabled"), wanted},
+                     {QStringLiteral("profile"), remoteAudioProfileToWire(profile)}});
+}
+
+void RemoteMediaController::receiveHeadphonesAudioContext(const QJsonObject& payload)
+{
+    const std::optional<RemoteAudioContextMessage> context =
+        decodeHeadphonesAudioContext(payload);
+    if (!context || context->revision != d->headphonesRevision
+        || !isNewerGeneration(context->generation, d->headphonesGeneration)
+        || d->headphonesSsrc == 0 || context->ssrc != d->headphonesSsrc) { return; }
+    d->headphonesGeneration = context->generation;
+    d->headphonesContext = context;
+    d->headphonesRetryPending = false;
+    d->headphones->stop();
+    // start() can report a headphones failure synchronously, and a listener
+    // to that report may retire this controller.
+    const QPointer<RemoteMediaController> self(this);
+    if (context->enabled && headphonesWanted()) {
+        const RemoteAudioProfile profile = context->losslessEncoder
+            ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus;
+        if (d->headphones->start(context->ssrc, context->firstTimestamp, profile)) {
+            setHeadphonesProblem(QString());
+            qCInfo(lcRemoteMedia).noquote()
+                << QStringLiteral("Remote headphones audio receiving: %1, context %2")
+                       .arg(reportedAudioProfile(*context)).arg(context->generation);
+        }
+        if (!self) { return; }
+    } else if (!context->enabled) {
+        const RemoteAudioOffReason reason =
+            context->offReason.value_or(RemoteAudioOffReason::EncoderUnavailable);
+        if (reason == RemoteAudioOffReason::EncoderUnavailable) {
+            setHeadphonesProblem(QString::fromLatin1(kHeadphonesCoreCouldNotStart));
+        } else if (!d->headphonesFaulted) {
+            // No receiver on the headphones, this computer asked it off, or
+            // the radio or media is not ready: the speakers' status says
+            // the last two, and the first two leave nothing to explain.
+            setHeadphonesProblem(QString());
+        }
+        if (!self) { return; }
+    }
+    reconcileLinkTrial();
+    refreshAudioStatus();
+}
+
+void RemoteMediaController::onHeadphonesRestart(const QString& reason,
+                                                RemoteAudioReceiver::Fault fault)
+{
+    qCWarning(lcRemoteMedia).noquote()
+        << QStringLiteral("Remote headphones audio: %1").arg(reason);
+    d->headphones->stop();
+    // R-R3-23: a lossless headphones mix's restart counts against the one
+    // link trial, as the speakers' does.
+    if (d->headphonesContext && d->headphonesContext->losslessEncoder
+        && d->linkTrial.active() && linkInterruption(fault)
+        && d->linkTrial.noteInterruption(d->clock.elapsed())
+            == RemoteAudioLinkTrial::Verdict::Failed) {
+        fallBackToOpus(QStringLiteral("headphones stream restarts while lossless audio plays"));
+        return;
+    }
+    if (!d->headphonesRetryPending) {
+        d->headphonesRetryPending = true;
+        const QString connection = d->connectionId;
+        const quint32 revision = d->headphonesRevision;
+        const int delay = int(std::max<qint64>(
+            0, 1000 - (d->clock.elapsed() - d->headphonesLastRequestMs)));
+        QTimer::singleShot(delay, this, [this, connection, revision] {
+            if (!d->headphonesRetryPending || connection != d->connectionId
+                || revision != d->headphonesRevision) { return; }
+            d->headphonesRetryPending = false;
+            requestHeadphonesAudio();
+        });
+    }
+    reconcileLinkTrial();
+    refreshAudioStatus();
+}
+
+void RemoteMediaController::onHeadphonesError(const QString& reason,
+                                              RemoteAudioReceiver::Fault fault)
+{
+    // The headphones device failed on this computer. Only the headphones
+    // stop: the speakers' receiver and stream are untouched.
+    qCWarning(lcRemoteMedia).noquote()
+        << QStringLiteral("Remote headphones playback failed: %1").arg(reason);
+    d->headphones->stop();
+    d->headphonesFaulted = true;
+    d->headphonesRetryPending = false;
+    const QPointer<RemoteMediaController> self(this);
+    // headphonesWanted() is false now: the Core is asked to stop the mix.
+    requestHeadphonesAudio();
+    if (!self) { return; }
+    const QString text = headphonesFaultText(fault);
+    setHeadphonesProblem(text);
+    if (!self) { return; }
+    reconcileLinkTrial();
+    refreshAudioStatus();
     if (!self) { return; }
     emit errorOccurred(text);
 }
@@ -1264,6 +1507,16 @@ void RemoteMediaController::stop()
     // sinks stay registered and are asked for again on the next one.
     d->receiverRevisions.clear();
     d->receiverSsrcs.clear();
+    // R-R3-45: the headphones mix stops with the media connection and is
+    // asked for again on the next one.
+    d->headphones->stop();
+    d->headphonesSsrc = 0;
+    d->headphonesContext.reset();
+    d->headphonesRevision = 0;
+    d->headphonesGeneration = 0;
+    d->headphonesRequested = false;
+    d->headphonesFaulted = false;
+    d->headphonesRetryPending = false;
     QList<int> interrupted;
     for (auto& [sliceId, stream] : d->receiverStreams) {
         stream.receiver->stop();
@@ -1301,6 +1554,8 @@ void RemoteMediaController::stop()
     d->ctunStreams.clear();
     const QPointer<RemoteMediaController> self(this);
     if (!d->destroying) {
+        setHeadphonesProblem(QString());
+        if (!self) { return; }
         for (int sliceId : interrupted) {
             notifyReceiverStopped(sliceId, remoteAudioOffReasonToWire(
                 RemoteAudioOffReason::MediaNotReady));
@@ -1400,8 +1655,14 @@ void RemoteMediaController::start()
         // muted. A receiver stream nobody plays now (stopping, restarting)
         // is dropped; everything else goes to the speakers' receiver as
         // before.
-        if (!d->receiverSsrcs.isEmpty() && packet.size() >= 12) {
+        if ((!d->receiverSsrcs.isEmpty() || d->headphonesSsrc != 0) && packet.size() >= 12) {
             const quint32 ssrc = qFromBigEndian<quint32>(packet.constData() + 8);
+            // R-R3-45: the headphones mix goes to its own receiver, whatever
+            // the speakers do; while that receiver is stopped it is dropped.
+            if (d->headphonesSsrc != 0 && ssrc == d->headphonesSsrc) {
+                if (d->headphones->isRunning()) { d->headphones->submit(packet); }
+                return;
+            }
             if (d->receiverSsrcs.contains(ssrc)) {
                 for (auto& [sliceId, stream] : d->receiverStreams) {
                     if (stream.ssrc == ssrc) {
@@ -1431,6 +1692,9 @@ void RemoteMediaController::start()
             if (!self || !current()) { return; }
             // R-R3-43: each receiver stream an app wants, after the mix.
             requestWantedReceiverAudio();
+            if (!self || !current()) { return; }
+            // R-R3-45: and the headphones mix, when headphones are here.
+            requestHeadphonesAudio();
         }
     });
     connect(peer, &MediaPeer::connectionFailed, this,
@@ -1463,12 +1727,15 @@ void RemoteMediaController::start()
     const QPointer<MediaPeer> startedPeer(peer);
     // R-R3-43: the receiver stream ids are declared only when this GUI will
     // say so in its start below.
+    // R-R3-45: likewise the headphones mix's stream id.
     const bool started = peer->start(IMediaTransport::Role::Answerer, d->connectionId,
                                      IMediaTransport::kDefaultAudioTargetBitrate,
-                                     /*offerLosslessAudio=*/false, receiverAudioNegotiated());
+                                     /*offerLosslessAudio=*/false, receiverAudioNegotiated(),
+                                     headphonesMixNegotiated());
     if (!self) { return; }
     d->startingPeer = false;
     d->receiverSsrcs = started && startedPeer ? startedPeer->receiverAudioSsrcs() : QList<quint32>{};
+    d->headphonesSsrc = started && startedPeer ? startedPeer->headphonesAudioSsrc() : 0;
     const QString startError = std::exchange(d->startRefusal, QString());
     if (!started) {
         // R-R3-28, amended 2026-09-23: a refusal is never a silent stop, and
@@ -1513,7 +1780,17 @@ void RemoteMediaController::start()
     if (receiverAudioNegotiated()) {
         startControl.insert(QStringLiteral("receiverAudioVersion"), 1);
     }
+    // R-R3-45: likewise the headphones mix, only to a Core that offers it.
+    if (headphonesMixNegotiated()) {
+        startControl.insert(QStringLiteral("headphonesMixVersion"), 1);
+    }
     send(startControl);
+    if (!self) { return; }
+    // R-R3-45: a Core that cannot send the headphones mix says so on every
+    // flag routed to the headphones.
+    setHeadphonesProblem(headphonesMixNegotiated()
+                             ? QString()
+                             : QString::fromLatin1(kHeadphonesMixUnavailableReason));
     if (!self) { return; }
     if (!receiverAudioNegotiated()) {
         // An older Core: no request goes out, and each consumer is told why.
@@ -2715,6 +2992,11 @@ void RemoteMediaController::reconcileLinkTrial()
             lossless = true;
         }
     }
+    // R-R3-45: the headphones mix counts too.
+    if (d->headphones->isRunning() && d->headphonesContext
+        && d->headphonesContext->losslessEncoder) {
+        lossless = true;
+    }
     if (lossless && !d->linkTrial.active()) {
         d->linkTrial.begin(d->clock.elapsed());
         d->linkTrialTimer->start();
@@ -2955,6 +3237,11 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         refreshAudioStatus();
         if (!self) { return; }
         emit audioContextAccepted();
+        return;
+    }
+    if (op == QLatin1String("headphones-audio-context")) {
+        // R-R3-45: only from a Core this connection declared it to.
+        if (headphonesMixNegotiated()) { receiveHeadphonesAudioContext(payload); }
         return;
     }
     if (op == QLatin1String("receiver-audio-context")) {

@@ -14,12 +14,17 @@
 //                                    declared enum domains. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-45: SliceModel::OutputRoute
+//                                    (speakers or headphones). AI-assisted
+//                                    implementation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/MirrorEnumDomain.h"
 
 #include "core/WdspTypes.h"
 #include "models/Band.h"
+#include "models/SliceModel.h"
 #include "models/TunerModel.h"
 
 #include <QHash>
@@ -93,6 +98,10 @@ const DomainTable& table()
         declare<SbnrAlgo>(&t, { SbnrAlgo::Algo1, SbnrAlgo::Algo2, SbnrAlgo::Algo3 });
 
         declare<FmTxMode>(&t, { FmTxMode::High, FmTxMode::Simplex, FmTxMode::Low });
+
+        // R-R3-45: the output a receiver plays on (VAX design 6.2).
+        declare<SliceModel::OutputRoute>(&t, { SliceModel::OutputRoute::Speakers,
+                                               SliceModel::OutputRoute::Headphones });
 
         declare<TunerModel::ConnectionPhase>(&t, {
             TunerModel::ConnectionPhase::Disabled,

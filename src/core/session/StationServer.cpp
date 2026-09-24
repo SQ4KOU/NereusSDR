@@ -50,6 +50,9 @@
 //                                    object, notchControlVersion 1, and the
 //                                    plain refusal of raw Notch* writes.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-45: headphonesMixVersion 1 with
+//                                    media. AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1590,6 +1593,8 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.audioClockVersion = m_mediaEnabled ? 1 : 0;
     // R-R3-43: a receiver's own audio on its own stream, whenever media is on.
     caps.receiverAudioVersion = m_mediaEnabled ? 1 : 0;
+    // R-R3-45: the headphones mix on its own stream, whenever media is on.
+    caps.headphonesMixVersion = m_mediaEnabled ? 1 : 0;
     const std::optional<DisplayBudgetLimits> budget = displayBudgetLimits();
     if (m_mediaEnabled && m_displayBudgetEnforcementEnabled && budget) {
         caps.remoteDisplayBudgetVersion = 1;

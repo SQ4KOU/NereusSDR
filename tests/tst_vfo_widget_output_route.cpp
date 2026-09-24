@@ -106,6 +106,34 @@ private slots:
         QVERIFY(p.notice->isHidden());
     }
 
+    // R-R3-45 Task 2: a remote window's own reason (the Core cannot send
+    // the headphones mix, or the headphones failed) shows the same way,
+    // once this computer has headphones.
+    void saysARemoteWindowsReason()
+    {
+        SliceModel slice;
+        VfoWidget flag;
+        flag.setSlice(&slice);
+        const Parts p = partsOf(flag);
+        const QString reason = QStringLiteral("This Core cannot send audio for the headphones.");
+        flag.setHeadphonesAvailable(true);
+        flag.setHeadphonesProblem(reason);
+        QVERIFY(p.notice->isHidden());          // on the speakers: nothing to say
+
+        slice.setOutputRoute(SliceModel::OutputRoute::Headphones);
+        QVERIFY(!p.notice->isHidden());
+        QCOMPARE(p.notice->text(), reason);
+
+        // No headphones here comes first.
+        flag.setHeadphonesAvailable(false);
+        QCOMPARE(p.notice->text(), VfoWidget::headphonesMissingText());
+        flag.setHeadphonesAvailable(true);
+        QCOMPARE(p.notice->text(), reason);
+
+        flag.setHeadphonesProblem(QString());
+        QVERIFY(p.notice->isHidden());
+    }
+
     void wordsArePlain()
     {
         VfoWidget flag;

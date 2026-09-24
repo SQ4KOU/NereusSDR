@@ -4588,6 +4588,222 @@ private slots:
         audio.stop();
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
+
+    // R-R3-45, R-R3-23: the one link trial counts the headphones mix, here
+    // the only lossless stream (the speakers are muted). A link that cannot
+    // carry it fails the trial once, and the one fallback moves it to Opus
+    // with the speakers' stream, with one notice.
+    void losslessTrialCountsTheHeadphonesMixAndFallsBackOnce()
+    {
+        const RestoreAudioChoice restore;
+        AppSettings::instance().setValue(
+            QLatin1String(RemoteMediaController::kAudioProfileSettingKey), QStringLiteral("Lossless"));
+        Test::RemoteAudioSessionHarness h;
+        const auto routes = qScopeGuard([&h] { h.resetOutputRoutes(); });
+        h.attachRemoteHeadphones();
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr, nullptr,
+            [](QObject* parent) -> IMediaTransport* {
+                return new CapacityLimitedTransport(parent);
+            });
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QSignalSpy errors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        auto* const trialTimer =
+            remoteMedia.findChild<QTimer*>(QStringLiteral("remoteAudioLinkTrialTimer"));
+        QVERIFY(trialTimer);
+        PacedRemoteAudio audio(h);
+        QTimer headphones;
+        headphones.setInterval(10);
+        headphones.setTimerType(Qt::PreciseTimer);
+        connect(&headphones, &QTimer::timeout, &headphones, [&h] {
+            h.remoteHeadphonesBus->render(Test::RemoteAudioSessionHarness::kFrames);
+        });
+        headphones.start();
+        h.remote.audioEngine()->setMasterMuted(true);
+        h.station.sliceById(h.sliceB)->setOutputRoute(SliceModel::OutputRoute::Headphones);
+        h.connectSession();
+        QVERIFY(remoteMedia.headphonesMixNegotiated());
+
+        // Asked for in the one choice, lossless; the Core grants it and the
+        // trial runs although the speakers play nothing.
+        QTRY_VERIFY_WITH_TIMEOUT(!controlsFor(coreControls, QStringLiteral("headphones-audio"))
+                                      .isEmpty(), 15000);
+        QCOMPARE(controlsFor(coreControls, QStringLiteral("headphones-audio")).constFirst()
+                     .value(QStringLiteral("profile")).toString(), QStringLiteral("lossless"));
+        QTRY_VERIFY_WITH_TIMEOUT(daemonMedia.headphonesMixProfile()
+                                     == std::optional{RemoteAudioProfile::Lossless}, 15000);
+        QTRY_VERIFY_WITH_TIMEOUT(trialTimer->isActive(), 15000);
+
+        // The link cannot carry it: the trial fails, once.
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().qualityReason
+                                     == RemoteAudioQualityReason::NetworkTooSlow, 15000);
+        QCOMPARE(errors.count(), 1);
+        QCOMPARE(errors.constFirst().at(0).toString(),
+                 QStringLiteral("The network could not carry lossless audio; staying on Opus."));
+        // Both the headphones mix and the speakers' stream ask for Opus.
+        QTRY_VERIFY_WITH_TIMEOUT(
+            controlsFor(coreControls, QStringLiteral("headphones-audio")).constLast()
+                    .value(QStringLiteral("profile")).toString() == QLatin1String("opus")
+                && requestedProfiles(coreControls).constLast() == QLatin1String("opus"), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(daemonMedia.headphonesMixProfile()
+                                     == std::optional{RemoteAudioProfile::Opus}, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.headphonesTelemetry().running
+                                     && remoteMedia.headphonesTelemetry().decodedPackets > 10,
+                                 10000);
+        QVERIFY(!trialTimer->isActive());
+        QTest::qWait(1500);
+        QCOMPARE(errors.count(), 1);
+
+        headphones.stop();
+        audio.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-45: the headphones device fails on this computer (it goes away
+    // and stops reporting its timing). Only the headphones stop: the Core is asked to stop
+    // the mix, the problem is said in plain words (a notice and the flag's
+    // text), and the speakers play on without a new context. Opening the
+    // headphones again asks for the mix again.
+    void headphonesFailureIsReportedAndLeavesTheSpeakersPlaying()
+    {
+        Test::RemoteAudioSessionHarness h;
+        const auto routes = qScopeGuard([&h] { h.resetOutputRoutes(); });
+        h.attachRemoteHeadphones();
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QSignalSpy errors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QSignalSpy problems(&remoteMedia, &RemoteMediaController::headphonesProblemChanged);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        PacedRemoteAudio audio(h);
+        QTimer headphones;
+        headphones.setInterval(10);
+        headphones.setTimerType(Qt::PreciseTimer);
+        connect(&headphones, &QTimer::timeout, &headphones, [&h] {
+            h.remoteHeadphonesBus->render(Test::RemoteAudioSessionHarness::kFrames);
+        });
+        headphones.start();
+        h.station.sliceById(h.sliceB)->setOutputRoute(SliceModel::OutputRoute::Headphones);
+        h.connectSession();
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
+                                  RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.headphonesTelemetry().running
+                                     && remoteMedia.headphonesTelemetry().decodedPackets > 10,
+                                 15000);
+        const qsizetype mainContexts = controlsFor(coreControls, QStringLiteral("audio")).size();
+
+        // The headphones device goes away.
+        h.remoteHeadphonesBus->setOutputPacingAvailableForTesting(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!remoteMedia.headphonesProblem().isEmpty(), 5000);
+        const QString problem = remoteMedia.headphonesProblem();
+        QCOMPARE(problem, RemoteMediaController::headphonesFaultText(
+                              RemoteAudioReceiver::Fault::SpeakerTimingUnavailable));
+        QCOMPARE(problem, QStringLiteral("The headphones stopped reporting their timing."));
+        QVERIFY(OperatorWording::isPlain(problem));
+        QCOMPARE(errors.count(), 1);
+        QCOMPARE(errors.constFirst().at(0).toString(), problem);
+        QCOMPARE(OperatorReasonText::forDisplay(problem), problem);
+        QVERIFY(!remoteMedia.headphonesTelemetry().running);
+        // The Core is asked to stop the mix, and does.
+        QTRY_VERIFY_WITH_TIMEOUT(!controlsFor(coreControls, QStringLiteral("headphones-audio"))
+                                      .constLast().value(QStringLiteral("enabled")).toBool(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!daemonMedia.headphonesMixSending(), 5000);
+
+        // The speakers played on: still playing, no new request for them,
+        // and their device keeps hearing audio.
+        QCOMPARE(remoteMedia.audioStatus().state, RemoteAudioStatus::State::Playing);
+        QCOMPARE(controlsFor(coreControls, QStringLiteral("audio")).size(), mainContexts);
+        const int heard = int(h.remoteBus->heard.size());
+        QTRY_VERIFY_WITH_TIMEOUT(h.remoteBus->heard.size() >= heard + 48000 * 2, 5000);
+        QVERIFY(remoteMedia.audioTelemetry().running);
+        // Nothing asks again in a loop.
+        const qsizetype requestsAfter =
+            controlsFor(coreControls, QStringLiteral("headphones-audio")).size();
+        QTest::qWait(1500);
+        QCOMPARE(controlsFor(coreControls, QStringLiteral("headphones-audio")).size(),
+                 requestsAfter);
+        QCOMPARE(errors.count(), 1);
+
+        // The headphones are closed and opened again (the Enabled box, or
+        // another device): asked for again, and they play.
+        h.remote.audioEngine()->setHeadphonesBusForTest(nullptr);
+        QVERIFY(!h.remote.audioEngine()->headphonesAvailable());
+        h.attachRemoteHeadphones();
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.headphonesProblem().isEmpty(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(daemonMedia.headphonesMixSending(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.headphonesTelemetry().running
+                                     && remoteMedia.headphonesTelemetry().decodedPackets > 10,
+                                 10000);
+        QCOMPARE(errors.count(), 1);
+
+        headphones.stop();
+        audio.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-45: a Core from before the headphones mix. The media start and
+    // every audio control are today's, no headphones request goes out, and
+    // the flag's reason says in plain words that this Core cannot send
+    // audio for the headphones.
+    void olderCoreCannotSendTheHeadphonesMixAndSaysSo()
+    {
+        Test::RemoteAudioSessionHarness h;
+        const auto routes = qScopeGuard([&h] { h.resetOutputRoutes(); });
+        h.attachRemoteHeadphones();
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        PacedRemoteAudio audio(h);
+        h.hideHeadphonesMix = true;
+        h.connectSession();
+        QVERIFY(remoteMedia.audioProfileNegotiated());
+        QVERIFY(!remoteMedia.headphonesMixNegotiated());
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
+                                  RemoteAudioStatus::State::Playing, 15000);
+        const QString reason =
+            QString::fromLatin1(RemoteMediaController::kHeadphonesMixUnavailableReason);
+        QCOMPARE(remoteMedia.headphonesProblem(), reason);
+        QCOMPARE(reason, QStringLiteral("This Core cannot send audio for the headphones."));
+        QVERIFY(OperatorWording::isPlain(reason));
+
+        h.remote.sliceById(h.sliceB)->setOutputRoute(SliceModel::OutputRoute::Headphones);
+        QTRY_COMPARE_WITH_TIMEOUT(h.station.sliceById(h.sliceB)->outputRoute(),
+                                  SliceModel::OutputRoute::Headphones, 5000);
+        QTest::qWait(300);
+        QVERIFY(controlsFor(coreControls, QStringLiteral("headphones-audio")).isEmpty());
+        QVERIFY(!daemonMedia.headphonesMixSending());
+        const QList<QJsonObject> starts = controlsFor(coreControls, QStringLiteral("start"));
+        QCOMPARE(starts.size(), qsizetype(1));
+        QVERIFY(!starts.constFirst().contains(QStringLiteral("headphonesMixVersion")));
+        QCOMPARE(remoteMedia.headphonesProblem(), reason);
+
+        audio.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-45: every new string the headphones add is in the operator's words.
+    void headphonesWordingIsPlain()
+    {
+        using Fault = RemoteAudioReceiver::Fault;
+        for (Fault fault : {Fault::SpeakerOpenFailed, Fault::SpeakerTimingUnavailable,
+                            Fault::SpeakerCallbackTooLarge, Fault::SpeakerStalled,
+                            Fault::SpeakerWriteFailed, Fault::DecoderUnavailable,
+                            Fault::ArrivalBurst, Fault::StreamGap, Fault::NoPackets,
+                            Fault::DecodeFailed, Fault::ClockBuffer}) {
+            const QString text = RemoteMediaController::headphonesFaultText(fault);
+            QVERIFY(!text.isEmpty());
+            QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+        }
+        for (const char* text : {RemoteMediaController::kHeadphonesMixUnavailableReason,
+                                 RemoteMediaController::kHeadphonesCoreCouldNotStart}) {
+            QVERIFY2(OperatorWording::isPlain(QString::fromLatin1(text)), text);
+        }
+        const QString wire = remoteAudioOffReasonToWire(RemoteAudioOffReason::NoHeadphonesReceiver);
+        QCOMPARE(wire, QStringLiteral("no-headphones-receiver"));
+        QVERIFY(OperatorReasonText::knownReasons().contains(wire));
+        const QString shown = OperatorReasonText::forDisplay(wire);
+        QVERIFY(shown != wire);
+        QVERIFY2(OperatorWording::isPlain(shown), qPrintable(shown));
+    }
 };
 QTEST_MAIN(TestRemoteMediaController)
 #include "tst_remote_media_controller.moc"

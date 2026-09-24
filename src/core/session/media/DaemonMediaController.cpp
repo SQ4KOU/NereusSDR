@@ -342,6 +342,17 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
             this, &DaemonMediaController::onSliceRemoved);
     connect(m_radioModel, &RadioModel::connectionStateChanged,
             this, &DaemonMediaController::onRadioConnectionStateChanged);
+    // R-R3-45: the headphones mix runs while some slice plays on the
+    // headphones, so follow every slice's output route.
+    for (SliceModel* slice : m_radioModel->slices()) {
+        watchSliceOutputRoute(slice);
+    }
+    connect(m_radioModel, &RadioModel::sliceAdded, this, [this](int sliceId) {
+        if (m_radioModel) {
+            watchSliceOutputRoute(m_radioModel->sliceById(sliceId));
+        }
+        onOutputRoutesChanged();
+    });
     // Capture changes can be emitted inside endpoint lease release. Process
     // them after map replacement/removal completes, then revalidate again at
     // send time so no old source row slips through the queued notification.
@@ -859,6 +870,13 @@ void DaemonMediaController::onRadioConnectionStateChanged(ConnectionState state)
                                          RemoteAudioOffReason::RadioOffline);
             }
         }
+        // R-R3-45: the headphones mix keeps its intent, as receivers do.
+        if (m_headphones.revision != 0) {
+            stopHeadphonesAudioCapture();
+            sendHeadphonesAudioContext(false, m_headphones.desiredEnabled
+                                                  ? RemoteAudioOffReason::RadioOffline
+                                                  : RemoteAudioOffReason::ClientDisabled);
+        }
         clearProduction();
         return;
     }
@@ -867,6 +885,10 @@ void DaemonMediaController::onRadioConnectionStateChanged(ConnectionState state)
         if (m_receiverStreams.count(sliceId) != 0) {
             reconcileReceiverAudio(sliceId);
         }
+    }
+    // R-R3-45: the headphones mix resumes with the radio.
+    if (m_headphones.revision != 0) {
+        reconcileHeadphonesAudio();
     }
 }
 
@@ -886,6 +908,7 @@ void DaemonMediaController::onControl(const QJsonObject& control, quint64 epoch)
     if (op == QLatin1String("keyframe")) { handleKeyframe(control); return; }
     if (op == QLatin1String("audio")) { handleAudio(control); return; }
     if (op == QLatin1String("receiver-audio")) { handleReceiverAudio(control); return; }
+    if (op == QLatin1String("headphones-audio")) { handleHeadphonesAudio(control); return; }
     acceptPeerControl(control);
 }
 
@@ -922,6 +945,21 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
             || !exactUnsigned(control.value(QStringLiteral("receiverAudioVersion")),
                               receiverAudioVersion, /*nonzero=*/true)
             || receiverAudioVersion < 1) {
+            return false;
+        }
+    }
+    // R-R3-45: likewise headphonesMixVersion; only then does the offer
+    // declare the headphones stream id, the main stream carry the speakers'
+    // mix alone, and a headphones-audio request get honoured.
+    const bool declaresHeadphonesMix =
+        control.contains(QStringLiteral("headphonesMixVersion"));
+    if (declaresHeadphonesMix) {
+        legacyShape.remove(QStringLiteral("headphonesMixVersion"));
+        quint32 headphonesMixVersion = 0;
+        if (!m_server || !m_server->remoteAudioStatusAvailable()
+            || !exactUnsigned(control.value(QStringLiteral("headphonesMixVersion")),
+                              headphonesMixVersion, /*nonzero=*/true)
+            || headphonesMixVersion < 1) {
             return false;
         }
     }
@@ -988,17 +1026,24 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
                 if (m_peer.get() != peer || m_epoch != peerEpoch) { return; }
                 reconcileReceiverAudio(sliceId);
             }
+            // R-R3-45: and the headphones mix, on its own.
+            if (m_peer.get() != peer || m_epoch != peerEpoch) { return; }
+            if (m_headphones.revision != 0) {
+                reconcileHeadphonesAudio();
+            }
         }
     });
     const bool offerLossless = declaresAudioProfile && m_audioLosslessAllowed;
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId,
-                     m_audioTargetBitrate, offerLossless, declaresReceiverAudio)) {
+                     m_audioTargetBitrate, offerLossless, declaresReceiverAudio,
+                     declaresHeadphonesMix)) {
         m_displayDiagnosticsTimer.stop();
         m_peer.reset();
         sendRejected(connectionId, 0, 0, QStringLiteral("media peer start failed"));
         return false;
     }
     m_receiverAudioNegotiated = declaresReceiverAudio;
+    m_headphonesMixNegotiated = declaresHeadphonesMix;
     return true;
 }
 
@@ -1662,6 +1707,218 @@ std::optional<RemoteAudioProfile> DaemonMediaController::receiverAudioProfile(in
         return std::nullopt;
     }
     return it->second.activeProfile;
+}
+
+// ---- R-R3-45: the headphones mix ----
+
+bool DaemonMediaController::handleHeadphonesAudio(const QJsonObject& control)
+{
+    // An app that did not declare the headphones mix at start gets
+    // nothing: its offer carries no headphones stream id.
+    if (!m_headphonesMixNegotiated || !m_peer) {
+        return false;
+    }
+    quint32 revision = 0;
+    const std::optional<RemoteAudioProfile> profile =
+        remoteAudioProfileFromWire(control.value(QStringLiteral("profile")));
+    if (!exactKeys(control, {"op", "connectionId", "revision", "enabled", "profile"})
+        || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
+        || control.value(QStringLiteral("connectionId")).toString() != m_peer->connectionId()
+        || !exactUnsigned(control.value(QStringLiteral("revision")), revision, true)
+        || !control.value(QStringLiteral("enabled")).isBool() || !profile
+        || (m_headphones.revision != 0
+            && staleOrEqualRevision(revision, m_headphones.revision))) {
+        return false;
+    }
+    m_headphones.revision = revision;
+    m_headphones.desiredEnabled = control.value(QStringLiteral("enabled")).toBool();
+    m_headphones.requestedProfile = *profile;
+    reconcileHeadphonesAudio();
+    return true;
+}
+
+bool DaemonMediaController::anySliceOnHeadphones() const
+{
+    if (!m_radioModel) {
+        return false;
+    }
+    for (SliceModel* slice : m_radioModel->slices()) {
+        if (slice && slice->outputRoute() == SliceModel::OutputRoute::Headphones) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void DaemonMediaController::watchSliceOutputRoute(SliceModel* slice)
+{
+    if (!slice) {
+        return;
+    }
+    connect(slice, &SliceModel::outputRouteChanged, this,
+            &DaemonMediaController::onOutputRoutesChanged, Qt::UniqueConnection);
+}
+
+void DaemonMediaController::onOutputRoutesChanged()
+{
+    // Only the first receiver onto the headphones starts the mix and only
+    // the last one off stops it; the mix itself follows every route change
+    // in AudioEngine without a new context.
+    const bool routed = anySliceOnHeadphones();
+    if (routed == m_headphonesRouted) {
+        return;
+    }
+    m_headphonesRouted = routed;
+    if (m_headphones.revision != 0) {
+        reconcileHeadphonesAudio();
+    }
+}
+
+void DaemonMediaController::reconcileHeadphonesAudio()
+{
+    // Only the headphones capture restarts; the main stream and every
+    // receiver stream carry on untouched.
+    stopHeadphonesAudioCapture();
+    m_headphonesRouted = anySliceOnHeadphones();
+    // Why it is off, first cause wins: the client's own choice, no receiver
+    // on the headphones, then the station radio, then media readiness.
+    std::optional<RemoteAudioOffReason> blockedBy;
+    if (!m_headphones.desiredEnabled) {
+        blockedBy = RemoteAudioOffReason::ClientDisabled;
+    } else if (!m_headphonesRouted) {
+        blockedBy = RemoteAudioOffReason::NoHeadphonesReceiver;
+    } else if (!m_radioModel || !m_radioModel->isConnected()) {
+        blockedBy = RemoteAudioOffReason::RadioOffline;
+    } else if (!m_peer || !m_peer->isReady()) {
+        blockedBy = RemoteAudioOffReason::MediaNotReady;
+    }
+    const AdmittedAudioProfile admitted = admitProfile(m_headphones.requestedProfile);
+    m_headphones.activeProfile = admitted.active;
+    m_headphones.profileRefusal = admitted.refusal;
+    bool actualEnabled = false;
+    if (!blockedBy) {
+        if (!m_headphones.sender) {
+            // Opus at the main stream's setting, or lossless: the session's
+            // one quality choice. Parented, so a sender retired with
+            // deleteLater() is still reclaimed with this controller.
+            OpusAudioCodecConfig codecConfig;
+            codecConfig.bitrate = m_audioTargetBitrate;
+            m_headphones.sender = std::make_unique<DaemonAudioSender>(
+                m_radioModel->audioEngine(), codecConfig, this);
+            m_headphones.sender->setSliceSource(DaemonAudioSource::kHeadphonesMix);
+            m_headphones.sender->setCaptureClock([this] { return displayNowNs(); });
+            DaemonAudioSender* const sender = m_headphones.sender.get();
+            connect(sender, &DaemonAudioSender::packetReady, this,
+                    [this, sender](const QByteArray& packet) {
+                onHeadphonesAudioPacket(sender, packet);
+            });
+        }
+        m_headphones.sender->setProfile(m_headphones.activeProfile);
+        actualEnabled = m_peer->headphonesAudioSsrc() != 0
+            && m_headphones.sender->start(m_peer->headphonesAudioSsrc(),
+                                          m_headphones.nextSequence,
+                                          m_headphones.nextTimestamp);
+        m_headphones.sending = actualEnabled;
+        if (actualEnabled) {
+            qCInfo(lcDaemonMedia).noquote().nospace()
+                << "headphones mix on, "
+                << remoteAudioProfileToWire(m_headphones.activeProfile)
+                << ", revision " << m_headphones.revision;
+        }
+    }
+    sendHeadphonesAudioContext(actualEnabled,
+                               blockedBy.value_or(RemoteAudioOffReason::EncoderUnavailable));
+}
+
+void DaemonMediaController::stopHeadphonesAudioCapture()
+{
+    m_headphones.sending = false;
+    if (!m_headphones.sender) {
+        return;
+    }
+    if (m_headphones.sender->isRunning()) {
+        // As the main stream: the stream id's timeline continues from here.
+        m_headphones.nextSequence = m_headphones.sender->nextSequence();
+        m_headphones.nextTimestamp = m_headphones.sender->nextTimestamp();
+    }
+    m_headphones.sender->stop();
+}
+
+void DaemonMediaController::sendHeadphonesAudioContext(bool enabled,
+                                                       RemoteAudioOffReason reason)
+{
+    if (!m_peer || m_headphones.revision == 0 || m_peer->headphonesAudioSsrc() == 0) {
+        return;
+    }
+    const bool lossless = m_headphones.activeProfile == RemoteAudioProfile::Lossless;
+    RemoteAudioContextMessage context;
+    context.connectionId = m_peer->connectionId();
+    context.revision = m_headphones.revision;
+    context.generation = nextHeadphonesContextGeneration();
+    context.enabled = enabled;
+    context.ssrc = m_peer->headphonesAudioSsrc();
+    context.firstSequence = m_headphones.nextSequence;
+    context.firstTimestamp = m_headphones.nextTimestamp;
+    if (enabled && lossless && m_headphones.sender) {
+        context.losslessEncoder = m_headphones.sender->losslessProfile();
+    } else if (enabled && m_headphones.sender) {
+        context.encoder = m_headphones.sender->encoderProfile();
+    }
+    if (!enabled) {
+        context.offReason = reason;
+    }
+    context.profile = m_headphones.activeProfile;
+    context.profileRefusal = m_headphones.profileRefusal;
+    sendControl(encodeHeadphonesAudioContext(context));
+}
+
+void DaemonMediaController::onHeadphonesAudioPacket(DaemonAudioSender* sender,
+                                                    const QByteArray& packet)
+{
+    // Emitted on the sender's owner thread. The identity checks keep a
+    // stopped or retired stream from reaching a replacement peer.
+    if (m_headphones.sender.get() != sender || !m_headphones.sending || !sender->isRunning()
+        || m_epoch == 0 || !m_peer || !m_peer->isReady() || !m_headphonesMixNegotiated) {
+        return;
+    }
+    m_peer->sendRtp(packet);
+}
+
+void DaemonMediaController::resetHeadphonesAudioSession()
+{
+    stopHeadphonesAudioCapture();
+    if (m_headphones.sender) {
+        // As a receiver stream: this can run inside the sender's own
+        // packetReady emission, so it goes from the event loop.
+        DaemonAudioSender* const sender = m_headphones.sender.release();
+        sender->disconnect(this);
+        sender->deleteLater();
+    }
+    // A different media peer has a different stream id and a new timeline.
+    m_headphones = HeadphonesAudioStream{};
+    m_headphonesMixNegotiated = false;
+}
+
+quint32 DaemonMediaController::nextHeadphonesContextGeneration()
+{
+    ++m_nextHeadphonesContextGeneration;
+    if (m_nextHeadphonesContextGeneration == 0) {
+        ++m_nextHeadphonesContextGeneration;
+    }
+    return m_nextHeadphonesContextGeneration;
+}
+
+bool DaemonMediaController::headphonesMixSending() const
+{
+    return m_headphones.sending && m_headphones.sender && m_headphones.sender->isRunning();
+}
+
+std::optional<RemoteAudioProfile> DaemonMediaController::headphonesMixProfile() const
+{
+    if (!headphonesMixSending()) {
+        return std::nullopt;
+    }
+    return m_headphones.activeProfile;
 }
 
 bool DaemonMediaController::handleClockProbe(const QJsonObject& control, qint64 receivedNs)
@@ -2596,6 +2853,13 @@ void DaemonMediaController::onSliceRemoved(int sliceId)
         releaseReceiverStreamIndex(stream);
         retireReceiverSender(stream);
     }
+    // R-R3-45: the slice may have been the last one on the headphones.
+    {
+        const QPointer<DaemonMediaController> self(this);
+        MediaPeer* const before = m_peer.get();
+        onOutputRoutesChanged();
+        if (!self || m_peer.get() != before) { return; }
+    }
     MediaPeer* const peer = m_peer.get();
     const quint64 epoch = m_epoch;
     for (quint32 endpointId : endpointIds()) {
@@ -2683,6 +2947,12 @@ void DaemonMediaController::reconcileAudio()
             });
         }
         m_audioSender->setProfile(m_audioActiveProfile);
+        // R-R3-45: an app that plays the headphones mix on its own stream
+        // gets the speakers' mix alone here; any other app the station's
+        // whole program, as before. Capture is stopped above.
+        m_audioSender->setSliceSource(m_headphonesMixNegotiated
+                                          ? DaemonAudioSource::kSpeakersMix
+                                          : DaemonAudioSource::kMasterMix);
         actualEnabled = m_audioSender->start(m_peer->audioSsrc(), m_audioNextSequence,
                                               m_audioNextTimestamp);
         if (actualEnabled) {
@@ -2862,6 +3132,8 @@ void DaemonMediaController::clearSession()
     // R-R3-43: every receiver stream's sender and slice tap go with the
     // session; there is no GUI left to tell.
     resetReceiverAudioSession();
+    // R-R3-45: and the headphones mix's.
+    resetHeadphonesAudioSession();
     if (m_peer) {
         logDisplayDiagnostics(true);
     }

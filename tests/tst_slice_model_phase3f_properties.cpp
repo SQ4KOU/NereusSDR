@@ -11,6 +11,7 @@
 #include <QtTest/QtTest>
 #include <QSignalSpy>
 #include "core/AppSettings.h"
+#include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 using namespace NereusSDR;
@@ -444,6 +445,29 @@ private slots:
         slice.setSliceIndex(2);
         slice.restoreOutputRoute();
         QCOMPARE(slice.outputRoute(), SliceModel::OutputRoute::Speakers);
+    }
+
+    // R-R3-45 Task 2: a remote window's slice leaves the route to the Core
+    // (it is a mirrored slice property the Core saves), so it writes none
+    // of its own settings, and RadioModel sets that for every remote slice.
+    void output_route_not_persisted_in_a_remote_window()
+    {
+        AppSettings::instance().clear();
+        SliceModel slice;
+        slice.setSliceIndex(1);
+        slice.setOutputRoutePersisted(false);
+        QSignalSpy spy(&slice, &SliceModel::outputRouteChanged);
+        slice.setOutputRoute(SliceModel::OutputRoute::Headphones);
+        QCOMPARE(slice.outputRoute(), SliceModel::OutputRoute::Headphones);
+        QCOMPARE(spy.count(), 1);
+        QVERIFY(!AppSettings::instance().contains(QStringLiteral("Slice1/OutputRoute")));
+
+        RadioModel remote{RadioModel::Role::Remote};
+        const int id = remote.addSliceWithStationId(2);
+        QCOMPARE(id, 2);
+        remote.sliceById(id)->setOutputRoute(SliceModel::OutputRoute::Headphones);
+        QVERIFY(!AppSettings::instance().contains(QStringLiteral("Slice2/OutputRoute")));
+        AppSettings::instance().clear();
     }
 
     void output_route_is_a_property()
