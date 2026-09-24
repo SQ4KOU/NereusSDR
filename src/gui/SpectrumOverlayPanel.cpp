@@ -54,6 +54,9 @@
 //                 with no antenna choices, where its flyout would be empty.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 / R-R3-21 fix wave: the VAX combo's tooltip before
+//                 a radio is set reads "waiting for the radio". J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "SpectrumOverlayPanel.h"
@@ -860,7 +863,7 @@ void SpectrumOverlayPanel::buildVaxFlyout()
         // Disabled until setRadioModel() resolves a slice; retains the
         // pre-3O tooltip in that transient state.
         m_vaxCmb->setEnabled(false);
-        m_vaxCmb->setToolTip("VAX channel (not yet bound to a radio model)");
+        m_vaxCmb->setToolTip("VAX channel (waiting for the radio)");
         row->addWidget(m_vaxCmb, 1);
         vb->addLayout(row);
 
@@ -926,7 +929,7 @@ void SpectrumOverlayPanel::setRadioModel(RadioModel* model)
     if (!m_radioModel) {
         // Unbound — revert to the pre-3O disabled state.
         m_vaxCmb->setEnabled(false);
-        m_vaxCmb->setToolTip("VAX channel (not yet bound to a radio model)");
+        m_vaxCmb->setToolTip("VAX channel (waiting for the radio)");
         if (m_rxAntCmb) { m_rxAntCmb->setEnabled(false); }
         if (m_txAntCmb) { m_txAntCmb->setEnabled(false); }
         showAttValues();

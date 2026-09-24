@@ -17,6 +17,7 @@
 #include <QLabel>
 #include <QPushButton>
 
+#include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
 #include "gui/SpectrumOverlayPanel.h"
@@ -68,6 +69,14 @@ private slots:
         QComboBox* combo = vaxCombo(h);
         QVERIFY(combo);
         QVERIFY(!combo->isEnabled());  // unbound → disabled
+        // Fix wave M6: the unbound tooltip is in plain operator words, not
+        // "not yet bound to a radio model".
+        for (const QString& word : {QStringLiteral("model"), QStringLiteral("bound"),
+                                    QStringLiteral("not yet")}) {
+            QVERIFY2(!combo->toolTip().contains(word, Qt::CaseInsensitive),
+                     qPrintable(combo->toolTip()));
+        }
+        QVERIFY(OperatorWording::isPlain(combo->toolTip()));
 
         h.panel->setRadioModel(&radio);
 
