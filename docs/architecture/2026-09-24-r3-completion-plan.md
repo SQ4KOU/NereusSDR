@@ -185,3 +185,40 @@ checks.
 **Execution note (advisory):** sonnet (documentation only).
 
 - [ ] **Step 1:** Update the plan, the README and radio-recovery; commit.
+
+## Task 5: A window that loses its Core for good says why and what to do
+
+**Requirements:** R-R3-21, R-R3-23 (connection feedback), R-R3-38.
+
+Operator decision of 2026-09-24 (question C, option 1): when a remote window loses its
+Core for a reason that will not fix itself, it stays where it is, says what happened in
+plain words and offers the next steps as buttons; nothing retries by itself. Today such a
+window sits at "Core connection failed" (`RemoteConnectionController.cpp:89`).
+
+**Files:** `src/gui/RemoteConnectionController.{h,cpp}`, `src/gui/MainWindow.{h,cpp}`
+(the message and its buttons over the window's content, keeping the layout),
+`src/core/session/StationClient.{h,cpp}` (carry the Core's end reason and whether it is
+retryable, and who took over when the Core says so), the tests of both.
+
+**Acceptance:**
+- Another window or device takes over the Core: this window stays, shows that the Core
+  was taken over (naming the other device when the Core says which one) and offers
+  **Take it back** (connects again, which takes the Core back) and **Choose another
+  Core** (opens Connections); it does not retry by itself.
+- The Core refuses this window for good because the app is too old or too new (link
+  version): the window says which side needs updating, in the words the Core or
+  `LinkVersion::refusalText` gives, and offers **Choose another Core** (and **Check for
+  updates** where the app has an update check); it does not retry.
+- Any other end the Core marks not retryable: the Core's plain reason and **Choose
+  another Core**; no retry.
+- A dropped link (retryable) behaves as today: the window retries and says so.
+- Every string passes `OperatorWording::isPlain`; local windows are unchanged.
+- The pairing cases (removed from the Core, the Core's identity changed) are left to the
+  iPhone plan's Part C, which adds them to this same message.
+
+**Verification:** a remote window test with a loopback Core for each case (takeover,
+version refusal, other refusal, dropped link), by exact name, offscreen.
+
+**Execution note (advisory):** opus (small).
+
+- [ ] **Step 1:** The message, the buttons, no retry for permanent ends, tests; commit.
