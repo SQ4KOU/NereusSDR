@@ -6271,6 +6271,11 @@ nereus_add_test(tst_radio_model_max_slices)
 # Design: docs/architecture/2026-05-26-phase3f-multi-pan-multi-slice-design.md §12.
 nereus_add_test(tst_settings_schema_v6_migration)
 
+# R-R3-49 fix wave: SettingsSchemaVersion v6 -> v7 resets NetworkWatchdogEnabled
+# once, so a value saved while the checkbox did nothing does not come alive.
+# Source: NereusSDR-original (no Thetis upstream).
+nereus_add_test(tst_settings_schema_v7_migration)
+
 # Phase 3F Sub-Epic B Task 1: SliceConfig + DdcAssignment shared structs.
 # 2 tests: slice_config_struct_has_required_fields,
 #          ddc_assignment_struct_has_required_fields.

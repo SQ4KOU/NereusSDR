@@ -172,9 +172,10 @@ bool initialize(const QString& profile)
     // DspOptionsBufferSize<Mode> / DspOptionsFilterSize<Mode> keys into
     // <Mode>Rx + <Mode>Tx variants so the UI can expose Thetis-faithful
     // per-channel combos; v6 (Phase 3F) is additive only: new per-slice
-    // per-band keys populate lazily on first write.
+    // per-band keys populate lazily on first write; v7 (R-R3-49) resets
+    // NetworkWatchdogEnabled once, since it was saved while nothing read it.
     // See AppSettings::ensureSettingsAtVersion for the upstream Thetis cites.
-    AppSettings::instance().ensureSettingsAtVersion(6);
+    AppSettings::instance().ensureSettingsAtVersion(7);
 
     // Restore logging category toggles from settings
     LogManager::instance().loadSettings();

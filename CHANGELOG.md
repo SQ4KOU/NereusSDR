@@ -32,6 +32,7 @@
 
 - **MainWindow refactor**: m_spectrumWidget single-widget pointer replaced with m_panStack (PanadapterStack containing N PanadapterApplet instances). 125 call sites migrated to activeSpectrumWidget() helper for backward compatibility.
 - **RadioModel** gains TxSliceArbiter ownership + FFTRouter ownership + WidebandFftEngine instances (one per ADC, default 122.88 MHz).
+- **Network Watchdog starts from its default once.** Setup > General > Options > Network Watchdog was saved but never used; it now controls the radio's watchdog (R-R3-49). So that a setting changed back when it did nothing does not suddenly take effect, the upgrade resets it to on once (settings schema v7). Turn it off again afterwards if you want it off.
 
 ### Deferred (post-bench polish backlog, queued for Phase 3F-1)
 
