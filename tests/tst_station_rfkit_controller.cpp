@@ -175,20 +175,43 @@ private slots:
         QCOMPARE(amp.count(QStringLiteral("GET /info")), 1);
     }
 
-    // A reply with no device at all is refused the same way.
-    void refusesAnAnswerThatNamesNoDevice()
+    // M2 (R-R3-47): a reply with no device is a failed answer, retried; it
+    // never drops an admitted amp for good. Only a reply that names another
+    // product is refused.
+    void answerThatNamesNoDeviceIsRetried()
     {
         FakeAmp amp;
         amp.info = R"({"hello":"world"})";
         Rf2ksConnection connection;
+        connection.setPollIntervalMs(250);
         RfKitModel model;
         model.bindConnection(&connection);
         StationRfKitController controller(&connection, &model);
+        QSignalSpy faults(&connection, &Rf2ksConnection::faultObserved);
         controller.start(QStringLiteral("127.0.0.1"), amp.serverPort());
-        QTRY_COMPARE_WITH_TIMEOUT(model.connectionPhase(), Phase::Error, 3000);
-        QCOMPARE(model.connectionError(),
-                 QStringLiteral("The device at this address did not say it is an RF-Kit RF2K-S "
-                                "amplifier."));
+        QTRY_COMPARE_WITH_TIMEOUT(model.connectionPhase(), Phase::Retrying, 3000);
+        QVERIFY(connection.reconnectPending());
+        QVERIFY(!connection.isConnected());
+        QCOMPARE(faults.count(), 0);
+
+        // The amp answers properly on a later try: admitted.
+        amp.info = kRf2ksInfo;
+        QTRY_COMPARE_WITH_TIMEOUT(model.connectionPhase(), Phase::Connected, 5000);
+        QCOMPARE(model.deviceModel(), QStringLiteral("RF2K-S"));
+
+        // One /info re-poll without a device: the amp stays admitted.
+        amp.info = R"({"hello":"world"})";
+        const int infos = amp.count(QStringLiteral("GET /info"));
+        QTRY_VERIFY_WITH_TIMEOUT(amp.count(QStringLiteral("GET /info")) > infos, 6000);
+        amp.info = kRf2ksInfo;
+        QTest::qWait(200);
+        QVERIFY(connection.isConnected());
+        QCOMPARE(model.connectionPhase(), Phase::Connected);
+        QCOMPARE(model.deviceModel(), QStringLiteral("RF2K-S"));
+        for (const auto& fault : faults) {
+            QVERIFY(fault.at(0).toString() != QStringLiteral("identity"));
+        }
+        controller.cancel();
     }
 
     // Nothing answering: the Core keeps trying (Retrying) unless automatic

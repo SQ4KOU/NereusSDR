@@ -383,21 +383,24 @@ the amp as connected only if the reply's `device` field is `RF2K-S`
 (`{"device":"RF2K-S","software_version":{"GUI":200,"controller":267},
 "custom_device_name":"KG4VCF"}` on firmware G200C267; design doc
 2026-05-24-rfkit-rf2ks-applet-design.md section 6.1, from the amp's
-swagger and a live probe). Only then does it poll the other paths. Anything
-else is refused with a reason in `connectionError`, recorded as a fault, and
-never retried: a different device at the address will not become an
-RF2K-S. The `/info` refresh every ten poll cycles checks it again; a device
-that stops naming itself `RF2K-S` is dropped the same way. No answer at all
-is retried with the connection's backoff (1 s doubling to 60 s) while
-automatic retry is on (`RfKit_AutoReconnect`), and otherwise stops at
-`error`.
+swagger and a live probe). Only then does it poll the other paths. A
+reply that names another product is refused with a reason in
+`connectionError`, recorded as a fault, and never retried: a different
+device at the address will not become an RF2K-S. The `/info` refresh every
+ten poll cycles checks it again; a device that starts naming another
+product is dropped the same way. A reply that names no device at all
+proves nothing either way, so it counts as a failed answer (as does no
+answer at all): retried with the connection's backoff (1 s doubling to
+60 s) while automatic retry is on (`RfKit_AutoReconnect`), and otherwise
+stopped at `error`; on an admitted amp it is one failed poll (three in a
+row drop the link and retry, as for any failure), never a refusal.
 
 RF2K-S reasons in `rfkit`.`connectionError` (already in user words):
 
 | Reason | When |
 | --- | --- |
 | "The device at this address is not an RF-Kit RF2K-S amplifier. It reports itself as <device>." | `/info` named another device |
-| "The device at this address did not say it is an RF-Kit RF2K-S amplifier." | `/info` named no device |
+| "The device at this address did not say it is an RF-Kit RF2K-S amplifier." | Kept for older apps; a Core from the fix wave on retries an `/info` that names no device instead |
 | "The RF-Kit amplifier did not answer at this address." | No answer and automatic retry off |
 
 ## The `stationTci` object and the station TCI server
