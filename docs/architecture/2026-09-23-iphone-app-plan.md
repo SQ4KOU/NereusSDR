@@ -712,7 +712,8 @@ in CI), D4, spec §4.11.
 - Create: `ios/NereusKit/Package.swift`, `ios/NereusKit/Sources/NereusModels/Frequency.swift`,
   `ios/NereusKit/Tests/NereusModelsTests/FrequencyTests.swift`
 - Create: `ios/scripts/swift-test.sh`
-- Create: `scripts/verify-ios-provenance.py`, `tests/scripts/test_verify_ios_provenance.py`
+- Create: `scripts/verify-ios-provenance.py`, `tests/compliance/test_verify_ios_provenance.py`
+  (where the other checkers' tests live; CI's `compliance` job runs that folder with pytest)
 - Create: `.github/workflows/ios.yml` (the `package` job)
 - Modify: `.github/workflows/ci.yml` (a `compliance` step runs
   `python3 scripts/verify-ios-provenance.py`)
@@ -772,7 +773,8 @@ in CI), D4, spec §4.11.
   `ios/**`, `tests/data/link/**` or the workflow, and runs `ios/scripts/swift-test.sh`.
 
 **Verification:** documentation plus a checker with its own tests.
-`python3 -m pytest tests/scripts/test_verify_ios_provenance.py -q` passes;
+`python3 -m pytest tests/compliance/test_verify_ios_provenance.py -q` passes (the checker
+and its test run on this Mac's Python 3.9 as well as CI's 3.12);
 `python3 scripts/verify-ios-provenance.py` exits 0 on the tree;
 `ios/scripts/swift-test.sh` passes.
 
