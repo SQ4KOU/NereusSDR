@@ -1,7 +1,8 @@
 # NereusSDR for iPhone and iPad: Design Spec
 
-Status: **Approved** by JJ (KG4VCF) on 2026-09-23 ("onward"); D35 to D42
-were added while planning, each his call, and he changed D38 later that day. Every decision in §3 is JJ's.
+Status: **Approved** by JJ (KG4VCF) on 2026-09-23 ("onward"); D35 to D43
+were added while planning, each his call; he changed D38 later that day and set
+D43's wording rule on 2026-09-24. Every decision in §3 is JJ's.
 Plan: [2026-09-23-iphone-app-plan.md](2026-09-23-iphone-app-plan.md)
 Branch: `claude/nereussdr-iphone-app-5fb988`
 
@@ -94,7 +95,7 @@ Every row is a call JJ made, one question at a time, on a rendered mockup.
 | # | Decision | Why | Rejected |
 | --- | --- | --- | --- |
 | D15 | Controls live in both places: the Modes tab has the active slice's full set; the RX and TX panels on the band keep a quick subset. | Everything is reachable, and the common things are one tap away. | |
-| D16 | Setup is the desktop's whole Setup tree (same categories, order and page names), each category marked Station, This phone or Both, with Devices added first. | One mental model on both. | |
+| D16 | Setup is the desktop's whole Setup tree (same categories, order and page names), each category marked Core, This phone or Both, with Devices added first. | One mental model on both. | |
 | D17 | The front end (preamp, step attenuator, RX and TX antennas, RX-only inputs) lives in the Modes tab with the slice, as the desktop's RX applet has it, not on Radio. | It is set with the slice. | |
 | D18 | The amp's OPERATE and the tuner's TUNE live in the TX panel, beside RF power, TUNE and MOX. | They are part of getting on the air. | |
 
@@ -102,11 +103,11 @@ Every row is a call JJ made, one question at a time, on a rendered mockup.
 
 | # | Decision | Why | Rejected |
 | --- | --- | --- | --- |
-| D19 | A station is required: no demo mode. | The app is a console for a real station. | "Try it without a station" with a sample band. |
+| D19 | A Core is required: no demo mode. | The app is a console for a real station. | "Try it without a Core" with a sample band. |
 | D20 | The station runs from **a switch in the desktop app**, on a new Remote Station page under CAT & Network. It keeps running after the app closes and can start with the computer. | No second install for the common case. | A separate station install. |
 | D21 | **Ask before taking over.** Connecting to a station another device is using names that device and asks first. A device reclaiming its own dropped session is not asked. | A second person at home is not thrown off silently. Amends remote design §7.1 (§4.5). | Preempt at once. |
 | D22 | **Taking over may cut a transmission off.** "Unkey and take over" unkeys the other device first. | A transmission left running at home can be stopped from anywhere. | Wait until it unkeys. |
-| D23 | **The app keeps the older link too.** Every app release still speaks the link one major version back; only a station two majors behind is refused. Features the station can't do yet are greyed "Needs a newer station". | An App Store update must never lock the operator out. Amends remote design §7.0 (§4.4). | A station self-update triggered from the phone; updating at the station only. |
+| D23 | **The app keeps the older link too.** Every app release still speaks the link one major version back; only a station two majors behind is refused. Features the Core can't do yet are greyed "Needs a newer Core". | An App Store update must never lock the operator out. Amends remote design §7.0 (§4.4). | A station self-update triggered from the phone; updating at the station only. |
 
 ### 3.5 Away from the app
 
@@ -139,7 +140,8 @@ Every row is a call JJ made, one question at a time, on a rendered mockup.
 Choices the code could not settle, put to JJ on 2026-09-23 with a
 recommendation each. He kept D35 to D40 as recommended; D41 and D42 are his
 answers in his own words. He later changed D38 against the recommendation, to match
-his 2026-09-22 answer to the Core/GUI session.
+his 2026-09-22 answer to the Core/GUI session. D43 is a wording rule he gave that
+session on 2026-09-24.
 
 | # | Decision | Why | Rejected |
 | --- | --- | --- | --- |
@@ -151,6 +153,7 @@ his 2026-09-22 answer to the Core/GUI session.
 | D40 | **Filter presets live on the station**, and every device shows the same ones. | One station, one set of presets, like the radio's own memories. A desktop connected remotely starts sharing the station's presets; a desktop running the radio locally is unchanged. | Each device keeping its own. |
 | D41 | **An item the desktop has not built appears on the phone once it exists.** The phone keeps the desktop's order and names for tools, Radio tab items and Setup pages, and leaves out any the station does not offer yet; each appears by itself, in its place, when it is built. VAX and antenna selection are built and working, so VAX Audio and Antenna Setup are on the phone from the start even though their desktop menu entries are not finished. | App Review rejects apps that show placeholder or "coming soon" items. JJ: "show each once it exists however vax, antenna selection are there and working". | Greyed items as on the desktop; building every missing desktop feature in this plan. |
 | D42 | **MIDI Mapping and Macro Buttons are dropped for now.** | Neither exists on the desktop and nothing defined what they would do. JJ: "drop these for now". | Building a first version now; drawing them on the board first. |
+| D43 | **On screen, the NereusSDR computer you connect to, update and pair with is "the Core".** "Station" appears on screen only in its ham sense: your station, the station callsign, the station's network. This document's prose, code identifiers, wire names and the link document keep "station". | One name for the same computer on the desktop and the phone, while "station" keeps the meaning hams give it. JJ's rule, given to the Core/GUI session on 2026-09-24. | "Station" for both. |
 
 ---
 
@@ -211,9 +214,9 @@ This spec amends it for the phone:
 
 * **Every app release implements the station's current major and the one before
   it.** A station one major behind is served through the older link, and new
-  features stay greyed "Needs a newer station".
+  features stay greyed "Needs a newer Core".
 * **Only a station two or more majors behind is refused**, and the refusal
-  names both versions ("The station needs updating").
+  names both versions ("The Core needs updating").
 * Within a major, the capability descriptor gates each feature; the phone greys
   what the station does not advertise.
 
@@ -379,7 +382,7 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
 ![Spots on the band](2026-09-23-iphone-app-design/04-spots.jpg)
 
 1. The toolbar, left to right: RX panel, speaker mute, Slice A, Pan 1,
-   Display, the station link dot with its round-trip time, and TX panel.
+   Display, the link dot with its round-trip time, and TX panel.
 2. The tab bar: Panadapter, Modes, Tools, Radio, Setup.
 3. Tap or drag the band to tune the active slice. Zoom minus and plus sit at
    the bottom right of the waterfall; PTT at the bottom left.
@@ -402,7 +405,7 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
     source, spotter, comment, time) with a Tune button. Tap a +N badge to see
     the hidden spots as a list. Colours follow the desktop's DXCC priority.
 11. How spots look is set on each phone. Which spots there are comes from the
-    station.
+    Core.
 12. The mic meter is titled "Mic level", not the desktop's "Level", because on
     the band it sits next to RF power and SWR, where "Level" could be mistaken
     for the leveler. It is the desktop's Phone/CW applet gauge: -40 to +10 dB,
@@ -420,12 +423,12 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
    transmit (TX filter, mic gain, PROC, LEV, EQ, CFC, VOX, MON).
 2. While transmitting, every tab's title bar shows a red TX pill with the clock
    and Stop; one tap unkeys.
-3. **Tools** lists the desktop's tools in its order, each marked Station, This
-   phone or Both, showing each once the station offers it (D41). On the phone,
-   PureSignal is on, off and status only; calibration stays at the station.
+3. **Tools** lists the desktop's tools in its order, each marked Core, This
+   phone or Both, showing each once the Core offers it (D41). On the phone,
+   PureSignal is on, off and status only; calibration stays at the Core.
 4. MIDI Mapping and Macro Buttons are dropped for now (D42). Network Diagnostics
    and Support Bundle cover both ends.
-5. **Radio** opens with the station and link (name, direct or relay, round-trip
+5. **Radio** opens with the Core and link (name, direct or relay, round-trip
    time) and Disconnect; then the radio at a glance (model, firmware, protocol,
    sample rate, slices in use, PA volts, ADC overload, the station computer's
    CPU); then the accessories, each with a one-line status that opens its page;
@@ -435,27 +438,27 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
 
    | Category | Pages | Marked |
    | --- | --- | --- |
-   | Devices | Paired phones and computers, Add a device | Station |
+   | Devices | Paired phones and computers, Add a device | Core |
    | General | Startup & Preferences, UI Scale & Theme, Navigation, Battery and sessions, Options | Both |
-   | Hardware | Hardware Config, DDC Routing | Station |
-   | PA | PA Gain, Watt Meter, PA Values | Station |
+   | Hardware | Hardware Config, DDC Routing | Core |
+   | PA | PA Gain, Watt Meter, PA Values | Core |
    | Audio | On this phone, Devices, TX Input, VAX, TCI, Advanced, TX Profile | Both |
-   | DSP | AGC/ALC, NR/ANF, NB/SNB, CW, AM/SAM, FM, CFC, TNF, Filter Presets, Options | Station |
+   | DSP | AGC/ALC, NR/ANF, NB/SNB, CW, AM/SAM, FM, CFC, TNF, Filter Presets, Options | Core |
    | Display | Spectrum Defaults, Spectrum Peaks, Waterfall Defaults, Grid & Scales, Multimeter, TX Display | Both |
    | Transmit | Power, TX Profiles, Speech Processor, DEXP/VOX, PTT buttons | Both |
    | Appearance | Colors & Theme, Meter Styles, Gradients | This phone |
    | CAT & Network | Serial Ports, TCI Server, Peripherals, 4O3A, RF-Kit, TCP/IP CAT, MIDI Control, Data use | Both |
-   | Test | Two-Tone IMD | Station |
+   | Test | Two-Tone IMD | Core |
    | Diagnostics | Radio Status, Connection Quality, Settings Validation, Logs, Export / Import | Both |
 
-   Station settings are shared by every device paired with the station;
+   Core settings are shared by every device paired with the Core;
    settings marked This phone stay on the phone. A page the desktop has not
    built yet appears once it exists (D41).
 7. Left off the phone: the Keyboard page on the iPhone (an iPad with a keyboard
    gets it once the desktop builds it, D41); Appearance's Skins and Collapsible
    Display, which are about the desktop's window; the desktop's Remote Station
    page, whose job Devices does on the phone.
-8. **Devices**: Rename for the station; a reminder to back up the station key;
+8. **Devices**: Rename for the Core; a reminder to back up the Core's key;
    each paired device with when it was paired and last seen; one-tap Revoke,
    which drops that device at once, even mid-session; Add a device, which shows
    a one-time code; a note that only one device can be connected at a time.
@@ -468,28 +471,28 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
 ![The takeover question](2026-09-23-iphone-app-design/09-takeover.jpg)
 ![When things aren't right](2026-09-23-iphone-app-design/10-trouble.jpg)
 
-1. **Welcome:** one picture of radio, station and phone ("Your station, from
-   anywhere."), with two ways on: Find my station and Set up a station.
+1. **Welcome:** one picture of radio, Core and phone ("Your station, from
+   anywhere."), with two ways on: Find my Core and Set up a Core.
 2. iOS asks once to search the local network, with the app's own reason under
    its question.
-3. **Found it:** an unclaimed station on the same Wi-Fi is claimed with one
+3. **Found it:** an unclaimed Core on the same Wi-Fi is claimed with one
    tap. From anywhere else its code works, and an address can be typed.
 4. The microphone is asked for right after pairing, so iOS never interrupts the
    first transmission. Listening works without it.
-5. **Set up a station** explains the two ways to run one (on a computer, or on
+5. **Set up a Core** explains the two ways to run one (on a computer, or on
    a small box from a flashed card). It finds the radio and waits for its first
    device, showing a code with no time limit.
-6. **Your stations** lists paired stations first, then unclaimed ones on this
-   network. The phone lists stations only, never radios directly.
+6. **Your Cores** lists paired Cores first, then unclaimed ones on this
+   network. The phone lists Cores only, never radios directly.
 7. A pairing code is a number and two words (for example `7-anvil-harbor`),
    typed once.
-8. **Link lost while keyed:** the phone says the station stops transmitting on
-   its own when the link goes. That is the station's promise, since the phone
+8. **Link lost while keyed:** the phone says the Core stops transmitting on
+   its own when the link goes. That is the Core's promise, since the phone
    can't see it happen. The phone keeps retrying, with Cancel.
 9. **Back on the air:** transmit stays off until the operator taps PTT.
-10. **The desktop's Remote Station page:** Run a station on this computer; Keep
+10. **The desktop's Remote Station page:** Run a Core on this computer; Keep
     it running when NereusSDR is closed; Start it with the computer; the
-    station's name with Rename; the pairing code, shown until a device claims
+    Core's name with Rename; the pairing code, shown until a device claims
     it; then the paired devices with Revoke, and Add a device.
 11. **A small box** shows its code on a status page any browser on the network
     can open, which changes nothing, and in its console log for claiming over
@@ -501,18 +504,18 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
     loses the session is told who took it and when; its band stops; Take it
     back asks the same question the other way.
 14. **Five trouble screens,** each naming its cause, so the operator knows
-    whether to walk to the radio, the station computer or the phone:
-    * The radio is off: the station answers but can't hear the radio; the
+    whether to walk to the radio, the Core or the phone:
+    * The radio is off: the Core answers but can't hear the radio; the
       desktop's DISCONNECTED over the band, the last frame and the five-second
       retry.
-    * The station isn't answering: what the phone tried (this Wi-Fi, direct,
+    * The Core isn't answering: what the phone tried (this Wi-Fi, direct,
       relay) and what to check.
-    * The station needs updating: only when it is two versions behind; names
+    * The Core needs updating: only when it is two versions behind; names
       both versions.
-    * An older station: one version behind or less; the phone connects and
-      greys what the station can't do yet.
-    * This phone is offline: not the station's fault; the phone waits for a
-      network and says the station has already unkeyed.
+    * An older Core: one version behind or less; the phone connects and
+      greys what the Core can't do yet.
+    * This phone is offline: not the Core's fault; the phone waits for a
+      network and says the Core has already unkeyed.
 
 ### 5.4 Amps, tuner, audio and data
 
@@ -520,7 +523,7 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
 ![Audio and data use](2026-09-23-iphone-app-design/12-audio-and-data.jpg)
 
 1. Each accessory has its own page, reached from the Radio tab, saying it is on
-   the station's network (the RF2K-S says "polled by the station").
+   the station's network (the RF2K-S says "polled by the Core").
 2. **Power Genius XL:** OPERATE, output and efficiency; the band it got from the
    radio and what it is paired with; the TX interlock summary (Block, the SWR
    gate and its grace time) with "Change in Setup"; its fault history; Advanced.
@@ -570,7 +573,7 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
 ![Long sessions](2026-09-23-iphone-app-design/16-long-sessions.jpg)
 ![Transmit time-out](2026-09-23-iphone-app-design/17-transmit-time-out.jpg)
 
-1. **The lock-screen card** shows the station, the link, slice A with its
+1. **The lock-screen card** shows the Core, the link, slice A with its
    frequency and signal level, and mute. iOS limits how often the card can
    change, so the reading steps every few seconds.
 2. When the link drops, the lock screen lights up and buzzes, then keeps
@@ -580,7 +583,7 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
    tap. On iPhones without the island, the card shows only on the lock screen
    and a lost link arrives as a banner.
 4. If the link drops while keyed in another app, the island opens by itself,
-   the phone buzzes, and it says the station has already unkeyed.
+   the phone buzzes, and it says the Core has already unkeyed.
 5. The opened island shows forward power, SWR and the time left before the
    time-out ("Time-out in 2:13").
 6. **PTT buttons** (Setup, Transmit, this phone): the headset button, a paired
@@ -605,7 +608,7 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
 13. Just before iOS ends the card at eight hours, the app leaves a last message
     on it. The sound carries on, and opening NereusSDR starts a fresh card.
 14. **Transmit time-out** (D29): on the PTT buttons page, a Transmit time-out
-    group marked Station with "Stop transmitting after: 3 minutes" (30 seconds
+    group marked Core with "Stop transmitting after: 3 minutes" (30 seconds
     to 30 minutes, or off). When it fires, the band shows an amber notice,
     "Transmit stopped after 3:00. That's the time-out for phone and iPad. Tap
     PTT to go again.", and PTT is back to Tap.
@@ -616,7 +619,7 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
 ![iPad upright](2026-09-23-iphone-app-design/19-ipad-upright.jpg)
 
 1. On its side, the analog S-meter heads the column, then RX, then TX with the
-   amp and tuner. A corner button hides the column, and the station's name shows
+   amp and tuner. A corner button hides the column, and the Core's name shows
    in the toolbar. Otherwise the iPad has the phone's toolbar, flags, band plan,
    toggle PTT and tabs.
 2. Upright (834 by 1210 points on the 11-inch), the S-meter, RX and TX sit in
@@ -629,7 +632,7 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
 
 1. **Spot Hub** is one Tools page: the Spot List and Display first; then each
    source with a status dot (cluster, RBN, WSJT-X, SpotCollector, POTA, FreeDV,
-   PSK Reporter); then Identity. The sources and the list live at the station;
+   PSK Reporter); then Identity. The sources and the list live at the Core;
    how spots look lives on the phone.
 2. **Spot List:** newest first, with the desktop's columns (time, kHz, call,
    mode, source, spotter, comment), source pills and a band filter. A tap tunes.
@@ -637,7 +640,7 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
    halfway, 0 to 100; font 16 of 8 to 32; override colours off; override
    background on at 48). Each source can be shown or hidden on this phone's
    band. Spot lifetime (default 30 minutes) and "Clear all spots" belong to the
-   station.
+   Core.
 4. **A source page** (the cluster, for example): server, port, callsign,
    auto-connect (off), the live console and a command line.
 5. **FreeDV Reporter** folds the desktop's 14 columns into two lines per
@@ -651,7 +654,7 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
    callsign.
 9. **Ask to QSY:** pick the slice's frequency, theirs, or type one, then Send
    QSY. As on the desktop, the operator's radio tunes there too.
-10. The reporter connection and "hide my station" run at the station, so the
+10. The reporter connection and "hide my station" run at the Core, so your
     station stays listed while the phone is away. Miles and kHz are set per
     phone. Distance and heading stay blank until a grid square is set.
 
@@ -707,7 +710,7 @@ Hardware evidence stays **pending** until a device or the bench shows it.
 | R-IOS-18 | Tabs and Setup (§5.2): Modes, Tools, Radio, the Setup tree with its tags, Devices; controls in both places (D15). | Software: each control writes to its owner (station or phone). Integration: a station setting changed on the phone shows on the desktop. |
 | R-IOS-19 | Accessories on the phone (§5.4 items 1 to 5): the three pages, the TX panel controls, the interlock refusal with "Operate amp". | Bench with the devices. |
 | R-IOS-20 | Audio on the phone (§5.4 items 6 to 10): routes, the iPhone microphone by default, the band muted while talking, MON in headphones only, voice processing off, the quality choice, the speaker's route menu. | Device: every route, including AirPods; no feedback on the speaker while keyed. Bench: on-air audio shaped by the station's processing. |
-| R-IOS-21 | The transmit time-out on the phone (§5.5 items 5 and 14): the setting marked Station, the time left in the island, the notice when it fires. | Software. Bench, with R-IOS-04. |
+| R-IOS-21 | The transmit time-out on the phone (§5.5 items 5 and 14): the setting marked Core, the time left in the island, the notice when it fires. | Software. Bench, with R-IOS-04. |
 | R-IOS-22 | Long sessions (§5.5 items 9 to 13): sound only when locked, the screen-on choice defaulting to Always, the sleep timer, Low Power Mode to Saver, the heat slow-down, the locked stretch marked in the waterfall. | Device and Measurement: a multi-hour run with battery and heat logged. |
 | R-IOS-23 | Data use (§5.4 items 11 to 13): the modes and their defaults (D28), the counters, the 5 GB warning, the first-time cellular note and chip. The estimates are replaced by measured figures before release. | Measurement: each mode for an hour on Wi-Fi and on cellular. |
 | R-IOS-24 | iPad on its side and upright (§5.6, D30, D31). | Device: an 11-inch iPad in both orientations. |
@@ -738,21 +741,21 @@ the air as R3, R4 and R5 land.
 
 ## 7. Error handling
 
-| Situation | The station | The phone |
+| Situation | The Core | The phone |
 | --- | --- | --- |
 | Link lost while listening | Keeps the radio state (remote design §13) | Retries with backoff, cancellable; LINK LOST on the band, the card and the island |
-| Link lost while keyed | Drops MOX on the watchdog | Says the station stops on its own; retries; back on the air with transmit off |
+| Link lost while keyed | Drops MOX on the watchdog | Says the Core stops on its own; retries; back on the air with transmit off |
 | The radio is off | Answers; reports the radio link | The desktop's DISCONNECTED, the last frame, the five-second retry |
-| The station isn't answering | | What it tried (this Wi-Fi, direct, relay) and what to check |
-| Versions two majors apart | Refuses, naming both | "The station needs updating", naming both |
-| An older station | Negotiates down | Connects; greys "Needs a newer station" |
-| The phone is offline | Unkeys if it was keyed (watchdog) | Waits for a network; says the station has already unkeyed |
+| The Core isn't answering | | What it tried (this Wi-Fi, direct, relay) and what to check |
+| Versions two majors apart | Refuses, naming both | "The Core needs updating", naming both |
+| An older Core | Negotiates down | Connects; greys "Needs a newer Core" |
+| The phone is offline | Unkeys if it was keyed (watchdog) | Waits for a network; says the Core has already unkeyed |
 | Another device holds the session | Reports the holder (R-IOS-02) | The takeover question |
 | Taken over | Admits the other device | The band stops; who and when; Take it back |
 | Transmit refused (interlock, amp in STANDBY, PA protection) | Refuses with a reason | Red explanation, with the fix where there is one |
 | The time-out fires | Drops MOX, gives the reason | Amber notice; PTT back to Tap |
 | A call or Siri interrupts | Unkeyed by the phone's request | Unkeys; audio resumes afterwards |
-| The device is revoked | Drops the session at once (pairing design §7) | Back to the station list; the station must be paired again |
+| The device is revoked | Drops the session at once (pairing design §7) | Back to the list of Cores; the Core must be paired again |
 | Low Power Mode or a hot phone | Honours the smaller display request | Saver, or a slower band until it cools |
 
 ---

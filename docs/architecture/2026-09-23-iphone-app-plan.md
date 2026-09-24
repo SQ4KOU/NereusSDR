@@ -106,8 +106,12 @@ read for this plan at `4bb89b5d`.
   inside strings (a cite goes in a comment beside the string). Station-side strings pass
   `OperatorWording::isPlain` (`tests/OperatorWording.h`), and the desktop shows Core
   reasons through `src/gui/OperatorReasonText`, as on the station branch; the phone shows
-  the station's reason text as sent. App text matches the spec's §5 and the board's
-  pictures.
+  the Core's reason text as sent. App text matches the spec's §5 and the board's
+  pictures. On screen, in both apps, the NereusSDR computer you connect to, update and
+  pair with is "the Core" (D43); "station" appears on screen only in its ham sense (your
+  station, the station callsign, the station's network). Code identifiers, wire names,
+  the link document and this plan's prose keep "station"; where a task quotes on-screen
+  text that says "station" for the Core, write "Core".
 * **Attribution.** New NereusSDR-original C++ files start with
   `// no-port-check: NereusSDR-original.` Logic ported from Thetis (Task 33's `StopAllTx`
   from `console.cs`, Task 38's time-out from `TimeOutTimerManager.cs`, the display
@@ -385,7 +389,9 @@ order as the station tasks they consume land.
 **Tasks flagged for an earlier independent review** (they touch authorisation, secrets,
 networking that could expose or strand the station, or the transmit boundary): 4, 12, 13,
 14, 17, 18, 25, 26, 27, 27a, 28, 28a, 29, 29a, 30, 31, 32, 33, 34, 35, 36, 37, 38, 41, 42, 45, 47, 48,
-54, 64, 65. JJ decides whether any of them gets one.
+54, 64, 65. JJ decides whether any of them gets one. For the six phone tasks among them
+(27a, 28a, 29a, 54, 64, 65) he decided on 2026-09-24: each gets its own independent
+review as soon as it is finished.
 
 ---
 
@@ -651,8 +657,8 @@ before capabilities arrive.
   `major` is in the station's list is accepted and the session runs at that major; any
   other is refused with `session.end`, `retryable:false`, and the reason
   `refusalText(stationMajors, clientMajors)`, which names both sides' versions in plain words and passes
-  `OperatorWording::isPlain`, e.g. "This station runs link version 1 and this app runs
-  version 3. Update the station."
+  `OperatorWording::isPlain`, e.g. "This Core runs link version 1 and this app runs
+  version 3. Update the Core."
 - The desktop client picks the highest shared major from the station's `hello` and
   sends it; with no shared major it disconnects without retrying and shows the
   station's-side wording.
@@ -1326,7 +1332,7 @@ station-key backup prompt), spec §5.2 item 8.
 
 **Acceptance:**
 - `devices.revoke` of a connected device ends that device's connection at once with
-  `session.end`, reason "This device was removed from the station.", `retryable:false`,
+  `session.end`, reason "This device was removed from the Core.", `retryable:false`,
   and it can no longer authenticate.
 - `station.retireToken` is refused with a plain reason until at least one device key is
   paired, so the owner cannot lock everyone out; once accepted it deletes the token
@@ -1675,8 +1681,8 @@ desktop's remote window also holds its own key; pairing design §6 and §11), R-
 - Consumes: Tasks 12 to 16.
 - Produces:
   - The Connections dialog shows the pairing design's three groups: "Radios on this
-    network" (unchanged), "Stations on this network" (unclaimed ones with Pair), "Your
-    stations"; plus "Add a station by code" and "Type an address".
+    network" (unchanged), "Cores on this network" (unclaimed ones with Pair), "Your
+    stations"; plus "Add a Core by code" and "Type an address".
   - `void StationPairingClient::pairOnThisNetwork(const QString& host, quint16 port)` and
     `void StationPairingClient::pairByCode(const QString& code)` (direct to a station on
     this network, or through the rendezvous once Task 27 lands), each ending in signal
@@ -2597,7 +2603,7 @@ are measured before one is chosen).
   no upgrade starts until unkey. Severing a path while keyed, on every rung, is Task 37's
   test.
 - `relay = deny` on the station stops the relay rungs; the attempt record says the
-  station turned them off.
+  Core turned them off.
 
 **Verification:** networking and the transmit boundary: the traversal harness, plus
 `cmake --build build --target tst_path_racer tst_session_transport_switch tst_media_replace && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_path_racer|tst_session_transport_switch|tst_media_replace)$' --output-on-failure`.
@@ -2665,7 +2671,7 @@ seamless; switchable off), remote design §12.1 (no path change while keyed).
 - While the phone is keyed, or while MOX's delay timers run, no upgrade starts until
   unkey.
 - With the station's `relay = deny` the relay rungs are not tried, and the attempt
-  record says the station turned them off.
+  record says the Core turned them off.
 - The floor's relayed traffic never contains the Opus or JSON plaintext (checked in the
   test).
 
@@ -3193,12 +3199,12 @@ design §9.7, spec §4.6 items 1 and 2, R-IOS-13.
     retransmission; on the LAN WebSocket they ride the session.
   - `RemoteTxWatchdog` armed while a remote device holds MOX or TUNE or has VOX armed;
     each keepalive with the current epoch re-arms it; at 400 ms without one it calls
-    `stopAllTx("The link to <device> went quiet, so the station stopped transmitting.")`.
+    `stopAllTx("The link to <device> went quiet, so the Core stopped transmitting.")`.
     It disarms at the device's release, so a RADE end-of-over tail (built after R4) never
     looks like a lost link.
   - `StarvationPolicy::actionFor(DSPMode)` returning `KeepKeyed` or `Unkey` per the table
     above; on `starved(true)` an `Unkey` mode calls
-    `stopAllTx("No microphone audio arrived from <device>, so the station stopped transmitting.")`.
+    `stopAllTx("No microphone audio arrived from <device>, so the Core stopped transmitting.")`.
 
 **Acceptance:**
 - With an injected clock: keepalives every 100 ms hold transmit for 10 minutes; one
@@ -3409,11 +3415,11 @@ D21, D22, spec §4.5.
     60 s.
   - Confirm: when the holder is transmitting the station runs `UnkeyGate::unkey` for it
     and waits for the outcome; then it ends the holder's connection with
-    `session.end {reason: "<taker> took over the station.", takenOverBy: "<taker>", at: "<ISO 8601 UTC>", retryable: false}`
+    `session.end {reason: "<taker> took over the Core.", takenOverBy: "<taker>", at: "<ISO 8601 UTC>", retryable: false}`
     and continues the taker's connect sequence; the taker's `txPermitted` is true only
     after the unkey is confirmed (or timed out with transmit stopped).
   - Cancel, or no answer in 60 s: the taker's connection ends with
-    `session.end {reason: "The other device keeps the station.", retryable: false}`.
+    `session.end {reason: "The other device keeps the Core.", retryable: false}`.
   - The same device key reconnecting is admitted at once, preempting its own old
     connection as today (MOX drops across the change).
   - A peer that did not declare `sessionHolder` and finds a different device holding the
@@ -3988,7 +3994,7 @@ iOS 17.4) and §4.13, R-IOS-28 (the Push to Talk capability on the app ID), R-IO
   `aps-environment`), `ios/NereusApp/Info.plist` (`UIBackgroundModes`: `audio`,
   `push-to-talk`, `bluetooth-central`; `NSMicrophoneUsageDescription` "NereusSDR sends
   your voice to your station when you transmit."; `NSLocalNetworkUsageDescription`
-  "NereusSDR looks for your station on this network."; `NSBonjourServices`
+  "NereusSDR looks for your Core on this network."; `NSBonjourServices`
   `_nereus-station._tcp`; `NSBluetoothAlwaysUsageDescription` "NereusSDR connects to
   Bluetooth push-to-talk buttons."; `NSSupportsLiveActivities` YES)
 - Create: `ios/NereusApp/App/NereusSDRApp.swift`, `AppModel.swift` (owns the session,
@@ -4168,8 +4174,8 @@ and fix, never resuming after a reconnect), spec §5.1 items 12 and 13, §5.2 it
 
 **Acceptance:**
 - PTT: one tap keys (sends `tx.key {trigger:"screen"}`), a second unkeys; a refusal shows
-  the station's text in red with a fix button when `fix` is set ("Operate amp" sends
-  `amp.operate`); link loss while keyed shows "The station stops transmitting on its own
+  the Core's text in red with a fix button when `fix` is set ("Operate amp" sends
+  `amp.operate`); link loss while keyed shows "The Core stops transmitting on its own
   when the link goes." and, back on the air, PTT reads Tap.
 - When `txState.stopSerial` advances with `stopReason` `timeOut`, the band shows the amber
   notice "Transmit stopped after 3:00. That's the time-out for phone and iPad. Tap PTT to
@@ -4263,9 +4269,9 @@ R-IOS-17 (§5.3 items 12 and 13), R-IOS-08 (the app's pairing screens), D19, D21
   `session.held` (Task 41).
 - Produces: `ConnectionFlow`, the state machine behind the screens:
   welcome, local-network permission (asked once, by starting the browser), found
-  (one-tap claim of an unclaimed station on this network), code entry (validated against
+  (one-tap claim of an unclaimed Core on this network), code entry (validated against
   the word list), typed address, microphone permission right after the first pairing,
-  your stations (paired first, then unclaimed on this network; stations only, never
+  your Cores (paired first, then unclaimed on this network; Cores only, never
   radios), connecting, the takeover question, connected, link lost (listening and
   keyed), taken over, and the five trouble screens. From this task on the app declares
   `sessionHolder: 1` in its `hello`, so the station asks it the takeover question.
@@ -4273,19 +4279,19 @@ R-IOS-17 (§5.3 items 12 and 13), R-IOS-08 (the app's pairing screens), D19, D21
 **Acceptance:**
 - Each trouble screen appears for its cause against `FakeStation` configured to produce
   it: the radio off (the desktop's DISCONNECTED over the band, the last frame, the
-  five-second retry); the station not answering (what was tried: this Wi-Fi, direct,
-  relay, and what to check); the station needs updating (two majors apart, naming both
-  versions); an older station (one major behind: connects and greys each feature whose
-  capability is missing with "Needs a newer station"); this phone offline (waits for a
-  network and says the station has already unkeyed).
+  five-second retry); the Core not answering (what was tried: this Wi-Fi, direct,
+  relay, and what to check); the Core needs updating (two majors apart, naming both
+  versions); an older Core (one major behind: connects and greys each feature whose
+  capability is missing with "Needs a newer Core"); this phone offline (waits for a
+  network and says the Core has already unkeyed).
 - The takeover question names the device, how long it has been connected, when it was
   last used, and whether it is listening or transmitting; transmitting shows "Unkey and
   take over" in red; a reclaim of this phone's own session never shows it; being taken
   over shows who and when, stops the band, and Take it back asks the same question.
 - A typed code with a word not in the list is caught before sending, with suggestions.
-- When the station removes this phone (`session.end` with the removal reason) the phone
-  returns to the station list, says the station must be paired again, and drops that
-  station's stored identity (spec §7).
+- When the Core removes this phone (`session.end` with the removal reason) the phone
+  returns to the list of Cores, says the Core must be paired again, and drops that
+  Core's stored identity (spec §7).
 - Screenshots of every screen against `06-first-launch.jpg`, `07-connecting.jpg`,
   `09-takeover.jpg` and `10-trouble.jpg`.
 
@@ -4367,19 +4373,19 @@ Touch section and the dial (R-IOS-12), PTT buttons and the transmit time-out gro
 **Interfaces:**
 - Consumes: the Setup description (Tasks 43 to 46), the settings proxy (Task 9), the
   devices object and verbs (Tasks 13, 14), `PhoneSettings` (Task 51).
-- Produces: Devices first, then the desktop's categories in order, each marked Station,
-  This phone or Both (spec §5.2 item 6 table); Station pages rendered from the station's
+- Produces: Devices first, then the desktop's categories in order, each marked Core,
+  This phone or Both (spec §5.2 item 6 table); Core pages rendered from the Core's
   description, which leaves out pages the desktop has not built (D41), so each appears
   once it exists; This phone pages native. Left off: the Keyboard page (the desktop has
   not built it; an iPad with a keyboard gets it once it exists), Appearance's Skins and
   Collapsible Display, and the desktop's Remote Station page. From this task on the app
   declares `setupDescription: 1` in its `hello`, so the station sends it the
   descriptions.
-  - Devices: Rename for the station; the key backup reminder; each paired device with
+  - Devices: Rename for the Core; the key backup reminder; each paired device with
     when it was paired and last seen; one-tap Revoke; Add a device (shows the code);
     "Only one device can be connected at a time."
   - PTT buttons: the headset button, a paired Bluetooth PTT button, the Action button;
-    "Key a locked phone" on by default; a Transmit time-out group marked Station, "Stop
+    "Key a locked phone" on by default; a Transmit time-out group marked Core, "Stop
     transmitting after: 3 minutes" (30 seconds to 30 minutes, or off), writing
     `RemoteMoxTimeOutEnabled` and `RemoteMoxTimeOutSeconds`.
   - Battery and sessions, Navigation and Data use carry exactly the choices and defaults
@@ -4426,19 +4432,19 @@ until observed).
   station's radios, TCI clients and support bundle (Task 25), telemetry (Task 9), the
   attempt record (Tasks 27a and 29a).
 - Produces:
-  - Tools, in the desktop's order, each marked Station, This phone or Both, showing
-    only what the station offers (D41): Spot Hub (Task 62), FreeDV Reporter (Task 63),
-    TX Equalizer, PureSignal (on, off and status only; calibration stays at the station),
-    Diversity, TCI Server (the station's switch and port, and its connected clients),
-    VAX Audio (the station computer's VAX channels from the `vax` object: the slices
+  - Tools, in the desktop's order, each marked Core, This phone or Both, showing
+    only what the Core offers (D41): Spot Hub (Task 62), FreeDV Reporter (Task 63),
+    TX Equalizer, PureSignal (on, off and status only; calibration stays at the Core),
+    Diversity, TCI Server (the Core's switch and port, and its connected clients),
+    VAX Audio (the Core's VAX channels from the `vax` object: the slices
     feeding each, gain, mute, level), then the phone's Network Diagnostics and Support
     Bundle. CWX, Memory Manager and CAT Control appear when the desktop builds them;
     MIDI Mapping and Macro Buttons are dropped for now (D42).
-  - Radio: the station and link (name, direct or relay, round-trip time) and Disconnect;
+  - Radio: the Core and link (name, direct or relay, round-trip time) and Disconnect;
     the radio at a glance (model, firmware, protocol, sample rate, slices in use, PA
-    volts, ADC overload, the station computer's CPU); the accessories, each with a
-    one-line status that opens its page (Task 60); then, as the station offers them,
-    Antenna Setup (the station's antenna settings page from its Setup description, Task
+    volts, ADC overload, the Core's CPU); the accessories, each with a
+    one-line status that opens its page (Task 60); then, as the Core offers them,
+    Antenna Setup (the Core's antenna settings page from its Setup description, Task
     45, drawn by Task 58's `DescribedPage`, on radios with antenna control),
     Transverters (when the desktop builds it), Manage Radios and Protocol Info.
   - Support Bundle collects the phone's own log and the station's bundle and hands both
@@ -4475,7 +4481,7 @@ refusal with "Operate amp"), D18, spec §5.4 items 1 to 5.
 - Consumes: the station's `amplifier`, `rfkit` and `tuner` objects (the accessories plan)
   and the verbs of Task 42.
 - Produces: each page says the device is on the station's network (the RF2K-S says
-  "polled by the station"). Power Genius XL: OPERATE, output and efficiency; the band it
+  "polled by the Core"). Power Genius XL: OPERATE, output and efficiency; the band it
   got from the radio and what it is paired with; the TX interlock summary (Block, the SWR
   gate and its grace time) with "Change in Setup"; its fault history; Advanced. Tuner
   Genius XL: OPERATE, TUNE, a line when a tune is recalled from memory, three antennas
@@ -4485,7 +4491,7 @@ refusal with "Operate amp"), D18, spec §5.4 items 1 to 5.
 
 **Acceptance:**
 - Each control sends its verb and the page follows the mirrored state; a refused verb
-  shows the station's reason.
+  shows the Core's reason.
 - With the amp in STANDBY and the interlock on Block, PTT is refused with the red
   explanation and an "Operate amp" button that operates it.
 - Screenshots against `11-amps-and-tuner.jpg`.
@@ -4648,7 +4654,7 @@ message), R-IOS-21 (the time left in the island), D24, D25, spec §4.7.
   expanded island shows forward power, SWR and "Time-out in m:ss", and its UNKEY sends
   `tx.unkey` in one tap.
 - A lost link while keyed in another app updates the activity with an alert (the island
-  opens, the phone buzzes) saying the station has already unkeyed; on the lock screen it
+  opens, the phone buzzes) saying the Core has already unkeyed; on the lock screen it
   lights and buzzes and keeps retrying until cancelled.
 - On iPhones without the island the card shows only on the lock screen and a lost link
   arrives as a banner.
@@ -4931,7 +4937,7 @@ client.
 12. A flashed card in a Pi 4 beside a radio, claimed from the phone with one tap.
 13. Versions, with the debug overrides of Tasks 4 and 8: a phone speaking majors 1 and 2
     against a station speaking 1 connects and greys what the station lacks ("An older
-    station"); a phone speaking 2 and 3 against a station speaking 1 shows "The station
+    Core"); a phone speaking 2 and 3 against a station speaking 1 shows "The Core
     needs updating" naming both; a station speaking 1 and 2 serves a phone speaking 1.
 14. Screenshots of every screen in spec §5 taken on the device and compared side by side
     with the board's pictures, per `ui-verification`.
