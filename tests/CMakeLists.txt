@@ -7189,6 +7189,38 @@ nereus_add_test(tst_link_surface_manifest_regen
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 
+# iPhone app plan, Task 3 (R-IOS-01): the conformance suite both ends of the
+# link run, from tests/data/link/v1/ (manifest.json, control/, sessions/,
+# media/). tests/LinkFixtures holds the loader, the placeholder matcher and
+# the session script player. tst_link_conformance_regen writes the media
+# vectors from the station's own encoders, into NEREUS_LINK_REGEN_OUT only.
+nereus_add_test(tst_link_conformance_control
+    LinkFixtures.cpp
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_link_conformance_control PRIVATE
+    NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
+nereus_add_test(tst_link_conformance_session
+    LinkFixtures.cpp
+    fakes/LoopbackTransport.cpp
+    fakes/P1FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_link_conformance_session PRIVATE
+    NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
+nereus_add_test(tst_link_conformance_media
+    LinkFixtures.cpp
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_link_conformance_media PRIVATE
+    NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
+nereus_add_test(tst_link_conformance_regen
+    LinkFixtures.cpp
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_link_conformance_regen PRIVATE
+    NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
+
 # R-R3-46 / R-R3-11 / R-R3-13: the Core's step attenuator and preamp as the
 # mirrored `stepAtt` object, end to end: a DaemonApp Core on a primed board
 # with a fake radio connection, a StationServer, and a remote window over the

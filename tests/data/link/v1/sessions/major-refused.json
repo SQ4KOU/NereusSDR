@@ -1,0 +1,9 @@
+{
+    "stationSetup": {"radio": "static", "slices": 1},
+    "steps": [
+        {"from": "station", "message": {"major": 1, "minor": 11, "peer": "nereusd", "settingsSchema": 0, "type": "hello"}},
+        {"from": "client", "message": {"type": "hello", "major": 2, "minor": 0, "settingsSchema": 0, "peer": "NereusSDR iPhone"}},
+        {"from": "station", "message": {"reason": "Protocol major version mismatch: station speaks 1.11, client speaks 2.0. A differing major means an incompatible wire contract.", "retryable": false, "type": "session.end"}},
+        {"expectClosed": {"retryable": false}}
+    ]
+}

@@ -1,0 +1,9 @@
+{
+  "from": "station",
+  "wire": {
+    "type": "session.end",
+    "reason": "station shutting down",
+    "retryable": true
+  },
+  "decodes": true
+}

@@ -1,0 +1,10 @@
+{
+    "stationSetup": {"radio": "static", "slices": 1},
+    "steps": [
+        {"from": "station", "message": {"major": 1, "minor": 11, "peer": "nereusd", "settingsSchema": 0, "type": "hello"}},
+        {"from": "client", "message": {"type": "hello", "major": 1, "minor": 11, "settingsSchema": 0, "peer": "NereusSDR iPhone"}},
+        {"advanceMs": 30000},
+        {"from": "station", "message": {"reason": "handshake deadline expired", "retryable": true, "type": "session.end"}},
+        {"expectClosed": {"retryable": true}}
+    ]
+}

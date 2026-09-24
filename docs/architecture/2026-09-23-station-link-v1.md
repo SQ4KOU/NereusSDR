@@ -1294,6 +1294,12 @@ bytes left over, or a field that fails these rules. It dials
 `wss://<source address>:<control port>`, with the IPv6 scope when the
 address is link-local, and pins the announced pin.
 
+The conformance vector `media/lan-announcement.bin` (section 16.4) is a
+datagram the station's own encoder wrote, with its decoded fields in
+`media/lan-announcement.expect.json`. `tst_link_conformance_media` decodes
+it and encodes the fields again, so a change to this layout fails there
+until the vector, and this table, move with it.
+
 ## 15. Limits
 
 The limits both ends keep. Three come from constants the surface test
@@ -1331,38 +1337,167 @@ maximum also equals `kMaximumSpectrumDisplayFramesPerSecond` in
 
 `tests/data/link/v1/` holds the machine-readable half of this document.
 Both the station's tests and the app's tests read it; nothing in it is
-bundled into the app.
+bundled into the app. The station's runners are
+`tst_link_conformance_control`, `tst_link_conformance_session` and
+`tst_link_conformance_media`, over the shared loader, placeholder matcher
+and script player in `tests/LinkFixtures.{h,cpp}`. The app runs the same
+files against its own client.
+
+### 16.1 The files
 
 - `surface.json` is the link's surface: the nine sections this document's
   tables render (`messageKinds`, `capabilities`, `mirrorClasses`,
   `objectKeys`, `commands`, `settingsScope`, `telemetry`, `mediaControl`,
   `limits`). `tst_link_surface_manifest` captures it from the code and
   fails when the committed file differs; `tst_link_surface_manifest_regen`
-  writes it again (`NEREUS_LINK_REGEN_OUT=tests/data/link/v1`).
+  writes it again (`NEREUS_LINK_REGEN_OUT=tests/data/link/v1`). Each
+  `capabilities` entry carries the `value` a station with every feature on
+  sends; section 6.3 is rendered from it.
 - `manifest.json` lists the fixtures:
   `{"linkMajors":[1],"fixtures":[{"id":"<fixture id>","file":"<path under v1/>","kind":"control"|"session"|"media","requires":{"<feature>":<version>}}]}`.
-  `requires` is `{}` for a fixture every major-1 station passes.
+  `requires` names the capability versions a fixture exercises, and is
+  `{}` for a fixture every major-1 station passes. Every file under
+  `control/`, `sessions/` and `media/` is listed once; a media entry names
+  its `.bin`, and its `.expect.json` sits beside it.
 - `control/*.json`: `{"from":"station"|"client","wire":{<the exact message>},"decodes":true|false}`.
-  Each end decodes `wire`; when `decodes` is true it encodes the result
-  again and the two JSON objects compare equal after parsing, key order
-  ignored.
 - `sessions/*.json`: `{"stationSetup":{<the fake radio model and settings>},"steps":[<steps>]}`,
   where a step is `{"from":"station"|"client","message":{<a message>}}`,
-  `{"advanceMs":N}` or `{"expectClosed":{"retryable":true|false}}`. The
-  station's runner plays the client's messages and checks the station's;
-  the app's runner does the reverse. Time moves only through `advanceMs`
-  and injected clocks.
-- Expected messages may hold placeholders: `"$any"`, `"$string"`, `"$int"`,
-  `"$capture:<name>"` (records the value) and `"$ref:<name>"` (must equal
-  a recorded value).
+  `{"advanceMs":N}` or `{"expectClosed":{"retryable":true|false}}`.
 - `media/*.bin` with `*.expect.json`: the encoded bytes and
-  `{"codec":"nsdc1"|"ps3d"|"opus","expect":{<decoded values>}}` with a
-  tolerance (display bins within 0.01 dB; Opus PCM within 2 least
-  significant bits of the reference or at least 60 dB SNR, as the fixture
-  states).
+  `{"codec":<codec>,"expect":{<decoded values>}}`.
 
-The control, session and media fixtures and their runners arrive with the
-plan's Task 3, which extends this section.
+Expected messages may hold placeholders: `"$any"` (any value, the key must
+be present), `"$string"`, `"$int"` (a whole number), `"$capture:<name>"`
+(records the value) and `"$ref:<name>"` (must equal a recorded value).
+Objects must have the same keys and arrays the same length; numbers
+compare by value, so `1` and `1.0` are equal.
+
+### 16.2 Control fixtures
+
+Each end decodes `wire`; when `decodes` is true it encodes the result
+again and the two JSON objects compare equal after parsing, key order
+ignored. The fixtures cover every message kind in each direction it
+travels: seven from the client (`hello`, `auth.request`, `command.invoke`,
+`media.control`, `property.write`, `settings.write`, `settings.remove`)
+and sixteen from the station, with a `delta` carrying `"nan"` and `"-inf"`
+(section 4.2). The refusals are: a `media.control` over its 128 KiB cap
+and a `station.metrics.v1` over its 16 KiB cap (each an otherwise valid
+message padded past the cap), a missing required key (`command.invoke`
+without `id`), a wrong type (an `f64` entry holding `true`), an `f64`
+string other than the three of section 4.2, a `hello` major above 65535,
+and an unknown `type`.
+
+The two transport caps (1 MiB into the station, 8 MiB into the desktop
+client, section 12.3) are enforced by the WebSocket layer before any
+message is decoded, so a decoder fixture cannot hold them; `surface.json`
+records them under `limits`.
+
+### 16.3 Session fixtures
+
+The station's player builds the station `stationSetup` describes, opens a
+client connection to it over an in-process transport, and walks the
+steps. It sends each client message and matches each station message
+against the next one the station sent, in arrival order. The app's runner
+does the reverse: it sends the station's messages to its client and
+matches what the client sends.
+
+- **The token.** `"$ref:token"` in a client message is the station's
+  token. The player reads it from the station at run time; no fixture
+  holds a token.
+- **Time.** Time moves only through `{"advanceMs":N}`. The station's
+  player keeps a virtual clock over the station's own timers (the connect
+  deadline, the heartbeat and the 50 ms delta flush) and fires each when
+  its virtual time comes. A `delta` that waits for the flush follows an
+  `{"advanceMs":50}` step. No runner sleeps.
+- **Closing.** `{"expectClosed":{"retryable":R}}` holds when the station
+  has closed the connection, every message it sent before closing is
+  listed in the steps, and `R` equals `retryable` of the last
+  `session.end` or `auth.result` it sent. An authentication refusal sends
+  `auth.result` and closes with no `session.end` (section 12.4).
+- **The end.** A fixture that does not end in `expectClosed` ends with the
+  connection open. Messages the station sends after the last step are not
+  checked: on `connect-connectable` the radio keeps sending deltas.
+- **The heartbeat.** Pings and pongs are WebSocket frames, not messages
+  (section 12.1), so no step holds one. The in-process transport answers a
+  ping the way a WebSocket stack does. `heartbeat-answered` passes three
+  heartbeat intervals with the link up; `heartbeat-missed` has a client
+  that never answers, and the station ends the session on the third
+  interval with `heartbeat timeout`, `retryable` true.
+- **Summarised snapshots.** Outside `connect-connectable`, a `schema`
+  message's `fields` and an `object.create` message's `properties` are
+  `"$any"`: `connect-connectable` and `surface.json`'s `mirrorClasses`
+  hold their content, and a fixture about something else does not repeat
+  it. An end that plays the station's side sends, for such a message, the
+  class's fields from `mirrorClasses` and one entry of each field's kind.
+
+`stationSetup` holds:
+
+| Key | Meaning | Default |
+| --- | --- | --- |
+| `radio` | `"static"`: a model reporting a connected Hermes Lite 2 (MAC `AA:BB:CC:DD:EE:01`) with no radio behind it, so nothing changes on its own; `"connectable"`: a model connected to the fake Protocol 1 radio, receive processing and all | `"static"` |
+| `slices` | slices before the client connects | 1 |
+| `panadapters` | panadapters before the client connects | 0 |
+| `coreAccessories` | the Core owns its accessories: the `tuner`, `amplifier` and `rfkit` objects and the accessory commands | false |
+| `stationTci` | the Core runs a station TCI server (it stays off) | false |
+| `stepAttenuator` | a step attenuator controller is bound, so the radio hardware objects are offered | false |
+| `media` | media is enabled | false |
+| `priorFailedAuthentications` | other clients that each sent a wrong token before this one connects | 0 |
+| `clientAnswersPings` | the client's transport answers the station's pings | true |
+| `preemptingClient` | `{"afterStep": i}`: a second client authenticates once step `i` is done | none |
+
+The station runner starts every fixture from an empty settings profile,
+and the bundled NR3 model files count as absent, so a fixture reads the
+same on every machine.
+
+| Fixture | What it holds the station to |
+| --- | --- |
+| `connect-connectable` | The whole connect sequence to `snapshot.complete` on a connected radio with one slice, every message in full |
+| `wrong-token` | `auth.result` refused, `retryable` false, then the close |
+| `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
+| `major-refused` | A `hello` with major 2 gets `session.end` naming both versions, `retryable` false |
+| `lower-minor` | A `hello` with minor 4 agrees minor 4: the capabilities without the minor-11 entries, and a minor-11 verb refused with a plain reason |
+| `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false |
+| `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
+| `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "handshake deadline expired", `retryable` true |
+| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta` |
+| `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry |
+| `unknown-verb` | `command.result` refused, "unrecognised command verb"; the connection stays up |
+| `unknown-kind` | `session.end` "undecodable message", `retryable` false |
+| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments and, where it takes any, with one argument renamed |
+
+`tst_link_conformance_session` also checks that every verb in the
+`commands` table is invoked both ways by some fixture.
+
+### 16.4 Media vectors
+
+`tst_link_conformance_regen` writes every vector from the station's own
+encoders and fixed inputs, into `NEREUS_LINK_REGEN_OUT` only. The media
+runner decodes the bytes and compares the result with `expect`, then
+encodes `expect` again and compares that with the bytes, so a change to
+either the decoder or the encoder fails it.
+
+| Codec | Vector | Decoded values |
+| --- | --- | --- |
+| `nrsc1` | `media/lan-announcement.bin`: one LAN announcement datagram (section 14) | `controlPort`, `fingerprint`, `coreName`, `radioName`, `radioMac`, `radioConnected`, exact |
+| `ps3d` | `media/ps3d-frame.bin`: one PureSignal display chunk, eight points and four correction points | Every header field and the eight value lists; `tolerance` `{"absolute": 0}`, because the values travel as IEEE-754 binary64 |
+
+The format also names `nsdc1` (display frames, bins within 0.01 dB) and
+`opus` (audio, PCM within 2 least significant bits of the reference or at
+least 60 dB SNR, as the vector states). This version of the suite has no
+vectors for them yet.
+
+### 16.5 Running the station's runners
+
+```
+cmake --build build --target tst_link_conformance_control tst_link_conformance_session tst_link_conformance_media
+QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^tst_link_conformance_(control|session|media)$' --output-on-failure
+```
+
+Each runner also alters one of its fixtures in memory and checks that the
+failure names the step or field that differs. With
+`NEREUS_LINK_TRACE_DIR` set, `tst_link_conformance_session` writes every
+message the station sent in each fixture to `<id>.jsonl` there, which is
+how a fixture is written to what the code does.
 
 ## 17. Changing the link
 
