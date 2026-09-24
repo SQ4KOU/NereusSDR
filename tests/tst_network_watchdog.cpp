@@ -6,11 +6,13 @@
 // R-R3-49 / R-R3-11: the Network Watchdog setting (Setup > General >
 // Options) does what Thetis does with it.
 //
-// Protocol 2 (loopback P2FakeRadio): byte 38 of the general command packet
-// carries the setting at connect and on change, a change sends the general
-// packet at once, and the 500 ms keepalive general packet is sent only while
-// the watchdog is on (Thetis ChannelMaster/network.c:897-898, 1436 and
-// netInterface.c:1364-1372 [v2.10.3.15]). With the watchdog off no loss is
+// Protocol 2 (loopback P2FakeRadio): the radio's own safety timer stays on
+// whatever the setting says. Byte 38 of the general command packet is
+// always 1 and the 500 ms keepalive general packet always runs, so a radio
+// left keyed when the computer dies still drops out of transmit (operator
+// decision 2026-09-24). This is a deliberate divergence: Thetis lets both
+// follow the setting (ChannelMaster/network.c:897-898, 1436 [v2.10.3.15]).
+// The setting governs only the wait for data: with it off no loss is
 // declared when data stops (network.c:656: prn->wdt ? 3000 : WSA_INFINITE).
 //
 // Protocol 1 (loopback P1FakeRadio): nothing on the wire changes; the start
@@ -145,8 +147,9 @@ private slots:
         QCOMPARE(fake.lastGeneralWatchdog(), 1);
     }
 
-    void p2WatchdogOffAtConnectSendsByte38Zero()
+    void p2WatchdogOffAtConnectStillSendsByte38One()
     {
+        // The radio's safety timer stays on with the setting off.
         P2FakeRadio fake;
         QVERIFY(fake.start());
         P2RadioConnection connection;
@@ -154,37 +157,10 @@ private slots:
         connection.setWatchdogEnabled(false);
         QVERIFY(establishP2(connection, fake));
         QTRY_VERIFY(fake.generalDatagrams() >= 1);
-        QCOMPARE(fake.lastGeneralWatchdog(), 0);
-    }
-
-    void p2ChangeSendsTheGeneralPacketAtOnce()
-    {
-        P2FakeRadio fake;
-        QVERIFY(fake.start());
-        P2RadioConnection connection;
-        configureP2(connection, fake);
-        QVERIFY(establishP2(connection, fake));
-        QTRY_VERIFY(fake.generalDatagrams() >= 1);
-
-        // Well inside the 500 ms keepalive: the change itself sends it.
-        int before = fake.generalDatagrams();
-        connection.setWatchdogEnabled(false);
-        QTRY_VERIFY_WITH_TIMEOUT(fake.generalDatagrams() > before, 150);
-        QCOMPARE(fake.lastGeneralWatchdog(), 0);
-
-        before = fake.generalDatagrams();
-        connection.setWatchdogEnabled(true);
-        QTRY_VERIFY_WITH_TIMEOUT(fake.generalDatagrams() > before, 150);
         QCOMPARE(fake.lastGeneralWatchdog(), 1);
-
-        // The same value again sends nothing (Thetis sends only on change).
-        before = fake.generalDatagrams();
-        connection.setWatchdogEnabled(true);
-        QTest::qWait(60);
-        QCOMPARE(fake.generalDatagrams(), before);
     }
 
-    void p2KeepaliveRunsOnlyWhileTheWatchdogIsOn()
+    void p2KeepaliveRunsWithByte38OneWhateverTheSetting()
     {
         P2FakeRadio fake;
         QVERIFY(fake.start());
@@ -199,15 +175,22 @@ private slots:
         int before = fake.generalDatagrams();
         QTest::qWait(1300);
         QVERIFY2(fake.generalDatagrams() - before >= 2,
-                 "keepalive general packets every 500 ms while on");
+                 "keepalive general packets every 500 ms with the setting on");
         QCOMPARE(fake.lastGeneralWatchdog(), 1);
 
         connection.setWatchdogEnabled(false);
-        QTRY_COMPARE(fake.lastGeneralWatchdog(), 0);
         before = fake.generalDatagrams();
         QTest::qWait(1300);
-        QCOMPARE(fake.generalDatagrams(), before);
+        QVERIFY2(fake.generalDatagrams() - before >= 2,
+                 "keepalive general packets every 500 ms with the setting off");
+        QCOMPARE(fake.lastGeneralWatchdog(), 1);
         QCOMPARE(connection.state(), ConnectionState::Connected);
+
+        connection.setWatchdogEnabled(true);
+        before = fake.generalDatagrams();
+        QTest::qWait(1300);
+        QVERIFY(fake.generalDatagrams() - before >= 2);
+        QCOMPARE(fake.lastGeneralWatchdog(), 1);
     }
 
     // ---- Protocol 2: loss detection ---------------------------------------

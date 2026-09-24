@@ -30,6 +30,11 @@
 //                 its settings are unavailable, and says the Core needs
 //                 updating when an older Core refuses it. J.J. Boyd (KG4VCF),
 //                 with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 fix wave: the tooltip says the box sets how long
+//                 NereusSDR waits before it treats the radio as lost; the
+//                 radio's safety timer stays on (operator decision).
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -357,7 +362,14 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
     // From Thetis setup.designer.cs:8385-8395 [v2.10.3.13] — Checked=true
     m_chkNetworkWDT = new QCheckBox(tr("Network Watchdog"), group);
     m_chkNetworkWDT->setObjectName(QStringLiteral("chkNetworkWDT"));
-    m_chkNetworkWDT->setToolTip(QStringLiteral("Resets software/firmware if network becomes inactive."));
+    // Thetis's tooltip is "Resets software/firmware if network becomes
+    // inactive." (setup.designer.cs:8442 [v2.10.3.15]). NereusSDR keeps the
+    // radio's own safety timer on whatever this box says (operator decision
+    // 2026-09-24, R-R3-49), so the tooltip says what the box does here.
+    m_chkNetworkWDT->setToolTip(
+        tr("How long NereusSDR waits for data from the radio before it treats "
+           "the radio as lost. On: three seconds. Off: it keeps waiting. The "
+           "radio's own safety timer stays on either way."));
     // Default ON — first-launch loads "True"
     m_chkNetworkWDT->setChecked(
         s.value(QStringLiteral("NetworkWatchdogEnabled"), QStringLiteral("True")).toString() == QStringLiteral("True"));

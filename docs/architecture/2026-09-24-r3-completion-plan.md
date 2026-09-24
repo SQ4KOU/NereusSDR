@@ -95,6 +95,13 @@ the general packet when it changes (`netInterface.c:1364-1372`).
   whatever the setting (`networkproto1.c:50, 85`). The setting only sets the wait for
   data: three seconds on, for ever off (`networkproto1.c:292-294`; mi0bot 297 and 443).
 
+Operator decision (2026-09-24, from the final review's I1): NereusSDR keeps the radio's own
+safety timer on. On Protocol 2, byte 38 is always 1 and the 500 ms keepalive always runs,
+whatever the checkbox says, because a radio left keyed when the computer dies is a hazard.
+This is a deliberate divergence from Thetis (`network.c:897-898, 1436`). The checkbox
+governs only how long NereusSDR waits for data before it declares the radio lost, on both
+protocols.
+
 **Files:** `src/core/P1RadioConnection.*`, `src/core/P2RadioConnection.*`, the connect
 path that applies it (`src/models/RadioModel.cpp`), the Core's apply on a window's change
 (`src/core/session/StationServer.cpp`), `src/core/settings/SettingsScope.cpp` (the
@@ -102,17 +109,19 @@ setting becomes Core-owned: a radio setting, applied where the radio is), the pa
 
 **Acceptance:**
 - Read first: the Thetis lines above, quoted with file:line in the report.
-- Protocol 2: byte 38 follows the setting at connect and on change (default on); a change
-  sends the general packet at once; the keepalive runs only while it is on; with it off
-  no loss is declared when data stops.
+- Protocol 2: byte 38 is always 1 and the keepalive always runs, with the setting on or
+  off (operator decision above); with it off no loss is declared when data stops.
 - Protocol 1: the start packet stays as today (no watchdog bit). The wait for data before
   the radio is declared lost is 3000 ms with the setting on and has no limit with it off.
 - The setting is a Station setting: applied by the window on a local radio and by the
   Core on the Core's; a remote window's change reaches the Core. An older Core refuses the
-  key; the page puts the box back and says the Core needs updating, in plain words.
-- Tests: the P2 fake shows byte 38 on and off at connect and on change, the immediate
-  send, and the keepalive stopping with it off; P1 and P2 loss detection follow the wait;
-  a remote window's change reaches the Core and its radio.
+  key; the page puts the box back and says the Core needs updating, in plain words. A
+  remote window may change the wait; it cannot turn off the radio's safety timer.
+- The checkbox's tooltip says, in plain words, what it does: how long NereusSDR waits
+  before it treats the radio as lost.
+- Tests: the P2 fake shows byte 38 = 1 and the keepalive running with the setting off;
+  P1 and P2 loss detection follow the wait; a remote window's change reaches the Core
+  and its radio.
 
 **Verification:** `tst_network_watchdog`, `tst_network_watchdog_setting`,
 `tst_p1_watchdog_wire`, `tst_remote_gui_gating` by exact name.

@@ -504,11 +504,12 @@ public slots:
 
     // --- Watchdog ---
     // R-R3-49: the Network Watchdog setting (Setup > General > Options),
-    // applied where the radio is. Protocol 2 sends it in byte 38 of the
-    // general packet, sends that packet at once on a change and sends it
-    // every 500 ms only while it is on; Protocol 1 sends nothing for it.
-    // On both, it sets how long an established link waits for data before
-    // the radio is declared lost: three seconds on, no limit off. See
+    // applied where the radio is. On both protocols it sets only how long
+    // an established link waits for data before the radio is declared lost:
+    // three seconds on, no limit off. Nothing on the wire follows it: the
+    // Protocol 2 radio's own safety timer (general packet byte 38) stays on
+    // and its 500 ms keepalive always runs (operator decision 2026-09-24; a
+    // deliberate divergence from Thetis, which lets both follow it). See
     // P2RadioConnection::setWatchdogEnabled and
     // P1RadioConnection::setWatchdogEnabled for the Thetis lines.
     virtual void setWatchdogEnabled(bool enabled) = 0;

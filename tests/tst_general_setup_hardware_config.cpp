@@ -12,6 +12,7 @@
 #include <QComboBox>
 #include <QLabel>
 #include "gui/setup/GeneralOptionsPage.h"
+#include "OperatorWording.h"
 
 using namespace NereusSDR;
 
@@ -91,7 +92,14 @@ void TestGeneralSetupHardwareConfig::chkNetworkWDT_present_defaultChecked()
     auto* chk = group->findChild<QCheckBox*>("chkNetworkWDT");
     QVERIFY2(chk, "chkNetworkWDT not found");
     QCOMPARE(chk->text(), QString("Network Watchdog"));
-    QCOMPARE(chk->toolTip(), QString("Resets software/firmware if network becomes inactive."));
+    // R-R3-49: the tooltip says what the box does in NereusSDR (the wait
+    // before the radio is treated as lost), not Thetis's wording, since the
+    // radio's own safety timer stays on either way.
+    QCOMPARE(chk->toolTip(),
+             QString("How long NereusSDR waits for data from the radio before it treats "
+                     "the radio as lost. On: three seconds. Off: it keeps waiting. The "
+                     "radio's own safety timer stays on either way."));
+    QVERIFY(OperatorWording::isPlain(chk->toolTip()));
     QVERIFY2(chk->isChecked(), "chkNetworkWDT must default to checked");
 }
 

@@ -60,6 +60,10 @@
 //   2026-09-24 - R-R3-49: the Network Watchdog setting drives general packet byte 38, is sent at once on a change,
 //                 gates the 500 ms keepalive and the established-silence wait: Thetis network.c:656, 897-898, 1436 and
 //                 netInterface.c:1364-1372 [v2.10.3.15]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 fix wave: operator decision, the radio's safety timer stays on. Byte 38 is always 1 and the
+//                 keepalive always runs (deliberate divergence from network.c:897-898, 1436 [v2.10.3.15]); the setting
+//                 governs only the established-silence wait (network.c:656). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -645,12 +649,16 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // captures a default-init state before SetADCCount(2) is applied.
     m_numAdc = m_hardwareProfile.caps ? m_hardwareProfile.adcCount : m_caps->adcCount;
     m_numDac = 1;
-    // R-R3-49: byte 38 carries the Network Watchdog setting (default on, as
-    // Thetis's checkbox, applied before SendStart by setup.cs:2195).
+    // R-R3-49: byte 38 enables the radio's own safety timer, which drops the
+    // radio out of transmit when general packets stop arriving. NereusSDR
+    // deliberately keeps it on whatever the Network Watchdog setting says: a
+    // radio left keyed when the computer dies is a hazard (operator decision
+    // 2026-09-24). Thetis lets byte 38 follow the setting instead:
     // From Thetis network.c:897-898 [v2.10.3.15]:
     //   // Watchdog Timer default = 0 disabled
     //   packetbuf[38] = prn->wdt;
-    m_wdt = m_watchdogEnabled ? 1 : 0;
+    // The setting governs only the wait for data (onEstablishedSilenceTimeout).
+    m_wdt = 1;
 
     // From Thetis console.cs:8216 UpdateDDCs() — 2-ADC P2 boards (Angelia /
     // Orion / OrionMKII / Saturn / ANAN-G2) place RX1 on DDC2 because DDC0/
@@ -1313,11 +1321,9 @@ quint8 P2RadioConnection::effectiveLpfBitsAlex0() const
 // ---------------------------------------------------------------------------
 // setWatchdogEnabled
 //
-// R-R3-49: the Network Watchdog setting (Setup > General > Options). Byte 38
-// of the general packet carries it; a change sends the general packet at
-// once; the 500 ms keepalive general packet runs only while it is on
-// (onKeepAliveTick); and it sets how long an established stream waits for
-// data before the radio is declared lost (three seconds on, no limit off).
+// R-R3-49: the Network Watchdog setting (Setup > General > Options). It sets
+// how long an established stream waits for data before the radio is declared
+// lost: three seconds on, no limit off.
 //
 // From Thetis setup.cs:18024-18028 [v2.10.3.15]:
 //   private void chkNetworkWDT_CheckedChanged(object sender, EventArgs e)
@@ -1325,35 +1331,28 @@ quint8 P2RadioConnection::effectiveLpfBitsAlex0() const
 //       if (initializing) return;
 //       NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
 //   }
-// From Thetis netInterface.c:1364-1372 [v2.10.3.15]:
-//   void SetWatchdogTimer(int enable)
-//   {
-//       if (prn->wdt != enable)
-//       {
-//           prn->wdt = enable;
-//           if (listenSock != INVALID_SOCKET)
-//               CmdGeneral();
-//       }
-//   }
-// From Thetis network.c:897-898 [v2.10.3.15]:
-//   // Watchdog Timer default = 0 disabled
-//   packetbuf[38] = prn->wdt;
 // From Thetis network.c:656 [v2.10.3.15]:
 //   DWORD retVal = WSAWaitForMultipleEvents(1, &prn->hDataEvent, FALSE, prn->wdt ? 3000 : WSA_INFINITE, FALSE);
 //
-// NereusSDR sends the general packet only once the stream is running (its
-// socket and the radio's address are set at connect). Turning the watchdog
-// off stops a wait in progress; turning it on starts the wait from then, so
-// the radio is not declared lost the moment the box is ticked.
+// Deliberate divergence (operator decision 2026-09-24): in Thetis the same
+// setting also turns off the radio's own safety timer (general packet byte
+// 38, network.c:897-898 [v2.10.3.15]) and the 500 ms keepalive that feeds it
+// (network.c:1436 [v2.10.3.15]), and SetWatchdogTimer sends the general
+// packet at once to carry the change (netInterface.c:1364-1372
+// [v2.10.3.15]). NereusSDR keeps byte 38 at 1 and the keepalive running
+// whatever the setting says, because a radio left keyed when the computer
+// dies is a hazard. Nothing on the wire changes here, so nothing is sent.
+//
+// Turning the watchdog off stops a wait in progress; turning it on starts the
+// wait from then, so the radio is not declared lost the moment the box is
+// ticked.
 // ---------------------------------------------------------------------------
 void P2RadioConnection::setWatchdogEnabled(bool enabled)
 {
-    m_watchdogEnabled = enabled;
-    const int wdt = enabled ? 1 : 0;
-    if (m_wdt == wdt) {
+    if (m_watchdogEnabled == enabled) {
         return;
     }
-    m_wdt = wdt;
+    m_watchdogEnabled = enabled;
 
     if (!enabled) {
         if (m_establishedSilenceTimer) {
@@ -1367,10 +1366,6 @@ void P2RadioConnection::setWatchdogEnabled(bool enabled)
             std::chrono::milliseconds(m_establishedSilenceTimeoutMs),
             Qt::PreciseTimer);
         m_establishedSilenceTimer->start(m_establishedSilenceTimeoutMs);
-    }
-
-    if (m_running && m_socket && !m_radioInfo.address.isNull()) {
-        sendCmdGeneral();
     }
 }
 
@@ -2280,7 +2275,7 @@ void P2RadioConnection::noteAcceptedInboundDatagram(quint64 datagramGeneration)
     // R-R3-49: with the Network Watchdog off the wait has no limit.
     // From Thetis network.c:656 [v2.10.3.15]:
     //   prn->wdt ? 3000 : WSA_INFINITE
-    if (m_wdt == 0) {
+    if (!m_watchdogEnabled) {
         return;
     }
     if (!m_running || m_linkLossLatched
@@ -2304,7 +2299,7 @@ void P2RadioConnection::noteAcceptedInboundDatagram(quint64 datagramGeneration)
 
 void P2RadioConnection::onEstablishedSilenceTimeout()
 {
-    if (m_wdt == 0) {
+    if (!m_watchdogEnabled) {
         return; // R-R3-49: watchdog off, no limit (network.c:656 [v2.10.3.15])
     }
     if (!m_running || m_linkLossLatched
@@ -2432,11 +2427,14 @@ void P2RadioConnection::stopForEstablishedSilence()
 // Fires every 500ms, sends CmdGeneral when running
 void P2RadioConnection::onKeepAliveTick()
 {
-    // R-R3-49: the keepalive general packet goes out only while the Network
-    // Watchdog is on.
+    // R-R3-49: the keepalive general packet feeds the radio's safety timer
+    // (byte 38, always on here), so it runs whatever the Network Watchdog
+    // setting says. Deliberate divergence (operator decision 2026-09-24: a
+    // radio left keyed when the computer dies is a hazard). Thetis stops it
+    // with the setting off:
     // From Thetis network.c:1436 [v2.10.3.15]:
     //   if (prn->run && prn->wdt) CmdGeneral();
-    if (m_running && m_wdt != 0 && !m_radioInfo.address.isNull()) {
+    if (m_running && !m_radioInfo.address.isNull()) {
         sendCmdGeneral();
     }
 
