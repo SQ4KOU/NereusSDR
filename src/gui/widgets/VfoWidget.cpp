@@ -3787,20 +3787,27 @@ QColor VfoWidget::sliceColor(int index)
 {
     // From AetherSDR SliceColors.h (the table is ControlRanges.h's
     // kSliceColours, which the Core's catalogue reads too).
-    return QColor(static_cast<QRgb>(ControlRanges::sliceColour(index)));
+    // From AetherSDR src/gui/SliceColors.h:5, 16-23 [@0cd4559]:
+    // index all eight bright entries by slice id % 8.
+    return QColor(static_cast<QRgb>(ControlRanges::sliceColour(index % kSliceColorCount)));
 }
 
 QColor VfoWidget::sliceDimColor(int index)
 {
-    // From AetherSDR src/gui/SliceColors.h:16-19 [@0cd4559]: the dim half
-    // (dr, dg, db) of each kSliceColors entry. Current AetherSDR carries the
-    // same four values as color.slice.dim.a-d in
-    // resources/themes/default-dark.json:227-230 [@9f81dc00].
-    switch (index) {
-    case 0: return QColor(0x00, 0x60, 0x80);  // cyan, dim
-    case 1: return QColor(0x80, 0x20, 0x80);  // magenta, dim
-    case 2: return QColor(0x20, 0x80, 0x20);  // green, dim
-    case 3: return QColor(0x80, 0x80, 0x00);  // yellow, dim
+    // From AetherSDR src/gui/SliceColors.h:5, 16-23 [@0cd4559]: the dim half
+    // (dr, dg, db) of all eight kSliceColors entries, indexed by slice id % 8
+    // as there. Current AetherSDR carries the same eight values as
+    // color.slice.dim.a-h in resources/themes/default-dark.json:227-234
+    // [@9f81dc00].
+    switch (index % kSliceColorCount) {
+    case 0: return QColor(0x00, 0x60, 0x80);  // A = cyan, dim
+    case 1: return QColor(0x80, 0x20, 0x80);  // B = magenta, dim
+    case 2: return QColor(0x20, 0x80, 0x20);  // C = green, dim
+    case 3: return QColor(0x80, 0x80, 0x00);  // D = yellow, dim
+    case 4: return QColor(0x80, 0x50, 0x00);  // E = orange, dim
+    case 5: return QColor(0x00, 0x70, 0x60);  // F = teal, dim
+    case 6: return QColor(0x80, 0x30, 0x40);  // G = coral, dim
+    case 7: return QColor(0x58, 0x40, 0x80);  // H = lavender, dim
     default: return QColor(0x00, 0x60, 0x80);
     }
 }
