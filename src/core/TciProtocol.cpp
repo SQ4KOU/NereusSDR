@@ -17,6 +17,13 @@
 //                J.J. Boyd (KG4VCF): remote-window branches in the init
 //                burst, trx, vfo and modulation. AI-assisted transformation
 //                via Anthropic Claude Code.
+//   2026-09-24 - R-R3-48 / R-R3-25: the Core's station server is
+//                receive-only too (transmitRefused()). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-48 / R-R3-25: the station server refuses TX profile
+//                and XIT changes while receive-only
+//                (isTransmitSettingChange). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 
 #include "TciProtocol.h"
 #include "AppSettings.h"
@@ -36,6 +43,28 @@ namespace NereusSDR {
 // synonyms for "normal" so client-set values that round-trip through the
 // shim layer come back unchanged (Thetis tciModeToAgcMode at
 // TCIServer.cs:2280-2303 normalises identically).
+// static
+bool TciProtocol::isTransmitSettingChange(const QString& command)
+{
+    QString text = command.trimmed();
+    if (text.endsWith(QLatin1Char(';'))) {
+        text.chop(1);
+    }
+    const qsizetype colon = text.indexOf(QLatin1Char(':'));
+    if (colon < 0) {
+        return false;   // tx_profile_ex with no arguments is a query
+    }
+    const QString name = text.left(colon).trimmed().toLower();
+    const int argCount = int(text.mid(colon + 1).split(QLatin1Char(',')).size());
+    if (name == QLatin1String("tx_profile_ex")) {
+        return argCount >= 1;
+    }
+    if (name == QLatin1String("xit_enable") || name == QLatin1String("xit_offset")) {
+        return argCount >= 2;
+    }
+    return false;
+}
+
 QString TciProtocol::tciAgcModeForWire(const QString& enumName)
 {
     const QString u = enumName.trimmed().toUpper();
@@ -266,8 +295,9 @@ QStringList TciProtocol::buildInitBurst() const
     // From Thetis TCIServer.cs:2529 [v2.10.3.13]
     // R-R3-42 / R-R3-25: a remote window's receivers belong to a Core that
     // does not transmit for it, so it tells the app it only receives.
-    lines << (m_remoteWindow ? QStringLiteral("receive_only:true;")
-                             : QStringLiteral("receive_only:false;"));
+    // R-R3-48: so does the Core's station server until remote transmit.
+    lines << (transmitRefused() ? QStringLiteral("receive_only:true;")
+                                : QStringLiteral("receive_only:false;"));
 
     // From Thetis TCIServer.cs:2530 [v2.10.3.13] — locked at 2 per design doc §1.2;
     // Slice C/D are NereusSDR-internal and not exposed via TCI in Phase 3J-1.
@@ -887,8 +917,8 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     lines << buildSplitEnableLine(0, split[0]);
     lines << buildSplitEnableLine(1, bRX2Enabled && split[1]);
     // R-R3-42 / R-R3-25: neither receiver can transmit from a remote window.
-    lines << buildTxEnableLine(0, !m_remoteWindow && !mox);
-    lines << buildTxEnableLine(1, !m_remoteWindow && bRX2Enabled && !mox);
+    lines << buildTxEnableLine(0, !transmitRefused() && !mox);
+    lines << buildTxEnableLine(1, !transmitRefused() && bRX2Enabled && !mox);
 
     // From Thetis TCIServer.cs:2478-2481 [v2.10.3.13]
     lines << buildRxChannelEnableLine(0, 0, true);
@@ -1892,11 +1922,12 @@ QString TciProtocol::handleTrxCommand(const QStringList& args)
             return {};
         }
         const bool mox = (boolStr == QStringLiteral("true"));
-        // R-R3-42 / R-R3-25: a remote window never keys the transmitter.
-        // No MOX write and no broadcast; the asking app alone hears that
-        // its receiver is not transmitting. TciServer tells the operator
-        // why, in plain words, off the wire.
-        if (m_remoteWindow) {
+        // R-R3-42 / R-R3-25: a remote window never keys the transmitter,
+        // nor does the Core's station server until remote transmit
+        // (R-R3-48). No MOX write and no broadcast; the asking app alone
+        // hears that its receiver is not transmitting. TciServer tells the
+        // operator why, in plain words, off the wire.
+        if (transmitRefused()) {
             (void)mox;
             return buildTrxLine(rx, false);
         }
@@ -2644,6 +2675,13 @@ QString TciProtocol::handleXitEnableCommand(const QStringList& args)
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
     }
 
+    if (args.size() >= 2 && m_stationReceiveOnly) {
+        // M1 (R-R3-48 / R-R3-25): XIT is transmit configuration; the
+        // receive-only station server changes nothing and tells the asking
+        // app the value it keeps. TciServer tells the operator why.
+        return handleXitEnableCommand({args.at(0)});
+    }
+
     if (args.size() >= 2) {
         const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
         QMetaObject::invokeMethod(m_radio, "setXitEnable", Qt::DirectConnection,
@@ -2674,6 +2712,11 @@ QString TciProtocol::handleXitOffsetCommand(const QStringList& args)
         QMetaObject::invokeMethod(m_radio, "xitOffset", Qt::DirectConnection,
                                   Q_RETURN_ARG(int, offset));
         return QStringLiteral("xit_offset:%1,%2;").arg(rx).arg(offset);
+    }
+
+    if (args.size() >= 2 && m_stationReceiveOnly) {
+        // M1 (R-R3-48 / R-R3-25): as xit_enable.
+        return handleXitOffsetCommand({args.at(0)});
     }
 
     if (args.size() >= 2) {
@@ -3086,6 +3129,11 @@ QString TciProtocol::handleTxProfileExSetCommand(const QStringList& args)
     if (args.size() != 1) { return {}; }
     const QString name = args.at(0).trimmed();
     if (name.isEmpty()) { return {}; }
+    if (m_stationReceiveOnly) {
+        // M1 (R-R3-48 / R-R3-25): the TX profile is transmit configuration;
+        // the receive-only station server keeps the Core's and says which.
+        return handleTxProfileExQueryCommand();
+    }
     QMetaObject::invokeMethod(m_radio, "setTxProfile", Qt::DirectConnection,
                               Q_ARG(QString, name));
     m_pendingNotifications << buildTxProfileExLine(name);

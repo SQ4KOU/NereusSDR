@@ -12,7 +12,9 @@
 // Regex pattern and wire format: FlexRadio LAN discovery protocol
 //
 // AI tooling: Anthropic Claude Code; modified by J.J. Boyd (KG4VCF),
-// September 2026, AI-assisted via OpenAI Codex.
+// September 2026, AI-assisted via OpenAI Codex. Station network filter
+// (setStationBind, R-R3-22 / R-R3-47) by J.J. Boyd (KG4VCF), 2026-09-24,
+// AI-assisted via Anthropic Claude Code.
 
 #include "LanDiscovery.h"
 #include <QRegularExpression>
@@ -46,18 +48,19 @@ void LanDiscovery::stop() {
 }
 
 void LanDiscovery::on9008Ready() {
-    while (m_sock9008.hasPendingDatagrams()) {
-        QByteArray d(int(m_sock9008.pendingDatagramSize()), 0);
-        m_sock9008.readDatagram(d.data(), d.size());
-        parseAnnouncement(QString::fromUtf8(d).trimmed(), 9008);
-    }
+    readSocket(m_sock9008, 9008);
 }
 
 void LanDiscovery::on9010Ready() {
-    while (m_sock9010.hasPendingDatagrams()) {
-        QByteArray d(int(m_sock9010.pendingDatagramSize()), 0);
-        m_sock9010.readDatagram(d.data(), d.size());
-        parseAnnouncement(QString::fromUtf8(d).trimmed(), 9010);
+    readSocket(m_sock9010, 9010);
+}
+
+void LanDiscovery::readSocket(QUdpSocket& socket, quint16 port) {
+    while (socket.hasPendingDatagrams()) {
+        QByteArray d(int(socket.pendingDatagramSize()), 0);
+        QHostAddress sender;
+        socket.readDatagram(d.data(), d.size(), &sender);
+        parseAnnouncement(QString::fromUtf8(d).trimmed(), port, sender);
     }
 }
 
@@ -66,15 +69,27 @@ void LanDiscovery::onTimeout() {
     emit scanFinished();
 }
 
-void LanDiscovery::injectDatagramForTesting(const QString& payload, quint16 receivedPort) {
-    parseAnnouncement(payload, receivedPort);
+void LanDiscovery::injectDatagramForTesting(const QString& payload, quint16 receivedPort,
+                                            const QHostAddress& sender) {
+    parseAnnouncement(payload, receivedPort, sender);
 }
 
-void LanDiscovery::parseAnnouncement(const QString& payload, quint16 port) {
+void LanDiscovery::parseAnnouncement(const QString& payload, quint16 port,
+                                     const QHostAddress& sender) {
     static const QRegularExpression rx(
         R"(^(?<model>\S+)\s+ip=(?<ip>\d+\.\d+\.\d+\.\d+)\s+v=(?<v>\S+)\s+serial=(?<serial>\S+)\s+nickname=(?<nick>\S+)$)");
     auto m = rx.match(payload);
     if (!m.hasMatch()) return;
+    // R-R3-22 / R-R3-47: on the Core, only the station network (and this
+    // computer) is heard, both as the sender and as the announced address.
+    if (m_stationBind
+        && (!m_stationBind->acceptsPeer(sender)
+            || !m_stationBind->acceptsPeer(QHostAddress(m.captured("ip"))))) {
+        qCDebug(lcLan) << "ignored an announcement from outside the station network:"
+                       << sender << m.captured("ip");
+        m_ignoredOffNetwork.append({m.captured("model"), m.captured("ip")});
+        return;
+    }
     const QString serial = m.captured("serial");
     QString identity = serial;
     if (m_identitySensitiveDeduplication) {

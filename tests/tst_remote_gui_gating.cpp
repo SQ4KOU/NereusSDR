@@ -2377,9 +2377,9 @@ private slots:
     // DDC Routing changes the radio's hardware settings (a placeholder
     // locally too), which a remote window cannot do yet. Hardware Config
     // is no longer declared (R-R3-46: remoteHardwareConfigFollowsTheCore).
-    // RF-Kit
-    // connects this computer's own amplifier socket. None reaches local
-    // DSP, so the resource audit does not catch them; they are declared.
+    // RF-Kit is no longer declared either (R-R3-47: the page asks the Core,
+    // tst_rfkit_page_master_gate). None reaches local DSP, so the resource
+    // audit does not catch them; they are declared.
     // ====================================================================
     void remoteDeclaredUnavailableSetupLeavesSayWhy_data()
     {
@@ -2387,7 +2387,6 @@ private slots:
         QTest::addColumn<QString>("reasonWord");
         QTest::newRow("DDC Routing") << QStringLiteral("DDC Routing")
                                      << QStringLiteral("hardware");
-        QTest::newRow("RF-Kit") << QStringLiteral("RF-Kit") << QStringLiteral("Amplifier");
     }
 
     void remoteDeclaredUnavailableSetupLeavesSayWhy()
@@ -3613,8 +3612,12 @@ private slots:
             }
         }
         QVERIFY(toggle != nullptr);
+        // R-R3-47: with no Core offering RF-Kit setup, the toggle stays off
+        // and says why (with one, it asks the Core: tst_remote_peripherals).
         QVERIFY(!toggle->isEnabled());
-        QCOMPARE(toggle->toolTip(), operateBtn->toolTip());
+        QCOMPARE(toggle->toolTip(),
+                 QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app."));
+        QVERIFY(OperatorWording::isPlain(toggle->toolTip()));
         toggle->trigger();
         QCOMPARE(toggles.count(), 0);
 

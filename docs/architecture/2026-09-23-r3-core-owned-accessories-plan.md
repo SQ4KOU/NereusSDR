@@ -287,3 +287,57 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir <build dir> -R '^(tst_daemon_config|t
 
 - [ ] **Step 1:** Station-interface binding, config key and beacon gate with tests;
   commit.
+
+## Task 6: The amp's and the tuner's own settings from a remote window
+
+Added 2026-09-24 after Task 4: a remote window's Power Genius and Tuner Genius
+Advanced pages show what the Core keeps, but not the devices' own settings, which
+need the Core to talk to the device. The operator's rule is remote parity: a control a
+local window offers is never left disabled in a remote one.
+
+**Requirements:** R-R3-47, R-R3-22.
+
+**Files:**
+- Modify: `src/core/StationPgxlController.{h,cpp}` and the Core's Tuner Genius
+  controller (each device setting as a typed request the Core sends to the device, with
+  the device's answer returned), `src/core/session/SessionCommandDispatcher.cpp`,
+  `src/core/session/StationServer.cpp`, `src/core/session/StationClient.cpp`,
+  `src/core/session/IStationLink.h` (one verb per setting group: the Power Genius's
+  Hardware, Network, Pairing & Band Source, Save & Reboot and Revert; the Tuner Genius's
+  Network, Save & Reboot and Revert; and any other control on the two Advanced pages a
+  remote window cannot use yet), `src/core/session/StationCapabilities.{h,cpp}` (a
+  raised control version for each device, so older windows see today's wire),
+  `src/gui/setup/PgxlAdvancedPage.cpp` and `src/gui/setup/TgxlAdvancedPage.cpp` (in a
+  remote window the controls send the verbs and show the Core's answer; in a local
+  window unchanged), the control document
+- Test: `tests/tst_station_pgxl_controller.cpp`, the Tuner Genius controller's test,
+  `tests/tst_remote_peripherals.cpp`, a page test for each Advanced page in a remote
+  window
+
+**Acceptance:**
+- In a remote window every control on the Power Genius and Tuner Genius Advanced pages
+  works as it does in a local window: the request goes to the Core as a typed verb, the
+  Core sends the device the same command the local page sends today (a fake device in
+  the tests records the bytes), and the page shows the device's answer and its new
+  values from the Core's status. A device refusal or a missing device reaches the
+  window as plain words.
+- Network changes and Save & Reboot ask the same confirmation a local window asks
+  before anything is sent.
+- None of these verbs keys the radio or puts the amp in operate; the receive-only
+  Core's refusals (Task 2) are unchanged.
+- A window whose Core does not offer the raised version keeps today's behaviour and
+  says why a control is unavailable, in plain words.
+
+**Verification:** the tests above built and run by exact name, offscreen. Hardware
+(pending, operator checkpoint, and only with the operator's go-ahead because it changes
+the devices' own settings): a name change and a Save & Reboot on the real Power Genius
+and Tuner Genius from the Rock's remote window.
+
+**Execution note (advisory):** opus. After Task 4. Touches settings that can take a
+device off its network (Network, Save & Reboot): a candidate for an earlier independent
+review; the operator decides.
+
+- [ ] **Step 1:** Core requests and verbs for each device setting, with fake-device
+  tests; commit.
+- [ ] **Step 2:** The Advanced pages in a remote window, the version gate and the
+  control document; commit.

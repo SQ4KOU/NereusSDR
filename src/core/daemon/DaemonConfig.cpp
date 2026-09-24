@@ -2,7 +2,8 @@
 // src/core/daemon/DaemonConfig.cpp  (NereusSDR)
 // =================================================================
 // no-port-check: NereusSDR-original. See DaemonConfig.h for the on-disk
-// format and the design rationale.
+// format and the design rationale. 2026-09-24: station_bind (R-R3-22 /
+// R-R3-47), J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "DaemonConfig.h"
@@ -11,6 +12,7 @@
 #include "core/LogCategories.h"
 
 #include <QFile>
+#include <QHostAddress>
 #include <QRegularExpression>
 #include <QTextStream>
 
@@ -36,6 +38,7 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
 
     QTextStream in(&file);
     int lineNo = 0;
+    QString olderStationBind; // station_tci_bind, read when station_bind is empty
     while (!in.atEnd()) {
         ++lineNo;
         QString line = in.readLine();
@@ -148,6 +151,11 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
             cfg.coreName = value;
         } else if (key == QLatin1String("remote_bind")) {
             cfg.remoteBind = value;
+        } else if (key == QLatin1String("station_bind")) {
+            cfg.stationBind = value;
+        } else if (key == QLatin1String("station_tci_bind")) {
+            // The older name (TCI only), now every station listener's.
+            olderStationBind = value;
         } else if (key == QLatin1String("display_application_bytes_per_second")
                    || key == QLatin1String("spectrum_sample_units_per_second")) {
             bool ok = false;
@@ -162,6 +170,10 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
             qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
                               << "unknown key, ignored:" << key;
         }
+    }
+
+    if (cfg.stationBind.isEmpty() && !olderStationBind.isEmpty()) {
+        cfg.stationBind = olderStationBind;
     }
 
     if (errorOut) {
@@ -192,6 +204,13 @@ bool DaemonConfig::validate(QString* errorOut) const
             *errorOut = QStringLiteral("display_application_bytes_per_second and "
                 "spectrum_sample_units_per_second must both be positive integers "
                 "no greater than 9007199254740991");
+        }
+        return false;
+    }
+    if (!stationBind.isEmpty() && QHostAddress(stationBind).isNull()) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("station_bind must be empty or an IP address, got %1")
+                            .arg(stationBind);
         }
         return false;
     }

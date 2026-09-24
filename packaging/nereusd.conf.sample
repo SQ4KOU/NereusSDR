@@ -64,6 +64,21 @@ remote_port = 0
 # Default: 127.0.0.1
 remote_bind = 127.0.0.1
 
+# The station network: where this Core accepts connections from the
+# devices at the station. It covers the amplifier and tuner connection
+# (TCP 4992), the Power Genius and Tuner Genius announcements (UDP 9008 and
+# 9010) and the station TCI server (the RF-Kit RF2K-S follows this Core's
+# radio through it). Empty uses this machine's address on the radio's
+# network, found once the radio connects; until then only this machine is
+# accepted, and if the radio moves to another network they all move with
+# it. Set an address of this machine to choose another network, or 0.0.0.0
+# to accept every network. This machine itself is always accepted.
+# The older name station_tci_bind is still read when this one is empty.
+# The TCI server runs only while the TCI switch in a connected app is on,
+# and transmits for no app.
+# Default: empty
+station_bind =
+
 # Name shown under LAN Cores in the GUI Connections window. Empty uses this
 # machine's hostname. At most 128 UTF-8 bytes, without control characters.
 # An available non-loopback remote listener announces its certificate identity,

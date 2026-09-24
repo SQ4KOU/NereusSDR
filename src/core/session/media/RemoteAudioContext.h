@@ -4,7 +4,8 @@
 // no-port-check: NereusSDR-original.  The one wire codec Core and GUI share
 // for the remote audio context, in the minor-7 and minor-8 shapes and the
 // audio-profile shape (R-R3-23, audioProfileVersion 1), and for the
-// receiver audio context (R-R3-43, receiverAudioVersion 1); it holds no
+// receiver audio context (R-R3-43, receiverAudioVersion 1) and the
+// headphones audio context (R-R3-45, headphonesMixVersion 1); it holds no
 // session identity or playback policy.
 // =================================================================
 
@@ -34,10 +35,13 @@ enum class RemoteAudioOffReason {
     SliceRemoved,
     /// Core already sends kMaxReceiverAudioStreams receiver streams.
     ReceiverLimit,
+    /// R-R3-45, only in a headphones-audio-context: no receiver is routed
+    /// to the headphones, so there is no headphones mix to send.
+    NoHeadphonesReceiver,
 };
 
 /// client-disabled, media-not-ready, radio-offline, encoder-unavailable,
-/// slice-removed or receiver-limit.
+/// slice-removed, receiver-limit or no-headphones-receiver.
 QString remoteAudioOffReasonToWire(RemoteAudioOffReason reason);
 /// One of the four main-context wire strings exactly (not slice-removed or
 /// receiver-limit); nullopt for any other string and for any value that is
@@ -45,6 +49,9 @@ QString remoteAudioOffReasonToWire(RemoteAudioOffReason reason);
 std::optional<RemoteAudioOffReason> remoteAudioOffReasonFromWire(const QJsonValue& value);
 /// R-R3-43: any of the six wire strings, as a receiver-audio-context carries.
 std::optional<RemoteAudioOffReason> receiverAudioOffReasonFromWire(const QJsonValue& value);
+/// R-R3-45: the four main-context strings or no-headphones-receiver, as a
+/// headphones-audio-context carries.
+std::optional<RemoteAudioOffReason> headphonesAudioOffReasonFromWire(const QJsonValue& value);
 
 /// {"codec":"opus","sampleRate","channels","frameSamples","targetBitrate",
 /// "audioBandwidthHz"}, every number an integral JSON number.
@@ -153,5 +160,21 @@ QJsonObject encodeReceiverAudioContext(const RemoteReceiverAudioContextMessage& 
 /// decodeRemoteAudioContext's profile shape, except the ssrc rule above.
 std::optional<RemoteReceiverAudioContextMessage> decodeReceiverAudioContext(
     const QJsonObject& payload);
+
+// ---- Headphones mix (R-R3-45, headphonesMixVersion 1) ----
+
+/// Core's answer to {op:"headphones-audio", connectionId, revision, enabled,
+/// profile}, and its notice whenever the headphones mix starts, stops or
+/// changes: the audio-profile shape of the audio context with op
+/// "headphones-audio-context":
+/// {op, connectionId, revision, generation, enabled, ssrc, firstSequence,
+///  firstTimestamp, profile, encoder | reason [, profileRefusal]}.
+/// ssrc is always the connection's headphones mix id. revision is the
+/// newest headphones-audio request; generation counts headphones contexts
+/// on their own. The reason is one of the four main reasons or
+/// no-headphones-receiver.
+QJsonObject encodeHeadphonesAudioContext(const RemoteAudioContextMessage& message);
+/// Exactly that shape; otherwise as decodeRemoteAudioContext's profile shape.
+std::optional<RemoteAudioContextMessage> decodeHeadphonesAudioContext(const QJsonObject& payload);
 
 } // namespace NereusSDR

@@ -18,13 +18,25 @@
 //   2026-05-24 -- Created in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-24 -- R-R3-47 / R-R3-48: remote window through the Core
+//                 (switch, connect, disconnect), band-follow line. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 -- R-R3-47: every control works from a remote window: the
+//                 connection settings and antenna names as station
+//                 settings, Reset amp error through the Core
+//                 (remoteRfKitControlVersion 3). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "RfKitPage.h"
 
+#include "models/AccessoryDataModel.h"
 #include "models/RadioModel.h"
+#include "models/RfKitModel.h"
 #include "core/AppSettings.h"
 #include "core/Rf2ksConnection.h"
+#include "core/session/IStationLink.h"
+#include "gui/OperatorReasonText.h"
 
 #include <QCheckBox>
 #include <QFormLayout>
@@ -33,6 +45,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTabWidget>
 #include <QTimer>
@@ -65,8 +78,25 @@ RfKitPage::RfKitPage(RadioModel* model, QWidget* parent)
     if (m_model) {
         connect(m_model, &RadioModel::connectionStateChanged,
                 this, &RfKitPage::refreshConnectionBanner);
+        // R-R3-47: the Core's switch and link, in a remote window.
+        connect(m_model, &RadioModel::stationLinkStateChanged,
+                this, &RfKitPage::refreshConnectionBanner);
+        connect(m_model, &RadioModel::rfKitEnabledChanged, this, [this](bool enabled) {
+            if (m_master) {
+                const QSignalBlocker block(m_master);
+                m_master->setChecked(enabled);
+            }
+            applyMasterGate(enabled);
+            refreshLiveStatus();
+        });
+        if (RfKitModel* rfKit = m_model->rfKitModel()) {
+            connect(rfKit, &RfKitModel::bandFollowChanged, this, &RfKitPage::refreshBandFollow);
+            connect(rfKit, &RfKitModel::stationConnectionChanged,
+                    this, &RfKitPage::refreshLiveStatus);
+        }
     }
     refreshConnectionBanner();  // initial paint
+    refreshBandFollow();
 
     // Periodic live-status refresh (1 Hz).
     auto* timer = new QTimer(this);
@@ -116,6 +146,14 @@ QWidget* RfKitPage::buildGeneralTab()
     m_liveStatusLabel->setTextFormat(Qt::RichText);
     lay->addWidget(m_liveStatusLabel);
 
+    // R-R3-48: whether the amp follows the radio's band, and if not, the
+    // TCI server address to enter on it.
+    m_bandFollowLabel = new QLabel(tab);
+    m_bandFollowLabel->setObjectName(QStringLiteral("rfKitPageBandFollow"));
+    m_bandFollowLabel->setTextFormat(Qt::PlainText);
+    m_bandFollowLabel->setWordWrap(true);
+    lay->addWidget(m_bandFollowLabel);
+
     lay->addStretch();
     return tab;
 }
@@ -161,34 +199,28 @@ QWidget* RfKitPage::buildRf2ksTab()
     connFm->addRow(tr("Poll interval:"), m_pollIntervalSpin);
 
     m_testConnBtn = new QPushButton(tr("Test connection"), connBox);
+    m_disconnectBtn = new QPushButton(tr("Disconnect"), connBox);
+    m_disconnectBtn->setObjectName(QStringLiteral("rfKitDisconnectButton"));
     m_setTciBtn   = new QPushButton(tr("Set amp to TCI mode"), connBox);
     m_resetErrBtn = new QPushButton(tr("Reset amp error state"), connBox);
     auto* btnRow  = new QHBoxLayout();
     btnRow->addWidget(m_testConnBtn);
+    btnRow->addWidget(m_disconnectBtn);
     btnRow->addWidget(m_setTciBtn);
     btnRow->addWidget(m_resetErrBtn);
     connFm->addRow(btnRow);
 
     root->addWidget(connBox);
 
-    connect(m_testConnBtn, &QPushButton::clicked, this, [this] {
-        if (m_model && m_model->rfKitConnection()) {
-            m_model->rfKitConnection()->connectToAmp(
-                m_hostEdit->text(),
-                static_cast<quint16>(m_portSpin->value()));
-        }
-    });
+    connect(m_testConnBtn, &QPushButton::clicked, this, &RfKitPage::onConnectClicked);
+    connect(m_disconnectBtn, &QPushButton::clicked, this, &RfKitPage::onDisconnectClicked);
     connect(m_setTciBtn, &QPushButton::clicked, this, [this] {
         if (m_model && m_model->rfKitConnection()) {
             m_model->rfKitConnection()->setOperationalInterface(
                 QStringLiteral("TCI"));
         }
     });
-    connect(m_resetErrBtn, &QPushButton::clicked, this, [this] {
-        if (m_model && m_model->rfKitConnection()) {
-            m_model->rfKitConnection()->resetError();
-        }
-    });
+    connect(m_resetErrBtn, &QPushButton::clicked, this, &RfKitPage::onResetErrorClicked);
 
     // --- Antenna labels group ---
     auto* labelsBox = new QGroupBox(tr("Antenna labels"), tab);
@@ -229,11 +261,193 @@ QWidget* RfKitPage::buildRf2ksTab()
     root->addWidget(diagBox);
 
     root->addStretch();
+
+    // R-R3-47: in a remote window the amp is the Core's. Its address comes
+    // from the Core's `rfkit` object and goes back with Connect; the rest
+    // of this tab stays with the Core.
+    if (isRemote()) {
+        m_testConnBtn->setText(tr("Connect"));
+        m_testConnBtn->setToolTip(tr("Ask the Core to connect to the amplifier at this address "
+                                     "and save it."));
+        if (RfKitModel* rfKit = m_model->rfKitModel()) {
+            m_hostEdit->setText(rfKit->configuredHost());
+            if (rfKit->configuredPort() > 0) {
+                m_portSpin->setValue(rfKit->configuredPort());
+            }
+        }
+        m_setTciBtn->setEnabled(false);
+        m_setTciBtn->setToolTip(tr("The Core puts the amplifier in TCI mode itself while the "
+                                   "station's TCI server is on."));
+        // I4: the Core's settings and names, and whether it takes them.
+        connect(m_model, &RadioModel::stationLinkStateChanged,
+                this, &RfKitPage::refreshRemoteSettings);
+        if (AccessoryDataModel* data = m_model->accessoryDataModel()) {
+            connect(data, &AccessoryDataModel::labelsChanged,
+                    this, &RfKitPage::refreshRemoteSettings);
+        }
+        // A request the Core refused (connect, switch, Reset amp error):
+        // its words show in the status line.
+        connect(m_model, &RadioModel::accessoryRequestRefused, this,
+                [this](const QString& device, const QString& reason) {
+            if (device == QLatin1String("rfkit")) {
+                m_remoteResult = OperatorReasonText::forDisplay(reason);
+                refreshLiveStatus();
+            }
+        });
+        refreshRemoteSettings();
+    }
     return tab;
+}
+
+bool RfKitPage::isRemote() const
+{
+    return m_model && m_model->role() == RadioModel::Role::Remote;
+}
+
+bool RfKitPage::remoteControlAvailable() const
+{
+    const IStationLink* link = m_model ? m_model->stationLink() : nullptr;
+    return link && link->remoteRfKitControlAvailable();
+}
+
+bool RfKitPage::remoteSettingsAvailable() const
+{
+    const IStationLink* link = m_model ? m_model->stationLink() : nullptr;
+    return link && link->rfKitSettingsAvailable();
+}
+
+void RfKitPage::refreshRemoteSettings()
+{
+    if (!isRemote()) {
+        return;
+    }
+    // I4 (R-R3-47): the station's values (the Core's settings, read through
+    // the station settings), unless the operator is changing one.
+    const bool available = remoteSettingsAvailable();
+    const QString unavailable = tr("This Core does not let this app change these settings. "
+                                   "Updating the Core may help.");
+    for (QWidget* w : std::initializer_list<QWidget*>{
+             m_autoReconnect, m_pollIntervalSpin, m_saveBtn, m_resetErrBtn,
+             m_antLabelEdits[0], m_antLabelEdits[1], m_antLabelEdits[2],
+             m_antLabelEdits[3]}) {
+        w->setEnabled(available);
+        w->setToolTip(available ? QString() : unavailable);
+    }
+    if (available) {
+        m_resetErrBtn->setToolTip(tr("Ask the Core to clear the amplifier's error."));
+        auto& s = AppSettings::instance();
+        if (!m_autoReconnect->hasFocus()) {
+            const QSignalBlocker block(m_autoReconnect);
+            m_autoReconnect->setChecked(
+                s.value(QStringLiteral("RfKit_AutoReconnect"), QStringLiteral("True"))
+                    .toString() == QStringLiteral("True"));
+        }
+        if (!m_pollIntervalSpin->hasFocus()) {
+            const QSignalBlocker block(m_pollIntervalSpin);
+            m_pollIntervalSpin->setValue(
+                s.value(QStringLiteral("RfKit_PollIntervalMs"), QStringLiteral("1000")).toInt());
+        }
+        const QStringList labels = m_model->accessoryDataModel()
+            ? m_model->accessoryDataModel()->rfkitAntennaLabels() : QStringList{};
+        for (int i = 0; i < 4; ++i) {
+            if (m_antLabelEdits[i] && !m_antLabelEdits[i]->hasFocus() && i < labels.size()) {
+                m_antLabelEdits[i]->setText(labels.at(i));
+            }
+        }
+    }
+}
+
+void RfKitPage::onResetErrorClicked()
+{
+    if (!m_model) { return; }
+    if (isRemote()) {
+        // I4 (R-R3-47): the Core sends the amp the request this button sends
+        // locally.
+        IStationLink* link = m_model->stationLink();
+        const auto outcome = link ? link->requestResetRfKitError()
+            : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        m_remoteResult = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
+        refreshLiveStatus();
+        return;
+    }
+    if (m_model->rfKitConnection()) {
+        m_model->rfKitConnection()->resetError();
+    }
+}
+
+void RfKitPage::onConnectClicked()
+{
+    if (!m_model) { return; }
+    if (isRemote()) {
+        IStationLink* link = m_model->stationLink();
+        if (!link) { return; }
+        const auto outcome = link->requestConfigureRfKit(
+            m_hostEdit->text().trimmed(), static_cast<quint16>(m_portSpin->value()));
+        m_remoteResult = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
+        refreshLiveStatus();
+        return;
+    }
+    if (m_model->rfKitConnection()) {
+        m_model->rfKitConnection()->connectToAmp(
+            m_hostEdit->text(),
+            static_cast<quint16>(m_portSpin->value()));
+    }
+}
+
+void RfKitPage::onDisconnectClicked()
+{
+    if (!m_model) { return; }
+    if (isRemote()) {
+        IStationLink* link = m_model->stationLink();
+        if (!link) { return; }
+        const auto outcome = link->requestDisconnectRfKit();
+        m_remoteResult = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
+        refreshLiveStatus();
+        return;
+    }
+    if (m_model->rfKitConnection()) {
+        m_model->rfKitConnection()->disconnect();
+    }
+}
+
+void RfKitPage::refreshBandFollow()
+{
+    if (!m_bandFollowLabel) { return; }
+    RfKitModel* rfKit = m_model ? m_model->rfKitModel() : nullptr;
+    m_bandFollowLabel->setText(rfKit ? rfKit->bandFollowText() : QString());
+}
+
+QString RfKitPage::bandFollowTextForTesting() const
+{
+    return m_bandFollowLabel ? m_bandFollowLabel->text() : QString();
+}
+
+QString RfKitPage::liveStatusTextForTesting() const
+{
+    return m_liveStatusLabel ? m_liveStatusLabel->text() : QString();
 }
 
 void RfKitPage::saveRf2ksSettings()
 {
+    if (isRemote()) {
+        // I4 (R-R3-47): the connection settings and antenna names are the
+        // station's; written as station settings, which the Core applies at
+        // once (remoteRfKitControlVersion 3). The address goes with Connect.
+        if (!remoteSettingsAvailable()) {
+            return;
+        }
+        auto& s = AppSettings::instance();
+        s.setValue(QStringLiteral("RfKit_AutoReconnect"),
+                   m_autoReconnect->isChecked() ? QStringLiteral("True")
+                                                : QStringLiteral("False"));
+        s.setValue(QStringLiteral("RfKit_PollIntervalMs"),
+                   QString::number(m_pollIntervalSpin->value()));
+        for (int i = 0; i < 4; ++i) {
+            s.setValue(QStringLiteral("RfKit_Ant%1_Label").arg(i + 1),
+                       m_antLabelEdits[i]->text());
+        }
+        return;
+    }
     // Per-radio peripherals refactor (2026-05-26): the three connection
     // keys are scoped under hardware/<mac>/peripherals/ via
     // RadioModel::setPeripheralValue.  Auto-reconnect / poll-interval
@@ -307,6 +521,23 @@ void RfKitPage::refreshConnectionBanner()
     // inject a MAC via setLastRadioInfoForTest + setConnectionStateForTest
     // (without a live RadioConnection object) still drive the right
     // banner state.
+    if (isRemote()) {
+        // R-R3-47: the Core's RF-Kit, switched through the Core.
+        const bool available = remoteControlAvailable();
+        m_connectionBanner->setText(available
+            ? tr("Changes here go to the RF-Kit amplifier at the Core's station.")
+            : tr("This Core does not offer RF-Kit amplifier setup to this app."));
+        m_connectionBanner->setStyleSheet(available
+            ? QStringLiteral("color:#7ec850; font-size:11px; font-weight:bold;")
+            : QStringLiteral("color:#ffcc66; font-size:11px; font-weight:bold;"));
+        if (m_master) {
+            m_master->setEnabled(available);
+            const QSignalBlocker block(m_master);
+            m_master->setChecked(m_model->rfKitEnabled());
+        }
+        applyMasterGate(m_model->rfKitEnabled());
+        return;
+    }
     const QString mac      = m_model ? m_model->currentRadioMac() : QString{};
     const bool    haveMac  = !mac.isEmpty();
     if (haveMac) {
@@ -365,6 +596,20 @@ QPushButton* RfKitPage::testConnectionButtonForTesting() const
 
 void RfKitPage::onMasterToggled(bool checked)
 {
+    if (isRemote()) {
+        // R-R3-47: the Core switches its amp; the box follows the Core's
+        // answer (rfKitEnabled), so a refused request puts it back.
+        IStationLink* link = m_model->stationLink();
+        const auto outcome = link ? link->requestRfKitEnabled(checked)
+            : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        m_remoteResult = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
+        if (!outcome.sent && m_master) {
+            const QSignalBlocker block(m_master);
+            m_master->setChecked(m_model->rfKitEnabled());
+        }
+        refreshLiveStatus();
+        return;
+    }
     if (m_model) {
         m_model->setRfKitEnabled(checked);
     }
@@ -382,7 +627,8 @@ void RfKitPage::applyMasterGate(bool enabled)
     // isConnected() because the latter requires a live RadioConnection
     // -- unit tests that inject a MAC via setLastRadioInfoForTest +
     // setConnectionStateForTest don't stand up a connection object.
-    const bool haveMac = m_model && !m_model->currentRadioMac().isEmpty();
+    const bool haveMac = isRemote() ? remoteControlAvailable()
+                                    : m_model && !m_model->currentRadioMac().isEmpty();
     const bool gateOn  = enabled && haveMac;
     m_tabs->setTabEnabled(idx, gateOn);
     m_rf2ksTab->setEnabled(gateOn);
@@ -391,6 +637,37 @@ void RfKitPage::applyMasterGate(bool enabled)
 void RfKitPage::refreshLiveStatus()
 {
     if (!m_liveStatusLabel || !m_model) { return; }
+    if (isRemote()) {
+        // R-R3-47: the Core's amp, as the `rfkit` object reports it.
+        RfKitModel* rfKit = m_model->rfKitModel();
+        if (!rfKit) { return; }
+        using Phase = RfKitModel::ConnectionPhase;
+        QString text;
+        switch (rfKit->connectionPhase()) {
+        case Phase::Disabled: text = tr("Off at the station"); break;
+        case Phase::Disconnected: text = tr("Disconnected"); break;
+        case Phase::Discovering:
+        case Phase::Connecting: text = tr("Connecting at the station"); break;
+        case Phase::Identifying: text = tr("Checking the device"); break;
+        case Phase::Retrying: text = tr("Retrying at the station"); break;
+        case Phase::Connected:
+            text = tr("Connected: %1 %2").arg(rfKit->deviceNickname(), rfKit->deviceVersion());
+            break;
+        case Phase::Error:
+            text = tr("Error: %1").arg(OperatorReasonText::forDisplay(rfKit->connectionError()));
+            break;
+        }
+        if (!m_remoteResult.isEmpty()) {
+            text += QStringLiteral("\n") + m_remoteResult;
+        }
+        m_liveStatusLabel->setTextFormat(Qt::PlainText);
+        m_liveStatusLabel->setText(tr("RF2K-S: %1").arg(text));
+        if (m_diagnosticsLabel) {
+            m_diagnosticsLabel->setTextFormat(Qt::PlainText);
+            m_diagnosticsLabel->setText(tr("The Core keeps the amplifier's connection counts."));
+        }
+        return;
+    }
     Rf2ksConnection* conn = m_model->rfKitConnection();
     if (!conn) { return; }
     const QString status = conn->isConnected()

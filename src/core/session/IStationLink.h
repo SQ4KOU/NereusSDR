@@ -60,6 +60,21 @@
 //                                    to this app, and whether the link to
 //                                    the Core is up. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-48: the RF-Kit's
+//                                    configure, disconnect and switch
+//                                    requests, and the station TCI
+//                                    switch. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the accessory
+//                                    records and settings
+//                                    (accessoryDataVersion 1): interlock
+//                                    policy, output limit, fault history.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the amp's and
+//                                    tuner's own settings
+//                                    (remotePgxlControlVersion 3,
+//                                    remoteTgxlControlVersion 1).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -137,6 +152,93 @@ public:
     /// this app. Both false on an older Core or link.
     virtual bool remoteAmplifierStatusAvailable() const { return false; }
     virtual bool remoteRfKitStatusAvailable() const { return false; }
+
+    /// R-R3-47 / R-R3-22 (remotePgxlControlVersion 2): the Core's Power
+    /// Genius XL is set up through the Core. Acceptance means the Core
+    /// took the request; `amplifier`.connectionPhase says what happened.
+    virtual bool remotePgxlControlAvailable() const { return false; }
+    virtual CommandOutcome requestConfigurePgxl(const QString&, quint16)
+    { return { false, QStringLiteral("The station does not support remote PGXL configuration.") }; }
+    virtual CommandOutcome requestDisconnectPgxl()
+    { return { false, QStringLiteral("The station does not support remote PGXL configuration.") }; }
+    virtual CommandOutcome requestPgxlConnectionSettings(bool, int, int)
+    { return { false, QStringLiteral("The station does not support remote PGXL configuration.") }; }
+
+    /// R-R3-47 / R-R3-22 (remoteRfKitControlVersion 2): the Core's RF-Kit
+    /// RF2K-S is set up and switched through the Core. Acceptance means the
+    /// Core took the request; `rfkit`.connectionPhase and the `radio`
+    /// object's rfKitEnabled say what happened.
+    virtual bool remoteRfKitControlAvailable() const { return false; }
+    virtual CommandOutcome requestConfigureRfKit(const QString&, quint16)
+    { return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") }; }
+    virtual CommandOutcome requestDisconnectRfKit()
+    { return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") }; }
+    virtual CommandOutcome requestRfKitEnabled(bool)
+    { return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") }; }
+    /// I4 (R-R3-47, remoteRfKitControlVersion 3): the RF-Kit page's
+    /// connection settings, antenna names and Reset amp error work from a
+    /// remote window. The settings and names travel as station settings,
+    /// which the Core applies at once; Reset amp error is its own request.
+    virtual bool rfKitSettingsAvailable() const { return false; }
+    virtual CommandOutcome requestResetRfKitError()
+    { return { false, QStringLiteral("This Core does not let this app reset the RF-Kit amplifier's error. Updating the Core may help.") }; }
+
+    /// R-R3-48 (stationTciVersion 1): the Core runs its own TCI server on
+    /// the station network, switched by this app's one TCI switch and port.
+    virtual bool stationTciAvailable() const { return false; }
+    virtual CommandOutcome requestStationTci(bool, quint16)
+    { return { false, QStringLiteral("This Core has no TCI server for the station.") }; }
+    /// R-R3-48: the Core this window uses runs on this computer and serves
+    /// TCI here, so the window runs no TCI server of its own. Kept while the
+    /// link is down (the Core keeps its server), false for another Core.
+    virtual bool coreServesTciOnThisComputer() const { return false; }
+
+    /// R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core shares its
+    /// accessory records and settings (`accessoryData`) and takes these
+    /// three changes. Acceptance means the Core took the request; the
+    /// `accessoryData` object says what it now holds.
+    virtual bool accessoryDataAvailable() const { return false; }
+    virtual CommandOutcome requestTxInterlockPolicy(int, int, bool, double)
+    { return { false, QStringLiteral("This Core does not share its amplifier and tuner settings with this app.") }; }
+    virtual CommandOutcome requestPgxlPowerCap(bool, int)
+    { return { false, QStringLiteral("This Core does not share its amplifier and tuner settings with this app.") }; }
+    virtual CommandOutcome requestClearAccessoryFaults(const QString&)
+    { return { false, QStringLiteral("This Core does not share its amplifier and tuner settings with this app.") }; }
+
+    /// R-R3-47 / R-R3-22 (remotePgxlControlVersion 3): the Core sends the
+    /// Power Genius's own settings (name, hardware, network, Save & Reboot,
+    /// Revert) to the amp as the local Advanced page does. Acceptance means
+    /// the request left for the amp; the amp's answer and values come back
+    /// on `accessorySettings`.
+    virtual bool pgxlDeviceSettingsAvailable() const { return false; }
+    virtual CommandOutcome requestPgxlName(const QString&)
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    /// `setting` is "biasMode" (ClassA or ClassAB), "fanMode" (Auto, Quiet
+    /// or Continuous) or "ledIntensity" (0 to 100, as a number).
+    virtual CommandOutcome requestPgxlHardware(const QString&, const QString&)
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestPgxlNetwork(bool, const QString&, const QString&, const QString&)
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestPgxlSaveAndRestart()
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestPgxlReadSettings()
+    { return { false, pgxlDeviceSettingsUnavailableReason() }; }
+    /// R-R3-47 / R-R3-22 (remoteTgxlControlVersion 1): the same for the
+    /// Tuner Genius's own settings (name, network, Save & Reboot, Revert).
+    virtual bool tgxlDeviceSettingsAvailable() const { return false; }
+    virtual CommandOutcome requestTgxlName(const QString&)
+    { return { false, tgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestTgxlNetwork(bool, const QString&, const QString&, const QString&)
+    { return { false, tgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestTgxlSaveAndRestart()
+    { return { false, tgxlDeviceSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestTgxlReadSettings()
+    { return { false, tgxlDeviceSettingsUnavailableReason() }; }
+    static QString pgxlDeviceSettingsUnavailableReason()
+    { return QStringLiteral("This Core does not let this app change the Power Genius's own settings. Updating the Core may help."); }
+    static QString tgxlDeviceSettingsUnavailableReason()
+    { return QStringLiteral("This Core does not let this app change the Tuner Genius's own settings. Updating the Core may help."); }
+
     virtual CommandOutcome requestApplyNnrModels(quint32)
     { return { false, QStringLiteral("NNR model application is not supported by this station link.") }; }
     virtual bool nnrControlAvailable() const { return false; }

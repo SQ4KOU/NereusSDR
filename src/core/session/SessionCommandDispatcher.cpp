@@ -42,6 +42,31 @@
 //                                    3): setAlexRxAntenna, one band's RX or
 //                                    RX-only antenna. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: configurePgxl,
+//                                    disconnectPgxl and
+//                                    setPgxlConnectionSettings for the
+//                                    Core's Power Genius XL. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-48: configureRfKit,
+//                                    disconnectRfKit and setRfKitEnabled
+//                                    for the Core's RF-Kit RF2K-S, and
+//                                    setStationTci for the station's TCI
+//                                    server. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: setTxInterlockPolicy,
+//                                    setPgxlPowerCap and clearAccessoryFaults
+//                                    (accessoryDataVersion 1). AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the amp's and
+//                                    tuner's own settings (setPgxlName,
+//                                    setPgxlHardware, setPgxlNetwork,
+//                                    savePgxlSettings, readPgxlSettings and
+//                                    the four setTgxl* / *TgxlSettings
+//                                    verbs). AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47: resetRfKitError (the RF-Kit
+//                                    page's Reset amp error). AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -336,6 +361,36 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleDisconnectTgxl(invoke);
     } else if (invoke.commandVerb == "setFourO3AEnabled") {
         handleSetFourO3AEnabled(invoke);
+    } else if (invoke.commandVerb == "configurePgxl") {
+        handleConfigurePgxl(invoke);
+    } else if (invoke.commandVerb == "disconnectPgxl") {
+        handleDisconnectPgxl(invoke);
+    } else if (invoke.commandVerb == "setPgxlConnectionSettings") {
+        handleSetPgxlConnectionSettings(invoke);
+    } else if (invoke.commandVerb == "configureRfKit") {
+        handleConfigureRfKit(invoke);
+    } else if (invoke.commandVerb == "disconnectRfKit") {
+        handleDisconnectRfKit(invoke);
+    } else if (invoke.commandVerb == "setRfKitEnabled") {
+        handleSetRfKitEnabled(invoke);
+    } else if (invoke.commandVerb == "resetRfKitError") {
+        handleResetRfKitError(invoke);
+    } else if (invoke.commandVerb == "setStationTci") {
+        handleSetStationTci(invoke);
+    } else if (invoke.commandVerb == "setTxInterlockPolicy") {
+        handleSetTxInterlockPolicy(invoke);
+    } else if (invoke.commandVerb == "setPgxlPowerCap") {
+        handleSetPgxlPowerCap(invoke);
+    } else if (invoke.commandVerb == "clearAccessoryFaults") {
+        handleClearAccessoryFaults(invoke);
+    } else if (invoke.commandVerb == "setPgxlName" || invoke.commandVerb == "setPgxlHardware"
+               || invoke.commandVerb == "setPgxlNetwork"
+               || invoke.commandVerb == "savePgxlSettings"
+               || invoke.commandVerb == "readPgxlSettings"
+               || invoke.commandVerb == "setTgxlName" || invoke.commandVerb == "setTgxlNetwork"
+               || invoke.commandVerb == "saveTgxlSettings"
+               || invoke.commandVerb == "readTgxlSettings") {
+        handleAccessoryDeviceSettings(invoke);
     } else if (invoke.commandVerb == "requestIoBoardProbe") {
         handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "setAlexRxAntenna") {
@@ -938,6 +993,367 @@ void SessionCommandDispatcher::handleDisconnectTgxl(const SessionMessage& invoke
     if (!m_radioModel->disconnectTgxlForStation(&reason)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    reason.isEmpty() ? QStringLiteral("TGXL disconnect was refused") : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-47 / R-R3-22: the Power Genius's address, as configureTgxl's.
+// Accepted means saved and identifying; `amplifier`.connectionPhase says
+// whether it connected.
+void SessionCommandDispatcher::handleConfigurePgxl(const SessionMessage& invoke)
+{
+    QString host;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "host", "port" })
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok
+        || port < 1 || port > 65535) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("invalid host or port argument"), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->configurePgxlForStation(host, static_cast<quint16>(port), &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("PGXL configuration was refused") : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-47 / R-R3-22: the RF-Kit's configure rule, as the Power Genius's.
+void SessionCommandDispatcher::handleConfigureRfKit(const SessionMessage& invoke)
+{
+    QString host;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "host", "port" })
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok
+        || port < 1 || port > 65535) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("invalid host or port argument"), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->configureRfKitForStation(host, static_cast<quint16>(port), &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not set up the RF-Kit amplifier.")
+                                    : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+void SessionCommandDispatcher::handleDisconnectRfKit(const SessionMessage& invoke)
+{
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The disconnect request for the RF-Kit amplifier was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->disconnectRfKitForStation(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not disconnect the RF-Kit "
+                                                     "amplifier.")
+                                    : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// I4 (R-R3-47, remoteRfKitControlVersion 3): the local page's Reset amp
+// error, sent by the Core to its admitted amp.
+void SessionCommandDispatcher::handleResetRfKitError(const SessionMessage& invoke)
+{
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to reset the RF-Kit amplifier's error was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->resetRfKitErrorForStation(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not reset the RF-Kit "
+                                                     "amplifier's error.")
+                                    : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+void SessionCommandDispatcher::handleSetRfKitEnabled(const SessionMessage& invoke)
+{
+    QVariant enabled;
+    if (!hasExactlyArguments(invoke.arguments, { "enabled" })
+        || !findArgument(invoke.arguments, "enabled", &enabled)
+        || enabled.typeId() != QMetaType::Bool) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to turn the RF-Kit amplifier on or off was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setRfKitEnabledForStation(enabled.toBool(), &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change its RF-Kit "
+                                                     "amplifier switch.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-48: the one TCI switch and port, kept by the Core.
+void SessionCommandDispatcher::handleSetStationTci(const SessionMessage& invoke)
+{
+    QVariant enabled;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "enabled", "port" })
+        || !findArgument(invoke.arguments, "enabled", &enabled)
+        || enabled.typeId() != QMetaType::Bool
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to turn the station's TCI server on or off was "
+                                  "not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setStationTciForStation(enabled.toBool(), port, &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change its TCI server.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-47 / R-R3-22 (accessoryDataVersion 1): the transmit interlock policy.
+// The Core applies it and mirrors it back on `accessoryData`; its
+// enforcement stays on the Core and a change keys nothing.
+void SessionCommandDispatcher::handleSetTxInterlockPolicy(const SessionMessage& invoke)
+{
+    int mode = -1;
+    int graceMs = -1;
+    QVariant gate;
+    double gateMax = 0.0;
+    if (!hasExactlyArguments(invoke.arguments,
+                             { "mode", "graceMs", "swrGateEnabled", "swrGateMax" })
+        || !hasWireKind(invoke.arguments, "mode", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "mode", &mode) != ArgumentStatus::Ok
+        || !hasWireKind(invoke.arguments, "graceMs", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "graceMs", &graceMs) != ArgumentStatus::Ok
+        || !findArgument(invoke.arguments, "swrGateEnabled", &gate)
+        || gate.typeId() != QMetaType::Bool
+        || !hasWireKind(invoke.arguments, "swrGateMax", MirrorWireKind::Float64)
+        || !findFiniteDoubleArgument(invoke.arguments, "swrGateMax", &gateMax)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to change the transmit interlock was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setTxInterlockPolicyForStation(mode, graceMs, gate.toBool(), gateMax,
+                                                      &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change the transmit "
+                                                     "interlock.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-47 / R-R3-22: the Power Genius output limit that raises the alert.
+void SessionCommandDispatcher::handleSetPgxlPowerCap(const SessionMessage& invoke)
+{
+    QVariant enabled;
+    int watts = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "enabled", "watts" })
+        || !findArgument(invoke.arguments, "enabled", &enabled)
+        || enabled.typeId() != QMetaType::Bool
+        || !hasWireKind(invoke.arguments, "watts", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "watts", &watts) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to change the Power Genius output limit was "
+                                  "not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setPgxlPowerCapForStation(enabled.toBool(), watts, &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change the Power Genius "
+                                                     "output limit.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-47 / R-R3-22: one device's fault history, cleared on the Core.
+void SessionCommandDispatcher::handleClearAccessoryFaults(const SessionMessage& invoke)
+{
+    QString device;
+    if (!hasExactlyArguments(invoke.arguments, { "device" })
+        || !findUtf8Argument(invoke.arguments, "device", &device)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to clear the fault history was not understood."),
+                   {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->clearAccessoryFaultsForStation(device, &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not clear the fault history.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
+// 1): the amp's and the tuner's own settings. The Core sends each to the
+// device as the local Advanced page's own command (StationDeviceSettings);
+// accepted means it left for the device, and the device's answer comes
+// back on `accessorySettings`. None keys a transmitter or operates the amp.
+void SessionCommandDispatcher::handleAccessoryDeviceSettings(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    const bool pgxl = verb.contains("Pgxl");
+    const QString device = pgxl ? QStringLiteral("Power Genius") : QStringLiteral("Tuner Genius");
+    const auto notUnderstood = [&](const QString& what) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to %1 was not understood.").arg(what), {});
+    };
+    QString reason;
+    bool sent = false;
+    if (verb == "setPgxlName" || verb == "setTgxlName") {
+        QString name;
+        if (!hasExactlyArguments(invoke.arguments, { "name" })
+            || !findUtf8Argument(invoke.arguments, "name", &name)) {
+            notUnderstood(QStringLiteral("rename the %1").arg(device));
+            return;
+        }
+        sent = pgxl ? m_radioModel->setPgxlNameForStation(name, &reason)
+                    : m_radioModel->setTgxlNameForStation(name, &reason);
+    } else if (verb == "setPgxlHardware") {
+        // Exactly one of biasMode (utf8), fanMode (utf8), ledIntensity (i64).
+        const MirrorUpdate* only = invoke.arguments.size() == 1 ? &invoke.arguments.first()
+                                                                : nullptr;
+        QVariant value;
+        bool shape = false;
+        if (only && (only->name == "biasMode" || only->name == "fanMode")) {
+            QString text;
+            shape = findUtf8Argument(invoke.arguments, only->name, &text);
+            value = text;
+        } else if (only && only->name == "ledIntensity") {
+            int led = 0;
+            shape = hasWireKind(invoke.arguments, "ledIntensity", MirrorWireKind::Int64)
+                && findIntArgument(invoke.arguments, "ledIntensity", &led) == ArgumentStatus::Ok;
+            value = led;
+        }
+        if (!shape) {
+            notUnderstood(QStringLiteral("change the Power Genius hardware"));
+            return;
+        }
+        sent = m_radioModel->setPgxlHardwareForStation(QString::fromUtf8(only->name), value,
+                                                       &reason);
+    } else if (verb == "setPgxlNetwork" || verb == "setTgxlNetwork") {
+        QVariant dhcp;
+        QString address;
+        QString netmask;
+        QString gateway;
+        if (!hasExactlyArguments(invoke.arguments, { "dhcp", "address", "netmask", "gateway" })
+            || !findArgument(invoke.arguments, "dhcp", &dhcp)
+            || dhcp.typeId() != QMetaType::Bool
+            || !findUtf8Argument(invoke.arguments, "address", &address)
+            || !findUtf8Argument(invoke.arguments, "netmask", &netmask)
+            || !findUtf8Argument(invoke.arguments, "gateway", &gateway)) {
+            notUnderstood(QStringLiteral("change the %1 network settings").arg(device));
+            return;
+        }
+        sent = pgxl ? m_radioModel->setPgxlNetworkForStation(dhcp.toBool(), address, netmask,
+                                                             gateway, &reason)
+                    : m_radioModel->setTgxlNetworkForStation(dhcp.toBool(), address, netmask,
+                                                             gateway, &reason);
+    } else if (verb == "savePgxlSettings" || verb == "saveTgxlSettings") {
+        if (!hasExactlyArguments(invoke.arguments, {})) {
+            notUnderstood(QStringLiteral("save and restart the %1").arg(device));
+            return;
+        }
+        sent = pgxl ? m_radioModel->savePgxlSettingsForStation(&reason)
+                    : m_radioModel->saveTgxlSettingsForStation(&reason);
+    } else {
+        if (!hasExactlyArguments(invoke.arguments, {})) {
+            notUnderstood(QStringLiteral("read the %1 settings").arg(device));
+            return;
+        }
+        sent = pgxl ? m_radioModel->readPgxlSettingsForStation(&reason)
+                    : m_radioModel->readTgxlSettingsForStation(&reason);
+    }
+    if (!sent) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty()
+                       ? QStringLiteral("The Core did not send the request to the %1.").arg(device)
+                       : reason,
+                   {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+void SessionCommandDispatcher::handleDisconnectPgxl(const SessionMessage& invoke)
+{
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("disconnectPgxl takes no arguments"), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->disconnectPgxlForStation(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("PGXL disconnect was refused") : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-47: autoReconnect (bool), keepaliveSec (i64, 1 to 3600), pingSec
+// (i64, 0 to 3600), saved together on the Core and applied at once.
+void SessionCommandDispatcher::handleSetPgxlConnectionSettings(const SessionMessage& invoke)
+{
+    QVariant autoReconnect;
+    int keepaliveSec = 0;
+    int pingSec = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "autoReconnect", "keepaliveSec", "pingSec" })
+        || !findArgument(invoke.arguments, "autoReconnect", &autoReconnect)
+        || autoReconnect.typeId() != QMetaType::Bool
+        || !hasWireKind(invoke.arguments, "keepaliveSec", MirrorWireKind::Int64)
+        || !hasWireKind(invoke.arguments, "pingSec", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "keepaliveSec", &keepaliveSec) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "pingSec", &pingSec) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("setPgxlConnectionSettings requires an autoReconnect boolean "
+                                  "and keepaliveSec and pingSec whole numbers"), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setPgxlConnectionSettingsForStation(autoReconnect.toBool(), keepaliveSec,
+                                                           pingSec, &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("PGXL settings change was refused") : reason,
                    {});
         return;
     }

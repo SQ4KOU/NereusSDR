@@ -28,6 +28,12 @@
 // Modification history (NereusSDR):
 //   2026-09-23  J.J. Boyd / KG4VCF  Created (R-R3-47, R-R3-22). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  The Core's controller owns the
+//                                    connection state (identity, phases).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-48: band follow (the
+//                                    amp is paired with the radio). AI-
+//                                    assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/PgxlStatusGauges.h"
@@ -66,6 +72,10 @@ class AmplifierModel : public QObject {
     Q_PROPERTY(double mainsVoltageV READ mainsVoltageV NOTIFY statusChanged)
     Q_PROPERTY(double drainCurrentA READ drainCurrentA NOTIFY statusChanged)
     Q_PROPERTY(QString efficiencyText READ efficiencyText NOTIFY statusChanged)
+    // R-R3-48: whether the amp follows the radio's band: it does once it
+    // is paired with the radio (Off while not connected, Waiting until the
+    // pairing is answered).
+    Q_PROPERTY(NereusSDR::TunerModel::BandFollow bandFollow READ bandFollow NOTIFY bandFollowChanged)
 
 public:
     /// The amp's state. Wire values are fixed; new ones are only appended.
@@ -83,9 +93,14 @@ public:
 
     using ConnectionPhase = TunerModel::ConnectionPhase;
     using StationConnectionState = TunerModel::StationConnectionState;
+    using BandFollow = TunerModel::BandFollow;
 
     /// Why a window cannot change this object: the Core refuses every write.
     static QString readOnlyReason();
+    /// R-R3-25: why a receive-only Core refuses to operate the amplifier or
+    /// the tuner (or change the tuner's bypass or antenna). Also what a
+    /// window shows on its disabled Operate control.
+    static QString receiveOnlyOperateReason();
 
     explicit AmplifierModel(QObject* parent = nullptr);
 
@@ -109,6 +124,11 @@ public:
     double mainsVoltageV() const { return m_gauges.mainsVoltageV; }
     double drainCurrentA() const { return m_gauges.drainCurrentA; }
     QString efficiencyText() const { return m_gauges.efficiencyText; }
+    BandFollow bandFollow() const { return m_bandFollow; }
+    /// R-R3-48: the band-follow line the amp page and applet show.
+    QString bandFollowText() const;
+    /// R-R3-48: band follow as the bound connection reports it (or a test).
+    void setBandFollow(BandFollow state);
 
     /// The State for an amp's state word.
     static State stateFromWord(const QString& deviceState);
@@ -117,6 +137,11 @@ public:
     /// connect, drop, retry and failure as the connection phase. The Core
     /// and a local window only; a remote window never binds.
     void bindConnection(PgxlConnection* connection);
+
+    /// R-R3-47: the Core's StationPgxlController reports the connection
+    /// state (identity included) through setStationConnectionState(); the
+    /// bound connection then feeds only the amp's status frames.
+    void setConnectionStateOwnedByController(bool owned) { m_controllerOwnsConnection = owned; }
 
     /// Whether the station has the amp switched on (the 4O3A switch). Off
     /// reads as phase Disabled whenever the amp is not connected.
@@ -136,6 +161,7 @@ public:
 signals:
     void stationConnectionChanged();
     void statusChanged();
+    void bandFollowChanged();
 
 private:
     void publishConnection(const StationConnectionState& next);
@@ -144,10 +170,12 @@ private:
     QPointer<PgxlConnection> m_conn;
     StationConnectionState m_connection;
     bool m_enabled{true};
+    bool m_controllerOwnsConnection{false};
     bool m_present{false};
     State m_state{State::Unknown};
     bool m_operate{false};
     PgxlGauges m_gauges;
+    BandFollow m_bandFollow{BandFollow::Off};
 };
 
 } // namespace NereusSDR

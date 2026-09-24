@@ -12,15 +12,26 @@
 // Regex pattern and wire format: FlexRadio LAN discovery protocol
 //
 // AI tooling: Anthropic Claude Code; modified by J.J. Boyd (KG4VCF),
-// September 2026, AI-assisted via OpenAI Codex.
+// September 2026, AI-assisted via OpenAI Codex. Station network filter
+// (setStationBind, R-R3-22 / R-R3-47) by J.J. Boyd (KG4VCF), 2026-09-24,
+// AI-assisted via Anthropic Claude Code. The announcements it ignored
+// (ignoredOffNetwork, R-R3-47) by J.J. Boyd (KG4VCF), 2026-09-24,
+// AI-assisted via Anthropic Claude Code.
 
 #pragma once
 
+#include "core/StationNetwork.h"
+
+#include <QHostAddress>
+#include <QList>
 #include <QObject>
+#include <QPair>
 #include <QUdpSocket>
 #include <QTimer>
 #include <QSet>
 #include <QString>
+
+#include <optional>
 
 namespace NereusSDR {
 
@@ -35,11 +46,25 @@ public:
     void setIdentitySensitiveDeduplication(bool enabled) {
         m_identitySensitiveDeduplication = enabled;
     }
+    // R-R3-22 / R-R3-47: on the Core, hear announcements from the station
+    // network only (StationNetwork::StationBind). The sockets still open on
+    // every address, because the amplifier and tuner announce by broadcast
+    // and a socket bound to one address hears no broadcast; an announcement
+    // whose sender, or whose announced address, is not on the station
+    // network (or this computer) is ignored. A desktop window never calls
+    // this and hears every announcement, as before.
+    void setStationBind(const StationNetwork::StationBind& bind) { m_stationBind = bind; }
+    // M7 (R-R3-47): the announcements ignored as off the station network,
+    // as (product, announced address), so the owner can say why.
+    QList<QPair<QString, QString>> ignoredOffNetwork() const { return m_ignoredOffNetwork; }
+
     void start(int timeoutMs = 3000);
     void stop();
 
-    // Test hook: feed a raw datagram payload as if it arrived on UDP.
-    void injectDatagramForTesting(const QString& payload, quint16 receivedPort = 9008);
+    // Test hook: feed a raw datagram payload as if it arrived on UDP from
+    // `sender` (null: unknown, which a station filter refuses).
+    void injectDatagramForTesting(const QString& payload, quint16 receivedPort = 9008,
+                                  const QHostAddress& sender = QHostAddress());
 
 signals:
     void deviceDiscovered(const QString& model,
@@ -56,13 +81,16 @@ private slots:
     void onTimeout();
 
 private:
-    void parseAnnouncement(const QString& payload, quint16 port);
+    void readSocket(QUdpSocket& socket, quint16 port);
+    void parseAnnouncement(const QString& payload, quint16 port, const QHostAddress& sender);
 
     QUdpSocket m_sock9008;
     QUdpSocket m_sock9010;
     QTimer     m_timeout;
     QSet<QString> m_seenIdentities;
     bool m_identitySensitiveDeduplication{false};
+    std::optional<StationNetwork::StationBind> m_stationBind;
+    QList<QPair<QString, QString>> m_ignoredOffNetwork;
 };
 
 }  // namespace NereusSDR

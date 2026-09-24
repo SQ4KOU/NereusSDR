@@ -8,6 +8,7 @@
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <vector>
 
 // R-R3-23: the bus plays in the format it was opened with (48 kHz stereo
 // float when never opened): its queue, clock, capacity and `heard` count
@@ -34,7 +35,12 @@ public:
             if (dry > 0) {
                 queue.insert(queue.end(), std::size_t(dry * channels), 0.0f);
                 playedDryFrames += dry;
+                dryEvents.push_back({dueFramesLocked(), dry});
             }
+        }
+        if (playedDryFramesAtFirstPush < 0) {
+            playedDryFramesAtFirstPush = playedDryFrames;
+            firstPushDueFrame = dueFramesLocked();
         }
         queue.insert(queue.end(), samples, samples + count);
         peakQueued = qMax(peakQueued, int(queue.size()) / channels);
@@ -78,6 +84,28 @@ public:
     qint64 playClockOriginNs() const { std::lock_guard<std::mutex> lock(mutex); return playOriginNs; }
     // Frames the play clock found nothing to play for (the queue ran dry).
     qint64 playedDryFramesForTesting() const { std::lock_guard<std::mutex> lock(mutex); return playedDryFrames; }
+    // R-R3-21: the dry frames counted by the first push that queued audio,
+    // that is, all the silence played before playback started (-1 before
+    // any push). Recorded under the same lock as the count, so no later
+    // shortfall can fold into it.
+    qint64 playedDryFramesAtFirstPushForTesting() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return playedDryFramesAtFirstPush;
+    }
+    // Each push that found the device had run dry: the play-clock frame of
+    // that push and the frames it had played silent. For failure messages.
+    struct DryEvent { qint64 atFrame; qint64 frames; };
+    std::vector<DryEvent> dryEventsForTesting() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return dryEvents;
+    }
+    qint64 firstPushDueFrameForTesting() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return firstPushDueFrame;
+    }
     // Renders every frame the play clock has reached; returns how many.
     int renderDue()
     {
@@ -164,6 +192,9 @@ private:
     qint64 playOriginNs = 0;
     qint64 playedFrames = 0;
     qint64 playedDryFrames = 0;
+    qint64 playedDryFramesAtFirstPush = -1;
+    qint64 firstPushDueFrame = -1;
+    std::vector<DryEvent> dryEvents;
     qint64 dueFramesLocked() const
     {
         return playClock ? (playClock() - playOriginNs) * qint64(format.sampleRate)

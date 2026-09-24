@@ -80,6 +80,11 @@
 //                 Claude Code. A local slice restores its speakers or
 //                 headphones choice (Slice<N>/OutputRoute) when it is added.
 //                 NereusSDR-original; no Thetis logic.
+//   2026-09-23 : R-R3-45 Task 2 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. A local slice is restored through
+//                 SliceModel::loadFromSettings(), so its VAX channel comes
+//                 back too; a remote window's slice leaves its output route
+//                 to the Core. NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -115,6 +120,41 @@
 //   2026-09-23 - R-R3-46 fix wave: attenuator follows slice A, ioBoard,
 //                 OC reload, torn load reads, remote meter offset 0. J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22 / R-R3-25: the Core's Power Genius XL
+//                 (StationPgxlController): identity before admission, so
+//                 pairing (onPgxlConnected) runs only for a confirmed amp;
+//                 configure, disconnect and connection settings for the
+//                 station. NereusSDR-original; no Thetis logic. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-48: the Core's RF-Kit through
+//                StationRfKitController (configure, disconnect, switch),
+//                rfKitEnabled Core to window, and the Core's station TCI
+//                server (enableStationTci, setStationTciForStation). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: the Core's accessory records and
+//                settings (`accessoryData`, StationAccessoryData): Tuner
+//                Genius and RF-Kit faults recorded, connection counters
+//                owned here, the interlock, power-cap and fault-history
+//                commands, a window's setting changes applied at once, and
+//                a remote window fed from the Core's copy. NereusSDR-
+//                original; no Thetis logic. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-24 - R-R3-22 / R-R3-47: the Core's station listeners (4992,
+//                accessory discovery, station TCI) on the station network
+//                only, one rule (setStationBind, applyStationBind); the
+//                FlexRadio beacon follows the 4O3A switch (updateFlexBeacon).
+//                NereusSDR-original; no Thetis logic. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: the amp's and tuner's own settings for
+//                a window (`accessorySettings`, AccessorySettingsModel; the
+//                nine ...ForStation requests; accessoryRequestRefused).
+//                NereusSDR-original; no Thetis logic. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 fix wave: Reset amp error for a window
+//                (resetRfKitErrorForStation) and a window's RF-Kit
+//                auto-reconnect and poll interval applied at once.
+//                NereusSDR-original; no Thetis logic. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -429,9 +469,18 @@ warren@wpratt.com
 // line PGXL sends so we can design the response layer in a follow-up.
 #include "core/SmartSdrApiListener.h"
 #include "core/StationTgxlController.h"
+#include "core/StationPgxlController.h"
+#include "core/StationRfKitController.h"
+#include "core/StationTciController.h"
+#include "core/RfKitBandFollow.h"
 #include "core/PgxlStatusGauges.h"
 #include "models/AmplifierModel.h"
 #include "models/RfKitModel.h"
+#include "models/StationTciModel.h"
+#include "models/AccessoryDataModel.h"
+#include "models/AccessorySettingsModel.h"
+#include "core/StationAccessoryData.h"
+#include "core/ConnectionDiagnostics.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1351,6 +1400,8 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // this computer's accessory connections.
     m_amplifierModel = new AmplifierModel(this);
     m_rfKitModel = new RfKitModel(this);
+    // R-R3-48: the Core's station TCI server state (`stationTci`).
+    m_stationTciModel = new StationTciModel(this);
     if (m_role == Role::Local) {
         m_amplifierModel->bindConnection(m_pgxlConnection);
         m_rfKitModel->bindConnection(m_rfKitConnection.get());
@@ -1391,6 +1442,80 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // instance is provided now so TgxlAdvancedPage can use the shared log.
     m_pgxlFaultLog = new FaultLog(QStringLiteral("PGXL_FaultHistory"), this);
     m_tgxlFaultLog = new FaultLog(QStringLiteral("TGXL_FaultHistory"), this);
+    // R-R3-47: the RF-Kit's faults, and (on the Core) the Tuner Genius's
+    // through StationTgxlController (enableStationAccessoryIdentity).
+    m_rfkitFaultLog = new FaultLog(QStringLiteral("RfKit_FaultHistory"), this);
+
+    // R-R3-47 / R-R3-22: the connection counters and the Core's accessory
+    // records and settings (`accessoryData`). A Local model (the Core, or a
+    // local window in process) counts on its own connections and keeps the
+    // object current; a Remote model's hold the Core's values and feed the
+    // same fault logs, counters, policy and tune memory its pages read.
+    m_pgxlDiagnostics = new ConnectionDiagnostics(this);
+    m_tgxlDiagnostics = new ConnectionDiagnostics(this);
+    m_accessoryDataModel = new AccessoryDataModel(this);
+    // R-R3-47 / R-R3-22: the amp's and tuner's own settings. The Core's
+    // station controllers keep it current (enableStationAccessoryIdentity);
+    // a Remote model holds the Core's values.
+    m_accessorySettingsModel = new AccessorySettingsModel(this);
+    if (m_role == Role::Local) {
+        m_pgxlDiagnostics->bindTo(m_pgxlConnection);
+        m_tgxlDiagnostics->bindTo(m_tgxlConnection);
+        StationAccessoryData::Sources sources;
+        sources.pgxlFaults = m_pgxlFaultLog;
+        sources.tgxlFaults = m_tgxlFaultLog;
+        sources.rfkitFaults = m_rfkitFaultLog;
+        sources.pgxlDiagnostics = m_pgxlDiagnostics;
+        sources.tgxlDiagnostics = m_tgxlDiagnostics;
+        sources.interlock = m_txInterlockPolicy;
+        sources.tuneMemory = m_tuneMemoryStore;
+        m_stationAccessoryData = new StationAccessoryData(m_accessoryDataModel, sources, this);
+        // The power-cap alert, computed where the amp is (was
+        // MainWindow::onAmpMetersForPowerCap).
+        connect(this, &RadioModel::ampMetersChanged, m_stationAccessoryData,
+                [this](float fwd, float /*swr*/) {
+            m_stationAccessoryData->onForwardPower(static_cast<double>(fwd));
+        });
+        // The RF-Kit's faults, in plain words (Rf2ksConnection says what
+        // happened; its link and identity reasons are already plain).
+        connect(m_rfKitConnection.get(), &Rf2ksConnection::faultObserved, this,
+                [this](const QString& kind, const QString& detail) {
+            if (kind == QLatin1String("link") || kind == QLatin1String("identity")) {
+                m_rfkitFaultLog->captureNotice(kind, detail, QString());
+            } else if (kind == QLatin1String("interface")) {
+                m_rfkitFaultLog->captureNotice(
+                    kind,
+                    QStringLiteral("The RF-Kit amplifier reported a problem with how it "
+                                   "follows the radio."),
+                    detail);
+            } else {
+                m_rfkitFaultLog->captureNotice(
+                    kind, QStringLiteral("The RF-Kit amplifier reported a problem."), detail);
+            }
+        });
+    } else {
+        AccessoryDataModel* data = m_accessoryDataModel;
+        connect(data, &AccessoryDataModel::faultsChanged, this, [this, data] {
+            m_pgxlFaultLog->applyMirroredJson(data->pgxlFaults());
+            m_tgxlFaultLog->applyMirroredJson(data->tgxlFaults());
+            m_rfkitFaultLog->applyMirroredJson(data->rfkitFaults());
+        });
+        connect(data, &AccessoryDataModel::pgxlDiagnosticsChanged, this, [this, data] {
+            m_pgxlDiagnostics->applyMirroredCounters(data->pgxlDiagnostics());
+        });
+        connect(data, &AccessoryDataModel::tgxlDiagnosticsChanged, this, [this, data] {
+            m_tgxlDiagnostics->applyMirroredCounters(data->tgxlDiagnostics());
+        });
+        connect(data, &AccessoryDataModel::interlockChanged, this, [this, data] {
+            m_txInterlockPolicy->applyMirrored(
+                static_cast<TxInterlockPolicy::Mode>(static_cast<int>(data->interlockMode())),
+                data->interlockGraceMs(), data->interlockSwrGateEnabled(),
+                static_cast<float>(data->interlockSwrGateMax()));
+        });
+        connect(data, &AccessoryDataModel::tuneMemoryChanged, this, [this, data] {
+            m_tuneMemoryStore->applyMirroredJson(data->tuneMemory());
+        });
+    }
 
     // FlexRadio UDP 4992 discovery beacon.
     // Constructed once; configured in connectToRadio() once the radio MAC is
@@ -2479,6 +2604,12 @@ RadioModel::RadioModel(Role role, QObject* parent)
 
 RadioModel::~RadioModel()
 {
+    // R-R3-48: the station TCI server holds this model's slices and
+    // receivers; stop it while they still exist.
+    delete m_rfKitBandFollow;
+    m_rfKitBandFollow = nullptr;
+    delete m_stationTci;
+    m_stationTci = nullptr;
     teardownConnection();
     qDeleteAll(m_slices);
     qDeleteAll(m_panadapters);
@@ -2505,6 +2636,15 @@ QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVa
                 current = value.toBool();
                 if (propertyName == "fourO3AEnabled") { emit fourO3AEnabledChanged(current); }
                 emit fourO3AStatusChanged();
+            }
+            return {};
+        }
+        if (propertyName == "rfKitEnabled") {
+            // R-R3-47: the Core's RF-Kit switch, observed; never a request.
+            if (value.typeId() != QMetaType::Bool) { return QStringLiteral("Expected a boolean RF-Kit observation."); }
+            if (m_remoteRfKitEnabled != value.toBool()) {
+                m_remoteRfKitEnabled = value.toBool();
+                emit rfKitEnabledChanged(m_remoteRfKitEnabled);
             }
             return {};
         }
@@ -3167,7 +3307,9 @@ void RadioModel::setFourO3AEnabled(bool enabled)
         // already-connected PGXL keeps sending statusUpdated frames,
         // m_hasAmplifier stays true, and the S-Meter keeps showing the
         // 2 kW PGXL scale even though the operator just disabled 4O3A.
-        if (m_pgxlConnection) {
+        if (m_stationPgxl) {
+            m_stationPgxl->cancel(true);
+        } else if (m_pgxlConnection) {
             m_pgxlConnection->disconnect();
             qCInfo(lcConnection) << "4O3A disabled: PGXL TCP disconnected";
         }
@@ -3192,6 +3334,10 @@ void RadioModel::setFourO3AEnabled(bool enabled)
             if (wasOperate) { emit ampStateChanged(); }
         }
     }
+
+    // R-R3-22: the FlexRadio beacon invites an amplifier or tuner to the
+    // 4992 listener, so it runs only while 4O3A is on.
+    updateFlexBeacon();
 
     emit fourO3AEnabledChanged(enabled);
     emit fourO3AStatusChanged();
@@ -3244,7 +3390,287 @@ void RadioModel::enableStationAccessoryIdentity()
     if (m_role != Role::Local || m_stationTgxl) { return; }
     m_stationTgxl = new StationTgxlController(m_tgxlConnection, m_tunerModel, this);
     m_stationTgxl->cancel(!fourO3AEnabled());
+    // R-R3-47: the Tuner Genius's faults, recorded on the Core.
+    connect(m_stationTgxl, &StationTgxlController::faultObserved, this,
+            [this](const QString& kind, const QString& text, const QString& detail) {
+        m_tgxlFaultLog->captureNotice(kind, text, detail);
+    });
+    // R-R3-47: the Power Genius, likewise identified before it is admitted
+    // (and so before onPgxlConnected pairs it).
+    m_stationPgxl = new StationPgxlController(m_pgxlConnection, m_amplifierModel, this);
+    m_stationPgxl->cancel(!fourO3AEnabled());
+    // R-R3-47 / R-R3-22: the amp's and tuner's own settings for a window.
+    m_stationPgxl->deviceSettings()->setModel(m_accessorySettingsModel);
+    m_stationTgxl->deviceSettings()->setModel(m_accessorySettingsModel);
+    // R-R3-47: the RF-Kit too: admitted once its /info names an RF2K-S.
+    m_stationRfKit = new StationRfKitController(m_rfKitConnection.get(), m_rfKitModel, this);
+    m_stationRfKit->cancel(!rfKitEnabled());
+    if (m_stationTciModel) {
+        connect(m_stationTciModel, &StationTciModel::stateChanged, m_stationRfKit, [this] {
+            if (m_stationRfKit) {
+                m_stationRfKit->setBandFollowWanted(m_stationTciModel->listening());
+            }
+        });
+    }
+    applyStationBind();
 }
+
+void RadioModel::enableStationTci(const QString& bindOverride)
+{
+    if (m_role != Role::Local || m_stationTci) { return; }
+    m_stationTci = new StationTciController(this, m_stationTciModel, this);
+    m_stationTci->setBindOverride(bindOverride);
+    if (isConnected() && !m_lastRadioInfo.address.isNull()) {
+        m_stationTci->setRadioAddress(m_lastRadioInfo.address);
+    }
+    // R-R3-48: the RF-Kit follows the band as an app of this server.
+    m_rfKitBandFollow = new RfKitBandFollow(m_rfKitModel, this);
+    m_rfKitBandFollow->setServer(m_stationTci->server());
+    // R-R3-22: the one station rule, when the Core has set it, wins over
+    // the override given here.
+    applyStationBind();
+    m_stationTci->applySaved();
+}
+
+void RadioModel::setStationBind(const QString& bindOverride)
+{
+    if (m_role != Role::Local) { return; }
+    StationNetwork::StationBind bind = m_stationBind.value_or(StationNetwork::StationBind{});
+    bind.bindOverride = bindOverride.trimmed();
+    m_stationBind = bind;
+    applyStationBind();
+}
+
+void RadioModel::setStationInterfaceEntriesForTest(const QList<QNetworkAddressEntry>& entries)
+{
+    if (!m_stationBind) { return; }
+    m_stationBind->entriesForTest = entries;
+    applyStationBind();
+}
+
+void RadioModel::applyStationBind()
+{
+    if (!m_stationBind) { return; } // A desktop window: listeners bind as before.
+    // The radio's address, kept across a disconnect so listeners stay on
+    // the network they faced; null until a radio has connected.
+    m_stationBind->radio = m_lastRadioInfo.address;
+    const StationNetwork::StationBind& bind = *m_stationBind;
+    if (m_stationTci) {
+        if (bind.entriesForTest) {
+            m_stationTci->setInterfaceEntriesForTest(*bind.entriesForTest);
+        }
+        m_stationTci->setBindOverride(bind.bindOverride);
+        m_stationTci->setRadioAddress(bind.radio);
+    }
+    if (m_smartSdrListener) { m_smartSdrListener->setStationBind(bind); }
+    if (m_stationPgxl) { m_stationPgxl->setStationBind(bind); }
+    if (m_stationTgxl) { m_stationTgxl->setStationBind(bind); }
+    if (m_flexBroadcaster) {
+        // Announce the address the 4992 listener listens on; with no
+        // single station address the beacon finds its own as before.
+        const QHostAddress station = bind.stationAddress();
+        const bool single = !station.isNull() && !bind.everyAddress() && !station.isLoopback();
+        m_flexBroadcaster->setSourceAddress(single ? station : QHostAddress());
+    }
+}
+
+void RadioModel::updateFlexBeacon()
+{
+    if (!m_flexBroadcaster) { return; }
+    const bool broadcastSetting =
+        AppSettings::instance().value(QStringLiteral("PGXL_BroadcastDiscovery"),
+                                      QStringLiteral("True")).toString()
+        == QStringLiteral("True");
+    // R-R3-22: the beacon asks a Power Genius or Tuner Genius to connect to
+    // the 4992 listener; with 4O3A off nothing listens there, so nothing is
+    // announced.
+    const bool wanted = m_role == Role::Local && m_flexBeaconConfigured
+        && fourO3AEnabled() && broadcastSetting;
+    if (wanted) {
+        if (!m_flexBroadcaster->isRunning()) { m_flexBroadcaster->start(); }
+    } else if (m_flexBroadcaster->isRunning()) {
+        m_flexBroadcaster->stop();
+    }
+}
+
+void RadioModel::configureFlexBeaconForTest()
+{
+    if (!m_flexBroadcaster) { return; }
+    m_flexBroadcaster->setNoSendForTesting(true);
+    m_flexBeaconConfigured = true;
+    updateFlexBeacon();
+}
+
+bool RadioModel::flexBeaconRunningForTest() const
+{
+    return m_flexBroadcaster && m_flexBroadcaster->isRunning();
+}
+
+bool RadioModel::setStationTciForStation(bool enabled, int port, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTci) {
+        if (reason) { *reason = QStringLiteral("This Core has no TCI server for the station."); }
+        return false;
+    }
+    return m_stationTci->setEnabled(enabled, port, reason);
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-47 / R-R3-22: the Core's accessory records and settings
+// (accessoryDataVersion 1). NereusSDR-original; no Thetis logic.
+// ---------------------------------------------------------------------------
+
+bool RadioModel::setTxInterlockPolicyForStation(int mode, int graceMs, bool swrGateEnabled,
+                                                double swrGateMax, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationAccessoryData) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    return m_stationAccessoryData->setInterlockPolicy(mode, graceMs, swrGateEnabled, swrGateMax,
+                                                      reason);
+}
+
+bool RadioModel::setPgxlPowerCapForStation(bool enabled, int watts, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationAccessoryData) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    return m_stationAccessoryData->setPowerCap(enabled, watts, reason);
+}
+
+bool RadioModel::clearAccessoryFaultsForStation(const QString& device, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationAccessoryData) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    return m_stationAccessoryData->clearFaults(device, reason);
+}
+
+void RadioModel::applyRemoteAccessorySetting(const QString& key)
+{
+    if (m_role != Role::Local) {
+        return;
+    }
+    // I4 (R-R3-47): a window's RF-Kit Save reaches the Core's connection now,
+    // as the local page's Save does (applyRfKitOperatorSettings).
+    if (key == QLatin1String("RfKit_AutoReconnect")
+        || key == QLatin1String("RfKit_PollIntervalMs")) {
+        applyRfKitOperatorSettings();
+        return;
+    }
+    if (m_stationAccessoryData) {
+        m_stationAccessoryData->applySetting(key);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-47 / R-R3-22: the Power Genius's and Tuner Genius's own settings for
+// a window (remotePgxlControlVersion 3, remoteTgxlControlVersion 1). Each is
+// sent by the station controller's StationDeviceSettings as the local
+// Advanced page's own command. NereusSDR-original; no Thetis logic.
+// ---------------------------------------------------------------------------
+
+namespace {
+bool refuseNoStationDevice(QString* reason)
+{
+    if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+    return false;
+}
+} // namespace
+
+bool RadioModel::setPgxlNameForStation(const QString& name, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
+    return m_stationPgxl->deviceSettings()->setName(name, reason);
+}
+
+bool RadioModel::setPgxlHardwareForStation(const QString& setting, const QVariant& value,
+                                           QString* reason)
+{
+    if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
+    StationDeviceSettings* settings = m_stationPgxl->deviceSettings();
+    if (setting == QLatin1String("biasMode")) {
+        return settings->setBiasMode(value.toString(), reason);
+    }
+    if (setting == QLatin1String("fanMode")) {
+        return settings->setFanMode(value.toString(), reason);
+    }
+    if (setting == QLatin1String("ledIntensity")) {
+        return settings->setLedIntensity(value.toInt(), reason);
+    }
+    if (reason) {
+        *reason = QStringLiteral("The request to change the Power Genius hardware was not "
+                                 "understood.");
+    }
+    return false;
+}
+
+bool RadioModel::setPgxlNetworkForStation(bool dhcp, const QString& address,
+                                          const QString& netmask, const QString& gateway,
+                                          QString* reason)
+{
+    if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
+    return m_stationPgxl->deviceSettings()->setNetwork(dhcp, address, netmask, gateway, reason);
+}
+
+bool RadioModel::savePgxlSettingsForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
+    return m_stationPgxl->deviceSettings()->saveAndRestart(reason);
+}
+
+bool RadioModel::readPgxlSettingsForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
+    return m_stationPgxl->deviceSettings()->readBack(reason);
+}
+
+bool RadioModel::setTgxlNameForStation(const QString& name, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
+    return m_stationTgxl->deviceSettings()->setName(name, reason);
+}
+
+bool RadioModel::setTgxlNetworkForStation(bool dhcp, const QString& address,
+                                          const QString& netmask, const QString& gateway,
+                                          QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
+    return m_stationTgxl->deviceSettings()->setNetwork(dhcp, address, netmask, gateway, reason);
+}
+
+bool RadioModel::saveTgxlSettingsForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
+    return m_stationTgxl->deviceSettings()->saveAndRestart(reason);
+}
+
+bool RadioModel::readTgxlSettingsForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
+    return m_stationTgxl->deviceSettings()->readBack(reason);
+}
+
+namespace {
+// An accessory address a station may dial: an IP address or a valid DNS
+// name (Task 4d's TGXL rule, shared with the PGXL by R-R3-47).
+bool validStationAccessoryHost(const QString& host)
+{
+    bool validHost = !host.isEmpty() && host.size() <= 253;
+    if (validHost && QHostAddress(host).isNull()) {
+        const QByteArray ace = QUrl::toAce(host);
+        static const QRegularExpression label(QStringLiteral("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"));
+        validHost = !ace.isEmpty() && ace.size() <= 253;
+        auto labels = QString::fromLatin1(ace).split(QLatin1Char('.'));
+        if (labels.size() > 1 && labels.last().isEmpty()) { labels.removeLast(); }
+        for (const auto& part : labels) { validHost = validHost && label.match(part).hasMatch(); }
+    }
+    return validHost;
+}
+} // namespace
 
 bool RadioModel::configureTgxlForStation(const QString& inputHost, quint16 port, QString* reason)
 {
@@ -3262,15 +3688,7 @@ bool RadioModel::configureTgxlForStation(const QString& inputHost, quint16 port,
         return refuse(QStringLiteral("Enable 4O3A on Core before connecting the TGXL."));
     }
     const QString host = inputHost.trimmed();
-    bool validHost = !host.isEmpty() && host.size() <= 253;
-    if (validHost && QHostAddress(host).isNull()) {
-        const QByteArray ace = QUrl::toAce(host);
-        static const QRegularExpression label(QStringLiteral("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"));
-        validHost = !ace.isEmpty() && ace.size() <= 253;
-        auto labels = QString::fromLatin1(ace).split(QLatin1Char('.'));
-        if (labels.size() > 1 && labels.last().isEmpty()) { labels.removeLast(); }
-        for (const auto& part : labels) { validHost = validHost && label.match(part).hasMatch(); }
-    }
+    const bool validHost = validStationAccessoryHost(host);
     if (!validHost || port == 0) {
         return refuse(QStringLiteral("Enter a valid TGXL IP address or hostname and TCP port 1–65535."));
     }
@@ -3296,8 +3714,80 @@ bool RadioModel::disconnectTgxlForStation(QString* reason)
     return true;
 }
 
+// R-R3-47 / R-R3-22: the TGXL's configure rule for the Power Genius.
+// Acceptance is "saved and identifying"; `amplifier`.connectionPhase says
+// whether it connected. Pairing waits for admission (onPgxlConnected).
+bool RadioModel::configurePgxlForStation(const QString& inputHost, quint16 port, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    if (m_role != Role::Local || !m_stationPgxl) {
+        return refuse(QStringLiteral("Station accessory configuration is unavailable."));
+    }
+    if (currentRadioMac().isEmpty()) {
+        return refuse(QStringLiteral("Connect Core to a radio before configuring its PGXL."));
+    }
+    if (!fourO3AEnabled()) {
+        return refuse(QStringLiteral("Enable 4O3A on Core before connecting the PGXL."));
+    }
+    const QString host = inputHost.trimmed();
+    if (!validStationAccessoryHost(host) || port == 0) {
+        return refuse(QStringLiteral("Enter a valid PGXL IP address or hostname and TCP port 1 to 65535."));
+    }
+    // Both fields are saved by one accepted command, validated first; no
+    // settings write on its own dials anything.
+    setPeripheralValue(QStringLiteral("PGXL_ManualIp"), host);
+    setPeripheralValue(QStringLiteral("PGXL_ManualPort"), QString::number(port));
+    AppSettings::instance().save();
+    m_stationPgxl->start(host, port);
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+bool RadioModel::disconnectPgxlForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationPgxl) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    m_stationPgxl->cancel(!fourO3AEnabled());
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+bool RadioModel::setPgxlConnectionSettingsForStation(bool autoReconnect, int keepaliveSec,
+                                                     int pingSec, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    if (m_role != Role::Local || !m_stationPgxl) {
+        return refuse(QStringLiteral("Station accessory configuration is unavailable."));
+    }
+    if (keepaliveSec < kPgxlKeepaliveMinSec || keepaliveSec > kPgxlKeepaliveMaxSec
+        || pingSec < 0 || pingSec > kPgxlPingMaxSec) {
+        return refuse(QStringLiteral("Enter a keepalive of 1 to 3600 seconds and a ping of 0 to 3600 seconds."));
+    }
+    // Station-wide keys (SettingsScope "PGXL_"), saved together, then
+    // applied to the running connection.
+    auto& settings = AppSettings::instance();
+    settings.setValue(QStringLiteral("PGXL_AutoReconnect"),
+                      autoReconnect ? QStringLiteral("True") : QStringLiteral("False"));
+    settings.setValue(QStringLiteral("PGXL_KeepaliveSec"), QString::number(keepaliveSec));
+    settings.setValue(QStringLiteral("PGXL_PingSec"), QString::number(pingSec));
+    settings.save();
+    m_stationPgxl->applyConnectionSettings();
+    if (reason) { reason->clear(); }
+    return true;
+}
+
 bool RadioModel::rfKitEnabled() const
 {
+    // R-R3-47: a remote window holds the Core's switch as it last heard it.
+    if (m_role == Role::Remote) { return m_remoteRfKitEnabled; }
     return peripheralValue(QStringLiteral("RfKit_Enabled"),
                            QStringLiteral("False"))
         == QStringLiteral("True");
@@ -3335,6 +3825,13 @@ void RadioModel::applyRfKitOperatorSettings()
 
 void RadioModel::setRfKitEnabled(bool enabled)
 {
+    if (m_role == Role::Remote) {
+        // R-R3-47: the switch lives on the Core; a remote window asks it
+        // with the setRfKitEnabled command (IStationLink).
+        qCWarning(lcConnection) << "setRfKitEnabled ignored in a remote window;"
+                                << "the Core owns the RF-Kit switch";
+        return;
+    }
     const bool current = rfKitEnabled();
     if (enabled == current) {
         return;
@@ -3349,13 +3846,95 @@ void RadioModel::setRfKitEnabled(bool enabled)
                             QStringLiteral("8080")).toUInt());
         if (!host.isEmpty() && m_rfKitConnection) {
             applyRfKitOperatorSettings();
-            m_rfKitConnection->connectToAmp(host, port);
+            if (m_stationRfKit) {
+                m_stationRfKit->start(host, port);   // R-R3-47: identity first
+            } else {
+                m_rfKitConnection->connectToAmp(host, port);
+            }
+        } else if (m_stationRfKit) {
+            m_stationRfKit->cancel(false);
         }
+    } else if (m_stationRfKit) {
+        m_stationRfKit->cancel(true);
     } else if (m_rfKitConnection) {
         m_rfKitConnection->disconnect();
     }
 
     emit rfKitEnabledChanged(enabled);
+}
+
+bool RadioModel::setRfKitEnabledForStation(bool enabled, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationRfKit) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    if (currentRadioMac().isEmpty()) {
+        if (reason) {
+            *reason = QStringLiteral("Connect the Core to a radio before turning its RF-Kit "
+                                     "amplifier on or off.");
+        }
+        return false;
+    }
+    setRfKitEnabled(enabled);
+    AppSettings::instance().save();
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+// R-R3-47 / R-R3-22: the Power Genius's configure rule for the RF-Kit.
+// Acceptance is "saved and identifying"; `rfkit`.connectionPhase says
+// whether it connected.
+bool RadioModel::configureRfKitForStation(const QString& inputHost, quint16 port, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    if (m_role != Role::Local || !m_stationRfKit) {
+        return refuse(QStringLiteral("Station accessory configuration is unavailable."));
+    }
+    if (currentRadioMac().isEmpty()) {
+        return refuse(QStringLiteral("Connect the Core to a radio before setting up its RF-Kit "
+                                     "amplifier."));
+    }
+    if (!rfKitEnabled()) {
+        return refuse(QStringLiteral("Turn on the RF-Kit amplifier on the Core before "
+                                     "connecting it."));
+    }
+    const QString host = inputHost.trimmed();
+    if (!validStationAccessoryHost(host) || port == 0) {
+        return refuse(QStringLiteral("Enter the RF-Kit amplifier's IP address or host name, "
+                                     "and a port from 1 to 65535."));
+    }
+    // Both fields are saved by one accepted command, validated first.
+    setPeripheralValue(QStringLiteral("RfKit_ManualIp"), host);
+    setPeripheralValue(QStringLiteral("RfKit_ManualPort"), QString::number(port));
+    AppSettings::instance().save();
+    applyRfKitOperatorSettings();
+    m_stationRfKit->start(host, port);
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+bool RadioModel::disconnectRfKitForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationRfKit) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    m_stationRfKit->cancel(!rfKitEnabled());
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+bool RadioModel::resetRfKitErrorForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationRfKit) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    return m_stationRfKit->resetError(reason);
 }
 
 // ── Per-radio peripherals helpers ──────────────────────────────────────────
@@ -3437,6 +4016,10 @@ void RadioModel::applyPeripheralsForCurrentMac()
 
     int started = 0;
 
+    // R-R3-22 / R-R3-47: on the Core every station listener follows this
+    // radio's network before any of them starts.
+    applyStationBind();
+
     // ── 4O3A SmartSDR API listener on TCP 4992 ──────────────────────────
     // Must come before PGXL/TGXL because the live socket dials are gated
     // on the same per-MAC flag.
@@ -3460,13 +4043,28 @@ void RadioModel::applyPeripheralsForCurrentMac()
         // A radio scope replacement can arrive without an intervening
         // enabled-state change. Never retain the previous scope's listener.
         if (m_smartSdrListener) { m_smartSdrListener->stop(); }
-        if (m_pgxlConnection) { m_pgxlConnection->disconnect(); }
+        if (!m_stationPgxl && m_pgxlConnection) { m_pgxlConnection->disconnect(); }
         emit fourO3AEnabledChanged(false);
     }
+    // R-R3-22: this radio's 4O3A switch decides the FlexRadio beacon.
+    updateFlexBeacon();
 
     emit fourO3AStatusChanged();
 
     // ── RF-Kit RF2K-S ───────────────────────────────────────────────────
+    // R-R3-48: the Core's station TCI server faces this radio's network.
+    if (m_stationTci && !m_lastRadioInfo.address.isNull()) {
+        m_stationTci->setRadioAddress(m_lastRadioInfo.address);
+    }
+    // R-R3-47: publish this radio's saved RF-Kit address on the Core
+    // before anything can dial it, as for the Power Genius below.
+    if (m_stationRfKit) {
+        const QString savedHost = peripheralValue(QStringLiteral("RfKit_ManualIp"));
+        const quint16 savedPort = static_cast<quint16>(
+            peripheralValue(QStringLiteral("RfKit_ManualPort"),
+                            QStringLiteral("8080")).toUInt());
+        m_stationRfKit->resetScope(savedHost, savedPort, rfKitEnabled());
+    }
     if (rfKitEnabled() && m_rfKitConnection) {
         const QString host =
             peripheralValue(QStringLiteral("RfKit_ManualIp"));
@@ -3475,7 +4073,11 @@ void RadioModel::applyPeripheralsForCurrentMac()
                             QStringLiteral("8080")).toUInt());
         if (!host.isEmpty()) {
             applyRfKitOperatorSettings();
-            m_rfKitConnection->connectToAmp(host, port);
+            if (m_stationRfKit) {
+                m_stationRfKit->start(host, port);
+            } else {
+                m_rfKitConnection->connectToAmp(host, port);
+            }
             qCInfo(lcConnection)
                 << "RF-Kit auto-connect for MAC" << mac
                 << ":" << host << ":" << port;
@@ -3502,6 +4104,16 @@ void RadioModel::applyPeripheralsForCurrentMac()
     if (m_stationTgxl) {
         m_stationTgxl->resetScope(tgxlIp, tgxlPort, fourO3AOn);
     }
+    // R-R3-47: the same for the Power Genius.
+    const QString pgxlIp = peripheralValue(QStringLiteral("PGXL_ManualIp"));
+    bool pgxlPortOk = false;
+    const uint savedPgxlPort = peripheralValue(QStringLiteral("PGXL_ManualPort"),
+        QStringLiteral("9008")).toUInt(&pgxlPortOk);
+    const quint16 pgxlPort = pgxlPortOk && savedPgxlPort <= 65535
+        ? quint16(savedPgxlPort) : 0;
+    if (m_stationPgxl) {
+        m_stationPgxl->resetScope(pgxlIp, pgxlPort, fourO3AOn);
+    }
 
     // ── PGXL / TGXL (gated on 4O3A master) ──────────────────────────────
     // Without the 4O3A gate, a saved PGXL_ManualIp would dial out even
@@ -3510,17 +4122,31 @@ void RadioModel::applyPeripheralsForCurrentMac()
     // the operator who explicitly turned 4O3A off (see MainWindow's
     // earlier auto-connect block where this gate was first established).
     if (fourO3AOn) {
-        const QString pgxlIp =
-            peripheralValue(QStringLiteral("PGXL_ManualIp"));
         if (!pgxlIp.isEmpty() && m_pgxlConnection
             && !m_pgxlConnection->isConnected()) {
-            const quint16 p = static_cast<quint16>(
-                peripheralValue(QStringLiteral("PGXL_ManualPort"),
-                                QStringLiteral("9008")).toUInt());
-            m_pgxlConnection->connectToPgxl(pgxlIp, p);
-            qCInfo(lcConnection) << "PGXL auto-connect for MAC" << mac
-                                  << ":" << pgxlIp << ":" << p;
-            ++started;
+            const quint16 p = m_stationPgxl ? pgxlPort
+                : static_cast<quint16>(peripheralValue(QStringLiteral("PGXL_ManualPort"),
+                                                       QStringLiteral("9008")).toUInt());
+            bool pgxlStarted = true;
+            if (m_stationPgxl) {
+                QString reason;
+                if (!configurePgxlForStation(pgxlIp, p, &reason)) {
+                    AmplifierModel::StationConnectionState state;
+                    state.configuredHost = pgxlIp;
+                    state.configuredPort = p;
+                    state.phase = AmplifierModel::ConnectionPhase::Error;
+                    state.error = reason;
+                    m_amplifierModel->setStationConnectionState(state);
+                    pgxlStarted = false;
+                }
+            } else {
+                m_pgxlConnection->connectToPgxl(pgxlIp, p);
+            }
+            if (pgxlStarted) {
+                qCInfo(lcConnection) << "PGXL auto-connect for MAC" << mac
+                                      << ":" << pgxlIp << ":" << p;
+                ++started;
+            }
         }
 
         if (!tgxlIp.isEmpty() && m_tgxlConnection
@@ -3561,7 +4187,10 @@ void RadioModel::teardownPeripherals()
     // re-issue /info and restart polling. disconnect() is idempotent: it
     // stops both timers and only emits disconnected() if it had been
     // connected.
-    if (m_rfKitConnection) {
+    if (m_stationRfKit) {
+        m_stationRfKit->cancel(!rfKitEnabled());
+        qCInfo(lcConnection) << "Peripherals teardown: RF-Kit disconnected";
+    } else if (m_rfKitConnection) {
         m_rfKitConnection->disconnect();
         qCInfo(lcConnection) << "Peripherals teardown: RF-Kit disconnected";
     }
@@ -3569,7 +4198,9 @@ void RadioModel::teardownPeripherals()
         m_smartSdrListener->stop();
         qCInfo(lcConnection) << "Peripherals teardown: SmartSDR API stopped";
     }
-    if (m_pgxlConnection) {
+    if (m_stationPgxl) {
+        m_stationPgxl->cancel();
+    } else if (m_pgxlConnection) {
         m_pgxlConnection->disconnect();
         qCInfo(lcConnection) << "Peripherals teardown: PGXL disconnected";
     }
@@ -3897,6 +4528,14 @@ void RadioModel::reportStationSliceCommandRejected(const QString& reason)
         return;
     }
     emit sliceAddRejected(reason);
+}
+
+void RadioModel::reportStationAccessoryRefusal(const QString& device, const QString& reason)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    emit accessoryRequestRefused(device, reason);
 }
 
 void RadioModel::reportStationRetuneRejected(int sliceId, const QString& reason)
@@ -6391,11 +7030,13 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
                                            ? m_receiveLayoutMac : m_lastRadioInfo.macAddress);
         // Restore before binding can activate a pooled receiver. Each stable
         // slice ID owns its NR selection even when another slice has focus.
-        slice->restoreNnrSettings();
+        // loadFromSettings() restores the NR selection, the VAX channel
+        // (Slice<N>/VaxChannel, which nothing restored before R-R3-45's
+        // follow-up) and, R-R3-45, speakers or headphones, all before the
+        // first block reaches AudioEngine so the receiver starts on its own
+        // output and VAX channel.
+        slice->loadFromSettings();
         wireNnrSettings(slice);
-        // R-R3-45: speakers or headphones, restored before the first block
-        // reaches AudioEngine so the receiver starts on its own output.
-        slice->restoreOutputRoute();
     } else {
         // R-R3-44: a remote window's VAX channels are this computer's. The
         // slice keeps its channel through the window's store (set by
@@ -6406,6 +7047,10 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
                 m_remoteVaxChannelStore(sliceIndex, channel);
             }
         });
+        // R-R3-45: speakers or headphones is the Core's slice property,
+        // mirrored both ways; the Core saves and restores it, so a remote
+        // window writes nothing of its own.
+        slice->setOutputRoutePersisted(false);
     }
     // Phase 3F: stamp the owning pan id BEFORE the sliceAdded() emit below,
     // so the MainWindow handler routes the new VfoWidget to the correct
@@ -10625,13 +11270,12 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             m_flexBroadcaster->setPeerHint(QHostAddress(pgxlIpStr));
         }
 
-        const bool enabled =
-            as.value(QStringLiteral("PGXL_BroadcastDiscovery"),
-                     QStringLiteral("True")).toString()
-            == QStringLiteral("True");
-        if (enabled) {
-            m_flexBroadcaster->start();
-        }
+        // R-R3-22: configured for this radio; it runs only while 4O3A is
+        // on (updateFlexBeacon), which applyPeripheralsForCurrentMac
+        // re-checks once the radio's own 4O3A switch is known.
+        m_flexBeaconConfigured = true;
+        applyStationBind();
+        updateFlexBeacon();
     }
 
     // Tell MainWindow / FFTEngine / SpectrumWidget the wire rate so bin math
@@ -14666,6 +15310,7 @@ void RadioModel::teardownConnection()
 
     // Stop the FlexRadio discovery beacon so we no longer announce ourselves
     // as "Available" after the radio disconnects.
+    m_flexBeaconConfigured = false;
     if (m_flexBroadcaster) {
         m_flexBroadcaster->stop();
     }

@@ -172,6 +172,7 @@ private slots:
     void receiveQueueHoldsEveryDeclaredStream_data();
     void receiveQueueHoldsEveryDeclaredStream();
     void receiverStreamPreconditionsRefuseSilently();
+    void headphonesMixIsDeclaredLastAndCrossesBesideTheOthers();
 
 private:
     static void wireExchange(LibDataChannelMediaTransport& offerer,
@@ -1398,6 +1399,68 @@ void TestMediaTransport::receiverStreamPreconditionsRefuseSilently()
     options.receiverAudioSsrcs = kTestReceiverSsrcs;
     QVERIFY(transport.start(options));
     transport.stop();
+}
+
+// R-R3-45: the headphones mix is one more a=ssrc line on the same audio
+// line, after the receiver streams, and crosses intact beside them. Only a
+// headphones SSRC distinct from the main and receiver SSRCs is accepted.
+void TestMediaTransport::headphonesMixIsDeclaredLastAndCrossesBesideTheOthers()
+{
+    constexpr quint32 kHeadphones = 0x4e523355U;
+    for (const quint32 bad : {kTestAudioSsrc, kTestReceiverSsrcs.at(2)}) {
+        LibDataChannelMediaTransport transport;
+        QSignalSpy errors(&transport, &IMediaTransport::errorOccurred);
+        IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+        options.receiverAudioSsrcs = kTestReceiverSsrcs;
+        options.headphonesAudioSsrc = bad;
+        QVERIFY(!transport.start(options));
+        QCOMPARE(errors.size(), 0);
+    }
+
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QString offer;
+    QString answer;
+    wireExchange(offerer, answerer, &offer, &answer);
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    QSignalSpy answerErrors(&answerer, &IMediaTransport::errorOccurred);
+    IMediaTransport::StartOptions answerOptions{IMediaTransport::Role::Answerer, kTestAudioSsrc};
+    answerOptions.receiverAudioSsrcs = kTestReceiverSsrcs;
+    answerOptions.headphonesAudioSsrc = kHeadphones;
+    IMediaTransport::StartOptions offerOptions{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    offerOptions.receiverAudioSsrcs = kTestReceiverSsrcs;
+    offerOptions.headphonesAudioSsrc = kHeadphones;
+    QVERIFY(answerer.start(answerOptions));
+    QVERIFY(offerer.start(offerOptions));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+
+    QStringList expected{QStringLiteral("a=ssrc:%1 cname:nereus-mixed-stereo").arg(kTestAudioSsrc)};
+    for (qsizetype index = 0; index < kTestReceiverSsrcs.size(); ++index) {
+        expected << QStringLiteral("a=ssrc:%1 cname:nereus-receiver-%2")
+                        .arg(kTestReceiverSsrcs.at(index)).arg(index);
+    }
+    expected << QStringLiteral("a=ssrc:%1 cname:nereus-headphones-mix").arg(kHeadphones);
+    QCOMPARE(audioSsrcLines(offer), expected);
+    QCOMPARE(offer.count(QStringLiteral("m=audio")), 1);
+
+    QList<QByteArray> received;
+    connect(&answerer, &IMediaTransport::rtpReceived, this,
+            [&received](const QByteArray& packet) { received.append(packet); });
+    const QList<QByteArray> sent{rtpPacket(1, 15, kTestAudioSsrc),
+                                 rtpPacket(2, 15, kHeadphones),
+                                 rtpPacket(3, 15, kTestReceiverSsrcs.at(0)),
+                                 rtpPacket(4, 15, kHeadphones)};
+    for (const QByteArray& packet : sent) {
+        QVERIFY(offerer.sendRtp(packet));
+    }
+    QVERIFY(!offerer.sendRtp(rtpPacket(5, 15, kHeadphones + 1)));
+    QTRY_COMPARE_WITH_TIMEOUT(received.size(), sent.size(), 5000);
+    QCOMPARE(received, sent);
+    QCOMPARE(answerErrors.count(), 0);
+    offerer.stop();
+    answerer.stop();
 }
 
 QTEST_GUILESS_MAIN(TestMediaTransport)

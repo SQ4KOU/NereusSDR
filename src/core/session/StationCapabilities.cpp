@@ -22,6 +22,15 @@
 //                                    remotePgxlControlVersion and
 //                                    remoteRfKitControlVersion after it.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-48: stationTciVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: accessoryDataVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: remoteTgxlControlVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -89,6 +98,7 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         intEntry("audioProfileVersion", audioProfileVersion),
         intEntry("audioClockVersion", audioClockVersion),
         intEntry("receiverAudioVersion", receiverAudioVersion),
+        intEntry("headphonesMixVersion", headphonesMixVersion),
         intEntry("settingsSchemaVersion", settingsSchemaVersion),
     };
     if (hasBudget) {
@@ -113,6 +123,12 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         // R-R3-47 / R-R3-22: the Core's amplifier and RF-Kit status objects.
         updates.append(intEntry("remotePgxlControlVersion", remotePgxlControlVersion));
         updates.append(intEntry("remoteRfKitControlVersion", remoteRfKitControlVersion));
+        // R-R3-48: the Core's station TCI server.
+        updates.append(intEntry("stationTciVersion", stationTciVersion));
+        // R-R3-47 / R-R3-22: the Core's accessory records and settings.
+        updates.append(intEntry("accessoryDataVersion", accessoryDataVersion));
+        // R-R3-47 / R-R3-22: the Tuner Genius's own settings, last.
+        updates.append(intEntry("remoteTgxlControlVersion", remoteTgxlControlVersion));
     }
     return updates;
 }
@@ -242,7 +258,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "propertyResultVersion" || u.name == "dspAssetVersion"
                    || u.name == "psDisplayVersion" || u.name == "notchControlVersion"
                    || u.name == "audioProfileVersion" || u.name == "audioClockVersion"
-                   || u.name == "receiverAudioVersion") {
+                   || u.name == "receiverAudioVersion"
+                   || u.name == "headphonesMixVersion") {
             const qlonglong raw = u.value.toLongLong();
             const int version = raw >= 0 && raw <= 65535 ? static_cast<int>(raw) : 0;
             if (u.name == "wdspVersion") caps.wdspVersion = version;
@@ -255,6 +272,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
             else if (u.name == "audioProfileVersion") caps.audioProfileVersion = version;
             else if (u.name == "audioClockVersion") caps.audioClockVersion = version;
             else if (u.name == "receiverAudioVersion") caps.receiverAudioVersion = version;
+            else if (u.name == "headphonesMixVersion") caps.headphonesMixVersion = version;
             else caps.psDisplayVersion = version;
         } else if (u.name == "hpsdrModel") {
             // R-R3-46. A model this build has never heard of (a newer Core's
@@ -289,16 +307,26 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 caps.radioHardwareVersion = raw >= 0 && raw <= 65535 ? static_cast<int>(raw) : 0;
             }
         } else if (u.name == "remotePgxlControlVersion"
-                   || u.name == "remoteRfKitControlVersion") {
-            // R-R3-47 / R-R3-22: sent in the same block as the four above.
+                   || u.name == "remoteRfKitControlVersion"
+                   || u.name == "stationTciVersion"
+                   || u.name == "accessoryDataVersion"
+                   || u.name == "remoteTgxlControlVersion") {
+            // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
+            // four above.
             caps.radioIdentityEntries = true;
             if (u.kind == MirrorWireKind::Int64 && u.value.typeId() == QMetaType::LongLong) {
                 const qlonglong raw = u.value.toLongLong();
                 const int version = raw >= 0 && raw <= 65535 ? static_cast<int>(raw) : 0;
                 if (u.name == "remotePgxlControlVersion") {
                     caps.remotePgxlControlVersion = version;
-                } else {
+                } else if (u.name == "remoteRfKitControlVersion") {
                     caps.remoteRfKitControlVersion = version;
+                } else if (u.name == "stationTciVersion") {
+                    caps.stationTciVersion = version;
+                } else if (u.name == "accessoryDataVersion") {
+                    caps.accessoryDataVersion = version;
+                } else {
+                    caps.remoteTgxlControlVersion = version;
                 }
             }
         } else if (u.name == "settingsSchemaVersion") {

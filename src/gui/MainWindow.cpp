@@ -15,6 +15,14 @@
 //                 status bar items whose feature is not built yet are
 //                 hidden through UnbuiltFeatures (local and remote
 //                 windows). AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-45 fix wave: each slice flag
+//                 also learns whether the headphones are turned on.
+//                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-45 Task 2: a remote window opens
+//                 this computer's headphones when they are enabled, and each
+//                 slice flag learns why a receiver on the headphones is
+//                 silent on the Core's side. AI-assisted implementation via
+//                 Anthropic Claude Code.
 //   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-47 / R-R3-22: the Power Genius
 //                 gauge conversion moved to the Core side
 //                 (PgxlStatusGauges); AmpApplet and Rf2ksApplet read
@@ -98,6 +106,15 @@
 //                 Multimeter and high-resolution filter settings and the
 //                 DXCC country table load at startup. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-48: the one TCI switch (TciSwitch),
+//                the local RF-Kit band follow, the remote RF-Kit applet's
+//                Disconnect or Reconnect through the Core. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: the power-cap alert is the Core's
+//                (StationAccessoryData, in process for a local window)
+//                and shown from `accessoryData` in every window; a remote
+//                window's antenna names follow the Core's. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -336,6 +353,7 @@ warren@wpratt.com
 #include "core/FFTRouter.h"
 #include "StyleConstants.h"
 #include "models/RadioModel.h"
+#include "models/AccessoryDataModel.h"
 #include "models/SliceModel.h"
 #include "widgets/VfoWidget.h"
 #include "widgets/RxDashboard.h"
@@ -439,6 +457,8 @@ warren@wpratt.com
 #  include "applets/TciApplet.h"
 #  include "applets/ClientChainApplet.h"
 #  include "core/TciServer.h"
+#  include "core/TciSwitch.h"
+#  include "core/RfKitBandFollow.h"
 #  include "setup/TciLogWindow.h"  // Phase 3J-1 closeout Item 2 (2026-05-12)
 #  include <QWebSocket>
 #endif
@@ -448,6 +468,7 @@ warren@wpratt.com
 // Remote-daemon R2 Task 20: the wss client and the settings backend it
 // writes through. Both are used only on the m_station.isRemote() path.
 #include "core/session/StationClient.h"
+#include "models/RfKitModel.h"
 #include "RemoteConnectionController.h"
 #include "gui/RemoteMediaController.h"
 #include "gui/RemoteVaxRouter.h"
@@ -616,6 +637,19 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
 #ifdef HAVE_WEBSOCKETS
     {
         m_tciServer = new TciServer(m_radioModel, this);
+        // R-R3-48: the app's one TCI switch drives this server and, on a
+        // Core that runs a station server, the Core's too.
+        m_tciSwitch = new TciSwitch(m_tciServer, m_radioModel, this);
+        connect(m_tciSwitch, &TciSwitch::stationRequestFailed, this,
+                [this](const QString& reason) {
+            statusBar()->showMessage(OperatorReasonText::forDisplay(reason), 5000);
+        });
+        // R-R3-48: a local window's RF-Kit follows the band as an app of
+        // this server; the band-follow line says whether it does.
+        if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local) {
+            m_rfKitBandFollow = new RfKitBandFollow(m_radioModel->rfKitModel(), this);
+            m_rfKitBandFollow->setServer(m_tciServer);
+        }
         connect(m_tciServer, &TciServer::serverStarted,
                 this, [this](quint16) { m_tciServerRunning = true;  updateTciIndicator(); });
         connect(m_tciServer, &TciServer::serverStopped,
@@ -1017,7 +1051,11 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
             // shouldn't crash startup.
             bindAddr = QHostAddress(QHostAddress::LocalHost);
         }
-        if (enabled) {
+        // R-R3-48: through the one switch. At startup this window only
+        // applies it here; the Core keeps its own switch.
+        if (m_tciSwitch) {
+            m_tciSwitch->setSwitch(enabled, port, bindAddr, /*tellCore=*/false);
+        } else if (enabled) {
             m_tciServer->start(bindAddr, port);
         }
     }
@@ -1277,6 +1315,12 @@ void MainWindow::ensureRemoteSession()
         // ~MainWindow).
         if (AudioEngine* vaxEngine = m_radioModel->localAudioDevices()) {
             vaxEngine->openVaxOutputs();
+            // R-R3-45: this computer's headphones open here too when Setup,
+            // Audio, Devices has them enabled, as a local start() opens
+            // them, so the Core's headphones mix has somewhere to play.
+            if (vaxEngine->headphonesEnabled() && !vaxEngine->headphonesAvailable()) {
+                vaxEngine->setHeadphonesEnabled(true);
+            }
             m_remoteVax = new RemoteVaxRouter(m_radioModel, vaxEngine,
                                               RemoteVaxRouter::coreKeyFor(m_station), this);
             const QPointer<RemoteMediaController> media(m_remoteMedia);
@@ -1777,6 +1821,17 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         newFlag->setHeadphonesAvailable(engine->headphonesAvailable());
         connect(engine, &AudioEngine::headphonesAvailableChanged,
                 newFlag, &VfoWidget::setHeadphonesAvailable);
+        // Turned on but not open: "could not be opened", not "turn on".
+        newFlag->setHeadphonesEnabled(engine->headphonesEnabled());
+        connect(engine, &AudioEngine::headphonesEnabledChanged,
+                newFlag, &VfoWidget::setHeadphonesEnabled);
+    }
+    // R-R3-45: in a remote window, the Core's side too: a Core that cannot
+    // send the headphones mix, or headphones that failed here.
+    if (m_remoteMedia) {
+        newFlag->setHeadphonesProblem(m_remoteMedia->headphonesProblem());
+        connect(m_remoteMedia, &RemoteMediaController::headphonesProblemChanged,
+                newFlag, &VfoWidget::setHeadphonesProblem);
     }
 
     // Remote Daemon R2 Task 12: per-slice S-meter. SliceMeterPump
@@ -5439,6 +5494,13 @@ void MainWindow::buildUI()
         // A remote window's refusal is the Core's text; shown in user words.
         showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
     });
+    // L1 (R-R3-47, R-R3-22, R-R3-48): the Core refused an accessory request
+    // (amp, tuner, RF-Kit, interlock, fault history, station TCI). Its own
+    // route, so a slice-only listener never hears it; the same toast.
+    connect(m_radioModel, &RadioModel::accessoryRequestRefused, this,
+            [this](const QString&, const QString& reason) {
+        showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
+    });
 
     // Phase 3F Sub-Epic I closeout, defect F4.
     //
@@ -6275,8 +6337,12 @@ void MainWindow::populateDefaultMeter()
     // Fires a 5-second status-bar toast when peak forward power exceeds the
     // cap configured in Setup -> Peripherals -> PGXL Advanced -> Hardware.
     // De-bounced: one toast per exceedance event (re-arms below cap).
-    connect(m_radioModel, &RadioModel::ampMetersChanged,
-            this, &MainWindow::onAmpMetersForPowerCap);
+    // R-R3-47 / R-R3-22: the alert is computed where the amp is (the Core,
+    // or this window's own model in process) and shown from the
+    // `accessoryData` object, so every connected window sees it.
+    m_powerCapAlertSeen = m_radioModel->accessoryDataModel()->powerCapAlertCount();
+    connect(m_radioModel->accessoryDataModel(), &AccessoryDataModel::powerCapChanged,
+            this, &MainWindow::onPowerCapAlertChanged);
 
     // Phase 3P-II review fix C2: surface TX interlock decisions to the
     // operator via 5-second status-bar toasts.  Without these connections
@@ -6628,16 +6694,10 @@ void MainWindow::populateDefaultMeter()
         // Connection -> applet data flow.
         Rf2ksConnection* rfKitConn = m_radioModel->rfKitConnection();
         if (rfKitConn) {
-            // R-R3-47 / R-R3-22: power, OPERATE, the connection dot and
-            // the name and version come from RadioModel's RfKitModel, which
-            // Rf2ksApplet reads itself (the Core's `rfkit` object in a
-            // remote window). The tuner and antenna rows stay wired here.
-            connect(rfKitConn, &Rf2ksConnection::tunerUpdated,
-                    m_rfKitApplet, &Rf2ksApplet::setTuner);
-            connect(rfKitConn, &Rf2ksConnection::antennasUpdated,
-                    m_rfKitApplet, &Rf2ksApplet::setAntennas);
-            connect(rfKitConn, &Rf2ksConnection::activeAntennaUpdated,
-                    m_rfKitApplet, &Rf2ksApplet::setActiveAntenna);
+            // R-R3-47 / R-R3-22: power, OPERATE, the connection dot, the
+            // name and version, and (Task 3) the tuner and antenna rows come
+            // from RadioModel's RfKitModel, which Rf2ksApplet reads itself
+            // (the Core's `rfkit` object in a remote window).
 
             // Applet -> connection (antenna click, operate toggle).
             connect(m_rfKitApplet, &Rf2ksApplet::antennaRequested,
@@ -6658,6 +6718,24 @@ void MainWindow::populateDefaultMeter()
 
         connect(m_rfKitApplet, &Rf2ksApplet::connectionToggleRequested,
                 this, [this]() {
+            // R-R3-47: a remote window asks the Core, which owns the amp.
+            if (m_radioModel->role() == RadioModel::Role::Remote) {
+                IStationLink* link = m_radioModel->stationLink();
+                RfKitModel* rfKit = m_radioModel->rfKitModel();
+                if (!link || !rfKit || !link->remoteRfKitControlAvailable()) { return; }
+                using Phase = RfKitModel::ConnectionPhase;
+                const auto phase = rfKit->connectionPhase();
+                const bool active = phase == Phase::Connected || phase == Phase::Connecting
+                    || phase == Phase::Identifying || phase == Phase::Retrying;
+                const auto outcome = active
+                    ? link->requestDisconnectRfKit()
+                    : link->requestConfigureRfKit(rfKit->configuredHost(),
+                                                  static_cast<quint16>(rfKit->configuredPort()));
+                if (!outcome.sent) {
+                    statusBar()->showMessage(OperatorReasonText::forDisplay(outcome.reason), 5000);
+                }
+                return;
+            }
             Rf2ksConnection* conn = m_radioModel->rfKitConnection();
             if (!conn) { return; }
             if (conn->isConnected()) {
@@ -6698,6 +6776,26 @@ void MainWindow::populateDefaultMeter()
                 diag += QStringLiteral("(connection unavailable)\n");
             }
             QGuiApplication::clipboard()->setText(diag);
+        });
+    }
+
+    // R-R3-47 / R-R3-22: a remote window's antenna names are the Core's.
+    if (m_radioModel->role() == RadioModel::Role::Remote) {
+        connect(m_radioModel->accessoryDataModel(), &AccessoryDataModel::labelsChanged, this,
+                [this] {
+            const AccessoryDataModel* data = m_radioModel->accessoryDataModel();
+            const QStringList tgxl = data->tgxlAntennaLabels();
+            if (m_tunerApplet) {
+                for (int i = 0; i < tgxl.size(); ++i) {
+                    m_tunerApplet->onAntennaLabelChanged(i + 1, tgxl.at(i));
+                }
+            }
+            const QStringList rfkit = data->rfkitAntennaLabels();
+            if (m_rfKitApplet) {
+                for (int i = 0; i < rfkit.size(); ++i) {
+                    m_rfKitApplet->setAntennaLabel(i + 1, rfkit.at(i));
+                }
+            }
         });
     }
 
@@ -9956,7 +10054,7 @@ void MainWindow::openDiversityDialog()
 
 // Phase 3P-II Phase 4 Task 97: PGXL power cap soft-alert toast.
 //
-// Fires a 5-second QStatusBar toast when peak forward power exceeds the
+// Fires a 5-second toast when peak forward power exceeds the
 // operator-configured PGXL cap.  De-bounced: one toast per exceedance event
 // (re-armed when fwd drops back below the cap threshold so a subsequent
 // exceedance fires a fresh toast).
@@ -9965,37 +10063,24 @@ void MainWindow::openDiversityDialog()
 //   docs/architecture/2026-05-18-pgxl-tgxl-and-analog-smeter-plan.md
 //   Task 97 / design ss5.6.2 "TX power cap: soft alert only".
 //
-// Keys:
-//   PGXL_PowerCapEnabled  -- "True"/"False", default "False"
-//   PGXL_PowerCapW        -- int watts, default 1500
-//
-// Connected to RadioModel::ampMetersChanged in buildUI() near Task 43.
-void MainWindow::onAmpMetersForPowerCap(float fwd, float /*swr*/)
+// R-R3-47 / R-R3-22: the rule (PGXL_PowerCapEnabled, PGXL_PowerCapW,
+// one alert per exceedance) moved to StationAccessoryData::onForwardPower,
+// which runs where the amp is. The window shows the alert when the
+// object's alert count moves while the output is over the limit; the count
+// it saw when the object first arrived is not an alert of its own.
+void MainWindow::onPowerCapAlertChanged()
 {
-    const bool enabled = AppSettings::instance()
-        .value(QStringLiteral("PGXL_PowerCapEnabled"), QStringLiteral("False"))
-        .toString() == QStringLiteral("True");
-    if (!enabled) {
-        m_powerCapToastShown = false;   // keep re-arm state sane if feature toggled
+    const AccessoryDataModel* data = m_radioModel->accessoryDataModel();
+    const qint64 count = data->powerCapAlertCount();
+    if (count == m_powerCapAlertSeen) {
         return;
     }
-
-    const float capW = AppSettings::instance()
-        .value(QStringLiteral("PGXL_PowerCapW"), 1500).toFloat();
-
-    if (fwd <= capW) {
-        m_powerCapToastShown = false;   // re-arm: fwd is back below cap
+    const bool fresh = count > m_powerCapAlertSeen;
+    m_powerCapAlertSeen = count;
+    if (!fresh || !data->powerCapExceeded() || data->powerCapAlertText().isEmpty()) {
         return;
     }
-
-    if (m_powerCapToastShown) { return; }   // de-bounce: already toasted this exceedance
-    m_powerCapToastShown = true;
-
-    const QString msg = QStringLiteral("PGXL power %1 W exceeds cap %2 W")
-        .arg(static_cast<int>(fwd))
-        .arg(static_cast<int>(capW));
-    showToast(msg, ToastSeverity::Error, 5000);
-    qCWarning(lcMeter) << msg;
+    showToast(data->powerCapAlertText(), ToastSeverity::Error, 5000);
 }
 
 // ── Phase 3P-II review fix C2: TX interlock warning/denial toasts ────────────
@@ -10139,9 +10224,10 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
                         if (!bindAddr.setAddress(bindStr)) {
                             bindAddr = QHostAddress(QHostAddress::LocalHost);
                         }
-                        m_tciServer->start(bindAddr, port);
+                        // R-R3-48: this window's server and the Core's.
+                        m_tciSwitch->setSwitch(true, port, bindAddr);
                     } else {
-                        m_tciServer->stop();
+                        m_tciSwitch->setSwitch(false, port, QHostAddress(QHostAddress::LocalHost));
                     }
                 });
         // Phase 3J-1 closeout Item 1 (2026-05-12): live-restart on bind /
@@ -10152,15 +10238,13 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
         // start.  Mirrors the enable-toggled pattern above.
         connect(dialog, &SetupDialog::tciServerBindOrPortChanged,
                 this, [this](const QString& bindStr, quint16 port) {
-                    if (!m_tciServer->isRunning()) {
-                        return;
-                    }
                     QHostAddress bindAddr;
                     if (!bindAddr.setAddress(bindStr)) {
                         bindAddr = QHostAddress(QHostAddress::LocalHost);
                     }
-                    m_tciServer->stop();
-                    m_tciServer->start(bindAddr, port);
+                    // R-R3-48: restarts this window's server if it runs,
+                    // and gives the Core the new port while the switch is on.
+                    m_tciSwitch->setPortOrBind(port, bindAddr);
                 });
         // Phase 3J-1 closeout Item 2 (2026-05-12): "Show Log..." button.
         // The window is owned by MainWindow (lazy-constructed) so it

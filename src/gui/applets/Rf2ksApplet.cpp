@@ -13,6 +13,13 @@
 //   RfKitModel in local and remote windows; a remote window shows a stale
 //   line when it loses the Core. J.J. Boyd (KG4VCF), AI-assisted via
 //   Anthropic Claude Code.
+//   2026-09-24  R-R3-47 / R-R3-48: the tuner and antenna rows read the
+//   RfKitModel too; the band-follow line; a remote window's
+//   Disconnect/Reconnect asks the Core. J.J. Boyd (KG4VCF), AI-assisted
+//   via Anthropic Claude Code.
+//   2026-09-24  R-R3-47 / R-R3-22: an empty antenna name shows "ANT N" (a
+//   remote window takes the Core's names). J.J. Boyd (KG4VCF), AI-assisted
+//   via Anthropic Claude Code.
 // =================================================================
 
 #include "Rf2ksApplet.h"
@@ -195,6 +202,16 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
 
     root->addWidget(tunerWrap);
 
+    // R-R3-48: whether the amp follows the radio's band, and if not, the
+    // TCI server address to enter on it.
+    m_bandFollowLabel = new QLabel(this);
+    m_bandFollowLabel->setObjectName(QStringLiteral("rfKitBandFollowLabel"));
+    m_bandFollowLabel->setTextFormat(Qt::PlainText);
+    m_bandFollowLabel->setWordWrap(true);
+    m_bandFollowLabel->setContentsMargins(8, 0, 8, 4);
+    m_bandFollowLabel->setStyleSheet(QStringLiteral("color: #9aa5b1; font-size: 10px;"));
+    root->addWidget(m_bandFollowLabel);
+
     // R-R3-47: a remote window's readings come from the Core; this line
     // says when they are not live.
     m_staleLabel = new QLabel(this);
@@ -213,6 +230,8 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
         if (m_rfKit) {
             connect(m_rfKit, &RfKitModel::statusChanged, this, &Rf2ksApplet::syncFromRfKit);
             connect(m_rfKit, &RfKitModel::stationConnectionChanged,
+                    this, &Rf2ksApplet::syncFromRfKit);
+            connect(m_rfKit, &RfKitModel::bandFollowChanged,
                     this, &Rf2ksApplet::syncFromRfKit);
         }
         connect(m_model, &RadioModel::stationLinkStateChanged,
@@ -257,8 +276,19 @@ void Rf2ksApplet::syncFromRfKit()
     if (!m_rfKit->deviceNickname().isEmpty() || !m_rfKit->deviceVersion().isEmpty()) {
         setNicknameAndVersion(m_rfKit->deviceNickname(), m_rfKit->deviceVersion());
     }
+    if (m_bandFollowLabel) {
+        m_bandFollowLabel->setText(m_rfKit->bandFollowText());
+    }
     if (!m_rfKit->present()) {
         return;
+    }
+    // R-R3-47: the tuner and antenna rows, as the amp last reported them.
+    setTuner(m_rfKit->tuner());
+    if (m_rfKit->antennaPresentMask() != 0) {
+        setAntennas(m_rfKit->antennas());
+    }
+    if (m_rfKit->activeAntennaNumber() > 0) {
+        setActiveAntenna(m_rfKit->activeAntenna());
     }
     setOperateMode(m_rfKit->operate() ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
     RfKitPowerSnapshot snap;
@@ -301,6 +331,11 @@ bool Rf2ksApplet::staleIndicatorVisibleForTesting() const
 QString Rf2ksApplet::staleIndicatorTextForTesting() const
 {
     return m_staleLabel ? m_staleLabel->text() : QString();
+}
+
+QString Rf2ksApplet::bandFollowTextForTesting() const
+{
+    return m_bandFollowLabel ? m_bandFollowLabel->text() : QString();
 }
 
 // ---------- Section A slots ----------
@@ -419,8 +454,11 @@ void Rf2ksApplet::setAntennas(const QList<RfKitAntenna>& list)
         if (!btn) {
             continue;
         }
-        const QString label = m_antennaLabels.value(a.number,
-            QStringLiteral("ANT %1").arg(a.number));
+        // R-R3-47: an empty name (the Core's default) shows "ANT N" too.
+        QString label = m_antennaLabels.value(a.number);
+        if (label.isEmpty()) {
+            label = QStringLiteral("ANT %1").arg(a.number);
+        }
         btn->setText(label);
         // R-R3-21: an amplifier report never re-enables a remote window's
         // antenna buttons.
@@ -513,11 +551,15 @@ QMenu* Rf2ksApplet::buildContextMenu(QObject* menuParent)
         emit navigationRequested(QStringLiteral("rfKit"));
     });
     connect(disco, &QAction::triggered, this, &Rf2ksApplet::connectionToggleRequested);
-    // R-R3-21: the toggle opens or closes this computer's own RF2K-S link.
+    // R-R3-47: in a remote window the toggle asks the Core, which owns the
+    // amp; a Core that does not offer it keeps the item off.
     if (isRemoteModel()) {
-        disco->setEnabled(false);
-        disco->setToolTip(AmpApplet::remoteUnavailableReason());
-        menu->setToolTipsVisible(true);
+        const IStationLink* link = m_model ? m_model->stationLink() : nullptr;
+        if (!link || !link->remoteRfKitControlAvailable()) {
+            disco->setEnabled(false);
+            disco->setToolTip(tr("This Core does not offer RF-Kit amplifier setup to this app."));
+            menu->setToolTipsVisible(true);
+        }
     }
     connect(diag,  &QAction::triggered, this, &Rf2ksApplet::diagnosticsCopyRequested);
     return menu;

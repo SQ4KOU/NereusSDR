@@ -49,10 +49,15 @@ public:
     // IMediaTransport::kMaxReceiverAudioStreams receiver SSRCs of this
     // connection beside the main one, and both sides send and accept
     // exactly that set. Off, every description and filter is today's.
+    // headphonesMixStream (R-R3-45): both sides set it for a GUI that
+    // declared it can play the Core's headphones mix. The offerer declares
+    // headphonesAudioSsrcForConnection() after any receiver streams, and
+    // both sides send and accept it too. Off, nothing changes.
     bool start(IMediaTransport::Role role, const QString& connectionId,
                int audioTargetBitrate = IMediaTransport::kDefaultAudioTargetBitrate,
                bool offerLosslessAudio = false,
-               bool receiverAudioStreams = false);
+               bool receiverAudioStreams = false,
+               bool headphonesMixStream = false);
     void stop();
 
     bool acceptControl(const QJsonObject& control);
@@ -98,6 +103,15 @@ public:
     /// receiver's SSRC is replaced by the next integer (wrapping) until it is
     /// none of these, so every id is distinct and both peers agree.
     static QList<quint32> receiverAudioSsrcsForConnection(const QString& connectionId);
+    /// R-R3-45: the declared headphones mix SSRC, or 0 when the headphones
+    /// mix was not asked for or the peer is stopped.
+    quint32 headphonesAudioSsrc() const;
+    /// R-R3-45: the headphones mix SSRC for a connection: SHA-256 over the
+    /// ASCII "NereusSDR/media-headphones-ssrc/v1:" followed by the
+    /// connection id, first four digest bytes big-endian. Zero, the main
+    /// SSRC or any of the four receiver SSRCs is replaced by the next
+    /// integer (wrapping) until it is none of these.
+    static quint32 headphonesAudioSsrcForConnection(const QString& connectionId);
     std::optional<MediaPeerTelemetry> telemetry() const;
 
 signals:

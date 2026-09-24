@@ -3,8 +3,9 @@
 // src/core/session/media/DaemonAudioSource.h  (NereusSDR)
 // =================================================================
 // Bounded bridge from AudioEngine's borrowed post-master-mix callback, or
-// (R-R3-43) one receiver's own tap, to owned 40 ms stereo blocks for the
-// remote audio sender.
+// (R-R3-43) one receiver's own tap, or (R-R3-45) the speakers' mix alone or
+// the headphones mix, to owned 40 ms stereo blocks for the remote audio
+// sender.
 // =================================================================
 
 #pragma once
@@ -89,8 +90,15 @@ public:
     /// and the mix, with its AF gain undone as local VAX has it). Frames the
     /// MOX gate withholds advance the position without samples, so the loss
     /// shows as an integral packet gap, as dropped ingress does. Refused
-    /// (false) while running, or for a negative id other than kMasterMix.
+    /// (false) while running, or for a negative id other than kMasterMix,
+    /// kSpeakersMix or kHeadphonesMix.
     static constexpr int kMasterMix = -1;
+    /// R-R3-45: the speakers' mix alone (the receivers routed to the
+    /// speakers), from the master tap; and the headphones mix (the
+    /// receivers routed to the headphones), from AudioEngine's
+    /// headphones-mix tap. Both before master volume and mute.
+    static constexpr int kSpeakersMix = -2;
+    static constexpr int kHeadphonesMix = -3;
     bool setSliceSource(int sliceId);
     int sliceSource() const noexcept { return m_sliceId; }
 

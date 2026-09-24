@@ -167,6 +167,10 @@
 //                                    minor-11 peers. AI-assisted
 //                                    implementation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: pgxlControlVersion
+//                                    3 and tgxlControlVersion 1, the amp's
+//                                    and tuner's own settings. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -423,6 +427,30 @@ public:
     // the `amplifier` and `rfkit` objects (remotePgxlControlVersion and
     // remoteRfKitControlVersion); 0 otherwise.
     int accessoryStatusVersion() const;
+    // R-R3-47: remotePgxlControlVersion. 3 on a Core that owns its
+    // accessories (the `amplifier` object, the configurePgxl,
+    // disconnectPgxl and setPgxlConnectionSettings verbs, and the amp's own
+    // settings on `accessorySettings` with their verbs); 0 otherwise.
+    int pgxlControlVersion() const;
+    // R-R3-47 / R-R3-22: remoteTgxlControlVersion. 1 on a Core that owns its
+    // accessories (the tuner's own settings on `accessorySettings` and the
+    // setTgxlName, setTgxlNetwork, saveTgxlSettings and readTgxlSettings
+    // verbs); 0 otherwise.
+    int tgxlControlVersion() const;
+    // R-R3-47: remoteRfKitControlVersion. 3 on a Core that owns its
+    // accessories (the `rfkit` object with its interface, antenna, tuner
+    // and band-follow rows, the configureRfKit, disconnectRfKit and
+    // setRfKitEnabled verbs, and from 3 the resetRfKitError verb and a
+    // window's auto-reconnect and poll interval applied at once); 0
+    // otherwise.
+    int rfKitControlVersion() const;
+    // R-R3-48: stationTciVersion. 1 on a Core that runs its own station
+    // TCI server (the `stationTci` object and the setStationTci verb).
+    int stationTciVersion() const;
+    // R-R3-47 / R-R3-22: accessoryDataVersion. 1 on a Core that owns its
+    // accessories (the `accessoryData` object and the setTxInterlockPolicy,
+    // setPgxlPowerCap and clearAccessoryFaults verbs); 0 otherwise.
+    int accessoryDataVersion() const;
 
     // ---- Subsystem accessors, non-owning, for tests and diagnostics ----
     StateMirror* stateMirror() const { return m_mirror; }

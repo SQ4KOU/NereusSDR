@@ -395,7 +395,9 @@ AudioEngine* DaemonAudioSource::audioEngine() const noexcept
 
 bool DaemonAudioSource::setSliceSource(int sliceId)
 {
-    if (isRunning() || (sliceId < 0 && sliceId != kMasterMix)) {
+    if (isRunning()
+        || (sliceId < 0 && sliceId != kMasterMix && sliceId != kSpeakersMix
+            && sliceId != kHeadphonesMix)) {
         return false;
     }
     m_sliceId = sliceId;
@@ -413,8 +415,10 @@ void DaemonAudioSource::detachFromEngine()
     // and a receiver stream stopping must not cost the speakers' stream a
     // block. setSliceSource() is refused while running, so the tap this
     // bridge holds is always the current kind.
-    if (m_sliceId == kMasterMix) {
+    if (m_sliceId == kMasterMix || m_sliceId == kSpeakersMix) {
         m_audioEngine->clearMasterMixAudioTap(m_bridge.get());
+    } else if (m_sliceId == kHeadphonesMix) {
+        m_audioEngine->clearHeadphonesMixAudioTap(m_bridge.get());
     } else {
         m_audioEngine->clearSliceAudioTap(m_bridge.get());
     }
@@ -432,8 +436,11 @@ void DaemonAudioSource::start()
     // Start/reset before publishing the bridge. AudioEngine's install gate
     // means the DSP thread cannot enter consume() until after this returns.
     m_bridge->start();
-    if (m_sliceId == kMasterMix) {
-        m_audioEngine->setMasterMixAudioTap(m_bridge.get());
+    if (m_sliceId == kMasterMix || m_sliceId == kSpeakersMix) {
+        m_audioEngine->setMasterMixAudioTap(m_bridge.get(),
+                                            /*speakersOnly=*/m_sliceId == kSpeakersMix);
+    } else if (m_sliceId == kHeadphonesMix) {
+        m_audioEngine->setHeadphonesMixAudioTap(m_bridge.get());
     } else if (!m_audioEngine->setSliceAudioTap(m_sliceId, m_bridge.get())) {
         // Every receiver tap slot is taken: stay stopped.
         m_bridge->stop();

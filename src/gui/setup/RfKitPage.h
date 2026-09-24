@@ -29,6 +29,11 @@
 //   2026-05-24 -- Created in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-24 -- R-R3-47 / R-R3-48: in a remote window the page is a
+//                 view of the Core's `rfkit` object and switch, and asks
+//                 the Core to switch, connect and disconnect the amp; the
+//                 band-follow line, local and remote. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QWidget>
@@ -58,6 +63,15 @@ public:
     void         setAntennaLabelForTesting(int n, const QString& label);
     void         clickSaveForTesting();
     QPushButton* testConnectionButtonForTesting() const;
+    QPushButton* disconnectButtonForTesting() const { return m_disconnectBtn; }
+    QString      bandFollowTextForTesting() const;
+    QString      liveStatusTextForTesting() const;
+    QCheckBox*   autoReconnectForTesting() const { return m_autoReconnect; }
+    QSpinBox*    pollIntervalForTesting() const { return m_pollIntervalSpin; }
+    QLineEdit*   antennaLabelEditForTesting(int n) const
+    { return n >= 1 && n <= 4 ? m_antLabelEdits[n - 1] : nullptr; }
+    QPushButton* saveButtonForTesting() const { return m_saveBtn; }
+    QPushButton* resetErrorButtonForTesting() const { return m_resetErrBtn; }
 
 private slots:
     // Master toggle handler.  Persists the new state via
@@ -92,6 +106,18 @@ private:
     // fields reflect the just-connected radio's saved values.
     void reloadFromPeripherals();
 
+    // R-R3-47: a remote window (the amp is the Core's).
+    bool isRemote() const;
+    bool remoteControlAvailable() const;
+    // I4 (R-R3-47): the Core takes this page's settings, names and Reset amp
+    // error from a remote window (remoteRfKitControlVersion 3).
+    bool remoteSettingsAvailable() const;
+    void refreshRemoteSettings();
+    void onResetErrorClicked();
+    void refreshBandFollow();
+    void onConnectClicked();
+    void onDisconnectClicked();
+
     RadioModel*  m_model{nullptr};
 
     // Tab host.
@@ -120,6 +146,11 @@ private:
     QPushButton* m_setTciBtn{nullptr};
     QPushButton* m_resetErrBtn{nullptr};
     QPushButton* m_saveBtn{nullptr};
+    QPushButton* m_disconnectBtn{nullptr};
+    // R-R3-48: whether the amp follows the radio's band.
+    QLabel*      m_bandFollowLabel{nullptr};
+    // R-R3-47: what the Core said about the last request (remote window).
+    QString      m_remoteResult;
 };
 
 } // namespace NereusSDR

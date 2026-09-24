@@ -9,6 +9,8 @@
 // captures/flex-pgxl-tgxl-capture_00001_20260519173452.pcapng.
 //
 // AI tooling: Anthropic Claude Code.
+// Modified 2026-09-24 by J.J. Boyd (KG4VCF): R-R3-22 / R-R3-47 station
+// network binding (setStationBind); AI-assisted via Anthropic Claude Code.
 
 #include "SmartSdrApiListener.h"
 
@@ -38,6 +40,10 @@ SmartSdrApiListener::SmartSdrApiListener(QObject* parent)
 
 bool SmartSdrApiListener::start()
 {
+    // R-R3-22 / R-R3-47: the Core listens on the station network only.
+    if (m_stationBind) {
+        return startOn(m_stationBind->listenAddresses(), m_listenPort);
+    }
     // AnyIPv4 (not Any) because Qt's default Any binds IPv6-only on macOS,
     // which silently blocks IPv4 clients like Windows PowerGeniusDesktop.
     return start(m_listenAddress, m_listenPort);
@@ -45,18 +51,48 @@ bool SmartSdrApiListener::start()
 
 bool SmartSdrApiListener::start(QHostAddress bindAddr, quint16 port)
 {
-    if (m_server.isListening()) {
-        m_server.close();
+    return startOn({bindAddr}, port);
+}
+
+void SmartSdrApiListener::closeServers()
+{
+    m_server.close();
+    m_extraServers.clear();
+    m_listening.clear();
+}
+
+bool SmartSdrApiListener::startOn(const QList<QHostAddress>& addresses, quint16 port)
+{
+    closeServers();
+    const QHostAddress first = addresses.isEmpty() ? QHostAddress(QHostAddress::AnyIPv4)
+                                                   : addresses.first();
+    bool ok = m_server.listen(first, port);
+    QString failedAddress = first.toString();
+    QString error = ok ? QString() : m_server.errorString();
+    // Port 0 (tests) lets the first bind choose; the rest share it.
+    const quint16 chosenPort = ok ? m_server.serverPort() : port;
+    for (int i = 1; ok && i < addresses.size(); ++i) {
+        auto server = std::make_unique<QTcpServer>();
+        connect(server.get(), &QTcpServer::newConnection,
+                this, &SmartSdrApiListener::onNewConnection);
+        if (!server->listen(addresses.at(i), chosenPort)) {
+            ok = false;
+            failedAddress = addresses.at(i).toString();
+            error = server->errorString();
+            break;
+        }
+        m_extraServers.push_back(std::move(server));
     }
-    bool ok = m_server.listen(bindAddr, port);
     if (!ok) {
-        m_lastListenError = m_server.errorString();
+        closeServers();
+        m_lastListenError = error;
         emit statusChanged();
         qCWarning(lcSmartSdr) << "failed to bind"
-                               << bindAddr.toString() << ":" << port
-                               << ":" << m_server.errorString();
+                               << failedAddress << ":" << port
+                               << ":" << error;
         return false;
     }
+    m_listening = addresses.isEmpty() ? QList<QHostAddress>{first} : addresses;
     m_lastListenError.clear();
     emit statusChanged();
     // 2026-05-21 4o3a-lan-ptt-pcap-divergence.md §8 C1: generate synthetic
@@ -66,9 +102,31 @@ bool SmartSdrApiListener::start(QHostAddress bindAddr, quint16 port)
     qCInfo(lcSmartSdr) << "local-client handle:" << m_localClientHandle;
     m_periodicTimer.start();
     qCInfo(lcSmartSdr) << "SmartSDR API listener listening on"
-                       << m_server.serverAddress().toString()
+                       << m_listening
                        << ":" << m_server.serverPort();
     return true;
+}
+
+void SmartSdrApiListener::setStationBind(const StationNetwork::StationBind& bind)
+{
+    m_stationBind = bind;
+    if (!m_server.isListening()) {
+        return;
+    }
+    const QList<QHostAddress> wanted = bind.listenAddresses();
+    if (wanted == m_listening) {
+        return;
+    }
+    qCInfo(lcSmartSdr) << "station network changed: SmartSDR API listener moves from"
+                       << m_listening << "to" << wanted;
+    const quint16 port = m_listenPort;
+    stop();
+    startOn(wanted, port);
+}
+
+QList<QHostAddress> SmartSdrApiListener::listenAddresses() const
+{
+    return m_server.isListening() ? m_listening : QList<QHostAddress>{};
 }
 
 void SmartSdrApiListener::stop()
@@ -81,7 +139,7 @@ void SmartSdrApiListener::stop()
     // interlock state after the operator toggled 4O3A off in Setup.
     m_periodicTimer.stop();
     m_pttAckTimeout.stop();
-    m_server.close();
+    closeServers();
 
     // Disconnect signals from each socket so the dangling deleteLater()
     // callbacks don't try to update m_clients while we're clearing it.
@@ -595,9 +653,16 @@ void SmartSdrApiListener::onPttAckTimeout()
 
 void SmartSdrApiListener::onNewConnection()
 {
-    while (m_server.hasPendingConnections()) {
-        QTcpSocket* sock = m_server.nextPendingConnection();
+    // Any of the listening servers (m_server or a station extra).
+    auto* server = qobject_cast<QTcpServer*>(sender());
+    if (!server) { server = &m_server; }
+    while (server->hasPendingConnections()) {
+        QTcpSocket* sock = server->nextPendingConnection();
         if (!sock) { continue; }
+        // Owned by the listener, not the server: a station extra server is
+        // destroyed when the station network changes, and its accepted
+        // sockets must outlive it until stop() retires them.
+        sock->setParent(this);
         connect(sock, &QTcpSocket::readyRead,
                 this, &SmartSdrApiListener::onClientDataReady);
         connect(sock, &QTcpSocket::disconnected,

@@ -48,6 +48,8 @@
 class QTabWidget;
 class QCheckBox;
 class QLabel;
+class QPushButton;
+class QSpinBox;
 
 namespace NereusSDR {
 
@@ -79,6 +81,11 @@ private slots:
     // listener health.  This slot only ends the visible pending state.
     void onStationFourO3ACommandFinished(bool accepted, const QString& reason);
 
+    // R-R3-47: the remote Power Genius tab's two buttons (connect or
+    // disconnect at the Core; send the connection settings).
+    void onRemotePgxlConnectClicked();
+    void onRemotePgxlApplySettingsClicked();
+
 private:
     // Build the General tab content as a composite widget: master toggle
     // group + FlexAPI listener status row + embedded PeripheralsPage +
@@ -93,6 +100,14 @@ private:
     // Enable / disable the detail tabs (1, 2, 3) based on master state.
     // Called after onMasterToggled and at construction time.
     void applyMasterGateToTabs(bool enabled);
+
+    // R-R3-47 / R-R3-22: a remote window's Power Genius XL tab, a view of
+    // the Core's `amplifier` object plus the Core's PGXL commands (connect,
+    // disconnect, connection settings). Operate stays disabled with the
+    // Core's receive-only reason.
+    QWidget* buildRemotePgxlTab();
+    void refreshRemotePgxlTab();
+    void loadRemotePgxlSettings();
 
     RadioModel*           m_model{nullptr};
 
@@ -117,6 +132,21 @@ private:
     PgxlInterlockPage*    m_pgxlInterlockPage{nullptr};
     PgxlAdvancedPage*     m_pgxlAdvancedPage{nullptr};
     TgxlAdvancedPage*     m_tgxlAdvancedPage{nullptr};
+
+    // Remote Power Genius XL tab (remote windows only).
+    QWidget*              m_remotePgxlTab{nullptr};
+    QLabel*               m_remotePgxlStatus{nullptr};
+    QLabel*               m_remotePgxlIdentity{nullptr};
+    QLabel*               m_remotePgxlReadings{nullptr};
+    QPushButton*          m_remotePgxlConnect{nullptr};
+    QPushButton*          m_remotePgxlOperate{nullptr};
+    QCheckBox*            m_remotePgxlAutoReconnect{nullptr};
+    QSpinBox*             m_remotePgxlKeepalive{nullptr};
+    QSpinBox*             m_remotePgxlPing{nullptr};
+    QPushButton*          m_remotePgxlApply{nullptr};
+    QLabel*               m_remotePgxlResult{nullptr};
+    // R-R3-48: the Power Genius's band-follow line (General tab).
+    QLabel*               m_pgxlBandFollow{nullptr};
 };
 
 }  // namespace NereusSDR

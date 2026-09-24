@@ -75,6 +75,15 @@ public:
         // receiver audio. Zero, the main SSRC, a repeat or more than
         // kMaxReceiverAudioStreams entries is a precondition refusal.
         QList<quint32> receiverAudioSsrcs {};
+        // R-R3-45 headphones mix: the SSRC of one more audio stream on the
+        // same m-line, the Core's mix of the receivers routed to the
+        // headphones. 0 (the default) declares none and keeps today's
+        // offer, answer and queue. Otherwise an offerer declares it with
+        // its own a=ssrc line after the receiver streams, both roles'
+        // sendRtp() accept it, and the receive queue holds
+        // kReceivedRtpPacketsPerStream more packets. The main SSRC or a
+        // receiver SSRC here is a precondition refusal.
+        quint32 headphonesAudioSsrc = 0;
     };
 
     /// R-R3-43: the most receiver audio streams one media connection

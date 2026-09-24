@@ -23,6 +23,15 @@
 //                 resetAudioSettings and stop() emit vaxBusOpenChanged
 //                 (R-R3-49, R-R3-21) by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 : R-R3-45 fix wave by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The mix, headphones and program
+//                 scratch are engine members sized off the DSP thread
+//                 (ensureMixScratchFrames); headphonesEnabledChanged.
+//   2026-09-23 : R-R3-45 Task 2 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The master tap can take the
+//                 speakers' mix alone, a headphones-mix tap beside it feeds
+//                 a remote window's headphones stream, and remote playback
+//                 can play on the headphones output.
 //   2026-09-23 : R-R3-45 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code. Speakers or headphones per receiver (VAX
 //                 design 6.2): the master mixer builds both sums, the
@@ -191,11 +200,36 @@ AudioFormat toAudioFormat(const AudioDeviceConfig& cfg)
     return f;
 }
 
+// R-R3-21: process-wide Pa_Initialize / Pa_Terminate calls by any
+// AudioEngine, read by the test seam below.
+std::atomic<int> g_paInitializeCalls{0};
+std::atomic<int> g_paTerminateCalls{0};
+
 } // namespace
+
+#ifdef NEREUS_BUILD_TESTS
+int AudioEngine::paInitializeCallsForTest()
+{
+    return g_paInitializeCalls.load(std::memory_order_relaxed);
+}
+
+int AudioEngine::paTerminateCallsForTest()
+{
+    return g_paTerminateCalls.load(std::memory_order_relaxed);
+}
+#endif
 
 AudioEngine::AudioEngine(QObject* parent)
     : QObject(parent)
 {
+    // R-R3-45 fix wave: the mix scratch rxBlockReady uses, sized here and
+    // grown only by ensureMixScratchFrames(), never on the DSP thread.
+    m_mixScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
+    m_hpMixScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
+    m_programScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
+    m_avMixScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
+    m_vaxScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
+    m_mixScratchFrames.store(kMixScratchMinFrames, std::memory_order_seq_cst);
 #if defined(Q_OS_LINUX)
     // Cache the Linux audio backend detection result up front so Task 14's
     // dispatch (PipeWireBus vs. LinuxPipeBus pactl path) has a stable
@@ -226,14 +260,29 @@ AudioEngine::AudioEngine(QObject* parent)
     // without a real audio subsystem will see Pa_Initialize fail; log and
     // continue — rxBlockReady / start() degrade to a safe no-op in that
     // case.
-    const PaError err = Pa_Initialize();
-    if (err != paNoError) {
-        qCWarning(lcAudio) << "Pa_Initialize failed:" << Pa_GetErrorText(err)
-                           << "— audio subsystem will be inert.";
+    //
+    // R-R3-21: a test run never initialises PortAudio. On Linux its ALSA
+    // host API opens every PCM to probe it, and on macOS it walks
+    // CoreAudio, so the device guard in makeBus alone still let a test
+    // touch the real audio devices. The device layer counts as ready
+    // anyway, so the device paths still reach makeBus, which hands out the
+    // test's fake devices or nothing (see setDeviceBusFactoryForTest).
+    if (PortAudioBus::portAudioBarredForTestRun()) {
         m_paInitialized = false;
+        m_deviceLayerReady = true;
+        qCInfo(lcAudio) << "PortAudio not initialized: test run";
     } else {
-        m_paInitialized = true;
-        qCInfo(lcAudio) << "PortAudio initialized:" << Pa_GetVersionText();
+        g_paInitializeCalls.fetch_add(1, std::memory_order_relaxed);
+        const PaError err = Pa_Initialize();
+        if (err != paNoError) {
+            qCWarning(lcAudio) << "Pa_Initialize failed:" << Pa_GetErrorText(err)
+                               << "— audio subsystem will be inert.";
+            m_paInitialized = false;
+        } else {
+            m_paInitialized = true;
+            qCInfo(lcAudio) << "PortAudio initialized:" << Pa_GetVersionText();
+        }
+        m_deviceLayerReady = m_paInitialized;
     }
 
     // Pre-register the TX-monitor mixer slot so txMonitorBlockReady's
@@ -314,6 +363,7 @@ AudioEngine::~AudioEngine()
         m_captureSupervisor->shutdown();
     }
     if (m_paInitialized) {
+        g_paTerminateCalls.fetch_add(1, std::memory_order_relaxed);
         Pa_Terminate();
         m_paInitialized = false;
     }
@@ -393,7 +443,7 @@ void AudioEngine::setSliceStreaming(int sliceId, bool streaming)
     if (!streaming) {
         // Close first so no new audio callback can enter behind the
         // invalidation and escape the acknowledgment wait below.
-        m_mixAdmissionClosed.store(true, std::memory_order_release);
+        m_mixAdmissionClosed.store(true, std::memory_order_seq_cst);
     }
 
     m_masterMix.setSliceStreaming(sliceId, streaming);
@@ -426,14 +476,14 @@ void AudioEngine::setSliceStreaming(int sliceId, bool streaming)
 
     if (!streaming) {
         unsigned inFlight =
-            m_mixRegionsInFlight.load(std::memory_order_acquire);
+            m_mixRegionsInFlight.load(std::memory_order_seq_cst);
         while (inFlight != 0) {
             m_mixRegionsInFlight.wait(inFlight,
-                                      std::memory_order_acquire);
+                                      std::memory_order_seq_cst);
             inFlight =
-                m_mixRegionsInFlight.load(std::memory_order_acquire);
+                m_mixRegionsInFlight.load(std::memory_order_seq_cst);
         }
-        m_mixAdmissionClosed.store(false, std::memory_order_release);
+        m_mixAdmissionClosed.store(false, std::memory_order_seq_cst);
     }
 }
 
@@ -468,6 +518,10 @@ void AudioEngine::start()
     // of 1. Same reason the WDSP RX channel pool is sized off caps directly
     // (RadioModel.cpp §"open the WDSP channel pool").
     preregisterSlices(m_radio ? m_radio->boardCapabilities().maxSlices : 1);
+    // R-R3-45 fix wave: the mix scratch covers the configured DSP block.
+    ensureMixScratchFrames(AppSettings::instance()
+                               .value(QStringLiteral("audio/DspBlockSize"), QStringLiteral("0"))
+                               .toString().toInt());
 
     ensureSpeakersOpen();
     // R-R3-45: the headphones output opens at startup too, when Setup,
@@ -548,6 +602,7 @@ void AudioEngine::stop()
     }
     {
         std::lock_guard<std::mutex> lock(m_headphonesBusMutex);
+        m_remoteHeadphonesPlayback = false;
         m_headphonesBus.reset();
         configureHeadphonesConverter();
     }
@@ -943,7 +998,7 @@ void AudioEngine::ensureSpeakersOpen()
     if (m_speakersBus && m_speakersBus->isOpen()) {
         return;
     }
-    if (!m_paInitialized) {
+    if (!m_deviceLayerReady) {
         return;
     }
 
@@ -1017,8 +1072,11 @@ void AudioEngine::retryCapture()
     }
 }
 
-bool AudioEngine::beginRemotePlayback(QString* error)
+bool AudioEngine::beginRemotePlayback(QString* error, RemotePlaybackOutput output)
 {
+    if (output == RemotePlaybackOutput::Headphones) {
+        return beginRemoteHeadphonesPlayback(error);
+    }
     if (m_running) {
         if (error) { *error = QStringLiteral("Local DSP already owns speaker playback"); }
         return false;
@@ -1056,23 +1114,85 @@ bool AudioEngine::beginRemotePlayback(QString* error)
     return true;
 }
 
-void AudioEngine::endRemotePlayback()
+bool AudioEngine::beginRemoteHeadphonesPlayback(QString* error)
 {
+    // R-R3-45: the speakers' rules, on the headphones output.
+    if (m_running) {
+        if (error) { *error = QStringLiteral("Local DSP already owns headphones playback"); }
+        return false;
+    }
+    // The headphones are opened by the Enabled box, or when a remote window
+    // starts (MainWindow); never here, so begin cannot report a device
+    // change to the controller that is starting playback.
+    std::lock_guard<std::mutex> lock(m_headphonesBusMutex);
+    if (!m_headphonesBus || !m_headphonesBus->isOpen()) {
+        if (error) {
+            *error = m_headphonesEnabled
+                ? QStringLiteral("Could not open the selected headphones device")
+                : QStringLiteral("No headphones are set up on this computer");
+        }
+        return false;
+    }
+    const AudioFormat format = m_headphonesBus->negotiatedFormat();
+    if ((format.channels != 1 && format.channels != 2)
+        || format.sampleRate < kMinRemotePlaybackRateHz
+        || format.sampleRate > kMaxRemotePlaybackRateHz
+        || format.sample != AudioFormat::Sample::Float32) {
+        if (error) {
+            *error = QStringLiteral("Remote audio cannot play on a headphones device set to "
+                                    "%1 channels at %2 Hz")
+                         .arg(format.channels).arg(format.sampleRate);
+        }
+        return false;
+    }
+    if (!m_headphonesBus->outputPacing()) {
+        if (error) { *error = QStringLiteral("The selected headphones device does not report its playback timing"); }
+        return false;
+    }
+    m_headphonesBus->flush();
+    m_remoteHeadphonesFormat = format;
+    m_remoteHeadphonesPlayback = true;
+    return true;
+}
+
+void AudioEngine::endRemotePlayback(RemotePlaybackOutput output)
+{
+    if (output == RemotePlaybackOutput::Headphones) {
+        std::lock_guard<std::mutex> lock(m_headphonesBusMutex);
+        m_remoteHeadphonesPlayback = false;
+        m_remoteHeadphonesFormat = AudioFormat{};
+        if (m_headphonesBus) { m_headphonesBus->flush(); }
+        return;
+    }
     std::lock_guard<std::mutex> lock(m_speakersBusMutex);
     m_remotePlayback = false;
     m_remotePlaybackFormat = AudioFormat{};
     if (m_speakersBus) { m_speakersBus->flush(); }
 }
 
-std::optional<AudioFormat> AudioEngine::remotePlaybackFormat()
+std::optional<AudioFormat> AudioEngine::remotePlaybackFormat(RemotePlaybackOutput output)
 {
+    if (output == RemotePlaybackOutput::Headphones) {
+        std::lock_guard<std::mutex> lock(m_headphonesBusMutex);
+        if (!m_remoteHeadphonesPlayback) { return std::nullopt; }
+        return m_remoteHeadphonesFormat;
+    }
     std::lock_guard<std::mutex> lock(m_speakersBusMutex);
     if (!m_remotePlayback) { return std::nullopt; }
     return m_remotePlaybackFormat;
 }
 
-std::optional<IAudioBus::OutputPacing> AudioEngine::remotePlaybackPacing()
+std::optional<IAudioBus::OutputPacing> AudioEngine::remotePlaybackPacing(
+    RemotePlaybackOutput output)
 {
+    if (output == RemotePlaybackOutput::Headphones) {
+        std::lock_guard<std::mutex> lock(m_headphonesBusMutex);
+        if (!m_remoteHeadphonesPlayback || !m_headphonesBus || !m_headphonesBus->isOpen()
+            || m_headphonesBus->negotiatedFormat() != m_remoteHeadphonesFormat) {
+            return std::nullopt;
+        }
+        return m_headphonesBus->outputPacing();
+    }
     std::lock_guard<std::mutex> lock(m_speakersBusMutex);
     // A device reopened in another format no longer matches the stream the
     // receiver makes for it: no pacing, so the receiver restarts.
@@ -1081,12 +1201,30 @@ std::optional<IAudioBus::OutputPacing> AudioEngine::remotePlaybackPacing()
     return m_speakersBus->outputPacing();
 }
 
-bool AudioEngine::writeRemotePlayback(const QVector<float>& pcm)
+bool AudioEngine::writeRemotePlayback(const QVector<float>& pcm, RemotePlaybackOutput output)
 {
     // Bounded worker-side scratch; never called by the device callback.
     // The block is interleaved in the format begin accepted (one or two
     // channels); the channel count is checked again under the lock.
     if (pcm.isEmpty() || pcm.size() > qsizetype(kMaxRemotePlaybackFrames) * 2) { return false; }
+    if (output == RemotePlaybackOutput::Headphones) {
+        // R-R3-45: no master volume or mute on the headphones (design 6.3).
+        for (qsizetype i = 0; i < pcm.size(); ++i) {
+            if (!std::isfinite(pcm[i])) { return false; }
+        }
+        std::lock_guard<std::mutex> lock(m_headphonesBusMutex);
+        if (!m_remoteHeadphonesPlayback || !m_headphonesBus || !m_headphonesBus->isOpen()
+            || m_headphonesBus->negotiatedFormat() != m_remoteHeadphonesFormat) { return false; }
+        const int channels = m_remoteHeadphonesFormat.channels;
+        if (channels <= 0 || pcm.size() % channels != 0
+            || pcm.size() / channels > kMaxRemotePlaybackFrames) { return false; }
+        const int frames = int(pcm.size() / channels);
+        const auto pacing = m_headphonesBus->outputPacing();
+        if (!pacing || pacing->capacityFrames - pacing->queuedFrames < frames) { return false; }
+        const auto bytes = static_cast<qint64>(pcm.size()) * qint64(sizeof(float));
+        return m_headphonesBus->push(reinterpret_cast<const char*>(pcm.constData()), bytes)
+            == bytes;
+    }
     std::array<float, kMaxRemotePlaybackFrames * 2> scaled;
     const float gain = m_masterVolume.load(std::memory_order_acquire);
     for (qsizetype i = 0; i < pcm.size(); ++i) {
@@ -1118,7 +1256,7 @@ void AudioEngine::setSpeakersConfig(const AudioDeviceConfig& cfg)
 
 void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
 {
-    if (!m_paInitialized) {
+    if (!m_deviceLayerReady) {
         return;
     }
 
@@ -1150,7 +1288,7 @@ void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
 void AudioEngine::setHeadphonesConfig(const AudioDeviceConfig& cfg)
 {
     m_headphonesConfig = cfg;
-    if (!m_paInitialized) {
+    if (!m_deviceLayerReady) {
         return;
     }
     // R-R3-45: the device opens only while the headphones are enabled.
@@ -1164,8 +1302,12 @@ void AudioEngine::setHeadphonesEnabled(bool enabled)
         && (m_headphonesBus != nullptr) == enabled) {
         return;
     }
+    const bool changed = m_headphonesEnabled != enabled;
     m_headphonesEnabled = enabled;
     reopenHeadphones();
+    if (changed) {
+        emit headphonesEnabledChanged(enabled);
+    }
 }
 
 void AudioEngine::reopenHeadphones()
@@ -1268,7 +1410,7 @@ void AudioEngine::setVaxConfig(int channel, const AudioDeviceConfig& cfg)
     }
 #endif
 
-    if (!m_paInitialized) {
+    if (!m_deviceLayerReady) {
         return;
     }
     m_vaxBus[idx] = makeBus(cfg, /*capture=*/false);
@@ -1319,7 +1461,7 @@ void AudioEngine::setVaxEnabled(int channel, bool on)
     // Windows lazy PortAudio fallback: enable with defaults if no explicit
     // setVaxConfig has been wired yet. Real config lands via the
     // VirtualCableDetector / Setup→Audio→VAX BYO UI in Sub-Phase 9.
-    if (!m_paInitialized) {
+    if (!m_deviceLayerReady) {
         return;
     }
     AudioDeviceConfig defaults;
@@ -1498,7 +1640,7 @@ void AudioEngine::setVaxTxBusForTest(std::unique_ptr<IAudioBus> bus)
 
 #endif
 
-void AudioEngine::setMasterMixAudioTap(MasterMixAudioTap* tap)
+void AudioEngine::setMasterMixAudioTap(MasterMixAudioTap* tap, bool speakersOnly)
 {
     std::lock_guard<std::mutex> controlLock(m_masterMixTapControlMutex);
 
@@ -1511,8 +1653,43 @@ void AudioEngine::setMasterMixAudioTap(MasterMixAudioTap* tap)
         m_masterMixTapCallsInFlight.wait(calls, std::memory_order_relaxed);
         calls = m_masterMixTapCallsInFlight.load(std::memory_order_seq_cst);
     }
+    // R-R3-45: what the tap takes, published with it while no callback runs.
+    m_masterMixTapSpeakersOnly.store(speakersOnly, std::memory_order_seq_cst);
     m_masterMixAudioTap.store(tap, std::memory_order_seq_cst);
     m_masterMixTapAdmissionClosed.store(false, std::memory_order_seq_cst);
+}
+
+void AudioEngine::setHeadphonesMixAudioTap(MasterMixAudioTap* tap)
+{
+    // R-R3-45: the master tap's gate, on its own slot.
+    std::lock_guard<std::mutex> controlLock(m_headphonesMixTapControlMutex);
+    m_headphonesMixTapAdmissionClosed.store(true, std::memory_order_seq_cst);
+    unsigned calls = m_headphonesMixTapCallsInFlight.load(std::memory_order_seq_cst);
+    while (calls != 0) {
+        m_headphonesMixTapCallsInFlight.wait(calls, std::memory_order_relaxed);
+        calls = m_headphonesMixTapCallsInFlight.load(std::memory_order_seq_cst);
+    }
+    m_headphonesMixAudioTap.store(tap, std::memory_order_seq_cst);
+    m_headphonesMixTapAdmissionClosed.store(false, std::memory_order_seq_cst);
+}
+
+void AudioEngine::clearHeadphonesMixAudioTap(MasterMixAudioTap* tap)
+{
+    if (tap == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> controlLock(m_headphonesMixTapControlMutex);
+    m_headphonesMixTapAdmissionClosed.store(true, std::memory_order_seq_cst);
+    unsigned calls = m_headphonesMixTapCallsInFlight.load(std::memory_order_seq_cst);
+    while (calls != 0) {
+        m_headphonesMixTapCallsInFlight.wait(calls, std::memory_order_relaxed);
+        calls = m_headphonesMixTapCallsInFlight.load(std::memory_order_seq_cst);
+    }
+    MasterMixAudioTap* expected = tap;
+    m_headphonesMixAudioTap.compare_exchange_strong(expected, nullptr,
+                                                    std::memory_order_seq_cst,
+                                                    std::memory_order_seq_cst);
+    m_headphonesMixTapAdmissionClosed.store(false, std::memory_order_seq_cst);
 }
 
 void AudioEngine::clearMasterMixAudioTap(MasterMixAudioTap* tap)
@@ -1688,22 +1865,26 @@ void AudioEngine::skipSliceTaps(int sliceId, int frames) noexcept
 
 void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
 {
-    if (m_mixAdmissionClosed.load(std::memory_order_acquire)) {
+    // R-R3-45 fix wave: seq_cst on both sides of this gate (a Dekker
+    // pattern: store-closed then load-count against increment then
+    // load-closed), as the tap gates beside it already are. Acquire and
+    // release alone let each side miss the other's write.
+    if (m_mixAdmissionClosed.load(std::memory_order_seq_cst)) {
         return;
     }
-    m_mixRegionsInFlight.fetch_add(1, std::memory_order_acq_rel);
+    m_mixRegionsInFlight.fetch_add(1, std::memory_order_seq_cst);
     struct MixRegionGuard {
         std::atomic<unsigned>& count;
         ~MixRegionGuard()
         {
-            if (count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            if (count.fetch_sub(1, std::memory_order_seq_cst) == 1) {
                 count.notify_all();
             }
         }
     } mixRegion{m_mixRegionsInFlight};
     // Pairs with the control thread's close-before-invalidate sequence. If
     // close raced the first check, acknowledge without touching either mix.
-    if (m_mixAdmissionClosed.load(std::memory_order_acquire)) {
+    if (m_mixAdmissionClosed.load(std::memory_order_seq_cst)) {
         return;
     }
 
@@ -1860,13 +2041,12 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     if (vaxValid) {
         const int vaxIdx = vaxCh - 1;
         // Distinct from `mix` scratch below: that one is reserved for the
-        // master-mix accumulate path. Grows once per thread via resize(),
-        // zero-alloc thereafter.
-        static thread_local std::vector<float> vaxScratch;
-        const int stereoFloats = frames * 2;
-        if (static_cast<int>(vaxScratch.size()) < stereoFloats) {
-            vaxScratch.resize(static_cast<size_t>(stereoFloats));
-        }
+        // master-mix accumulate path. R-R3-45 fix wave: an engine member
+        // sized off this thread with the mix scratch (never resized here);
+        // the loop below drains any backlog a capacity at a time.
+        std::vector<float>& vaxScratch = m_vaxScratch;
+        const int vaxDrainFrames =
+            std::min(frames, m_mixScratchFrames.load(std::memory_order_seq_cst));
         // Mute wins over gain: when muted the channel's block is taken and
         // not pushed; spec says "tags / level UI still reflect routing,
         // but no downstream audio". Taking it keeps the mix in step.
@@ -1880,7 +2060,7 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         // Normally one block. More only after a slice on the channel was
         // late: then the backlog every slice has queued goes out at once.
         int mixedVax = 0;
-        while ((mixedVax = m_vaxMix.tryDrain(vaxCh, vaxScratch.data(), frames)) > 0) {
+        while ((mixedVax = m_vaxMix.tryDrain(vaxCh, vaxScratch.data(), vaxDrainFrames)) > 0) {
             if (!muted && vaxBus != nullptr && vaxBus->isOpen()) {
                 vaxBus->push(reinterpret_cast<const char*>(vaxScratch.data()),
                              static_cast<qint64>(mixedVax) * 2
@@ -1893,10 +2073,18 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // per-block vector reuse costs zero allocation after the first block
     // per thread. Channel count = 2 is intentionally hard-coded here:
     // the MasterMixer contract and the DSP pipeline both emit stereo.
-    static thread_local std::vector<float> mix;
-    if (static_cast<int>(mix.size()) < frames * 2) {
-        mix.resize(static_cast<size_t>(frames) * 2);
-    }
+    //
+    // R-R3-45 fix wave: the scratch is owned by the engine and sized off
+    // this thread (constructor, setDspBlockSize, start), so nothing here
+    // allocates. Each drain takes at most the scratch's frames. A producer
+    // whose blocks are larger than that (not seen: the scratch starts at
+    // the mixer ring's own 4096-frame floor and follows the DSP block size)
+    // leaves the rest queued in its ring, the queue grows every period, and
+    // the ring's drop-oldest overflow then discards audio. So the fix for
+    // such a block is to size the scratch first, which setDspBlockSize does.
+    std::vector<float>& mix = m_mixScratch;
+    const int drainFrames =
+        std::min(frames, m_mixScratchFrames.load(std::memory_order_seq_cst));
 
     // Phase 3F: the mixer decides whether a block leaves, not us. It
     // returns 0 until every slice feeding the mix this period has
@@ -1910,11 +2098,8 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     //
     // R-R3-45: the same drain builds the headphones sum, the slices routed
     // there, so both outputs are paced by one barrier.
-    static thread_local std::vector<float> hpMix;
-    if (static_cast<int>(hpMix.size()) < frames * 2) {
-        hpMix.resize(static_cast<size_t>(frames) * 2);
-    }
-    const int mixed = m_masterMix.tryDrain(mix.data(), hpMix.data(), frames);
+    std::vector<float>& hpMix = m_hpMixScratch;
+    const int mixed = m_masterMix.tryDrain(mix.data(), hpMix.data(), drainFrames);
 
     // Drain the anti-VOX reference in the same call stack, so both mixes are
     // paced by their own barrier over the same period.
@@ -1939,13 +2124,11 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // `avMix`, matching upstream, where each mixer carries its own volume
     // and the anti-VOX instance is created at 1.0 (cmaster.c:167
     // [v2.10.3.15]).
-    static thread_local std::vector<float> avMix;
-    if (static_cast<int>(avMix.size()) < frames * 2) {
-        avMix.resize(static_cast<size_t>(frames) * 2);
-    }
-    const int avFrames = m_antiVoxMix.tryDrain(avMix.data(), frames);
+    // R-R3-45 fix wave: an engine member sized off this thread, as `mix`.
+    std::vector<float>& avMix = m_avMixScratch;
+    const int avFrames = m_antiVoxMix.tryDrain(avMix.data(), drainFrames);
     if (avFrames > 0) {
-        // DirectConnection only: avMix is thread_local scratch and the next
+        // DirectConnection only: avMix is the engine's scratch and the next
         // block overwrites it. See the signal's contract in AudioEngine.h.
         //
         // The consumer, TxWorkerThread::onAntiVoxBlockReady, therefore runs
@@ -1973,14 +2156,16 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         if (!m_masterMixTapAdmissionClosed.load(std::memory_order_seq_cst)) {
             MasterMixAudioTap* tap =
                 m_masterMixAudioTap.load(std::memory_order_seq_cst);
-            if (tap != nullptr) {
+            if (tap != nullptr
+                && m_masterMixTapSpeakersOnly.load(std::memory_order_seq_cst)) {
+                // R-R3-45: an app that plays the headphones mix on its own
+                // stream gets the speakers' mix alone here.
+                tap->consume(mix.data(), mixed, kMasterMixSampleRateHz);
+            } else if (tap != nullptr) {
                 // R-R3-45: the station's program is every receiver, on
                 // whichever local output it plays, so the local speakers or
                 // headphones choice cannot change it either.
-                static thread_local std::vector<float> program;
-                if (static_cast<int>(program.size()) < stereoFloats) {
-                    program.resize(static_cast<size_t>(stereoFloats));
-                }
+                std::vector<float>& program = m_programScratch;
                 for (int i = 0; i < stereoFloats; ++i) {
                     program[static_cast<size_t>(i)] = mix[static_cast<size_t>(i)]
                         + hpMix[static_cast<size_t>(i)];
@@ -1990,6 +2175,22 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         }
         if (m_masterMixTapCallsInFlight.fetch_sub(1, std::memory_order_seq_cst) == 1) {
             m_masterMixTapCallsInFlight.notify_all();
+        }
+    }
+
+    // R-R3-45: the headphones mix for a remote window's headphones stream,
+    // on its own gate, before any local device handling.
+    if (!m_headphonesMixTapAdmissionClosed.load(std::memory_order_seq_cst)) {
+        m_headphonesMixTapCallsInFlight.fetch_add(1, std::memory_order_seq_cst);
+        if (!m_headphonesMixTapAdmissionClosed.load(std::memory_order_seq_cst)) {
+            MasterMixAudioTap* tap =
+                m_headphonesMixAudioTap.load(std::memory_order_seq_cst);
+            if (tap != nullptr) {
+                tap->consume(hpMix.data(), mixed, kMasterMixSampleRateHz);
+            }
+        }
+        if (m_headphonesMixTapCallsInFlight.fetch_sub(1, std::memory_order_seq_cst) == 1) {
+            m_headphonesMixTapCallsInFlight.notify_all();
         }
     }
 
@@ -2554,8 +2755,34 @@ void AudioEngine::setDspSampleRate(int rate)
     emit dspSampleRateChanged(rate);
 }
 
+void AudioEngine::ensureMixScratchFrames(int frames)
+{
+    // R-R3-45 fix wave: owner thread. Grows the DSP thread's mix scratch
+    // while no block is being mixed: the same close-then-drain gate
+    // setSliceStreaming uses, so rxBlockReady never sees a vector being
+    // replaced and never allocates itself.
+    if (frames <= m_mixScratchFrames.load(std::memory_order_acquire)) {
+        return;
+    }
+    m_mixAdmissionClosed.store(true, std::memory_order_seq_cst);
+    unsigned inFlight = m_mixRegionsInFlight.load(std::memory_order_seq_cst);
+    while (inFlight != 0) {
+        m_mixRegionsInFlight.wait(inFlight, std::memory_order_seq_cst);
+        inFlight = m_mixRegionsInFlight.load(std::memory_order_seq_cst);
+    }
+    const auto floats = static_cast<size_t>(frames) * 2;
+    m_mixScratch.assign(floats, 0.0f);
+    m_hpMixScratch.assign(floats, 0.0f);
+    m_programScratch.assign(floats, 0.0f);
+    m_avMixScratch.assign(floats, 0.0f);
+    m_vaxScratch.assign(floats, 0.0f);
+    m_mixScratchFrames.store(frames, std::memory_order_seq_cst);
+    m_mixAdmissionClosed.store(false, std::memory_order_seq_cst);
+}
+
 void AudioEngine::setDspBlockSize(int blockSize)
 {
+    ensureMixScratchFrames(blockSize);
     AppSettings::instance().setValue(QStringLiteral("audio/DspBlockSize"),
                                      QString::number(blockSize));
     // TODO(sub-phase-12-dsp-live-apply): delegate to WdspEngine once

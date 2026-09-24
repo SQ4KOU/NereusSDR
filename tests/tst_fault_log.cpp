@@ -16,12 +16,29 @@
 //                 lands finds nothing at construction and the real data
 //                 after reload(). AI-assisted transformation via
 //                 Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd (KG4VCF), R-R3-47 / R-R3-22: every record names
+//                 its device and says what happened in plain words; records
+//                 saved before carry them too; a remote window's copy is
+//                 replaced from the Core's list without saving; the Core's
+//                 history (here an RF-Kit fault it recorded) survives a Core
+//                 restart. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 #include "core/AppSettings.h"
 #include "core/FaultLog.h"
 #include "core/settings/SettingsProxy.h"
+#include "core/Rf2ksConnection.h"
+#include "core/TxInterlockPolicy.h"
+#include "models/AccessoryDataModel.h"
+#include "models/RadioModel.h"
+#include "OperatorWording.h"
+
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTemporaryDir>
 
 namespace {
 // RAII guard so a QVERIFY/QCOMPARE failure partway through
@@ -54,6 +71,12 @@ private slots:
     void likelyCauseSwrTrip();
     void persistsAcrossInstances();
     void reloadPicksUpValueDeliveredThroughRemoteBackend();
+    // R-R3-47 / R-R3-22
+    void recordsNameTheirDeviceAndSayWhatHappened();
+    void recordsSavedBeforeCarryDeviceAndText();
+    void mirroredListReplacesWithoutSaving();
+    void historySurvivesACoreRestart();
+    void interlockAndPowerCapSurviveACoreRestart();
 };
 
 // Capture 12 events and verify only the 10 newest are retained, newest first.
@@ -169,6 +192,197 @@ void FaultLogTest::reloadPicksUpValueDeliveredThroughRemoteBackend()
     QCOMPARE(log.events().first().state, QStringLiteral("FAULT_PROTECT"));
     QCOMPARE(log.events().first().likelyCause, QStringLiteral("SWR trip"));
     QVERIFY(qFuzzyCompare(log.events().first().fwdAtFaultW, 1800.0f));
+}
+
+// R-R3-47: a record names its device and says what happened in plain words;
+// a notice (a Tuner Genius or RF-Kit problem) keeps what the device said.
+void FaultLogTest::recordsNameTheirDeviceAndSayWhatHappened()
+{
+    NereusSDR::AppSettings::instance().clear();
+    NereusSDR::FaultLog pgxl(QStringLiteral("PGXL_FaultHistory"));
+    NereusSDR::FaultEvent ev;
+    ev.whenMs = 1790000000000;
+    ev.state = QStringLiteral("FAULT");
+    ev.fwdAtFaultW = 1000.0f;
+    ev.swrAtFault = 3.0f;
+    ev.tempAtFaultC = 60.0f;
+    ev.likelyCause = NereusSDR::FaultLog::likelyCauseFor(1000.0f, 3.0f, 60.0f);
+    pgxl.capture(ev);
+    const NereusSDR::FaultEvent got = pgxl.events().first();
+    QCOMPARE(got.device, QStringLiteral("pgxl"));
+    QCOMPARE(got.text, QStringLiteral("The Power Genius reported a fault. Likely cause: high SWR."));
+    QVERIFY(NereusSDR::OperatorWording::isPlain(got.text));
+
+    NereusSDR::FaultLog tgxl(QStringLiteral("TGXL_FaultHistory"));
+    NereusSDR::FaultLog rfkit(QStringLiteral("RfKit_FaultHistory"));
+    tgxl.captureNotice(QStringLiteral("link"),
+                       QStringLiteral("The Tuner Genius stopped answering."), QString());
+    rfkit.captureNotice(QStringLiteral("interface"),
+                        QStringLiteral("The RF-Kit amplifier reported a problem."),
+                        QStringLiteral("CAT timeout"));
+    QCOMPARE(tgxl.events().first().device, QStringLiteral("tgxl"));
+    QCOMPARE(rfkit.events().first().device, QStringLiteral("rfkit"));
+    QCOMPARE(rfkit.events().first().detail, QStringLiteral("CAT timeout"));
+    QVERIFY(rfkit.events().first().whenMs > 0);
+    for (const QString& text : { tgxl.events().first().text, rfkit.events().first().text,
+                                 NereusSDR::FaultLog::plainTextFor(QStringLiteral("pgxl"),
+                                     QStringLiteral("FAULT"), QStringLiteral("Overtemp")),
+                                 NereusSDR::FaultLog::plainTextFor(QStringLiteral("pgxl"),
+                                     QStringLiteral("FAULT"), QStringLiteral("Drive too high")),
+                                 NereusSDR::FaultLog::plainTextFor(QStringLiteral("pgxl"),
+                                     QStringLiteral("FAULT"), QStringLiteral("Unknown")) }) {
+        QVERIFY2(NereusSDR::OperatorWording::isPlain(text), qPrintable(text));
+    }
+
+    // The JSON the settings key and the Core's object carry has all of it.
+    const QJsonObject saved = QJsonDocument::fromJson(
+        NereusSDR::AppSettings::instance().value(QStringLiteral("RfKit_FaultHistory"))
+            .toString().toUtf8()).array().first().toObject();
+    QCOMPARE(saved.value(QStringLiteral("device")).toString(), QStringLiteral("rfkit"));
+    QCOMPARE(saved.value(QStringLiteral("state")).toString(), QStringLiteral("interface"));
+    QCOMPARE(saved.value(QStringLiteral("detail")).toString(), QStringLiteral("CAT timeout"));
+    QVERIFY(!saved.value(QStringLiteral("text")).toString().isEmpty());
+    NereusSDR::AppSettings::instance().clear();
+}
+
+// R-R3-47: a history saved before device and text existed reads with both.
+void FaultLogTest::recordsSavedBeforeCarryDeviceAndText()
+{
+    NereusSDR::AppSettings::instance().clear();
+    NereusSDR::AppSettings::instance().setValue(QStringLiteral("PGXL_FaultHistory"),
+        QStringLiteral("[{\"whenMs\":99000,\"state\":\"FAULT\",\"fwdAtFaultW\":1800,"
+                       "\"swrAtFault\":1.2,\"tempAtFaultC\":90,\"likelyCause\":\"Overtemp\"}]"));
+    NereusSDR::FaultLog log(QStringLiteral("PGXL_FaultHistory"));
+    QCOMPARE(log.events().size(), 1);
+    QCOMPARE(log.events().first().device, QStringLiteral("pgxl"));
+    QCOMPARE(log.events().first().text,
+             QStringLiteral("The Power Genius reported a fault. Likely cause: the amplifier was "
+                            "too hot."));
+    NereusSDR::AppSettings::instance().clear();
+}
+
+// R-R3-47: a remote window's copy takes the Core's list as it is and saves
+// nothing (the Core keeps the history).
+void FaultLogTest::mirroredListReplacesWithoutSaving()
+{
+    NereusSDR::AppSettings::instance().clear();
+    NereusSDR::FaultLog log(QStringLiteral("TGXL_FaultHistory"));
+    QSignalSpy changed(&log, &NereusSDR::FaultLog::changed);
+    log.applyMirroredJson(QStringLiteral(
+        "[{\"whenMs\":5,\"device\":\"tgxl\",\"state\":\"link\","
+        "\"text\":\"The Tuner Genius stopped answering.\",\"detail\":\"\"}]"));
+    QCOMPARE(changed.count(), 1);
+    QCOMPARE(log.events().size(), 1);
+    QCOMPARE(log.events().first().text, QStringLiteral("The Tuner Genius stopped answering."));
+    QVERIFY(!NereusSDR::AppSettings::instance().contains(QStringLiteral("TGXL_FaultHistory")));
+    log.applyMirroredJson(QStringLiteral("[]"));
+    QVERIFY(log.events().isEmpty());
+    QCOMPARE(changed.count(), 2);
+}
+
+namespace {
+
+// What the Core's settings file on disk holds for `key` right now (never
+// written by the test: only the Core's own save path writes it).
+QString onDisk(const QString& key)
+{
+    NereusSDR::AppSettings disk(NereusSDR::AppSettings::instance().filePath());
+    disk.load();
+    return disk.value(key).toString();
+}
+
+// The Core stops without saving (a power loss): its settings in memory are
+// gone, and the next Core reads the file.
+void loseMemoryAndReload()
+{
+    NereusSDR::AppSettings::instance().clear();
+    NereusSDR::AppSettings::instance().load();
+}
+
+} // namespace
+
+// R-R3-47 / R-R3-22 (I3): a fault the Core records reaches its settings
+// file through the Core's own save path, shortly after it happens, so a
+// Core that loses power and starts again has it, and says so on its
+// `accessoryData` object. Clearing the history reaches the file the same
+// way. The test never writes the file itself.
+void FaultLogTest::historySurvivesACoreRestart()
+{
+    const QString file = NereusSDR::AppSettings::instance().filePath();
+    QVERIFY(!file.isEmpty());
+    QFile::remove(file);
+    NereusSDR::AppSettings::instance().clear();
+    {
+        NereusSDR::RadioModel core;
+        // The RF-Kit reports an interface error (the amp's own words).
+        core.rfKitConnection()->injectJsonForTesting(
+            QStringLiteral("/operational-interface"),
+            R"({"operational_interface":"UDP","error":"CAT timeout"})");
+        QCOMPARE(core.rfkitFaultLog()->events().size(), 1);
+        QVERIFY(core.accessoryDataModel()->rfkitFaults().contains(QStringLiteral("CAT timeout")));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            onDisk(QStringLiteral("RfKit_FaultHistory")).contains(QStringLiteral("CAT timeout")),
+            3000);
+        // No clean stop: the model goes without a save of its own.
+    }
+    loseMemoryAndReload();
+
+    {
+        NereusSDR::RadioModel restarted;
+        QCOMPARE(restarted.rfkitFaultLog()->events().size(), 1);
+        const NereusSDR::FaultEvent ev = restarted.rfkitFaultLog()->events().first();
+        QCOMPARE(ev.device, QStringLiteral("rfkit"));
+        QCOMPARE(ev.detail, QStringLiteral("CAT timeout"));
+        QVERIFY(NereusSDR::OperatorWording::isPlain(ev.text));
+        QVERIFY(restarted.accessoryDataModel()->rfkitFaults().contains(
+            QStringLiteral("CAT timeout")));
+
+        // A window clears the history: the file follows.
+        QString reason;
+        QVERIFY(restarted.clearAccessoryFaultsForStation(QStringLiteral("rfkit"), &reason));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !onDisk(QStringLiteral("RfKit_FaultHistory")).contains(QStringLiteral("CAT timeout")),
+            3000);
+    }
+    loseMemoryAndReload();
+    {
+        NereusSDR::RadioModel again;
+        QVERIFY(again.rfkitFaultLog()->events().isEmpty());
+    }
+    NereusSDR::AppSettings::instance().clear();
+    QFile::remove(file);
+}
+
+// I3: the interlock policy and the output limit a window sets reach the
+// Core's settings file through the Core's own save path.
+void FaultLogTest::interlockAndPowerCapSurviveACoreRestart()
+{
+    const QString file = NereusSDR::AppSettings::instance().filePath();
+    QFile::remove(file);
+    NereusSDR::AppSettings::instance().clear();
+    {
+        NereusSDR::RadioModel core;
+        QString reason;
+        QVERIFY(core.setTxInterlockPolicyForStation(2, 1500, true, 2.5, &reason));
+        QVERIFY(core.setPgxlPowerCapForStation(true, 800, &reason));
+        QTRY_VERIFY_WITH_TIMEOUT(onDisk(QStringLiteral("PGXL_PowerCapW")) == QStringLiteral("800"),
+                                 3000);
+    }
+    loseMemoryAndReload();
+    {
+        NereusSDR::RadioModel restarted;
+        QCOMPARE(restarted.txInterlockPolicy()->mode(), NereusSDR::TxInterlockPolicy::Block);
+        QCOMPARE(restarted.txInterlockPolicy()->graceMs(), 1500);
+        QVERIFY(restarted.txInterlockPolicy()->swrGateEnabled());
+        QCOMPARE(NereusSDR::AppSettings::instance().value(
+                     QStringLiteral("PGXL_PowerCapEnabled")).toString(),
+                 QStringLiteral("True"));
+        QCOMPARE(NereusSDR::AppSettings::instance().value(
+                     QStringLiteral("PGXL_PowerCapW")).toString(),
+                 QStringLiteral("800"));
+    }
+    NereusSDR::AppSettings::instance().clear();
+    QFile::remove(file);
 }
 
 QTEST_GUILESS_MAIN(FaultLogTest)

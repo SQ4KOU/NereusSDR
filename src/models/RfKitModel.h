@@ -26,11 +26,19 @@
 // Modification history (NereusSDR):
 //   2026-09-23  J.J. Boyd / KG4VCF  Created (R-R3-47, R-R3-22). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-48: the antenna and
+//                                    tuner rows, the operating interface,
+//                                    band follow, and the Core's
+//                                    controller owning the connection
+//                                    state (remoteRfKitControlVersion 2).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include "core/Rf2ksConnection.h"
 #include "models/TunerModel.h"
 
 #include <QByteArray>
+#include <QList>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -38,8 +46,6 @@
 
 namespace NereusSDR {
 
-class Rf2ksConnection;
-struct RfKitPowerSnapshot;
 
 class RfKitModel : public QObject {
     Q_OBJECT
@@ -61,10 +67,44 @@ class RfKitModel : public QObject {
     Q_PROPERTY(double temperatureC READ temperatureC NOTIFY statusChanged)
     Q_PROPERTY(double voltageV READ voltageV NOTIFY statusChanged)
     Q_PROPERTY(double currentA READ currentA NOTIFY statusChanged)
+    // R-R3-47: the amp's operating interface as it reports it ("TCI",
+    // "UDP", "CAT", "UNIV"; empty before the first reading).
+    Q_PROPERTY(QString operationalInterface READ operationalInterface NOTIFY statusChanged)
+    // R-R3-47: the antenna row. Bit N-1 of a mask is internal antenna N
+    // (1 to 4): present is every internal antenna the amp lists, disabled
+    // the ones it lists as disabled. The active antenna is a number (0:
+    // none reported) and whether it is an external one.
+    Q_PROPERTY(int antennaPresentMask READ antennaPresentMask NOTIFY statusChanged)
+    Q_PROPERTY(int antennaDisabledMask READ antennaDisabledMask NOTIFY statusChanged)
+    Q_PROPERTY(int activeAntennaNumber READ activeAntennaNumber NOTIFY statusChanged)
+    Q_PROPERTY(bool activeAntennaExternal READ activeAntennaExternal NOTIFY statusChanged)
+    // R-R3-47: the tuner row, as /tuner reports it.
+    Q_PROPERTY(NereusSDR::RfKitModel::TunerMode tunerMode READ tunerMode NOTIFY statusChanged)
+    Q_PROPERTY(QString tunerSetup READ tunerSetup NOTIFY statusChanged)
+    Q_PROPERTY(int tunerInductanceNh READ tunerInductanceNh NOTIFY statusChanged)
+    Q_PROPERTY(int tunerCapacitancePf READ tunerCapacitancePf NOTIFY statusChanged)
+    Q_PROPERTY(int tunerFrequencyKhz READ tunerFrequencyKhz NOTIFY statusChanged)
+    Q_PROPERTY(int tunerSegmentKhz READ tunerSegmentKhz NOTIFY statusChanged)
+    // R-R3-48: whether the amp follows the radio's band through the TCI
+    // server, and the address and port to enter on the amp when it does not.
+    Q_PROPERTY(NereusSDR::TunerModel::BandFollow bandFollow READ bandFollow NOTIFY bandFollowChanged)
+    Q_PROPERTY(QString bandFollowAddress READ bandFollowAddress NOTIFY bandFollowChanged)
+    Q_PROPERTY(int bandFollowPort READ bandFollowPort NOTIFY bandFollowChanged)
 
 public:
     using ConnectionPhase = TunerModel::ConnectionPhase;
     using StationConnectionState = TunerModel::StationConnectionState;
+    using BandFollow = TunerModel::BandFollow;
+
+    /// The tuner's mode. Wire values are fixed; new ones are only appended.
+    enum class TunerMode {
+        Unknown = 0,     ///< no reading yet, or a word this build does not know
+        Bypass = 1,      ///< BYPASS
+        Manual = 2,      ///< MANUAL
+        AutoTuning = 3,  ///< AUTO_TUNING: a tune is running
+        Auto = 4,        ///< AUTO
+    };
+    Q_ENUM(TunerMode)
 
     /// Why a window cannot change this object: the Core refuses every write.
     static QString readOnlyReason();
@@ -88,6 +128,34 @@ public:
     double temperatureC() const { return m_temperatureC; }
     double voltageV() const { return m_voltageV; }
     double currentA() const { return m_currentA; }
+    QString operationalInterface() const { return m_operationalInterface; }
+    int antennaPresentMask() const { return m_antennaPresentMask; }
+    int antennaDisabledMask() const { return m_antennaDisabledMask; }
+    int activeAntennaNumber() const { return m_activeAntennaNumber; }
+    bool activeAntennaExternal() const { return m_activeAntennaExternal; }
+    TunerMode tunerMode() const { return m_tunerMode; }
+    QString tunerSetup() const { return m_tunerSetup; }
+    int tunerInductanceNh() const { return m_tunerInductanceNh; }
+    int tunerCapacitancePf() const { return m_tunerCapacitancePf; }
+    int tunerFrequencyKhz() const { return m_tunerFrequencyKhz; }
+    int tunerSegmentKhz() const { return m_tunerSegmentKhz; }
+    BandFollow bandFollow() const { return m_bandFollow; }
+    QString bandFollowAddress() const { return m_bandFollowAddress; }
+    int bandFollowPort() const { return m_bandFollowPort; }
+
+    /// The whole connection state (a Core-side controller builds on it).
+    StationConnectionState stationConnectionState() const { return m_connection; }
+
+    /// R-R3-48: the band-follow line the amp page and applet show.
+    QString bandFollowText() const;
+
+    /// R-R3-47: the Core's StationRfKitController reports the connection
+    /// state through setStationConnectionState(); the bound connection
+    /// then feeds only the amp's readings and identity.
+    void setConnectionStateOwnedByController(bool owned) { m_controllerOwnsConnection = owned; }
+
+    /// R-R3-48: band follow as the Core (or a local window) sees it.
+    void setBandFollow(BandFollow state, const QString& address, int port);
 
     /// Follow `connection`: its power, operate and info reports, and its
     /// connect, drop and failure as the connection phase. The Core and a
@@ -108,6 +176,20 @@ public:
     /// One /info report.
     void applyInfo(const QString& device, const QString& softwareVersion,
                    const QString& customName);
+    /// R-R3-47: one /operational-interface report.
+    void applyOperationalInterface(const QString& iface);
+    /// R-R3-47: one /antennas report.
+    void applyAntennas(const QList<RfKitAntenna>& antennas);
+    /// R-R3-47: one /antennas/active report.
+    void applyActiveAntenna(const RfKitAntenna& antenna);
+    /// R-R3-47: one /tuner report.
+    void applyTuner(const RfKitTunerSnapshot& tuner);
+
+    /// The antenna list and active antenna as the applet draws them.
+    QList<RfKitAntenna> antennas() const;
+    RfKitAntenna activeAntenna() const;
+    /// The tuner row as the applet draws it.
+    RfKitTunerSnapshot tuner() const;
 
     /// A remote window: one of the Core's values arriving.
     bool applyStationValue(const QByteArray& propertyName, const QVariant& value);
@@ -115,6 +197,7 @@ public:
 signals:
     void stationConnectionChanged();
     void statusChanged();
+    void bandFollowChanged();
 
 private:
     void publishConnection(const StationConnectionState& next);
@@ -123,6 +206,21 @@ private:
     QPointer<Rf2ksConnection> m_conn;
     StationConnectionState m_connection;
     bool m_enabled{true};
+    bool m_controllerOwnsConnection{false};
+    QString m_operationalInterface;
+    int m_antennaPresentMask{0};
+    int m_antennaDisabledMask{0};
+    int m_activeAntennaNumber{0};
+    bool m_activeAntennaExternal{false};
+    TunerMode m_tunerMode{TunerMode::Unknown};
+    QString m_tunerSetup;
+    int m_tunerInductanceNh{0};
+    int m_tunerCapacitancePf{0};
+    int m_tunerFrequencyKhz{0};
+    int m_tunerSegmentKhz{0};
+    BandFollow m_bandFollow{BandFollow::Off};
+    QString m_bandFollowAddress;
+    int m_bandFollowPort{0};
     bool m_present{false};
     bool m_operate{false};
     double m_forwardPowerW{0.0};

@@ -29,6 +29,9 @@
 //                remote rx_sensors from the Core's mirrored meter; a late
 //                "cannot send" answer unsubscribes the apps and tells them.
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-48 / R-R3-25: the station server tells the operator
+//                why a TX profile or XIT change was not made. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -1267,6 +1270,59 @@ bool TciServer::start(quint16 port)
     return start(QHostAddress(QHostAddress::LocalHost), port);
 }
 
+bool TciServer::start(const QList<QHostAddress>& bindAddresses, quint16 port)
+{
+    if (bindAddresses.isEmpty()) {
+        return false;
+    }
+    if (!start(bindAddresses.constFirst(), port)) {
+        return false;
+    }
+    // R-R3-48: the remaining addresses share the first one's port, so an
+    // app reaches the same server whichever address it uses.
+    const quint16 boundPort = m_server->serverPort();
+    for (qsizetype i = 1; i < bindAddresses.size(); ++i) {
+        auto* extra = new QWebSocketServer(QStringLiteral("NereusSDR-TCI"),
+                                           QWebSocketServer::NonSecureMode, this);
+        if (!extra->listen(bindAddresses.at(i), boundPort)) {
+            const QString errStr = extra->errorString();
+            qCWarning(lcTci) << "TciServer: failed to listen on"
+                             << bindAddresses.at(i).toString() << "port" << boundPort
+                             << errStr;
+            delete extra;
+            stop();
+            emit errorOccurred(errStr);
+            return false;
+        }
+        connect(extra, &QWebSocketServer::newConnection,
+                this, &TciServer::onNewConnection);
+        m_extraServers.append(extra);
+        qCInfo(lcTci) << "TciServer: also listening on" << bindAddresses.at(i).toString()
+                      << "port" << boundPort;
+    }
+    return true;
+}
+
+QList<QHostAddress> TciServer::listenAddresses() const
+{
+    QList<QHostAddress> addresses;
+    if (m_server && m_server->isListening()) {
+        addresses.append(m_server->serverAddress());
+    }
+    for (QWebSocketServer* extra : m_extraServers) {
+        if (extra && extra->isListening()) {
+            addresses.append(extra->serverAddress());
+        }
+    }
+    return addresses;
+}
+
+void TciServer::setStationReceiveOnly(bool receiveOnly)
+{
+    m_stationReceiveOnly = receiveOnly;
+    m_protocol->setStationReceiveOnly(receiveOnly);
+}
+
 bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
 {
     if (m_server) {
@@ -1421,6 +1477,11 @@ void TciServer::stop()
     m_server->close();
     delete m_server;
     m_server = nullptr;
+    for (QWebSocketServer* extra : std::as_const(m_extraServers)) {
+        extra->close();
+        delete extra;
+    }
+    m_extraServers.clear();
 
     qCInfo(lcTci) << "TciServer: stopped";
     emit serverStopped();
@@ -1447,8 +1508,17 @@ quint16 TciServer::port() const
 
 void TciServer::onNewConnection()
 {
-    while (m_server->hasPendingConnections()) {
-        auto* ws = m_server->nextPendingConnection();
+    // R-R3-48: any of the listening servers (the station network's or this
+    // computer's) may have the new connection.
+    auto* server = qobject_cast<QWebSocketServer*>(sender());
+    if (!server) {
+        server = m_server;
+    }
+    if (!server) {
+        return;
+    }
+    while (server->hasPendingConnections()) {
+        auto* ws = server->nextPendingConnection();
 
         // Phase 26 review finding #7: bound incoming binary (and text) frame
         // size against hostile or malformed frames from a misbehaving local
@@ -2499,6 +2569,16 @@ void TciServer::onTextMessageReceived(const QString& msg)
         // NereusSDR simplification: TryAcquire/Release runs directly in the
         // main-thread slot; no per-listener thread lock needed because all
         // WebSocket callbacks run on the same Qt event loop.
+        // M1 (R-R3-48 / R-R3-25): a TX profile or XIT change on the
+        // receive-only station server is not made (TciProtocol answers with
+        // the kept value); the operator hears why, off the wire.
+        if (m_stationReceiveOnly && !m_remoteWindow
+            && TciProtocol::isTransmitSettingChange(trimmed)) {
+            qCInfo(lcTci) << "TciServer: transmit setting refused on the station server"
+                          << trimmed << ", peer" << session->peer;
+            raiseOperatorNotice(session->peer,
+                                QString::fromLatin1(kStationTransmitRefusedReason));
+        }
         {
             const QString kTrx = QStringLiteral("trx:");
             if (trimmed.startsWith(kTrx)) {
@@ -2514,16 +2594,21 @@ void TciServer::onTextMessageReceived(const QString& msg)
                     const bool wantsMox = (parts.at(1).trimmed().compare(
                         QLatin1String("true"), Qt::CaseInsensitive) == 0);
 
-                    if (m_remoteWindow) {
+                    if (m_remoteWindow || m_stationReceiveOnly) {
                         // R-R3-42 / R-R3-25: no TX audio lock and no
-                        // TX_CHRONO in a remote window. TciProtocol answers
-                        // trx:N,false without touching MOX; the operator
-                        // hears why.
+                        // TX_CHRONO in a remote window, nor on the Core's
+                        // station server until remote transmit (R-R3-48).
+                        // TciProtocol answers trx:N,false without touching
+                        // MOX; the operator hears why.
                         if (wantsMox) {
-                            qCInfo(lcTci) << "TciServer: transmit refused in a remote window, peer"
-                                          << session->peer;
+                            qCInfo(lcTci) << "TciServer: transmit refused"
+                                          << (m_remoteWindow ? "in a remote window"
+                                                             : "on the station server")
+                                          << ", peer" << session->peer;
                             raiseOperatorNotice(session->peer,
-                                                QString::fromLatin1(kRemoteTransmitRefusedReason));
+                                                QString::fromLatin1(m_remoteWindow
+                                                    ? kRemoteTransmitRefusedReason
+                                                    : kStationTransmitRefusedReason));
                         }
                     } else if (hasTciArg && wantsMox) {
                         // Client wants TX audio ownership.

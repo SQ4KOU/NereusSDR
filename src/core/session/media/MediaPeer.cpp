@@ -119,6 +119,8 @@ struct MediaPeer::Private {
     quint32 audioSsrc = 0;
     // R-R3-43: empty unless receiver audio streams were asked for.
     QList<quint32> receiverAudioSsrcs;
+    // R-R3-45: 0 unless the headphones mix was asked for.
+    quint32 headphonesAudioSsrc = 0;
     quint64 generation = 0;
     int remoteCandidateControls = 0;
     int localCandidateControls = 0;
@@ -151,7 +153,7 @@ MediaPeer::~MediaPeer()
 
 bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
                       int audioTargetBitrate, bool offerLosslessAudio,
-                      bool receiverAudioStreams)
+                      bool receiverAudioStreams, bool headphonesMixStream)
 {
     d->startRefusal = StartRefusal::None;
     if (d->started || !isCanonicalConnectionId(connectionId)) {
@@ -187,6 +189,8 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
     d->audioSsrc = audioSsrcForConnection(connectionId);
     d->receiverAudioSsrcs = receiverAudioStreams
         ? receiverAudioSsrcsForConnection(connectionId) : QList<quint32>{};
+    d->headphonesAudioSsrc = headphonesMixStream
+        ? headphonesAudioSsrcForConnection(connectionId) : 0;
     d->remoteCandidateControls = 0;
     d->localCandidateControls = 0;
     d->remoteDescriptionAccepted = false;
@@ -273,7 +277,8 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
                     return;
                 }
                 // R-R3-43: the main stream or a declared receiver stream;
-                // anything else is refused and reported, as always.
+                // R-R3-45: or the declared headphones mix. Anything else is
+                // refused and reported, as always.
                 if (packet.size() < IMediaTransport::kMinRawRtpBytes
                     || packet.size() > IMediaTransport::kMaxRawRtpBytes
                     || !self->isDeclaredAudioSsrc(rtpSsrc(packet))) {
@@ -330,6 +335,7 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
     IMediaTransport::StartOptions options{role, d->audioSsrc, audioTargetBitrate};
     options.offerLosslessAudio = offerLosslessAudio;
     options.receiverAudioSsrcs = d->receiverAudioSsrcs;
+    options.headphonesAudioSsrc = d->headphonesAudioSsrc;
     const bool backendStarted = transport->start(options);
     if (!self) {
         return false;
@@ -377,6 +383,7 @@ void MediaPeer::stopInternal(bool notify)
     d->connectionId.clear();
     d->audioSsrc = 0;
     d->receiverAudioSsrcs.clear();
+    d->headphonesAudioSsrc = 0;
 
     QPointer<IMediaTransport> transport = d->transport;
     d->transport.clear();
@@ -554,10 +561,32 @@ QList<quint32> MediaPeer::receiverAudioSsrcsForConnection(const QString& connect
     return ssrcs;
 }
 
+quint32 MediaPeer::headphonesAudioSsrc() const
+{
+    return d->headphonesAudioSsrc;
+}
+
+quint32 MediaPeer::headphonesAudioSsrcForConnection(const QString& connectionId)
+{
+    // Distinct from the main stream and from every receiver stream id,
+    // declared or not, so the set is the same whichever streams a
+    // connection declares.
+    const quint32 mainSsrc = audioSsrcForConnection(connectionId);
+    const QList<quint32> receivers = receiverAudioSsrcsForConnection(connectionId);
+    QByteArray identity("NereusSDR/media-headphones-ssrc/v1:");
+    identity.append(connectionId.toUtf8());
+    quint32 ssrc = digestSsrc(identity);
+    while (ssrc == 0 || ssrc == mainSsrc || receivers.contains(ssrc)) {
+        ++ssrc;
+    }
+    return ssrc;
+}
+
 bool MediaPeer::isDeclaredAudioSsrc(quint32 ssrc) const
 {
     return ssrc != 0
-        && (ssrc == d->audioSsrc || d->receiverAudioSsrcs.contains(ssrc));
+        && (ssrc == d->audioSsrc || d->receiverAudioSsrcs.contains(ssrc)
+            || ssrc == d->headphonesAudioSsrc);
 }
 
 std::optional<MediaPeerTelemetry> MediaPeer::telemetry() const

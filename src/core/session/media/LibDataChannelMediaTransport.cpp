@@ -46,6 +46,8 @@ static_assert(IMediaTransport::kReceivedRtpPacketsPerStream * 1000
               "each audio stream's receive queue must hold 256 ms of lossless audio");
 constexpr char kMainAudioStreamName[] = "nereus-mixed-stereo";
 constexpr char kReceiverAudioStreamPrefix[] = "nereus-receiver-";
+// R-R3-45: the headphones mix's a=ssrc cname.
+constexpr char kHeadphonesAudioStreamName[] = "nereus-headphones-mix";
 constexpr auto kRtpTimingWarningThreshold = std::chrono::milliseconds(80);
 constexpr auto kRtpTimingWarningInterval = std::chrono::seconds(1);
 
@@ -274,9 +276,12 @@ quint32 rtpSsrc(const QByteArray& packet)
 }
 
 // R-R3-43: the main stream or one of the declared receiver streams.
-bool isDeclaredAudioSsrc(quint32 ssrc, quint32 mainSsrc, const QList<quint32>& receiverSsrcs)
+// R-R3-45: or the declared headphones mix (0 when none is declared).
+bool isDeclaredAudioSsrc(quint32 ssrc, quint32 mainSsrc, const QList<quint32>& receiverSsrcs,
+                         quint32 headphonesSsrc)
 {
-    return ssrc == mainSsrc || receiverSsrcs.contains(ssrc);
+    return ssrc == mainSsrc || receiverSsrcs.contains(ssrc)
+        || (headphonesSsrc != 0 && ssrc == headphonesSsrc);
 }
 
 // R-R3-43: at most kMaxReceiverAudioStreams, none zero, none the main SSRC,
@@ -293,6 +298,15 @@ bool validReceiverAudioSsrcs(quint32 mainSsrc, const QList<quint32>& receiverSsr
         }
     }
     return true;
+}
+
+// R-R3-45: 0 (none), or an id that is neither the main stream's nor a
+// receiver stream's.
+bool validHeadphonesAudioSsrc(quint32 mainSsrc, const QList<quint32>& receiverSsrcs,
+                              quint32 headphonesSsrc)
+{
+    return headphonesSsrc == 0
+        || (headphonesSsrc != mainSsrc && !receiverSsrcs.contains(headphonesSsrc));
 }
 
 } // namespace
@@ -355,6 +369,8 @@ struct LibDataChannelMediaTransport::Private {
     quint32 localAudioSsrc = 0;
     // R-R3-43: the declared receiver audio streams' SSRCs, empty for today.
     QList<quint32> receiverAudioSsrcs;
+    // R-R3-45: the declared headphones mix's SSRC, 0 for today.
+    quint32 headphonesAudioSsrc = 0;
     CandidatePolicy candidatePolicy = CandidatePolicy::HostOnly;
     bool started = false;
     bool ready = false;
@@ -385,17 +401,21 @@ LibDataChannelMediaTransport::~LibDataChannelMediaTransport()
 bool LibDataChannelMediaTransport::start(const StartOptions& options)
 {
     if (d->started || options.localAudioSsrc == 0
-        || !validReceiverAudioSsrcs(options.localAudioSsrc, options.receiverAudioSsrcs)) {
+        || !validReceiverAudioSsrcs(options.localAudioSsrc, options.receiverAudioSsrcs)
+        || !validHeadphonesAudioSsrc(options.localAudioSsrc, options.receiverAudioSsrcs,
+                                     options.headphonesAudioSsrc)) {
         return false;
     }
 
     d->role = options.role;
     d->localAudioSsrc = options.localAudioSsrc;
     d->receiverAudioSsrcs = options.receiverAudioSsrcs;
+    d->headphonesAudioSsrc = options.headphonesAudioSsrc;
     d->bridge = std::make_shared<CallbackBridge>();
     d->bridge->rtpPacketCapacity =
         static_cast<std::size_t>(kReceivedRtpPacketsPerStream)
-        * static_cast<std::size_t>(1 + options.receiverAudioSsrcs.size());
+        * static_cast<std::size_t>(1 + options.receiverAudioSsrcs.size()
+                                   + (options.headphonesAudioSsrc != 0 ? 1 : 0));
     const std::weak_ptr<CallbackBridge> weak = d->bridge;
 
     try {
@@ -531,6 +551,10 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
                 opus.addSSRC(options.receiverAudioSsrcs.at(index),
                              kReceiverAudioStreamPrefix + std::to_string(index));
             }
+            // R-R3-45: the headphones mix, last, only when declared.
+            if (options.headphonesAudioSsrc != 0) {
+                opus.addSSRC(options.headphonesAudioSsrc, kHeadphonesAudioStreamName);
+            }
             d->audio = d->peer->addTrack(opus);
             bindTrack(d->audio, weak);
         }
@@ -570,6 +594,7 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
     d->ready = false;
     d->localAudioSsrc = 0;
     d->receiverAudioSsrcs.clear();
+    d->headphonesAudioSsrc = 0;
     d->remoteDescriptionAccepted = false;
     d->remoteDescribesLossless = false;
     d->acceptedCandidates = 0;
@@ -743,7 +768,8 @@ bool LibDataChannelMediaTransport::sendRtp(const QByteArray& packet)
     if (!d->ready || !d->audio || packet.size() < kMinRawRtpBytes
         || packet.size() > kMaxRawRtpBytes || d->audio->bufferedAmount() != 0
         || d->audio->maxMessageSize() < static_cast<std::size_t>(packet.size())
-        || !isDeclaredAudioSsrc(rtpSsrc(packet), d->localAudioSsrc, d->receiverAudioSsrcs)) {
+        || !isDeclaredAudioSsrc(rtpSsrc(packet), d->localAudioSsrc, d->receiverAudioSsrcs,
+                                d->headphonesAudioSsrc)) {
         return false;
     }
     const std::shared_ptr<CallbackBridge> bridge = d->bridge;

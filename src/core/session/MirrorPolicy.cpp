@@ -13,6 +13,10 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-40: SliceModel nnrLimit is
 //                                    Outbound. AI-assisted implementation
 //                                    via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-45: SliceModel outputRoute is
+//                                    Bidirectional. AI-assisted
+//                                    implementation via Anthropic Claude
+//                                    Code.
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the Core's step
 //                                    attenuator and preamp (`stepAtt`).
 //                                    AI-assisted via Anthropic Claude Code.
@@ -25,6 +29,16 @@
 //                 Claude Code.
 //   2026-09-24 - R-R3-45: SliceModel outputRoute is Outbound until the
 //                 headphones plan's remote window task makes it two-way.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-48: RfKitModel rows, bandFollow,
+//                StationTciModel, all Outbound; rfKitEnabled Outbound. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Merge: lane B's headphones Task 2 makes outputRoute
+//                 two-way; the Outbound entry is removed. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: AccessoryDataModel, all Outbound. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: AccessorySettingsModel, all Outbound.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -90,7 +104,7 @@ namespace {
 // WRITE. Listing them keeps the table total, so the guard can name a
 // newly added property instead of silently accepting it.
 const MirrorPolicy::Entry kEntries[] = {
-    // ---- SliceModel (110 entries) ----
+    // ---- SliceModel (144 entries) ----
     { "SliceModel", "frequency", MirrorDirection::Bidirectional },
     { "SliceModel", "dspMode", MirrorDirection::Bidirectional },
     { "SliceModel", "filterLow", MirrorDirection::Bidirectional },
@@ -137,6 +151,11 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "locked", MirrorDirection::Bidirectional },
     { "SliceModel", "muted", MirrorDirection::Bidirectional },
     { "SliceModel", "audioPan", MirrorDirection::Bidirectional },
+    // R-R3-45: speakers or headphones (VAX design 6.2). The Core owns it:
+    // the Core's mixer splits the two mixes and the Core saves the choice;
+    // a remote window writes it from the flag and plays the headphones mix
+    // the Core sends while any receiver is on the headphones.
+    { "SliceModel", "outputRoute", MirrorDirection::Bidirectional },
     { "SliceModel", "ssqlEnabled", MirrorDirection::Bidirectional },
     { "SliceModel", "ssqlThresh", MirrorDirection::Bidirectional },
     { "SliceModel", "amsqEnabled", MirrorDirection::Bidirectional },
@@ -268,10 +287,6 @@ const MirrorPolicy::Entry kEntries[] = {
     // Outbound here too.
     { "SliceModel", "snrDb", MirrorDirection::Outbound },
     { "SliceModel", "lastRadeRxCallsign", MirrorDirection::Outbound },
-    // R-R3-45: speakers or headphones. Outbound, the direction every
-    // unlisted property already had; the headphones plan's remote window
-    // task (Task 2) makes it two-way with the headphones mix it plays.
-    { "SliceModel", "outputRoute", MirrorDirection::Outbound },
 
     // ---- TransmitModel (15 entries) ----
     { "TransmitModel", "mox", MirrorDirection::Bidirectional },
@@ -290,7 +305,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitModel", "antiVoxRun", MirrorDirection::Bidirectional },
     { "TransmitModel", "paSettingsBypass", MirrorDirection::Bidirectional },
 
-    // ---- TunerModel (13 entries) ----
+    // ---- TunerModel (21 entries) ----
     { "TunerModel", "relayC1", MirrorDirection::Outbound },
     { "TunerModel", "relayL", MirrorDirection::Outbound },
     { "TunerModel", "relayC2", MirrorDirection::Outbound },
@@ -407,6 +422,8 @@ const MirrorPolicy::Entry kEntries[] = {
     { "AmplifierModel", "mainsVoltageV", MirrorDirection::Outbound },
     { "AmplifierModel", "drainCurrentA", MirrorDirection::Outbound },
     { "AmplifierModel", "efficiencyText", MirrorDirection::Outbound },
+    // R-R3-48 (remotePgxlControlVersion 2): band follow, read-only.
+    { "AmplifierModel", "bandFollow", MirrorDirection::Outbound },
 
     // R-R3-47 / R-R3-22 (remoteRfKitControlVersion 1): the Core's RF-Kit
     // RF2K-S status, read-only for the same reason.
@@ -426,6 +443,103 @@ const MirrorPolicy::Entry kEntries[] = {
     { "RfKitModel", "temperatureC", MirrorDirection::Outbound },
     { "RfKitModel", "voltageV", MirrorDirection::Outbound },
     { "RfKitModel", "currentA", MirrorDirection::Outbound },
+    // R-R3-47 / R-R3-48 (remoteRfKitControlVersion 2): the interface,
+    // antenna and tuner rows and band follow, read-only.
+    { "RfKitModel", "operationalInterface", MirrorDirection::Outbound },
+    { "RfKitModel", "antennaPresentMask", MirrorDirection::Outbound },
+    { "RfKitModel", "antennaDisabledMask", MirrorDirection::Outbound },
+    { "RfKitModel", "activeAntennaNumber", MirrorDirection::Outbound },
+    { "RfKitModel", "activeAntennaExternal", MirrorDirection::Outbound },
+    { "RfKitModel", "tunerMode", MirrorDirection::Outbound },
+    { "RfKitModel", "tunerSetup", MirrorDirection::Outbound },
+    { "RfKitModel", "tunerInductanceNh", MirrorDirection::Outbound },
+    { "RfKitModel", "tunerCapacitancePf", MirrorDirection::Outbound },
+    { "RfKitModel", "tunerFrequencyKhz", MirrorDirection::Outbound },
+    { "RfKitModel", "tunerSegmentKhz", MirrorDirection::Outbound },
+    { "RfKitModel", "bandFollow", MirrorDirection::Outbound },
+    { "RfKitModel", "bandFollowAddress", MirrorDirection::Outbound },
+    { "RfKitModel", "bandFollowPort", MirrorDirection::Outbound },
+
+    // R-R3-48 (stationTciVersion 1): the Core's station TCI server,
+    // read-only. Its switch changes only through setStationTci.
+    { "StationTciModel", "enabled", MirrorDirection::Outbound },
+    { "StationTciModel", "port", MirrorDirection::Outbound },
+    { "StationTciModel", "listening", MirrorDirection::Outbound },
+    { "StationTciModel", "stationAddress", MirrorDirection::Outbound },
+    { "StationTciModel", "error", MirrorDirection::Outbound },
+
+    // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory
+    // records and settings, read-only. A window changes the interlock
+    // policy, the output limit and a fault history only through
+    // setTxInterlockPolicy, setPgxlPowerCap and clearAccessoryFaults.
+    { "AccessoryDataModel", "faultRevision", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlFaults", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlFaults", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitFaults", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlConnectedSinceMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlLastRttMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlKeepaliveMissed", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlReconnectCount", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlFramesIn", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlFramesOut", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlBytesIn", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlBytesOut", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlLastFrameMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "pgxlFaultsSession", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlConnectedSinceMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlLastRttMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlKeepaliveMissed", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlReconnectCount", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlFramesIn", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlFramesOut", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlBytesIn", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlBytesOut", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlLastFrameMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlFaultsSession", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "interlockMode", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "interlockGraceMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "interlockSwrGateEnabled", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "interlockSwrGateMax", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "powerCapEnabled", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "powerCapW", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "powerCapExceeded", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "powerCapAlertText", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "powerCapAlertCount", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tuneMemory", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "autoTuneMemoryRecall", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlAntenna1Label", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlAntenna2Label", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "tgxlAntenna3Label", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitAntenna1Label", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitAntenna2Label", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitAntenna3Label", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitAntenna4Label", MirrorDirection::Outbound },
+
+    // R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
+    // 1): the amp's and tuner's own settings as the Core last heard them,
+    // read-only. A window changes them only through the setPgxl* / setTgxl*,
+    // save and read commands.
+    { "AccessorySettingsModel", "pgxlNickname", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlBiasMode", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlFanMode", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlLedIntensity", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlNetworkKnown", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlDhcp", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlAddress", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlNetmask", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlGateway", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlAnswer", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlAnswerAccepted", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "pgxlAnswerCount", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlNickname", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlNetworkKnown", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlDhcp", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlAddress", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlNetmask", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlGateway", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlAnswer", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlAnswerAccepted", MirrorDirection::Outbound },
+    { "AccessorySettingsModel", "tgxlAnswerCount", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },
@@ -439,7 +553,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (5 entries) ----
+    // ---- RadioModel (19 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
@@ -455,7 +569,9 @@ const MirrorPolicy::Entry kEntries[] = {
     { "RadioModel", "rxFilter1Effective", MirrorDirection::Outbound },
     { "RadioModel", "rxFilter1Band", MirrorDirection::Outbound },
     { "RadioModel", "rxFilter1Reason", MirrorDirection::Outbound },
-    { "RadioModel", "rfKitEnabled", MirrorDirection::Bidirectional },
+    // R-R3-47: the Core's RF-Kit switch. A window changes it with the
+    // setRfKitEnabled command; a raw write is refused.
+    { "RadioModel", "rfKitEnabled", MirrorDirection::Outbound },
     // The 4O3A listener and its bind error exist only at Core. A remote
     // client renders these observational values and must never write one
     // back into a listener, socket, or per-MAC settings scope.

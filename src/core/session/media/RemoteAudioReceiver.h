@@ -9,6 +9,8 @@
 
 namespace NereusSDR {
 class AudioEngine;
+// R-R3-45: defined in AudioEngine.h (Speakers, Headphones).
+enum class RemotePlaybackOutput : int;
 
 // R-R3-35: when a known RTP time will be heard. rtpTimestamp is the end of
 // the newest packet handed to the rate matcher; behind it, when the worker
@@ -193,6 +195,15 @@ public:
     /// std::chrono::steady_clock, counted from this process's first use.
     explicit RemoteAudioReceiver(AudioEngine* engine, QObject* parent = nullptr,
                                  Clock clock = {});
+    /// R-R3-45: a receiver that plays on `output` of `engine`: the
+    /// headphones output for the Core's headphones mix, with its own rate
+    /// matching against that device's clock. Everything else is as the
+    /// speakers' receiver; the faults keep their names (SpeakerOpenFailed
+    /// and so on) and mean the headphones device.
+    RemoteAudioReceiver(AudioEngine* engine, RemotePlaybackOutput output,
+                        QObject* parent = nullptr, Clock clock = {});
+    /// The output this receiver plays on (Speakers unless built for another).
+    RemotePlaybackOutput output() const;
     /// A receiver in the PCM-sink mode (see PcmSinkMode). Its telemetry
     /// counts frames handed to the sink as deviceConsumedFrames, with
     /// lastDeviceProgressAgeMs from the newest hand-off; it reports no

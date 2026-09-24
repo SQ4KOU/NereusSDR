@@ -33,6 +33,9 @@ class CheckerRepo:
         self._git("config", "user.email", "checker-fixture@example.invalid")
         self._git("config", "commit.gpgSign", "false")
         self.write("scripts/check-new-ports.py", CHECKER.read_text())
+        # The checker reads each file's header through the shared rule.
+        self.write("scripts/header_block.py",
+                   (CHECKER.parent / "header_block.py").read_text())
         for name in (
             "THETIS-PROVENANCE.md",
             "WDSP-PROVENANCE.md",

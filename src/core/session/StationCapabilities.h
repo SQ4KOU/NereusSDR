@@ -70,6 +70,16 @@
 //                                    remoteRfKitControlVersion, in the same
 //                                    minor-11 block. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24 - R-R3-48: stationTciVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: accessoryDataVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: remotePgxlControlVersion 3 and
+//                remoteTgxlControlVersion 1 (the amp's and tuner's own
+//                settings), the latter last in the minor-11 block. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -121,11 +131,35 @@ struct StationCapabilities {
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows
-    /// no Power Genius readings from this Core.
+    /// no Power Genius readings from this Core. 2 adds configurePgxl,
+    /// disconnectPgxl and setPgxlConnectionSettings; 3 adds the amp's own
+    /// settings (the pgxl* properties of the read-only `accessorySettings`
+    /// object and the setPgxlName, setPgxlHardware, setPgxlNetwork,
+    /// savePgxlSettings and readPgxlSettings commands).
     int remotePgxlControlVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its RF-Kit RF2K-S status
-    /// as the read-only `rfkit` object. Sent last in the same block.
+    /// as the read-only `rfkit` object; 2 adds the interface, antenna and
+    /// tuner rows, band follow, and the configureRfKit, disconnectRfKit and
+    /// setRfKitEnabled commands. Sent in the same block.
     int remoteRfKitControlVersion = 0;
+    /// R-R3-48: 1 means the Core runs its own TCI server on the station
+    /// network, mirrored as the read-only `stationTci` object and switched
+    /// by the setStationTci command. Sent in the same block. 0: a
+    /// window's TCI switch changes only its own server.
+    int stationTciVersion = 0;
+    /// R-R3-47 / R-R3-22: 1 means the Core mirrors its accessory records
+    /// and settings as the read-only `accessoryData` object (fault
+    /// history, connection counters, interlock policy, output limit and
+    /// its alert, tune memory, antenna names) and takes the
+    /// setTxInterlockPolicy, setPgxlPowerCap and clearAccessoryFaults
+    /// commands. Sent last in the same block.
+    int accessoryDataVersion = 0;
+    /// R-R3-47 / R-R3-22: 1 means the Core sends its Tuner Genius's own
+    /// settings (the tgxl* properties of `accessorySettings`) and takes the
+    /// setTgxlName, setTgxlNetwork, saveTgxlSettings and readTgxlSettings
+    /// commands. Sent last in the same minor-11 block. 0: a window cannot
+    /// change the tuner's own settings on this Core and says so.
+    int remoteTgxlControlVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered
@@ -208,6 +242,15 @@ struct StationCapabilities {
     /// receiver-audio-context. Nonzero only with media. A GUI that does not
     /// see it sends no receiver request and gets no receiver stream.
     int receiverAudioVersion = 0;
+    /// R-R3-45: 1 means the Core can send the headphones mix (the receivers
+    /// routed to the headphones) on its own stream beside the speakers'
+    /// mix. A GUI that sees it may add headphonesMixVersion to its media
+    /// start (the offer then declares the headphones stream id and the main
+    /// stream carries the speakers' mix alone) and send {op:
+    /// "headphones-audio", connectionId, revision, enabled, profile}; the
+    /// Core answers with a headphones-audio-context. Nonzero only with
+    /// media. A GUI that does not see it gets today's wire.
+    int headphonesMixVersion = 0;
 
     /// The daemon's own AppSettings SettingsSchemaVersion, read by that
     /// key name from its own store. See StationClient's schema-skew check.

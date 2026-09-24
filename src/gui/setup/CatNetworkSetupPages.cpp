@@ -15,6 +15,9 @@
 // accepts is a value the next launch will actually dial.
 #include "core/session/RemoteStationOptions.h"
 #include "core/session/IStationLink.h"
+#include "models/AmplifierModel.h"
+#include "models/StationTciModel.h"
+#include "core/TciSwitch.h"
 #include "models/RadioModel.h"
 
 #include <QNetworkInterface>
@@ -296,7 +299,53 @@ void CatTciServerPage::buildServerGroup()
     m_statusLabel->setObjectName(QStringLiteral("tciStatusLabel"));
     form->addRow(tr("Status:"), m_statusLabel);
 
+    // R-R3-48: in a remote window on a Core that runs its own TCI server,
+    // where devices at the station (the RF-Kit amplifier) reach it. The
+    // switch and port above drive both servers.
+    m_stationLine = new QLabel(group);
+    m_stationLine->setObjectName(QStringLiteral("tciStationLine"));
+    m_stationLine->setTextFormat(Qt::PlainText);
+    m_stationLine->setWordWrap(true);
+    m_stationLine->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
+    m_stationLine->setVisible(false);
+    form->addRow(QString(), m_stationLine);
+
     contentLayout()->addWidget(group);
+}
+
+void CatTciServerPage::setRadioModel(NereusSDR::RadioModel* model)
+{
+    if (m_radioModelRef) {
+        disconnect(m_radioModelRef, nullptr, this, nullptr);
+        if (auto* station = m_radioModelRef->stationTciModel()) {
+            disconnect(station, nullptr, this, nullptr);
+        }
+    }
+    m_radioModelRef = model;
+    if (model) {
+        connect(model, &NereusSDR::RadioModel::stationLinkStateChanged,
+                this, &CatTciServerPage::refreshStationLine);
+        if (auto* station = model->stationTciModel()) {
+            connect(station, &NereusSDR::StationTciModel::stateChanged,
+                    this, &CatTciServerPage::refreshStationLine);
+        }
+    }
+    refreshStationLine();
+}
+
+void CatTciServerPage::refreshStationLine()
+{
+    if (!m_stationLine) {
+        return;
+    }
+    const QString line = NereusSDR::TciSwitch::stationLine(m_radioModelRef.data());
+    m_stationLine->setText(line);
+    m_stationLine->setVisible(!line.isEmpty());
+}
+
+QString CatTciServerPage::stationLineForTesting() const
+{
+    return m_stationLine && !m_stationLine->isHidden() ? m_stationLine->text() : QString();
 }
 
 // ---------------------------------------------------------------------------
@@ -1059,13 +1108,23 @@ void PeripheralsPage::wireStatusSignals()
             connect(tuner, &TunerModel::stationConnectionChanged,
                     this, &PeripheralsPage::refreshRemoteTgxlRow);
         }
+        auto* amp = m_model ? m_model->amplifierModel() : nullptr;
+        if (amp) {
+            connect(amp, &AmplifierModel::stationConnectionChanged,
+                    this, &PeripheralsPage::refreshRemotePgxlRow);
+        }
         if (m_model) {
             connect(m_model, &RadioModel::connectionStateChanged,
                     this, &PeripheralsPage::refreshRemoteTgxlRow);
             connect(m_model, &RadioModel::stationLinkStateChanged,
                     this, &PeripheralsPage::refreshRemoteTgxlRow);
+            connect(m_model, &RadioModel::connectionStateChanged,
+                    this, &PeripheralsPage::refreshRemotePgxlRow);
+            connect(m_model, &RadioModel::stationLinkStateChanged,
+                    this, &PeripheralsPage::refreshRemotePgxlRow);
         }
         refreshRemoteTgxlRow();
+        refreshRemotePgxlRow();
         return;
     }
     // Row index map: 0 = TGXL, 1 = PGXL (matches buildRow call order above).
@@ -1172,9 +1231,13 @@ void PeripheralsPage::buildRow(int row, const QString& name,
                           "Leave blank to disable auto-connect.").arg(name));
     const bool remote = model && model->role() == RadioModel::Role::Remote;
     const bool remoteTgxl = remote && idx == 0;
+    const bool remotePgxl = remote && idx == 1;
     const auto* tuner = model ? model->tunerModel() : nullptr;
+    const auto* amp = model ? model->amplifierModel() : nullptr;
     const QString savedIp = remoteTgxl && tuner
         ? tuner->configuredHost()
+        : remotePgxl && amp
+        ? amp->configuredHost()
         : model
         ? model->peripheralValue(ipKey)
         : QString{};
@@ -1184,6 +1247,9 @@ void PeripheralsPage::buildRow(int row, const QString& name,
                               : QStringLiteral("pgxlHostEdit"));
     if (remoteTgxl) {
         m_lastDisplayedCoreTgxlHost = savedIp;
+    }
+    if (remotePgxl) {
+        m_lastDisplayedCorePgxlHost = savedIp;
     }
     connect(ipEdit, &QLineEdit::textChanged, this,
             [model, ipKey](const QString& text) {
@@ -1201,6 +1267,8 @@ void PeripheralsPage::buildRow(int row, const QString& name,
                              .arg(name).arg(defaultPort));
     const int savedPort = remoteTgxl && tuner && tuner->configuredPort() > 0
         ? tuner->configuredPort()
+        : remotePgxl && amp && amp->configuredPort() > 0
+        ? amp->configuredPort()
         : model
         ? model->peripheralValue(portKey,
                                  QString::number(static_cast<int>(defaultPort))).toInt()
@@ -1211,6 +1279,9 @@ void PeripheralsPage::buildRow(int row, const QString& name,
                                 : QStringLiteral("pgxlPortSpin"));
     if (remoteTgxl) {
         m_lastDisplayedCoreTgxlPort = tuner ? tuner->configuredPort() : 0;
+    }
+    if (remotePgxl) {
+        m_lastDisplayedCorePgxlPort = amp ? static_cast<quint16>(amp->configuredPort()) : 0;
     }
     connect(portSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
             [model, portKey](int v) {
@@ -1254,16 +1325,6 @@ void PeripheralsPage::buildRow(int row, const QString& name,
     statusLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
     m_statusLabels[idx] = statusLabel;
     m_grid->addWidget(statusLabel, row, 5);
-
-    if (remote && idx == 1) {
-        ipEdit->setEnabled(false);
-        portSpin->setEnabled(false);
-        scanBtn->setEnabled(false);
-        connectBtn->setEnabled(false);
-        const QString reason = tr("Remote PGXL connection control is not available yet.");
-        connectBtn->setToolTip(reason);
-        statusLabel->setText(reason);
-    }
 }
 
 bool PeripheralsPage::isRemoteMode() const
@@ -1341,6 +1402,75 @@ void PeripheralsPage::refreshRemoteTgxlRow()
     connectButton->setToolTip(QString());
 }
 
+void PeripheralsPage::refreshRemotePgxlRow()
+{
+    if (!isRemoteMode() || !m_grid || m_statusLabels.size() < 2) {
+        return;
+    }
+    auto* amp = m_model->amplifierModel();
+    auto* link = m_model->stationLink();
+    auto* ipEdit = qobject_cast<QLineEdit*>(m_grid->itemAtPosition(2, 1)->widget());
+    auto* portSpin = qobject_cast<QSpinBox*>(m_grid->itemAtPosition(2, 2)->widget());
+    auto* scanButton = qobject_cast<QPushButton*>(m_grid->itemAtPosition(2, 3)->widget());
+    auto* connectButton = m_connectBtns[1];
+    auto* status = m_statusLabels[1];
+    if (!amp || !ipEdit || !portSpin || !scanButton || !connectButton || !status) {
+        return;
+    }
+    const bool available = link && link->remotePgxlControlAvailable();
+    scanButton->setEnabled(false);
+    scanButton->setToolTip(tr("LAN scanning runs at the station and is unavailable from this remote GUI."));
+    // The Core's address fills the fields only when it changes, so an
+    // unsent draft survives a phase or error update.
+    const QString coreHost = amp->configuredHost();
+    const quint16 corePort = static_cast<quint16>(amp->configuredPort());
+    if (coreHost != m_lastDisplayedCorePgxlHost || corePort != m_lastDisplayedCorePgxlPort) {
+        ipEdit->setText(coreHost);
+        if (corePort > 0) {
+            portSpin->setValue(corePort);
+        }
+        m_lastDisplayedCorePgxlHost = coreHost;
+        m_lastDisplayedCorePgxlPort = corePort;
+    }
+    using Phase = AmplifierModel::ConnectionPhase;
+    const auto phase = amp->connectionPhase();
+    const bool active = phase == Phase::Discovering || phase == Phase::Connecting
+        || phase == Phase::Identifying || phase == Phase::Retrying;
+    const bool connected = phase == Phase::Connected;
+    connectButton->setText(connected ? tr("Disconnect") : active ? tr("Cancel") : tr("Connect"));
+    connectButton->setEnabled(available);
+    ipEdit->setEnabled(available && !connected && !active);
+    portSpin->setEnabled(available && !connected && !active);
+    if (!available) {
+        const QString reason = tr("This Core does not offer Power Genius XL control to this app.");
+        status->setText(reason);
+        connectButton->setToolTip(reason);
+        return;
+    }
+    // The Core's own reason, shown in user words; the raw reason is logged.
+    const QString error = amp->connectionError().isEmpty()
+        ? QString() : OperatorReasonText::forDisplay(amp->connectionError());
+    QString text;
+    switch (phase) {
+    case Phase::Disabled: text = tr("Disabled at station"); break;
+    case Phase::Disconnected: text = tr("Disconnected"); break;
+    case Phase::Discovering: text = tr("Discovering at station"); break;
+    case Phase::Connecting: text = tr("Connecting at station"); break;
+    case Phase::Identifying: text = tr("Identifying device"); break;
+    case Phase::Retrying:
+        text = error.isEmpty() ? tr("Retrying at station")
+                               : tr("Retrying at station: %1").arg(error);
+        break;
+    case Phase::Connected:
+        text = tr("Connected: %1 %2").arg(amp->deviceModel(), amp->deviceSerial()); break;
+    case Phase::Error:
+        text = tr("Error: %1").arg(OperatorReasonText::forDisplay(amp->connectionError()));
+        break;
+    }
+    status->setText(text);
+    connectButton->setToolTip(QString());
+}
+
 void PeripheralsPage::onScanLan(int rowIdx)
 {
     if (isRemoteMode()) {
@@ -1393,6 +1523,26 @@ void PeripheralsPage::onConnect(int rowIdx)
     const QString host = ipEdit->text().trimmed();
     const quint16 port = static_cast<quint16>(portSpin->value());
 
+    if (isRemoteMode() && rowIdx == 1) {
+        // R-R3-47: the Core connects, identifies and pairs its Power
+        // Genius; this window only asks.
+        auto* link = m_model->stationLink();
+        if (!link || !link->remotePgxlControlAvailable()) {
+            refreshRemotePgxlRow();
+            return;
+        }
+        using Phase = AmplifierModel::ConnectionPhase;
+        const auto phase = m_model->amplifierModel()->connectionPhase();
+        const bool active = phase == Phase::Connected || phase == Phase::Discovering
+            || phase == Phase::Connecting || phase == Phase::Identifying
+            || phase == Phase::Retrying;
+        const auto outcome = active ? link->requestDisconnectPgxl()
+                                    : link->requestConfigurePgxl(host, port);
+        if (!outcome.sent && m_statusLabels.size() > 1) {
+            m_statusLabels[1]->setText(OperatorReasonText::forDisplay(outcome.reason));
+        }
+        return;
+    }
     if (isRemoteMode()) {
         if (rowIdx != 0) { return; }
         auto* link = m_model->stationLink();

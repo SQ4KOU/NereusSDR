@@ -21,6 +21,9 @@
 //                burst, transmit refused, vfo/modulation answer with the
 //                value the slice holds). AI-assisted transformation via
 //                Anthropic Claude Code.
+//   2026-09-24 - R-R3-48 / R-R3-25: setStationReceiveOnly() and
+//                transmitRefused(). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 
 #pragma once
 
@@ -170,6 +173,20 @@ public:
     // operation is unchanged.
     void setRemoteWindow(bool remote) { m_remoteWindow = remote; }
     bool remoteWindow() const { return m_remoteWindow; }
+
+    // R-R3-48 / R-R3-25: the Core's station server transmits for no app
+    // until remote transmit: receive_only:true, tx_enable false, and trx
+    // set commands answer trx:N,false without touching MOX. Unlike a
+    // remote window, vfo and modulation act on the Core's own slices.
+    void setStationReceiveOnly(bool receiveOnly) { m_stationReceiveOnly = receiveOnly; }
+    bool stationReceiveOnly() const { return m_stationReceiveOnly; }
+    // Transmit is refused (a remote window or the station server).
+    bool transmitRefused() const { return m_remoteWindow || m_stationReceiveOnly; }
+    // M1 (R-R3-48 / R-R3-25): `command` (one TCI command, with or without
+    // its ';') changes transmit configuration an app may not change on the
+    // receive-only station server: tx_profile_ex, xit_enable and xit_offset
+    // set commands. Queries are not changes.
+    static bool isTransmitSettingChange(const QString& command);
 
     // Slice ↔ trx mapping (NereusSDR architectural divergence per design doc §1.2):
     //   Slice A | trx:0,    Slice B | trx:1,    Slice C | trx:2,    Slice D | trx:3
@@ -690,6 +707,7 @@ private:
     int m_setDispatchCount{0};
     int m_queryDispatchCount{0};
     bool m_remoteWindow{false};
+    bool m_stationReceiveOnly{false};
 };
 
 } // namespace NereusSDR

@@ -681,11 +681,11 @@ private slots:
             "nnrVersion", "psAlgorithmVersion", "propertyResultVersion", "dspAssetVersion",
             "psDisplayVersion",
             // Lane B's per-feature versions (R-R3-21 notches, R-R3-23
-            // lossless audio, R-R3-35 audio clock, R-R3-43 receiver audio)
-            // go to every GUI whatever its minor, so they are part of
-            // today's shape too.
+            // lossless audio, R-R3-35 audio clock, R-R3-43 receiver audio,
+            // R-R3-45 headphones mix) go to every GUI whatever its minor,
+            // so they are part of today's shape too.
             "notchControlVersion", "audioProfileVersion", "audioClockVersion",
-            "receiverAudioVersion",
+            "receiverAudioVersion", "headphonesMixVersion",
             "settingsSchemaVersion",
             "displayApplicationBytesPerSecond", "spectrumSampleUnitsPerSecond",
             "displayBudgetGeneration", "remotePs3DisplaySubscribed",
@@ -724,7 +724,14 @@ private slots:
                                    // R-R3-47: then the accessory status
                                    // objects' versions, same block.
                                    "remotePgxlControlVersion",
-                                   "remoteRfKitControlVersion"});
+                                   "remoteRfKitControlVersion",
+                                   // R-R3-48: the station TCI server.
+                                   "stationTciVersion",
+                                   // R-R3-47: the accessory records.
+                                   "accessoryDataVersion",
+                                   // R-R3-47: the Tuner Genius's own
+                                   // settings.
+                                   "remoteTgxlControlVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -757,7 +764,10 @@ private slots:
                                            QByteArrayLiteral("radioAddress"),
                                            QByteArrayLiteral("radioHardwareVersion"),
                                            QByteArrayLiteral("remotePgxlControlVersion"),
-                                           QByteArrayLiteral("remoteRfKitControlVersion")}) {
+                                           QByteArrayLiteral("remoteRfKitControlVersion"),
+                                           QByteArrayLiteral("stationTciVersion"),
+                                           QByteArrayLiteral("accessoryDataVersion"),
+                                           QByteArrayLiteral("remoteTgxlControlVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

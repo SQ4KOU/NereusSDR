@@ -4,6 +4,7 @@
 #include <QtTest/QtTest>
 #include <QSemaphore>
 
+#include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/session/media/DaemonAudioSource.h"
 #include "models/RadioModel.h"
@@ -603,6 +604,60 @@ private slots:
         QCOMPARE(harness.engine->sliceAudioTapCount(), 0);
     }
 
+    // R-R3-45: with B on the headphones, a speakers-mix source captures A
+    // alone and a headphones-mix source B alone, side by side on their own
+    // taps; the headphones source leaves no receiver tap slot taken.
+    void speakersAndHeadphonesSourcesSplitTheMix()
+    {
+        Harness harness;
+        const auto route = qScopeGuard([&harness] {
+            harness.radio.sliceById(harness.sliceB)->setOutputRoute(
+                SliceModel::OutputRoute::Speakers);
+            AppSettings::instance().remove(
+                QStringLiteral("Slice%1/OutputRoute").arg(harness.sliceB));
+        });
+        harness.radio.sliceById(harness.sliceB)->setOutputRoute(
+            SliceModel::OutputRoute::Headphones);
+        DaemonAudioSource speakers;
+        DaemonAudioSource headphones;
+        speakers.setAudioEngine(harness.engine);
+        headphones.setAudioEngine(harness.engine);
+        QVERIFY(speakers.setSliceSource(DaemonAudioSource::kSpeakersMix));
+        QVERIFY(headphones.setSliceSource(DaemonAudioSource::kHeadphonesMix));
+        speakers.start();
+        headphones.start();
+        QVERIFY(speakers.isRunning() && headphones.isRunning());
+        QCOMPARE(harness.engine->sliceAudioTapCount(), 0);
+
+        for (int block = 0; block < 2; ++block) {
+            feedMixedBlock(harness, 0.4f, 0.4f, -0.4f, -0.4f);
+        }
+        int speakerBlocks = 0;
+        while (const auto block = speakers.takeBlock()) {
+            ++speakerBlocks;
+            float peak = 0.0f;
+            for (float sample : block->pcmInterleaved) {
+                QVERIFY2(sample >= 0.0f, "slice B leaked onto the speakers' mix");
+                peak = std::max(peak, sample);
+            }
+            QVERIFY(peak > 0.05f);
+        }
+        int headphoneBlocks = 0;
+        while (const auto block = headphones.takeBlock()) {
+            ++headphoneBlocks;
+            float trough = 0.0f;
+            for (float sample : block->pcmInterleaved) {
+                QVERIFY2(sample <= 0.0f, "slice A leaked onto the headphones mix");
+                trough = std::min(trough, sample);
+            }
+            QVERIFY(trough < -0.05f);
+        }
+        QVERIFY(speakerBlocks >= 1);
+        QCOMPARE(headphoneBlocks, speakerBlocks);
+        headphones.stop();
+        speakers.stop();
+    }
+
     // Frames the MOX gate withholds advance the slice source's position
     // without samples: the next block starts on the original grid, and the
     // withheld audio is not counted as a loss.
@@ -640,7 +695,10 @@ private slots:
         Harness harness;
         DaemonAudioSource source;
         source.setAudioEngine(harness.engine);
-        QVERIFY(!source.setSliceSource(-2));
+        QVERIFY(!source.setSliceSource(-4));
+        // R-R3-45: -2 and -3 are the speakers' and headphones mixes.
+        QCOMPARE(DaemonAudioSource::kSpeakersMix, -2);
+        QCOMPARE(DaemonAudioSource::kHeadphonesMix, -3);
         QVERIFY(source.setSliceSource(harness.sliceA));
         source.start();
         QVERIFY(source.isRunning());

@@ -106,6 +106,18 @@ struct DaemonConfig {
     int     remotePort {0};
     QString remoteBind {QStringLiteral("127.0.0.1")};
 
+    // R-R3-22 / R-R3-47 / R-R3-48: the station network, where every station
+    // listener accepts connections: the SmartSDR API listener on TCP 4992,
+    // the Power Genius and Tuner Genius discovery on UDP 9008 and 9010, and
+    // the station TCI server (StationNetwork::StationBind). Empty: this
+    // computer's address on the radio's subnet, found once the radio
+    // connects (only this computer before then). Every listener also
+    // accepts this computer. `station_bind` in the file; the older name
+    // `station_tci_bind` (Task 3 of the core-owned accessories plan) is
+    // still read when `station_bind` is empty or absent. Feeds
+    // RadioModel::setStationBind() and enableStationTci() from DaemonApp.
+    QString stationBind;
+
     // R-R3-23: the Opus encoder target for station audio, bit/s. Only the
     // two supported profiles are accepted (OpusAudioEncoder refuses any
     // other): 24000, the measured default, codes wideband sound up to 8 kHz;

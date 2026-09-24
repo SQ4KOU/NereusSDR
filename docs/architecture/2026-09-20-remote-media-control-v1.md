@@ -26,7 +26,7 @@ codec histories and callbacks, including deliberate silent redials.
 
 | Operation | Exact payload fields beyond `op` and `connectionId` |
 | --- | --- |
-| `start` | None; a GUI whose Core advertised `audioProfileVersion` adds `audioProfileVersion`, a whole number of at least 1 (anything else is refused and no peer starts); a GUI whose Core advertised `receiverAudioVersion` may add `receiverAudioVersion` the same way (see Receiver audio) |
+| `start` | None; a GUI whose Core advertised `audioProfileVersion` adds `audioProfileVersion`, a whole number of at least 1 (anything else is refused and no peer starts); a GUI whose Core advertised `receiverAudioVersion` may add `receiverAudioVersion` the same way (see Receiver audio), and one whose Core advertised `headphonesMixVersion` may add `headphonesMixVersion` the same way (see Headphones mix) |
 | `description` | `sdp`, `type` (`offer` or `answer`, appropriate to peer role) |
 | `candidate` | `candidate`, `mid` |
 
@@ -68,7 +68,19 @@ line to that line's track whatever its SSRC (measured, not assumed), so the
 refusal is the media peer's receive filter. Each peer's queue of received
 RTP between drains holds 64 packets per declared stream, 256 ms of lossless
 audio (250 packets/s) for every stream: 64 packets without receiver
-streams, 320 with them; when full, the oldest packet is dropped.
+streams, 320 with them, and 64 more with the headphones mix; when full, the
+oldest packet is dropped.
+
+The headphones mix (R-R3-45) is one more stream on the same m-line and SRTP
+context. Its SSRC is formed the same way from the ASCII prefix
+`NereusSDR/media-headphones-ssrc/v1:` followed by the canonical connection
+UUID; a value that is zero, the main SSRC or any of the four receiver SSRCs
+(declared or not) is replaced by the next integer (modulo 2^32) until it is
+none of these. It is declared only when the GUI added
+`headphonesMixVersion` to its `start`: Core's offer then carries, after any
+receiver lines, one `a=ssrc:<headphones> cname:nereus-headphones-mix` line,
+and each peer also sends and accepts that SSRC. Without it nothing above
+changes.
 
 ## Display subscriptions
 
@@ -264,6 +276,86 @@ The two new reason strings, `slice-removed` and `receiver-limit`, occur only
 in `receiver-audio-context`; an `audio-context` carrying one is malformed. A
 GUI shows every reason through `OperatorReasonText` in plain words, never as
 the wire string.
+
+## Headphones mix (headphones-audio and headphones-audio-context)
+
+Capability `headphonesMixVersion=1` (R-R3-45) negotiates it; the session
+protocol minor is unchanged. The Core advertises version 1 whenever media is
+on. A GUI that sees it may add `headphonesMixVersion` (a whole number of at
+least 1) to its `start`; only a GUI at the audio status detail minor may,
+and a malformed value starts no peer. Only then does the offer declare the
+headphones stream ID (see Media peer) and does the Core honour a
+`headphones-audio` request. A GUI that did not declare it gets exactly the
+wire it gets today: no headphones ID, no headphones context, and the main
+stream carrying the station's whole program.
+
+Each slice has a speakers-or-headphones output route (`outputRoute`, a
+mirrored slice property both sides may write, saved and restored by the
+Core). The Core's mixer makes two mixes from the one set of receivers, each
+at its slice's gain, pan and mute: the speakers' mix (the receivers routed
+to the speakers) and the headphones mix (those routed to the headphones).
+For a GUI that declared the headphones mix, the main stream carries the
+speakers' mix alone, and the headphones mix travels on its own stream
+while it runs; a receiver routed to the headphones is heard only there.
+For any other GUI the main stream carries both mixes added together, as
+before. Neither mix carries master volume or mute; those are the GUI's
+own, on its speakers only.
+
+GUI-to-Core `headphones-audio` has exactly these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `op`, `connectionId` | As every operation; the current peer's ID |
+| `revision` | Nonzero uint32; for the whole media connection it only goes up (serial-number order, as `audio`) |
+| `enabled` | Boolean: whether this computer can play the headphones mix now (it has headphones open and they have not failed) |
+| `profile` | `opus` or `lossless`, the session's one audio quality choice |
+
+The Core ignores a request with any other key, a wrong or retired
+`connectionId`, a malformed field, or a revision at or below its last
+accepted one. The headphones mix runs while the GUI asked for it, some slice
+is routed to the headphones, the radio is connected and media is ready.
+Each accepted request, and each change of those that starts or stops the
+mix, is answered with one `headphones-audio-context` (a radio drop only when
+it changes what the app was last told: a mix that was sending stops, and
+`media-not-ready` becomes `radio-offline`, while `no-headphones-receiver`
+and `client-disabled` stand): the audio-profile
+shape of `audio-context` with op `headphones-audio-context`:
+
+| Field | Meaning |
+| --- | --- |
+| `op` | `headphones-audio-context` |
+| `connectionId`, `revision`, `enabled` | As `audio-context`; `revision` is the newest `headphones-audio` request |
+| `generation` | uint32 counting headphones contexts; its own count |
+| `ssrc` | The headphones stream ID, always |
+| `firstSequence`, `firstTimestamp` | Where the headphones stream's RTP timeline continues; it keeps one timeline for the whole media connection |
+| `profile`, `encoder`, `profileRefusal` | As the audio-profile shape of `audio-context` |
+| `reason` | While disabled: `client-disabled`, `no-headphones-receiver`, `radio-offline`, `media-not-ready` or `encoder-unavailable` |
+
+Routing a second or third receiver to the headphones, or one of several
+back, changes only what the mix contains, not the stream: no new context
+is sent. The profile follows the rules of the main stream, and the GUI's
+one link trial counts the headphones mix beside every other lossless
+stream, so one fallback moves it to Opus with the rest. Starting, stopping
+or changing the headphones mix never restarts the main stream or a
+receiver stream. When the session or the media connection ends the
+headphones mix stops with it, with no context.
+
+The GUI plays the headphones mix on this computer's headphones output with
+its own receiver and rate matcher, paced by that device's clock. A
+headphones device failure stops only that receiver: the GUI asks the Core
+to stop the mix, says what happened in plain words, and the speakers play
+on. It asks again when the headphones device is opened, closed or
+changed, or the operator chooses the audio quality again (a decoder that
+could not start depends on it); a media reconnect keeps the failure.
+With a Core that did not advertise the capability, a slice flag routed to
+the headphones says in plain words that this Core cannot send audio for the
+headphones, so the receiver plays on the speakers (such a Core sums every
+receiver into the main stream).
+
+The new reason string `no-headphones-receiver` occurs only in
+`headphones-audio-context`; an `audio-context` or `receiver-audio-context`
+carrying it is malformed. A GUI shows reasons through `OperatorReasonText`
+in plain words, never as the wire string.
 
 ## Measured audio delay (clock-probe and clock-echo)
 

@@ -113,6 +113,10 @@
 //                 groups, is registered only once logging is built. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-24: R-R3-47 / R-R3-48: CAT & Network > RF-Kit works in a remote
+//                 window through the Core; the TCI Server page shows the
+//                 Core's station TCI server. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -1387,6 +1391,8 @@ void SetupDialog::buildTree()
         if (m_pendingTciServer) {
             tciPage->setTciServer(m_pendingTciServer);
         }
+        // R-R3-48: the Core's station TCI server line.
+        tciPage->setRadioModel(m_model);
         return tciPage;
     });
     // 4O3A integration page (replaces the previous standalone
@@ -1417,12 +1423,10 @@ void SetupDialog::buildTree()
                 this, &SetupDialog::connectionsRequested);
         return page;
     });
-    // R-R3-21: RfKitPage connects this computer's own RfKitConnection to
-    // the amplifier (RfKitPage.cpp connectToAmp), which a remote window
-    // must not do: the amplifier sits at the station.
-    markRemoteUnavailable(
-        registerPage(cat, "RF-Kit", SetupScope::Core, [this] { return new RfKitPage(m_model); }),
-        tr("Amplifier control is not available from a remote window yet."));
+    // R-R3-47: in a remote window RfKitPage asks the Core to switch,
+    // connect and disconnect its amplifier (it never dials the amp from
+    // this computer); a Core that does not offer that says so on the page.
+    registerPage(cat, "RF-Kit", SetupScope::Core, [this] { return new RfKitPage(m_model); });
     if (UnbuiltFeatures::isBuilt(UnbuiltFeature::Cat)) {
         registerPage(cat, "TCP/IP CAT", SetupScope::ThisComputer, [] { return new CatTcpIpPage; });
     }

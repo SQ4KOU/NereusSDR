@@ -70,6 +70,11 @@ public:
     // Idempotent: re-calls with the same pointer just refresh the snapshot.
     void setTciServer(class NereusSDR::TciServer* server);
 
+    // R-R3-48: the window's RadioModel, so the page can show the Core's
+    // station TCI server ("Also at the station: <address>, port <port>").
+    void setRadioModel(class NereusSDR::RadioModel* model);
+    QString stationLineForTesting() const;
+
 signals:
     // Emitted when the operator toggles the Enable TCI Server checkbox.
     // Phase 3J-1 review P2.4: MainWindow::wireSetupDialog connects this to
@@ -125,6 +130,10 @@ private:
     bool m_tciServerRunning{false};
     int  m_tciClientCount{0};
     void refreshTciStatusDisplay();
+    // R-R3-48: the Core's station TCI server line.
+    QPointer<class NereusSDR::RadioModel> m_radioModelRef;
+    QLabel* m_stationLine{nullptr};
+    void refreshStationLine();
 
     // Group 2: Compatibility
     QCheckBox*   m_emulateExpertSdr3Check{nullptr};
@@ -244,6 +253,9 @@ private:
     // Called at end of constructor after both rows are built.
     void wireStatusSignals();
     void refreshRemoteTgxlRow();
+    // R-R3-47 / R-R3-22: the Power Genius row in a remote window, a view of
+    // the Core's `amplifier` object plus the Core's PGXL commands.
+    void refreshRemotePgxlRow();
     bool isRemoteMode() const;
 
     RadioModel*   m_model{nullptr};
@@ -259,6 +271,8 @@ private:
     // unsent remote-TGXL draft.
     QString m_lastDisplayedCoreTgxlHost;
     quint16 m_lastDisplayedCoreTgxlPort{0};
+    QString m_lastDisplayedCorePgxlHost;
+    quint16 m_lastDisplayedCorePgxlPort{0};
 };
 
 } // namespace NereusSDR

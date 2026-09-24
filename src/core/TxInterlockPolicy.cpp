@@ -6,6 +6,11 @@
 // full design notes.
 //
 // AI tooling: Anthropic Claude Code.
+//
+// Modification history (NereusSDR):
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: reloadFromSettings()
+//                                    and applyMirrored(). AI-assisted via
+//                                    Anthropic Claude Code.
 
 #include "core/TxInterlockPolicy.h"
 #include "core/AppSettings.h"
@@ -16,6 +21,38 @@ namespace NereusSDR {
 
 TxInterlockPolicy::TxInterlockPolicy(QObject* parent)
     : QObject(parent)
+{
+    load();
+}
+
+void TxInterlockPolicy::reloadFromSettings()
+{
+    const Mode mode = m_mode;
+    const int graceMs = m_graceMs;
+    const bool gate = m_swrGateEnabled;
+    const float gateMax = m_swrGateMax;
+    load();
+    if (mode != m_mode || graceMs != m_graceMs || gate != m_swrGateEnabled
+        || !qFuzzyCompare(gateMax, m_swrGateMax)) {
+        emit changed();
+    }
+}
+
+void TxInterlockPolicy::applyMirrored(Mode mode, int graceMs, bool swrGateEnabled,
+                                      float swrGateMax)
+{
+    if (mode == m_mode && graceMs == m_graceMs && swrGateEnabled == m_swrGateEnabled
+        && qFuzzyCompare(swrGateMax, m_swrGateMax)) {
+        return;
+    }
+    m_mode = mode;
+    m_graceMs = graceMs;
+    m_swrGateEnabled = swrGateEnabled;
+    m_swrGateMax = swrGateMax;
+    emit changed();
+}
+
+void TxInterlockPolicy::load()
 {
     auto& s = AppSettings::instance();
 

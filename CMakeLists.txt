@@ -957,8 +957,15 @@ set(CORE_SOURCES
     src/core/PgxlStatusGauges.cpp
     src/core/TgxlConnection.cpp
     src/core/StationTgxlController.cpp
+    src/core/StationPgxlController.cpp
     # Phase 3P-III RF-Kit RF2K-S amplifier
     src/core/Rf2ksConnection.cpp
+    # R-R3-47 / R-R3-48: the Core's RF-Kit and station TCI server
+    src/core/StationRfKitController.cpp
+    src/core/StationTciController.cpp
+    src/core/StationNetwork.cpp
+    src/core/RfKitBandFollow.cpp
+    src/core/TciSwitch.cpp
     src/core/LanDiscovery.cpp
     src/core/SmartSdrApiListener.cpp
     src/core/ConnectionDiagnostics.cpp
@@ -967,10 +974,17 @@ set(CORE_SOURCES
     # R-R3-47: the Core's Power Genius and RF-Kit status objects
     src/models/AmplifierModel.cpp
     src/models/RfKitModel.cpp
+    src/models/StationTciModel.cpp
     # Phase 3P-II Phase 4 (Advanced UI + helpers)
     src/core/FaultLog.cpp
     src/core/TuneMemoryStore.cpp
     src/core/TxInterlockPolicy.cpp
+    # R-R3-47 / R-R3-22: the Core's accessory records and settings
+    src/core/StationAccessoryData.cpp
+    src/models/AccessoryDataModel.cpp
+    # R-R3-47 / R-R3-22: the amp's and tuner's own settings for a window
+    src/core/StationDeviceSettings.cpp
+    src/models/AccessorySettingsModel.cpp
     # FlexRadio UDP 4992 discovery beacon (PGXL/TGXL auto-detect)
     src/core/FlexRadioDiscoveryBroadcaster.cpp
     # Multi-homed-host source-IP picker (PGXL/TGXL/broadcaster per-peer

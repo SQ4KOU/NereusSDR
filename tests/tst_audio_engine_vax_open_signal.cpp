@@ -24,6 +24,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-49, R-R3-21). AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Merge with integration: the picked-
+//                                    device note follows the device-layer
+//                                    gate (a test run skips PortAudio).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -121,9 +125,11 @@ private slots:
 #endif
 
     // A picked device (the page's device picker): the output is replaced,
-    // and announced. The "PortAudio not set up" return shares the same
-    // announcement (a scope guard on every return); the engine sets
-    // PortAudio up in its constructor, so a test cannot reach that return.
+    // and announced. The "device layer not ready" return shares the same
+    // announcement (a scope guard on every return). A test run never
+    // initialises PortAudio but counts the device layer ready (makeBus
+    // hands out only the test's fake devices), so a test cannot reach
+    // that return; only a failed Pa_Initialize outside a test run can.
     void setVaxConfigWithAPickedDeviceAnnounces()
     {
         AudioEngine engine;

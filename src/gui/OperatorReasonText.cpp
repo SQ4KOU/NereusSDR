@@ -164,6 +164,9 @@ constexpr Entry kEntries[] = {
     {"receiver-limit", nullptr,
      "The Core is already sending audio for as many receivers as it can. Stop the audio "
      "for another receiver to hear this one."},
+    // R-R3-45: the headphones audio context's own reason.
+    {"no-headphones-receiver", nullptr,
+     "No receiver is playing on the headphones."},
 
     // Audio and display from the Core: the Core's refusals
     // (DaemonMediaController::sendRejected) and this computer's own
@@ -340,6 +343,8 @@ constexpr Entry kEntries[] = {
      "This Core does not offer C-Tune to this app."},
     {"The station does not support remote TGXL configuration.", nullptr,
      "This Core does not offer Tuner Genius XL setup to this app."},
+    {"The station does not support remote PGXL configuration.", nullptr,
+     "This Core does not offer Power Genius XL setup to this app."},
     {"The station does not support NNR model application.", nullptr,
      "This Core does not offer NNR model changes to this app."},
     {"The station does not support NNR diagnostics.", nullptr,
@@ -360,6 +365,22 @@ constexpr Entry kEntries[] = {
      "The Tuner Genius at this address did not say which unit it is."},
     {"TGXL native identity timed out", nullptr,
      "The device at this address did not answer as a Tuner Genius in time."},
+
+    // The Core's Power Genius XL checks, PgxlConnection.cpp (R-R3-47):
+    // shown on the Peripherals page's Power Genius XL row and its Setup tab.
+    {"PGXL identity was rejected by station discovery", nullptr,
+     "The Core could not confirm that the device at this address is a Power Genius."},
+    {"PGXL native info omitted a nonempty serial", nullptr,
+     "The Power Genius at this address did not say which unit it is."},
+    {"PGXL native identity timed out", nullptr,
+     "The device at this address did not answer as a Power Genius in time."},
+    // RadioModel.cpp: the Core's own setup checks for the Power Genius.
+    {"Connect Core to a radio before configuring its PGXL.", nullptr,
+     "Connect the Core to a radio before setting up its Power Genius."},
+    {"Enable 4O3A on Core before connecting the PGXL.", nullptr,
+     "Turn on 4O3A on the Core before connecting the Power Genius."},
+    {"Enter a valid PGXL IP address or hostname and TCP port 1 to 65535.", nullptr,
+     "Enter the Power Genius's IP address or host name, and a port from 1 to 65535."},
 
     // Noise reduction status and refusals, NnrAdapter.cpp (two also in
     // SliceModel.cpp and RadioModel.cpp): shown in the NNR panel and when
@@ -540,6 +561,32 @@ const Pattern kPatterns[] = {
     {R"(^TGXL discovery approval timed out for serial )", nullptr,
      "The Core did not see this Tuner Genius on its network in time.",
      "TGXL discovery approval timed out for serial 1234-5678"},
+
+    // The Core's Power Genius XL checks, StationPgxlController.cpp and
+    // PgxlConnection.cpp (R-R3-47), each worded around a model, address or
+    // serial.
+    {R"(^Expected PowerGeniusXL at the connected endpoint; observed .* \(serial .*\)\.$)",
+     nullptr,
+     "The device at this address is not a Power Genius. Check the amplifier's address and "
+     "port.",
+     "Expected PowerGeniusXL at the connected endpoint; observed TunerGenius (serial "
+     "241288-1)."},
+    {R"(^No matching PGXL discovery announcement for .+\. Check the amplifier address, port and station LAN discovery\.$)",
+     nullptr,
+     "The Core did not find a Power Genius at this address on its network. Check the "
+     "amplifier's address and port.",
+     "No matching PGXL discovery announcement for 192.0.2.40:9008. Check the amplifier "
+     "address, port and station LAN discovery."},
+    {R"(^PGXL identity serial mismatch: expected .*, observed .*$)", nullptr,
+     "The Power Genius at this address is not the one the Core found on its network. Check "
+     "the amplifier's address and port.",
+     "PGXL identity serial mismatch: expected 10-200/24-0046, observed 10-200/24-0047"},
+    {R"(^PGXL native info failed with code )", nullptr,
+     "The Power Genius at this address did not say which unit it is.",
+     "PGXL native info failed with code 3"},
+    {R"(^PGXL discovery approval timed out for serial )", nullptr,
+     "The Core did not see this Power Genius on its network in time.",
+     "PGXL discovery approval timed out for serial 10-200/24-0046"},
 
     // StationClient.cpp: nothing was sent because the link is not up.
     {R"(^The station session is not established, so (.+) was not sent\.$)", nullptr,

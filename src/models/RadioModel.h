@@ -56,6 +56,26 @@
 //                 Claude Code. setRemoteVaxChannelStore(): where a remote
 //                 window's slices keep their VAX channel. NereusSDR-original;
 //                 no Thetis logic.
+//   2026-09-24 - R-R3-47 / R-R3-48: RF-Kit station verbs,
+//                stationTciModel() / stationTciController(), rfKitEnabled
+//                read-only. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: the Core's accessory records and
+//                settings (`accessoryData`): RF-Kit fault log, the model's
+//                own connection counters, the interlock, power-cap and
+//                fault-history commands, and a window's setting changes
+//                reaching the Core's live objects. NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-22 / R-R3-47: setStationBind (the Core's station
+//                listeners on the station network only) and the FlexRadio
+//                beacon following the 4O3A switch. NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: the Power Genius's and Tuner Genius's
+//                own settings for a window (`accessorySettings`, the
+//                ...ForStation device-settings requests) and a route of
+//                their own for the Core's refusals (accessoryRequestRefused).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -151,6 +171,7 @@
 #include "core/HardwareProfile.h"
 #include "core/codec/CodecContext.h"  // SliceConfig (Phase 3F Sub-Epic B Task 16)
 #include "core/DdcAssignment.h"       // DdcAssignment (Phase 3F Sub-Epic B Task 16)
+#include "core/StationNetwork.h"  // StationBind (R-R3-22 station listeners)
 #include "core/SkuUiProfile.h"  // issue #257 — setLastBandForTest passes the SKU into refreshAntennasFromAlex
 #include "core/safety/SwrProtectionController.h"
 #include "core/safety/TxInhibitMonitor.h"
@@ -279,8 +300,17 @@ class RadeChannel;
 // I/Q wire rate before m_connection->sendTxIq.  Lives in core/Resampler.h.
 class Resampler;
 class StationTgxlController;
+class StationPgxlController;
+class StationRfKitController;
+class StationTciController;
+class StationTciModel;
+class RfKitBandFollow;
 class AmplifierModel;
 class RfKitModel;
+class AccessoryDataModel;
+class AccessorySettingsModel;
+class StationAccessoryData;
+class ConnectionDiagnostics;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -304,8 +334,9 @@ class RadioModel : public QObject {
     Q_PROPERTY(QString model       READ model       NOTIFY infoChanged)
     Q_PROPERTY(QString version     READ version     NOTIFY infoChanged)
     Q_PROPERTY(bool    connected   READ isConnected NOTIFY connectionStateChanged)
-    Q_PROPERTY(bool rfKitEnabled READ rfKitEnabled WRITE setRfKitEnabled
-               NOTIFY rfKitEnabledChanged)
+    // R-R3-47: the station's RF-Kit switch, Core to window only. A window
+    // changes it with the setRfKitEnabled command; a raw write is refused.
+    Q_PROPERTY(bool rfKitEnabled READ rfKitEnabled NOTIFY rfKitEnabledChanged)
     // R-R3-22: station-owned configuration/status; changes use a typed verb.
     Q_PROPERTY(bool fourO3AEnabled READ fourO3AEnabled NOTIFY fourO3AStatusChanged)
     Q_PROPERTY(bool fourO3AListening READ fourO3AListening NOTIFY fourO3AStatusChanged)
@@ -509,6 +540,14 @@ public:
     /// from the silent divergence this whole round exists to close: the
     /// click does nothing and nothing says why.
     void reportStationSliceCommandRejected(const QString& reason);
+
+    /// R-R3-47 / R-R3-22 / R-R3-48: the Core refused an accessory request,
+    /// with its own reason. `device` says what it was about: "pgxl",
+    /// "tgxl", "rfkit", "interlock", "tci", "4o3a", or for a fault history
+    /// the device it names ("faults" for any other). Role::Remote only.
+    /// Routed to accessoryRequestRefused, which MainWindow toasts and the
+    /// pages that sent the request show, never to the slice toast.
+    void reportStationAccessoryRefusal(const QString& device, const QString& reason);
 
     /// The station refused a sample-rate change, with its own reason.
     /// Role::Remote only. Routed to sliceRetuneRejected, which carries the
@@ -1751,6 +1790,14 @@ public:
     // Remote model's hold the Core's values only.
     AmplifierModel* amplifierModel() const { return m_amplifierModel; }
     RfKitModel*     rfKitModel()     const { return m_rfKitModel; }
+    // R-R3-48: the Core's station TCI server as the `stationTci` object.
+    // Non-null from construction; filled only on a Core that runs one
+    // (enableStationTci), and from the Core's values in a remote window.
+    StationTciModel* stationTciModel() const { return m_stationTciModel; }
+    // R-R3-48: the Core's station TCI server (nullptr outside the Core).
+    StationTciController* stationTciController() const { return m_stationTci; }
+    // R-R3-47: the Core's RF-Kit controller (nullptr outside the Core).
+    StationRfKitController* stationRfKitController() const { return m_stationRfKit; }
     // SmartSDR API server on TCP 4992. Owned by RadioModel; lifetime matches.
     // Used by MainWindow to push slice/transmit state so PGXL/TGXL pull the
     // current band/freq via the SmartSDR API rather than from a stale cache.
@@ -1782,6 +1829,54 @@ public:
     bool stationAccessoryIdentityEnabled() const { return m_stationTgxl != nullptr; }
     bool configureTgxlForStation(const QString& host, quint16 port, QString* reason);
     bool disconnectTgxlForStation(QString* reason);
+    // R-R3-47 / R-R3-22: the Core's Power Genius XL, as the tuner's above.
+    // configure saves the address for the Core's radio and starts
+    // identifying what answers there; it is paired only once admitted.
+    bool configurePgxlForStation(const QString& host, quint16 port, QString* reason);
+    bool disconnectPgxlForStation(QString* reason);
+    /// Saves and applies the amp's connection settings on the Core:
+    /// automatic retry, keepalive seconds (1 to 3600) and ping seconds
+    /// (0 turns it off, up to 3600).
+    bool setPgxlConnectionSettingsForStation(bool autoReconnect, int keepaliveSec,
+                                             int pingSec, QString* reason);
+    // R-R3-47 / R-R3-22: the Core's RF-Kit RF2K-S. configure saves the
+    // address for the Core's radio and starts identifying what answers
+    // there; the amp is admitted once its /info names an RF2K-S.
+    bool configureRfKitForStation(const QString& host, quint16 port, QString* reason);
+    bool disconnectRfKitForStation(QString* reason);
+    /// I4 (R-R3-47, remoteRfKitControlVersion 3): a window's Reset amp
+    /// error, sent to the admitted amp as the local page sends it.
+    bool resetRfKitErrorForStation(QString* reason);
+    /// The station's RF-Kit switch, from a window's command.
+    bool setRfKitEnabledForStation(bool enabled, QString* reason);
+
+    // R-R3-48: the Core runs the app's TCI server on the station network
+    // (DaemonApp, before radio startup). `bindOverride` is nereusd.conf's
+    // station_bind (older name station_tci_bind); empty picks this
+    // computer's address on the radio's subnet once the radio connects.
+    // Once setStationBind has run, its rule wins.
+    void enableStationTci(const QString& bindOverride);
+    /// The station's TCI switch and port, from a window's command.
+    bool setStationTciForStation(bool enabled, int port, QString* reason);
+
+    // R-R3-22 / R-R3-47 / R-R3-48: the Core's station network (DaemonApp,
+    // before radio startup). The SmartSDR API listener on TCP 4992, the
+    // Power Genius and Tuner Genius discovery sockets and the station TCI
+    // server then all accept connections there only, by one rule
+    // (StationNetwork::StationBind): `bindOverride` is nereusd.conf's
+    // station_bind (older name station_tci_bind); empty follows the radio's
+    // subnet, with 127.0.0.1 alone until a radio connects; a new radio
+    // address moves every listener. A desktop window never calls this and
+    // binds as it always has. The FlexRadio beacon then announces the
+    // station address.
+    void setStationBind(const QString& bindOverride);
+    /// The rule as it stands (radio address included); unset in a desktop window.
+    std::optional<StationNetwork::StationBind> stationBind() const { return m_stationBind; }
+    /// Test seam: this computer's address entries for the station rule.
+    void setStationInterfaceEntriesForTest(const QList<QNetworkAddressEntry>& entries);
+    static constexpr int kPgxlKeepaliveMinSec = 1;
+    static constexpr int kPgxlKeepaliveMaxSec = 3600;
+    static constexpr int kPgxlPingMaxSec = 3600;
 
     // Phase 3P-III RF-Kit RF2K-S master toggle.
     // Persisted per-MAC under hardware/<mac>/peripherals/RfKit_Enabled.
@@ -1872,6 +1967,61 @@ public:
     // Fault History tables reflect live captures.
     FaultLog* pgxlFaultLog() { return m_pgxlFaultLog; }
     FaultLog* tgxlFaultLog() { return m_tgxlFaultLog; }
+    // R-R3-47: the RF-Kit's faults (a lost link, a refused identity, an
+    // interface error), key RfKit_FaultHistory.
+    FaultLog* rfkitFaultLog() { return m_rfkitFaultLog; }
+
+    // R-R3-47 / R-R3-22: the Power Genius and Tuner Genius connection
+    // counters. A Local model's are bound to its own connections for its
+    // whole life; a Remote model's hold the Core's counters. Non-null
+    // from construction.
+    ConnectionDiagnostics* pgxlDiagnostics() const { return m_pgxlDiagnostics; }
+    ConnectionDiagnostics* tgxlDiagnostics() const { return m_tgxlDiagnostics; }
+
+    // R-R3-47 / R-R3-22: the Core's accessory records and settings, as the
+    // Core mirrors them (`accessoryData`). Non-null from construction. A
+    // Local model keeps it current (StationAccessoryData); a Remote model
+    // holds the Core's values and feeds them into its fault logs, counters,
+    // interlock policy and tune memory so the pages show the Core's.
+    AccessoryDataModel* accessoryDataModel() const { return m_accessoryDataModel; }
+    // nullptr in a Remote model.
+    StationAccessoryData* stationAccessoryData() const { return m_stationAccessoryData; }
+
+    // R-R3-47 / R-R3-22: the three commands (accessoryDataVersion 1). The
+    // policy's enforcement stays in MoxController; a change keys nothing.
+    bool setTxInterlockPolicyForStation(int mode, int graceMs, bool swrGateEnabled,
+                                        double swrGateMax, QString* reason);
+    bool setPgxlPowerCapForStation(bool enabled, int watts, QString* reason);
+    bool clearAccessoryFaultsForStation(const QString& device, QString* reason);
+    /// A window changed a station setting (StationServer, after the write
+    /// is stored): the Core's interlock policy, output limit, tune memory,
+    /// antenna names, fault logs and RF-Kit auto-reconnect and poll
+    /// interval follow it at once. Other keys ignored.
+    void applyRemoteAccessorySetting(const QString& key);
+
+    // R-R3-47 / R-R3-22: the Power Genius's and Tuner Genius's own settings
+    // (`accessorySettings`, remotePgxlControlVersion 3 and
+    // remoteTgxlControlVersion 1). Non-null from construction. On the Core
+    // the station controllers keep it current; a Remote model holds the
+    // Core's values for the Advanced pages.
+    AccessorySettingsModel* accessorySettingsModel() const { return m_accessorySettingsModel; }
+    // A window's request, sent by the Core as the local Advanced page's own
+    // device command (StationDeviceSettings). True when it left for the
+    // device; the answer arrives on accessorySettingsModel().
+    bool setPgxlNameForStation(const QString& name, QString* reason);
+    /// `setting` is "biasMode" (utf8 ClassA or ClassAB), "fanMode" (utf8
+    /// Auto, Quiet or Continuous) or "ledIntensity" (0 to 100).
+    bool setPgxlHardwareForStation(const QString& setting, const QVariant& value,
+                                   QString* reason);
+    bool setPgxlNetworkForStation(bool dhcp, const QString& address, const QString& netmask,
+                                  const QString& gateway, QString* reason);
+    bool savePgxlSettingsForStation(QString* reason);
+    bool readPgxlSettingsForStation(QString* reason);
+    bool setTgxlNameForStation(const QString& name, QString* reason);
+    bool setTgxlNetworkForStation(bool dhcp, const QString& address, const QString& netmask,
+                                  const QString& gateway, QString* reason);
+    bool saveTgxlSettingsForStation(QString* reason);
+    bool readTgxlSettingsForStation(QString* reason);
 
     // Phase 3G-9b: one-shot profile that sets the 7 smooth-default recipe
     // values on SpectrumWidget. Called from the constructor exactly once
@@ -2150,6 +2300,12 @@ public:
     // setConnectionStateForTest + setLastRadioInfoForTest.
     void applyPeripheralsForTest() { applyPeripheralsForCurrentMac(); }
     void teardownPeripheralsForTest() { teardownPeripherals(); }
+    // R-R3-22: the FlexRadio beacon as connectToRadio leaves it, in a mode
+    // that sends nothing (FlexRadioDiscoveryBroadcaster::setNoSendForTesting),
+    // and whether it runs.
+    void configureFlexBeaconForTest();
+    bool flexBeaconRunningForTest() const;
+    class FlexRadioDiscoveryBroadcaster* flexBroadcasterForTest() const { return m_flexBroadcaster; }
 
 #ifdef NEREUS_BUILD_TESTS
 public:
@@ -3111,6 +3267,9 @@ signals:
     // request because the maxSlices() cap has been reached.  Status-bar /
     // toast subscribers wire to this signal in Sub-Epic C Tasks 8-9.
     void sliceAddRejected(QString reason);
+    /// R-R3-47 / R-R3-22: the Core refused a request for an accessory's own
+    /// settings (`device` "pgxl" or "tgxl"); `reason` is the Core's words.
+    void accessoryRequestRefused(const QString& device, const QString& reason);
 
     /// Phase 3F Sub-Epic I closeout, defect F4: the operator retuned a slice
     /// to a frequency no DDC can reach, and the frequency has been rolled
@@ -4948,9 +5107,16 @@ private:
     PgxlConnection* m_pgxlConnection{nullptr};
     TgxlConnection* m_tgxlConnection{nullptr};
     StationTgxlController* m_stationTgxl{nullptr};
+    StationPgxlController* m_stationPgxl{nullptr};
     TunerModel*     m_tunerModel{nullptr};
     AmplifierModel* m_amplifierModel{nullptr};
     RfKitModel*     m_rfKitModel{nullptr};
+    // R-R3-47 / R-R3-48: the Core's RF-Kit controller, station TCI server
+    // and its state, and the RF-Kit's band follow over that server.
+    StationRfKitController* m_stationRfKit{nullptr};
+    StationTciModel*        m_stationTciModel{nullptr};
+    StationTciController*   m_stationTci{nullptr};
+    RfKitBandFollow*        m_rfKitBandFollow{nullptr};
 
     // Phase 3P-III: RF-Kit RF2K-S connection. unique_ptr with Qt parent=this
     // so destruction order is deterministic and QObject hierarchy is intact.
@@ -5050,6 +5216,13 @@ private:
     // Shared (non-owning) with PgxlAdvancedPage and TgxlAdvancedPage.
     FaultLog* m_pgxlFaultLog{nullptr};
     FaultLog* m_tgxlFaultLog{nullptr};
+    // R-R3-47 / R-R3-22: see the accessors.
+    FaultLog* m_rfkitFaultLog{nullptr};
+    ConnectionDiagnostics* m_pgxlDiagnostics{nullptr};
+    ConnectionDiagnostics* m_tgxlDiagnostics{nullptr};
+    AccessoryDataModel* m_accessoryDataModel{nullptr};
+    AccessorySettingsModel* m_accessorySettingsModel{nullptr};
+    StationAccessoryData* m_stationAccessoryData{nullptr};
 
     // Phase 3P-II Phase 4 Task 94: last known PGXL state string.
     // Tracks "previous state" so we capture only on FAULT *transitions*
@@ -5062,12 +5235,22 @@ private:
     // Allows PGXL/TGXL to auto-discover NereusSDR in their FlexRadio dropdown
     // without any manual IP entry.
     class FlexRadioDiscoveryBroadcaster* m_flexBroadcaster{nullptr};
+    // R-R3-22: connectToRadio configured the beacon for this radio. It
+    // runs only while this is set, 4O3A is on and PGXL_BroadcastDiscovery
+    // is True (updateFlexBeacon).
+    bool m_flexBeaconConfigured{false};
+    void updateFlexBeacon();
+    // R-R3-22 / R-R3-47: set by setStationBind on the Core only.
+    std::optional<StationNetwork::StationBind> m_stationBind;
+    void applyStationBind();
 
     // Passive SmartSDR API listener on TCP 4992. Bench-recon stub: logs every
     // line PGXL sends so we can design the response layer in a follow-up.
     // Phase 3P-II follow-up: replace with a full SmartSDR API server.
     class SmartSdrApiListener* m_smartSdrListener{nullptr};
     bool m_remoteFourO3AEnabled{false};
+    // R-R3-47: the Core's RF-Kit switch as a remote window last heard it.
+    bool m_remoteRfKitEnabled{false};
     bool m_remoteFourO3AListening{false};
     QString m_remoteFourO3AListenerError;
     QTimer* m_accessoryBandTimer{nullptr};

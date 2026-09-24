@@ -879,6 +879,57 @@ private slots:
         QFETCH(QJsonObject, payload);
         QVERIFY(!decodeRemoteAudioContext(payload, true, true).has_value());
     }
+
+    // R-R3-45: the headphones-audio-context is the audio-profile shape under
+    // its own op, always with the headphones stream id. It carries the four
+    // main reasons and no-headphones-receiver, never a receiver-only one,
+    // and neither other context accepts it or its new reason.
+    void headphonesContextRoundTripsAndStaysApart()
+    {
+        RemoteAudioContextMessage on = sampleMessage(true);
+        on.encoder = defaultProfile();
+        on.profile = RemoteAudioProfile::Opus;
+        RemoteAudioContextMessage lossless = on;
+        lossless.profile = RemoteAudioProfile::Lossless;
+        lossless.losslessEncoder = l16EncoderProfile();
+        lossless.encoder.reset();
+        RemoteAudioContextMessage none = sampleMessage(false);
+        none.offReason = RemoteAudioOffReason::NoHeadphonesReceiver;
+        none.profile = RemoteAudioProfile::Opus;
+        for (const RemoteAudioContextMessage& message : {on, lossless, none}) {
+            const QJsonObject encoded = overTheWire(encodeHeadphonesAudioContext(message));
+            QCOMPARE(encoded.value(QStringLiteral("op")).toString(),
+                     QStringLiteral("headphones-audio-context"));
+            const std::optional<RemoteAudioContextMessage> decoded =
+                decodeHeadphonesAudioContext(encoded);
+            QVERIFY2(decoded.has_value(), wire(encoded).constData());
+            compareMessages(*decoded, message);
+            QVERIFY(!decodeRemoteAudioContext(encoded, true, true).has_value());
+            QVERIFY(!decodeReceiverAudioContext(
+                withKey(encoded, QStringLiteral("sliceId"), 1)).has_value());
+        }
+        const QJsonObject noneWire = encodeHeadphonesAudioContext(none);
+        QCOMPARE(noneWire.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("no-headphones-receiver"));
+        // Its reason in the other contexts is malformed.
+        QVERIFY(!decodeRemoteAudioContext(
+            withKey(noneWire, QStringLiteral("op"), QStringLiteral("audio-context")), true, true)
+                     .has_value());
+        QVERIFY(!decodeReceiverAudioContext(
+            withKey(withKey(noneWire, QStringLiteral("op"),
+                            QStringLiteral("receiver-audio-context")),
+                    QStringLiteral("sliceId"), 1)).has_value());
+        // A receiver-only reason, no stream id or another key is refused.
+        QVERIFY(!decodeHeadphonesAudioContext(
+            withKey(noneWire, QStringLiteral("reason"), QStringLiteral("slice-removed")))
+                     .has_value());
+        QVERIFY(!decodeHeadphonesAudioContext(withKey(noneWire, QStringLiteral("ssrc"), 0))
+                     .has_value());
+        QVERIFY(!decodeHeadphonesAudioContext(withKey(noneWire, QStringLiteral("sliceId"), 1))
+                     .has_value());
+        QVERIFY(!decodeHeadphonesAudioContext(
+            withKey(noneWire, QStringLiteral("op"), QStringLiteral("audio-context"))).has_value());
+    }
 };
 
 QTEST_APPLESS_MAIN(TstRemoteAudioContext)

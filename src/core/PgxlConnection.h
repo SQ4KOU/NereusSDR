@@ -15,6 +15,16 @@
 //   2026-09-23  configuredHost()/configuredPort() for the Core's
 //                 `amplifier` object (R-R3-47). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (R-R3-47, R-R3-22): the Tuner Genius connection's
+//                 lifecycle (TgxlConnection.h, 2026-09-21/22 entries): an
+//                 owned, generation-checked retry timer replaces the static
+//                 single-shot; every physical dial gets a fresh socket; an
+//                 opt-in identity admission (native `info` serial, held
+//                 until the Core's controller approves it) for the Core.
+//   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (R-R3-47, R-R3-22): replyReceived, every answer of an
+//                 admitted amp by sequence, for the Core's device settings.
 // =================================================================
 #pragma once
 
@@ -28,15 +38,49 @@
 
 namespace NereusSDR {
 
+// R-R3-47: the amp's own answer to `info`, for the Core's identity check.
+// Captured from a real PGXL (captures/flex-tgxl-direct-CONTROL.pcapng,
+// C30698/C206): `R<seq>|0|serial=10-200/24-0046  version=3.8.9
+// protocol=1.0 mains=240`. No model and no nickname in this reply.
+struct PgxlIdentityInfo {
+    quint64 socketAttemptToken{0};
+    QString peerAddress;
+    quint16 peerPort{0};
+    QString serial;
+    QString version;
+};
+
 class PgxlConnection : public QObject {
     Q_OBJECT
 public:
     explicit PgxlConnection(QObject* parent = nullptr);
+    ~PgxlConnection() override;
 
     bool    isConnected() const { return m_connected; }
     QString version()     const { return m_version; }
-    QString peerAddress() const { return m_socket.peerAddress().toString(); }
-    quint16 peerPort()    const { return m_socket.peerPort(); }
+    QString peerAddress() const { return m_socket->peerAddress().toString(); }
+    quint16 peerPort()    const { return m_socket->peerPort(); }
+    quint64 socketAttemptToken() const { return m_socketAttemptGeneration; }
+    bool reconnectPending() const noexcept { return m_reconnectTimer.isActive(); }
+    bool identityAdmissionRequired() const { return m_identityAdmissionRequired; }
+    PgxlIdentityInfo identityInfo() const { return m_identityInfo; }
+
+    // R-R3-47: the Core's identity boundary, off by default so a local
+    // window's V-banner handshake is unchanged. When on, a V banner only
+    // starts identification: `info` is sent, nothing else is sent or
+    // published, and the connection counts as connected only once the
+    // owner calls admitIdentity() for this physical attempt.
+    void setIdentityAdmissionRequired(bool required);
+    bool admitIdentity(quint64 socketAttemptToken, const QString& expectedSerial);
+    bool rejectIdentity(quint64 socketAttemptToken, const QString& reason);
+
+    // R-R3-47: connection settings applied while running. Re-reads
+    // PGXL_AutoReconnect (a pending retry is dropped when it is off) and
+    // PGXL_KeepaliveSec (a running keepalive takes the new interval).
+    void applyConnectionSettings();
+    // Periodic `ping` while connected, every `seconds`; 0 turns it off.
+    void setAutoPingIntervalSec(int seconds);
+    int autoPingIntervalSec() const { return m_autoPingSec; }
     // R-R3-47: the address and port last dialled (connectToPgxl), for the
     // Core's `amplifier` object. Empty and 9008 before any dial.
     QString configuredHost() const { return m_lastHost; }
@@ -54,7 +98,7 @@ public:
 
     // Test-only: feed a single line into processLine (no newline needed).
     // Used by tst_pgxl_connection_parse. Production code never calls this.
-    void injectLineForTesting(const QString& line) { processLine(line); }
+    void injectLineForTesting(const QString& line) { processLine(line, 0); }
 
     // Test-only: simulate a disconnect without a real socket drop.
     // Used by tst_pgxl_connection_reconnect. Production code never calls this.
@@ -65,6 +109,22 @@ public:
 
     // Test-only: flush all pending pings as timed-out without waiting 5 s.
     void testFlushPingTimeouts();
+
+    // Test-only lifecycle seams, as TgxlConnection's: compress the
+    // 1/2/5/10/30/60-second policy and expose the owned-timer state.
+    void testSetReconnectBackoffUnitMs(int ms) {
+        m_reconnectBackoffUnitMs = ms > 0 ? ms : 1;
+    }
+    bool testReconnectPending() const { return reconnectPending(); }
+    void testForceSourceBindFailureOnce() { m_testForceSourceBindFailure = true; }
+    quint64 testActiveSocketAttemptGeneration() const {
+        return m_socketAttemptGeneration;
+    }
+    QTcpSocket* testSocketForTesting() const { return m_socket; }
+    void testInjectLineForSocketAttempt(const QString& line, quint64 attemptGeneration);
+    void testInjectFailureForSocketAttempt(quint64 attemptGeneration);
+    void testSetIdentityTimeoutMs(int ms) { m_identityTimeoutMs = ms > 0 ? ms : 1; }
+    bool testAutoPingActive() const { return m_pingTimer.isActive(); }
 
 public slots:
     void connectToPgxl(const QString& host, quint16 port = 9008);
@@ -109,31 +169,60 @@ signals:
     void pairingResult(bool succeeded, const QString& detail);
     void saveAcknowledged();
     void reconnectAttempt(int attemptNumber, int backoffMs);
+    /// R-R3-47 / R-R3-22: every R-frame answer once the amp is connected
+    /// (admitted, on the Core): its sequence, whether its code was 0, and
+    /// its body. The Core's device settings match their requests by it.
+    void replyReceived(quint32 seq, bool accepted, const QString& body);
+
+    // R-R3-47 identity admission (only with setIdentityAdmissionRequired).
+    void identityProtocolProgress(quint64 socketAttemptToken,
+                                  const QString& peerAddress,
+                                  quint16 peerPort,
+                                  const QString& version);
+    void nativeInfoReceived(const NereusSDR::PgxlIdentityInfo& info);
+    void identityAdmissionFailed(quint64 socketAttemptToken, const QString& reason);
 
     // Test seam: emitted from sendCommand so tests can assert frame format.
     void testFrameWrittenForTesting(const QString& frame);
 
 private slots:
-    void onConnected();
-    void onDisconnected();
-    void onReadyRead();
-    void onError();
     void pollStatus();
     void onKeepaliveTimeout();
     void onPingTimeoutCheck();
     void scheduleReconnect();
+    void onReconnectTimeout();
+    void onConnectTimeout();
+    void onIdentityTimeout();
+    void onAutoPing();
 
 private:
-    void processLine(const QString& line);
+    enum class SourceBindResult { NotRequested, Bound, Failed };
+
+    void onConnected(quint64 attemptGeneration);
+    void onDisconnected(quint64 attemptGeneration);
+    void onReadyRead(quint64 attemptGeneration);
+    void onError(quint64 attemptGeneration);
+    void processLine(const QString& line, quint64 attemptGeneration = 0);
+    void queueDial(const QString& host, quint16 port, quint64 generation);
+    bool requestIsCurrent(const QString& host, quint16 port, quint64 generation) const;
+    bool socketAttemptIsCurrent(quint64 attemptGeneration) const;
+    void beginSocketAttempt(quint64 endpointGeneration);
+    void retireSocketAttempt();
+    void clearIdentityAttempt();
+    void clearPairing();
+    void failIdentityAdmission(quint64 socketAttemptToken, const QString& reason);
+    quint32 writeProtocolCommand(const QString& cmd);
 
     // 2026-05-26 KG4VCF: probe the kernel for the local source IP it
     // would use to reach `host` and explicitly bind m_socket to that
-    // address.  Called from both connectToPgxl() and the auto-reconnect
-    // lambda so a topology change between drops is picked up.  No-op
-    // if the probe fails -- falls through to OS default routing.
-    void bindSourceForHost(const QString& host);
+    // address.  Called for every physical dial (initial and retry) so a
+    // topology change between drops is picked up.  No-op if the probe
+    // fails -- falls through to OS default routing.
+    SourceBindResult bindSourceForHost(const QString& host);
 
-    QTcpSocket m_socket;
+    // R-R3-47: one QTcpSocket per physical dial (TgxlConnection's fix for
+    // the invalid-descriptor errors a reused socket gave after a timeout).
+    QTcpSocket* m_socket{nullptr};
     QTimer     m_pollTimer;
     QByteArray m_readBuf;
     quint32    m_seq{0};
@@ -154,12 +243,28 @@ private:
     QTimer  m_pingTimer;         // periodic auto-ping (PGXL_PingSec); wired in Task 67.
     QTimer  m_pingTimeoutTimer;
     QTimer  m_reconnectTimer;
+    QTimer  m_connectTimer;
+    QTimer  m_identityTimer;
+    int     m_reconnectBackoffUnitMs{1000};
     int     m_reconnectAttempts{0};
-    // Dedup window for scheduleReconnect: see TgxlConnection.h for the
-    // full rationale. Coalesces Qt's duplicate errorOccurred+disconnected
-    // signal firings on the same connect-time failure so we schedule
-    // exactly one retry per disconnect event, not two racing ones.
-    qint64  m_lastReconnectScheduleMs{0};
+    // R-R3-47: endpoint and physical-attempt generations (TgxlConnection's
+    // pattern). A retry, a queued dial or a socket callback belonging to a
+    // replaced or cancelled endpoint can never act.
+    quint64 m_endpointGeneration{0};
+    quint64 m_socketAttemptGeneration{0};
+    quint64 m_nextSocketAttemptGeneration{0};
+    quint64 m_socketAttemptEndpointGeneration{0};
+    quint64 m_retryGeneration{0};
+    quint64 m_connectGeneration{0};
+    QString m_retryHost;
+    quint16 m_retryPort{0};
+    QString m_connectHost;
+    quint16 m_connectPort{0};
+    bool    m_suppressSocketReconnect{false};
+    QMetaObject::Connection m_socketConnectedConnection;
+    QMetaObject::Connection m_socketDisconnectedConnection;
+    QMetaObject::Connection m_socketReadyReadConnection;
+    QMetaObject::Connection m_socketErrorConnection;
     int     m_keepaliveMissed{0};
     quint32 m_pendingPairingSeq{0};
     // Phase 3P-II Task 66: serial captured from flexradioPair() so setBand()
@@ -173,6 +278,15 @@ private:
     quint64 m_framesIn{0}, m_framesOut{0}, m_bytesIn{0}, m_bytesOut{0};
     QString m_lastHost;
     quint16 m_lastPort{9008};
+    int     m_autoPingSec{0};
+    bool    m_testForceSourceBindFailure{false};
+    bool    m_identityAdmissionRequired{false};
+    int     m_identityTimeoutMs{5000};
+    PgxlIdentityInfo m_identityInfo;
+    QMap<QString, QString> m_identityStatus;
+    quint32 m_pendingIdentityInfoSeq{0};
 };
 
 }  // namespace NereusSDR
+
+Q_DECLARE_METATYPE(NereusSDR::PgxlIdentityInfo)

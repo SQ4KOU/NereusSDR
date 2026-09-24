@@ -167,6 +167,30 @@ private:
     void handleConfigureTgxl(const NereusSDR::SessionMessage& invoke);
     void handleDisconnectTgxl(const NereusSDR::SessionMessage& invoke);
     void handleSetFourO3AEnabled(const NereusSDR::SessionMessage& invoke);
+    // R-R3-47 / R-R3-22 (remotePgxlControlVersion 2): the Core's Power
+    // Genius XL, as configureTgxl / disconnectTgxl, plus its connection
+    // settings.
+    void handleConfigurePgxl(const NereusSDR::SessionMessage& invoke);
+    void handleDisconnectPgxl(const NereusSDR::SessionMessage& invoke);
+    void handleSetPgxlConnectionSettings(const NereusSDR::SessionMessage& invoke);
+    // R-R3-47 / R-R3-22 (remoteRfKitControlVersion 2): the Core's RF-Kit
+    // RF2K-S, and its switch.
+    void handleConfigureRfKit(const NereusSDR::SessionMessage& invoke);
+    void handleDisconnectRfKit(const NereusSDR::SessionMessage& invoke);
+    void handleSetRfKitEnabled(const NereusSDR::SessionMessage& invoke);
+    // I4 (R-R3-47, remoteRfKitControlVersion 3): Reset amp error.
+    void handleResetRfKitError(const NereusSDR::SessionMessage& invoke);
+    // R-R3-48 (stationTciVersion 1): the station's TCI switch and port.
+    void handleSetStationTci(const NereusSDR::SessionMessage& invoke);
+    // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory
+    // records and settings.
+    void handleSetTxInterlockPolicy(const NereusSDR::SessionMessage& invoke);
+    void handleSetPgxlPowerCap(const NereusSDR::SessionMessage& invoke);
+    void handleClearAccessoryFaults(const NereusSDR::SessionMessage& invoke);
+    // R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
+    // 1): the amp's and tuner's own settings, sent by the Core to the device
+    // as the local Advanced page's own commands.
+    void handleAccessoryDeviceSettings(const NereusSDR::SessionMessage& invoke);
     void handleRequestIoBoardProbe(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 fix wave (radioHardwareVersion 3): one band's RX or RX-only
     // antenna, applied through the Core's AlexAntennaFacade.

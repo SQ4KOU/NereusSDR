@@ -223,6 +223,11 @@
 //                                    invokeCommand() had zero callers.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the amp's and
+//                                    tuner's own settings (requests,
+//                                    `accessorySettings`, refusals routed
+//                                    to the Advanced pages). AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -437,6 +442,21 @@ public:
     bool stationLinkReady() const override;
     bool remoteAmplifierStatusAvailable() const override;
     bool remoteRfKitStatusAvailable() const override;
+    // R-R3-47 / R-R3-22: see IStationLink.
+    bool remotePgxlControlAvailable() const override;
+    // R-R3-47 / R-R3-48: see IStationLink.
+    bool remoteRfKitControlAvailable() const override;
+    // R-R3-47 / R-R3-22: see IStationLink.
+    bool accessoryDataAvailable() const override;
+    // R-R3-47 / R-R3-22: see IStationLink.
+    bool pgxlDeviceSettingsAvailable() const override;
+    bool tgxlDeviceSettingsAvailable() const override;
+    bool stationTciAvailable() const override;
+    bool coreServesTciOnThisComputer() const override;
+    /// Test seam: whether the Core counts as on this computer (a session
+    /// started without a dial has no address to judge by).
+    void setCoreOnThisComputerForTest(bool onThisComputer)
+    { m_coreOnThisComputerForTest = onThisComputer ? 1 : 0; }
     bool telemetryAvailable() const;
     std::optional<SessionTransportTelemetry> transportTelemetry() const;
     bool sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch);
@@ -537,6 +557,31 @@ public:
     CommandOutcome requestConfigureTgxl(const QString& host, quint16 port) override;
     CommandOutcome requestDisconnectTgxl() override;
     CommandOutcome requestFourO3AEnabled(bool enabled) override;
+    CommandOutcome requestConfigurePgxl(const QString& host, quint16 port) override;
+    CommandOutcome requestDisconnectPgxl() override;
+    CommandOutcome requestPgxlConnectionSettings(bool autoReconnect, int keepaliveSec,
+                                                 int pingSec) override;
+    CommandOutcome requestConfigureRfKit(const QString& host, quint16 port) override;
+    CommandOutcome requestDisconnectRfKit() override;
+    bool rfKitSettingsAvailable() const override;
+    CommandOutcome requestResetRfKitError() override;
+    CommandOutcome requestRfKitEnabled(bool enabled) override;
+    CommandOutcome requestStationTci(bool enabled, quint16 port) override;
+    CommandOutcome requestTxInterlockPolicy(int mode, int graceMs, bool swrGateEnabled,
+                                            double swrGateMax) override;
+    CommandOutcome requestPgxlPowerCap(bool enabled, int watts) override;
+    CommandOutcome requestClearAccessoryFaults(const QString& device) override;
+    CommandOutcome requestPgxlName(const QString& name) override;
+    CommandOutcome requestPgxlHardware(const QString& setting, const QString& value) override;
+    CommandOutcome requestPgxlNetwork(bool dhcp, const QString& address,
+                                      const QString& netmask, const QString& gateway) override;
+    CommandOutcome requestPgxlSaveAndRestart() override;
+    CommandOutcome requestPgxlReadSettings() override;
+    CommandOutcome requestTgxlName(const QString& name) override;
+    CommandOutcome requestTgxlNetwork(bool dhcp, const QString& address,
+                                      const QString& netmask, const QString& gateway) override;
+    CommandOutcome requestTgxlSaveAndRestart() override;
+    CommandOutcome requestTgxlReadSettings() override;
     CommandOutcome requestApplyNnrModels(quint32 revision) override;
     bool nnrControlAvailable() const override;
     // R-R3-21: the Core advertised dspAssetVersion 2 on a session that
@@ -851,6 +896,8 @@ private:
         int sliceId = -1;
         quint64 streamEpoch = 0;
         bool requestedPin = false;
+        // clearAccessoryFaults: which device's history (L1 routing).
+        QString faultsDevice;
     };
     QHash<quint32, PendingCommand> m_pendingCommands;
     std::optional<QPair<quint32, bool>> m_pendingPs3Display;
@@ -882,6 +929,8 @@ private:
     /// arming anything, which is what keeps a session with nothing latched
     /// from ever being auto-retried: there is nothing to redial.
     QUrl m_lastUrl;
+    // R-R3-48: -1 judge by m_lastUrl; 0 or 1 set by a test.
+    int m_coreOnThisComputerForTest = -1;
     QString m_lastFingerprint;
     bool m_lastAllowUnpinned = false;
 

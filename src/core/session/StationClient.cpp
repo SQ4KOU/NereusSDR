@@ -66,6 +66,33 @@
 //                 (setAlexRxAntenna), and the window's OC pin matrix copy
 //                 reloaded when the Core's OC settings arrive. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-48: remoteRfKitControlVersion 2 (the
+//                 configureRfKit, disconnectRfKit and setRfKitEnabled
+//                 requests; rfKitEnabled applied as plain state), and
+//                 stationTciVersion 1 (the `stationTci` object and the
+//                 setStationTci request). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: remotePgxlControlVersion 2, the
+//                 configurePgxl, disconnectPgxl and setPgxlConnectionSettings
+//                 requests. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: accessoryDataVersion 1 (the
+//                 `accessoryData` object and the setTxInterlockPolicy,
+//                 setPgxlPowerCap and clearAccessoryFaults requests). J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: remotePgxlControlVersion 3 and
+//                 remoteTgxlControlVersion 1 (the `accessorySettings` object
+//                 and the amp's and tuner's own settings requests); their
+//                 refusals go to the Advanced pages, not the slice toast.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22 / R-R3-48: every accessory request's
+//                 refusal (Power Genius, Tuner Genius, RF-Kit, interlock,
+//                 fault history, station TCI, 4O3A switch) goes to
+//                 accessoryRequestRefused, never the slice toast. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47: remoteRfKitControlVersion 3 (the resetRfKitError
+//                 request, the RF-Kit page's settings from a remote window).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -79,6 +106,12 @@
 #include "models/AmplifierModel.h"
 #include "models/NotchModel.h"
 #include "models/RfKitModel.h"
+#include "models/StationTciModel.h"
+#include "models/AccessoryDataModel.h"
+#include "models/AccessorySettingsModel.h"
+
+#include <QHostAddress>
+#include <QNetworkInterface>
 #include "models/PanadapterModel.h"
 #include "models/PureSignalSettings.h"
 #include "core/dsp/DspAssetService.h"
@@ -1697,6 +1730,19 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         { "rfkit", m_radioModel->rfKitModel(),
           m_agreedMinor >= kRadioIdentitySessionProtocolMinor
               && m_capabilities.remoteRfKitControlVersion >= 1 },
+        // R-R3-48: the Core's station TCI server.
+        { "stationTci", m_radioModel->stationTciModel(),
+          m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+              && m_capabilities.stationTciVersion >= 1 },
+        // R-R3-47 / R-R3-22: the Core's accessory records and settings.
+        { "accessoryData", m_radioModel->accessoryDataModel(),
+          m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+              && m_capabilities.accessoryDataVersion >= 1 },
+        // R-R3-47 / R-R3-22: the amp's and tuner's own settings.
+        { "accessorySettings", m_radioModel->accessorySettingsModel(),
+          m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+              && (m_capabilities.remotePgxlControlVersion >= 3
+                  || m_capabilities.remoteTgxlControlVersion >= 1) },
     };
     for (const auto& accessory : accessories) {
         const QByteArray key(accessory.key);
@@ -1767,6 +1813,11 @@ void StationClient::handleSettingsSnapshot(const SessionMessage& message)
         }
         if (m_radioModel->tgxlFaultLog() != nullptr) {
             m_radioModel->tgxlFaultLog()->reload();
+        }
+        // R-R3-47: and the RF-Kit's. A Core that offers `accessoryData`
+        // then sends its live lists, which replace these.
+        if (m_radioModel->rfkitFaultLog() != nullptr) {
+            m_radioModel->rfkitFaultLog()->reload();
         }
     }
 }
@@ -2264,6 +2315,8 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("RadioModel.fourO3AEnabled"),
         QByteArrayLiteral("RadioModel.fourO3AListening"),
         QByteArrayLiteral("RadioModel.fourO3AListenerError"),
+        // R-R3-47: likewise the Core's RF-Kit switch.
+        QByteArrayLiteral("RadioModel.rfKitEnabled"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),
         QByteArrayLiteral("SliceModel.signalAverageDbm"),
@@ -2343,6 +2396,21 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
     if (className == "RfKitModel") {
         auto* rfKit = qobject_cast<RfKitModel*>(target);
         return rfKit != nullptr && rfKit->applyStationValue(propertyName, native);
+    }
+    // R-R3-48: a plain state apply; the switch changes only by command.
+    if (className == "StationTciModel") {
+        auto* tci = qobject_cast<StationTciModel*>(target);
+        return tci != nullptr && tci->applyStationValue(propertyName, native);
+    }
+    // R-R3-47 / R-R3-22: a plain state apply; changes only by command.
+    if (className == "AccessoryDataModel") {
+        auto* data = qobject_cast<AccessoryDataModel*>(target);
+        return data != nullptr && data->applyStationValue(propertyName, native);
+    }
+    // R-R3-47 / R-R3-22: a plain state apply; changes only by command.
+    if (className == "AccessorySettingsModel") {
+        auto* settings = qobject_cast<AccessorySettingsModel*>(target);
+        return settings != nullptr && settings->applyStationValue(propertyName, native);
     }
     if (className != "SliceModel") {
         return false;
@@ -2572,6 +2640,49 @@ MirrorUpdate doubleArgument(const QByteArray& name, double value)
     return MirrorUpdate{ 0, name, MirrorWireKind::Float64, QVariant(value) };
 }
 
+// R-R3-47 / R-R3-22: the amp's and tuner's own settings verbs, whose
+// refusals the Advanced pages show (RadioModel::accessoryRequestRefused).
+// L1 (R-R3-47, R-R3-22, R-R3-48): what an accessory request the Core
+// refused was about, for RadioModel::accessoryRequestRefused; empty for
+// every other verb. "pgxl" and "tgxl" (the amp's and tuner's connection,
+// output limit and own settings), "rfkit", "interlock", "tci" (the
+// station TCI server), "4o3a" (the 4O3A switch) and, for a fault history,
+// the device it names ("faults" for any other).
+QString accessoryRefusalDevice(const QByteArray& verb, const QString& faultsDevice)
+{
+    if (verb == "setPgxlName" || verb == "setPgxlHardware" || verb == "setPgxlNetwork"
+        || verb == "savePgxlSettings" || verb == "readPgxlSettings"
+        || verb == "setPgxlPowerCap" || verb == "configurePgxl" || verb == "disconnectPgxl"
+        || verb == "setPgxlConnectionSettings") {
+        return QStringLiteral("pgxl");
+    }
+    if (verb == "setTgxlName" || verb == "setTgxlNetwork" || verb == "saveTgxlSettings"
+        || verb == "readTgxlSettings" || verb == "configureTgxl" || verb == "disconnectTgxl") {
+        return QStringLiteral("tgxl");
+    }
+    if (verb == "configureRfKit" || verb == "disconnectRfKit" || verb == "setRfKitEnabled"
+        || verb == "resetRfKitError") {
+        return QStringLiteral("rfkit");
+    }
+    if (verb == "setTxInterlockPolicy") {
+        return QStringLiteral("interlock");
+    }
+    if (verb == "setStationTci") {
+        return QStringLiteral("tci");
+    }
+    if (verb == "setFourO3AEnabled") {
+        return QStringLiteral("4o3a");
+    }
+    if (verb == "clearAccessoryFaults") {
+        if (faultsDevice == QLatin1String("pgxl") || faultsDevice == QLatin1String("tgxl")
+            || faultsDevice == QLatin1String("rfkit")) {
+            return faultsDevice;
+        }
+        return QStringLiteral("faults");
+    }
+    return {};
+}
+
 } // namespace
 
 StationClient::CommandOutcome StationClient::sendCommand(const QByteArray& verb, int sliceId,
@@ -2592,7 +2703,16 @@ StationClient::CommandOutcome StationClient::sendCommand(const QByteArray& verb,
                 .arg(action)
         };
     }
-    PendingCommand pending{ verb, sliceId };
+    PendingCommand pending;
+    pending.verb = verb;
+    pending.sliceId = sliceId;
+    if (verb == "clearAccessoryFaults") {
+        for (const MirrorUpdate& argument : arguments) {
+            if (argument.name == "device") {
+                pending.faultsDevice = argument.value.toString();
+            }
+        }
+    }
     if ((verb == "requestStreamCtunPinned" || verb == "requestStreamCentre")
         && !m_radioModel.isNull()) {
         if (SliceModel* slice = m_radioModel->sliceById(sliceId)) {
@@ -2787,6 +2907,226 @@ StationClient::CommandOutcome StationClient::requestNnrRetry(int sliceId)
         QStringLiteral("trying noise reduction again"));
 }
 
+StationClient::CommandOutcome StationClient::requestConfigurePgxl(const QString& host, quint16 port)
+{
+    if (!remotePgxlControlAvailable()) {
+        return { false, QStringLiteral("The station does not support remote PGXL configuration.") };
+    }
+    return sendCommand("configurePgxl", -1,
+                       { stringArgument("host", host), intArgument("port", port) },
+                       QStringLiteral("the Power Genius address"));
+}
+
+StationClient::CommandOutcome StationClient::requestDisconnectPgxl()
+{
+    if (!remotePgxlControlAvailable()) {
+        return { false, QStringLiteral("The station does not support remote PGXL configuration.") };
+    }
+    return sendCommand("disconnectPgxl", -1, {}, QStringLiteral("the Power Genius disconnect"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlConnectionSettings(bool autoReconnect,
+                                                                           int keepaliveSec,
+                                                                           int pingSec)
+{
+    if (!remotePgxlControlAvailable()) {
+        return { false, QStringLiteral("The station does not support remote PGXL configuration.") };
+    }
+    return sendCommand("setPgxlConnectionSettings", -1,
+                       { boolArgument("autoReconnect", autoReconnect),
+                         intArgument("keepaliveSec", keepaliveSec),
+                         intArgument("pingSec", pingSec) },
+                       QStringLiteral("the Power Genius connection settings"));
+}
+
+// R-R3-47 / R-R3-22 (remoteRfKitControlVersion 2): the Core's RF-Kit.
+StationClient::CommandOutcome StationClient::requestConfigureRfKit(const QString& host, quint16 port)
+{
+    if (!remoteRfKitControlAvailable()) {
+        return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") };
+    }
+    return sendCommand("configureRfKit", -1,
+                       { stringArgument("host", host), intArgument("port", port) },
+                       QStringLiteral("the RF-Kit amplifier address"));
+}
+
+bool StationClient::rfKitSettingsAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remoteRfKitControlVersion >= 3;
+}
+
+StationClient::CommandOutcome StationClient::requestResetRfKitError()
+{
+    if (!rfKitSettingsAvailable()) {
+        return IStationLink::requestResetRfKitError();
+    }
+    return sendCommand("resetRfKitError", -1, {},
+                       QStringLiteral("the RF-Kit amplifier's error reset"));
+}
+
+StationClient::CommandOutcome StationClient::requestDisconnectRfKit()
+{
+    if (!remoteRfKitControlAvailable()) {
+        return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") };
+    }
+    return sendCommand("disconnectRfKit", -1, {}, QStringLiteral("the RF-Kit amplifier disconnect"));
+}
+
+StationClient::CommandOutcome StationClient::requestRfKitEnabled(bool enabled)
+{
+    if (!remoteRfKitControlAvailable()) {
+        return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") };
+    }
+    return sendCommand("setRfKitEnabled", -1, { boolArgument("enabled", enabled) },
+                       QStringLiteral("the RF-Kit amplifier switch"));
+}
+
+// R-R3-48 (stationTciVersion 1): the one TCI switch and port.
+StationClient::CommandOutcome StationClient::requestStationTci(bool enabled, quint16 port)
+{
+    if (!stationTciAvailable()) {
+        return { false, QStringLiteral("This Core has no TCI server for the station.") };
+    }
+    return sendCommand("setStationTci", -1,
+                       { boolArgument("enabled", enabled), intArgument("port", port) },
+                       QStringLiteral("the station's TCI server switch"));
+}
+
+// R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory records
+// and settings.
+StationClient::CommandOutcome StationClient::requestTxInterlockPolicy(int mode, int graceMs,
+                                                                      bool swrGateEnabled,
+                                                                      double swrGateMax)
+{
+    if (!accessoryDataAvailable()) {
+        return IStationLink::requestTxInterlockPolicy(mode, graceMs, swrGateEnabled, swrGateMax);
+    }
+    return sendCommand("setTxInterlockPolicy", -1,
+                       { intArgument("mode", mode), intArgument("graceMs", graceMs),
+                         boolArgument("swrGateEnabled", swrGateEnabled),
+                         doubleArgument("swrGateMax", swrGateMax) },
+                       QStringLiteral("the transmit interlock"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlPowerCap(bool enabled, int watts)
+{
+    if (!accessoryDataAvailable()) {
+        return IStationLink::requestPgxlPowerCap(enabled, watts);
+    }
+    return sendCommand("setPgxlPowerCap", -1,
+                       { boolArgument("enabled", enabled), intArgument("watts", watts) },
+                       QStringLiteral("the Power Genius output limit"));
+}
+
+StationClient::CommandOutcome StationClient::requestClearAccessoryFaults(const QString& device)
+{
+    if (!accessoryDataAvailable()) {
+        return IStationLink::requestClearAccessoryFaults(device);
+    }
+    return sendCommand("clearAccessoryFaults", -1, { stringArgument("device", device) },
+                       QStringLiteral("the fault history"));
+}
+
+// R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
+// 1): the amp's and tuner's own settings. A Core that did not offer them is
+// not asked; the window says why.
+StationClient::CommandOutcome StationClient::requestPgxlName(const QString& name)
+{
+    if (!pgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestPgxlName(name);
+    }
+    return sendCommand("setPgxlName", -1, { stringArgument("name", name) },
+                       QStringLiteral("the Power Genius name"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlHardware(const QString& setting,
+                                                                 const QString& value)
+{
+    if (!pgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestPgxlHardware(setting, value);
+    }
+    if (setting == QLatin1String("ledIntensity")) {
+        return sendCommand("setPgxlHardware", -1, { intArgument("ledIntensity", value.toInt()) },
+                           QStringLiteral("the Power Genius hardware setting"));
+    }
+    return sendCommand("setPgxlHardware", -1, { stringArgument(setting.toUtf8(), value) },
+                       QStringLiteral("the Power Genius hardware setting"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlNetwork(bool dhcp, const QString& address,
+                                                                const QString& netmask,
+                                                                const QString& gateway)
+{
+    if (!pgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestPgxlNetwork(dhcp, address, netmask, gateway);
+    }
+    return sendCommand("setPgxlNetwork", -1,
+                       { boolArgument("dhcp", dhcp), stringArgument("address", address),
+                         stringArgument("netmask", netmask),
+                         stringArgument("gateway", gateway) },
+                       QStringLiteral("the Power Genius network settings"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlSaveAndRestart()
+{
+    if (!pgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestPgxlSaveAndRestart();
+    }
+    return sendCommand("savePgxlSettings", -1, {},
+                       QStringLiteral("the Power Genius Save & Reboot"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlReadSettings()
+{
+    if (!pgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestPgxlReadSettings();
+    }
+    return sendCommand("readPgxlSettings", -1, {},
+                       QStringLiteral("the request for the Power Genius settings"));
+}
+
+StationClient::CommandOutcome StationClient::requestTgxlName(const QString& name)
+{
+    if (!tgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestTgxlName(name);
+    }
+    return sendCommand("setTgxlName", -1, { stringArgument("name", name) },
+                       QStringLiteral("the Tuner Genius name"));
+}
+
+StationClient::CommandOutcome StationClient::requestTgxlNetwork(bool dhcp, const QString& address,
+                                                                const QString& netmask,
+                                                                const QString& gateway)
+{
+    if (!tgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestTgxlNetwork(dhcp, address, netmask, gateway);
+    }
+    return sendCommand("setTgxlNetwork", -1,
+                       { boolArgument("dhcp", dhcp), stringArgument("address", address),
+                         stringArgument("netmask", netmask),
+                         stringArgument("gateway", gateway) },
+                       QStringLiteral("the Tuner Genius network settings"));
+}
+
+StationClient::CommandOutcome StationClient::requestTgxlSaveAndRestart()
+{
+    if (!tgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestTgxlSaveAndRestart();
+    }
+    return sendCommand("saveTgxlSettings", -1, {},
+                       QStringLiteral("the Tuner Genius Save & Reboot"));
+}
+
+StationClient::CommandOutcome StationClient::requestTgxlReadSettings()
+{
+    if (!tgxlDeviceSettingsAvailable()) {
+        return IStationLink::requestTgxlReadSettings();
+    }
+    return sendCommand("readTgxlSettings", -1, {},
+                       QStringLiteral("the request for the Tuner Genius settings"));
+}
+
 StationClient::CommandOutcome StationClient::requestDisconnectTgxl()
 {
     if (!remoteTgxlConfigAvailable()) {
@@ -2871,6 +3211,13 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             }
         } else if (pending.verb == "requestSliceSampleRate") {
             m_radioModel->reportStationRetuneRejected(pending.sliceId, reason);
+        } else if (const QString device = accessoryRefusalDevice(pending.verb,
+                                                                 pending.faultsDevice);
+                   !device.isEmpty()) {
+            // L1 (R-R3-47, R-R3-22, R-R3-48): an accessory refusal has its
+            // own route (the pages that sent it show it; MainWindow says
+            // it), never the slice one.
+            m_radioModel->reportStationAccessoryRefusal(device, reason);
         } else {
             m_radioModel->reportStationSliceCommandRejected(reason);
         }
@@ -2972,10 +3319,80 @@ bool StationClient::remoteAmplifierStatusAvailable() const
         && m_capabilities.remotePgxlControlVersion >= 1;
 }
 
+bool StationClient::remotePgxlControlAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remotePgxlControlVersion >= 2;
+}
+
 bool StationClient::remoteRfKitStatusAvailable() const
 {
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.remoteRfKitControlVersion >= 1;
+}
+
+bool StationClient::remoteRfKitControlAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remoteRfKitControlVersion >= 2;
+}
+
+bool StationClient::accessoryDataAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.accessoryDataVersion >= 1;
+}
+
+bool StationClient::pgxlDeviceSettingsAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remotePgxlControlVersion >= 3;
+}
+
+bool StationClient::tgxlDeviceSettingsAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remoteTgxlControlVersion >= 1;
+}
+
+bool StationClient::stationTciAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.stationTciVersion >= 1;
+}
+
+bool StationClient::coreServesTciOnThisComputer() const
+{
+    // What the Core last said it offers, kept while the link is down: the
+    // Core keeps its server running whether or not this window is there.
+    if (m_agreedMinor < kRadioIdentitySessionProtocolMinor
+        || m_capabilities.stationTciVersion < 1) {
+        return false;
+    }
+    if (m_coreOnThisComputerForTest >= 0) {
+        return m_coreOnThisComputerForTest == 1;
+    }
+    const QString host = m_lastUrl.host();
+    if (host.isEmpty()) {
+        return false;
+    }
+    if (host.compare(QStringLiteral("localhost"), Qt::CaseInsensitive) == 0) {
+        return true;
+    }
+    const QHostAddress address(host);
+    if (address.isNull()) {
+        return false;
+    }
+    if (address.isLoopback()) {
+        return true;
+    }
+    const auto local = QNetworkInterface::allAddresses();
+    for (const QHostAddress& mine : local) {
+        if (mine.isEqual(address, QHostAddress::ConvertV4MappedToIPv4)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool StationClient::remoteFourO3AControlAvailable() const
