@@ -1,7 +1,7 @@
 # NereusSDR for iPhone and iPad: Design Spec
 
 Status: **Approved** by JJ (KG4VCF) on 2026-09-23 ("onward"); D35 to D42
-were added while planning, each his call. Every decision in §3 is JJ's.
+were added while planning, each his call, and he changed D38 later that day. Every decision in §3 is JJ's.
 Plan: [2026-09-23-iphone-app-plan.md](2026-09-23-iphone-app-plan.md)
 Branch: `claude/nereussdr-iphone-app-5fb988`
 
@@ -138,14 +138,15 @@ Every row is a call JJ made, one question at a time, on a rendered mockup.
 
 Choices the code could not settle, put to JJ on 2026-09-23 with a
 recommendation each. He kept D35 to D40 as recommended; D41 and D42 are his
-answers in his own words.
+answers in his own words. He later changed D38 against the recommendation, to match
+his 2026-09-22 answer to the Core/GUI session.
 
 | # | Decision | Why | Rejected |
 | --- | --- | --- | --- |
 | D35 | **The desktop's station switch hands over.** While NereusSDR is open it runs the station itself and serves the phone; when it closes, a background station (`nereusd`) takes over the radio and keeps serving; when it opens again it takes the radio back. While the app is open, the operator at the desktop and a phone can both operate, as when standing at the radio with the phone in hand. | The desktop keeps working exactly as it does today, which remote design §5 requires; the loopback end state needs every control mirrored first. | The desktop as a client of a background station whenever the switch is on. |
 | D36 | **The station also advertises itself over Bonjour (DNS-SD)**, alongside its existing announcement, and the phone finds stations that way. | iOS only lets an app receive custom multicast with a special permission Apple grants on request, and a refusal would block the release. Amends pairing design §6. | Asking Apple for the multicast permission. |
 | D37 | **The pairing code's key exchange uses a published library on both ends:** SPAKE2+EE (BSD-2-Clause) on libsodium (ISC). | Homemade cryptography is how security bugs get in. | Writing the exchange on the cryptography already shipped (OpenSSL, Mbed TLS). |
-| D38 | **The rendezvous and relay run on a second small server** with its own address. | Relay traffic on port 443 never collides with the website on the shared server. | Sharing the website's server and splitting port 443. |
+| D38 | **The rendezvous and relay run on the website's server**, the one that serves nereussdr.com, at `rv.nereussdr.com`. The rendezvous's WebSocket rides behind the website's web server by host name; coturn takes UDP 3478 and 443; a web-only fallback that needs its own TLS listener on TCP 443 needs a splitter by TLS name or a second address, which the fallback measurement weighs. | No new machine to run, and `rv.nereussdr.com` and the R5 bench already point there. JJ's call on 2026-09-23, matching his 2026-09-22 answer to the Core/GUI session. | A second small server of its own (recommended, for keeping relay traffic and the website apart). |
 | D39 | **The station also accepts the app one major version back**, just as the app accepts the station one back. | Neither update order can lock the operator out while an App Store update waits in review. Amends §4.4 and remote design §7.0. | Changing only the app's side. |
 | D40 | **Filter presets live on the station**, and every device shows the same ones. | One station, one set of presets, like the radio's own memories. A desktop connected remotely starts sharing the station's presets; a desktop running the radio locally is unchanged. | Each device keeping its own. |
 | D41 | **An item the desktop has not built appears on the phone once it exists.** The phone keeps the desktop's order and names for tools, Radio tab items and Setup pages, and leaves out any the station does not offer yet; each appears by itself, in its place, when it is built. VAX and antenna selection are built and working, so VAX Audio and Antenna Setup are on the phone from the start even though their desktop menu entries are not finished. | App Review rejects apps that show placeholder or "coming soon" items. JJ: "show each once it exists however vax, antenna selection are there and working". | Greyed items as on the desktop; building every missing desktop feature in this plan. |

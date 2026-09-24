@@ -125,7 +125,7 @@ read for this plan at `4bb89b5d`.
   bundles: no tokens, private keys, pairing codes or device keys. Keys and codes in tests
   are generated at run time. A pairing code appears only on the station's console output
   and its status page, never through the logging categories.
-* **Devices** (the radios, the station computers, iPhones and iPads, the second server)
+* **Devices** (the radios, the station computers, iPhones and iPads, the website's server)
   are touched only by the controller or JJ, never by an implementer on its own
   initiative. Confirm which device answers before writing to it; never restart or reflash
   a box that could drop off its network without asking. Hardware and device evidence
@@ -298,7 +298,7 @@ not, the controller stops and asks JJ.
 | `src/core/daemon/{StationStatusPage,StationControlSocket,StationControlCommands}.*` | The status page and console commands |
 | `src/gui/StationServiceManager.*`, `src/gui/setup/RemoteStationPage.*`, `src/gui/setup/ThisCorePage.*` | Starting the background station; the Remote Station page; managing a remote Core |
 | `resources/pairing-words-v1.txt`, `cmake/NereusPairing.cmake` | The pairing word list; libsodium and SPAKE2+EE |
-| `rendezvous/` | The rendezvous service (Python), its conformance vectors, coturn configuration and deployment (D38) |
+| `rendezvous/` | The rendezvous service (Python), its conformance vectors, coturn configuration and deployment on the website's server (D38) |
 | `packaging/deb/`, `packaging/station-image/` | The station's Debian packages and the card image |
 | `ios/` | The app: `LICENSE`, `README.md`, `THIRD-PARTY.md`, `project.yml`, `NereusKit/`, `NereusApp/`, `NereusActivity/`, `Shared/`, `AppStore/`, `scripts/` |
 | `scripts/verify-ios-provenance.py`, `scripts/render-link-tables.py` | The app's provenance check; the link document's generated tables |
@@ -334,12 +334,15 @@ not, the controller stops and asks JJ.
       support), runs `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` and
       `xcodebuild -runFirstLaunch`, and installs the iOS 27 platform; the controller installs
       XcodeGen with `brew install xcodegen`.
-- [ ] Before Task 26's deployment step, JJ creates the second small server and points
-      `rv.nereussdr.com` (A and AAAA records) at it (D38).
+- [ ] Before Task 26's deployment step, the controller confirms `rv.nereussdr.com` (A and
+      AAAA records) points at the website's server (D38), and asks JJ before the R5 bench's
+      `netbench` server gives up UDP 443 and 3478 there. That server also runs the website
+      and the bench: nothing touches its firewall or the `netbench` account, and Caddy
+      changes go through the website's own server-config flow.
 - [ ] Before Task 12, confirm with JJ which session runs the station tasks (Parts C to I):
       this plan's controller, or the Core/GUI session's controller in its station lanes.
       Both sessions were set to build pairing, R5 and R4; the Core/GUI session is holding
-      its own R5 and R4 plans (2026-09-24) until JJ decides.
+      its own R5 and R4 plans (2026-09-23) until JJ decides.
 
 **Order and parts.** A (Tasks 1 to 4): the written link. B (5 to 11): the app's
 foundation. C (12 to 18): identity and pairing. D (19 to 25): what the phone shows. E (26
@@ -2002,18 +2005,21 @@ review (it can leave a station without a radio). Requires Tasks 19 and 21.
 Per the pairing design §5 and §8, the R5 bench close-out and JJ's direction of
 2026-09-22 (rendezvous and relay on `rv.nereussdr.com`; IPv6 direct first, then IPv4
 hole punching, then relay on UDP and TCP 443; acceptance is a phone on a cellular
-carrier reaching the station), and D38 (a second small server). This comes before
+carrier reaching the station), and D38 (the website's server). This comes before
 remote transmit in JJ's saved order (R3, R5, R4, R6).
 
 **Settled here, with reasons** (these match JJ's R5 answers to the Core/GUI session on
 2026-09-22 and 2026-09-23: device keys and pairing before remote access goes live, TURN
 over UDP first, the web-only fallback required, a separate control connection):
 
-* **A small signalling service plus coturn.** The Python service in `rendezvous/`
-  (Task 26) handles registration, introductions and pairing mailboxes over a TLS
-  WebSocket on TCP 443; coturn serves STUN and TURN on UDP 3478 and UDP 443. The web-only
-  fallback over TCP 443 is chosen by measurement (Task 29) among the options the App
-  Store app can use; libnice is excluded because it needs GLib, which is LGPL.
+* **A small signalling service plus coturn, on the website's server (D38).** The Python
+  service in `rendezvous/` (Task 26) handles registration, introductions and pairing
+  mailboxes over a TLS WebSocket on TCP 443, behind the website's Caddy by host name, so
+  the website keeps its port and nothing splits it; coturn serves STUN and TURN on UDP
+  3478 and UDP 443 (Caddy's HTTP/3 stays off). The web-only fallback over TCP 443 is
+  chosen by measurement (Task 29) among the options the App Store app can use, including
+  what each needs on the shared server; libnice is excluded because it needs GLib, which
+  is LGPL.
 * **The control session crosses NAT on its own small ICE connection**, carrying the
   unchanged session protocol over a reliable data channel, so media restarts never cut
   control and the heartbeat never queues behind the display; on the LAN the direct
@@ -2029,7 +2035,7 @@ over UDP first, the web-only fallback required, a separate control connection):
   (Task 29); whether coturn keeps refreshing an allocation past its credential's expiry
   is recorded by Task 26's Docker check.
 
-## Task 26: The rendezvous service and the second server
+## Task 26: The rendezvous service on the website's server
 
 **Requirements:** R-IOS-08 (pair by code through the relay), R-IOS-16 (direct and
 relay), D38, pairing design §5.1 to §5.5.
@@ -2040,7 +2046,12 @@ relay), D38, pairing design §5.1 to §5.5.
   `python3-cryptography`), `tests/` (pytest), `conformance/` (the vectors the C++ and
   Swift clients also run), `deploy/` (`setup-server.sh`, systemd unit, coturn
   `turnserver.conf`), `deploy.sh`, `README.md` (the self-hosting recipe: DNS with A and
-  AAAA records, certificates from Let's Encrypt, firewall rules, limits)
+  AAAA records, certificates from Let's Encrypt, firewall rules, limits, and running
+  beside a website on the same server)
+- Modify: `website/deploy/Caddyfile` (an `rv.nereussdr.com` site whose `reverse_proxy`
+  sends the WebSocket to the service on a loopback port), `website/README.md` (the
+  shared server's port map: Caddy on TCP 80 and 443, coturn on UDP 3478 and 443 and its
+  relay range, the service on loopback)
 - Create: `docs/architecture/2026-09-23-rendezvous-v1.md` (the rendezvous wire), a
   section in the link document pointing to it
 - Modify: `.github/workflows/ci.yml` (a job running the service's pytest suite)
@@ -2073,7 +2084,13 @@ relay), D38, pairing design §5.1 to §5.5.
   - coturn hardening: no anonymous or static allocations; relaying to loopback, RFC 1918,
     100.64/10, link-local, unique-local and multicast addresses blocked; no TCP relaying;
     no admin CLI; quotas per session and in total sized to the server's transfer
-    allowance; UDP 3478 and 443 in both address families.
+    allowance; UDP 3478 and 443 in both address families; a relay port range that
+    leaves out every port the R5 bench's `netbench` server uses there (UDP 50001 and
+    47001, TCP 47000).
+  - On the shared server: `rendezvous/deploy/setup-server.sh` refuses to start coturn
+    while any other process holds UDP 3478 or 443, never changes the firewall, Caddy's
+    configuration or the `netbench` account, and leaves Caddy's TLS to Caddy (the
+    service itself listens on loopback only).
   - Service limits (configurable, these defaults): introductions 30 a minute per source
     address and 60 per station id; mailbox opens 10 a minute per source address; message
     and size caps sized for real SDP (at most 64 KiB, candidates at most 4 KiB each, up to
@@ -2094,18 +2111,26 @@ relay), D38, pairing design §5.1 to §5.5.
 - The service and coturn listen on IPv4 and IPv6; `README.md` explains every step a
   self-hoster needs, including the AAAA records the pairing design §9.5 item 3 requires,
   and a fresh container built from it alone serves both roles.
+- In Docker, the website's Caddyfile with the new site passes `caddy validate`, and
+  Caddy (with local certificates for the test) serves the website's pages and upgrades
+  a WebSocket to the service by host name, each unchanged by the other
+  (`rendezvous/tests/caddy-check.sh`).
 
 **Verification:** networking and authorisation: invariant tests first.
 `python3 -m pytest rendezvous/tests -q`; coturn checks in Docker by
-`rendezvous/tests/coturn-check.sh`. Deployment is a controller and JJ step, never the
-implementer's: JJ creates the second server and points `rv.nereussdr.com` (A and AAAA)
-at it (D38); the controller runs `rendezvous/deploy.sh` against the address JJ gives and
-checks the WebSocket, STUN on 3478 and 443, a test TURN allocation and certificate
-expiry from this Mac and from the Rock, in both address families (pending until
-observed).
+`rendezvous/tests/coturn-check.sh` and `rendezvous/tests/caddy-check.sh`. Deployment is
+a controller and JJ step on the website's server (D38), never the implementer's: the
+controller confirms `rv.nereussdr.com` resolves to it in both address families, checks
+`ss -lntup` and asks JJ before `netbench` gives up UDP 443 and 3478, deploys the Caddy
+site through the website's own flow (`website/deploy/setup-server.sh`, which validates
+before installing), runs `rendezvous/deploy.sh`, then checks that nereussdr.com still
+serves, putting the previous Caddyfile back at once if it does not. Then it checks the
+WebSocket, STUN on 3478 and 443, a test TURN allocation and certificate expiry from this
+Mac and from the Rock, in both address families (pending until observed).
 
 **Execution note (advisory):** opus. Networking, authorisation, an internet-facing
-service: flag for earlier review. Requires Part C.
+service on the server that also runs the website: flag for earlier review. Requires
+Part C.
 
 - [ ] **Step 1:** The protocol document and conformance vectors; registration with
       proof, introductions, nameplates and mailboxes, with tests.
@@ -2287,8 +2312,12 @@ are measured before one is chosen).
     except DNS and only TCP 443 open, at 0.5 % and 1 % loss and 30 and 80 ms delay:
     inter-arrival p50, p95, p99 and maximum for keyed events, Opus and display frames;
     the worst stall; cold time to first audio; recovery after a TCP reset; Pi 4 CPU at
-    145 and 520 kbit/s; artifact size; lines of code and patched upstream lines; and a
-    licence note for the station and for the app.
+    145 and 520 kbit/s; artifact size; lines of code and patched upstream lines; a
+    licence note for the station and for the app; and what each needs on the website's
+    server (D38): (B) and (C) reach coturn's TLS listener on TCP 443, which the
+    website's Caddy holds, so they need a splitter by TLS name in front of Caddy or a
+    second address on the server, while (E) rides the rendezvous's host name behind
+    Caddy and needs neither.
   - `PathRacer` starts, at once and together: direct TLS to each cached and LAN address
     (IPv6 first, IPv4 250 ms later), the rendezvous introduction with ICE (host, server
     reflexive and TURN/UDP candidates), and, when the station allows the relay, the
