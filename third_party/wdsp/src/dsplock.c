@@ -123,6 +123,11 @@ boydsoftprez@gmail.com
 //                 periodic delay (WDSPSetTestPeriodicDelayUs) added by J.J.
 //                 Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code (R-R3-40, R-R3-37).
+//   2026-09-23 - GetChannelDspLoad returns 1 when no attempt found the pair
+//                 at rest (the read may be torn; the caller skips it), and
+//                 the test-only WDSPSetTestHoldLoadPair added by J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code (R-R3-40).
 // =================================================================
 
 #include "comm.h"
@@ -158,6 +163,10 @@ static volatile long test_process_delay_us[MAX_CHANNELS];
 static volatile long test_periodic_delay_us[MAX_CHANNELS];
 static volatile long test_periodic_every[MAX_CHANNELS];
 static long test_periodic_count[MAX_CHANNELS];
+
+// Test-only: 1 while WDSPSetTestHoldLoadPair holds the channel's load pair
+// open, so every read of it finds a change in progress.
+static volatile long test_load_pair_held[MAX_CHANNELS];
 
 // Times each channel's worker has left its loop.
 static volatile long worker_exits[MAX_CHANNELS];
@@ -651,8 +660,36 @@ int GetChannelDspLoad (int channel, WdspChannelLoad* out)
 			out->currentBlockNs = elapsed > 0 ? elapsed : 0;
 		}
 		out->readNs = now_ns;
+		// The worker kept the pair moving for every attempt: the last one
+		// may be torn (a block counted twice or not at all), so the caller
+		// is told to skip this read rather than measure with it.
+		if (attempt == kLoadReadAttempts)
+		{
+			return 1;
+		}
 	}
 	return 0;
+}
+
+PORT
+void WDSPSetTestHoldLoadPair (int channel, int hold)
+{
+	if (!valid_channel (channel))
+	{
+		return;
+	}
+	// Opens (odd) or closes (even) the channel's load pair as the worker's
+	// load_seq_step does, so a read in between finds a change in progress.
+	// The worker's own steps come in pairs, so the parity it leaves is this
+	// hook's.
+	if (hold && InterlockedExchange (&test_load_pair_held[channel], 1L) == 0)
+	{
+		load_seq_step (channel);
+	}
+	else if (!hold && InterlockedExchange (&test_load_pair_held[channel], 0L) != 0)
+	{
+		load_seq_step (channel);
+	}
 }
 
 PORT

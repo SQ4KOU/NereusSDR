@@ -47,6 +47,36 @@ class TestReceiverDspLoadSampler : public QObject {
     Q_OBJECT
 
 private slots:
+    // R-R3-40 fix wave: dsplock.c gives up after 64 attempts at reading
+    // busyNs and the block in progress at rest, and that last pair may be
+    // torn (a block counted twice or not at all). Such a read measures
+    // nothing: the slice keeps its load, and the next read measures from
+    // the last good baseline.
+    void aReadThatMayBeTornKeepsTheSlicesLoad()
+    {
+        ReceiverDspLoadSampler sampler;
+        sampler.update(one(reading(0, 0)));
+        sampler.update(one(reading(10, 10 * 40'000'000LL)));
+        const auto before = sampler.snapshot(kSlice);
+        QVERIFY(before);
+
+        // Torn: the block just finished is in busyNs and in the block in
+        // progress too.
+        ReceiverDspLoadSampler::Reading torn = reading(20, 20 * 40'000'000LL);
+        torn.currentBlockNs = 40'000'000LL;
+        torn.consistent = false;
+        sampler.update(one(torn));
+        const auto kept = sampler.snapshot(kSlice);
+        QVERIFY(kept);
+        QCOMPARE(kept->load, before->load);
+
+        // The next good read covers both intervals from the kept baseline.
+        sampler.update(one(reading(30, 10 * 40'000'000LL + 20 * 20'000'000LL)));
+        const auto next = sampler.snapshot(kSlice);
+        QVERIFY(next);
+        QVERIFY(qAbs(next->load - 20000.0 / kPeriodUs) < 1e-9);
+    }
+
     void severalReadersSeeTheSameSnapshot()
     {
         ReceiverDspLoadSampler sampler;

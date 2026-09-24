@@ -12,6 +12,8 @@
 //                 reads replaces mean block / period and the "time so far
 //                 over one period" rule for a late block in progress
 //                 (R-R3-40, R-R3-37).
+//                 Later the same day: a read that may be torn keeps the
+//                 slice's baseline and snapshot (R-R3-40).
 // =================================================================
 
 #include "models/ReceiverDspLoadSampler.h"
@@ -60,6 +62,18 @@ void ReceiverDspLoadSampler::update(const QHash<int, Reading>& readings)
 
     for (auto it = readings.constBegin(); it != readings.constEnd(); ++it) {
         const Reading& now = it.value();
+        // A read that may be torn measures nothing: keep what the slice had.
+        if (!now.consistent) {
+            const auto kept = m_baselines.constFind(it.key());
+            if (kept != m_baselines.constEnd()) {
+                baselines.insert(it.key(), *kept);
+                const auto shown = m_snapshots.constFind(it.key());
+                if (shown != m_snapshots.constEnd()) {
+                    snapshots.insert(it.key(), *shown);
+                }
+            }
+            continue;
+        }
         const Baseline current{now.blocks, now.busyNs, now.lateBlocks,
                                now.busyNs + now.currentBlockNs, now.readNs};
         baselines.insert(it.key(), current);

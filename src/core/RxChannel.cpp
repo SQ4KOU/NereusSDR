@@ -27,6 +27,8 @@
 //                 (runtime NNR limit, carried across a rebuild).
 //                 Later the same day: the read time (readNs), so a load
 //                 reads busy time over wall time (R-R3-40, R-R3-37).
+//                 Later the same day: DspLoadCounters::consistent, false for
+//                 a read whose busy pair may be torn (R-R3-40).
 // =================================================================
 
 //=================================================================
@@ -1962,9 +1964,12 @@ bool RxChannel::dspLoad(DspLoadCounters& out) const
         return false;
     }
     WdspChannelLoad load{};
-    if (GetChannelDspLoad(m_channelId, &load) != 0) {
+    // 1: the counters were read, but the busy pair may be torn (dsplock.c).
+    const int result = GetChannelDspLoad(m_channelId, &load);
+    if (result != 0 && result != 1) {
         return false;
     }
+    out.consistent = result == 0;
     out.blocks        = load.blocks;
     out.busyNs        = load.busyNs;
     out.lateBlocks    = load.lateBlocks;

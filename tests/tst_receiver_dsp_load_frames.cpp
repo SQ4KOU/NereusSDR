@@ -309,6 +309,22 @@ private slots:
         std::this_thread::sleep_for(kSettle);
     }
 
+    // R-R3-40 fix wave: when the worker keeps busyNs and the block in
+    // progress changing through every attempt, GetChannelDspLoad says so
+    // (1) instead of handing back a pair that may be torn, and reads
+    // normally again once the pair settles.
+    void aReadThatNeverFindsThePairAtRestIsFlagged()
+    {
+        WdspChannelLoad load{};
+        QCOMPARE(GetChannelDspLoad(kChannel, &load), 0);
+        WDSPSetTestHoldLoadPair(kChannel, 1);
+        const int held = GetChannelDspLoad(kChannel, &load);
+        WDSPSetTestHoldLoadPair(kChannel, 0);
+        QCOMPARE(held, 1);
+        QVERIFY(load.readNs > 0);
+        QCOMPARE(GetChannelDspLoad(kChannel, &load), 0);
+    }
+
     // The defect: one 9 ms block in 12 is about 60% of a core, not overload.
     void aFrameLikeLoadReadsItsCpuShare()
     {

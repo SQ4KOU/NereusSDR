@@ -22,6 +22,8 @@
 //                 between two reads (readNs), so a long block in progress
 //                 counts only for the time it has run (R-R3-40, R-R3-37;
 //                 docs/architecture/2026-09-23-r3-receiver-load-hotfix-plan.md).
+//                 Later the same day: Reading::consistent; a read that may be
+//                 torn keeps the slice's baseline and snapshot (R-R3-40).
 // =================================================================
 
 #pragma once
@@ -95,6 +97,11 @@ public:
         // RxDspWorker::inputDelayStats for the receiver's input.
         qint64 inputDelayMs{0};
         qint64 droppedInputMs{0};
+        // False for a read whose busy pair may be torn
+        // (RxChannel::DspLoadCounters::consistent): the slice keeps its
+        // previous baseline and snapshot, and the next read measures from
+        // that baseline.
+        bool consistent{true};
     };
 
     // Replaces every snapshot with one computed from these readings, keyed

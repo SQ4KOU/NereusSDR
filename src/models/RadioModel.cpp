@@ -6145,7 +6145,11 @@ void RadioModel::sampleReceiverDspLoad()
             reading.blockPeriodUs      = counters.blockPeriodUs;
             reading.currentBlockNs     = counters.currentBlockNs;
             reading.readNs             = counters.readNs;
-            reading.intervalMaxBlockUs = channel->takeDspIntervalMaxBlockUs();
+            reading.consistent         = counters.consistent;
+            // A read the sampler skips leaves the interval's longest block
+            // for the next one.
+            reading.intervalMaxBlockUs =
+                counters.consistent ? channel->takeDspIntervalMaxBlockUs() : 0;
             if (m_dspWorker) {
                 const RxDspWorker::InputDelayStats input =
                     m_dspWorker->inputDelayStatsForSlice(sliceId, slice->streamIndex());
