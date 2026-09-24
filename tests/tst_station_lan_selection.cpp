@@ -92,6 +92,48 @@ private slots:
         endpoint.announcement.fingerprint.clear();
         QVERIFY(matchingSavedCores(endpoint, {unpinned}).isEmpty());
     }
+    void aSavedCoreThatForgotThisComputerOffersPair()
+    {
+        // Part C fix wave (R2-M1): found by its identity, announcing itself
+        // unclaimed (reset from its console, or this computer removed), the
+        // saved Core's LAN row offers Pair, not Connect.
+        StationLanEndpoint endpoint;
+        endpoint.announcement = {4711, QStringLiteral("AB:").repeated(31) + QStringLiteral("AB"),
+            QStringLiteral("Core"), {}, QStringLiteral("00:00:00:00:00:00"), false};
+        endpoint.announcement.schema = kStationLanAnnouncementSchema2;
+        endpoint.announcement.identity = QByteArray(kStationLanIdentityBytes, '\x42');
+        endpoint.announcement.label = QStringLiteral("KG4VCF");
+        endpoint.announcement.claimed = false;
+        endpoint.announcement.pairing = StationLanPairing::Click;
+        QVERIFY(!encodeStationLanAnnouncement(endpoint.announcement).isEmpty());
+        SavedCoreTarget paired = savedCore(QString(), QString());
+        paired.connection.identityFingerprint = endpoint.announcement.identity;
+        QCOMPARE(matchingSavedCores(endpoint, {paired}).size(), 1);
+
+        ConnectionTargetRow row = GuiConnectionController::lanCoreRow(endpoint, {paired});
+        QVERIFY(row.pairable);
+        QVERIFY(!row.connectable);
+        QCOMPARE(row.state, QStringLiteral("Not paired yet"));
+        endpoint.announcement.pairing = StationLanPairing::Code;
+        row = GuiConnectionController::lanCoreRow(endpoint, {paired});
+        QVERIFY(row.pairable);
+        QCOMPARE(row.state, QStringLiteral("Pairs with its code"));
+        // Its pairing closed after too many wrong codes: neither.
+        endpoint.announcement.pairing = StationLanPairing::Closed;
+        row = GuiConnectionController::lanCoreRow(endpoint, {paired});
+        QVERIFY(!row.pairable);
+        QVERIFY(!row.connectable);
+        QCOMPARE(row.state, QStringLiteral("Pairing is closed on the Core"));
+
+        // Claimed (still paired with this computer, or with others): Connect.
+        endpoint.announcement.claimed = true;
+        endpoint.announcement.pairing = StationLanPairing::Code;
+        row = GuiConnectionController::lanCoreRow(endpoint, {paired});
+        QVERIFY(!row.pairable);
+        QVERIFY(row.connectable);
+        QCOMPARE(row.state, QStringLiteral("Saved, ready to connect"));
+    }
+
     void discoveredAddressUsesSavedPinWithoutRewritingAddress()
     {
         QTemporaryDir directory;

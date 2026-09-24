@@ -462,9 +462,12 @@ AddCoreByCodeDialog::AddCoreByCodeDialog(const QString& address, QWidget* parent
     setObjectName(QStringLiteral("addCoreByCode"));
 
     auto* layout = new QVBoxLayout(this);
+    // Part C fix wave (R2-M2): the places that show the code today. A
+    // headless Core has no screen, and the Remote Access page shows no code
+    // yet.
     auto* explanation = new QLabel(
-        tr("Type the pairing code the Core shows on its screen, its status page or the "
-           "Remote Access page of the computer it runs on, and the Core's address."),
+        tr("Type the Core's pairing code and its address. The code is on the Core's status "
+           "page, or run nereusd pairing show on the computer the Core runs on."),
         this);
     explanation->setObjectName(QStringLiteral("addCoreByCodeExplanation"));
     configurePlainTextLabel(explanation);

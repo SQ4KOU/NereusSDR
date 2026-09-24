@@ -63,6 +63,7 @@ private slots:
     void editorCancelHasNoAcceptance();
     void controlsRemainReadableAndReachable();
     void rowSelectionNeverResizesTheWindow();
+    void theCodeDialogNamesPlacesThatShowTheCode();
 };
 
 void ConnectionSelectorTest::selectionRefreshIsStableAndDoesNotConnect()
@@ -262,7 +263,7 @@ void ConnectionSelectorTest::controlsRemainReadableAndReachable()
          QStringLiteral("Saturn (advertised online)"), QStringLiteral("192.168.109.106:4433"), QStringLiteral("Saved, ready to connect")},
         savedRow()
     });
-    selector.setDiscoveryStatus(QStringLiteral("LAN discovery is active. Verify new Cores in Core setup."));
+    selector.setDiscoveryStatus(QStringLiteral("LAN discovery is active."));
     selector.setSelectedKey(QStringLiteral("saved-core"));
     selector.setCurrentConnection(QStringLiteral("Core connected"),
         QStringLiteral("Core: 192.168.109.106:4433\nRadio: Saturn G2"), true, false);
@@ -385,6 +386,21 @@ void ConnectionSelectorTest::rowSelectionNeverResizesTheWindow()
     QCOMPARE(selector.size(), opened);
     QCOMPARE(selector.minimumSize(), openedMinimum);
     assertRowFits();
+}
+
+// Part C fix wave (R2-M2): a headless Core has no screen, and the Remote
+// Access page shows no code yet; the dialog names the status page and the
+// console command.
+void ConnectionSelectorTest::theCodeDialogNamesPlacesThatShowTheCode()
+{
+    AddCoreByCodeDialog dialog;
+    auto* explanation = dialog.findChild<QLabel*>(QStringLiteral("addCoreByCodeExplanation"));
+    QVERIFY(explanation);
+    const QString text = explanation->text();
+    QVERIFY(text.contains(QStringLiteral("status page")));
+    QVERIFY(text.contains(QStringLiteral("nereusd pairing show")));
+    QVERIFY(!text.contains(QStringLiteral("screen")));
+    QVERIFY(!text.contains(QStringLiteral("Remote Access")));
 }
 
 QTEST_MAIN(ConnectionSelectorTest)

@@ -245,7 +245,7 @@ void GuiConnectionController::refresh()
             && selectionMatchesSaved(current, matches.first())
             && QUrl(current.connection.url) == endpoint.url();
         ConnectionTargetRow row = lanCoreRow(endpoint, m_store.targets());
-        if (exact && m_remoteControls) {
+        if (exact && m_remoteControls && !row.pairable) {
             row.state = m_remoteControls->statusText();
             row.connectable = m_remoteControls->canConnect();
         }
@@ -253,7 +253,8 @@ void GuiConnectionController::refresh()
     }
     m_selector->setDiscoveryStatus(m_lan.port() == 0
         ? tr("LAN discovery is not running. Saved and manual addresses remain available.")
-        : m_lan.lastError().isEmpty() ? tr("LAN discovery is active. Verify new Cores in Core setup.")
+        // Part C fix wave (R2-M2): new Cores pair from their row now.
+        : m_lan.lastError().isEmpty() ? tr("LAN discovery is active.")
         : OperatorReasonText::lanDiscoveryForDisplay(m_lan.lastError()));
     if (current.connection.isRemote() && !m_store.target(current.savedId)) {
         rows.append({QStringLiteral("current"), ConnectionTargetKind::SavedCore,
@@ -302,9 +303,19 @@ ConnectionTargetRow GuiConnectionController::lanCoreRow(const StationLanEndpoint
             : tr("%1 (advertised offline)").arg(advertised.radioName.isEmpty() ? tr("Radio") : advertised.radioName),
         endpointText(endpoint.url()), QString(),
         matches.size() < 2, false, false};
+    // Part C fix wave (R2-M1): a saved Core found by its identity that now
+    // announces itself unclaimed has forgotten this computer (a console
+    // reset, or this computer was removed): Connect would only be refused
+    // again, so the row offers Pair. A Core this computer is still paired
+    // with never announces itself unclaimed.
+    const bool identityMatch = matches.size() == 1
+        && !matches.first().connection.identityFingerprint.isEmpty()
+        && matches.first().connection.identityFingerprint == advertised.identity;
+    const bool forgotThisComputer = identityMatch
+        && advertised.schema >= kStationLanAnnouncementSchema2 && !advertised.claimed;
     if (matches.size() > 1) {
         row.state = tr("Choose a saved entry");
-    } else if (matches.size() == 1) {
+    } else if (matches.size() == 1 && !forgotThisComputer) {
         row.state = tr("Saved, ready to connect");
     } else if (oneClickPairs(advertised)) {
         // iPhone app Task 18: an unclaimed Core pairs with one click.
@@ -316,6 +327,11 @@ ConnectionTargetRow GuiConnectionController::lanCoreRow(const StationLanEndpoint
         // reopened for another device).
         row.state = tr("Pairs with its code");
         row.pairable = true;
+        row.connectable = false;
+    } else if (advertised.schema >= kStationLanAnnouncementSchema2 && !advertised.claimed) {
+        // Unclaimed, but its pairing closed after too many wrong codes: it
+        // opens again only from the Core's own computer.
+        row.state = tr("Pairing is closed on the Core");
         row.connectable = false;
     } else if (advertised.schema >= kStationLanAnnouncementSchema2) {
         // Paired with other devices and not taking new ones: pairing opens

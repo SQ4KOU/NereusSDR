@@ -435,6 +435,91 @@ private slots:
         QCOMPARE(again.selectedId(), QStringLiteral("second"));
     }
 
+    // Part C fix wave (R2-M3): V1 stays for a build from before V2, but a
+    // forgotten Core leaves it, token and all, and an edit reaches it.
+    void v1FollowsForgetsAndEditsButGainsNothing()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("settings.xml"));
+        AppSettings settings(path);
+        QJsonObject first = jsonV1Target(QStringLiteral("first"));
+        first.insert(QStringLiteral("token"), QStringLiteral("first-secret"));
+        QJsonObject second = jsonV1Target(QStringLiteral("second"));
+        second.insert(QStringLiteral("token"), QStringLiteral("second-secret"));
+        settings.setValue(QLatin1String(kV1Key),
+                          documentFor(QJsonArray{first, second}, QStringLiteral("first"), 1));
+        QVERIFY(settings.save());
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+
+        const auto v1 = [&path]() {
+            AppSettings onDisk(path);
+            onDisk.load();
+            return QJsonDocument::fromJson(
+                       onDisk.value(QLatin1String(kV1Key)).toString().toUtf8())
+                .object();
+        };
+
+        // Forget "first": gone from V1, its token with it, and V1's
+        // selection falls back to this computer's own Core.
+        QVERIFY(store.remove(QStringLiteral("first")));
+        QJsonObject doc = v1();
+        QCOMPARE(doc.value(QStringLiteral("version")).toInt(), 1);
+        QCOMPARE(doc.value(QStringLiteral("selectedId")).toString(), QStringLiteral("local"));
+        QJsonArray cores = doc.value(QStringLiteral("cores")).toArray();
+        QCOMPARE(cores.size(), 1);
+        QCOMPARE(cores.at(0).toObject().value(QStringLiteral("id")).toString(),
+                 QStringLiteral("second"));
+        QVERIFY(!QJsonDocument(doc).toJson().contains("first-secret"));
+
+        // Edit "second": its new token and address reach V1, with no
+        // identity key in a V1 record.
+        SavedCoreTarget edited = *store.target(QStringLiteral("second"));
+        edited.connection.token = QStringLiteral("replaced-secret");
+        edited.connection.url = QStringLiteral("wss://moved.example.test:4433");
+        edited.connection.identityFingerprint = someIdentity();
+        QVERIFY(store.upsert(edited));
+        cores = v1().value(QStringLiteral("cores")).toArray();
+        QCOMPARE(cores.size(), 1);
+        const QJsonObject carried = cores.at(0).toObject();
+        QCOMPARE(carried.value(QStringLiteral("token")).toString(),
+                 QStringLiteral("replaced-secret"));
+        QCOMPARE(carried.value(QStringLiteral("url")).toString(),
+                 QStringLiteral("wss://moved.example.test:4433"));
+        QVERIFY(!carried.contains(QStringLiteral("identity")));
+        QVERIFY(!QJsonDocument(v1()).toJson().contains("second-secret"));
+
+        // A Core added after V2 does not appear in V1.
+        QVERIFY(store.upsert(makeTarget(QStringLiteral("third"))));
+        QCOMPARE(v1().value(QStringLiteral("cores")).toArray().size(), 1);
+
+        // Its last Core forgotten, V1 is an empty list, still there.
+        QVERIFY(store.remove(QStringLiteral("second")));
+        AppSettings onDisk(path);
+        onDisk.load();
+        QVERIFY(onDisk.contains(QLatin1String(kV1Key)));
+        QVERIFY(v1().value(QStringLiteral("cores")).toArray().isEmpty());
+    }
+
+    // A V1 that cannot be read, beside a V2, is removed at the next change:
+    // nothing could keep a forgotten Core's token out of it.
+    void anUnreadableV1BesideV2IsRemovedAtTheNextChange()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("settings.xml")));
+        settings.setValue(QLatin1String(kTargetKey),
+                          documentFor(QJsonArray{jsonTarget(QStringLiteral("one"))},
+                                      QStringLiteral("one"), 2));
+        settings.setValue(QLatin1String(kV1Key), QStringLiteral("{ not a list"));
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+        QVERIFY(settings.contains(QLatin1String(kV1Key)));
+        QVERIFY(store.remove(QStringLiteral("one")));
+        QVERIFY(!settings.contains(QLatin1String(kV1Key)));
+    }
+
     // A V1 list that cannot be read writes nothing and is left as it is.
     void unreadableV1ListIsNotMigrated()
     {
