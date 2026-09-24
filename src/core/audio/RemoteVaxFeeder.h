@@ -8,14 +8,21 @@
 // file adds no ported logic.
 //
 // One feeder per VAX channel. It is a receiver-stream sink
-// (IReceiverPcmSink): the remote window asks the Core for the assigned
-// slice's audio and the stream's blocks land here on the receive worker
-// thread. receiverAudioBlock() only copies the block into a bounded
-// hand-off ring and returns (no allocation, no lock, no device or network
-// work), because it runs under the stream's lock (R3 receiver audio plan,
-// Task 3's finding).
+// (IReceiverPcmSink): the remote window asks the Core for the audio of
+// every slice assigned to the channel and the streams' blocks land here on
+// the receive worker thread. receiverAudioBlock() only copies the block
+// into that slice's bounded hand-off ring and returns (no allocation, no
+// lock, no device or network work), because it runs under the stream's
+// lock (R3 receiver audio plan, Task 3's finding).
 //
-// A worker of its own (pump(), every 5 ms) moves the audio from the ring
+// Slices sharing a channel are mixed, as the local VAX tee mixes them
+// (AudioEngine, VaxChannelMixer): the pump sums the slices' rings in
+// 192-frame chunks before the rate matcher. A chunk waits until every
+// slice still sending has one queued; a slice whose stream stopped, or
+// that has sent nothing for kQuietNs, counts as silence until its audio
+// flows again.
+//
+// A worker of its own (pump(), every 5 ms) moves the audio from the rings
 // through a rate matcher into the VAX output, topping the output's queue
 // up to a small target as the output reports consuming it. The output's
 // own clock (the app reading the VAX device) therefore paces the audio,
@@ -37,6 +44,9 @@
 // Modification history (NereusSDR):
 //   2026-09-23: Written for NereusSDR by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23: R-R3-44 fix wave: a set of slices per channel, one hand-off
+//                 ring each, summed before the rate matcher. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -46,9 +56,11 @@
 #include "core/session/media/IReceiverPcmSink.h"
 #include "core/session/media/RemoteAudioRateMatcher.h"
 
+#include <QList>
 #include <QString>
 #include <QVector>
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <functional>
@@ -82,10 +94,12 @@ struct RemoteVaxFeederStats {
         NoReader,        // the output stopped taking audio; nothing is reading it
     };
     State state = State::Idle;
+    // The lowest assigned slice (-1 for none), and all of them.
     int sourceSliceId = -1;
-    // Frames the stream delivered for the assigned slice (blocks for any
-    // other slice are ignored), and frames dropped because the hand-off
-    // ring was full.
+    QList<int> sourceSliceIds;
+    // Frames the streams delivered for the assigned slices (blocks for any
+    // other slice are ignored), and frames dropped because a hand-off ring
+    // was full.
     quint64 receivedFrames = 0;
     quint64 droppedFrames = 0;
     quint64 writtenFrames = 0;
@@ -94,7 +108,7 @@ struct RemoteVaxFeederStats {
     // stopped). An output that stops reading never counts here.
     int restarts = 0;
     // The delay ahead of the output, in frames at 48 kHz: its own queue,
-    // the rate matcher's fill and the hand-off ring.
+    // the rate matcher's fill and the fullest hand-off ring.
     int queuedFrames = 0;
     int matcherFillFrames = 0;
     int handoffFrames = 0;
@@ -116,8 +130,12 @@ public:
     // The rate matcher's ring: 180 ms, the remote speaker's default, so it
     // starts with 90 ms of reserve (WDSP rmatch starts half full).
     static constexpr int kMatcherRingFrames = 8640;
-    // Hand-off ring from the receive worker: 32768 stereo frames, 683 ms.
+    // Hand-off ring from the receive worker, one per slice: 32768 stereo
+    // frames, 683 ms.
     static constexpr std::size_t kHandoffBytes = std::size_t(1) << 18;
+    // Slices one channel can carry: a Core's slice limit
+    // (WdspEngine::kMaxSliceChannels).
+    static constexpr int kMaxSources = 5;
     static constexpr qint64 kPumpIntervalNs = 5'000'000;
     // The output took nothing for this long with audio queued: it paused
     // (at least; twice its largest read step when that is longer).
@@ -135,20 +153,27 @@ public:
 
     int channel() const { return m_channel; }
 
-    /// The slice whose stream feeds this channel, -1 for none. Anything
-    /// queued for the previous slice is dropped. GUI thread, before the
-    /// stream is requested (and after it is released).
+    /// The slices whose streams feed this channel (at most kMaxSources;
+    /// empty for none). Anything queued for a slice no longer in the set is
+    /// dropped; a slice that stays keeps playing. GUI thread, after the
+    /// streams of the slices leaving are released and before those of the
+    /// slices joining are requested.
+    void setSourceSlices(const QList<int>& sliceIds);
+    /// One slice, or none for -1.
     void setSourceSlice(int sliceId);
-    int sourceSlice() const { return m_sourceSlice.load(std::memory_order_acquire); }
+    QList<int> sourceSlices() const;
+    /// The lowest assigned slice, -1 for none.
+    int sourceSlice() const;
 
     // IReceiverPcmSink
-    /// Receive worker thread: copies the block into the hand-off ring and
-    /// returns. A block for another slice, or one that does not fit, is
-    /// dropped.
+    /// Receive worker thread: copies the block into its slice's hand-off
+    /// ring and returns. A block for a slice not assigned here, or one that
+    /// does not fit, is dropped.
     void receiverAudioBlock(int sliceId, const float* interleavedStereo, int frames) override;
-    /// GUI thread: records the reason; the feeder waits for audio again.
+    /// GUI thread: records the reason; that slice counts as silence until
+    /// its audio flows again.
     void receiverAudioStopped(int sliceId, const QString& reason) override;
-    /// The last stop reason for the assigned slice (a wire reason or a
+    /// The last stop reason for an assigned slice (a wire reason or a
     /// sentence), empty once audio has flowed again since. GUI thread.
     QString lastStopReason() const;
 
@@ -168,39 +193,60 @@ public:
 private:
     using State = RemoteVaxFeederStats::State;
 
+    struct Source {
+        // Written by the GUI thread, read by the receive worker and pump.
+        std::atomic<int> sliceId{-1};
+        std::atomic<quint32> generation{0};
+        // Bytes the receive worker has pushed, and how many of them
+        // belonged to the previous slice in this slot when it last changed
+        // (the change follows that slice's release, so none of its blocks
+        // follow).
+        std::atomic<quint64> pushedBytes{0};
+        std::atomic<quint64> dropUntilBytes{0};
+        // The Core stopped this slice's stream; silence until audio flows.
+        std::atomic<bool> stopped{false};
+        std::unique_ptr<AudioRingSpsc<kHandoffBytes>> handoff;
+
+        // Pump only.
+        quint32 seenGeneration = 0;
+        quint64 poppedBytes = 0;
+        quint64 seenPushedBytes = 0;
+        qint64 lastArrivalNs = 0;
+        bool heard = false;
+        bool wasLive = false;
+    };
+
+    Source* sourceFor(int sliceId);
     void dropHandoff();
-    void popHandoff(void* into, std::size_t bytes);
+    void dropHandoff(Source& source);
+    void popHandoff(Source& source, void* into, std::size_t bytes);
+    // A slice counted in the mix: sending, and heard within kQuietNs.
+    bool isLive(const Source& source, qint64 now) const;
     qint64 pausedNs() const;
     void restartMatcher();
-    // Moves whole input chunks from the hand-off ring into the matcher (or,
+    // Sums whole chunks from the live slices' rings into the matcher (or,
     // unpaced, straight to the output). Returns the frames moved.
-    int drainHandoff(bool paced);
+    int drainHandoff(bool paced, qint64 now);
     void publish(State state, int queuedFrames);
 
     const int m_channel;
     VaxOutputPort m_port;
     Clock m_clock;
 
-    // Written by the GUI thread, read by the receive worker and the pump.
-    std::atomic<int> m_sourceSlice{-1};
+    std::array<Source, kMaxSources> m_sources;
+    // Written by the GUI thread, read by the pump.
     std::atomic<quint32> m_generation{0};
     std::atomic<quint64> m_receivedFrames{0};
     std::atomic<quint64> m_droppedFrames{0};
-    // Bytes the receive worker has pushed, and how many of them belonged to
-    // the previous slice when the source last changed (setSourceSlice runs
-    // after that slice's release, so none of its blocks follow).
-    std::atomic<quint64> m_pushedBytes{0};
-    std::atomic<quint64> m_dropUntilBytes{0};
-    AudioRingSpsc<kHandoffBytes> m_handoff;
 
     // Pump only.
     RemoteAudioRateMatcher m_matcher;
     bool m_matcherReady = false;
     bool m_matcherTried = false;
     QVector<float> m_chunk;
-    QVector<float> m_direct;
+    QVector<float> m_part;
+    QVector<float> m_matcherChunk;
     quint32 m_seenGeneration = 0;
-    quint64 m_poppedBytes = 0;
     State m_state = State::Idle;
     bool m_haveConsumed = false;
     quint64 m_lastConsumed = 0;

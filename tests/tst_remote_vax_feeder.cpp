@@ -8,6 +8,9 @@
 // R3 receiver audio plan, Task 5 (R-R3-44, R-R3-21, R-R3-23).
 //
 // The VAX feed contract:
+//   - slices sharing a VAX channel are mixed, as the local VAX tee mixes
+//     them; a slice whose stream stops, or goes quiet, counts as silence
+//     and the others play on (fix wave);
 //   - a feeder keeps a VAX output fed through a 10-minute run of the
 //     harness clock with the output's clock 200 ppm off the Core's, either
 //     way, without the delay growing and without a gap or a restart;
@@ -31,6 +34,9 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio plan, Task 5.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio fix wave: slices
+//                                    sharing a channel are mixed. AI-assisted
+//                                    transformation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -166,6 +172,28 @@ double amplitudeOf(const std::vector<float>& samples, double hz, std::size_t fir
     const auto begin = samples.begin() + qsizetype(firstFrame * 2);
     const auto end = begin + std::min<qsizetype>(48000 * 2, samples.end() - begin);
     return Test::toneAmplitude(QVector<float>(begin, end), 0, hz);
+}
+
+// A tone's amplitude averaged over ten 100 ms windows from firstFrame: each
+// window is short enough that the rate matcher's corrections do not move
+// the tone's phase within it.
+double shortWindowAmplitude(const std::vector<float>& samples, double hz, std::size_t firstFrame)
+{
+    constexpr std::size_t kWindow = 4800;
+    double sum = 0.0;
+    for (std::size_t w = 0; w < 10; ++w) {
+        const std::size_t start = firstFrame + w * kWindow;
+        double cosine = 0.0;
+        double sine = 0.0;
+        for (std::size_t f = 0; f < kWindow; ++f) {
+            const double phase = 2.0 * kPi * hz * double(f) / 48000.0;
+            const double v = samples[(start + f) * 2];
+            cosine += v * std::cos(phase);
+            sine += v * std::sin(phase);
+        }
+        sum += 2.0 * std::hypot(cosine, sine) / double(kWindow);
+    }
+    return sum / 10.0;
 }
 
 // A bus that records what is pushed (the Core's own local VAX tee target).
@@ -405,6 +433,99 @@ private slots:
         // Slice 0's 617 Hz blocks reached this sink too and were ignored.
         QVERIFY(amplitudeOf(output.heard, 617.0, 10 * 48000) < 0.002);
         QCOMPARE(feeder.stats().receivedFrames, sourceFrames);
+#endif
+    }
+
+    // Two slices on one channel are summed, as the local VAX tee sums them.
+    // One that the Core stops counts as silence at once and the other plays
+    // on without a gap; one that just goes quiet is waited for kQuietNs.
+    void mixesTheSlicesOnTheChannel_data()
+    {
+        QTest::addColumn<bool>("stopNotice");
+        QTest::newRow("the Core stops slice D") << true;
+        QTest::newRow("slice D goes quiet") << false;
+    }
+
+    void mixesTheSlicesOnTheChannel()
+    {
+#ifndef HAVE_WDSP
+        QSKIP("WDSP is disabled");
+#else
+        QFETCH(bool, stopNotice);
+        qint64 now = 0;
+        SimulatedVaxOutput output;
+        output.now = &now;
+        output.ppm = 0;
+        output.record = true;
+        RemoteVaxFeeder feeder(1, output.port(), [&now] { return now; });
+        feeder.setSourceSlices({3, 1});
+        QCOMPARE(feeder.sourceSlices(), (QList<int>{1, 3}));
+        constexpr qint64 kMs = 1'000'000;
+        constexpr qint64 kStopAt = 12'000 * kMs;
+        quint64 framesB = 0;
+        quint64 framesD = 0;
+        for (now = 0; now <= 20'000 * kMs; now += kMs) {
+            // The two streams' packets arrive 20 ms apart.
+            if (now % (40 * kMs) == 0) {
+                const std::vector<float> block = toneBlock(framesB, kOpusFrames, 1579.0, 0.10);
+                feeder.receiverAudioBlock(1, block.data(), kOpusFrames);
+                framesB += kOpusFrames;
+            }
+            if (now % (40 * kMs) == 20 * kMs && now < kStopAt) {
+                const std::vector<float> block = toneBlock(framesD, kOpusFrames, 617.0, 0.12);
+                feeder.receiverAudioBlock(3, block.data(), kOpusFrames);
+                framesD += kOpusFrames;
+            }
+            if (stopNotice && now == kStopAt) {
+                feeder.receiverAudioStopped(3, QStringLiteral("slice-removed"));
+            }
+            if (now % (5 * kMs) == 0) { feeder.pump(); }
+        }
+        output.advance();
+        QVERIFY(output.heard.size() > 20 * 48000 * 2 - 8192);
+        const auto rmsOf = [&output](std::size_t second, double* largestStep) {
+            double squares = 0.0;
+            *largestStep = 0.0;
+            for (std::size_t f = second * 48000; f < (second + 1) * 48000; ++f) {
+                const double v = output.heard[f * 2];
+                squares += v * v;
+                *largestStep = std::max(*largestStep, std::abs(v - output.heard[(f - 1) * 2]));
+            }
+            return std::sqrt(squares / 48000.0);
+        };
+        // Both tones, summed: the RMS of the two, and each tone present.
+        const double bothRms = std::sqrt((0.10 * 0.10 + 0.12 * 0.12) / 2.0);
+        for (std::size_t second = 3; second < 11; ++second) {
+            double step = 0.0;
+            const double rms = rmsOf(second, &step);
+            QVERIFY2(std::abs(rms - bothRms) < 0.005,
+                     qPrintable(QStringLiteral("second %1: rms %2, want %3")
+                                    .arg(second).arg(rms).arg(bothRms)));
+            QVERIFY2(step < 0.08, qPrintable(QStringLiteral("second %1: step %2").arg(second).arg(step)));
+        }
+        const double toneB = shortWindowAmplitude(output.heard, 1579.0, 5 * 48000);
+        const double toneD = shortWindowAmplitude(output.heard, 617.0, 5 * 48000);
+        QVERIFY2(std::abs(toneB - 0.10) < 0.005 && std::abs(toneD - 0.12) < 0.005,
+                 qPrintable(QStringLiteral("B %1 D %2").arg(toneB).arg(toneD)));
+        // After slice D stopped: slice B alone, whole.
+        for (std::size_t second = 14; second < 19; ++second) {
+            double step = 0.0;
+            const double rms = rmsOf(second, &step);
+            QVERIFY2(std::abs(rms - 0.10 / std::sqrt(2.0)) < 0.005,
+                     qPrintable(QStringLiteral("second %1: rms %2").arg(second).arg(rms)));
+            QVERIFY2(step < 0.08, qPrintable(QStringLiteral("second %1: step %2").arg(second).arg(step)));
+        }
+        QVERIFY(shortWindowAmplitude(output.heard, 617.0, 15 * 48000) < 0.005);
+        QVERIFY(std::abs(shortWindowAmplitude(output.heard, 1579.0, 15 * 48000) - 0.10) < 0.005);
+        QCOMPARE(feeder.stats().state, RemoteVaxFeederStats::State::Playing);
+        QCOMPARE(feeder.stats().receivedFrames, framesB + framesD);
+        // A stop the Core reports costs nothing; a slice that just goes
+        // quiet holds the mix for kQuietNs, at most one gap.
+        if (stopNotice) {
+            QCOMPARE(feeder.stats().restarts, 0);
+        } else {
+            QVERIFY(feeder.stats().restarts <= 1);
+        }
 #endif
     }
 
@@ -707,8 +828,8 @@ private slots:
 
     // The stream runs only while an app reads the channel where the
     // platform reports it, and while the channel is assigned elsewhere;
-    // the lowest slice on a channel carries it; request and release come
-    // in order on this thread.
+    // every slice on a channel is asked for; request and release come in
+    // order on this thread.
     void theStreamFollowsTheAssignmentAndTheReader()
     {
         RadioModel remote(RadioModel::Role::Remote);
@@ -774,11 +895,18 @@ private slots:
         router.refresh();
         QCOMPARE(log, QStringList{QStringLiteral("request 1 on VAX 1")});
         QCOMPARE(router.feeder(1)->sourceSlice(), 1);
-        // Slice A joins VAX 1: the lowest slice carries it.
+        // Slice A joins VAX 1: both are asked for, and mixed (the fix
+        // wave; this used to hand VAX 1 to the lowest slice alone).
         remote.sliceById(0)->setVaxChannel(1);
+        QCOMPARE(router.requestedSlices(1), (QList<int>{0, 1}));
         QCOMPARE(router.requestedSlice(1), 0);
-        QCOMPARE(log.mid(1), (QStringList{QStringLiteral("release 1 on VAX 1"),
-                                           QStringLiteral("request 0 on VAX 1")}));
+        QCOMPARE(log.mid(1), QStringList{QStringLiteral("request 0 on VAX 1")});
+        QCOMPARE(router.feeder(1)->sourceSlices(), (QList<int>{0, 1}));
+        // Slice B leaves VAX 1: only it is released.
+        remote.sliceById(1)->setVaxChannel(0);
+        QCOMPARE(log.mid(2), QStringList{QStringLiteral("release 1 on VAX 1")});
+        QCOMPARE(router.requestedSlices(1), QList<int>{0});
+        QCOMPARE(router.feeder(1)->sourceSlices(), QList<int>{0});
         // The app closes VAX 1: released.
         vax1Reader = false;
         router.refresh();
@@ -912,6 +1040,111 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(daemonMedia.activeReceiverAudioStreamCount(), 0, 5000);
         QCOMPARE(remoteErrors.count(), 0);
         AppSettings::instance().remove(RemoteVaxRouter::settingsKey(coreKey, h.sliceB));
+    }
+
+    // End to end: slices A and B both on VAX 1, in a remote window and at
+    // the Core: the remote window's VAX 1 carries both, each at the level
+    // the Core's own VAX 1 gives it.
+    void slicesAAndBOnVax1MixAsTheLocalVaxDoes_data()
+    {
+        QTest::addColumn<bool>("lossless");
+        QTest::newRow("opus") << false;
+        QTest::newRow("lossless") << true;
+    }
+
+    void slicesAAndBOnVax1MixAsTheLocalVaxDoes()
+    {
+        QFETCH(bool, lossless);
+        AppSettings::instance().setValue(
+            QLatin1String(RemoteMediaController::kAudioProfileSettingKey),
+            lossless ? QStringLiteral("Lossless") : QStringLiteral("Opus"));
+        const auto restoreChoice = qScopeGuard([] {
+            AppSettings::instance().remove(
+                QLatin1String(RemoteMediaController::kAudioProfileSettingKey));
+        });
+        Test::RemoteAudioSessionHarness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        QSignalSpy remoteErrors(&remoteMedia, &RemoteMediaController::errorOccurred);
+
+        // The Core's own local VAX 1, fed by its tee from slices A and B.
+        auto stationBus = std::make_unique<CollectingBus>();
+        CollectingBus* stationVax = stationBus.get();
+        h.stationAudio->setVaxBusForTest(1, std::move(stationBus));
+        h.stationAudio->setVaxRxGain(1, 0.5f);
+        h.station.sliceById(h.sliceA)->setVaxChannel(1);
+        h.station.sliceById(h.sliceB)->setVaxChannel(1);
+        for (int slice : {h.sliceA, h.sliceB}) {
+            AppSettings::instance().remove(QStringLiteral("Slice%1/VaxChannel").arg(slice));
+        }
+
+        AudioEngine* remoteEngine = h.remote.audioEngine();
+        auto vaxBus = std::make_unique<PacedAudioBus>();
+        PacedAudioBus* remoteVax = vaxBus.get();
+        remoteEngine->setVaxBusForTest(1, std::move(vaxBus));
+        remoteEngine->setVaxRxGain(1, 0.5f);
+
+        QTimer source;
+        source.setInterval(10);
+        source.setTimerType(Qt::PreciseTimer);
+        connect(&source, &QTimer::timeout, &source, [&h] { h.feedMixedTone(); });
+        QTimer devices;
+        devices.setInterval(10);
+        devices.setTimerType(Qt::PreciseTimer);
+        connect(&devices, &QTimer::timeout, &devices, [&h, remoteVax] {
+            h.remoteBus->render(Test::RemoteAudioSessionHarness::kFrames);
+            remoteVax->render(Test::RemoteAudioSessionHarness::kFrames);
+        });
+        source.start();
+        devices.start();
+
+        h.connectSession();
+        QVERIFY(remoteMedia.receiverAudioNegotiated());
+        h.remote.audioEngine()->setMasterMuted(true);
+        QTRY_VERIFY(h.remote.sliceById(h.sliceA) != nullptr);
+        QTRY_VERIFY(h.remote.sliceById(h.sliceB) != nullptr);
+
+        const QString coreKey = QStringLiteral("harnesscore2");
+        RemoteVaxRouter router(&h.remote, remoteEngine, coreKey);
+        router.setReceiverAudio(sourceFor(remoteMedia));
+        h.remote.sliceById(h.sliceA)->setVaxChannel(1);
+        h.remote.sliceById(h.sliceB)->setVaxChannel(1);
+        QList<int> both{h.sliceA, h.sliceB};
+        std::sort(both.begin(), both.end());
+        QCOMPARE(router.requestedSlices(1), both);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteVax->heard.size() >= 3 * 48000 * 2, 20000);
+        QTRY_VERIFY_WITH_TIMEOUT(stationVax->samples().size() >= 3 * 48000 * 2, 20000);
+        QCOMPARE(receiverRequests(coreControls, h.sliceA).size(), 1);
+        QCOMPARE(receiverRequests(coreControls, h.sliceB).size(), 1);
+        QCOMPARE(router.feeder(1)->stats().state, RemoteVaxFeederStats::State::Playing);
+
+        const QVector<float> heard = remoteVax->heard;
+        const QVector<float> local = stationVax->samples();
+        const int skip = 48000;
+        using H = Test::RemoteAudioSessionHarness;
+        const double remoteA = Test::toneAmplitude(heard, 0, H::kSliceAToneHz, skip);
+        const double remoteB = Test::toneAmplitude(heard, 0, H::kSliceBToneHz, skip);
+        const double localA = Test::toneAmplitude(local, 0, H::kSliceAToneHz, skip);
+        const double localB = Test::toneAmplitude(local, 0, H::kSliceBToneHz, skip);
+        qInfo() << (lossless ? "lossless" : "opus") << "remote VAX 1 slice A" << remoteA
+                << "slice B" << remoteB << "Core's own VAX 1 slice A" << localA
+                << "slice B" << localB;
+        QVERIFY(localA > 0.09);
+        QVERIFY(localB > 0.09);
+        const double tolerance = lossless ? 0.0005 : 0.005;
+        QVERIFY2(std::abs(remoteA - localA) < tolerance,
+                 qPrintable(QStringLiteral("A: remote %1 local %2").arg(remoteA).arg(localA)));
+        QVERIFY2(std::abs(remoteB - localB) < tolerance,
+                 qPrintable(QStringLiteral("B: remote %1 local %2").arg(remoteB).arg(localB)));
+
+        h.remote.sliceById(h.sliceA)->setVaxChannel(0);
+        h.remote.sliceById(h.sliceB)->setVaxChannel(0);
+        QTRY_COMPARE_WITH_TIMEOUT(daemonMedia.activeReceiverAudioStreamCount(), 0, 5000);
+        QCOMPARE(remoteErrors.count(), 0);
+        for (int slice : {h.sliceA, h.sliceB}) {
+            AppSettings::instance().remove(RemoteVaxRouter::settingsKey(coreKey, slice));
+        }
     }
 
     // An older Core: nothing is asked for on the wire, and the operator is

@@ -139,6 +139,7 @@
 #include "IAudioBus.h"
 #include "audio/CaptureSupervisor.h"
 #include "audio/MasterMixer.h"
+#include "audio/VaxChannelMixer.h"
 
 #if defined(Q_OS_LINUX)
 #  include "core/audio/LinuxAudioBackend.h"
@@ -987,6 +988,12 @@ private:
     // [v2.10.3.15]), and monitor audio suppressing the operator's own VOX
     // would be feedback by definition.
     MasterMixer m_antiVoxMix;
+
+    // R-R3-44 (fix wave): the local VAX tee's per-channel mix. Slices that
+    // share a VAX channel are summed into one block per period instead of
+    // each pushing its own. Membership rides the same setSliceStreaming
+    // calls as the two mixers above.
+    VaxChannelMixer m_vaxMix;
 
     // Control-to-audio withdrawal handshake. The audio thread never waits:
     // it either enters a region or drops a block while admission is closed.

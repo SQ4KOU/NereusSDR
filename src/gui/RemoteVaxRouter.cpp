@@ -8,6 +8,8 @@
 // Modification history (NereusSDR):
 //   2026-09-23: Written for NereusSDR by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23: R-R3-44 fix wave: every slice on a channel. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/RemoteVaxRouter.h"
@@ -24,6 +26,7 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <algorithm>
 #include <optional>
 
 namespace NereusSDR {
@@ -128,10 +131,16 @@ RemoteVaxFeeder* RemoteVaxRouter::feeder(int channel) const
     return m_feeders[static_cast<std::size_t>(channel - 1)].get();
 }
 
+QList<int> RemoteVaxRouter::requestedSlices(int channel) const
+{
+    if (channel < 1 || channel > kChannels) { return {}; }
+    return m_requested[static_cast<std::size_t>(channel - 1)];
+}
+
 int RemoteVaxRouter::requestedSlice(int channel) const
 {
-    if (channel < 1 || channel > kChannels) { return -1; }
-    return m_requested[static_cast<std::size_t>(channel - 1)];
+    const QList<int> slices = requestedSlices(channel);
+    return slices.isEmpty() ? -1 : slices.constFirst();
 }
 
 int RemoteVaxRouter::storedChannel(int sliceId) const
@@ -165,15 +174,17 @@ void RemoteVaxRouter::releaseChannel(int index)
 {
     const auto i = static_cast<std::size_t>(index);
     RemoteVaxFeeder* feeder = m_feeders[i].get();
-    const int slice = m_requested[i];
-    m_requested[i] = -1;
+    const QList<int> slices = m_requested[i];
+    m_requested[i].clear();
     if (!feeder) { return; }
-    if (slice >= 0 && m_source.release) {
+    if (m_source.release) {
         // After this returns the feeder is not called for that slice again.
-        m_source.release(slice, feeder);
+        for (int slice : slices) {
+            m_source.release(slice, feeder);
+        }
     }
     feeder->stopWorker();
-    feeder->setSourceSlice(-1);
+    feeder->setSourceSlices({});
     m_noticed[i].clear();
 }
 
@@ -185,39 +196,55 @@ void RemoteVaxRouter::refresh()
         RemoteVaxFeeder* feeder = m_feeders[i].get();
         if (!feeder) { continue; }
 
-        int wanted = -1;
+        QList<int> wanted;
         if (m_model) {
             for (SliceModel* slice : m_model->slices()) {
                 if (slice && slice->vaxChannel() == channel
-                    && (wanted < 0 || slice->sliceIndex() < wanted)) {
-                    wanted = slice->sliceIndex();
+                    && !wanted.contains(slice->sliceIndex())) {
+                    wanted << slice->sliceIndex();
                 }
             }
+            std::sort(wanted.begin(), wanted.end());
+            while (wanted.size() > RemoteVaxFeeder::kMaxSources) {
+                wanted.removeLast();
+            }
         }
-        if (wanted >= 0) {
+        if (!wanted.isEmpty()) {
             const bool outputOpen = m_engine && m_engine->isVaxBusOpen(channel);
             // Only a platform that reports readers can say there is none.
             const std::optional<bool> reader =
                 m_engine ? m_engine->vaxOutputHasReader(channel) : std::nullopt;
             if (!outputOpen || reader == std::optional<bool>(false) || !m_source.request) {
-                wanted = -1;
+                wanted.clear();
             }
         }
 
         if (wanted != m_requested[i]) {
-            releaseChannel(index);
-            if (wanted >= 0) {
-                qCInfo(lcAudio) << "Remote VAX" << channel << "carries slice" << wanted;
-                feeder->setSourceSlice(wanted);
+            if (wanted.isEmpty()) {
+                releaseChannel(index);
+                qCInfo(lcAudio) << "Remote VAX" << channel << "carries no slice";
+            } else {
+                const QList<int> previous = m_requested[i];
+                // Slices leaving first (after its release the feeder is
+                // not called for a slice again), then the new set, then
+                // the slices joining: a stream may answer its request at
+                // once, and the feeder must already know the slice.
+                if (m_source.release) {
+                    for (int slice : previous) {
+                        if (!wanted.contains(slice)) { m_source.release(slice, feeder); }
+                    }
+                }
+                feeder->setSourceSlices(wanted);
                 m_requested[i] = wanted;
                 if (m_startWorkers) { feeder->startWorker(); }
-                m_source.request(wanted, feeder);
-            } else {
-                qCInfo(lcAudio) << "Remote VAX" << channel << "carries no slice";
+                qCInfo(lcAudio) << "Remote VAX" << channel << "carries slices" << wanted;
+                for (int slice : wanted) {
+                    if (!previous.contains(slice)) { m_source.request(slice, feeder); }
+                }
             }
         }
 
-        if (m_requested[i] >= 0) {
+        if (!m_requested[i].isEmpty()) {
             const QString reason = feeder->lastStopReason();
             if (reason != m_noticed[i]) {
                 m_noticed[i] = reason;

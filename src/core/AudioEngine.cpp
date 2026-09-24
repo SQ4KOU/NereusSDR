@@ -388,6 +388,11 @@ void AudioEngine::setSliceStreaming(int sliceId, bool streaming)
     // on every transition (console.cs:27650-27651 [v2.10.3.15]).
     m_antiVoxMix.setSliceStreaming(sliceId, streaming);
 
+    // R-R3-44 (fix wave): the VAX channel mixes wait on their slices the
+    // same way, so a withdrawn slice must leave its channel's mix too, or a
+    // channel it shares would stop for the whole withdrawal.
+    m_vaxMix.setSliceStreaming(sliceId, streaming);
+
 #ifdef NEREUS_BUILD_TESTS
     if (!streaming && m_withdrawalPublishedHookForTest) {
         m_withdrawalPublishedHookForTest();
@@ -1629,10 +1634,9 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
 
     // VAX tap receives raw demodulated audio — pre-MasterMixer gain/pan,
     // pre-master-volume — matching Thetis VAC behavior and the spec §3.4
-    // pseudocode. Per-channel mute skips the push; non-unity per-channel
-    // gain copy-multiplies into a thread_local scratch (distinct from
-    // the master-mix `mix` scratch below) so the unity-gain fast path
-    // stays zero-copy. See docs/architecture/2026-04-19-vax-design.md
+    // pseudocode. Per-channel mute skips the push; the per-channel gain
+    // (and the slice's 1 / AF gain) scale the block as it is queued for
+    // the channel's mix below. See docs/architecture/2026-04-19-vax-design.md
     // §3.4 and §6.4.
     // R-R3-43 receiver taps: the same point and the same channel-independent
     // scaling as the VAX tee below (1 / the slice's AF gain, no VAX channel
@@ -1640,75 +1644,80 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // would.
     feedSliceTaps(sliceId, samples, frames);
 
+    // R-R3-44 (fix wave): slices that share a VAX channel are summed into
+    // one block per period (VaxChannelMixer). Each used to push its own
+    // block, so a channel carrying two slices got two periods of audio per
+    // real period and its device ring overran.
+    static_assert(VaxChannelMixer::kMaxSlices >= WdspEngine::kMaxSliceChannels,
+                  "every slice id needs a VAX mix slot");
     const int vaxCh = slice->vaxChannel();
-    if (vaxCh >= 1 && vaxCh <= 4) {
+    const bool vaxValid = vaxCh >= 1 && vaxCh <= 4;
+    float vaxGain = 1.0f;
+    if (vaxValid) {
         const int vaxIdx = vaxCh - 1;
+        const float gainUser =
+            m_vaxRxGain[vaxIdx].load(std::memory_order_acquire);
 
-        // Mute wins over gain: when muted the tap skips push() entirely —
-        // spec says "tags / level UI still reflect routing, but no
-        // downstream audio" and we don't waste the bus-push bandwidth.
+        // AF-Gain bypass for VAX (post-v0.3.2 AF-Gain rewire fix).
+        //
+        // Commit e61658f routed AF Gain through WDSP's PanelGain1
+        // stage (third_party/wdsp/src/rxa.c:538 [v2.10.3.14]),
+        // which is upstream of `samples` here.  Pre-fix WDSP shipped
+        // PanelGain1=4.0 (+12 dB) silently and the AF slider acted
+        // as a post-DSP scalar elsewhere — VAX inherited the +12 dB
+        // and felt "really hot".  Post-fix, VAX inherits whatever
+        // attenuation the speaker slider is currently applying,
+        // which is wrong for digital-mode apps that expect a stable
+        // calibrated level.
+        //
+        // Inverse-scale by 1/afGain so VAX recovers the pre-
+        // PanelGain1 signal level.  Clamped to skip compensation
+        // when the slider is essentially muted (≤ 0.001) — div-
+        // by-zero guard.  At full mute VAX goes silent (samples
+        // were already multiplied by ~0 inside WDSP); proper
+        // VAX-independent-of-mute requires the larger pre-PanelGain1
+        // tap (Option C in 2026-05-08 design discussion).
+        //
+        // R-R3-43: the AF gain undone is the feeding slice's own,
+        // from its WDSP RX channel. This used to read channel 0's,
+        // receiver 1's, for every slice.
+        //
+        // The fix wave applies it per slice as the block is queued, so a
+        // channel's sum carries each slice at its own level.
+        vaxGain = gainUser * afGainInverseForSlice(sliceId);
+    }
+    // A slice with no (or an out-of-range) channel leaves any channel it
+    // was on, so it stops holding that channel's mix.
+    m_vaxMix.accumulate(sliceId, vaxValid ? vaxCh : 0, samples, frames, vaxGain);
+
+    if (vaxValid) {
+        const int vaxIdx = vaxCh - 1;
+        // Distinct from `mix` scratch below — that one is reserved for the
+        // master-mix accumulate path. Grows once per thread via resize(),
+        // zero-alloc thereafter.
+        static thread_local std::vector<float> vaxScratch;
+        const int stereoFloats = frames * 2;
+        if (static_cast<int>(vaxScratch.size()) < stereoFloats) {
+            vaxScratch.resize(static_cast<size_t>(stereoFloats));
+        }
+        // Mute wins over gain: when muted the channel's block is taken and
+        // not pushed — spec says "tags / level UI still reflect routing,
+        // but no downstream audio". Taking it keeps the mix in step.
         const bool muted = m_vaxMuted[vaxIdx].load(std::memory_order_acquire);
-        if (!muted) {
-            // Snapshot the bus pointer into a local so the isOpen() check
-            // and the push() below observe the same IAudioBus instance.
-            // The live-reconfig contract (AudioEngine.h) forbids
-            // setVaxConfig / setVaxEnabled mid-block, but the snapshot
-            // eliminates any torn-read window should a caller violate it.
-            IAudioBus* vaxBus = m_vaxBus[vaxIdx].get();
-            if (vaxBus != nullptr && vaxBus->isOpen()) {
-                const float gainUser =
-                    m_vaxRxGain[vaxIdx].load(std::memory_order_acquire);
-
-                // AF-Gain bypass for VAX (post-v0.3.2 AF-Gain rewire fix).
-                //
-                // Commit e61658f routed AF Gain through WDSP's PanelGain1
-                // stage (third_party/wdsp/src/rxa.c:538 [v2.10.3.14]),
-                // which is upstream of `samples` here.  Pre-fix WDSP shipped
-                // PanelGain1=4.0 (+12 dB) silently and the AF slider acted
-                // as a post-DSP scalar elsewhere — VAX inherited the +12 dB
-                // and felt "really hot".  Post-fix, VAX inherits whatever
-                // attenuation the speaker slider is currently applying,
-                // which is wrong for digital-mode apps that expect a stable
-                // calibrated level.
-                //
-                // Inverse-scale by 1/afGain so VAX recovers the pre-
-                // PanelGain1 signal level.  Clamped to skip compensation
-                // when the slider is essentially muted (≤ 0.001) — div-
-                // by-zero guard.  At full mute VAX goes silent (samples
-                // were already multiplied by ~0 inside WDSP); proper
-                // VAX-independent-of-mute requires the larger pre-PanelGain1
-                // tap (Option C in 2026-05-08 design discussion).
-                //
-                // R-R3-43: the AF gain undone is the feeding slice's own,
-                // from its WDSP RX channel. This used to read channel 0's,
-                // receiver 1's, for every slice.
-                const float afInverse = afGainInverseForSlice(sliceId);
-                const float gain = gainUser * afInverse;
-
-                const qint64 payloadBytes =
-                    static_cast<qint64>(frames) * 2 * sizeof(float);
-                if (gain == 1.0f) {
-                    // Fast path — raw samples, zero copy.  Hit when both
-                    // the per-channel VAX gain and AF slider are at 1.0.
-                    vaxBus->push(reinterpret_cast<const char*>(samples),
-                                 payloadBytes);
-                } else {
-                    // Distinct from `mix` scratch below — that one is
-                    // reserved for the master-mix accumulate path and
-                    // must not be clobbered by the VAX tee. Grows once
-                    // per thread via resize(), zero-alloc thereafter.
-                    static thread_local std::vector<float> vaxScratch;
-                    const int stereoFloats = frames * 2;
-                    if (static_cast<int>(vaxScratch.size()) < stereoFloats) {
-                        vaxScratch.resize(static_cast<size_t>(stereoFloats));
-                    }
-                    for (int i = 0; i < stereoFloats; ++i) {
-                        vaxScratch[i] = samples[i] * gain;
-                    }
-                    vaxBus->push(
-                        reinterpret_cast<const char*>(vaxScratch.data()),
-                        payloadBytes);
-                }
+        // Snapshot the bus pointer into a local so the isOpen() check
+        // and the push() below observe the same IAudioBus instance.
+        // The live-reconfig contract (AudioEngine.h) forbids
+        // setVaxConfig / setVaxEnabled mid-block, but the snapshot
+        // eliminates any torn-read window should a caller violate it.
+        IAudioBus* vaxBus = m_vaxBus[vaxIdx].get();
+        // Normally one block. More only after a slice on the channel was
+        // late: then the backlog every slice has queued goes out at once.
+        int mixedVax = 0;
+        while ((mixedVax = m_vaxMix.tryDrain(vaxCh, vaxScratch.data(), frames)) > 0) {
+            if (!muted && vaxBus != nullptr && vaxBus->isOpen()) {
+                vaxBus->push(reinterpret_cast<const char*>(vaxScratch.data()),
+                             static_cast<qint64>(mixedVax) * 2
+                                 * static_cast<qint64>(sizeof(float)));
             }
         }
     }

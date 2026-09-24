@@ -13,7 +13,8 @@
 //     (settingsKey()), never in the Core's Slice<N>/VaxChannel. The router
 //     installs itself as the remote model's VAX channel store and restores
 //     each slice's channel as the slice appears.
-//   - VAX N carries the lowest-numbered slice assigned to it.
+//   - VAX N carries every slice assigned to it, mixed as the local VAX
+//     tee mixes them (the feeder sums their streams).
 //   - Its stream is asked for while the channel has a slice and an open
 //     output, and, where the platform reports whether an app is reading
 //     the output (macOS, PipeWire), only while one is. Elsewhere it runs
@@ -29,10 +30,14 @@
 // Modification history (NereusSDR):
 //   2026-09-23: Written for NereusSDR by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23: R-R3-44 fix wave: every slice on a channel is asked for
+//                 and mixed, not only the lowest-numbered one. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
 
+#include <QList>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -86,7 +91,9 @@ public:
     void setReceiverAudio(ReceiverAudio source);
 
     RemoteVaxFeeder* feeder(int channel) const;
-    /// The slice channel N's stream is asked for, -1 for none.
+    /// The slices channel N's streams are asked for (ascending), empty for
+    /// none; requestedSlice() is the lowest of them, -1 for none.
+    QList<int> requestedSlices(int channel) const;
     int requestedSlice(int channel) const;
     /// The channel stored on this computer for a slice (0 when none).
     int storedChannel(int sliceId) const;
@@ -111,7 +118,7 @@ private:
     ReceiverAudio m_source;
     bool m_startWorkers{true};
     std::array<std::unique_ptr<RemoteVaxFeeder>, kChannels> m_feeders;
-    std::array<int, kChannels> m_requested{{-1, -1, -1, -1}};
+    std::array<QList<int>, kChannels> m_requested;
     std::array<QString, kChannels> m_noticed;
     QTimer* m_readerTimer{nullptr};
 };
