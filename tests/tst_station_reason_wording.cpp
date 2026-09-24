@@ -792,8 +792,9 @@ const QList<ReasonSource>& reasonSources()
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},
          20,
-         // sliceCapReason: the radio's product label and the slice count.
-         {QStringLiteral("radioLabel"), QStringLiteral("cap")},
+         // sliceCapReason: the radio's product label and the slice count,
+         // worded "1 slice" or "N slices" from its own literals.
+         {QStringLiteral("radioLabel, slices"), QStringLiteral("slices"), QStringLiteral("cap")},
          {// The refuse lambdas' parameter (literals of these functions),
           // the facades' and allocators' results (scanned), and the notch
           // refusals, constants of this file checked in

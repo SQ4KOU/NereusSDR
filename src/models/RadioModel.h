@@ -1361,14 +1361,14 @@ public:
     /// Phase 3F Sub-Epic C Task 7: AetherSDR-faithful slice creation entry
     /// point.  Creates a new SliceModel (delegates to addSlice) and tags it
     /// with the supplied pan id as a dynamic property for Sub-Epic D wiring.
-    /// Enforces the maxSlices() cap and emits sliceAddRejected with a human
-    /// readable reason on overflow.
+    /// Enforces the slice cap addSlice() does (sliceChannelLimit()) and
+    /// emits sliceAddRejected with sliceCapReason() on overflow.
     /// Pattern from AetherSDR MainWindow.cpp:6849-6859 [@0cd4559a]
     /// (+RX button handler).
     ///
     /// Remote-daemon R2: on a Role::Remote model this SENDS the
-    /// addSliceOnPan verb and creates nothing locally. The maxSlices()
-    /// cap check below is deliberately skipped on that path: the station
+    /// addSliceOnPan verb and creates nothing locally. The slice cap
+    /// check is deliberately skipped on that path: the station
     /// owns the slice list and enforces its own cap, with its own reason,
     /// which comes back through reportStationSliceCommandRejected().
     Q_INVOKABLE void addSliceOnPan(const QString& panId);
@@ -4229,9 +4229,10 @@ private:
                      const ReceiveSliceState* restoreSeed = nullptr);
 
     /// The operator's reason for a refused add at the slice cap:
-    /// "<radio> supports a maximum of <cap> slices". One wording for
-    /// addSliceOnPan() and addSlice(), and so for the session verbs that
-    /// relay them (Phase 3F design section 3).
+    /// "<radio> supports a maximum of <cap> slices" ("1 slice" for one), or
+    /// "The Core supports a maximum of ..." before a radio has sized the
+    /// stream pool. One wording for addSliceOnPan() and addSlice(), and so
+    /// for the session verbs that relay them (Phase 3F design section 3).
     QString sliceCapReason(int cap) const;
 
     /// Slice ids below this have a WDSP channel: the stream pool's ceiling
@@ -4691,6 +4692,9 @@ private:
     bool m_receiveLayoutPendingAdmission{false};
     bool m_receiveLayoutManaged{false};
     bool m_receiveLayoutOverridesCount{false};
+    // Slice ids the saved layout hydrated, until admission completes: a
+    // slice refused at admission is "restored" only if its id is here.
+    QSet<int> m_receiveLayoutHydratedIds;
     // Slices closed at connect because the board cannot host their ids,
     // for the one run of admission that reports them. Kept so a later
     // admission step does not report an accepted restore over it.

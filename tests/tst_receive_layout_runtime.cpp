@@ -19,6 +19,7 @@
 #undef private
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "core/HpsdrModel.h"
 
 using namespace NereusSDR;
 
@@ -537,6 +538,99 @@ private slots:
                                 "+RX after closing another receiver. Your saved layout is kept."));
         app.stop();
         QCOMPARE(rawLayoutFromDisk(kMacA), original);
+    }
+
+    // ── Fix wave 1, M2: "restored" only for slices the saved layout held ──
+
+    // A window adds slices while the Core waits for its radio, beside a
+    // saved layout. The one the smaller board cannot host was never saved:
+    // it is closed, not "could not be restored". The saved layout is still
+    // kept.
+    void windowAddedSliceBesideASavedLayoutIsClosedNotRestored()
+    {
+        QVERIFY(saveLayout(kMacA, {{0, QStringLiteral("pan-0"), 14'293'200.0, DSPMode::USB}}));
+        RadioModel radio;
+        radio.setBoardForTest(HPSDRHW::HermesII); // two slices
+        radio.prepareReceiveLayout(kMacA);
+        QVERIFY(radio.receiveLayoutOverridesConfiguredCount());
+        radio.addSliceOnPan(QStringLiteral("pan-0"));
+        radio.addSliceOnPan(QStringLiteral("pan-0"));
+        QCOMPARE(radio.slices().size(), 3);
+        SliceModel* added = radio.sliceById(2);
+        QVERIFY(added);
+        const QString mhz = QString::number(added->frequency() / 1.0e6, 'f', 4);
+        const QString mode = SliceModel::modeName(added->dspMode());
+
+        const auto& caps = radio.boardCapabilities();
+        radio.configureStreamPool(caps.userDdcCount, caps.maxSlices, 192000);
+        radio.bindUnboundSlices();
+
+        QCOMPARE(radio.slices().size(), 2);
+        QCOMPARE(radio.receiveLayoutRestoreState(), QStringLiteral("degraded"));
+        const QString message = radio.receiveLayoutRestoreMessage();
+        QCOMPARE(message,
+                 QStringLiteral("Receiver C (%1\u00A0MHz %2) was closed because this radio "
+                                "supports only receivers A and B. Add it again with +RX after "
+                                "closing another receiver. Your saved layout is kept.")
+                     .arg(mhz, mode));
+        QVERIFY2(restoreMessageProblem(message).isEmpty(),
+                 qPrintable(restoreMessageProblem(message)));
+    }
+
+    // No saved layout: a slice refused only because every receiver is busy
+    // was never restored from anything, so it is closed.
+    void busyRefusalWithNoSavedLayoutIsClosedNotRestored()
+    {
+        RadioModel radio;
+        radio.setBoardForTest(HPSDRHW::HermesLite); // two receivers
+        radio.prepareReceiveLayout(kMacB);          // nothing saved
+        QVERIFY(!radio.receiveLayoutOverridesConfiguredCount());
+        radio.addSliceOnPan(QStringLiteral("pan-0"));
+        radio.addSliceOnPan(QStringLiteral("pan-1"));
+        radio.addSliceOnPan(QStringLiteral("pan-2"));
+        QCOMPARE(radio.slices().size(), 3);
+        radio.sliceById(0)->setFrequency(14'200'000.0);
+        radio.sliceById(1)->setFrequency(7'150'000.0);
+        radio.sliceById(2)->setFrequency(3'700'000.0);
+        radio.sliceById(2)->setDspMode(DSPMode::LSB);
+
+        const auto& caps = radio.boardCapabilities();
+        radio.configureStreamPool(caps.userDdcCount, caps.maxSlices, 192000);
+        radio.bindUnboundSlices();
+
+        QCOMPARE(radio.slices().size(), 2);
+        QVERIFY(!radio.sliceById(2));
+        QCOMPARE(radio.receiveLayoutRestoreState(), QStringLiteral("degraded"));
+        QCOMPARE(radio.receiveLayoutRestoreMessage(),
+                 QStringLiteral("Receiver C (3.7000\u00A0MHz LSB) was closed because all of "
+                                "the radio's receivers are in use. Add it again with +RX after "
+                                "closing another receiver."));
+    }
+
+    // ── Fix wave 1, M1: no kept layout claimed when none was saved ──────
+
+    void receiversThatDidNotStartClaimNoSavedLayoutWhenNoneWasSaved()
+    {
+        RadioModel radio;
+        radio.prepareReceiveLayout(kMacB); // nothing saved
+        QCOMPARE(radio.receiveLayoutRestoreState(), QStringLiteral("pending"));
+        // No radio has sized a receiver pool, so this slice cannot start.
+        QVERIFY(radio.addSlice(QStringLiteral("pan-0")) >= 0);
+        QVERIFY(radio.sliceById(0)->streamIndex() < 0);
+
+        radio.completeReceiveLayoutStartup();
+
+        QCOMPARE(radio.receiveLayoutRestoreState(), QStringLiteral("fallback"));
+        QCOMPARE(radio.receiveLayoutRestoreMessage(),
+                 QStringLiteral("Some receivers did not start; check the radio."));
+        // Nothing is held back: the receiver the operator has is saved.
+        radio.sliceById(0)->setFrequency(10'125'000.0);
+        radio.flushPendingSettingsSave();
+        const auto saved = layoutFromDisk(kMacB);
+        QCOMPARE(static_cast<int>(saved.state),
+                 static_cast<int>(ReceiveLayoutStore::LoadState::Loaded));
+        QCOMPARE(saved.slices.size(), 1);
+        QCOMPARE(saved.slices.first().frequencyHz, 10'125'000.0);
     }
 
     void refusedRadeReceiverSaysOnceThatItsAudioStaysOff()

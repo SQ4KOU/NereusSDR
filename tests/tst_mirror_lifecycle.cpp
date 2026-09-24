@@ -525,7 +525,10 @@ private slots:
     // "+PAN" click goes through addSliceOnPan).
     void addSliceOnPanCapRejectionProducesNoObjectCreate()
     {
-        RadioModel model; // disconnected: maxSlices() == 1
+        RadioModel model;
+        // A stream pool sized for one slice: the cap addSliceOnPan holds
+        // to (sliceChannelLimit()).
+        model.configureStreamPool(/*userDdcCount*/ 5, /*maxSlices*/ 1, 192000);
         StateMirror mirror;
         ObjectRegistry registry(&model, &mirror);
         Log log(&mirror, &registry);

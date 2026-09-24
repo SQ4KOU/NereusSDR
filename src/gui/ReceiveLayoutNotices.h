@@ -53,6 +53,12 @@ public:
         return viaCore ? tr("%1 Details remain in Core connection.").arg(message) : message;
     }
 
+    /// Forget the last warning, so the same one is toasted again. A window
+    /// with no Core calls this when its radio disconnects: its status never
+    /// returns to "accepted", and the same closure on the next connect is a
+    /// new event the operator must hear about (fix wave 1, M3).
+    void forget() { m_lastWarning.clear(); }
+
 private:
     QString m_lastWarning;
 };
