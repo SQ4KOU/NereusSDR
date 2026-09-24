@@ -123,6 +123,14 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47: remoteRfKitControlVersion 3
 //                                    with the resetRfKitError verb.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-21: radioHardwareVersion
+//                                    4 with the setAlexBpfMode verb, the
+//                                    filter policy from a remote window.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49: a window's Network Watchdog
+//                                    change is applied to the Core's radio
+//                                    when it arrives. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -493,7 +501,7 @@ QString peerNameForThisProcess()
 // Each side's own AppSettings schema version, read by the key name
 // AppSettings::ensureSettingsAtVersion() writes it under. Read rather than
 // hardcoded: the literal lives at exactly one place today (CoreInit.cpp's
-// ensureSettingsAtVersion(6) call), and duplicating it here would create a
+// ensureSettingsAtVersion(7) call), and duplicating it here would create a
 // second copy free to drift from the migrations that actually ran.
 qint32 settingsSchemaVersionOf(const AppSettings& settings)
 {
@@ -633,6 +641,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 sendToSession(
                     SessionMessages::settingsValue(key, value.toString(), originTag));
             });
+    // R-R3-49: the Network Watchdog is a radio setting, applied where the
+    // radio is. A window's change lands in the Core's settings above; the
+    // Core's radio takes it here, whichever path stored it.
+    connect(m_settingsServer, &SettingsProxyServer::outboundValueChanged, this,
+            [this](const QString& key, const QVariant& value, const QString&) {
+                if (key == QLatin1String("NetworkWatchdogEnabled") && m_radioModel) {
+                    m_radioModel->applyNetworkWatchdog(value.toString() == QLatin1String("True"));
+                }
+            });
     // Whole-branch review, Important 4. A removal has its own signal and
     // its own frame. It used to arrive here as an outboundValueChanged
     // carrying an INVALID QVariant, and the value.toString() above turned
@@ -642,6 +659,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
             [this](const QString& key) {
                 sendToSession(SessionMessages::settingsValueAbsent(key, QString()));
+            });
+    // R-R3-49: a removal (a settings reset on the Core, or the schema v7
+    // reset) leaves the settings reading the default, so the radio takes
+    // the default too rather than keep the last value it was given.
+    connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
+            [this](const QString& key) {
+                if (key == QLatin1String("NetworkWatchdogEnabled") && m_radioModel) {
+                    m_radioModel->applyNetworkWatchdog(RadioModel::kNetworkWatchdogDefault);
+                }
             });
 
     // A daemon can authenticate a GUI before its configured radio is
@@ -1148,6 +1174,18 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,
                 QStringLiteral("Update this app to set up the RF-Kit amplifier on this Core."), {}));
+            break;
+        }
+        // R-R3-46 / R-R3-21: the filter policy verb came with
+        // radioHardwareVersion 4, in the minor-11 block.
+        if (message.commandVerb == "setAlexBpfMode"
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || radioHardwareVersion() < 4)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change the filter policy on this Core.")
+                    : QStringLiteral("The Core has no filter settings ready."), {}));
             break;
         }
         // I4 (R-R3-47): Reset amp error came with remoteRfKitControlVersion 3.
@@ -2117,8 +2155,10 @@ int StationServer::radioHardwareVersion() const
         return 1;
     }
     // 3: the `ioBoard` object and the per-band antenna verb
-    // (setAlexRxAntenna), R-R3-46 fix wave.
-    return m_radioModel->ioBoardFacade()->isBound() ? 3 : 2;
+    // (setAlexRxAntenna), R-R3-46 fix wave. 4: the filter policy verb
+    // (setAlexBpfMode), R-R3-46 / R-R3-21, applied through the same
+    // `alexAntennas` facade.
+    return m_radioModel->ioBoardFacade()->isBound() ? 4 : 2;
 }
 
 StationCapabilities StationServer::buildCapabilities() const
@@ -2152,7 +2192,8 @@ StationCapabilities StationServer::buildCapabilities() const
             // `stepAtt` object (DaemonApp binds it before the server starts);
             // 2 once its Alex antennas are behind `alexAntennas` too, with
             // the hardware apply step and the I/O board probe; 3 with the
-            // read-only `ioBoard` object and the per-band antenna verb.
+            // read-only `ioBoard` object and the per-band antenna verb; 4
+            // with the filter policy verb.
             caps.radioHardwareVersion = radioHardwareVersion();
             // R-R3-47 / R-R3-22: 1 on a Core that owns its accessories: the
             // read-only `amplifier` and `rfkit` objects. The Power Genius is 2

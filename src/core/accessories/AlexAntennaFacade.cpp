@@ -16,6 +16,10 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 fix wave: one band's antenna at
 //                                    a time. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-21: the filter policy
+//                                    for a remote window
+//                                    (setBpfModeForChain). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/accessories/AlexAntennaFacade.h"
@@ -349,6 +353,31 @@ QString AlexAntennaFacade::setRxOnlyAntForBand(Band band, int antenna)
     refresh();
     return c->rxOnlyAnt(band) == antenna
         ? QString() : QStringLiteral("The Core kept this band's receive-only input.");
+}
+
+QString AlexAntennaFacade::setBpfModeForChain(int chain, int mode)
+{
+    AlexController* c = m_controller.data();
+    if (!c) {
+        return QStringLiteral("The Core has no filter settings ready.");
+    }
+    if (chain < 0 || chain >= kFilterChainCount) {
+        return QStringLiteral("The Core has two receive filter chains, 0 and 1.");
+    }
+    if (mode < static_cast<int>(AlexController::BpfMode::Auto)
+        || mode > static_cast<int>(AlexController::BpfMode::ForceBypass)) {
+        return QStringLiteral("The filter policy is Auto, Force filter or Force bypass.");
+    }
+    const auto wanted = static_cast<AlexController::BpfMode>(mode);
+    if (c->bpfMode(chain) == wanted) {
+        return {};
+    }
+    // The local filter policy dialog's Apply makes this same call.
+    c->setBpfMode(chain, wanted);
+    if (c->bpfMode(chain) != wanted) {
+        return QStringLiteral("The Core kept this chain's filter policy.");
+    }
+    return {};
 }
 
 bool AlexAntennaFacade::sendBandEdit(const char* property, Band band, int ant, bool rxOnly)

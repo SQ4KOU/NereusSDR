@@ -85,6 +85,10 @@
 //                 SliceModel::loadFromSettings(), so its VAX channel comes
 //                 back too; a remote window's slice leaves its output route
 //                 to the Core. NereusSDR-original; no Thetis logic.
+//   2026-09-24 : R-R3-46 / R-R3-21 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. A filter policy change (a local
+//                 window's, or a remote window's on the Core) is saved for
+//                 the radio at once. NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -158,6 +162,10 @@
 //                sent it shows is marked shownOnPage.
 //                NereusSDR-original; no Thetis logic. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Network Watchdog setting reaches the radio at
+//                connect and on change (Thetis setup.cs:2195, 18024-18028
+//                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -899,6 +907,21 @@ RadioModel::RadioModel(Role role, QObject* parent)
     });
     connect(&m_alexController, &AlexController::bpfStateChanged, this,
             [this](int, const AlexController::AlexAdcState&) {
+        if (ownsLocalDsp()) { emit filterStateChanged(); }
+    });
+    // R-R3-46 / R-R3-21: an operator filter policy change (the local
+    // dialog's Apply, or a remote window's through the Core's
+    // AlexAntennaFacade) is saved for the radio at once
+    // (AlexController::save writes Alex{0,1}_BpfMode with the rest of its
+    // per-radio keys). Before this only another antenna change marked the
+    // controller for saving, so the choice could be lost at the next start.
+    // The policy is also published (rxFilter<N>Mode) when the chain's
+    // effective filter did not move, as on a chain locked to wideband, where
+    // bpfStateChanged stays quiet; otherwise a remote window would keep
+    // showing the old policy.
+    connect(&m_alexController, &AlexController::bpfModeChanged, this, [this](int) {
+        m_alexControllerDirty = true;
+        scheduleSettingsSave();
         if (ownsLocalDsp()) { emit filterStateChanged(); }
     });
 
@@ -4542,7 +4565,6 @@ void RadioModel::reportStationAccessoryRefusal(const QString& device, const QStr
     const bool shownOnPage = commandId != 0 && page
         && page->property("visible").toBool();
     emit accessoryRequestRefused(device, reason, shownOnPage);
-    emit accessoryRequestFinished(commandId, false);
 }
 
 void RadioModel::noteAccessoryRequestShownOnPage(quint32 commandId, QObject* page)
@@ -4562,17 +4584,23 @@ void RadioModel::reportStationLinkStateChanged()
     emit stationLinkStateChanged();
 }
 
-void RadioModel::forgetAccessoryRequest(quint32 commandId)
-{
-    m_pageShownAccessoryRequests.remove(commandId);
-    emit accessoryRequestFinished(commandId, true);
-}
-
 void RadioModel::reportStationSettingChanged(const QString& key)
 {
     if (m_role == Role::Remote) {
         emit stationSettingChanged(key);
     }
+}
+
+void RadioModel::reportStationCommandFinished(quint32 commandId, bool accepted,
+                                              const QString& reason)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    // Follow-up 3: the command is over, so no page's claim on it remains
+    // (a refusal's claim was already taken by reportStationAccessoryRefusal).
+    m_pageShownAccessoryRequests.remove(commandId);
+    emit stationCommandFinished(commandId, accepted, reason);
 }
 
 void RadioModel::reportStationRetuneRejected(int sliceId, const QString& reason)
@@ -8561,9 +8589,13 @@ bool RadioModel::setActiveSliceById(int sliceId)
 
 void RadioModel::onBandButtonClicked(Band band)
 {
-    SliceModel* slice = activeSlice();
+    onBandButtonClicked(activeSlice(), band);
+}
+
+void RadioModel::onBandButtonClicked(SliceModel* slice, Band band)
+{
     if (!slice) {
-        // No active slice (pre-connection, between-slice teardown, etc.).
+        // No slice (pre-connection, between-slice teardown, etc.).
         // Silent — avoids log spam from UI events firing during startup.
         return;
     }
@@ -8665,6 +8697,47 @@ void RadioModel::removePanadapter(int index)
     delete m_panadapters.takeAt(index);
     emit panadapterRemoved(index);
 }
+
+// ---------------------------------------------------------------------------
+// R-R3-49: the Network Watchdog setting, applied where the radio is.
+//
+// From Thetis setup.cs:18024-18028 [v2.10.3.15]:
+//   private void chkNetworkWDT_CheckedChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       NetworkIO.SetWatchdogTimer(Convert.ToInt32(chkNetworkWDT.Checked));
+//   }
+// Default on: Thetis setup.designer.cs:8434 [v2.10.3.15]
+//   this.chkNetworkWDT.Checked = true;
+// ---------------------------------------------------------------------------
+bool RadioModel::networkWatchdogSetting()
+{
+    return AppSettings::instance()
+               .value(QStringLiteral("NetworkWatchdogEnabled"),
+                      kNetworkWatchdogDefault ? QStringLiteral("True") : QStringLiteral("False"))
+               .toString()
+           == QStringLiteral("True");
+}
+
+void RadioModel::setNetworkWatchdogEnabled(bool enabled)
+{
+    AppSettings::instance().setValue(QStringLiteral("NetworkWatchdogEnabled"),
+                                     enabled ? QStringLiteral("True") : QStringLiteral("False"));
+    applyNetworkWatchdog(enabled);
+}
+
+void RadioModel::applyNetworkWatchdog(bool enabled)
+{
+    // A remote window has no radio of its own; the Core applies its copy.
+    RadioConnection* conn = m_connection;
+    if (conn == nullptr) {
+        return;
+    }
+    QMetaObject::invokeMethod(conn, [conn, enabled]() {
+        conn->setWatchdogEnabled(enabled);
+    });
+}
+
 
 // --- Connection ---
 
@@ -11249,6 +11322,17 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     QMetaObject::invokeMethod(m_connection, [conn = m_connection,
                                               ps = m_transmitModel.pureSigEnabled()]() {
         conn->setPuresignalRun(ps);
+    });
+
+    // R-R3-49: the Network Watchdog setting reaches the connection before
+    // it starts, as Thetis applies the checkbox at startup, before any
+    // SendStart: P2 carries it in the first general packet, P1 uses it for
+    // the wait for data.
+    // From Thetis setup.cs:2195 [v2.10.3.15]:
+    //   chkNetworkWDT_CheckedChanged(this, e);
+    QMetaObject::invokeMethod(m_connection, [conn = m_connection,
+                                              on = networkWatchdogSetting()]() {
+        conn->setWatchdogEnabled(on);
     });
 
     // Now dispatch connectToRadio -- it will find the correct m_rxFreqHz[0]

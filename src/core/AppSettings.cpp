@@ -1603,6 +1603,18 @@ void AppSettings::ensureSettingsAtVersion(int currentVersion)
         // See docs/architecture/2026-05-26-phase3f-multi-pan-multi-slice-design.md §12.
     }
 
+    // v6 -> v7 migration (R-R3-49). Setup > General > Options saved
+    // NetworkWatchdogEnabled for years while nothing read it. R-R3-49 made
+    // the key drive the radio's watchdog, so a value an operator saved
+    // while the checkbox did nothing would come alive on upgrade with no
+    // notice. Reset it once so every operator starts from the default (on);
+    // a choice made on a v7 settings file is kept.
+    if (storedVersion < 7 && currentVersion >= 7) {
+        qDebug() << "Migrating settings to schema v7 (Network Watchdog reset)";
+        remove(QStringLiteral("NetworkWatchdogEnabled"));
+        qDebug() << "Settings migration to schema v7 complete";
+    }
+
     setValue(versionKey, QString::number(currentVersion));
 }
 

@@ -400,6 +400,76 @@ private slots:
         f.bindController(&a);
         QVERIFY(!f.applyRemoteProperty("txAntennas", QStringLiteral("1,1")));
     }
+
+    // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the Core applies a remote
+    // window's filter policy through the controller's setBpfMode, the call
+    // the local filter policy dialog makes. A slice on 40 m sits on ADC0, so
+    // the forced filter is that band's.
+    void facade_bound_applies_the_filter_policy_as_the_local_dialog_does() {
+        AlexController core;
+        core.notifySlicesOnAdc(0, {Band::Band40m, Band::Count, Band::Count, Band::Count,
+                                   Band::Count});
+        QCOMPARE(core.adcState(0).effective, AlexController::BpfEffective::Filtered);
+        QCOMPARE(core.adcState(0).reasonText, QStringLiteral("40m"));
+        AlexAntennaFacade f;
+        f.bindController(&core);
+        QSignalSpy applied(&core, &AlexController::bpfModeChanged);
+
+        QCOMPARE(f.setBpfModeForChain(0, int(AlexController::BpfMode::ForceBand)), QString());
+        QCOMPARE(core.bpfMode(0), AlexController::BpfMode::ForceBand);
+        QCOMPARE(core.adcState(0).effective, AlexController::BpfEffective::Filtered);
+        QCOMPARE(core.adcState(0).currentBpfBand, Band::Band40m);
+        QCOMPARE(core.adcState(0).reasonText, QStringLiteral("40m (forced)"));
+
+        QCOMPARE(f.setBpfModeForChain(0, int(AlexController::BpfMode::ForceBypass)), QString());
+        QCOMPARE(core.bpfMode(0), AlexController::BpfMode::ForceBypass);
+        QCOMPARE(core.adcState(0).effective, AlexController::BpfEffective::Bypass);
+        QCOMPARE(core.adcState(0).reasonText, QStringLiteral("BYPASS (operator override)"));
+
+        QCOMPARE(f.setBpfModeForChain(0, int(AlexController::BpfMode::Auto)), QString());
+        QCOMPARE(core.bpfMode(0), AlexController::BpfMode::Auto);
+        QCOMPARE(core.adcState(0).effective, AlexController::BpfEffective::Filtered);
+        QCOMPARE(core.adcState(0).reasonText, QStringLiteral("40m"));
+        QCOMPARE(applied.count(), 3);
+        QCOMPARE(applied.last().at(0).toInt(), 0);
+
+        // The policy it already has: taken, nothing to save.
+        QCOMPARE(f.setBpfModeForChain(0, int(AlexController::BpfMode::Auto)), QString());
+        QCOMPARE(applied.count(), 3);
+
+        // The second chain on its own.
+        QCOMPARE(f.setBpfModeForChain(1, int(AlexController::BpfMode::ForceBypass)), QString());
+        QCOMPARE(core.bpfMode(1), AlexController::BpfMode::ForceBypass);
+        QCOMPARE(core.bpfMode(0), AlexController::BpfMode::Auto);
+        QCOMPARE(applied.last().at(0).toInt(), 1);
+
+        // A wideband chain stays bypassed, but its policy still changes and
+        // is still announced (so the Core saves it).
+        core.setWidebandActive(1, true);
+        const int before = applied.count();
+        QCOMPARE(f.setBpfModeForChain(1, int(AlexController::BpfMode::ForceBand)), QString());
+        QCOMPARE(core.bpfMode(1), AlexController::BpfMode::ForceBand);
+        QCOMPARE(core.adcState(1).effective, AlexController::BpfEffective::WidebandLocked);
+        QCOMPARE(applied.count(), before + 1);
+    }
+
+    void facade_filter_policy_refuses_what_the_controller_cannot_take() {
+        AlexAntennaFacade unbound;
+        QVERIFY(!unbound.setBpfModeForChain(0, 1).isEmpty());
+
+        AlexController core;
+        AlexAntennaFacade f;
+        f.bindController(&core);
+        QSignalSpy applied(&core, &AlexController::bpfModeChanged);
+        for (const auto& [chain, mode] : {std::pair{2, 1}, std::pair{-1, 1},
+                                           std::pair{0, 3}, std::pair{0, -1}}) {
+            const QString reason = f.setBpfModeForChain(chain, mode);
+            QVERIFY2(!reason.isEmpty(), qPrintable(QStringLiteral("%1/%2").arg(chain).arg(mode)));
+        }
+        QCOMPARE(core.bpfMode(0), AlexController::BpfMode::Auto);
+        QCOMPARE(core.bpfMode(1), AlexController::BpfMode::Auto);
+        QCOMPARE(applied.count(), 0);
+    }
 };
 
 QTEST_APPLESS_MAIN(TestAlexController)

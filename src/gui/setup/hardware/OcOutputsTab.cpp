@@ -27,6 +27,9 @@
 //   2026-09-23 - R-R3-21: populate() routes the MAC into
 //                 PennyLaneController so Penny Ext Control saves per radio.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the VHF sub-tab is hidden until transverters are
+//                 built (UnbuiltFeatures).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -71,6 +74,7 @@
 #include "HardwareTransmitGate.h"
 #include "OcOutputsHfTab.h"
 #include "OcOutputsSwlTab.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include "core/BoardCapabilities.h"
 #include "core/OcMatrix.h"
@@ -134,7 +138,7 @@ OcOutputsTab::OcOutputsTab(RadioModel* model, QWidget* parent)
     {
         auto* vhfLayout = new QVBoxLayout(m_vhfTab);
         auto* placeholder = new QLabel(
-            tr("VHF band plan — pending XVTR mapping (Phase 3F+)"), m_vhfTab);
+            tr("Open collector outputs for transverter bands are not built yet."), m_vhfTab);
         placeholder->setAlignment(Qt::AlignCenter);
         placeholder->setStyleSheet(QStringLiteral(
             "color: rgba(255,255,255,0.5); font-style: italic;"));
@@ -142,7 +146,9 @@ OcOutputsTab::OcOutputsTab(RadioModel* model, QWidget* parent)
         vhfLayout->addWidget(placeholder);
         vhfLayout->addStretch();
     }
-    m_subTabs->addTab(m_vhfTab, tr("VHF"));
+    const int vhfIndex = m_subTabs->addTab(m_vhfTab, tr("VHF"));
+    // R-R3-49: hidden until transverters are built.
+    m_subTabs->setTabVisible(vhfIndex, UnbuiltFeatures::isBuilt(UnbuiltFeature::Transverters));
 
     // ── SWL sub-sub-tab (Phase 3L HL2 Filter visibility) ──────────────────
     // Source: Thetis tpOCSWLControl (setup.designer.cs) [@501e3f5]

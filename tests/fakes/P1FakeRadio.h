@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <QUdpSocket>
 #include <QHostAddress>
+#include <QList>
 
 namespace NereusSDR::Test {
 
@@ -57,6 +58,9 @@ public:
     int  ep2FramesReceived() const { return m_ep2Count; }
     bool isRunning()         const { return m_running; }
     int  metisStopCount()    const { return m_stopCount; }
+    // Every start/stop (EF FE 04 xx) datagram received, as it arrived on
+    // the socket, oldest first (R-R3-49: tests assert on the wire).
+    const QList<QByteArray>& metisCommandsReceived() const { return m_metisCommands; }
 
     // Override the firmware version reported in discovery replies (default: 72).
     void setFirmwareVersion(int fw) { m_firmwareVersion = fw; }
@@ -83,6 +87,7 @@ private:
     bool         m_autoStreamEnabled{true};
     int          m_ep2Count{0};
     int          m_stopCount{0};
+    QList<QByteArray> m_metisCommands;
     quint32      m_ep6Seq{0};
     int          m_firmwareVersion{72};  // arbitrary default; any value is now valid
 };

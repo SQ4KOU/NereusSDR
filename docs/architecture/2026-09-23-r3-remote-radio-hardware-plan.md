@@ -302,3 +302,45 @@ HL2, locally and through the Rock.
 **Execution note (advisory):** opus (small). After Task 4.
 
 - [ ] **Step 1:** Local band and mode feed, restore to radio, tests; commit.
+
+## Task 6: The filter policy from a remote window
+
+Added 2026-09-24 after the unfinished-controls plan's review: the filter policy dialog
+says "Remote policy editing is not available yet." in a remote window, while a local
+window edits it. The operator's rule is remote parity. Neither existing path can carry
+it: the policy's saved keys (`hardware/<mac>/alex/antenna/Alex{0,1}_BpfMode`) are
+model-owned, so the Core's settings proxy refuses them, and the mirrored `rxFilterN*`
+properties are outbound only; the `alexAntennas` object has no filter-mode property.
+
+**Requirements:** R-R3-46, R-R3-21.
+
+**Files:**
+- Modify: `src/core/accessories/AlexAntennaFacade.{h,cpp}` (a writable filter-policy
+  property, or a typed verb if a property does not fit the facade's shape: say which
+  and why), the Core's write handler applying it exactly as the local dialog does (the
+  same controller calls and saved keys), `src/core/session/MirrorPolicy.cpp` and
+  `MirrorSchema` registration, `src/core/session/StationServer.cpp` and
+  `StationCapabilities.{h,cpp}` (`radioHardwareVersion` 4), `src/core/session/StationClient.cpp`,
+  `src/gui/widgets/FilterPolicyDialog.{h,cpp}` (in a remote window it reads the Core's
+  policy and sends changes; with an older Core it keeps a plain reason)
+- Test: the facade's test, `tests/tst_remote_hardware*` (or the file the remote
+  hardware tasks used), a dialog test in a remote window, `tst_mirror_schema`
+
+**Acceptance:**
+- In a remote window the dialog shows the Core's current policy and a change reaches the
+  Core, takes effect there as it does locally (the same filter selection the local
+  dialog produces, checked on the Core's controller), is saved on the Core for that
+  radio, and every window shows it.
+- A remote window connected to a Core without `radioHardwareVersion` 4 sends nothing
+  and says in plain words that the Core needs updating for this.
+- Older windows see exactly today's wire.
+- A local window is unchanged.
+
+**Verification:** the tests above, built and run by exact name, offscreen. Hardware
+(pending, operator checkpoint): change the policy from the Rock's remote window and
+hear the filter change on the G2.
+
+**Execution note (advisory):** opus. After Tasks 1-5.
+
+- [ ] **Step 1:** Core property or verb, write handler, version gate, tests; commit.
+- [ ] **Step 2:** The dialog in a remote window, tests; commit.

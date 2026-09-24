@@ -24,10 +24,16 @@
 //                NereusSDR-original code (no Thetis port; no upstream
 //                attribution required). J.J. Boyd (KG4VCF), with
 //                AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: Jitter, Packet loss and Packet gap are hidden
+//                (UnbuiltFeatures) until they are measured for a local
+//                radio. A remote window opens RemoteDiagnosticsDialog
+//                instead. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "gui/NetworkDiagnosticsDialog.h"
 #include "StyleConstants.h"
+#include "UnbuiltFeatures.h"
 #include "models/RadioModel.h"
 #include "core/AudioEngine.h"
 #include "core/RadioConnection.h"
@@ -216,6 +222,12 @@ void NetworkDiagnosticsDialog::buildUi()
     buildNetworkSection(grid, row);
     buildAudioSection(grid, row);
     buildTelemetrySection(grid, row);
+
+    // R-R3-49: nothing measures these for a local radio yet, so their rows
+    // (name and value) are hidden until something does.
+    for (QLabel* value : {m_jitterLabel, m_lossLabel, m_packetGapLabel}) {
+        UnbuiltFeatures::hideRowUnlessBuilt(value, UnbuiltFeature::LocalNetworkStats);
+    }
 
     root->addStretch();
 

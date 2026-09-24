@@ -52,9 +52,6 @@ StartupPrefsPage::StartupPrefsPage(RadioModel* model, QWidget* parent)
         s.save();
     });
 
-    auto* restoreFreq = addLabeledToggle(QStringLiteral("Restore last frequency on connect"));
-    markNyi(restoreFreq, QStringLiteral("Phase 3E"));
-
     // R-R3-21: the operator identity the Spot Hub Settings tab edits
     // (User/Callsign, User/GridSquare and the copies each spot source reads).
     auto* callsign = addLabeledEdit(QStringLiteral("Callsign"),
@@ -103,24 +100,6 @@ StartupPrefsPage::StartupPrefsPage(RadioModel* model, QWidget* parent)
     connect(gridSquare, &QLineEdit::editingFinished, this, commitIdentity);
     m_callsignEdit = callsign;
     m_gridEdit = gridSquare;
-
-    // Section: Application
-    addSection(QStringLiteral("Application"));
-
-    auto* splash = addLabeledToggle(QStringLiteral("Show splash screen at startup"));
-    markNyi(splash, QStringLiteral("Phase 3N"));
-
-    auto* checkUpdates = addLabeledToggle(QStringLiteral("Check for updates on startup"));
-    markNyi(checkUpdates, QStringLiteral("Phase 3N"));
-
-    auto* regenWisdom = addLabeledButton(QStringLiteral("FFTW Wisdom"),
-                                         QStringLiteral("Regenerate"));
-    markNyi(regenWisdom, QStringLiteral("Phase 3C"));
-
-    auto* priority = addLabeledCombo(QStringLiteral("Process Priority"),
-        {QStringLiteral("Normal"), QStringLiteral("Above Normal"),
-         QStringLiteral("High"), QStringLiteral("Realtime")});
-    markNyi(priority, QStringLiteral("future"));
 }
 
 void StartupPrefsPage::setStationSettingsAvailable(bool available, const QString& reason)
@@ -142,18 +121,18 @@ UiScalePage::UiScalePage(RadioModel* model, QWidget* parent)
         {QStringLiteral("100%"), QStringLiteral("125%"),
          QStringLiteral("150%"), QStringLiteral("175%"),
          QStringLiteral("200%")});
-    markNyi(scale, QStringLiteral("Phase 3H"));
+    scale->setEnabled(false);
 
     // Section: Theme
     addSection(QStringLiteral("Theme"));
 
     auto* darkLight = addLabeledToggle(QStringLiteral("Dark mode"));
-    markNyi(darkLight, QStringLiteral("Phase 3H"));
+    darkLight->setEnabled(false);
 
     auto* fontSize = addLabeledCombo(QStringLiteral("Font Size"),
         {QStringLiteral("Small"), QStringLiteral("Medium"),
          QStringLiteral("Large")});
-    markNyi(fontSize, QStringLiteral("Phase 3H"));
+    fontSize->setEnabled(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -167,30 +146,30 @@ NavigationPage::NavigationPage(RadioModel* model, QWidget* parent)
     addSection(QStringLiteral("Mouse"));
 
     auto* wheelTune = addLabeledToggle(QStringLiteral("Mouse wheel tunes VFO"));
-    markNyi(wheelTune, QStringLiteral("Phase 3E"));
+    wheelTune->setEnabled(false);
 
     auto* clickTune = addLabeledToggle(QStringLiteral("Click-to-tune on panadapter"));
-    markNyi(clickTune, QStringLiteral("Phase 3E"));
+    clickTune->setEnabled(false);
 
     auto* scrollZoom = addLabeledToggle(QStringLiteral("Scroll zoom on panadapter"));
-    markNyi(scrollZoom, QStringLiteral("Phase 3E"));
+    scrollZoom->setEnabled(false);
 
     auto* dblClick = addLabeledCombo(QStringLiteral("Double-click action"),
         {QStringLiteral("Tune"), QStringLiteral("Center"),
          QStringLiteral("None")});
-    markNyi(dblClick, QStringLiteral("Phase 3E"));
+    dblClick->setEnabled(false);
 
     // Section: Tuning
     addSection(QStringLiteral("Tuning"));
 
     auto* snapTune = addLabeledToggle(QStringLiteral("Snap click-tune to step"));
-    markNyi(snapTune, QStringLiteral("Phase 3E"));
+    snapTune->setEnabled(false);
 
     auto* wheelOutside = addLabeledToggle(QStringLiteral("Wheel tunes outside spectral display"));
-    markNyi(wheelOutside, QStringLiteral("Phase 3E"));
+    wheelOutside->setEnabled(false);
 
     auto* wheelReverse = addLabeledToggle(QStringLiteral("Reverse wheel direction"));
-    markNyi(wheelReverse, QStringLiteral("Phase 3E"));
+    wheelReverse->setEnabled(false);
 }
 
 } // namespace NereusSDR

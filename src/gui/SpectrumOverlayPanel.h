@@ -35,6 +35,14 @@
 //                 audio/SendIqToVax stored-but-not-active). J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-49: the RF Gain slider and WNB button (ANT flyout)
+//                 and the IQ Ch combo (VAX flyout) are removed. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-09-24 - R-R3-49, R-R3-21: the ANT button is not shown on a board
+//                 with no antenna choices, where its flyout would be empty.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -76,8 +84,6 @@ public:
     // Bind this overlay panel to a RadioModel. Enables the VAX Ch combo
     // and wires it bidirectionally to the resolved pan slice. Safe to
     // call multiple times — each rebind drops prior SliceModel connections.
-    // The IQ Ch combo remains disabled (feature-flagged per design spec
-    // §6.7/§11.3 — audio/SendIqToVax is stored-but-not-active).
     void setRadioModel(RadioModel* model);
 
     using SliceResolver = std::function<SliceModel*()>;
@@ -178,6 +184,9 @@ private:
     // ── Main button strip ────────────────────────────────────────────────
     QPushButton*         m_collapseBtn{nullptr};
     QVector<QPushButton*> m_menuBtns;   // indices 0-6 (buttons 2-8)
+    // False on a board with no antenna choices: the ANT flyout would be
+    // empty, so its button is not shown (R-R3-49).
+    bool                 m_antAvailable{true};
     bool                 m_expanded{true};
 
     // ── Active flyout tracking (one visible at a time) ───────────────────
@@ -199,9 +208,6 @@ private:
     // can replicate the per-pan rebind pattern used for VAX.
     QMetaObject::Connection m_rxAntConn;
     QMetaObject::Connection m_txAntConn;
-    QSlider*     m_rfGainSlider{nullptr};
-    QLabel*      m_rfGainLabel{nullptr};
-    QPushButton* m_wnbBtn{nullptr};
 
     // ── Display flyout ───────────────────────────────────────────────────
     QWidget*     m_displayFlyout{nullptr};
@@ -225,7 +231,6 @@ private:
     // ── VAX flyout ───────────────────────────────────────────────────────
     QWidget*   m_vaxFlyout{nullptr};
     QComboBox* m_vaxCmb{nullptr};
-    QComboBox* m_vaxIqCmb{nullptr};
 
     // ── VAX model binding (Phase 3O Sub-Phase 9 Task 9.2c) ───────────────
     // m_vaxChannelConn stores the SliceModel::vaxChannelChanged → combo

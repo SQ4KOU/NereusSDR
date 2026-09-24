@@ -101,11 +101,19 @@
 //                 reaches local DSP any more, so the gate's cases use a
 //                 probe page that does. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-24 -- R-R3-49: the page-sweep floors drop by the leaves not
+//                 registered while their features are not built. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-09-24 -- R-R3-49: the Options page gates the Network Watchdog with
+//                 the Region (both the Core's). J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 
 #include "OperatorWording.h"
+#include "gui/RemoteAudioStatus.h"
 
 #include <QAction>
 #include <QApplication>
@@ -127,6 +135,7 @@
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QAbstractButton>
 #include <QPointer>
 #include <QStringList>
 #include <QTimer>
@@ -137,6 +146,7 @@
 #include <QWidget>
 
 #include <chrono>
+#include <functional>
 #include <memory>
 
 #include "core/AppSettings.h"
@@ -159,7 +169,23 @@
 #include "core/settings/SettingsScope.h"
 #include "gui/ConnectionPanel.h"
 #include "gui/GuiSessionCoordinator.h"
+#include "gui/SpectrumWidget.h"
+#include "gui/UnbuiltFeatures.h"
+#include "gui/containers/ContainerButtonDispatcher.h"
+#include "models/Band.h"
+#include "gui/containers/ContainerManager.h"
+#include "gui/containers/ContainerWidget.h"
+#include "gui/meters/AntennaButtonItem.h"
+#include "gui/meters/BandButtonItem.h"
+#include "gui/meters/FilterButtonItem.h"
+#include "gui/meters/MeterWidget.h"
+#include "gui/meters/ModeButtonItem.h"
+#include "gui/meters/OtherButtonItem.h"
+#include "gui/meters/TuneStepButtonItem.h"
+#include "gui/meters/VfoDisplayItem.h"
+#include "gui/widgets/StatusToast.h"
 #include "gui/MainWindow.h"
+#include "gui/RemoteMediaController.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/SetupDialog.h"
 #include "gui/StationStartupSelection.h"
@@ -192,6 +218,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#include "fakes/FakeAudioBus.h"
 #include "fakes/MainWindowTestSettings.h"
 
 using namespace NereusSDR;
@@ -1655,6 +1682,92 @@ private slots:
         }
     }
 
+    // R-R3-43 / R-R3-44: SetupDialog carries MainWindow's live "receiver
+    // streams are Opus" value to Audio > VAX, before the page is built and
+    // after. A local window never gets it, so its note stays absent.
+    void remoteVaxPageSaysWhenReceiverAudioIsCompressed()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        dialog.setReceiverAudioNote(RemoteReceiverAudioNote::OpusChosen);  // before the page exists
+        dialog.selectPage(QStringLiteral("VAX"));
+        QWidget* const page = dialog.realizedPageForTest(QStringLiteral("VAX"));
+        QVERIFY(page != nullptr);
+        auto* const note = page->findChild<QLabel*>(QStringLiteral("vaxCompressedAudioNote"));
+        QVERIFY(note != nullptr);
+        QVERIFY(!note->isHidden());
+        QVERIFY2(OperatorWording::isPlain(note->text()), qPrintable(note->text()));
+        dialog.setReceiverAudioNote(RemoteReceiverAudioNote::None);  // Lossless now runs
+        QVERIFY(note->isHidden());
+        dialog.setReceiverAudioNote(RemoteReceiverAudioNote::LosslessUnavailable);  // it fell back to Opus
+        QVERIFY(!note->isHidden());
+        QVERIFY(!note->text().contains(QLatin1String("Set Audio quality")));
+
+        RadioModel local;
+        SetupDialog localDialog(&local);
+        localDialog.selectPage(QStringLiteral("VAX"));
+        QWidget* const localPage = localDialog.realizedPageForTest(QStringLiteral("VAX"));
+        QVERIFY(localPage != nullptr);
+        auto* const localNote = localPage->findChild<QLabel*>(QStringLiteral("vaxCompressedAudioNote"));
+        QVERIFY(localNote != nullptr);
+        QVERIFY(localNote->isHidden());
+    }
+
+    // R-R3-43 / R-R3-44 fix wave (M3): MainWindow's push of the VAX note,
+    // through the same seams MainWindow's constructor and createSetupDialog
+    // use (MainWindow itself cannot be built here). The note is pushed on
+    // an audio status change, on a station link change (how a capability
+    // change arrives, which need not change the audio status), and into a
+    // Setup dialog when it opens.
+    void mainWindowPushesTheReceiverAudioNote()
+    {
+        // As in a real window, CoreInit's migrations ran before a
+        // StationClient exists (the file's other sessions use 6 too).
+        AppSettings::instance().ensureSettingsAtVersion(6);
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        RemoteMediaController media(&client, &remote, nullptr);
+        QWidget root;
+        RemoteReceiverAudioNote current = RemoteReceiverAudioNote::None;
+        const auto source = [&current] { return current; };
+        MainWindow::wireReceiverAudioNotePush(&root, &media, &remote, source);
+
+        // Setup opens: seeded with the value at that moment.
+        current = RemoteReceiverAudioNote::OpusChosen;
+        auto* dialog = new SetupDialog(&remote, &root);
+        MainWindow::seedReceiverAudioNote(dialog, source);
+        dialog->selectPage(QStringLiteral("VAX"));
+        QWidget* const page = dialog->realizedPageForTest(QStringLiteral("VAX"));
+        QVERIFY(page != nullptr);
+        auto* const note = page->findChild<QLabel*>(QStringLiteral("vaxCompressedAudioNote"));
+        QVERIFY(note != nullptr);
+        QVERIFY(!note->isHidden());
+        QVERIFY(note->text().contains(QLatin1String("Set Audio quality")));
+
+        // An audio status change.
+        current = RemoteReceiverAudioNote::LosslessUnavailable;
+        emit media.audioStatusChanged();
+        QVERIFY(!note->isHidden());
+        QVERIFY(!note->text().contains(QLatin1String("Set Audio quality")));
+
+        // A capability change with no audio status change: the Core stops
+        // sending receiver streams, so VAX is not fed from it.
+        current = RemoteReceiverAudioNote::None;
+        remote.reportStationLinkStateChanged();
+        QVERIFY(note->isHidden());
+
+        // And back.
+        current = RemoteReceiverAudioNote::OpusChosen;
+        remote.reportStationLinkStateChanged();
+        QVERIFY(!note->isHidden());
+
+        // Without media (a local window) the note is None.
+        QCOMPARE(MainWindow::receiverAudioNoteFor(nullptr), RemoteReceiverAudioNote::None);
+        // An unconnected Core sends no receiver streams.
+        QCOMPARE(MainWindow::receiverAudioNoteFor(&media), RemoteReceiverAudioNote::None);
+    }
+
     // R-R3-23: Audio > Devices in a remote window picks this computer's
     // speakers, headphones and microphone as it always has, whatever the
     // transmit permission. Nothing counted by the local-DSP audit is
@@ -1872,7 +1985,7 @@ private slots:
         // wave, final review I4); so is VAX (R-R3-44).
         const QMap<QString, int> coreControls{
             {QStringLiteral("Startup & Preferences"), 2}, // callsign, grid (R-R3-21)
-            {QStringLiteral("Options"), 1},             // General: Region
+            {QStringLiteral("Options"), 2},             // General: Region, Network Watchdog (R-R3-49)
             {QStringLiteral("Spectrum Defaults"), 5},   // FFT size, window, Hz/bin, fps x2
             {QStringLiteral("Grid & Scales"), 3},       // dB max, dB min, copy
             {QStringLiteral("Multimeter"), 1},          // sample interval
@@ -1940,8 +2053,13 @@ private slots:
             }
             }
         }
-        QVERIFY(thisComputer >= 20);
-        QVERIFY(core >= 25);
+        // R-R3-49: eight This Computer leaves (UI Scale & Theme, Navigation,
+        // Skins, Collapsible Display, Serial Ports, TCP/IP CAT, MIDI Control,
+        // Shortcuts) and three Core leaves (TX Profiles, Signal Generator,
+        // Hardware Tests) are not registered while their features are not
+        // built, so each floor drops by that many.
+        QVERIFY(thisComputer >= 12);
+        QVERIFY(core >= 22);
         QVERIFY(mixed >= 8);
 
         // Nothing towards the Core: nothing sent, and nothing held as an
@@ -2140,7 +2258,10 @@ private slots:
             QCOMPARE(notice->text(), kCoreSettingsMissingReason);
             QVERIFY2(!notice->isHidden(), qPrintable(labels.at(i)));
         }
-        QVERIFY(core >= 25);
+        // R-R3-49: three Core leaves are not registered while their
+        // features are not built (TX Profiles, Signal Generator, Hardware
+        // Tests).
+        QVERIFY(core >= 22);
         QCOMPARE(probeBuilds, 0);
         QVERIFY(dialog.realizePageAtForTest(probe) != nullptr);
         QCOMPARE(probeBuilds, 0);
@@ -2364,6 +2485,12 @@ private slots:
         QFETCH(QString, label);
         QFETCH(QString, reasonWord);
 
+        // R-R3-49: DDC Routing is hidden until multi-panadapter receiver
+        // routing is built (ddc-routing); its remote reason is checked as
+        // the page will be once it is.
+        UnbuiltFeatures::setBuiltForTest(UnbuiltFeature::DdcRouting, true);
+        const auto unmark = qScopeGuard([] { UnbuiltFeatures::resetForTest(); });
+
         RadioModel remote(RadioModel::Role::Remote);
         SetupDialog dialog(&remote);
 
@@ -2541,6 +2668,134 @@ private slots:
         QVERIFY(localAntennas->txGridForTest()->isEnabled());
         QVERIFY(localAntennas->blockTxAnt2ForTest()->isEnabled());
         QVERIFY(localHardware->findChild<Hl2OptionsTab*>()->transmitTimingsEnabledForTest());
+    }
+
+    // R3 unfinished controls fix wave (R-R3-49, R-R3-21): the groups and
+    // rows hidden inside Setup pages the Core owns (DSP > CW, AM/SAM and
+    // FM; Hardware Config's OC Outputs extras, antenna conflict policy,
+    // XVTR and VHF tabs, HL2 bus 0 and Bandwidth Monitor) are hidden in a
+    // connected remote window, where those pages are built for real rather
+    // than as placeholders. Marking every feature built shows each of them,
+    // so the check cannot pass on a page that lacks them.
+    void coreScopedHiddenGroupsHideInAConnectedRemoteWindow_data()
+    {
+        QTest::addColumn<bool>("hl2");
+        QTest::newRow("ANAN-100D") << false;
+        QTest::newRow("Hermes Lite 2") << true;
+    }
+
+    void coreScopedHiddenGroupsHideInAConnectedRemoteWindow()
+    {
+        QFETCH(bool, hl2);
+        const auto shown = [](QWidget* w, QWidget* page) {
+            if (w == nullptr) { return false; }
+            for (QWidget* p = w; p != nullptr && p != page; p = p->parentWidget()) {
+                const bool stackPage = qobject_cast<QStackedWidget*>(p->parentWidget()) != nullptr;
+                if (p->isHidden() && !stackPage) { return false; }
+            }
+            return true;
+        };
+        const auto named = [shown](const char* name) {
+            return [shown, name](QWidget* page) {
+                return shown(page->findChild<QWidget*>(QString::fromLatin1(name)), page);
+            };
+        };
+        const auto text = [shown](const char* caption) {
+            return [shown, caption](QWidget* page) {
+                const QString want = QString::fromLatin1(caption);
+                for (QLabel* l : page->findChildren<QLabel*>()) {
+                    if (l->text() == want && shown(l, page)) { return true; }
+                }
+                for (QAbstractButton* b : page->findChildren<QAbstractButton*>()) {
+                    if (b->text() == want && shown(b, page)) { return true; }
+                }
+                return false;
+            };
+        };
+        const auto tab = [shown](const char* caption) {
+            return [shown, caption](QWidget* page) {
+                for (QTabWidget* tabs : page->findChildren<QTabWidget*>()) {
+                    for (int i = 0; i < tabs->count(); ++i) {
+                        if (tabs->tabText(i) == QLatin1String(caption) && tabs->isTabVisible(i)
+                            && shown(tabs, page)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
+        };
+        struct Check {
+            const char* page;
+            const char* what;
+            std::function<bool(QWidget*)> shown;
+        };
+        QList<Check> checks{
+            {"CW", "keyer group", named("cwKeyerGroup")},
+            {"CW", "timing group", named("cwTimingGroup")},
+            {"CW", "peak filter bandwidth", text("Bandwidth")},
+            {"CW", "peak filter gain", text("Gain")},
+            {"AM/SAM", "synchronous AM group", named("samGroup")},
+            {"AM/SAM", "maximum squelch tail", text("Max Tail")},
+            {"FM", "deviation", named("fmRxDeviationCombo")},
+            {"FM", "de-emphasis", named("fmDeEmphasisButton")},
+            {"FM", "FM transmit group", named("fmTxGroup")},
+            {"Hardware Config", "antenna conflict policy", named("antennaConflictPolicyGroup")},
+            {"Hardware Config", "OC hot switching", named("ocAllowHotSwitching")},
+            {"Hardware Config", "OC USB BCD", named("ocUsbBcdGroup")},
+            {"Hardware Config", "OC external PA", named("ocExternalPaGroup")},
+            {"Hardware Config", "OC VHF tab", tab("VHF")},
+        };
+        if (!hl2) {
+            // The XVTR tab is not offered for the Hermes Lite 2 at all.
+            checks << Check{"Hardware Config", "XVTR tab", tab("XVTR")};
+        } else {
+            checks << Check{"Hardware Config", "HL2 I2C bus 0", named("hl2I2cBus0")}
+                   << Check{"Hardware Config", "Bandwidth Monitor tab", tab("Bandwidth Monitor")};
+        }
+
+        const auto unmark = qScopeGuard([] { UnbuiltFeatures::resetForTest(); });
+        for (const bool allBuilt : {false, true}) {
+            UnbuiltFeatures::resetForTest();
+            if (allBuilt) {
+                for (const UnbuiltFeatures::Entry& entry : UnbuiltFeatures::all()) {
+                    UnbuiltFeatures::setBuiltForTest(entry.feature, true);
+                }
+            }
+            SettingsProxy proxy;
+            AppSettings::instance().setRemoteBackend(&proxy);
+            const auto detach = qScopeGuard([] { AppSettings::instance().setRemoteBackend(nullptr); });
+            RadioModel remote(RadioModel::Role::Remote);
+            StationCapabilities caps;
+            caps.macAddress = hl2 ? QStringLiteral("AA:BB:CC:DD:EE:49")
+                                  : QStringLiteral("AA:BB:CC:DD:EE:50");
+            caps.board = hl2 ? HPSDRHW::HermesLite : HPSDRHW::Angelia;
+            caps.radioConnected = true;
+            caps.radioIdentityEntries = true;
+            caps.hpsdrModel = hl2 ? HPSDRModel::HERMESLITE : HPSDRModel::ANAN100D;
+            caps.radioProtocol = 1;
+            remote.applyStationCapabilities(caps);
+            remote.alexAntennaFacade()->setWindowAvailability(true, {});
+            remote.stepAttFacade()->setWindowAvailability(true, {});
+
+            SetupDialog dialog(&remote);
+            connectDialog(proxy, dialog);
+            QStringList wrong;
+            for (const Check& check : checks) {
+                const QString label = QString::fromLatin1(check.page);
+                dialog.selectPage(label);
+                QWidget* const page = dialog.realizedPageForTest(label);
+                QVERIFY2(page != nullptr, check.page);
+                QVERIFY2(!dialog.isPagePlaceholderForTest(label), check.page);
+                if (check.shown(page) != allBuilt) {
+                    wrong << QStringLiteral("%1: %2").arg(label, QString::fromLatin1(check.what));
+                }
+            }
+            QVERIFY2(wrong.isEmpty(),
+                     qPrintable((allBuilt ? QStringLiteral("built, not shown: ")
+                                          : QStringLiteral("not built, shown: "))
+                                + wrong.join(QStringLiteral("; "))));
+        }
     }
 
     // R-R3-46 (carried from the remote window Setup re-review): with the
@@ -3094,15 +3349,16 @@ private slots:
         combo->setCurrentIndex(4);
         QCOMPARE(slice->vaxChannel(), 4);
         QCOMPARE(stored.constLast(), (std::pair<int, int>{0, 4}));
-        // The IQ channel combo stays off: there is no I/Q for VAX.
-        auto* iqCombo = host.findChild<QComboBox*>(QStringLiteral("vaxIqCombo"));
-        QVERIFY(iqCombo != nullptr);
-        QVERIFY(!iqCombo->isEnabled());
+        // The IQ channel combo was removed (R-R3-49): not built remotely either.
+        QVERIFY(host.findChild<QComboBox*>(QStringLiteral("vaxIqCombo")) == nullptr);
 
         // Never the Core's key.
         QVERIFY(!AppSettings::instance().contains(QStringLiteral("Slice0/VaxChannel")));
     }
 
+    // R-R3-21 / R-R3-22: OPERATE waits for remote transmit. Disconnect
+    // and Reconnect ask the Core (tst_remote_peripherals); with no Core
+    // offering Power Genius control the item stays off and says why.
     void remoteAmplifierAppletControlsAreUnavailable()
     {
         RadioModel remote(RadioModel::Role::Remote);
@@ -3130,7 +3386,9 @@ private slots:
         QVERIFY(toggle != nullptr);
         QVERIFY(!toggle->isEnabled());
         QVERIFY2(OperatorWording::isPlain(toggle->toolTip()), qPrintable(toggle->toolTip()));
-        QCOMPARE(toggle->toolTip(), operateBtn->toolTip());
+        QCOMPARE(toggle->toolTip(),
+                 QStringLiteral("This Core does not offer Power Genius XL control to this app."));
+        QCOMPARE(operateBtn->toolTip(), AmpApplet::remoteUnavailableReason());
         toggle->trigger();
         QCOMPARE(toggles.count(), 0);
 
@@ -3401,9 +3659,9 @@ private slots:
 
     // ====================================================================
     // R-R3-21 fix wave: the RF-Kit RF2K-S applet. A Core with RF-Kit
-    // enabled shows it in a remote window (rfKitEnabled is mirrored), and
-    // OPERATE, the antenna buttons and Disconnect/Reconnect drive this
-    // computer's own RF2K-S connection, the amplifier the station owns.
+    // enabled shows it in a remote window (rfKitEnabled is mirrored).
+    // OPERATE and the antenna buttons wait for remote transmit;
+    // Disconnect/Reconnect ask the Core, which owns the amp (R-R3-22).
     // ====================================================================
     void remoteRfKitAppletControlsAreUnavailable()
     {
@@ -3753,6 +4011,346 @@ private slots:
             QCOMPARE(reRouted.count(), 1);
         }
 
+        sessions.shutdown();
+    }
+
+    // ====================================================================
+    // R3 unfinished controls, Task 3 (R-R3-49, R-R3-21): a container's
+    // function and band buttons act on the container's own slice, in a
+    // local window and in a remote one. The band buttons light that
+    // slice's band and follow it however it changes. In a remote window
+    // the transmit buttons say the transmit reason and change nothing;
+    // the others act on the Core's slice.
+    // ====================================================================
+    // Fix wave M2 (R-R3-49, R-R3-21): a container set to a slice that
+    // closes shows none of that slice's state. Its VFO display says the
+    // slice is not open instead of the slice's last frequency, its mode,
+    // filter, step and antenna buttons light nothing, and a wheel on the
+    // display says why it does nothing.
+    void aContainerOnASliceThatClosesShowsNoneOfIt()
+    {
+        Test::markAudioFirstRunDone();
+        RadioDiscovery::clearHoldOffForTest();
+        {
+            RadioDiscovery discovery;
+            discovery.holdOffScans(std::chrono::minutes{5});
+        }
+        const auto releaseHoldOff = qScopeGuard([] {
+            RadioDiscovery::clearHoldOffForTest();
+        });
+
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.replace({}, false));
+        MainWindow* const window = sessions.window();
+        RadioModel* const model = window->radioModel();
+        while (model->slices().size() < 2) { QVERIFY(model->addSlice() >= 0); }
+        SliceModel* const b = model->sliceById(1);
+        QVERIFY(b != nullptr);
+        b->setFrequency(7100000.0);
+
+        auto* manager = window->findChild<ContainerManager*>();
+        QVERIFY(manager != nullptr);
+        ContainerWidget* const container = manager->createContainer(2, DockMode::Floating);
+        auto* meter = new MeterWidget();
+        container->setContent(meter);
+        auto* modes = new ModeButtonItem();
+        auto* filters = new FilterButtonItem();
+        auto* steps = new TuneStepButtonItem();
+        auto* antennas = new AntennaButtonItem();
+        auto* vfo = new VfoDisplayItem();
+        for (MeterItem* item : std::initializer_list<MeterItem*>{modes, filters, steps, antennas, vfo}) {
+            meter->addItem(item);
+            container->wireInteractiveItem(item);
+        }
+        const auto destroy = qScopeGuard([manager, container] {
+            manager->destroyContainer(container->id());
+        });
+
+        // On slice B: lit from slice B.
+        QVERIFY(modes->activeMode() >= 0);
+        QCOMPARE(vfo->frequency(), int64_t(7100000));
+        QVERIFY(vfo->unavailableText().isEmpty());
+
+        // Slice B closes.
+        model->removeSlice(1);
+        QVERIFY(model->sliceById(1) == nullptr);
+
+        QCOMPARE(modes->activeMode(), -1);
+        QCOMPARE(filters->activeFilter(), -1);
+        for (int i = 0; i < 10; ++i) { QVERIFY(filters->filterLabel(i).isEmpty()); }
+        QCOMPARE(steps->activeStep(), -1);
+        for (int i = 0; i < antennas->buttonCount(); ++i) {
+            QVERIFY2(!antennas->button(i).on, qPrintable(QString::number(i)));
+        }
+        QCOMPARE(vfo->unavailableText(), QStringLiteral("Slice B is not open"));
+        QVERIFY(OperatorWording::isPlain(vfo->unavailableText()));
+
+        // A wheel on the display says why it does nothing.
+        emit container->frequencyChangeRequested(1000);
+        bool said = false;
+        for (StatusToast* toast : window->findChildren<StatusToast*>()) {
+            if (toast->message() == ContainerButtonDispatcher::noSliceReason(2)) { said = true; }
+        }
+        QVERIFY(said);
+
+        // Set to slice A, which is open: its state is back.
+        container->setRxSource(1);
+        QVERIFY(vfo->unavailableText().isEmpty());
+        QCOMPARE(vfo->frequency(),
+                 static_cast<int64_t>(std::llround(model->sliceById(0)->frequency())));
+        QVERIFY(modes->activeMode() >= 0);
+    }
+
+    // Fix wave M3 (R-R3-49, R-R3-21): the Peak hold and VAX 1 buttons light
+    // the moment their targets change elsewhere (the pan overlay, Setup >
+    // Audio > VAX), not at the next unrelated refresh.
+    void containerPeakAndVaxButtonsFollowChangesMadeElsewhere()
+    {
+        using Id = OtherButtonItem::ButtonId;
+        Test::markAudioFirstRunDone();
+        RadioDiscovery::clearHoldOffForTest();
+        {
+            RadioDiscovery discovery;
+            discovery.holdOffScans(std::chrono::minutes{5});
+        }
+        const auto releaseHoldOff = qScopeGuard([] {
+            RadioDiscovery::clearHoldOffForTest();
+            AppSettings::instance().remove(QStringLiteral("audio/Vax1/Enabled"));
+        });
+
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.replace({}, false));
+        MainWindow* const window = sessions.window();
+        RadioModel* const model = window->radioModel();
+        while (model->slices().isEmpty()) { QVERIFY(model->addSlice() >= 0); }
+        QVERIFY(model->sliceById(0) != nullptr);
+        AudioEngine* const audio = model->localAudioDevices();
+        QVERIFY(audio != nullptr);
+        audio->setVaxBusFactoryForTest([](int channel) -> std::unique_ptr<IAudioBus> {
+            auto bus = std::make_unique<FakeAudioBus>(QStringLiteral("FakeVax%1").arg(channel));
+            AudioFormat fmt;
+            fmt.sampleRate = 48000;
+            fmt.channels = 2;
+            fmt.sample = AudioFormat::Sample::Float32;
+            bus->open(fmt);
+            return bus;
+        });
+        audio->setVaxEnabled(1, false);
+
+        auto* manager = window->findChild<ContainerManager*>();
+        QVERIFY(manager != nullptr);
+        ContainerWidget* const container = manager->createContainer(1, DockMode::Floating);
+        auto* meter = new MeterWidget();
+        container->setContent(meter);
+        auto* buttons = new OtherButtonItem();
+        meter->addItem(buttons);
+        container->wireInteractiveItem(buttons);
+        const auto destroy = qScopeGuard([manager, container] {
+            manager->destroyContainer(container->id());
+        });
+
+        // Peak hold, changed on slice A's panadapter.
+        SpectrumWidget* sw = nullptr;
+        for (SpectrumWidget* candidate : window->findChildren<SpectrumWidget*>()) {
+            candidate->setPeakHoldEnabled(false);
+            if (sw == nullptr) { sw = candidate; }
+        }
+        QVERIFY(sw != nullptr);
+        QVERIFY(buttons->isButtonAvailable(Id::PeakHold));
+        const bool before = buttons->buttonState(Id::PeakHold);
+        for (SpectrumWidget* candidate : window->findChildren<SpectrumWidget*>()) {
+            candidate->setPeakHoldEnabled(true);
+        }
+        QVERIFY(!before);
+        QVERIFY(buttons->buttonState(Id::PeakHold));
+
+        // VAX 1, switched on as Setup > Audio > VAX does.
+        QVERIFY(!buttons->buttonState(Id::Vac1));
+        audio->setVaxEnabled(1, true);
+        QVERIFY(audio->isVaxBusOpen(1));
+        QVERIFY(buttons->buttonState(Id::Vac1));
+        audio->setVaxEnabled(1, false);
+        QVERIFY(!buttons->buttonState(Id::Vac1));
+    }
+
+    void containerButtonsActOnTheirOwnSliceLocallyAndRemotely()
+    {
+        using Id = OtherButtonItem::ButtonId;
+        Test::markAudioFirstRunDone();
+        RadioDiscovery::clearHoldOffForTest();
+        {
+            RadioDiscovery discovery;
+            discovery.holdOffScans(std::chrono::minutes{5});
+        }
+        const auto releaseHoldOff = qScopeGuard([] {
+            RadioDiscovery::clearHoldOffForTest();
+        });
+
+        struct Box {
+            ContainerWidget* container{nullptr};
+            OtherButtonItem* buttons{nullptr};
+            BandButtonItem* bands{nullptr};
+        };
+        // A container set to `rxSource` holding function and band buttons,
+        // wired as ContainerManager wires restored items.
+        const auto addBox = [](MainWindow* window, int rxSource) {
+            Box box;
+            auto* manager = window->findChild<ContainerManager*>();
+            if (!manager) { return box; }
+            box.container = manager->createContainer(rxSource, DockMode::Floating);
+            auto* meter = new MeterWidget();
+            box.container->setContent(meter);
+            box.buttons = new OtherButtonItem();
+            box.bands = new BandButtonItem();
+            meter->addItem(box.buttons);
+            box.container->wireInteractiveItem(box.buttons);
+            meter->addItem(box.bands);
+            box.container->wireInteractiveItem(box.bands);
+            return box;
+        };
+        const auto toastSaying = [](MainWindow* window, const QString& text) {
+            for (StatusToast* toast : window->findChildren<StatusToast*>()) {
+                if (toast->message() == text) { return true; }
+            }
+            return false;
+        };
+
+        GuiSessionCoordinator sessions;
+
+        // ---- Local window, no radio ----
+        {
+            QVERIFY(sessions.replace({}, false));
+            MainWindow* const window = sessions.window();
+            RadioModel* const model = window->radioModel();
+            QVERIFY(model->ownsLocalDsp());
+            while (model->slices().size() < 2) { QVERIFY(model->addSlice() >= 0); }
+            SliceModel* const a = model->sliceById(0);
+            SliceModel* const b = model->sliceById(1);
+            QVERIFY(a && b);
+            a->setFrequency(14100000.0);
+            b->setFrequency(7100000.0);
+            QVERIFY(model->setActiveSliceById(1));
+            QCOMPARE(model->activeSlice(), b);
+
+            const Box box = addBox(window, 1);
+            QVERIFY(box.container && box.buttons && box.bands);
+
+            // The band buttons light slice A's band, not the active slice's.
+            QCOMPARE(box.bands->activeBand(), uiIndexFromBand(Band::Band20m));
+            // ...and follow it when it changes from elsewhere.
+            a->setFrequency(21200000.0);
+            QCOMPARE(box.bands->activeBand(), uiIndexFromBand(Band::Band15m));
+            // A band button changes slice A, not the active slice B.
+            emit box.container->bandClicked(uiIndexFromBand(Band::Band40m));
+            QCOMPARE(bandFromFrequency(a->frequency()), Band::Band40m);
+            QCOMPARE(bandFromFrequency(b->frequency()), Band::Band40m);  // B was on 40m
+            b->setFrequency(3700000.0);
+            QCOMPARE(box.bands->activeBand(), uiIndexFromBand(Band::Band40m));
+
+            // ANF on slice A, lit from slice A.
+            const bool anfB = b->anfEnabled();
+            QVERIFY(!a->anfEnabled());
+            emit box.container->otherButtonClicked(int(Id::Anf));
+            QVERIFY(a->anfEnabled());
+            QCOMPARE(b->anfEnabled(), anfB);
+            QVERIFY(box.buttons->buttonState(Id::Anf));
+            // Changed from elsewhere (the VFO flag), the button follows.
+            a->setAnfEnabled(false);
+            QVERIFY(!box.buttons->buttonState(Id::Anf));
+
+            // No radio: TUN, MOX and 2TON are unavailable and do nothing.
+            for (Id id : {Id::Tun, Id::Mox, Id::TwoTon}) {
+                QVERIFY(!box.buttons->isButtonAvailable(id));
+                emit box.container->otherButtonClicked(int(id));
+            }
+            QVERIFY(!model->isTune());
+            QVERIFY(!model->moxController()->isMox());
+            QVERIFY(toastSaying(window, ContainerButtonDispatcher::noRadioTransmitReason()));
+
+            // Set to slice C, which is not open: unavailable, and says so.
+            box.container->setRxSource(3);
+            QVERIFY(!box.buttons->isButtonAvailable(Id::Anf));
+            QCOMPARE(box.bands->activeBand(), -1);
+            emit box.container->otherButtonClicked(int(Id::Anf));
+            QVERIFY(!a->anfEnabled());
+            QVERIFY(toastSaying(window, ContainerButtonDispatcher::noSliceReason(3)));
+
+            window->findChild<ContainerManager*>()->destroyContainer(box.container->id());
+        }
+
+        // ---- Remote window on a Core with slices A and B ----
+        QTemporaryDir stationDir;
+        QVERIFY(stationDir.isValid());
+        AppSettings stationSettings(stationDir.filePath(QStringLiteral("station.settings")));
+        constexpr int kMigratedSchema = 6;
+        AppSettings::instance().ensureSettingsAtVersion(kMigratedSchema);
+        stationSettings.ensureSettingsAtVersion(kMigratedSchema);
+
+        RadioModel station;
+        while (station.slices().size() < 2) { QVERIFY(station.addSlice() >= 0); }
+        station.sliceById(0)->setFrequency(14100000.0);
+        station.sliceById(1)->setFrequency(7100000.0);
+        station.setActiveSliceById(1);
+        StationServer server(&station, stationSettings, stationDir.path());
+        QWebSocketServer listener(QStringLiteral("core"), QWebSocketServer::NonSecureMode);
+        QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
+        connect(&listener, &QWebSocketServer::newConnection, &server, [&listener, &server] {
+            server.acceptTransport(new WebSocketTransport(
+                listener.nextPendingConnection(), StationServer::kMaxIncomingMessageBytes));
+        });
+        StationStartupSelection core;
+        core.connection.url = QStringLiteral("ws://127.0.0.1:%1").arg(listener.serverPort());
+        core.connection.token = server.token();
+        core.connection.allowUnpinned = true;
+        core.savedId = QStringLiteral("core");
+
+        {
+            QVERIFY(sessions.replace(core, true));
+            MainWindow* const window = sessions.window();
+            RadioModel* const model = window->radioModel();
+            QVERIFY(!model->ownsLocalDsp());
+            auto* const client = window->findChild<StationClient*>();
+            QVERIFY(client != nullptr);
+            QTRY_VERIFY(client->isHandshakeComplete());
+            QTRY_VERIFY(model->sliceById(0) != nullptr && model->sliceById(1) != nullptr);
+            SliceModel* const a = model->sliceById(0);
+            QTRY_COMPARE(bandFromFrequency(a->frequency()), Band::Band20m);
+
+            const Box box = addBox(window, 1);
+            QVERIFY(box.container && box.buttons && box.bands);
+            QCOMPARE(box.bands->activeBand(), uiIndexFromBand(Band::Band20m));
+
+            // The Core's slice A retunes: the band buttons follow.
+            station.sliceById(0)->setFrequency(21200000.0);
+            QTRY_COMPARE(box.bands->activeBand(), uiIndexFromBand(Band::Band15m));
+
+            // ANF acts on the Core's slice A, not its active slice B.
+            const bool anfB = station.sliceById(1)->anfEnabled();
+            QVERIFY(!station.sliceById(0)->anfEnabled());
+            emit box.container->otherButtonClicked(int(Id::Anf));
+            QTRY_VERIFY(station.sliceById(0)->anfEnabled());
+            QCOMPARE(station.sliceById(1)->anfEnabled(), anfB);
+            QTRY_VERIFY(box.buttons->buttonState(Id::Anf));
+
+            // The transmit buttons say the transmit reason and change nothing.
+            const QString reason =
+                QStringLiteral("Remote transmit controls are not available from this Core yet.");
+            for (Id id : {Id::Mon, Id::Tun, Id::Mox, Id::TwoTon, Id::PsA}) {
+                QVERIFY(!box.buttons->isButtonAvailable(id));
+                QCOMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(id)), reason);
+            }
+            const bool mon = station.transmitModel().monEnabled();
+            emit box.container->otherButtonClicked(int(Id::Mox));
+            emit box.container->otherButtonClicked(int(Id::Mon));
+            QVERIFY(toastSaying(window, reason));
+            QVERIFY(!station.moxController()->isMox());
+            QVERIFY(!model->moxController()->isMox());
+            QCOMPARE(model->transmitModel().monEnabled(), mon);
+
+            window->findChild<ContainerManager*>()->destroyContainer(box.container->id());
+        }
+
+        QVERIFY(sessions.replace({}, false));
         sessions.shutdown();
     }
 

@@ -19,6 +19,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-24 : setVaxEnabled, setVaxConfig, openVaxOutputSlots,
+//                 resetAudioSettings and stop() emit vaxBusOpenChanged
+//                 (R-R3-49, R-R3-21) by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-24 : R-R3-45 fix wave by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. The mix, headphones and program
 //                 scratch are engine members sized off the DSP thread
@@ -171,6 +175,7 @@
 #endif
 
 #include <QCoreApplication>
+#include <QScopeGuard>
 #include <QStandardPaths>
 
 #include <portaudio.h>
@@ -613,8 +618,15 @@ void AudioEngine::stop()
     // RX taps come down.
     m_vaxTxBus.reset();
     for (int idx = 0; idx < 4; ++idx) {
-        std::lock_guard<std::mutex> lock(m_vaxBusMutex[idx]);
-        m_vaxBus[idx].reset();
+        bool wasOpen = false;
+        {
+            std::lock_guard<std::mutex> lock(m_vaxBusMutex[idx]);
+            wasOpen = m_vaxBus[idx] && m_vaxBus[idx]->isOpen();
+            m_vaxBus[idx].reset();
+        }
+        // R-R3-21: an output that was open is closed; announced once the
+        // bus lock is released.
+        if (wasOpen) { emit vaxBusOpenChanged(idx + 1); }
     }
 
     if (!m_running) {
@@ -1366,6 +1378,9 @@ void AudioEngine::setVaxConfig(int channel, const AudioDeviceConfig& cfg)
     if (channel < 1 || channel > 4) {
         return;
     }
+    // R-R3-21: the output is replaced (or closed) on every path below;
+    // announced once the bus lock is released, whichever branch returns.
+    const auto announce = qScopeGuard([this, channel] { emit vaxBusOpenChanged(channel); });
     const int idx = channel - 1;
     // R-R3-44: a remote window's VAX feeder writes this slot from its own
     // worker; it waits while the output is replaced.
@@ -1412,6 +1427,9 @@ void AudioEngine::setVaxEnabled(int channel, bool on)
     if (channel < 1 || channel > 4) {
         return;
     }
+    // R-R3-21: emitted once the bus lock below is released, whichever
+    // branch returns.
+    const auto announce = qScopeGuard([this, channel] { emit vaxBusOpenChanged(channel); });
     const int idx = channel - 1;
     // R-R3-44: see setVaxConfig().
     std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
@@ -1479,18 +1497,24 @@ void AudioEngine::openVaxOutputSlots()
 {
     for (int channel = 1; channel <= 4; ++channel) {
         const int idx = channel - 1;
-        std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
-        if (m_vaxBus[idx]) {
-            // Caller wired an explicit device via setVaxConfig() before
-            // start() ran — honour that and don't clobber it with the
-            // platform-native bus.
-            continue;
+        bool opened = false;
+        {
+            std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
+            if (m_vaxBus[idx]) {
+                // Caller wired an explicit device via setVaxConfig() before
+                // start() ran — honour that and don't clobber it with the
+                // platform-native bus.
+                continue;
+            }
+            m_vaxBus[idx] = makeVaxBus(channel);
+            if (m_vaxBus[idx]) {
+                qCInfo(lcAudio) << "VAX" << channel << "bus opened (eager)"
+                                << "[" << m_vaxBus[idx]->backendName() << "]";
+                opened = true;
+            }
         }
-        m_vaxBus[idx] = makeVaxBus(channel);
-        if (m_vaxBus[idx]) {
-            qCInfo(lcAudio) << "VAX" << channel << "bus opened (eager)"
-                            << "[" << m_vaxBus[idx]->backendName() << "]";
-        }
+        // R-R3-21: announced once the bus lock is released.
+        if (opened) { emit vaxBusOpenChanged(channel); }
     }
 }
 
@@ -2768,37 +2792,6 @@ void AudioEngine::setDspBlockSize(int blockSize)
     emit dspBlockSizeChanged(blockSize);
 }
 
-// Sub-Phase 12 Task 12.4 — VAC feedback-loop tuning persistence.
-// ---------------------------------------------------------------------------
-
-void AudioEngine::setVacFeedbackParams(int channel, const VacFeedbackParams& params)
-{
-    if (channel < 1 || channel > 4) {
-        qCWarning(lcAudio) << "setVacFeedbackParams: channel" << channel
-                           << "out of range (1..4) — ignored";
-        return;
-    }
-    const QString prefix =
-        QStringLiteral("audio/VacFeedback/%1").arg(channel);
-    auto& s = AppSettings::instance();
-    s.setValue(prefix + QStringLiteral("/Gain"),
-               QString::number(static_cast<double>(params.gain), 'f', 4));
-    s.setValue(prefix + QStringLiteral("/SlewTimeMs"),
-               QString::number(params.slewTimeMs));
-    s.setValue(prefix + QStringLiteral("/PropRing"),
-               QString::number(params.propRing));
-    s.setValue(prefix + QStringLiteral("/FfRing"),
-               QString::number(params.ffRing));
-    // TODO(sub-phase-12-vac-feedback-live-apply): wire into IVAC engine once
-    // Phase 3M IVAC port lands.
-    qCInfo(lcAudio) << "VacFeedback params persisted; live-apply deferred to Phase 3M IVAC port"
-                    << "(channel:" << channel
-                    << "gain:" << params.gain
-                    << "slewTimeMs:" << params.slewTimeMs
-                    << "propRing:" << params.propRing
-                    << "ffRing:" << params.ffRing << ")";
-}
-
 // Sub-Phase 12 Task 12.4 — resetAudioSettings (addendum §2.5).
 // ---------------------------------------------------------------------------
 
@@ -2854,6 +2847,7 @@ void AudioEngine::resetAudioSettings()
             }
 #endif
         }
+        emit vaxBusOpenChanged(ch);  // R-R3-21: the output was rebuilt or closed
         emit vaxConfigChanged(ch, AudioDeviceConfig{});
     }
 

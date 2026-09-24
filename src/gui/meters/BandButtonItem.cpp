@@ -53,6 +53,7 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 #include "BandButtonItem.h"
+#include "gui/UnbuiltFeatures.h"
 
 namespace NereusSDR {
 
@@ -76,6 +77,9 @@ BandButtonItem::BandButtonItem(QObject* parent)
         setupButton(i, QString::fromLatin1(kBandLabels[i]));
         button(i).onColour = QColor(0x00, 0x70, 0xc0);
     }
+    // R-R3-49: XVTR goes with the transverters; not drawn until they are
+    // built (the saved visibility is untouched).
+    setButtonHiddenUntilBuilt(13, !UnbuiltFeatures::isBuilt(UnbuiltFeature::Transverters));
 
     connect(this, &ButtonBoxItem::buttonClicked,
             this, &BandButtonItem::onButtonClicked);

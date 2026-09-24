@@ -1,0 +1,119 @@
+// no-port-check: NereusSDR-original. Maps each container button to the
+// NereusSDR feature it fronts, on the container's own slice.
+
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// =================================================================
+// src/gui/containers/ContainerButtonDispatcher.h  (NereusSDR)
+// =================================================================
+//
+// NereusSDR-original; no upstream port.
+//
+// R-R3-49 / R-R3-21: a container's function buttons (OtherButtonItem) and
+// its band buttons do what their labels say. Each connected button calls
+// the NereusSDR target the rest of the app already uses (the same setters
+// the TX applet, the RX applet, the VFO flag, the pan overlay and Setup
+// call), so a remote window reaches the Core exactly as those do.
+//
+// Buttons that act on a receiver act on the container's own slice
+// (ContainerWidget::rxSource(), slices A to D), never on the active slice:
+// a container set to slice A acts on slice A while slice B is active. A
+// container set to a slice that is not open shows those buttons
+// unavailable, with the reason, and a click changes nothing.
+//
+// Transmit buttons (MON, TUN, MOX, 2TON, PS-A) work as the TX applet's do
+// with a radio connected here. With no radio, TUN, MOX and 2TON are
+// unavailable. In a remote window they show the transmit reason and change
+// nothing (remote transmit comes later).
+//
+// The dispatcher holds no state of its own: every lit state is read from
+// the target each time apply() runs.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-49, R-R3-21). AI-assisted
+//                                    via Anthropic Claude Code.
+// =================================================================
+
+#pragma once
+
+#include "gui/meters/OtherButtonItem.h"
+
+#include <QString>
+
+#include <functional>
+
+namespace NereusSDR {
+
+class AudioEngine;
+class BandButtonItem;
+class ButtonBoxItem;
+class RadioModel;
+class SliceModel;
+class SpectrumWidget;
+
+class ContainerButtonDispatcher {
+public:
+    using Id = OtherButtonItem::ButtonId;
+
+    // What the window supplies: the parts that live on MainWindow.
+    struct Hooks {
+        // Power: whether this window's radio (local) or Core (remote) is
+        // connected, whether a click can connect or disconnect it, and the
+        // click itself (Radio > Connect or Radio > Disconnect).
+        std::function<bool()> powerOn;
+        std::function<bool()> powerCanToggle;
+        std::function<void()> togglePower;
+        // Remote windows: whether the Core takes this window's transmit
+        // controls, and the reason shown when it does not.
+        std::function<bool()> transmitPermitted;
+        QString remoteTransmitReason;
+        // The panadapter that shows a slice (Peak, CTUN).
+        std::function<SpectrumWidget*(SliceModel*)> spectrumFor;
+        // This computer's VAX outputs (VAX 1, VAX 2). May be null.
+        AudioEngine* vaxDevices{nullptr};
+    };
+
+    struct State {
+        bool on{false};
+        bool available{true};
+        QString reason;  // why it is unavailable, in plain words
+    };
+
+    ContainerButtonDispatcher(RadioModel* model, Hooks hooks);
+
+    // The container's slice, or null when that slice is not open.
+    SliceModel* sliceFor(int rxSource) const;
+    // Why a container set to a slice that is not open does nothing.
+    static QString noSliceReason(int rxSource);
+
+    // The lit and available state of one function button.
+    State stateOf(Id id, int rxSource) const;
+    // Push every function button's state into `item`.
+    void apply(OtherButtonItem* item, int rxSource) const;
+    // Act on a click. Returns an empty string when it acted, otherwise the
+    // plain reason it changed nothing.
+    QString click(Id id, int rxSource);
+
+    // Band, mode, filter, antenna and tune step boxes: every button
+    // available while the container's slice is open, otherwise unavailable
+    // with noSliceReason().
+    void applySliceAvailability(ButtonBoxItem* box, int rxSource) const;
+    // Light the band of the container's slice (none when it is not open).
+    void applyBand(BandButtonItem* item, int rxSource) const;
+    // A band button click: that band on the container's own slice.
+    QString clickBand(int bandUiIndex, int rxSource);
+
+    // Plain reasons, exposed for tests.
+    static QString noRadioTransmitReason();
+    static QString noPowerTargetReason();
+
+private:
+    bool transmitBlockedRemotely() const;
+    SpectrumWidget* spectrumOf(int rxSource) const;
+
+    RadioModel* m_model{nullptr};
+    Hooks m_hooks;
+};
+
+} // namespace NereusSDR

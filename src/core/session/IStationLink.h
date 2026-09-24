@@ -75,6 +75,9 @@
 //                                    (remotePgxlControlVersion 3,
 //                                    remoteTgxlControlVersion 1).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-21: the filter policy
+//                                    request (radioHardwareVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -97,9 +100,12 @@ public:
     struct CommandOutcome {
         bool sent = false;
         QString reason;
-        // The request's id when sent (0 otherwise), so the page that sent
-        // it can claim the Core's refusal (RadioModel::
-        // noteAccessoryRequestShownOnPage).
+        /// The id the command went out under, when sent and the link
+        /// numbers its commands (0 otherwise). Its result arrives as
+        /// RadioModel::stationCommandFinished with the same id, so a sender
+        /// can tell its own command's result apart (the amp applets, the
+        /// TCI switch), and a page that sent it can claim the Core's
+        /// refusal (RadioModel::noteAccessoryRequestShownOnPage).
         quint32 commandId = 0;
     };
 
@@ -258,6 +264,17 @@ public:
     // the Core's hardware settings.
     virtual CommandOutcome requestIoBoardProbe()
     { return { false, QStringLiteral("This Core cannot probe its radio's I/O board for this app.") }; }
+
+    // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the filter policy dialog
+    // in a remote window. Whether the Core takes a filter policy change from
+    // this app now, why not in plain words, and the request itself (chain
+    // 0 or 1; mode 0 Auto, 1 Force filter, 2 Force bypass). The defaults
+    // refuse, for links that did not negotiate it.
+    virtual bool filterPolicyEditAvailable() const { return false; }
+    virtual QString filterPolicyUnavailableReason() const
+    { return QStringLiteral("This Core cannot change its filter policy for this app. Updating the Core may help."); }
+    virtual CommandOutcome requestFilterPolicy(int /*chain*/, int /*mode*/)
+    { return { false, filterPolicyUnavailableReason() }; }
 };
 
 } // namespace NereusSDR

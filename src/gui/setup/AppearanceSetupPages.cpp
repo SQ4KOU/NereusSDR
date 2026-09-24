@@ -3,6 +3,7 @@
 #include "gui/SMeterWidget.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/StyleConstants.h"
+#include "gui/UnbuiltFeatures.h"
 #include "core/AppSettings.h"
 #include "models/RadioModel.h"
 
@@ -334,6 +335,7 @@ void MeterStylesPage::buildUI()
 
     // --- Section: VFO Flag ---
     auto* vfoGroup = new QGroupBox(QStringLiteral("VFO Flag"), this);
+    vfoGroup->setObjectName(QStringLiteral("appearanceVfoFlagGroup"));
     auto* vfoLayout = new QVBoxLayout(vfoGroup);
 
     m_smallModeFilterToggle = new QCheckBox(
@@ -349,7 +351,7 @@ void MeterStylesPage::buildUI()
         s.value(QStringLiteral("AppearanceSmallModeFilterOnVfos"), QStringLiteral("False")).toString() == QStringLiteral("True"));
 
     connect(m_smallModeFilterToggle, &QCheckBox::toggled, this,
-        [this](bool v) {
+        [](bool v) {
             AppSettings::instance().setValue(
                 QStringLiteral("AppearanceSmallModeFilterOnVfos"),
                 v ? QStringLiteral("True") : QStringLiteral("False"));
@@ -358,48 +360,9 @@ void MeterStylesPage::buildUI()
         });
 
     contentLayout()->addWidget(vfoGroup);
-    contentLayout()->addStretch();
-}
-
-// ---------------------------------------------------------------------------
-// GradientsPage
-// ---------------------------------------------------------------------------
-
-GradientsPage::GradientsPage(RadioModel* model, QWidget* parent)
-    : SetupPage(QStringLiteral("Gradients"), model, parent)
-{
-    buildUI();
-}
-
-void GradientsPage::buildUI()
-{
-    NereusSDR::Style::applyDarkPageStyle(this);
-
-    // --- Section: Waterfall Gradient ---
-    auto* gradGroup = new QGroupBox(QStringLiteral("Waterfall Gradient"), this);
-    auto* gradForm  = new QFormLayout(gradGroup);
-    gradForm->setSpacing(6);
-
-    m_gradientEditorLabel = new QLabel(
-        QStringLiteral("(Gradient editor — not yet implemented)"), gradGroup);
-    m_gradientEditorLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #607080; font-style: italic;"
-        " background: #1a2a3a; border: 1px solid #203040;"
-        " border-radius: 3px; padding: 8px; }"));
-    m_gradientEditorLabel->setMinimumHeight(60);
-    m_gradientEditorLabel->setEnabled(false);
-    m_gradientEditorLabel->setAlignment(Qt::AlignCenter);
-    gradForm->addRow(QStringLiteral("Editor:"), m_gradientEditorLabel);
-
-    m_presetCombo = new QComboBox(gradGroup);
-    m_presetCombo->addItems({QStringLiteral("Enhanced"), QStringLiteral("Grayscale"),
-                             QStringLiteral("Spectrum"), QStringLiteral("Fire"),
-                             QStringLiteral("Ice")});
-    m_presetCombo->setEnabled(false);  // NYI
-    m_presetCombo->setToolTip(QStringLiteral("Waterfall gradient preset — not yet implemented"));
-    gradForm->addRow(QStringLiteral("Preset:"), m_presetCombo);
-
-    contentLayout()->addWidget(gradGroup);
+    // R-R3-49: the flag stores this setting but draws nothing with it yet,
+    // so the group (its only control) is hidden until that is built.
+    UnbuiltFeatures::hideUnlessBuilt(vfoGroup, UnbuiltFeature::SmallFilter);
     contentLayout()->addStretch();
 }
 
@@ -423,7 +386,7 @@ void SkinsPage::buildUI()
     skinLayout->setSpacing(6);
 
     m_skinListLabel = new QLabel(
-        QStringLiteral("(Skin list — not yet implemented. Phase 3H.)"), skinGroup);
+        QStringLiteral("No skins are loaded."), skinGroup);
     m_skinListLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: #607080; font-style: italic;"
         " background: #1a2a3a; border: 1px solid #203040;"
@@ -436,19 +399,19 @@ void SkinsPage::buildUI()
     auto* btnRow = new QHBoxLayout();
     m_loadBtn = new QPushButton(QStringLiteral("Load"), skinGroup);
     m_loadBtn->setEnabled(false);  // NYI
-    m_loadBtn->setToolTip(QStringLiteral("Load skin — not yet implemented (Phase 3H)"));
+    m_loadBtn->setToolTip(QStringLiteral("Load a skin"));
     m_loadBtn->setAutoDefault(false);
     btnRow->addWidget(m_loadBtn);
 
     m_saveBtn = new QPushButton(QStringLiteral("Save"), skinGroup);
     m_saveBtn->setEnabled(false);  // NYI
-    m_saveBtn->setToolTip(QStringLiteral("Save skin — not yet implemented (Phase 3H)"));
+    m_saveBtn->setToolTip(QStringLiteral("Save the current look as a skin"));
     m_saveBtn->setAutoDefault(false);
     btnRow->addWidget(m_saveBtn);
 
     m_importBtn = new QPushButton(QStringLiteral("Import..."), skinGroup);
     m_importBtn->setEnabled(false);  // NYI
-    m_importBtn->setToolTip(QStringLiteral("Import Thetis-format skin — not yet implemented (Phase 3H)"));
+    m_importBtn->setToolTip(QStringLiteral("Import a skin made for Thetis"));
     m_importBtn->setAutoDefault(false);
     btnRow->addWidget(m_importBtn);
 
@@ -483,7 +446,7 @@ void CollapsibleDisplayPage::buildUI()
     m_widthSpin->setValue(400);
     m_widthSpin->setSuffix(QStringLiteral(" px"));
     m_widthSpin->setEnabled(false);  // NYI
-    m_widthSpin->setToolTip(QStringLiteral("Collapsible panel width — not yet implemented"));
+    m_widthSpin->setToolTip(QStringLiteral("Width of the collapsible panel"));
     colForm->addRow(QStringLiteral("Width:"), m_widthSpin);
 
     m_heightSpin = new QSpinBox(colGroup);
@@ -491,12 +454,12 @@ void CollapsibleDisplayPage::buildUI()
     m_heightSpin->setValue(200);
     m_heightSpin->setSuffix(QStringLiteral(" px"));
     m_heightSpin->setEnabled(false);  // NYI
-    m_heightSpin->setToolTip(QStringLiteral("Collapsible panel height — not yet implemented"));
+    m_heightSpin->setToolTip(QStringLiteral("Height of the collapsible panel"));
     colForm->addRow(QStringLiteral("Height:"), m_heightSpin);
 
     m_enableToggle = new QCheckBox(QStringLiteral("Enable collapsible display"), colGroup);
     m_enableToggle->setEnabled(false);  // NYI
-    m_enableToggle->setToolTip(QStringLiteral("Enable collapsible spectrum section — not yet implemented"));
+    m_enableToggle->setToolTip(QStringLiteral("Let the spectrum section collapse"));
     colForm->addRow(QString(), m_enableToggle);
 
     contentLayout()->addWidget(colGroup);

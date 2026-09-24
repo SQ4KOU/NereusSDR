@@ -74,22 +74,6 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Appearance > Gradients
-// ---------------------------------------------------------------------------
-class GradientsPage : public SetupPage {
-    Q_OBJECT
-public:
-    explicit GradientsPage(RadioModel* model, QWidget* parent = nullptr);
-
-private:
-    void buildUI();
-
-    // Section: Waterfall Gradient
-    QLabel*    m_gradientEditorLabel{nullptr}; // placeholder for future editor
-    QComboBox* m_presetCombo{nullptr};
-};
-
-// ---------------------------------------------------------------------------
 // Appearance > Skins
 // ---------------------------------------------------------------------------
 class SkinsPage : public SetupPage {

@@ -614,6 +614,33 @@ if(WIN32)
 else()
     if(PkgConfig_FOUND)
         pkg_check_modules(FFTW3 fftw3)
+        # pkg-config names the library bare ("fftw3"), which reaches the
+        # link line as -lfftw3 twice: once for NereusSDR's own targets and
+        # again after the static libraries that also need it (wdsp_static).
+        # Apple's ld warns "ignoring duplicate libraries: '-lfftw3'" on
+        # that. Linking the full path, as fftw3f already is, keeps the
+        # ordering and drops the warning.
+        #
+        # Searched like fftw3f: the default paths (CMAKE_PREFIX_PATH, then
+        # Homebrew's own lib folder) before pkg-config's folder. Homebrew's
+        # pkg-config names the versioned Cellar folder, and a cached Cellar
+        # path breaks linking in an existing build folder once
+        # `brew upgrade fftw` and `brew cleanup` remove it; the unversioned
+        # ${HOMEBREW_PREFIX}/lib link follows upgrades. (The cache variable
+        # was FFTW3_FULL_PATH; the new name makes existing build folders
+        # search again instead of keeping a cached Cellar path.)
+        if(FFTW3_FOUND)
+            set(_fftw3_hints "")
+            if(HOMEBREW_PREFIX)
+                list(APPEND _fftw3_hints "${HOMEBREW_PREFIX}/lib")
+            endif()
+            list(APPEND _fftw3_hints ${FFTW3_LIBRARY_DIRS})
+            find_library(FFTW3_LINK_LIBRARY fftw3 HINTS ${_fftw3_hints})
+            unset(_fftw3_hints)
+            if(FFTW3_LINK_LIBRARY)
+                set(FFTW3_LIBRARIES ${FFTW3_LINK_LIBRARY})
+            endif()
+        endif()
     endif()
     if(NOT FFTW3_FOUND)
         find_library(FFTW3_LIB fftw3)
@@ -1352,6 +1379,7 @@ set(GUI_SOURCES
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainer.cpp
     src/gui/containers/ContainerManager.cpp
+    src/gui/containers/ContainerButtonDispatcher.cpp
     src/gui/containers/ContainerSettingsDialog.cpp
     src/gui/containers/MmioEndpointsDialog.cpp
     src/gui/containers/MmioVariablePickerPopup.cpp
@@ -1394,7 +1422,6 @@ set(GUI_SOURCES
     src/gui/containers/meter_property_editors/TuneStepButtonItemEditor.cpp
     src/gui/containers/meter_property_editors/OtherButtonItemEditor.cpp
     src/gui/containers/meter_property_editors/VoiceRecordPlayItemEditor.cpp
-    src/gui/containers/meter_property_editors/DiscordButtonItemEditor.cpp
     src/gui/meters/MeterWidget.cpp
     src/gui/meters/MeterItem.cpp
     src/gui/meters/ItemGroup.cpp
@@ -1419,7 +1446,6 @@ set(GUI_SOURCES
     src/gui/meters/TuneStepButtonItem.cpp
     src/gui/meters/OtherButtonItem.cpp
     src/gui/meters/VoiceRecordPlayItem.cpp
-    src/gui/meters/DiscordButtonItem.cpp
     src/gui/meters/VfoDisplayItem.cpp
     src/gui/meters/ClockItem.cpp
     src/gui/meters/ClickBoxItem.cpp
@@ -1429,6 +1455,7 @@ set(GUI_SOURCES
     src/gui/ColorSwatchButton.cpp
     src/gui/SpectrumOverlayPanel.cpp
     src/gui/SetupDialog.cpp
+    src/gui/UnbuiltFeatures.cpp
     src/gui/SetupPage.cpp
     src/gui/setup/GeneralSetupPages.cpp
     src/gui/setup/GeneralOptionsPage.cpp
@@ -1444,7 +1471,6 @@ set(GUI_SOURCES
     src/gui/setup/hardware/OcOutputsHfTab.cpp
     src/gui/setup/hardware/OcOutputsSwlTab.cpp
     src/gui/setup/hardware/XvtrTab.cpp
-    src/gui/setup/hardware/DiversityTab.cpp
     src/gui/setup/hardware/CalibrationTab.cpp
     src/gui/setup/hardware/PaCalibrationGroup.cpp
     src/gui/setup/hardware/Hl2IoBoardTab.cpp

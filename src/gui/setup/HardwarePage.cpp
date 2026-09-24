@@ -17,6 +17,12 @@
 //                 to the Core, which applies them (radioHardwareVersion 2);
 //                 transmit fields follow the transmit permission.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the XVTR and Bandwidth Monitor tabs stay hidden
+//                 (UnbuiltFeatures) until their features are built.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Diversity tab is removed (DiversityTab
+//                 deleted); saved diversity/* values stay in the file.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -65,12 +71,12 @@
 //============================================================================================//
 
 #include "HardwarePage.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include "hardware/RadioInfoTab.h"
 #include "hardware/AntennaAlexTab.h"
 #include "hardware/OcOutputsTab.h"
 #include "hardware/XvtrTab.h"
-#include "hardware/DiversityTab.h"
 #include "hardware/CalibrationTab.h"
 #include "hardware/Hl2IoBoardTab.h"
 #include "hardware/Hl2OptionsTab.h"
@@ -117,7 +123,6 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     m_antennaAlexTab  = new AntennaAlexTab(model, this);
     m_ocOutputsTab    = new OcOutputsTab(model, this);
     m_xvtrTab         = new XvtrTab(model, this);
-    m_diversityTab    = new DiversityTab(model, this);
     m_paCalTab        = new CalibrationTab(model, this);
     m_hl2OptionsTab   = new Hl2OptionsTab(model, this);
     m_hl2IoTab        = new Hl2IoBoardTab(model, this);
@@ -131,11 +136,15 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     m_antennaAlexIdx = m_tabs->addTab(m_antennaAlexTab, tr("Antenna / ALEX"));
     m_ocOutputsIdx   = m_tabs->addTab(m_ocOutputsTab,   tr("OC Outputs"));
     m_xvtrIdx        = m_tabs->addTab(m_xvtrTab,        tr("XVTR"));
-    m_diversityIdx   = m_tabs->addTab(m_diversityTab,   tr("Diversity"));
     m_paCalIdx       = m_tabs->addTab(m_paCalTab,       tr("Calibration"));
     m_hl2OptionsIdx  = m_tabs->addTab(m_hl2OptionsTab,  tr("HL2 Options"));
     m_hl2IoIdx       = m_tabs->addTab(m_hl2IoTab,       tr("HL2 I/O"));
     m_bwMonitorIdx   = m_tabs->addTab(m_bwMonitorTab,   tr("Bandwidth Monitor"));
+    // R-R3-49: tabs whose feature is not built yet stay hidden, before and
+    // after a radio is known (onCurrentRadioChanged ANDs the same check).
+    m_tabs->setTabVisible(m_xvtrIdx, UnbuiltFeatures::isBuilt(UnbuiltFeature::Transverters));
+    m_tabs->setTabVisible(m_bwMonitorIdx,
+                          UnbuiltFeatures::isBuilt(UnbuiltFeature::BandwidthMonitor));
 
     // ── Wire per-tab settingChanged → write-through persistence (Task 21) ─────
     // Lambda helper: generic connect for any tab type that has settingChanged.
@@ -165,7 +174,6 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
             this,             &HardwarePage::hpfBypassOnPsChanged);
     wire(m_ocOutputsTab,   QStringLiteral("ocOutputs"));
     wire(m_xvtrTab,        QStringLiteral("xvtr"));
-    wire(m_diversityTab,   QStringLiteral("diversity"));
     wire(m_paCalTab,       QStringLiteral("paCalibration"));
     wire(m_hl2OptionsTab,  QStringLiteral("hl2Options"));
     wire(m_hl2IoTab,       QStringLiteral("hl2IoBoard"));
@@ -273,8 +281,8 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
     m_tabs->setTabText(m_ocOutputsIdx,
         caps.hasIoBoardHl2 ? tr("Hermes Lite Control") : tr("OC Outputs"));
 
-    m_tabs->setTabVisible(m_xvtrIdx,        caps.xvtrJackCount > 0);
-    m_tabs->setTabVisible(m_diversityIdx,   caps.hasDiversityReceiver);
+    m_tabs->setTabVisible(m_xvtrIdx,        caps.xvtrJackCount > 0
+                                            && UnbuiltFeatures::isBuilt(UnbuiltFeature::Transverters));
     // Calibration tab is always visible — its 4 remaining groups (Freq Cal,
     // Level Cal, HPSDR Diag, TX Display) apply to every board, and Group 5
     // (Volts/Amps Cal) is harmless on boards without integrated PA. PA-cal
@@ -283,14 +291,14 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
     // category gate in SetupDialog.cpp.
     m_tabs->setTabVisible(m_hl2OptionsIdx,  caps.hasIoBoardHl2);
     m_tabs->setTabVisible(m_hl2IoIdx,       caps.hasIoBoardHl2);
-    m_tabs->setTabVisible(m_bwMonitorIdx,   caps.hasBandwidthMonitor);
+    m_tabs->setTabVisible(m_bwMonitorIdx,   caps.hasBandwidthMonitor
+                                            && UnbuiltFeatures::isBuilt(UnbuiltFeature::BandwidthMonitor));
 
     // Populate each tab with the new board info.
     m_radioInfoTab->populate(info, caps);
     m_antennaAlexTab->populate(info, caps);
     m_ocOutputsTab->populate(info, caps);
     m_xvtrTab->populate(info, caps);
-    m_diversityTab->populate(info, caps);
     m_paCalTab->populate(info, caps);
     m_hl2OptionsTab->populate(info, caps);
     m_hl2IoTab->populate(info, caps);
@@ -303,7 +311,6 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
         m_antennaAlexTab->restoreSettings( filterPrefix(all, QStringLiteral("antennaAlex/")));
         m_ocOutputsTab->restoreSettings(   filterPrefix(all, QStringLiteral("ocOutputs/")));
         m_xvtrTab->restoreSettings(        filterPrefix(all, QStringLiteral("xvtr/")));
-        m_diversityTab->restoreSettings(   filterPrefix(all, QStringLiteral("diversity/")));
         m_paCalTab->restoreSettings(       filterPrefix(all, QStringLiteral("paCalibration/")));
         m_hl2OptionsTab->restoreSettings(  filterPrefix(all, QStringLiteral("hl2Options/")));
         m_hl2IoTab->restoreSettings(       filterPrefix(all, QStringLiteral("hl2IoBoard/")));
@@ -367,7 +374,6 @@ bool HardwarePage::isTabVisibleForTest(Tab t) const
         case Tab::AntennaAlex:      return m_tabs->isTabVisible(m_antennaAlexIdx);
         case Tab::OcOutputs:        return m_tabs->isTabVisible(m_ocOutputsIdx);
         case Tab::Xvtr:             return m_tabs->isTabVisible(m_xvtrIdx);
-        case Tab::Diversity:        return m_tabs->isTabVisible(m_diversityIdx);
         case Tab::Calibration:      return m_tabs->isTabVisible(m_paCalIdx);
         case Tab::Hl2Options:       return m_tabs->isTabVisible(m_hl2OptionsIdx);
         case Tab::Hl2IoBoard:       return m_tabs->isTabVisible(m_hl2IoIdx);
@@ -383,7 +389,6 @@ QWidget* HardwarePage::tabWidgetForTest(Tab t) const
         case Tab::AntennaAlex:      return m_antennaAlexTab;
         case Tab::OcOutputs:        return m_ocOutputsTab;
         case Tab::Xvtr:             return m_xvtrTab;
-        case Tab::Diversity:        return m_diversityTab;
         case Tab::Calibration:      return m_paCalTab;
         case Tab::Hl2Options:       return m_hl2OptionsTab;
         case Tab::Hl2IoBoard:       return m_hl2IoTab;
@@ -404,7 +409,6 @@ QString HardwarePage::tabTextForTest(Tab t) const
         case Tab::AntennaAlex:      return m_tabs->tabText(m_antennaAlexIdx);
         case Tab::OcOutputs:        return m_tabs->tabText(m_ocOutputsIdx);
         case Tab::Xvtr:             return m_tabs->tabText(m_xvtrIdx);
-        case Tab::Diversity:        return m_tabs->tabText(m_diversityIdx);
         case Tab::Calibration:      return m_tabs->tabText(m_paCalIdx);
         case Tab::Hl2Options:       return m_tabs->tabText(m_hl2OptionsIdx);
         case Tab::Hl2IoBoard:       return m_tabs->tabText(m_hl2IoIdx);

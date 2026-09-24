@@ -96,6 +96,9 @@
 //                 (stationSettingChanged); whether the Core keeps a TCI
 //                 switch is read from this link's settings snapshot only.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-46 / R-R3-21: radioHardwareVersion 4, the filter
+//                 policy request (setAlexBpfMode) and its plain reason.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2883,6 +2886,33 @@ StationClient::CommandOutcome StationClient::requestAlexRxAntenna(Band band, int
                        QStringLiteral("the antenna change"));
 }
 
+bool StationClient::filterPolicyEditAvailable() const
+{
+    return remoteHardwareConfigAvailable() && m_capabilities.radioHardwareVersion >= 4;
+}
+
+QString StationClient::filterPolicyUnavailableReason() const
+{
+    if (filterPolicyEditAvailable()) {
+        return {};
+    }
+    if (!m_handshakeComplete) {
+        return QStringLiteral("Connect to the Core to change the filter policy.");
+    }
+    return QStringLiteral("This Core cannot change its filter policy for this app. "
+                          "Updating the Core may help.");
+}
+
+StationClient::CommandOutcome StationClient::requestFilterPolicy(int chain, int mode)
+{
+    if (!filterPolicyEditAvailable()) {
+        return {false, filterPolicyUnavailableReason()};
+    }
+    return sendCommand("setAlexBpfMode", -1,
+                       { intArgument("chain", chain), intArgument("mode", mode) },
+                       QStringLiteral("the filter policy change"));
+}
+
 StationClient::CommandOutcome StationClient::requestIoBoardProbe()
 {
     if (!remoteHardwareConfigAvailable()) {
@@ -3245,12 +3275,6 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         }
     }
 
-    // Follow-up 3: an accepted accessory request no page needs to claim.
-    if (message.accepted && !m_radioModel.isNull()
-        && !accessoryRefusalDevice(pending.verb, pending.faultsDevice).isEmpty()) {
-        m_radioModel->forgetAccessoryRequest(message.commandId);
-    }
-
     const bool isCtunCommand = pending.verb == "requestStreamCtunPinned"
         || pending.verb == "requestStreamCentre";
     bool newerCtunCommand = false;
@@ -3299,6 +3323,20 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             m_radioModel->pureSignalFacade()->receiveRemoteActionResult(message.commandId,
                 message.commandVerb, phase, message.reason, *values);
         }
+    }
+    // R-R3-22 fix wave: every result by its id, so a sender (the amp
+    // applets, the TCI switch) clears its own pending request and shows
+    // only its own refusal; it also ends a page's claim on an accepted
+    // accessory request (follow-up 3). The refusal's words are the same the routing above used.
+    if (!m_radioModel.isNull()) {
+        const QPointer<StationClient> self(this);
+        const QString finishedReason = message.accepted ? QString()
+            : message.reason.isEmpty()
+                ? QStringLiteral("The station refused the request without giving a reason.")
+                : message.reason;
+        m_radioModel->reportStationCommandFinished(message.commandId, message.accepted,
+                                                   finishedReason);
+        if (!self) { return; }
     }
     emit commandResponse(message);
     emit commandResult(message.commandId, message.accepted, message.reason);

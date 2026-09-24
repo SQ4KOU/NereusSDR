@@ -23,8 +23,8 @@ TciSwitch::TciSwitch(TciServer* local, RadioModel* model, QObject* parent)
     if (model) {
         connect(model, &RadioModel::stationLinkStateChanged, this, &TciSwitch::reevaluate);
         // Rework follow-up 1: the Core answered this window's request.
-        connect(model, &RadioModel::accessoryRequestFinished, this,
-                [this](quint32 commandId, bool) {
+        connect(model, &RadioModel::stationCommandFinished, this,
+                [this](quint32 commandId, bool, const QString&) {
             if (commandId != 0 && commandId == m_askedCommandId) {
                 endRequest();
                 onStationTciChanged();

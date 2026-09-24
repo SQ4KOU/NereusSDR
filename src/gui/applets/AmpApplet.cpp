@@ -30,10 +30,19 @@
 //   2026-09-24  R-R3-48: the band-follow line (paired with the radio or
 //                 not). J.J. Boyd (KG4VCF), with AI-assisted implementation
 //                 via Anthropic Claude Code.
+//   2026-09-24  R-R3-22 / R-R3-47: a remote window's Disconnect and
+//                 Reconnect ask the Core, which owns the Power Genius
+//                 (disconnectPgxl, configurePgxl, remotePgxlControlVersion
+//                 2); a status line shows the Core's connection as it
+//                 changes and the plain reason for a refusal; an older
+//                 Core leaves the item off with the reason. OPERATE stays
+//                 with remote transmit. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "AmpApplet.h"
 #include "core/session/IStationLink.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/HGauge.h"
 #include "models/AmplifierModel.h"
 #include "models/RadioModel.h"
@@ -183,6 +192,16 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
     m_staleLabel->setVisible(false);
     vbox->addWidget(m_staleLabel);
 
+    // R-R3-22: a remote window's line for the Core's connection to the amp
+    // and the reason a Disconnect or Reconnect was not taken.
+    m_connectionLabel = new QLabel(root);
+    m_connectionLabel->setObjectName(QStringLiteral("ampConnectionLabel"));
+    m_connectionLabel->setTextFormat(Qt::PlainText);
+    m_connectionLabel->setWordWrap(true);
+    m_connectionLabel->setStyleSheet(QStringLiteral("color: #9aa5b1; font-size: 10px;"));
+    m_connectionLabel->setVisible(false);
+    vbox->addWidget(m_connectionLabel);
+
     // R-R3-47: the gauges follow the RadioModel's AmplifierModel: the
     // Core's `amplifier` object in a remote window, the same object fed
     // by this computer's own PgxlConnection in a local one.
@@ -193,9 +212,14 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
                     this, &AmpApplet::syncFromAmplifier);
             connect(m_amp, &AmplifierModel::bandFollowChanged,
                     this, &AmpApplet::syncFromAmplifier);
+            connect(m_amp, &AmplifierModel::stationConnectionChanged,
+                    this, &AmpApplet::updateConnectionLine);
+            m_lastPhase = m_amp->connectionPhase();
         }
         connect(m_model, &RadioModel::stationLinkStateChanged,
                 this, &AmpApplet::updateStationState);
+        connect(m_model, &RadioModel::stationCommandFinished,
+                this, &AmpApplet::onStationCommandFinished);
         syncFromAmplifier();
         updateStationState();
     }
@@ -212,6 +236,117 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
 QString AmpApplet::remoteUnavailableReason()
 {
     return tr("Amplifier control is not available from a remote window yet.");
+}
+
+// R-R3-22 / R-R3-47: the words the 4O3A page's remote Power Genius tab
+// uses for the same phases.
+QString AmpApplet::stationConnectionText(TunerModel::ConnectionPhase phase,
+                                         const QString& error)
+{
+    using Phase = TunerModel::ConnectionPhase;
+    const QString reason = error.isEmpty() ? QString() : OperatorReasonText::forDisplay(error);
+    switch (phase) {
+    case Phase::Disabled:     return tr("Disabled at station");
+    case Phase::Disconnected: return tr("Disconnected");
+    case Phase::Discovering:  return tr("Discovering at station");
+    case Phase::Connecting:   return tr("Connecting at station");
+    case Phase::Identifying:  return tr("Identifying device");
+    case Phase::Retrying:
+        return reason.isEmpty() ? tr("Retrying at station")
+                                : tr("Retrying at station: %1").arg(reason);
+    case Phase::Connected:    return tr("Connected");
+    case Phase::Error:
+        return reason.isEmpty() ? tr("Stopped at station")
+                                : tr("Error: %1").arg(reason);
+    }
+    return QString();
+}
+
+bool AmpApplet::stationConnectionActive(TunerModel::ConnectionPhase phase)
+{
+    using Phase = TunerModel::ConnectionPhase;
+    return phase == Phase::Connected || phase == Phase::Discovering
+        || phase == Phase::Connecting || phase == Phase::Identifying
+        || phase == Phase::Retrying;
+}
+
+// R-R3-22 fix wave: the remote toggle's words, as the Peripherals row
+// says them: Disconnect when connected, Cancel while the Core is still
+// trying (the same command cancels the attempt), Reconnect otherwise.
+QString AmpApplet::stationConnectionToggleText(TunerModel::ConnectionPhase phase)
+{
+    if (phase == TunerModel::ConnectionPhase::Connected) {
+        return tr("Disconnect");
+    }
+    return stationConnectionActive(phase) ? tr("Cancel") : tr("Reconnect");
+}
+
+bool AmpApplet::isRemoteWindow() const
+{
+    return m_model && !m_model->ownsLocalDsp();
+}
+
+// R-R3-22: the Core's phase, or the reason the applet's own request was
+// not taken, while the Core reports its amp; the stale line covers the rest.
+void AmpApplet::updateConnectionLine()
+{
+    if (!m_connectionLabel) {
+        return;
+    }
+    if (m_amp && m_amp->connectionPhase() != m_lastPhase) {
+        // The Core moved: its phase replaces an earlier refusal. A request
+        // still waiting stays tied to its own command's result.
+        m_lastPhase = m_amp->connectionPhase();
+        m_requestReason.clear();
+    }
+    const IStationLink* link = isRemoteWindow() ? m_model->stationLink() : nullptr;
+    if (!m_amp || !link || !link->stationLinkReady()
+        || !link->remoteAmplifierStatusAvailable()) {
+        m_connectionLabel->clear();
+        m_connectionLabel->setVisible(false);
+        return;
+    }
+    m_connectionLabel->setText(m_requestReason.isEmpty()
+        ? stationConnectionText(m_amp->connectionPhase(), m_amp->connectionError())
+        : m_requestReason);
+    m_connectionLabel->setVisible(true);
+}
+
+// R-R3-22: the Core answered the applet's own Disconnect or Reconnect: a
+// refusal shows its reason; either way the request is no longer waiting.
+// Other Power Genius requests (the Setup pages') show where they were sent.
+void AmpApplet::onStationCommandFinished(quint32 commandId, bool accepted,
+                                         const QString& reason)
+{
+    if (m_pendingCommandId == 0 || commandId != m_pendingCommandId) {
+        return;
+    }
+    m_pendingCommandId = 0;
+    if (!accepted) {
+        m_requestReason = OperatorReasonText::forDisplay(reason);
+        updateConnectionLine();
+    }
+}
+
+void AmpApplet::requestRemoteConnectionToggle()
+{
+    IStationLink* link = m_model ? m_model->stationLink() : nullptr;
+    if (!link || !m_amp || !link->remotePgxlControlAvailable()) {
+        return;
+    }
+    const auto outcome = stationConnectionActive(m_amp->connectionPhase())
+        ? link->requestDisconnectPgxl()
+        : link->requestConfigurePgxl(m_amp->configuredHost(),
+                                     static_cast<quint16>(m_amp->configuredPort()));
+    m_pendingCommandId = outcome.sent ? outcome.commandId : 0;
+    m_requestReason = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
+    updateConnectionLine();
+}
+
+QString AmpApplet::connectionLineTextForTesting() const
+{
+    return m_connectionLabel && !m_connectionLabel->isHidden() ? m_connectionLabel->text()
+                                                               : QString();
 }
 
 // R-R3-47: every reading the AmplifierModel holds, each time it changes.
@@ -258,6 +393,7 @@ void AmpApplet::updateStationState()
     } else {
         m_staleLabel->setVisible(false);
     }
+    updateConnectionLine();
 }
 
 double AmpApplet::fwdGaugeValueForTesting() const { return m_fwdGauge->value(); }
@@ -394,18 +530,38 @@ QMenu* AmpApplet::buildContextMenu(QObject* menuParent)
     menu->addSeparator();
 
     // Disconnect or Reconnect depending on current state
-    const QString toggleLabel = m_pgxlConnected
-        ? QStringLiteral("Disconnect")
-        : QStringLiteral("Reconnect");
-    auto* toggleAction = menu->addAction(toggleLabel);
-    connect(toggleAction, &QAction::triggered, this, [this]() {
-        emit connectionToggleRequested();
-    });
-    // R-R3-21: the toggle connects this computer's own PGXL socket.
-    if (m_model && !m_model->ownsLocalDsp()) {
-        toggleAction->setEnabled(false);
-        toggleAction->setToolTip(remoteUnavailableReason());
-        menu->setToolTipsVisible(true);
+    if (!isRemoteWindow()) {
+        const QString toggleLabel = m_pgxlConnected
+            ? QStringLiteral("Disconnect")
+            : QStringLiteral("Reconnect");
+        auto* toggleAction = menu->addAction(toggleLabel);
+        connect(toggleAction, &QAction::triggered, this, [this]() {
+            emit connectionToggleRequested();
+        });
+    } else {
+        // R-R3-22 / R-R3-47: the Core owns the amp's connection. Disconnect
+        // (or cancel an attempt) and Reconnect to its saved address go to
+        // the Core; nothing here opens a connection of this computer's own.
+        const bool active = m_amp && stationConnectionActive(m_amp->connectionPhase());
+        auto* toggleAction = menu->addAction(stationConnectionToggleText(
+            m_amp ? m_amp->connectionPhase() : TunerModel::ConnectionPhase::Disabled));
+        const IStationLink* link = m_model->stationLink();
+        QString unavailable;
+        if (link && !link->stationLinkReady()) {
+            unavailable = tr("Waiting for the Core to connect.");
+        } else if (!link || !link->remotePgxlControlAvailable()) {
+            unavailable = tr("This Core does not offer Power Genius XL control to this app.");
+        } else if (!active && (!m_amp || m_amp->configuredHost().isEmpty()
+                               || m_amp->configuredPort() <= 0)) {
+            unavailable = tr("Enter the Power Genius address in Setup first.");
+        }
+        if (!unavailable.isEmpty()) {
+            toggleAction->setEnabled(false);
+            toggleAction->setToolTip(unavailable);
+            menu->setToolTipsVisible(true);
+        }
+        connect(toggleAction, &QAction::triggered,
+                this, &AmpApplet::requestRemoteConnectionToggle);
     }
 
     // Copy diagnostics to clipboard

@@ -20,13 +20,21 @@
 //   2026-09-24  R-R3-47 / R-R3-22: an empty antenna name shows "ANT N" (a
 //   remote window takes the Core's names). J.J. Boyd (KG4VCF), AI-assisted
 //   via Anthropic Claude Code.
+//   2026-09-24  R-R3-22 / R-R3-47: a remote window's Disconnect and
+//   Reconnect are sent to the Core by the applet (disconnectRfKit,
+//   configureRfKit, remoteRfKitControlVersion 2), and a status line shows
+//   the Core's connection as it changes and the plain reason for a
+//   refusal. OPERATE and the antennas stay with remote transmit. J.J. Boyd
+//   (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "Rf2ksApplet.h"
 #include "AmpApplet.h"
 #include "gui/HGauge.h"
 #include "core/session/IStationLink.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/StyleConstants.h"
+#include "gui/UnbuiltFeatures.h"
 #include "models/RadioModel.h"
 #include "models/RfKitModel.h"
 
@@ -195,6 +203,9 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
     actionRow->addWidget(m_tuneBtn,   2);
     actionRow->addWidget(m_bypassBtn, 1);
     tunerLay->addLayout(actionRow);
+    // R-R3-49: hidden until tuning and bypass from NereusSDR are built.
+    UnbuiltFeatures::hideUnlessBuilt(m_tuneBtn, UnbuiltFeature::RfkitTune);
+    UnbuiltFeatures::hideUnlessBuilt(m_bypassBtn, UnbuiltFeature::RfkitTune);
 
     root->addWidget(tunerWrap);
 
@@ -218,6 +229,17 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
     m_staleLabel->setVisible(false);
     root->addWidget(m_staleLabel);
 
+    // R-R3-22: a remote window's line for the Core's connection to the amp
+    // and the reason a Disconnect or Reconnect was not taken.
+    m_connectionLabel = new QLabel(this);
+    m_connectionLabel->setObjectName(QStringLiteral("rfKitConnectionLabel"));
+    m_connectionLabel->setTextFormat(Qt::PlainText);
+    m_connectionLabel->setWordWrap(true);
+    m_connectionLabel->setContentsMargins(8, 0, 8, 6);
+    m_connectionLabel->setStyleSheet(QStringLiteral("color: #9aa5b1; font-size: 10px;"));
+    m_connectionLabel->setVisible(false);
+    root->addWidget(m_connectionLabel);
+
     // R-R3-47: the header, gauges and strip follow the RadioModel's
     // RfKitModel: the Core's `rfkit` object in a remote window, the same
     // object fed by this computer's own Rf2ksConnection in a local one.
@@ -229,9 +251,14 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
                     this, &Rf2ksApplet::syncFromRfKit);
             connect(m_rfKit, &RfKitModel::bandFollowChanged,
                     this, &Rf2ksApplet::syncFromRfKit);
+            connect(m_rfKit, &RfKitModel::stationConnectionChanged,
+                    this, &Rf2ksApplet::updateConnectionLine);
+            m_lastPhase = m_rfKit->connectionPhase();
         }
         connect(m_model, &RadioModel::stationLinkStateChanged,
                 this, &Rf2ksApplet::updateStationState);
+        connect(m_model, &RadioModel::stationCommandFinished,
+                this, &Rf2ksApplet::onStationCommandFinished);
         syncFromRfKit();
         updateStationState();
     }
@@ -317,6 +344,70 @@ void Rf2ksApplet::updateStationState()
     } else {
         m_staleLabel->setVisible(false);
     }
+    updateConnectionLine();
+}
+
+// R-R3-22: the Core's phase, or the reason the applet's own request was
+// not taken, while the Core reports its amp; the stale line covers the rest.
+void Rf2ksApplet::updateConnectionLine()
+{
+    if (!m_connectionLabel) {
+        return;
+    }
+    if (m_rfKit && m_rfKit->connectionPhase() != m_lastPhase) {
+        // The Core moved: its phase replaces an earlier refusal. A request
+        // still waiting stays tied to its own command's result.
+        m_lastPhase = m_rfKit->connectionPhase();
+        m_requestReason.clear();
+    }
+    const IStationLink* link = isRemoteModel() ? m_model->stationLink() : nullptr;
+    if (!m_rfKit || !link || !link->stationLinkReady() || !link->remoteRfKitStatusAvailable()) {
+        m_connectionLabel->clear();
+        m_connectionLabel->setVisible(false);
+        return;
+    }
+    m_connectionLabel->setText(m_requestReason.isEmpty()
+        ? AmpApplet::stationConnectionText(m_rfKit->connectionPhase(),
+                                           m_rfKit->connectionError())
+        : m_requestReason);
+    m_connectionLabel->setVisible(true);
+}
+
+// R-R3-22: the Core answered the applet's own Disconnect or Reconnect: a
+// refusal shows its reason; either way the request is no longer waiting.
+// The RF-Kit page's requests show on the page.
+void Rf2ksApplet::onStationCommandFinished(quint32 commandId, bool accepted,
+                                           const QString& reason)
+{
+    if (m_pendingCommandId == 0 || commandId != m_pendingCommandId) {
+        return;
+    }
+    m_pendingCommandId = 0;
+    if (!accepted) {
+        m_requestReason = OperatorReasonText::forDisplay(reason);
+        updateConnectionLine();
+    }
+}
+
+void Rf2ksApplet::requestRemoteConnectionToggle()
+{
+    IStationLink* link = m_model ? m_model->stationLink() : nullptr;
+    if (!link || !m_rfKit || !link->remoteRfKitControlAvailable()) {
+        return;
+    }
+    const auto outcome = AmpApplet::stationConnectionActive(m_rfKit->connectionPhase())
+        ? link->requestDisconnectRfKit()
+        : link->requestConfigureRfKit(m_rfKit->configuredHost(),
+                                      static_cast<quint16>(m_rfKit->configuredPort()));
+    m_pendingCommandId = outcome.sent ? outcome.commandId : 0;
+    m_requestReason = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
+    updateConnectionLine();
+}
+
+QString Rf2ksApplet::connectionLineTextForTesting() const
+{
+    return m_connectionLabel && !m_connectionLabel->isHidden() ? m_connectionLabel->text()
+                                                               : QString();
 }
 
 bool Rf2ksApplet::staleIndicatorVisibleForTesting() const
@@ -538,24 +629,42 @@ QMenu* Rf2ksApplet::buildContextMenu(QObject* menuParent)
     auto* menu = new QMenu(qobject_cast<QWidget*>(menuParent));
     auto* openAdv = menu->addAction(QStringLiteral("Open RF-Kit Advanced..."));
     menu->addSeparator();
-    auto* disco = menu->addAction(m_connected
-                                    ? QStringLiteral("Disconnect")
-                                    : QStringLiteral("Reconnect"));
+    // R-R3-22 / R-R3-47: in a remote window the toggle follows the Core's
+    // phase (Cancel while it is still trying) and asks the Core, which
+    // owns the amp; a Core that does not offer it keeps the item off.
+    const bool remote = isRemoteModel();
+    const bool active = remote
+        ? (m_rfKit && AmpApplet::stationConnectionActive(m_rfKit->connectionPhase()))
+        : m_connected;
+    // Remote: Cancel while the Core is still trying (R-R3-22 fix wave).
+    auto* disco = menu->addAction(remote
+        ? AmpApplet::stationConnectionToggleText(
+              m_rfKit ? m_rfKit->connectionPhase() : TunerModel::ConnectionPhase::Disabled)
+        : (active ? QStringLiteral("Disconnect") : QStringLiteral("Reconnect")));
     auto* diag  = menu->addAction(QStringLiteral("Copy diagnostics to clipboard"));
 
     connect(openAdv, &QAction::triggered, this, [this] {
         emit navigationRequested(QStringLiteral("rfKit"));
     });
-    connect(disco, &QAction::triggered, this, &Rf2ksApplet::connectionToggleRequested);
-    // R-R3-47: in a remote window the toggle asks the Core, which owns the
-    // amp; a Core that does not offer it keeps the item off.
-    if (isRemoteModel()) {
+    if (!remote) {
+        connect(disco, &QAction::triggered, this, &Rf2ksApplet::connectionToggleRequested);
+    } else {
         const IStationLink* link = m_model ? m_model->stationLink() : nullptr;
-        if (!link || !link->remoteRfKitControlAvailable()) {
+        QString unavailable;
+        if (link && !link->stationLinkReady()) {
+            unavailable = tr("Waiting for the Core to connect.");
+        } else if (!link || !link->remoteRfKitControlAvailable()) {
+            unavailable = tr("This Core does not offer RF-Kit amplifier setup to this app.");
+        } else if (!active && (!m_rfKit || m_rfKit->configuredHost().isEmpty()
+                               || m_rfKit->configuredPort() <= 0)) {
+            unavailable = tr("Enter the RF-Kit amplifier's address in Setup first.");
+        }
+        if (!unavailable.isEmpty()) {
             disco->setEnabled(false);
-            disco->setToolTip(tr("This Core does not offer RF-Kit amplifier setup to this app."));
+            disco->setToolTip(unavailable);
             menu->setToolTipsVisible(true);
         }
+        connect(disco, &QAction::triggered, this, &Rf2ksApplet::requestRemoteConnectionToggle);
     }
     connect(diag,  &QAction::triggered, this, &Rf2ksApplet::diagnosticsCopyRequested);
     return menu;

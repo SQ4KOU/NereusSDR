@@ -42,6 +42,10 @@
 //                 duration into the meters at startup, not only when this
 //                 page opens. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: peak hold, text hold, digital delay and the
+//                 history enable are hidden (UnbuiltFeatures) until the
+//                 meters use them. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -96,6 +100,7 @@
 #include "gui/meters/MeterItem.h"
 #include "gui/meters/MeterPoller.h"
 #include "gui/meters/HistoryGraphItem.h"
+#include "gui/UnbuiltFeatures.h"
 // Remote Daemon R2 Task 12: the delay spinbox also drives SliceMeterPump's
 // interval, or the operator's delay slider silently stops changing the
 // per-flag S-meter cadence while still changing MeterPoller's.
@@ -203,6 +208,13 @@ void MultimeterPage::buildUI()
     m_signalHistoryDurationMs->setToolTip(tr("Total time span shown in the signal history graph (1–600 000 ms)."));
 
     // ── Cross-link ───────────────────────────────────────────────────────────
+    // R-R3-49: saved, but no meter reads these four yet; hidden until one
+    // does. Their saved values stay as they are.
+    for (QWidget* control : std::initializer_list<QWidget*>{
+             m_peakHoldMs, m_textHoldMs, m_digitalDelayMs, m_signalHistoryEnable}) {
+        UnbuiltFeatures::hideRowUnlessBuilt(control, UnbuiltFeature::MultimeterHolds);
+    }
+
     m_backBtn = new QPushButton(tr("← Spectrum defaults"), this);
     m_backBtn->setToolTip(tr("Navigate to the Spectrum Defaults setup page."));
     contentLayout()->addWidget(m_backBtn, 0, Qt::AlignLeft);

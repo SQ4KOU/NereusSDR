@@ -791,9 +791,9 @@ private slots:
              {"Task 24+", "override \u2014 no consumer", "no consumer"},
              {"Whether an app such as WSJT-X has this VAX channel open.",
               "No program is using this device"}},
+            // R-R3-49: the IQ channel combo (and its tooltip) was removed.
             {"src/gui/SpectrumOverlayPanel.cpp", true,
-             {"design spec", "reserved for future phase"},
-             {"Sending I/Q to a VAX channel is not available yet."}},
+             {"design spec", "reserved for future phase"}, {}},
             {"src/gui/diagnostics/DiagnosticsPhaseHPages.cpp", true,
              {"QT_LOGGING_TO_CONSOLE", "follow-up phase"},
              {"The 60 s history graph is not shown yet.",

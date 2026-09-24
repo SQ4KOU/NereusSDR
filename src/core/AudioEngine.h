@@ -21,6 +21,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-24 : vaxBusOpenChanged signal (R-R3-49, R-R3-21) by J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-23 : R-R3-45 Task 2 by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. Headphones in a remote window: the
 //                 master tap can take the speakers' mix alone, a second tap
@@ -817,19 +819,6 @@ public:
     void ensureMixScratchFrames(int frames);
     int mixScratchFrames() const { return m_mixScratchFrames.load(std::memory_order_acquire); }
 
-    // Sub-Phase 12 Task 12.4 — VAC feedback-loop tuning (per addendum §2.4).
-    // The four fields map to Thetis IVAC feedback tuning knobs. Persists to
-    // audio/VacFeedback/<channel>/{Gain,SlewTimeMs,PropRing,FfRing}.
-    // Live-apply is deferred to Phase 3M IVAC port.
-    // TODO(sub-phase-12-vac-feedback-live-apply): wire into IVAC engine.
-    struct VacFeedbackParams {
-        float gain      = 1.0f;
-        int   slewTimeMs = 5;
-        int   propRing   = 2;
-        int   ffRing     = 2;
-    };
-    void setVacFeedbackParams(int channel, const VacFeedbackParams& params);
-
     // Sub-Phase 12 Task 12.4 — Reset all audio settings (addendum §2.5).
     // Clears all audio/* keys from AppSettings, preserving
     // slice/<N>/VaxChannel and tx/OwnerSlot. Then rebuilds buses from
@@ -923,6 +912,11 @@ signals:
     void vaxRxGainChanged(int channel, float gain);
     void vaxMutedChanged(int channel, bool muted);
     void vaxTxGainChanged(float gain);
+    /// R-R3-21 (R3 unfinished controls fix wave M3): isVaxBusOpen(channel)
+    /// may have changed (setVaxEnabled, setVaxConfig, openVaxOutputs,
+    /// resetAudioSettings, stop). A container's VAX button and Setup >
+    /// Audio > VAX's channel card follow it at once.
+    void vaxBusOpenChanged(int channel);
 
     // (Phase 3M-1c D.1 added a micBlockReady(const float*, int) signal
     //  that fired on every kMicBlockFrames=720-sample accumulator block.

@@ -164,7 +164,6 @@
 #include "TxApplet.h"
 #include "TxEqDialog.h"
 #include "TxCfcDialog.h"
-#include "NyiOverlay.h"
 #include "gui/HGauge.h"
 #include "gui/StyleConstants.h"
 #include "gui/ComboStyle.h"

@@ -34,6 +34,11 @@
 // device's answers, its values and the Core's refusals (on their own route)
 // show on the page; an older Core leaves the controls saying why. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-22 / R-R3-47: the Power Genius and RF-Kit applets'
+// Disconnect and Reconnect send the Core's verbs from a remote window, show
+// the Core's connection as it changes and a refusal's plain reason, and
+// say why when the Core does not offer them; a local window is unchanged.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include <QtTest>
 
@@ -158,6 +163,7 @@ public:
 
     // R-R3-47: the Power Genius commands.
     bool pgxlAvailable{false};
+    CommandOutcome pgxlOutcome{true, {}};
     int pgxlConfigureCalls{0};
     int pgxlDisconnectCalls{0};
     int pgxlSettingsCalls{0};
@@ -167,17 +173,30 @@ public:
     int pgxlKeepaliveSec{0};
     int pgxlPingSec{-1};
     bool remotePgxlControlAvailable() const override { return pgxlAvailable; }
+    // R-R3-22 fix wave: each sent command gets its own id, as StationClient
+    // gives it, so an applet can tell its own command's result apart.
+    quint32 nextCommandId{100};
+    quint32 lastPgxlCommandId{0};
+    quint32 lastRfKitCommandId{0};
+    CommandOutcome stamp(CommandOutcome outcome, quint32& last)
+    {
+        if (outcome.sent) {
+            outcome.commandId = nextCommandId++;
+            last = outcome.commandId;
+        }
+        return outcome;
+    }
     CommandOutcome requestConfigurePgxl(const QString& host, quint16 port) override
     {
         ++pgxlConfigureCalls;
         pgxlHost = host;
         pgxlPort = port;
-        return {true, {}};
+        return stamp(pgxlOutcome, lastPgxlCommandId);
     }
     CommandOutcome requestDisconnectPgxl() override
     {
         ++pgxlDisconnectCalls;
-        return {true, {}};
+        return stamp(pgxlOutcome, lastPgxlCommandId);
     }
     CommandOutcome requestPgxlConnectionSettings(bool autoReconnect, int keepaliveSec,
                                                  int pingSec) override
@@ -187,6 +206,27 @@ public:
         pgxlKeepaliveSec = keepaliveSec;
         pgxlPingSec = pingSec;
         return {true, {}};
+    }
+
+    // R-R3-22: the RF-Kit commands, and what a request answers with.
+    bool rfKitAvailable{false};
+    int rfKitConfigureCalls{0};
+    int rfKitDisconnectCalls{0};
+    QString rfKitHost;
+    quint16 rfKitPort{0};
+    CommandOutcome accessoryOutcome{true, {}};
+    bool remoteRfKitControlAvailable() const override { return rfKitAvailable; }
+    CommandOutcome requestConfigureRfKit(const QString& host, quint16 port) override
+    {
+        ++rfKitConfigureCalls;
+        rfKitHost = host;
+        rfKitPort = port;
+        return stamp(accessoryOutcome, lastRfKitCommandId);
+    }
+    CommandOutcome requestDisconnectRfKit() override
+    {
+        ++rfKitDisconnectCalls;
+        return stamp(accessoryOutcome, lastRfKitCommandId);
     }
 };
 
@@ -357,6 +397,18 @@ TunerModel::StationConnectionState state(TunerModel::ConnectionPhase phase,
     return result;
 }
 
+// R-R3-22: the applet menu's Disconnect or Reconnect item.
+QAction* connectionToggle(QMenu* menu)
+{
+    for (QAction* a : menu->actions()) {
+        if (a->text() == QStringLiteral("Reconnect") || a->text() == QStringLiteral("Disconnect")
+            || a->text() == QStringLiteral("Cancel")) {
+            return a;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace
 
 class RemotePeripheralsTest : public QObject {
@@ -385,6 +437,7 @@ private slots:
     void remoteAmpAndRfKitAppletsFollowTheCore();
     void remoteAppletsSayWhyReadingsAreNotLive();
     void localAppletsShowTheSameValuesAsBefore();
+    void remoteAppletsConnectAndDisconnectThroughTheCore();
     void remotePgxlRowAndTabUseTheStationLink();
     void remoteWindowSetsUpThePgxlThroughTheCore();
     void receiveOnlyCoreRefusesTunerAndAmpOperation();
@@ -835,6 +888,231 @@ void RemotePeripheralsTest::localAppletsShowTheSameValuesAsBefore()
     QVERIFY(!rfKit.staleIndicatorVisibleForTesting());
 }
 
+// R-R3-22 / R-R3-47: a remote window's Power Genius and RF-Kit applets send
+// Disconnect and Reconnect to the Core (the Core owns both connections),
+// follow the Core's phase on their own line, show a refusal's plain reason,
+// and say why when the Core does not offer them. The window's own
+// connections stay closed and the local toggle signal is never raised.
+void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    RecordingTgxlLink link;
+    model.attachStation(&link);
+    AmpApplet amp(&model);
+    Rf2ksApplet rfKit(&model);
+    QSignalSpy ampLocalToggles(&amp, &AmpApplet::connectionToggleRequested);
+    QSignalSpy rfKitLocalToggles(&rfKit, &Rf2ksApplet::connectionToggleRequested);
+    const auto checkToggle = [](QMenu* menu, const QString& text, bool enabled,
+                                const QString& tooltip) {
+        QAction* toggle = connectionToggle(menu);
+        QVERIFY(toggle != nullptr);
+        QCOMPARE(toggle->text(), text);
+        QCOMPARE(toggle->isEnabled(), enabled);
+        // An action with no tooltip of its own shows its text.
+        QCOMPARE(toggle->toolTip(), tooltip.isEmpty() ? text : tooltip);
+        QVERIFY2(OperatorWording::isPlain(toggle->toolTip()), qPrintable(toggle->toolTip()));
+    };
+
+    // The link is still coming up: the items wait for it.
+    {
+        std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
+        std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
+        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), false,
+                    QStringLiteral("Waiting for the Core to connect."));
+        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), false,
+                    QStringLiteral("Waiting for the Core to connect."));
+    }
+    QVERIFY(amp.connectionLineTextForTesting().isEmpty());
+
+    // An older Core reports the amps but offers no setup: the items say why.
+    link.linkReady = true;
+    link.amplifierStatus = true;
+    link.rfKitStatus = true;
+    model.reportStationLinkStateChanged();
+    {
+        std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
+        std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
+        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), false,
+                    QStringLiteral("This Core does not offer Power Genius XL control to this app."));
+        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), false,
+                    QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app."));
+        connectionToggle(ampMenu.get())->trigger();
+        connectionToggle(rfKitMenu.get())->trigger();
+    }
+    QCOMPARE(link.pgxlConfigureCalls + link.pgxlDisconnectCalls, 0);
+    QCOMPARE(link.rfKitConfigureCalls + link.rfKitDisconnectCalls, 0);
+
+    // A Core that offers setup, with no address saved yet.
+    link.pgxlAvailable = true;
+    link.rfKitAvailable = true;
+    model.amplifierModel()->setStationConnectionState(
+        state(TunerModel::ConnectionPhase::Disconnected));
+    model.rfKitModel()->setStationConnectionState(
+        state(TunerModel::ConnectionPhase::Disconnected));
+    model.reportStationLinkStateChanged();
+    QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Disconnected"));
+    QCOMPARE(rfKit.connectionLineTextForTesting(), QStringLiteral("Disconnected"));
+    {
+        std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
+        std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
+        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), false,
+                    QStringLiteral("Enter the Power Genius address in Setup first."));
+        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), false,
+                    QStringLiteral("Enter the RF-Kit amplifier's address in Setup first."));
+    }
+
+    // Reconnect asks the Core to dial its saved address.
+    model.amplifierModel()->setStationConnectionState(
+        state(TunerModel::ConnectionPhase::Disconnected, QStringLiteral("192.0.2.40"), 9008));
+    model.rfKitModel()->setStationConnectionState(
+        state(TunerModel::ConnectionPhase::Disconnected, QStringLiteral("192.0.2.41"), 8080));
+    {
+        std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
+        std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
+        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), true, QString());
+        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), true, QString());
+        connectionToggle(ampMenu.get())->trigger();
+        connectionToggle(rfKitMenu.get())->trigger();
+    }
+    QCOMPARE(link.pgxlConfigureCalls, 1);
+    QCOMPARE(link.pgxlHost, QStringLiteral("192.0.2.40"));
+    QCOMPARE(link.pgxlPort, quint16{9008});
+    QCOMPARE(link.rfKitConfigureCalls, 1);
+    QCOMPARE(link.rfKitHost, QStringLiteral("192.0.2.41"));
+    QCOMPARE(link.rfKitPort, quint16{8080});
+
+    // The Core refuses another request (a Setup page's, another id): not
+    // the applets' business.
+    const QString otherRefusal = QStringLiteral("Choose an output limit from 100 to 2000 W.");
+    model.reportStationAccessoryRefusal(QStringLiteral("pgxl"), otherRefusal);
+    model.reportStationCommandFinished(7, false, otherRefusal);
+    QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Disconnected"));
+    QCOMPARE(rfKit.connectionLineTextForTesting(), QStringLiteral("Disconnected"));
+
+    // The Core refuses the applets' own: each shows the plain reason.
+    const QString pgxlRefusal = QStringLiteral("Enable 4O3A on Core before connecting the PGXL.");
+    const QString rfKitRefusal =
+        QStringLiteral("Turn on the RF-Kit amplifier on the Core before connecting it.");
+    model.reportStationAccessoryRefusal(QStringLiteral("pgxl"), pgxlRefusal);
+    model.reportStationCommandFinished(link.lastPgxlCommandId, false, pgxlRefusal);
+    model.reportStationAccessoryRefusal(QStringLiteral("rfkit"), rfKitRefusal);
+    model.reportStationCommandFinished(link.lastRfKitCommandId, false, rfKitRefusal);
+    QCOMPARE(amp.connectionLineTextForTesting(), OperatorReasonText::forDisplay(pgxlRefusal));
+    QCOMPARE(rfKit.connectionLineTextForTesting(), OperatorReasonText::forDisplay(rfKitRefusal));
+    QVERIFY2(OperatorWording::isPlain(amp.connectionLineTextForTesting()),
+             qPrintable(amp.connectionLineTextForTesting()));
+    QVERIFY2(OperatorWording::isPlain(rfKit.connectionLineTextForTesting()),
+             qPrintable(rfKit.connectionLineTextForTesting()));
+
+    // Accepted: the Core's phase replaces the refusal as it moves, and a
+    // refusal of another page's request does not land on the applet.
+    model.amplifierModel()->setStationConnectionState(
+        state(TunerModel::ConnectionPhase::Identifying, QStringLiteral("192.0.2.40"), 9008));
+    model.rfKitModel()->setStationConnectionState(
+        state(TunerModel::ConnectionPhase::Connecting, QStringLiteral("192.0.2.41"), 8080));
+    QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Identifying device"));
+    QCOMPARE(rfKit.connectionLineTextForTesting(), QStringLiteral("Connecting at station"));
+    model.reportStationAccessoryRefusal(QStringLiteral("pgxl"),
+                                        QStringLiteral("Choose an output limit from 100 to 2000 W."));
+    QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Identifying device"));
+
+    // While the Core is trying, the item says Cancel (the word the
+    // Peripherals row uses) and cancels the attempt.
+    {
+        std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
+        std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
+        checkToggle(ampMenu.get(), QStringLiteral("Cancel"), true, QString());
+        checkToggle(rfKitMenu.get(), QStringLiteral("Cancel"), true, QString());
+        connectionToggle(ampMenu.get())->trigger();
+        connectionToggle(rfKitMenu.get())->trigger();
+    }
+    QCOMPARE(link.pgxlDisconnectCalls, 1);
+    QCOMPARE(link.rfKitDisconnectCalls, 1);
+
+    // The Core takes the applets' requests with no phase change yet: their
+    // commands are done, so a later refusal of an unrelated request (a
+    // Setup page's) does not land on the applets' lines.
+    model.reportStationCommandFinished(link.lastPgxlCommandId, true, QString());
+    model.reportStationCommandFinished(link.lastRfKitCommandId, true, QString());
+    model.reportStationAccessoryRefusal(QStringLiteral("pgxl"), otherRefusal);
+    model.reportStationCommandFinished(link.nextCommandId + 50, false, otherRefusal);
+    model.reportStationAccessoryRefusal(QStringLiteral("rfkit"), otherRefusal);
+    model.reportStationCommandFinished(link.nextCommandId + 51, false, otherRefusal);
+    QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Identifying device"));
+    QCOMPARE(rfKit.connectionLineTextForTesting(), QStringLiteral("Connecting at station"));
+
+    // Connected, then a drop the Core retries, in user words.
+    model.amplifierModel()->setStationConnectionState(
+        state(TunerModel::ConnectionPhase::Connected, QStringLiteral("192.0.2.40"), 9008));
+    QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Connected"));
+    model.rfKitModel()->setStationConnectionState(
+        state(TunerModel::ConnectionPhase::Retrying, QStringLiteral("192.0.2.41"), 8080,
+              QStringLiteral("Connection refused")));
+    QVERIFY(rfKit.connectionLineTextForTesting().startsWith(QStringLiteral("Retrying at station")));
+    QVERIFY2(OperatorWording::isPlain(rfKit.connectionLineTextForTesting()),
+             qPrintable(rfKit.connectionLineTextForTesting()));
+    {
+        // Connected: Disconnect. Retrying: Cancel again.
+        std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
+        std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
+        checkToggle(ampMenu.get(), QStringLiteral("Disconnect"), true, QString());
+        checkToggle(rfKitMenu.get(), QStringLiteral("Cancel"), true, QString());
+        connectionToggle(ampMenu.get())->trigger();
+    }
+    QCOMPARE(link.pgxlDisconnectCalls, 2);
+
+    // A request this computer could not send shows why at once.
+    link.pgxlOutcome = {false, QStringLiteral("The station does not support remote PGXL configuration.")};
+    link.accessoryOutcome = {false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.")};
+    {
+        std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
+        std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
+        connectionToggle(ampMenu.get())->trigger();
+        connectionToggle(rfKitMenu.get())->trigger();
+    }
+    QCOMPARE(amp.connectionLineTextForTesting(),
+             OperatorReasonText::forDisplay(QStringLiteral(
+                 "The station does not support remote PGXL configuration.")));
+    QCOMPARE(rfKit.connectionLineTextForTesting(),
+             QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app."));
+    QVERIFY2(OperatorWording::isPlain(amp.connectionLineTextForTesting()),
+             qPrintable(amp.connectionLineTextForTesting()));
+
+    // The Core is lost: the stale line speaks and the connection line goes.
+    link.linkReady = false;
+    model.reportStationLinkStateChanged();
+    QVERIFY(amp.staleIndicatorVisibleForTesting());
+    QVERIFY(amp.connectionLineTextForTesting().isEmpty());
+    QVERIFY(rfKit.connectionLineTextForTesting().isEmpty());
+
+    // Nothing went through this computer's own connections.
+    QCOMPARE(ampLocalToggles.count(), 0);
+    QCOMPARE(rfKitLocalToggles.count(), 0);
+    QVERIFY(!model.pgxlConnection()->isConnected());
+    QCOMPARE(model.pgxlConnection()->socketAttemptToken(), quint64(0));
+    QVERIFY(!model.rfKitConnection()->isConnected());
+    QVERIFY(model.rfKitConnection()->peerAddress().isEmpty());
+
+    // A local window: no connection line, and the toggle is the local one.
+    RadioModel local;
+    AmpApplet localAmp(&local);
+    Rf2ksApplet localRfKit(&local);
+    QSignalSpy localAmpToggles(&localAmp, &AmpApplet::connectionToggleRequested);
+    QSignalSpy localRfKitToggles(&localRfKit, &Rf2ksApplet::connectionToggleRequested);
+    QVERIFY(localAmp.connectionLineTextForTesting().isEmpty());
+    QVERIFY(localRfKit.connectionLineTextForTesting().isEmpty());
+    {
+        std::unique_ptr<QMenu> ampMenu(localAmp.buildContextMenuForTesting());
+        std::unique_ptr<QMenu> rfKitMenu(localRfKit.buildContextMenuForTesting());
+        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), true, QString());
+        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), true, QString());
+        connectionToggle(ampMenu.get())->trigger();
+        connectionToggle(rfKitMenu.get())->trigger();
+    }
+    QCOMPARE(localAmpToggles.count(), 1);
+    QCOMPARE(localRfKitToggles.count(), 1);
+}
+
 // R-R3-47: the remote Power Genius row and tab ask the Core (typed link
 // requests) and show the Core's state; no socket of this window's own.
 void RemotePeripheralsTest::remotePgxlRowAndTabUseTheStationLink()
@@ -986,6 +1264,7 @@ void RemotePeripheralsTest::remoteWindowSetsUpThePgxlThroughTheCore()
     auto* connectButton = page.findChild<QPushButton*>(QStringLiteral("pgxlConnectButton"));
     auto* status = page.findChild<QLabel*>(QStringLiteral("pgxlStatusLabel"));
     QVERIFY(host && port && connectButton && status);
+    AmpApplet applet(&window);
     QSignalSpy windowFrames(window.pgxlConnection(), &PgxlConnection::testFrameWrittenForTesting);
 
     auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
@@ -1035,18 +1314,48 @@ void RemotePeripheralsTest::remoteWindowSetsUpThePgxlThroughTheCore()
     QCOMPARE(window.amplifierModel()->configuredPort(), int(amp.serverPort()));
     QCOMPARE(connectButton->text(), QStringLiteral("Disconnect"));
 
+    // R-R3-22: the applet's Disconnect and Reconnect ask the Core too.
+    QCOMPARE(applet.connectionLineTextForTesting(), QStringLiteral("Connected"));
+    {
+        std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
+        QAction* toggle = connectionToggle(menu.get());
+        QVERIFY(toggle && toggle->isEnabled());
+        QCOMPARE(toggle->text(), QStringLiteral("Disconnect"));
+        toggle->trigger();
+    }
+    QTRY_COMPARE(window.amplifierModel()->connectionPhase(),
+                 AmplifierModel::ConnectionPhase::Disconnected);
+    QTRY_VERIFY(!station.pgxlConnection()->isConnected());
+    QCOMPARE(applet.connectionLineTextForTesting(), QStringLiteral("Disconnected"));
+    {
+        std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
+        QAction* toggle = connectionToggle(menu.get());
+        QVERIFY(toggle && toggle->isEnabled());
+        QCOMPARE(toggle->text(), QStringLiteral("Reconnect"));
+        toggle->trigger();
+    }
+    QTRY_VERIFY(amp.hasPendingConnections());   // the Core dials its saved address
+    QTcpSocket* again = amp.nextPendingConnection();
+    again->write("V3.8.9\n");
+    again->flush();
+    QTRY_COMPARE(window.amplifierModel()->connectionPhase(),
+                 AmplifierModel::ConnectionPhase::Identifying);
+    QCOMPARE(applet.connectionLineTextForTesting(), QStringLiteral("Identifying device"));
+
     // Configure: the settings command reaches the Core and applies there.
     const auto settingsOutcome = client.requestPgxlConnectionSettings(true, 40, 0);
     QVERIFY(settingsOutcome.sent);
     QTRY_COMPARE(AppSettings::instance().value(QStringLiteral("PGXL_KeepaliveSec")).toString(),
                  QStringLiteral("40"));
 
-    // Disconnect: the Core closes it; the window shows it.
+    // Disconnect (here, cancelling the second attempt): the Core closes
+    // it; the window shows it.
     QVERIFY(QMetaObject::invokeMethod(&page, "onConnect", Qt::DirectConnection, Q_ARG(int, 1)));
     QTRY_COMPARE(window.amplifierModel()->connectionPhase(),
                  AmplifierModel::ConnectionPhase::Disconnected);
     QVERIFY(!station.pgxlConnection()->isConnected());
     QCOMPARE(status->text(), QStringLiteral("Disconnected"));
+    QCOMPARE(applet.connectionLineTextForTesting(), QStringLiteral("Disconnected"));
 
     // The window opened no connection of its own.
     QCOMPARE(windowFrames.count(), 0);
@@ -1221,13 +1530,29 @@ void RemotePeripheralsTest::remoteWindowSetsUpTheRfKitThroughTheCore()
     QCOMPARE(page.bandFollowTextForTesting(), window.rfKitModel()->bandFollowText());
     QVERIFY(page.bandFollowTextForTesting().startsWith(QStringLiteral("Band follow: off")));
 
-    // The applet's Disconnect asks the Core (MainWindow sends it).
-    std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
-    bool toggleEnabled = false;
-    for (QAction* a : menu->actions()) {
-        if (a->text() == QStringLiteral("Disconnect")) { toggleEnabled = a->isEnabled(); }
+    // R-R3-22: the applet's Disconnect and Reconnect ask the Core.
+    QCOMPARE(applet.connectionLineTextForTesting(), QStringLiteral("Connected"));
+    {
+        std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
+        QAction* toggle = connectionToggle(menu.get());
+        QVERIFY(toggle && toggle->isEnabled());
+        QCOMPARE(toggle->text(), QStringLiteral("Disconnect"));
+        toggle->trigger();
     }
-    QVERIFY(toggleEnabled);
+    QTRY_COMPARE(window.rfKitModel()->connectionPhase(),
+                 RfKitModel::ConnectionPhase::Disconnected);
+    QTRY_VERIFY(!station.rfKitConnection()->isConnected());
+    QCOMPARE(applet.connectionLineTextForTesting(), QStringLiteral("Disconnected"));
+    {
+        std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
+        QAction* toggle = connectionToggle(menu.get());
+        QVERIFY(toggle && toggle->isEnabled());
+        QCOMPARE(toggle->text(), QStringLiteral("Reconnect"));
+        toggle->trigger();
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
+                              RfKitModel::ConnectionPhase::Connected, 5000);
+    QTRY_COMPARE(applet.connectionLineTextForTesting(), QStringLiteral("Connected"));
 
     // Disconnect from the page.
     page.disconnectButtonForTesting()->click();
@@ -1240,6 +1565,22 @@ void RemotePeripheralsTest::remoteWindowSetsUpTheRfKitThroughTheCore()
     QTRY_VERIFY(!station.rfKitEnabled());
     QTRY_VERIFY(!window.rfKitEnabled());
     QTRY_COMPARE(window.rfKitModel()->connectionPhase(), RfKitModel::ConnectionPhase::Disabled);
+
+    // R-R3-22: the Core refuses the applet's Reconnect while its switch is
+    // off; the applet shows the reason in plain words.
+    {
+        std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
+        QAction* toggle = connectionToggle(menu.get());
+        QVERIFY(toggle && toggle->isEnabled());
+        QCOMPARE(toggle->text(), QStringLiteral("Reconnect"));
+        toggle->trigger();
+    }
+    QTRY_COMPARE(applet.connectionLineTextForTesting(),
+                 OperatorReasonText::forDisplay(QStringLiteral(
+                     "Turn on the RF-Kit amplifier on the Core before connecting it.")));
+    QVERIFY2(OperatorWording::isPlain(applet.connectionLineTextForTesting()),
+             qPrintable(applet.connectionLineTextForTesting()));
+    QVERIFY(!station.rfKitConnection()->isConnected());
 
     // The window opened no connection of its own.
     QVERIFY(!window.rfKitConnection()->isConnected());

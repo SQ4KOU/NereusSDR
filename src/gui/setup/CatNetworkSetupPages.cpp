@@ -8,6 +8,7 @@
 #include "gui/StyleConstants.h"
 #include "gui/LanScanDialog.h"
 #include "gui/OperatorReasonText.h"
+#include "gui/UnbuiltFeatures.h"
 #include "core/AppSettings.h"
 // Remote-daemon R2 Task 20: RemoteStationPage validates its URL field with
 // the same rule src/main.cpp applies to --station, so a value the field
@@ -81,7 +82,7 @@ void CatSerialPortsPage::buildUI()
         m_ports[i].portCombo->setStyleSheet(QString::fromLatin1(Style::kComboStyle));
         m_ports[i].portCombo->addItem(QStringLiteral("(none)"));
         m_ports[i].portCombo->setDisabled(true);
-        m_ports[i].portCombo->setToolTip(QStringLiteral("NYI — serial port selection"));
+        m_ports[i].portCombo->setToolTip(QStringLiteral("The serial port for this CAT connection"));
         grid->addWidget(m_ports[i].portCombo, 0, 1);
 
         // Column 2: Baud label + combo
@@ -95,14 +96,14 @@ void CatSerialPortsPage::buildUI()
             m_ports[i].baudCombo->addItem(QString::fromLatin1(kBaudRates[b]));
         }
         m_ports[i].baudCombo->setDisabled(true);
-        m_ports[i].baudCombo->setToolTip(QStringLiteral("NYI — baud rate selection"));
+        m_ports[i].baudCombo->setToolTip(QStringLiteral("The serial speed (baud rate)"));
         grid->addWidget(m_ports[i].baudCombo, 0, 3);
 
         // Row 1: enable + status
         m_ports[i].enableCheck = new QCheckBox(QStringLiteral("Enable"), group);
         m_ports[i].enableCheck->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
         m_ports[i].enableCheck->setDisabled(true);
-        m_ports[i].enableCheck->setToolTip(QStringLiteral("NYI — enable CAT port"));
+        m_ports[i].enableCheck->setToolTip(QStringLiteral("Turn this CAT port on"));
         grid->addWidget(m_ports[i].enableCheck, 1, 0, 1, 2);
 
         m_ports[i].statusLabel = new QLabel(QStringLiteral("Status: not connected"), group);
@@ -284,6 +285,8 @@ void CatTciServerPage::buildServerGroup()
         AppSettings::instance().setValue(QStringLiteral("TciRateLimitMsgsPerSec"), v);
     });
     form->addRow(tr("Rate limit:"), m_rateLimitSpin);
+    // R-R3-49: nothing applies the rate limit yet; hidden until it does.
+    UnbuiltFeatures::hideUnlessBuilt(m_rateLimitSpin, UnbuiltFeature::TciExtras);
 
     // Show Log button — Phase 3J-1 closeout Item 2 (2026-05-12) wires the
     // click through SetupDialog up to MainWindow, which owns the lazy-
@@ -469,6 +472,7 @@ void CatTciServerPage::buildCompatibilityGroup()
                                           on ? QStringLiteral("True") : QStringLiteral("False"));
     });
     form->addRow(QString(), m_cwBecomesCwuCheck);
+    UnbuiltFeatures::hideUnlessBuilt(m_cwBecomesCwuCheck, UnbuiltFeature::TciExtras);
 
     contentLayout()->addWidget(group);
 }
@@ -573,6 +577,7 @@ void CatTciServerPage::buildAudioStreamGroup()
         AppSettings::instance().setValue(QStringLiteral("TciTxChannel"), text);
     });
     form->addRow(tr("TX channel:"), m_txChannelCombo);
+    UnbuiltFeatures::hideUnlessBuilt(m_txChannelCombo, UnbuiltFeature::TciExtras);
 
     contentLayout()->addWidget(group);
 }
@@ -633,6 +638,8 @@ void CatTciServerPage::buildSensorsGroup()
     form->addRow(noteLabel);
 
     contentLayout()->addWidget(group);
+    // R-R3-49: the sensor intervals are not applied yet; hidden until they are.
+    UnbuiltFeatures::hideUnlessBuilt(group, UnbuiltFeature::TciExtras);
 }
 
 // ---------------------------------------------------------------------------
@@ -700,6 +707,9 @@ void CatTciServerPage::buildVfoQuirksGroup()
     form->addRow(QString(), m_copyRx2VfobToVfoaCheck);
 
     contentLayout()->addWidget(group);
+    // R-R3-49: the three RX2 VFO options are not applied yet; hidden until
+    // they are.
+    UnbuiltFeatures::hideUnlessBuilt(group, UnbuiltFeature::TciExtras);
 }
 
 // ---------------------------------------------------------------------------
@@ -924,7 +934,7 @@ void CatTcpIpPage::buildUI()
     m_enableCheck = new QCheckBox(QStringLiteral("Enable TCP/IP CAT Server"), group);
     m_enableCheck->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
     m_enableCheck->setDisabled(true);
-    m_enableCheck->setToolTip(QStringLiteral("NYI — TCP CAT server enable"));
+    m_enableCheck->setToolTip(QStringLiteral("Turn on the network CAT server"));
     grid->addWidget(m_enableCheck, 0, 0, 1, 2);
 
     // Bind IP
@@ -935,7 +945,7 @@ void CatTcpIpPage::buildUI()
     m_bindIpEdit = new QLineEdit(QStringLiteral("0.0.0.0"), group);
     m_bindIpEdit->setStyleSheet(QString::fromLatin1(Style::kLineEditStyle));
     m_bindIpEdit->setDisabled(true);
-    m_bindIpEdit->setToolTip(QStringLiteral("NYI — bind IP address"));
+    m_bindIpEdit->setToolTip(QStringLiteral("The network address the CAT server listens on"));
     grid->addWidget(m_bindIpEdit, 1, 1);
 
     // Port
@@ -948,7 +958,7 @@ void CatTcpIpPage::buildUI()
     m_portSpin->setRange(1024, 65535);
     m_portSpin->setValue(4532);
     m_portSpin->setDisabled(true);
-    m_portSpin->setToolTip(QStringLiteral("NYI — TCP CAT port (default 4532 / rigctld)"));
+    m_portSpin->setToolTip(QStringLiteral("The network port the CAT server listens on (4532 by default, as rigctld uses)"));
     grid->addWidget(m_portSpin, 2, 1);
 
     // Status
@@ -984,7 +994,7 @@ void CatMidiControlPage::buildUI()
     m_enableCheck = new QCheckBox(QStringLiteral("Enable MIDI Control"), group);
     m_enableCheck->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
     m_enableCheck->setDisabled(true);
-    m_enableCheck->setToolTip(QStringLiteral("NYI — MIDI control enable"));
+    m_enableCheck->setToolTip(QStringLiteral("Turn on MIDI control"));
     grid->addWidget(m_enableCheck, 0, 0, 1, 2);
 
     // Device combo
@@ -996,12 +1006,12 @@ void CatMidiControlPage::buildUI()
     m_deviceCombo->setStyleSheet(QString::fromLatin1(Style::kComboStyle));
     m_deviceCombo->addItem(QStringLiteral("(no MIDI devices found)"));
     m_deviceCombo->setDisabled(true);
-    m_deviceCombo->setToolTip(QStringLiteral("NYI — MIDI device selection"));
+    m_deviceCombo->setToolTip(QStringLiteral("The MIDI device to use"));
     grid->addWidget(m_deviceCombo, 1, 1);
 
     // Mapping table placeholder label
     m_mappingLabel = new QLabel(
-        QStringLiteral("MIDI mapping table will appear here"), group);
+        QStringLiteral("The MIDI mapping table is not built yet"), group);
     m_mappingLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
     m_mappingLabel->setAlignment(Qt::AlignCenter);
     m_mappingLabel->setMinimumHeight(80);
@@ -1011,7 +1021,7 @@ void CatMidiControlPage::buildUI()
     m_learnButton = new QPushButton(QStringLiteral("Learn..."), group);
     m_learnButton->setStyleSheet(QString::fromLatin1(Style::kButtonStyle));
     m_learnButton->setDisabled(true);
-    m_learnButton->setToolTip(QStringLiteral("NYI — MIDI learn mode"));
+    m_learnButton->setToolTip(QStringLiteral("Learn a control: move it on the MIDI device to assign it"));
     grid->addWidget(m_learnButton, 3, 0, 1, 2);
 
     contentLayout()->addWidget(group);

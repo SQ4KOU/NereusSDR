@@ -106,6 +106,19 @@
 //                                    reads and saves WsjtxSpotLifetimeSec,
 //                                    the name RadioModel reads. AI
 //                                    tooling: Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49: the Memories option, the
+//                                    WSJT-X filters, the RBN rate limit
+//                                    and Report decodes to PSK Reporter
+//                                    are hidden (UnbuiltFeatures) until
+//                                    they are applied; the WSJT-X colour
+//                                    swatches keep their names as labels
+//                                    meanwhile. AI tooling: Anthropic
+//                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49: the Display tab's Auto
+//                                    background toggle is removed; a
+//                                    saved IsSpotsOverrideToAuto...
+//                                    value stays in the file. AI
+//                                    tooling: Anthropic Claude Code.
 
 #include "SpotHubDialog.h"
 
@@ -118,6 +131,7 @@
 #include "core/PskReporterClient.h"
 #include "core/SpotCollectorClient.h"
 #include "core/WsjtxClient.h"
+#include "gui/UnbuiltFeatures.h"
 #include "gui/widgets/GuardedSlider.h"
 #include "models/BandFilterProxy.h"
 #include "models/SpotModel.h"
@@ -937,6 +951,9 @@ void SpotHubDialog::buildRbnTab(QTabWidget* tabs)
     rateRow->addStretch();
     grid->addLayout(rateRow, row, 1);
     row++;
+    // R-R3-49: nothing applies the rate limit yet; the row is hidden until
+    // something does.
+    UnbuiltFeatures::hideRowUnlessBuilt(rateSpin, UnbuiltFeature::RbnRateLimit, grid);
 
     connLayout->addLayout(grid);
 
@@ -1343,6 +1360,20 @@ void SpotHubDialog::buildWsjtxTab(QTabWidget* tabs)
     auto* defaultLabel = new QLabel("Default");
     defaultLabel->setStyleSheet("QLabel { color: #a0b0c0; font-size: 14px; }");
     filterRow->addWidget(defaultLabel);
+
+    // R-R3-49: nothing applies the three filters yet; they are hidden until
+    // something does. Their colours are applied, so each swatch keeps its
+    // name beside it, as Default does.
+    if (!UnbuiltFeatures::isBuilt(UnbuiltFeature::WsjtxFilters)) {
+        for (QCheckBox* box : {m_wsjtxFilterCQ, m_wsjtxFilterPOTA, m_wsjtxFilterCallingMe}) {
+            box->setVisible(false);
+            auto* caption = new QLabel(box->text());
+            caption->setObjectName(box->objectName() + QStringLiteral("Caption"));
+            caption->setStyleSheet(defaultLabel->styleSheet());
+            filterRow->insertWidget(filterRow->indexOf(box), caption, 1);
+        }
+        filterLabel->setText(QStringLiteral("Spot Colors:"));
+    }
 
     layout->addLayout(filterRow);
 
@@ -1896,6 +1927,9 @@ void SpotHubDialog::buildFreeDvTab(QTabWidget* tabs)
             settings.save();
         });
         prefsLayout->addWidget(pskChk);
+        // R-R3-49: nothing sends FreeDV decodes to PSK Reporter yet; hidden
+        // until something does.
+        UnbuiltFeatures::hideUnlessBuilt(pskChk, UnbuiltFeature::FreeDvToPsk);
 
         // Direction display 3-way combo, mirroring freedv-gui's
         // reportingDirectionAsCardinal toggle. NereusSDR exposes a
@@ -2460,7 +2494,7 @@ void SpotHubDialog::buildSpotListTab(QTabWidget* tabs)
 // (verbatim port): all knobs from AetherSDR
 // src/gui/SpotSettingsDialog.cpp:38-292 [@0cd4559] (Spots /
 // Memories toggles + Levels / Position / Font Size / Spot Lifetime
-// sliders + Override Colors / Override Background + Auto +
+// sliders + Override Colors / Override Background +
 // swatches + BG Opacity slider). Every knob change writes to the
 // upstream AppSettings keys (`SpotSettingsDialog.cpp:22-37
 // [@0cd4559]`) and emits settingsChanged() so MainWindow can
@@ -2564,7 +2598,6 @@ void SpotHubDialog::buildDisplayTab(QTabWidget* tabs)
     bool memoriesEnabled    = s.value("IsMemorySpotsEnabled", "False").toString() == "True";
     bool overrideColors     = s.value("IsSpotsOverrideColorsEnabled", "False").toString() == "True";
     bool overrideBg         = s.value("IsSpotsOverrideBackgroundColorsEnabled", "True").toString() == "True";
-    bool overrideBgAutoMode = s.value("IsSpotsOverrideToAutoBackgroundColorEnabled", "True").toString() == "True";
     int  levelsVal   = s.value("SpotsMaxLevel", 3).toInt();
     int  positionVal = s.value("SpotsStartingHeightPercentage", 50).toInt();
     int  fontSizeVal = s.value("SpotFontSize", 16).toInt();
@@ -2635,6 +2668,8 @@ void SpotHubDialog::buildDisplayTab(QTabWidget* tabs)
         save("IsMemorySpotsEnabled", on ? "True" : "False");
     });
     grid->addWidget(memoriesToggle, row++, 1, Qt::AlignLeft);
+    // R-R3-49: memories are not built yet; the row is hidden until they are.
+    UnbuiltFeatures::hideRowUnlessBuilt(memoriesToggle, UnbuiltFeature::Memories, grid);
 
     // Levels slider. Upstream :91-106 [@0cd4559].
     grid->addWidget(new QLabel("Levels:"), row, 0);
@@ -2782,8 +2817,8 @@ void SpotHubDialog::buildDisplayTab(QTabWidget* tabs)
     colorRow->addStretch();
     grid->addLayout(colorRow, row++, 1);
 
-    // Override Background + Auto + swatch. Upstream :212-252
-    // [@0cd4559].
+    // Override Background + swatch. Upstream :212-252
+    // [@0cd4559]. The upstream Auto toggle is removed (R-R3-49).
     grid->addWidget(new QLabel("Override Background:"), row, 0);
     auto* bgRow = new QHBoxLayout;
     auto* overrideBgToggle = new QPushButton("Enabled");
@@ -2792,22 +2827,11 @@ void SpotHubDialog::buildDisplayTab(QTabWidget* tabs)
     overrideBgToggle->setChecked(overrideBg);
     overrideBgToggle->setFixedWidth(70);
     overrideBgToggle->setStyleSheet(kToggleStyle);
-    auto* overrideBgAutoToggle = new QPushButton("Auto");
-    overrideBgAutoToggle->setObjectName("displayOverrideBgAutoToggle");
-    overrideBgAutoToggle->setCheckable(true);
-    overrideBgAutoToggle->setChecked(overrideBgAutoMode);
-    overrideBgAutoToggle->setFixedWidth(50);
-    overrideBgAutoToggle->setStyleSheet(kToggleStyle);
     connect(overrideBgToggle, &QPushButton::toggled, this,
             [save](bool on) {
         save("IsSpotsOverrideBackgroundColorsEnabled", on ? "True" : "False");
     });
-    connect(overrideBgAutoToggle, &QPushButton::toggled, this,
-            [save](bool on) {
-        save("IsSpotsOverrideToAutoBackgroundColorEnabled", on ? "True" : "False");
-    });
     bgRow->addWidget(overrideBgToggle);
-    bgRow->addWidget(overrideBgAutoToggle);
 
     auto* bgColorSwatch = new QPushButton;
     bgColorSwatch->setObjectName("displayBgColorSwatch");

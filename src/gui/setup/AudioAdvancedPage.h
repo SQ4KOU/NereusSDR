@@ -24,10 +24,8 @@
 
 class QCheckBox;
 class QComboBox;
-class QDoubleSpinBox;
 class QLabel;
 class QPushButton;
-class QSpinBox;
 
 namespace NereusSDR {
 
@@ -39,11 +37,10 @@ struct DetectedCable;
 //
 // Sections:
 //   1. DSP — sample-rate + block-size combos (persist + log deferred).
-//   2. VAC Feedback Tuning — per-VAX-channel gain / slew / propRing / ffRing.
-//   3. Feature Flags — SendIqToVax, TxMonitorToVax (Phase 3M deferred),
+//   2. Feature Flags: SendIqToVax, TxMonitorToVax (Phase 3M deferred),
 //                      MuteVaxDuringTxOnOtherSlice (active).
-//   4. Detected Cables — readonly readout + Rescan button.
-//   5. Reset — amber "Reset all audio to defaults" + confirm modal.
+//   3. Detected Cables: readonly readout + Rescan button.
+//   4. Reset: amber "Reset all audio to defaults" + confirm modal.
 // ---------------------------------------------------------------------------
 class AudioAdvancedPage : public SetupPage {
     Q_OBJECT
@@ -64,27 +61,16 @@ public:
 private:
     // Section builders.
     void buildDspSection();
-    void buildVacFeedbackSection();
     void buildFeatureFlagsSection();
     void buildCablesSection();
     void buildResetSection();
 
     // Load/save helpers.
     void loadDspSettings();
-    void loadVacFeedbackSettings(int channel);
 
     // DSP section.
     QComboBox* m_dspRateCombo    = nullptr;
     QComboBox* m_dspBlockCombo   = nullptr;
-
-    // VAC feedback section.
-    QComboBox*       m_vacTargetCombo   = nullptr;
-    QDoubleSpinBox*  m_vacGainSpin      = nullptr;
-    QSpinBox*        m_vacSlewSpin      = nullptr;
-    QSpinBox*        m_vacPropRingSpin  = nullptr;
-    QSpinBox*        m_vacFfRingSpin    = nullptr;
-    int              m_currentVacChannel = 1;
-    bool             m_vacLoading        = false;
 
     // Feature-flag checkboxes.
     QCheckBox* m_sendIqToVaxCheck          = nullptr;

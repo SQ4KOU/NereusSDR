@@ -11,6 +11,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-49 / R-R3-21: menu items and
+//                 status bar items whose feature is not built yet are
+//                 hidden through UnbuiltFeatures (local and remote
+//                 windows). AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-45 fix wave: each slice flag
 //                 also learns whether the headphones are turned on.
 //                 AI-assisted implementation via Anthropic Claude Code.
@@ -110,6 +114,15 @@
 //                (StationAccessoryData, in process for a local window)
 //                and shown from `accessoryData` in every window; a remote
 //                window's antenna names follow the Core's. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-22 / R-R3-47: the Power Genius and RF-Kit applets
+//                send a remote window's Disconnect or Reconnect to the
+//                Core themselves; the handlers here act on this computer's
+//                own connections in a local window only. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-43 / R-R3-44 / R-R3-21: Setup > Audio > VAX is told
+//                live whether the Core's receiver streams are Opus, so it
+//                can say what that costs digital modes. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -387,6 +400,7 @@ warren@wpratt.com
 #include "core/LogCategories.h"
 #include "containers/ContainerManager.h"
 #include "containers/ContainerWidget.h"
+#include "containers/ContainerButtonDispatcher.h"
 #include "containers/ContainerSettingsDialog.h"
 #include "meters/MeterWidget.h"
 #include "meters/MeterItem.h"
@@ -397,6 +411,8 @@ warren@wpratt.com
 #include "meters/FilterButtonItem.h"
 #include "meters/AntennaButtonItem.h"
 #include "meters/TuneStepButtonItem.h"
+#include "meters/BandButtonItem.h"
+#include "meters/OtherButtonItem.h"
 #include "models/FilterPresetStore.h"
 #include "core/SkuUiProfile.h"
 // Remote Daemon R2 Task 12: source-selector wiring below (setSourceSelector).
@@ -457,6 +473,7 @@ warren@wpratt.com
 #endif
 #include "SpectrumOverlayPanel.h"
 #include "SetupDialog.h"
+#include "UnbuiltFeatures.h"
 // Remote-daemon R2 Task 20: the wss client and the settings backend it
 // writes through. Both are used only on the m_station.isRemote() path.
 #include "core/session/StationClient.h"
@@ -1278,6 +1295,11 @@ void MainWindow::ensureRemoteSession()
             showToast(tr("Audio and display: %1").arg(OperatorReasonText::forDisplay(reason)),
                       ToastSeverity::Warning, 5000);
         });
+        // R-R3-43 / R-R3-44: the VAX page's compressed-audio note follows
+        // the quality choice, its fallback and the Core's capabilities while
+        // Setup is open.
+        wireReceiverAudioNotePush(this, m_remoteMedia, m_radioModel,
+                                  [this] { return receiverAudioNoteFor(m_remoteMedia); });
         connect(m_remoteMedia, &RemoteMediaController::recoveryRequested,
                 m_remoteConnection, &RemoteConnectionController::recoverMediaSession,
                 Qt::QueuedConnection);
@@ -2953,8 +2975,14 @@ void MainWindow::wireSpectrumSliceControls(SpectrumWidget* sw,
     // bypasses the allocator via forceHardwareFrequency and writes the centre
     // into this widget), and let the next VFO move settle the offsets to zero
     // through the now-unpinned allocator.
+    // R-R3-21 (fix wave M3): a container's Peak button lights at once when
+    // peak hold changes on its slice's pan, from the overlay or elsewhere.
+    connect(sw, &SpectrumWidget::peakHoldEnabledChanged, this,
+            [this](bool) { refreshContainerControls(); });
     connect(sw, &SpectrumWidget::ctunEnabledChanged, this,
             [this, panId, sw](bool enabled) {
+        // R-R3-21: a container's CTUN button lights from its slice's pan.
+        refreshContainerControls();
         if (!m_radioModel->ownsLocalDsp()) { return; }
         if (m_radioModel->receiverManager()) {
             m_radioModel->receiverManager()->setDdcFrequencyLocked(enabled);
@@ -3973,31 +4001,77 @@ void MainWindow::buildUI()
             this, refreshFilterIndicators);
     refreshFilterIndicators();
 
-    // Issue #118 — helper: wire a container's bandClicked signal through
-    // the RadioModel handler. Invoked from the containerAdded callback,
-    // which fires for every container materialized by ContainerManager
-    // (runtime-added, restoreState(), and createDefaultContainers()).
-    auto wireContainerBandClick = [this](ContainerWidget* c) {
-        if (!c) { return; }
-        connect(c, &ContainerWidget::bandClicked, this, [this](int idx) {
-            m_radioModel->onBandButtonClicked(bandFromUiIndex(idx));
-        });
-    };
+    // R-R3-21 / R-R3-49: the container buttons' targets. Power, the
+    // transmit gate, the panadapter of a slice and this computer's VAX
+    // outputs live on this window; the rest on RadioModel.
+    {
+        ContainerButtonDispatcher::Hooks hooks;
+        hooks.powerOn = [this] { return m_actDisconnect && m_actDisconnect->isEnabled(); };
+        hooks.powerCanToggle = [this] { return m_actConnect && m_actConnect->isEnabled(); };
+        hooks.togglePower = [this] {
+            // Radio > Disconnect / Radio > Connect: this window's radio, or
+            // in a remote window its Core.
+            if (m_actDisconnect && m_actDisconnect->isEnabled()) {
+                m_actDisconnect->trigger();
+            } else if (m_actConnect && m_actConnect->isEnabled()) {
+                m_actConnect->trigger();
+            }
+        };
+        hooks.transmitPermitted = [this] { return transmitControlsPermitted(); };
+        hooks.remoteTransmitReason =
+            tr("Remote transmit controls are not available from this Core yet.");
+        hooks.spectrumFor = [this](SliceModel* s) { return spectrumForSlice(s); };
+        // R-R3-49: VAX 1 / VAX 2 open and close this computer's VAX
+        // outputs, as Setup > Audio > VAX does (live in a remote window).
+        hooks.vaxDevices = m_radioModel->localAudioDevices();
+        // Fix wave M3: VAX 1 / VAX 2 light at once when Setup > Audio > VAX
+        // (or anything else) opens or closes this computer's VAX output.
+        if (hooks.vaxDevices) {
+            connect(hooks.vaxDevices, &AudioEngine::vaxBusOpenChanged, this,
+                    [this](int) { refreshContainerControls(); });
+        }
+        m_containerButtons = std::make_unique<ContainerButtonDispatcher>(
+            m_radioModel, std::move(hooks));
+    }
 
     connect(m_containerManager, &ContainerManager::containerAdded, this,
-            [this, wireContainerBandClick](const QString& id) {
+            [this](const QString& id) {
         if (auto* c = m_containerManager->container(id)) {
             c->setBoardCapabilities(m_radioModel->boardCapabilities());
-            wireContainerBandClick(c);
             wireContainerControls(c);
         }
     });
-    // R-R3-21: follow the active slice so the container controls show it.
-    connect(m_radioModel, &RadioModel::activeSliceChanged, this,
-            [this](int) { followActiveSliceForContainers(); });
+    // R-R3-21: every slice's state reaches the containers set to it.
     connect(m_radioModel, &RadioModel::sliceAdded, this,
-            [this](int) { followActiveSliceForContainers(); });
-    followActiveSliceForContainers();
+            [this](int) { watchSlicesForContainers(); });
+    connect(m_radioModel, &RadioModel::sliceRemoved, this,
+            [this](int) { watchSlicesForContainers(); });
+    // The function buttons' global targets: they light from the target.
+    {
+        const auto refresh = [this]() { refreshContainerControls(); };
+        connect(&m_radioModel->transmitModel(), &TransmitModel::monEnabledChanged,
+                this, refresh);
+        connect(m_radioModel, &RadioModel::tuneRefused, this, refresh);
+        connect(m_radioModel, &RadioModel::connectionStateChanged, this, refresh);
+        if (MoxController* mox = m_radioModel->moxController()) {
+            connect(mox, &MoxController::moxStateChanged, this, refresh);
+            connect(mox, &MoxController::moxRejected, this, refresh);
+            connect(mox, &MoxController::manualMoxChanged, this, refresh);
+        }
+        if (TwoToneController* twoTone = m_radioModel->twoToneController()) {
+            connect(twoTone, &TwoToneController::twoToneActiveChanged, this, refresh);
+        }
+        if (PureSignalSessionFacade* ps = m_radioModel->pureSignalFacade()) {
+            connect(ps, &PureSignalSessionFacade::statusChanged, this, refresh);
+            if (PureSignalSettings* settings = ps->settings()) {
+                connect(settings, &PureSignalSettings::autoCalEnabledChanged, this, refresh);
+            }
+        }
+        if (NotchModel* notches = m_radioModel->notchModel()) {
+            connect(notches, &NotchModel::globalEnabledChanged, this, refresh);
+        }
+    }
+    watchSlicesForContainers();
 
     // Create the MeterPoller BEFORE restoreState / populateDefaultMeter
     // so the meterReadyForPolling signal fires into a live poller as
@@ -6661,22 +6735,11 @@ void MainWindow::populateDefaultMeter()
 
         connect(m_rfKitApplet, &Rf2ksApplet::connectionToggleRequested,
                 this, [this]() {
-            // R-R3-47: a remote window asks the Core, which owns the amp.
+            // R-R3-22 / R-R3-47: a remote window's applet asks the Core
+            // itself (disconnectRfKit, configureRfKit) and shows the
+            // answer on its own line; this computer's connection is local
+            // only.
             if (m_radioModel->role() == RadioModel::Role::Remote) {
-                IStationLink* link = m_radioModel->stationLink();
-                RfKitModel* rfKit = m_radioModel->rfKitModel();
-                if (!link || !rfKit || !link->remoteRfKitControlAvailable()) { return; }
-                using Phase = RfKitModel::ConnectionPhase;
-                const auto phase = rfKit->connectionPhase();
-                const bool active = phase == Phase::Connected || phase == Phase::Connecting
-                    || phase == Phase::Identifying || phase == Phase::Retrying;
-                const auto outcome = active
-                    ? link->requestDisconnectRfKit()
-                    : link->requestConfigureRfKit(rfKit->configuredHost(),
-                                                  static_cast<quint16>(rfKit->configuredPort()));
-                if (!outcome.sent) {
-                    statusBar()->showMessage(OperatorReasonText::forDisplay(outcome.reason), 5000);
-                }
                 return;
             }
             Rf2ksConnection* conn = m_radioModel->rfKitConnection();
@@ -7112,7 +7175,8 @@ void MainWindow::buildMenuBar()
     {
         QAction* transvertersAction = radioMenu->addAction(QStringLiteral("Trans&verters…"));
         transvertersAction->setEnabled(false);
-        transvertersAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until transverters are built.
+        UnbuiltFeatures::hideUnlessBuilt(transvertersAction, UnbuiltFeature::Transverters);
     }
 
     radioMenu->addSeparator();
@@ -7274,9 +7338,9 @@ void MainWindow::buildMenuBar()
 
     {
         QMenu* displayModeMenu = viewMenu->addMenu(QStringLiteral("&Display Mode"));
-        QAction* placeholder = displayModeMenu->addAction(QStringLiteral("(NYI placeholder)"));
-        placeholder->setEnabled(false);
-        placeholder->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until display modes are built.
+        UnbuiltFeatures::hideUnlessBuilt(displayModeMenu->menuAction(),
+                                         UnbuiltFeature::DisplayMode);
     }
 
     {
@@ -7295,10 +7359,11 @@ void MainWindow::buildMenuBar()
             QAction* a = uiScaleMenu->addAction(QString::fromUtf8(s.label));
             a->setCheckable(true);
             a->setEnabled(false);
-            a->setToolTip(QStringLiteral("NYI — Phase X"));
             if (s.isDefault) { a->setChecked(true); }
             scaleGroup->addAction(a);
         }
+        // R-R3-49: hidden until UI scaling is built.
+        UnbuiltFeatures::hideUnlessBuilt(uiScaleMenu->menuAction(), UnbuiltFeature::UiScale);
     }
 
     // Phase 23 "View > Network Applets" submenu removed: TCI Server and
@@ -7311,19 +7376,12 @@ void MainWindow::buildMenuBar()
 
     viewMenu->addSeparator();
 
-    m_darkThemeAction = viewMenu->addAction(QStringLiteral("&Dark Theme"));
-    m_darkThemeAction->setCheckable(true);
-    m_darkThemeAction->setChecked(true);
-    m_darkThemeAction->setToolTip(QStringLiteral("Toggle dark theme (NYI — Phase X)"));
-    connect(m_darkThemeAction, &QAction::toggled, this, [](bool /*on*/) {
-        qCDebug(lcConnection) << "Dark Theme toggle NYI";
-    });
-
     {
         QAction* minimalAction = viewMenu->addAction(QStringLiteral("&Minimal Mode"));
         minimalAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
         minimalAction->setEnabled(false);
-        minimalAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until minimal mode is built.
+        UnbuiltFeatures::hideUnlessBuilt(minimalAction, UnbuiltFeature::MinimalMode);
     }
 
     // 2026-05-26 KG4VCF perf instrumentation: toggle the in-spectrum
@@ -7352,7 +7410,8 @@ void MainWindow::buildMenuBar()
     {
         QAction* kbAction = viewMenu->addAction(QStringLiteral("&Keyboard Shortcuts..."));
         kbAction->setEnabled(false);
-        kbAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until keyboard shortcut editing is built.
+        UnbuiltFeatures::hideUnlessBuilt(kbAction, UnbuiltFeature::Keyboard);
     }
 
     // =========================================================================
@@ -7636,7 +7695,8 @@ void MainWindow::buildMenuBar()
     {
         QAction* eqAction = dspMenu->addAction(QStringLiteral("&Equalizer..."));
         eqAction->setEnabled(false);
-        eqAction->setToolTip(QStringLiteral("NYI — Phase 3I-3"));
+        // R-R3-49: hidden until the receive equalizer is built.
+        UnbuiltFeatures::hideUnlessBuilt(eqAction, UnbuiltFeature::Equalizer);
     }
     {
         // Phase 3M-4 Task 8: wire DSP > PureSignal... to the modeless dialog.
@@ -7693,9 +7753,8 @@ void MainWindow::buildMenuBar()
 
     {
         QMenu* vhfMenu = bandMenu->addMenu(QStringLiteral("&VHF"));
-        QAction* placeholder = vhfMenu->addAction(QStringLiteral("(NYI — Phase X)"));
-        placeholder->setEnabled(false);
-        placeholder->setToolTip(QStringLiteral("VHF bands NYI — Phase X"));
+        // R-R3-49: hidden until transverters are built.
+        UnbuiltFeatures::hideUnlessBuilt(vhfMenu->menuAction(), UnbuiltFeature::Transverters);
     }
 
     // R-R3-21: GEN and WWV go through the band buttons' path, like the HF
@@ -7719,7 +7778,8 @@ void MainWindow::buildMenuBar()
     {
         QAction* bandStackAction = bandMenu->addAction(QStringLiteral("Band &Stacking..."));
         bandStackAction->setEnabled(false);
-        bandStackAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until band stacking is built.
+        UnbuiltFeatures::hideUnlessBuilt(bandStackAction, UnbuiltFeature::BandStack);
     }
 
     // =========================================================================
@@ -7985,17 +8045,20 @@ void MainWindow::buildMenuBar()
         QAction* cwxAction = toolsMenu->addAction(QStringLiteral("C&WX..."));
         cwxAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_X));
         cwxAction->setEnabled(false);
-        cwxAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until CWX is built.
+        UnbuiltFeatures::hideUnlessBuilt(cwxAction, UnbuiltFeature::Cwx);
     }
     {
         QAction* memAction = toolsMenu->addAction(QStringLiteral("&Memory Manager..."));
         memAction->setEnabled(false);
-        memAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until memories are built.
+        UnbuiltFeatures::hideUnlessBuilt(memAction, UnbuiltFeature::Memories);
     }
     {
         QAction* catAction = toolsMenu->addAction(QStringLiteral("&CAT Control..."));
         catAction->setEnabled(false);
-        catAction->setToolTip(QStringLiteral("NYI — Phase 3K"));
+        // R-R3-49: hidden until CAT is built.
+        UnbuiltFeatures::hideUnlessBuilt(catAction, UnbuiltFeature::Cat);
     }
     {
         // Phase 23: TCI Server action — enabled, opens Setup → TCI Server.
@@ -8013,12 +8076,8 @@ void MainWindow::buildMenuBar()
     {
         QAction* midiAction = toolsMenu->addAction(QStringLiteral("&MIDI Mapping..."));
         midiAction->setEnabled(false);
-        midiAction->setToolTip(QStringLiteral("NYI — Phase X"));
-    }
-    {
-        QAction* macroAction = toolsMenu->addAction(QStringLiteral("Macro &Buttons..."));
-        macroAction->setEnabled(false);
-        macroAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until MIDI control is built.
+        UnbuiltFeatures::hideUnlessBuilt(midiAction, UnbuiltFeature::Midi);
     }
 
     toolsMenu->addSeparator();
@@ -8085,17 +8144,18 @@ void MainWindow::buildMenuBar()
     {
         QAction* gettingStartedAction = helpMenu->addAction(QStringLiteral("&Getting Started"));
         gettingStartedAction->setEnabled(false);
-        gettingStartedAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until the help pages are built.
+        UnbuiltFeatures::hideUnlessBuilt(gettingStartedAction, UnbuiltFeature::Help);
     }
     {
         QAction* helpAction = helpMenu->addAction(QStringLiteral("&NereusSDR Help"));
         helpAction->setEnabled(false);
-        helpAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        UnbuiltFeatures::hideUnlessBuilt(helpAction, UnbuiltFeature::Help);
     }
     {
         QAction* dataModesAction = helpMenu->addAction(QStringLiteral("Understanding &Data Modes"));
         dataModesAction->setEnabled(false);
-        dataModesAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        UnbuiltFeatures::hideUnlessBuilt(dataModesAction, UnbuiltFeature::Help);
     }
 
     helpMenu->addSeparator();
@@ -8316,8 +8376,9 @@ void MainWindow::buildStatusBar()
         painter.end();
         bandStackLabel->setPixmap(pm);
     }
-    bandStackLabel->setToolTip(QStringLiteral("Band Stack (NYI)"));
+    bandStackLabel->setToolTip(QStringLiteral("Band stack"));
     bandStackLabel->setCursor(Qt::PointingHandCursor);
+    bandStackLabel->setObjectName(QStringLiteral("statusBandStackDots"));
 
     // +PAN icon. From AetherSDR MainWindow.cpp:4368-4396 [@c6481cb]: a jagged
     // spectrum polyline with a plus in the upper right. An icon reads as a
@@ -8461,22 +8522,30 @@ void MainWindow::buildStatusBar()
     auto* cwxLabel = new QLabel(QStringLiteral("CWX"), barWidget);
     cwxLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: #404858; font-weight: bold; font-size: 11px; }"));
-    cwxLabel->setToolTip(QStringLiteral("CW Keyer (NYI)"));
+    cwxLabel->setToolTip(QStringLiteral("CW keyer"));
     cwxLabel->setCursor(Qt::PointingHandCursor);
+    cwxLabel->setObjectName(QStringLiteral("statusCwxLabel"));
 
     // DVK
     auto* dvkLabel = new QLabel(QStringLiteral("DVK"), barWidget);
     dvkLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: #404858; font-weight: bold; font-size: 11px; }"));
-    dvkLabel->setToolTip(QStringLiteral("Digital Voice Keyer (NYI)"));
+    dvkLabel->setToolTip(QStringLiteral("Digital voice keyer"));
     dvkLabel->setCursor(Qt::PointingHandCursor);
+    dvkLabel->setObjectName(QStringLiteral("statusDvkLabel"));
 
     // FDX
     auto* fdxLabel = new QLabel(QStringLiteral("FDX"), barWidget);
     fdxLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: #404858; font-weight: bold; font-size: 11px; }"));
-    fdxLabel->setToolTip(QStringLiteral("Full Duplex (NYI)"));
+    fdxLabel->setToolTip(QStringLiteral("Full duplex"));
     fdxLabel->setCursor(Qt::PointingHandCursor);
+    fdxLabel->setObjectName(QStringLiteral("statusFdxLabel"));
+    // R-R3-49: each of the three is hidden until its feature is built. The
+    // group folds as one; it is taken off the bar below when none is left.
+    UnbuiltFeatures::hideUnlessBuilt(cwxLabel, UnbuiltFeature::Cwx);
+    UnbuiltFeatures::hideUnlessBuilt(dvkLabel, UnbuiltFeature::Voice);
+    UnbuiltFeatures::hideUnlessBuilt(fdxLabel, UnbuiltFeature::Fdx);
 
     // Rung 10, last resort (design §6). Grouped so the ladder folds them as
     // one unit rather than dribbling them out one label at a time. Each
@@ -8681,6 +8750,7 @@ void MainWindow::buildStatusBar()
 
     // CAT Serial — NYI until Phase 3K; kept as static indicator, no live signal
     m_catIndicator = makeIndicator(QStringLiteral("CAT"), QStringLiteral("Off"));
+    m_catIndicator->setObjectName(QStringLiteral("statusCatIndicator"));
     hbox->addWidget(m_catIndicator);
     m_catSep = makeSep();
     hbox->addWidget(m_catSep);
@@ -9215,6 +9285,17 @@ void MainWindow::buildStatusBar()
     m_chromeBar->setItemAvailable(m_tgxlChip, false);
     m_chromeBar->setItemAvailable(m_chain1IndicatorWidget, false);
     m_chromeBar->setItemAvailable(m_overflowChip, false);
+    // R-R3-49: items whose feature is not built yet never show. Reported as
+    // availability, the controller's one side channel, so the fold ladder
+    // neither shows them nor charges their width.
+    m_chromeBar->setItemAvailable(m_bandStackLabel,
+                                  UnbuiltFeatures::isBuilt(UnbuiltFeature::BandStack));
+    m_chromeBar->setItemAvailable(m_placeholderGroup,
+                                  UnbuiltFeatures::isBuilt(UnbuiltFeature::Cwx)
+                                      || UnbuiltFeatures::isBuilt(UnbuiltFeature::Voice)
+                                      || UnbuiltFeatures::isBuilt(UnbuiltFeature::Fdx));
+    m_chromeBar->setItemAvailable(m_catIndicator,
+                                  UnbuiltFeatures::isBuilt(UnbuiltFeature::Cat));
     for (int rung = 5; rung <= 8; ++rung) {  // SQL, APF, NB, NR
         m_chromeBar->setItemAvailable(m_rxDashboard->badgeForRung(rung), false);
     }
@@ -9536,22 +9617,52 @@ void MainWindow::openSetup(const QString& pageKey)
 //
 // Each ButtonBoxItem is a port of a Thetis MeterManager.cs button box; its
 // click did nothing past ContainerWidget's relay (only the band buttons were
-// connected). They now act on the active slice through the same SliceModel
-// setters the VFO flag and the RX applet use, so a remote window changes the
-// Core's slice exactly as those do. Acting on the container's own slice is a
-// later change (the unfinished-controls plan, Task 3).
+// connected). They act through the same SliceModel setters the VFO flag and
+// the RX applet use, so a remote window changes the Core's slice exactly as
+// those do. R-R3-49 (the unfinished-controls plan, Task 3): each acts on the
+// container's own slice (ContainerWidget::rxSource(), slices A to D), as
+// Thetis's meter acts on its own RX (MeterManager.cs:9424 [v2.10.3.15]
+// passes the meter's RX with every click), and the function and band
+// buttons go through ContainerButtonDispatcher.
+
+namespace {
+
+// The container's meter (its content, or the one inside it), as
+// ContainerManager::forEachMeterItem finds it.
+MeterWidget* containerMeter(const ContainerWidget* c)
+{
+    QWidget* content = c ? c->content() : nullptr;
+    if (!content) { return nullptr; }
+    if (auto* meter = qobject_cast<MeterWidget*>(content)) { return meter; }
+    return content->findChild<MeterWidget*>();
+}
+
+} // namespace
 
 void MainWindow::wireContainerControls(ContainerWidget* c)
 {
     if (!c) { return; }
-    connect(c, &ContainerWidget::modeClicked, this, &MainWindow::onContainerModeClicked);
-    connect(c, &ContainerWidget::filterClicked, this, &MainWindow::onContainerFilterClicked);
-    connect(c, &ContainerWidget::antennaSelected,
-            this, &MainWindow::onContainerAntennaSelected);
-    connect(c, &ContainerWidget::tuneStepSelected,
-            this, &MainWindow::onContainerTuneStepSelected);
-    connect(c, &ContainerWidget::frequencyChangeRequested,
-            this, &MainWindow::onContainerFrequencyStep);
+    // Issue #118: the band buttons, now on the container's own slice.
+    connect(c, &ContainerWidget::bandClicked, this, [this, c](int idx) {
+        if (!m_containerButtons) { return; }
+        showContainerButtonReason(m_containerButtons->clickBand(idx, c->rxSource()));
+    });
+    connect(c, &ContainerWidget::modeClicked, this,
+            [this, c](int index) { onContainerModeClicked(c, index); });
+    connect(c, &ContainerWidget::filterClicked, this,
+            [this, c](int index) { onContainerFilterClicked(c, index); });
+    connect(c, &ContainerWidget::antennaSelected, this,
+            [this, c](int index) { onContainerAntennaSelected(c, index); });
+    connect(c, &ContainerWidget::tuneStepSelected, this,
+            [this, c](int index) { onContainerTuneStepSelected(c, index); });
+    connect(c, &ContainerWidget::frequencyChangeRequested, this,
+            [this, c](int64_t deltaHz) { onContainerFrequencyStep(c, deltaHz); });
+    connect(c, &ContainerWidget::otherButtonClicked, this,
+            [this, c](int buttonId) { onContainerOtherButtonClicked(c, buttonId); });
+    connect(c, &ContainerWidget::unavailableButtonClicked,
+            this, &MainWindow::showContainerButtonReason);
+    connect(c, &ContainerWidget::rxSourceChanged, this,
+            [this, c](int) { refreshContainer(c); });
     // An item added later (a preset, Container settings > Apply) gets the
     // saved meter settings and the slice's state as it arrives; one refresh
     // now covers restored containers.
@@ -9583,34 +9694,123 @@ void MainWindow::onContainerItemAdded(MeterItem* item)
     refreshContainerControls(item);
 }
 
-void MainWindow::followActiveSliceForContainers()
+SliceModel* MainWindow::containerSlice(const ContainerWidget* c) const
 {
+    if (!c || !m_containerButtons) { return nullptr; }
+    return m_containerButtons->sliceFor(c->rxSource());
+}
+
+void MainWindow::watchSlicesForContainers()
+{
+    // Fix wave M4: sliceAdded / sliceRemoved during teardown reach here too.
+    if (m_shuttingDown) { return; }
     for (const QMetaObject::Connection& conn : std::as_const(m_containerSliceConnections)) {
         QObject::disconnect(conn);
     }
     m_containerSliceConnections.clear();
-    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
-    if (slice) {
-        const auto refresh = [this]() { refreshContainerControls(); };
-        // Tuning changes only what the VFO displays show; the buttons are
-        // left alone on every tuning step.
+    if (!m_radioModel) { return; }
+    const auto refresh = [this]() { refreshContainerControls(); };
+    for (SliceModel* slice : m_radioModel->slices()) {
+        if (!slice) { continue; }
+        // Tuning changes only what the VFO displays and band buttons of
+        // the containers on that slice show; the rest are left alone on
+        // every tuning step.
         m_containerSliceConnections
             << connect(slice, &SliceModel::frequencyChanged, this,
-                       [this]() { refreshContainerFrequency(); })
+                       [this, slice]() { refreshContainerFrequency(slice); })
             << connect(slice, &SliceModel::dspModeChanged, this, refresh)
             << connect(slice, &SliceModel::filterChanged, this, refresh)
             << connect(slice, &SliceModel::stepHzChanged, this, refresh)
             << connect(slice, &SliceModel::rxAntennaChanged, this, refresh)
-            << connect(slice, &SliceModel::txAntennaChanged, this, refresh);
+            << connect(slice, &SliceModel::txAntennaChanged, this, refresh)
+            << connect(slice, &SliceModel::anfEnabledChanged, this, refresh)
+            << connect(slice, &SliceModel::snbEnabledChanged, this, refresh)
+            << connect(slice, &SliceModel::mutedChanged, this, refresh)
+            << connect(slice, &SliceModel::binauralEnabledChanged, this, refresh);
     }
     refreshContainerControls();
 }
 
 void MainWindow::refreshContainerControls(MeterItem* only)
 {
-    if (!m_containerManager || !m_radioModel) { return; }
-    SliceModel* slice = m_radioModel->activeSlice();
-    if (!slice) { return; }
+    // Fix wave M4: the refresh connections (the global targets, sliceAdded
+    // and sliceRemoved, each slice's changes) can fire while the window is
+    // torn down, after m_containerButtons is destroyed and before the
+    // children that emit are.
+    if (m_shuttingDown) { return; }
+    if (!m_containerManager || !m_radioModel || !m_containerButtons) { return; }
+    for (ContainerWidget* c : m_containerManager->allContainers()) {
+        if (!c) { continue; }
+        if (only) {
+            MeterWidget* meter = containerMeter(c);
+            if (meter && meter->items().contains(only)) {
+                refreshContainer(c, only);
+                return;
+            }
+            continue;
+        }
+        refreshContainer(c);
+    }
+}
+
+void MainWindow::refreshContainer(ContainerWidget* c, MeterItem* only)
+{
+    if (m_shuttingDown) { return; }  // fix wave M4, as refreshContainerControls
+    if (!c || !m_radioModel || !m_containerButtons) { return; }
+    MeterWidget* meter = containerMeter(c);
+    if (!meter) { return; }
+    const int rxSource = c->rxSource();
+    SliceModel* slice = containerSlice(c);
+
+    // Function buttons and band buttons, whatever the slice (the function
+    // buttons' global targets do not need it; the dispatcher reports a
+    // slice that is not open on the ones that do).
+    const auto applyAlways = [&](MeterItem* item) {
+        if (auto* other = qobject_cast<OtherButtonItem*>(item)) {
+            m_containerButtons->apply(other, rxSource);
+            return true;
+        }
+        if (auto* band = qobject_cast<BandButtonItem*>(item)) {
+            m_containerButtons->applyBand(band, rxSource);
+            return true;
+        }
+        return false;
+    };
+
+    if (!slice) {
+        // Fix wave M2 (R-R3-49, R-R3-21): a slice that is not open (never
+        // opened, or closed while this container was set to it) shows
+        // none of its last state. The buttons light nothing and say why
+        // when clicked; the VFO display says the slice is not open.
+        const QString notOpen = tr("%1 is not open")
+                                    .arg(ContainerWidget::sliceNameForRxSource(rxSource));
+        const auto applyNoSlice = [&](MeterItem* item) {
+            if (applyAlways(item)) { return; }
+            if (auto* box = qobject_cast<ButtonBoxItem*>(item)) {
+                m_containerButtons->applySliceAvailability(box, rxSource);
+            }
+            if (auto* mode = qobject_cast<ModeButtonItem*>(item)) {
+                mode->setActiveMode(-1);
+            } else if (auto* filter = qobject_cast<FilterButtonItem*>(item)) {
+                for (int i = 0; i < 10; ++i) { filter->setFilterLabel(i, QString()); }
+                filter->setActiveFilter(-1);
+            } else if (auto* step = qobject_cast<TuneStepButtonItem*>(item)) {
+                step->setActiveStep(-1);
+            } else if (auto* ant = qobject_cast<AntennaButtonItem*>(item)) {
+                ant->setActiveRxAntenna(-1);
+                ant->setActiveTxAntenna(-1);
+            } else if (auto* vfo = qobject_cast<VfoDisplayItem*>(item)) {
+                vfo->setUnavailableText(notOpen);
+            }
+        };
+        if (only) {
+            applyNoSlice(only);
+        } else {
+            for (MeterItem* item : meter->items()) { applyNoSlice(item); }
+        }
+        c->update();
+        return;
+    }
 
     const QString modeName = SliceModel::modeName(slice->dspMode());
     int modeIndex = -1;
@@ -9653,6 +9853,10 @@ void MainWindow::refreshContainerControls(MeterItem* only)
     const Band band = bandFromFrequency(slice->frequency());
 
     const auto applyTo = [&](MeterItem* item) {
+        if (applyAlways(item)) { return; }
+        if (auto* box = qobject_cast<ButtonBoxItem*>(item)) {
+            m_containerButtons->applySliceAvailability(box, rxSource);
+        }
         if (auto* mode = qobject_cast<ModeButtonItem*>(item)) {
             mode->setActiveMode(modeIndex);
         } else if (auto* filter = qobject_cast<FilterButtonItem*>(item)) {
@@ -9674,6 +9878,7 @@ void MainWindow::refreshContainerControls(MeterItem* only)
             ant->setActiveRxAntenna(antIndex(slice->rxAntenna()));
             ant->setActiveTxAntenna(antIndex(slice->txAntenna()));
         } else if (auto* vfo = qobject_cast<VfoDisplayItem*>(item)) {
+            vfo->setUnavailableText(QString());
             vfo->setFrequency(static_cast<int64_t>(std::llround(slice->frequency())));
             vfo->setModeLabel(modeName);
             vfo->setFilterLabel(filterText);
@@ -9681,38 +9886,59 @@ void MainWindow::refreshContainerControls(MeterItem* only)
         }
     };
     if (only) {
-        applyTo(only);  // the added item's container repaints on its own
-        return;
+        applyTo(only);
+    } else {
+        for (MeterItem* item : meter->items()) { applyTo(item); }
     }
-    m_containerManager->forEachMeterItem(applyTo);
-    for (ContainerWidget* c : m_containerManager->allContainers()) {
-        if (c) { c->update(); }
-    }
+    c->update();
 }
 
-void MainWindow::refreshContainerFrequency()
+void MainWindow::refreshContainerFrequency(SliceModel* slice)
 {
-    if (!m_containerManager || !m_radioModel) { return; }
-    SliceModel* slice = m_radioModel->activeSlice();
-    if (!slice) { return; }
+    if (m_shuttingDown) { return; }  // fix wave M4, as refreshContainerControls
+    if (!m_containerManager || !m_radioModel || !m_containerButtons || !slice) { return; }
     const Band band = bandFromFrequency(slice->frequency());
-    bool any = false;
-    m_containerManager->forEachMeterItem([&](MeterItem* item) {
-        if (auto* vfo = qobject_cast<VfoDisplayItem*>(item)) {
-            vfo->setFrequency(static_cast<int64_t>(std::llround(slice->frequency())));
-            vfo->setBandLabel(bandLabel(band));
-            any = true;
-        }
-    });
-    if (!any) { return; }
     for (ContainerWidget* c : m_containerManager->allContainers()) {
-        if (c) { c->update(); }
+        if (!c || containerSlice(c) != slice) { continue; }
+        MeterWidget* meter = containerMeter(c);
+        if (!meter) { continue; }
+        bool any = false;
+        for (MeterItem* item : meter->items()) {
+            if (auto* vfo = qobject_cast<VfoDisplayItem*>(item)) {
+                vfo->setFrequency(static_cast<int64_t>(std::llround(slice->frequency())));
+                vfo->setBandLabel(bandLabel(band));
+                any = true;
+            } else if (auto* bands = qobject_cast<BandButtonItem*>(item)) {
+                // The band buttons follow the slice's band however it
+                // changes: a band button, the VFO, a spot, the Core.
+                m_containerButtons->applyBand(bands, c->rxSource());
+                any = true;
+            }
+        }
+        if (any) { c->update(); }
     }
 }
 
-void MainWindow::onContainerModeClicked(int index)
+void MainWindow::onContainerOtherButtonClicked(ContainerWidget* c, int buttonId)
 {
-    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    if (!c || !m_containerButtons) { return; }
+    const QString reason = m_containerButtons->click(
+        static_cast<OtherButtonItem::ButtonId>(buttonId), c->rxSource());
+    showContainerButtonReason(reason);
+    // Targets with no change signal of their own (peak hold, VAX) light
+    // from this refresh.
+    refreshContainerControls();
+}
+
+void MainWindow::showContainerButtonReason(const QString& reason)
+{
+    if (reason.isEmpty()) { return; }
+    showToast(reason, ToastSeverity::Warning, 3000);
+}
+
+void MainWindow::onContainerModeClicked(ContainerWidget* c, int index)
+{
+    SliceModel* slice = containerSlice(c);
     if (!slice) { return; }
     // From Thetis MeterManager.cs:10277 [v2.10.3.15] (clsModeButtonBox.setMode):
     //   if (abortForLockedVFO()) return;
@@ -9722,9 +9948,9 @@ void MainWindow::onContainerModeClicked(int index)
     slice->setDspMode(SliceModel::modeFromName(label));
 }
 
-void MainWindow::onContainerFilterClicked(int index)
+void MainWindow::onContainerFilterClicked(ContainerWidget* c, int index)
 {
-    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    SliceModel* slice = containerSlice(c);
     FilterPresetStore* store = m_radioModel ? m_radioModel->filterPresetStore() : nullptr;
     if (!slice || !store) { return; }
     // From Thetis MeterManager.cs:7952 [v2.10.3.15] (clsFilterButtonBox.MouseUp):
@@ -9736,9 +9962,9 @@ void MainWindow::onContainerFilterClicked(int index)
     slice->setFilter(presets[index].low, presets[index].high);
 }
 
-void MainWindow::onContainerAntennaSelected(int index)
+void MainWindow::onContainerAntennaSelected(ContainerWidget* c, int index)
 {
-    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    SliceModel* slice = containerSlice(c);
     if (!slice) { return; }
     // From Thetis MeterManager.cs:9974-9985 [v2.10.3.15] (clsAntennaButtonBox.MouseUp):
     //   if (index >= 0 && index <= 2) setRXAntenna(index, _rx1_band);
@@ -9769,9 +9995,9 @@ void MainWindow::onContainerAntennaSelected(int index)
     }
 }
 
-void MainWindow::onContainerTuneStepSelected(int index)
+void MainWindow::onContainerTuneStepSelected(ContainerWidget* c, int index)
 {
-    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    SliceModel* slice = containerSlice(c);
     const int hz = TuneStepButtonItem::stepHz(index);
     if (!slice || hz <= 0) { return; }
     // From Thetis MeterManager.cs:8242 [v2.10.3.15] (clsTunestepButtons.MouseUp):
@@ -9779,9 +10005,14 @@ void MainWindow::onContainerTuneStepSelected(int index)
     slice->setStepHz(hz);
 }
 
-void MainWindow::onContainerFrequencyStep(int64_t deltaHz)
+void MainWindow::onContainerFrequencyStep(ContainerWidget* c, int64_t deltaHz)
 {
-    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    SliceModel* slice = containerSlice(c);
+    if (!slice && c && m_containerButtons) {
+        // Fix wave M2: the wheel says why it does nothing, as a click does.
+        showContainerButtonReason(ContainerButtonDispatcher::noSliceReason(c->rxSource()));
+        return;
+    }
     if (!slice || deltaHz == 0) { return; }
     // SliceModel::setFrequency refuses a locked slice itself.
     slice->setFrequency(slice->frequency() + static_cast<double>(deltaHz));
@@ -10934,6 +11165,7 @@ SetupDialog* MainWindow::createSetupDialog()
     dialog->setTransmitPermitted(transmitControlsPermitted(),
         tr("Remote transmit controls are not available from this Core yet."));
     dialog->setStationSettingsAvailable(stationSettingsAvailable(), stationSettingsReason());
+    seedReceiverAudioNote(dialog, [this] { return receiverAudioNoteFor(m_remoteMedia); });
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     wireSetupDialog(dialog);
     return dialog;
@@ -10957,6 +11189,49 @@ QString MainWindow::stationSettingsReason() const
         return tr("The Core has not sent its settings.");
     }
     return tr("Connect to the Core to change these.");
+}
+
+RemoteReceiverAudioNote MainWindow::receiverAudioNoteFor(const RemoteMediaController* media)
+{
+    // Only a remote window has remote media, and only a Core that sends
+    // receiver streams feeds VAX from it.
+    if (media == nullptr) {
+        return RemoteReceiverAudioNote::None;
+    }
+    return remoteReceiverAudioNote(media->audioStatus(), media->receiverAudioNegotiated());
+}
+
+void MainWindow::wireReceiverAudioNotePush(QObject* dialogRoot, RemoteMediaController* media,
+                                           RadioModel* model, ReceiverAudioNoteSource source)
+{
+    if (dialogRoot == nullptr || !source) {
+        return;
+    }
+    auto push = [root = QPointer<QObject>(dialogRoot), source] {
+        if (!root) {
+            return;
+        }
+        const RemoteReceiverAudioNote note = source();
+        for (SetupDialog* dialog : root->findChildren<SetupDialog*>()) {
+            dialog->setReceiverAudioNote(note);
+        }
+    };
+    if (media != nullptr) {
+        QObject::connect(media, &RemoteMediaController::audioStatusChanged, dialogRoot, push);
+    }
+    // receiverAudioNegotiated() is not part of the audio status: a
+    // capability change (or the session ending) reaches the window as a
+    // station link change, which need not change the status.
+    if (model != nullptr) {
+        QObject::connect(model, &RadioModel::stationLinkStateChanged, dialogRoot, push);
+    }
+}
+
+void MainWindow::seedReceiverAudioNote(SetupDialog* dialog, const ReceiverAudioNoteSource& source)
+{
+    if (dialog != nullptr && source) {
+        dialog->setReceiverAudioNote(source());
+    }
 }
 
 bool MainWindow::transmitControlsPermitted() const
@@ -10999,6 +11274,9 @@ void MainWindow::applyRemoteRoleGating()
     for (VfoWidget* flag : m_vfoWidgetsBySlice) {
         if (flag) { flag->setTransmitPermitted(transmitPermitted, transmitReason); }
     }
+    // R-R3-21: the container function buttons: the transmit ones are
+    // unavailable with this reason, Power follows the Core session.
+    refreshContainerControls();
     // R-R3-21 / R-R3-10: the Core's settings availability too. Pushed on
     // every link change: StationClient marks the settings not ready before
     // it reports a lost or closed session, and ready (with the snapshot)
@@ -12013,6 +12291,12 @@ void MainWindow::onConnectionStateChanged()
             // connectionToggleRequested: disconnect or reconnect PGXL.
             connect(m_ampApplet, &AmpApplet::connectionToggleRequested,
                     this, [this]() {
+                // R-R3-22 / R-R3-47: a remote window's applet asks the Core
+                // itself (disconnectPgxl, configurePgxl); this computer's
+                // Power Genius connection is local only.
+                if (m_radioModel->role() == RadioModel::Role::Remote) {
+                    return;
+                }
                 PgxlConnection* pgxl = m_radioModel->pgxlConnection();
                 if (!pgxl) { return; }
                 if (pgxl->isConnected()) {
@@ -12207,6 +12491,9 @@ void MainWindow::onConnectionStateChanged()
     // local-only even when the mirrored radio reports Connected.
     applyRemoteRoleGating();
     refreshRemoteConnectionUi();
+    // R-R3-21: the container Power and transmit buttons follow the
+    // Connect / Disconnect enablement set just above.
+    refreshContainerControls();
 }
 
 // Phase 3I Task 17 / Phase 3Q Task 10 — auto-reconnect on launch.

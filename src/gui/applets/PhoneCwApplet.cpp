@@ -33,6 +33,10 @@
 //                 m_voxDlyLabel/m_voxPeakMeter removed.  DEXP row (#11)
 //                 stays.  pollDexpMeters() trimmed to drive only the DEXP
 //                 strip; VOX peak polling lives on TxApplet now.
+//   2026-09-24 - R-R3-49: +ACC and the ACC microphone source, MON and its
+//                 level, and the CW and FM pages are hidden (UnbuiltFeatures)
+//                 until built; with one page left there are no page tabs.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -85,7 +89,6 @@
 #include "gui/meters/MeterPoller.h"
 #include "gui/ComboStyle.h"
 #include "gui/widgets/DexpPeakMeter.h"
-#include "NyiOverlay.h"
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
 #include "core/MicProfileManager.h"
@@ -95,11 +98,13 @@
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 #include "gui/StyleConstants.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include <QButtonGroup>
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QListView>
 #include <QPainter>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -119,11 +124,6 @@ static constexpr int kLeftColW = 70;
 static constexpr int kValueW   = 36;
 // kGap (4) removed — only used by the CW page, now a placeholder (Phase 3M-2).
 
-// NYI phase tags
-static const QString kNyiPhone  = QStringLiteral("Phase 3I-1");
-// kNyiCw removed — CW page is now a placeholder (Phase 3M-2 deferred).
-static const QString kNyiVax    = QStringLiteral("Phase 3-VAX");
-static const QString kNyiFm     = QStringLiteral("Phase 3I-1");
 
 // Phone/CW-specific button background — bluer (#1a3a5a) than the
 // canonical kButtonBg (#1a2a3a) used by Style::buttonBaseStyle().
@@ -237,6 +237,21 @@ void PhoneCwApplet::buildUI()
 
     m_stack->setCurrentIndex(0);
     root->addWidget(m_stack);
+
+    // R-R3-49: controls whose feature is not built yet are hidden. The CW
+    // and FM pages are never shown (showPage falls back to Phone), and with
+    // Phone the only page left the applet shows no page tabs.
+    UnbuiltFeatures::hideUnlessBuilt(m_cwTabBtn, UnbuiltFeature::Cwx);
+    if (!UnbuiltFeatures::isBuilt(UnbuiltFeature::Cwx)) {
+        m_phoneTabBtn->setVisible(false);
+    }
+    UnbuiltFeatures::hideUnlessBuilt(m_accBtn, UnbuiltFeature::Acc);
+    if (!UnbuiltFeatures::isBuilt(UnbuiltFeature::Acc)) {
+        if (auto* list = qobject_cast<QListView*>(m_micSourceCombo->view())) {
+            list->setRowHidden(static_cast<int>(MicInput::Accessory), true);
+        }
+    }
+    UnbuiltFeatures::hideRowUnlessBuilt(m_monBtn, UnbuiltFeature::PhoneMon);
 
     // ── Wire tab buttons via QButtonGroup ────────────────────────────────────
     connect(m_tabGroup, &QButtonGroup::idToggled, this,
@@ -547,7 +562,9 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
         vbox->addLayout(row);
     }
 
-    // ── Mark Phone controls NYI (wired controls NOT marked) ──────────────────
+    // ── Phone controls with nothing behind them yet (wired ones are live) ───
+    // R-R3-49: these stay disabled and are hidden through the unbuilt list
+    // (acc, phone-mon); they carry no not-yet-implemented mark or tooltip.
     // #1  m_levelGauge       — wired (Phase 3M-1b mic level gauge)
     // #5  m_micLevelSlider   — wired (Phase 3M-1b mic gain)
     // #7  m_procBtn / m_procSlider — wired (Phase 3M-3a-ii post-bench cleanup)
@@ -557,10 +574,10 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
     //     m_dexpSlider is decorative-only per Thetis quirk, see wireControls())
     // #2 m_compGauge, #3 m_micProfileCombo, #4 m_micSourceCombo and #13
     // m_amCarSlider: wired (R-R3-21, see wireControls()).
-    NyiOverlay::markNyi(m_accBtn,           kNyiPhone);   // #6
+    m_accBtn->setEnabled(false);   // #6
     // #8 m_vaxBtn: wired (Phase 3M-VAX-toggle)
-    NyiOverlay::markNyi(m_monBtn,           kNyiPhone);   // #9
-    NyiOverlay::markNyi(m_monSlider,        kNyiPhone);   // #9 slider
+    m_monBtn->setEnabled(false);   // #9
+    m_monSlider->setEnabled(false);   // #9 slider
 }
 
 // ── CW page — placeholder until Phase 3M-2 ───────────────────────────────────
@@ -576,10 +593,9 @@ void PhoneCwApplet::buildCwPage(QWidget* page)
     layout->setAlignment(Qt::AlignCenter);
 
     auto* label = new QLabel(QStringLiteral(
-        "CW TX coming in Phase 3M-2.\n\n"
-        "Speed, pitch, sidetone, break-in, iambic, firmware keyer\n"
-        "controls will appear here when CW TX is wired up.\n\n"
-        "For now, see Setup \xe2\x86\x92 DSP \xe2\x86\x92 CW for available CW config."
+        "Sending CW from NereusSDR is not built yet.\n\n"
+        "Speed, pitch, sidetone, break-in and keyer controls\n"
+        "belong on this page once it is."
     ), page);
     label->setAlignment(Qt::AlignCenter);
     label->setWordWrap(true);
@@ -813,23 +829,25 @@ void PhoneCwApplet::buildFmPage(QWidget* page)
 
     vbox->addStretch();
 
-    // ── Mark all FM controls NYI (Phase 3I-1) ────────────────────────────────
-    NyiOverlay::markNyi(m_fmMicSlider,     kNyiFm);
-    NyiOverlay::markNyi(m_fmMicLabel,      kNyiFm);
-    NyiOverlay::markNyi(m_dev5kBtn,        kNyiFm);
-    NyiOverlay::markNyi(m_dev25kBtn,       kNyiFm);
-    NyiOverlay::markNyi(m_ctcssBtn,        kNyiFm);
-    NyiOverlay::markNyi(m_ctcssCombo,      kNyiFm);
-    NyiOverlay::markNyi(m_simplexBtn,      kNyiFm);
-    NyiOverlay::markNyi(m_rptOffsetSlider, kNyiFm);
-    NyiOverlay::markNyi(m_rptOffsetLabel,  kNyiFm);
-    NyiOverlay::markNyi(m_offsetMinusBtn,  kNyiFm);
-    NyiOverlay::markNyi(m_offsetPlusBtn,   kNyiFm);
-    NyiOverlay::markNyi(m_offsetRevBtn,    kNyiFm);
-    NyiOverlay::markNyi(m_fmProfileCombo,  kNyiFm);
-    NyiOverlay::markNyi(m_fmMemCombo,      kNyiFm);
-    NyiOverlay::markNyi(m_fmMemPrev,       kNyiFm);
-    NyiOverlay::markNyi(m_fmMemNext,       kNyiFm);
+    // ── FM controls: nothing behind them yet ─────────────────────────────────
+    // R-R3-49: the FM page is hidden through the unbuilt list (fm-page); the
+    // controls stay disabled and carry no not-yet-implemented mark.
+    m_fmMicSlider->setEnabled(false);
+    m_fmMicLabel->setEnabled(false);
+    m_dev5kBtn->setEnabled(false);
+    m_dev25kBtn->setEnabled(false);
+    m_ctcssBtn->setEnabled(false);
+    m_ctcssCombo->setEnabled(false);
+    m_simplexBtn->setEnabled(false);
+    m_rptOffsetSlider->setEnabled(false);
+    m_rptOffsetLabel->setEnabled(false);
+    m_offsetMinusBtn->setEnabled(false);
+    m_offsetPlusBtn->setEnabled(false);
+    m_offsetRevBtn->setEnabled(false);
+    m_fmProfileCombo->setEnabled(false);
+    m_fmMemCombo->setEnabled(false);
+    m_fmMemPrev->setEnabled(false);
+    m_fmMemNext->setEnabled(false);
 }
 
 // ── wireControls — Phase 3M-1b mic gain slider + mic level gauge ─────────────
@@ -1511,6 +1529,11 @@ void PhoneCwApplet::pollDexpMeters()
 
 void PhoneCwApplet::showPage(int index)
 {
+    // R-R3-49: a page whose feature is not built yet is not shown; Phone is.
+    if ((index == 1 && !UnbuiltFeatures::isBuilt(UnbuiltFeature::Cwx))
+        || (index == 2 && !UnbuiltFeatures::isBuilt(UnbuiltFeature::FmPage))) {
+        index = 0;
+    }
     if (m_stack) {
         m_stack->setCurrentIndex(index);
     }

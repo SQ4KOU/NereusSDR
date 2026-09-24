@@ -12,6 +12,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-49 / R-R3-21: VAX 1 / VAX 2 captions, buttons with no
+//                 NereusSDR feature hidden through UnbuiltFeatures, lit and
+//                 available state per button id. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -55,8 +59,11 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 #include "ButtonBoxItem.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include <QVector>
+
+#include <optional>
 
 namespace NereusSDR {
 
@@ -89,6 +96,20 @@ public:
     explicit OtherButtonItem(QObject* parent = nullptr);
 
     void setButtonState(ButtonId id, bool on);
+    bool buttonState(ButtonId id) const;
+
+    // R-R3-21: the grid position of a button id, or -1.
+    int indexOf(ButtonId id) const;
+    // R-R3-21: dimmed, a click changes nothing and says `reason`.
+    void setButtonAvailable(ButtonId id, bool available, const QString& reason = QString());
+    bool isButtonAvailable(ButtonId id) const;
+    // Drawn: saved visible and its feature built.
+    bool isButtonShown(ButtonId id) const;
+
+    // R-R3-49: the unbuilt feature a button waits for, or nullopt for a
+    // button whose feature NereusSDR has. Such a button is not drawn until
+    // the feature is built; its saved visibility is kept.
+    static std::optional<UnbuiltFeature> unbuiltFeatureFor(ButtonId id);
     MacroSettings& macroSettings(int macroIndex);
 
     Layer renderLayer() const override { return Layer::OverlayDynamic; }

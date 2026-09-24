@@ -1587,6 +1587,12 @@ nereus_add_test(tst_device_card)
 nereus_add_test(tst_audio_vax_page_auto_detect)
 target_compile_definitions(tst_audio_vax_page_auto_detect PRIVATE NEREUS_BUILD_TESTS)
 
+# R3 unfinished controls fix wave follow-up (R-R3-49, R-R3-21): every path
+# that changes AudioEngine::isVaxBusOpen emits vaxBusOpenChanged, and
+# Setup > Audio > VAX's channel cards follow it.
+nereus_add_test(tst_audio_engine_vax_open_signal)
+target_compile_definitions(tst_audio_engine_vax_open_signal PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3O Sub-Phase 12 Task 12.4: AudioEngine::resetAudioSettings ───────────
 # Verifies the clear-vs-preserve boundary from addendum §2.5:
 #   Cleared: audio/Speakers/*, Headphones/*, TxInput/*, Vax<1..4>/*,
@@ -1807,6 +1813,11 @@ nereus_add_test(tst_alex_per_adc_bpf_wire)
 # Also locks the re-entrancy guard: one band-crossing retune, one push.
 # NereusSDR-original: no Thetis port.
 nereus_add_test(tst_alex_bpf_policy_push)
+
+# R-R3-46 / R-R3-21: a local window's filter policy change is saved for its
+# radio at once, read back from a private settings file.
+# NereusSDR-original: no Thetis port.
+nereus_add_test(tst_local_filter_policy_persistence)
 
 # ── RF-safety: the Alex TX low-pass is selected from the TRANSMIT frequency ───
 # P2RadioConnection::setReceiverFrequency used to recompute the LPF from the
@@ -2412,7 +2423,8 @@ nereus_add_test(tst_tx_inhibit_monitor)
 # ── Phase 3M-0 Task 5 (updated 3M-1a E.5): setWatchdogEnabled(bool) ──────────
 # 8 tests assert boolean state-tracking on RadioConnection (P1 + P2).
 # Default changed from false to true in 3M-1a E.5 (see RadioConnection.h).
-# Wire-format assertions (RUNSTOP pkt[3] bit 7) are in tst_p1_watchdog_wire.
+# Wire: P2 general packet byte 38 and the P1/P2 waits are in tst_network_watchdog;
+# the P1 start/stop packet (unchanged by the setting) in tst_p1_watchdog_wire.
 # API mirrors NetworkIOImports.cs:197-198 [v2.10.3.13] (DllImport SetWatchdogTimer).
 # HL2 cite: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400.
 nereus_add_test(tst_radio_connection_watchdog)
@@ -2494,20 +2506,13 @@ target_compile_definitions(tst_p1_trx_relay_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p1_drive_level_wire)
 target_compile_definitions(tst_p1_drive_level_wire PRIVATE NEREUS_BUILD_TESTS)
 
-# ── Phase 3M-1a Task E.5: P1 RUNSTOP watchdog wire-byte snapshot ─────────────
-# 12 tests assert that pkt[3] bit 7 of the RUNSTOP packet correctly encodes
-# m_watchdogEnabled (inverted: 0=enabled, 1=disabled) per HL2 firmware.
-#
-# Wire cite: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400
-#   watchdog_disable <= eth_data[7]; // Bit 7 can be used to disable watchdog
-#
-# deskhpsdr reference: deskhpsdr/src/old_protocol.c:3811 [@120188f]
-#   buffer[3] = command; // no bit-7 OR -- watchdog always enabled implicitly
-#
-# Default changed: m_watchdogEnabled{false} -> {true} in RadioConnection.h
-# so the first sendMetisStart() writes bit 7 = 0 (watchdog active), matching
-# deskhpsdr implicit behavior.
-nereus_add_test(tst_p1_watchdog_wire)
+# ── Phase 3M-1a Task E.5 (R-R3-49): P1 RUNSTOP byte 3 snapshot ───────────────
+# The Network Watchdog setting does not change the start/stop packet: byte 3
+# stays 0x01 / 0x00 whatever it says, as Thetis sends
+# (networkproto1.c:50, 85 [v2.10.3.15]), read from the datagrams a loopback
+# P1FakeRadio receives. The P1 wait it controls is covered by
+# tst_network_watchdog.
+nereus_add_test(tst_p1_watchdog_wire fakes/P1FakeRadio.cpp)
 target_compile_definitions(tst_p1_watchdog_wire PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3M-1a Task E.6: P2 sendTxIq wire-byte snapshot ─────────────────────
@@ -6267,6 +6272,11 @@ nereus_add_test(tst_radio_model_max_slices)
 # Design: docs/architecture/2026-05-26-phase3f-multi-pan-multi-slice-design.md §12.
 nereus_add_test(tst_settings_schema_v6_migration)
 
+# R-R3-49 fix wave: SettingsSchemaVersion v6 -> v7 resets NetworkWatchdogEnabled
+# once, so a value saved while the checkbox did nothing does not come alive.
+# Source: NereusSDR-original (no Thetis upstream).
+nereus_add_test(tst_settings_schema_v7_migration)
+
 # Phase 3F Sub-Epic B Task 1: SliceConfig + DdcAssignment shared structs.
 # 2 tests: slice_config_struct_has_required_fields,
 #          ddc_assignment_struct_has_required_fields.
@@ -7007,6 +7017,21 @@ target_compile_definitions(tst_controls_connected PRIVATE NEREUS_BUILD_TESTS)
 # filter / AM and FM squelch, Meter Styles S-meter, Logs, VAX level.
 nereus_add_test(tst_setup_controls_connected)
 target_compile_definitions(tst_setup_controls_connected PRIVATE NEREUS_BUILD_TESTS)
+# R3 unfinished controls, Task 1 (R-R3-49, R-R3-21): the one list of
+# unbuilt features, every surface hidden through it in local and remote
+# windows, saved values kept, a saved Voice Rec/Play control kept.
+nereus_add_test(tst_unbuilt_features)
+target_compile_definitions(tst_unbuilt_features PRIVATE NEREUS_BUILD_TESTS)
+# R3 unfinished controls, Task 3 (R-R3-49, R-R3-21): the container function
+# and band buttons act on the container's own slice; the ones with nothing
+# behind them are hidden through the unbuilt list.
+nereus_add_test(tst_other_button_item)
+target_compile_definitions(tst_other_button_item PRIVATE NEREUS_BUILD_TESTS)
+# R3 unfinished controls, Task 4 (R-R3-49, R-R3-21): no control the app
+# builds, local or remote, carries a not-yet-implemented mark or tooltip,
+# including the surfaces hidden until their feature is built.
+nereus_add_test(tst_no_placeholder_marks)
+target_compile_definitions(tst_no_placeholder_marks PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_connection_selector)
 nereus_add_test(tst_station_lan_cache)
 nereus_add_test(tst_station_lan_transport)
@@ -7053,6 +7078,21 @@ nereus_add_test(tst_receive_layout_native fakes/P1FakeRadio.cpp)
 nereus_add_test(tst_receive_slice_seed)
 nereus_add_test(tst_p2_established_silence fakes/P2FakeRadio.cpp)
 target_compile_definitions(tst_p2_established_silence PRIVATE NEREUS_BUILD_TESTS)
+# R-R3-49 / R-R3-11: the Network Watchdog setting does what Thetis does with
+# it. P2 fake: general packet byte 38 at connect and on change, the immediate
+# send, the keepalive only while on, loss only while on. P1 fake: the start
+# packet unchanged, the 3000 ms wait while on, no loss while off.
+nereus_add_test(tst_network_watchdog fakes/P1FakeRadio.cpp fakes/P2FakeRadio.cpp)
+target_compile_definitions(tst_network_watchdog PRIVATE NEREUS_BUILD_TESTS)
+# R-R3-49 / R-R3-21 / R-R3-11: the Network Watchdog checkbox applied where
+# the radio is: a local window's radio, the connect path, a remote window's
+# change reaching the Core and its radio over the loopback, the gate, and an
+# older Core's refusal said in plain words.
+nereus_add_test(tst_network_watchdog_setting
+    fakes/P1FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp
+    fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_network_watchdog_setting PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_realtime_audio_priority)
 # R-R3-41: nereusd's signal processing thread placement (fixture topologies,
 # the registry against a recording fake, and a Linux-only smoke test).

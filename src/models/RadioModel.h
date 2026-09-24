@@ -80,6 +80,9 @@
 //                TCI objects owned by std::unique_ptr; accessory refusals
 //                say whether the page that sent them shows them. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Network Watchdog setting applied where the
+//                radio is (setNetworkWatchdogEnabled / applyNetworkWatchdog).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -560,12 +563,17 @@ public:
     /// arrives; otherwise it is toasted. Claims end when the command
     /// completes or the link to the Core drops. 0 is ignored.
     void noteAccessoryRequestShownOnPage(quint32 commandId, QObject* page);
-    /// The request was accepted: nothing to claim.
-    void forgetAccessoryRequest(quint32 commandId);
     /// Follow-up 6: one of the Core's station settings changed (`key`), or
     /// a whole snapshot arrived (empty). Role::Remote only; emits
     /// stationSettingChanged for the pages that show those settings.
     void reportStationSettingChanged(const QString& key);
+
+    /// R-R3-22 fix wave: the Core answered command `commandId` (the id in
+    /// IStationLink::CommandOutcome). `reason` is the Core's words for a
+    /// refusal, empty when accepted. Role::Remote only. Routed to
+    /// stationCommandFinished for a sender that waits on its own command.
+    /// Ends any page's claim on the command (noteAccessoryRequestShownOnPage).
+    void reportStationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
 
     /// The station refused a sample-rate change, with its own reason.
     /// Role::Remote only. Routed to sliceRetuneRejected, which carries the
@@ -581,6 +589,19 @@ public:
     // place to widen when a later phase (R4's TX path) makes part of it
     // true for a remote client too.
     bool ownsLocalDsp() const { return m_role == Role::Local; }
+
+    // R-R3-49: the Network Watchdog (Setup > General > Options) is a radio
+    // setting, applied where the radio is. setNetworkWatchdogEnabled saves
+    // it (a remote window's save goes to the Core) and applies it to this
+    // model's own radio, if it has one. applyNetworkWatchdog applies a value
+    // without saving it: the Core calls it when a window's change arrives.
+    // The connect path applies the saved value before the radio starts.
+    // Default on, as Thetis: setup.designer.cs:8434 [v2.10.3.15]
+    //   this.chkNetworkWDT.Checked = true;
+    static constexpr bool kNetworkWatchdogDefault = true;
+    static bool networkWatchdogSetting();
+    void setNetworkWatchdogEnabled(bool enabled);
+    void applyNetworkWatchdog(bool enabled);
 
     // Sub-components
     RadioConnection*  connection()       { return m_connection; }
@@ -1446,6 +1467,10 @@ public:
     //
     // Issue #118.
     void onBandButtonClicked(NereusSDR::Band band);
+
+    // R-R3-21: the same, on `slice` (a container's own slice, which need
+    // not be the active one). No-op if `slice` is null.
+    void onBandButtonClicked(SliceModel* slice, NereusSDR::Band band);
 
     // Panadapter management (client-side)
     QList<PanadapterModel*> panadapters() const { return m_panadapters; }
@@ -3287,10 +3312,11 @@ signals:
                                  bool shownOnPage);
     /// Remote window: a Core station setting changed (empty: a snapshot).
     void stationSettingChanged(const QString& key);
-    /// Remote window: the Core answered accessory request `commandId`
-    /// (accepted or refused; a refusal also arrives on
-    /// accessoryRequestRefused).
-    void accessoryRequestFinished(quint32 commandId, bool accepted);
+    /// R-R3-22 fix wave: see reportStationCommandFinished. The one
+    /// per-command result signal: the amp applets' pending requests and
+    /// the TCI switch's request wait both match their own id here (an
+    /// accessory refusal also arrives on accessoryRequestRefused).
+    void stationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
 
     /// Phase 3F Sub-Epic I closeout, defect F4: the operator retuned a slice
     /// to a frequency no DDC can reach, and the frequency has been rolled

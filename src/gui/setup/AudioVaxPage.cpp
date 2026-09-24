@@ -18,9 +18,22 @@
 // VAX channels are this computer's in a remote window as in a local one,
 // so the page works there. The "Consumers:" row shows whether an app is
 // reading each channel where the platform reports it.
+//
+// 2026-09-24 (R-R3-49, R-R3-21): J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code. The channel cards follow
+// AudioEngine::vaxBusOpenChanged (open state and "On" switch), so the page
+// matches a container's VAX toggle.
+//
+// 2026-09-24 (R-R3-43, R-R3-44, R-R3-21): J.J. Boyd (KG4VCF), AI-assisted
+// via Anthropic Claude Code. In a remote window whose receiver streams are
+// Opus, a plain note says the weakest digital-mode signals may not decode
+// and that Lossless avoids it; it follows the quality choice and its
+// fallback live (setReceiverAudioNote; with Lossless chosen but not running
+// it says the connection cannot carry it right now instead).
 // =================================================================
 
 #include "AudioVaxPage.h"
+#include "gui/RemoteAudioStatus.h"
 
 #include "core/AppSettings.h"
 #include "core/AudioDeviceConfig.h"
@@ -357,16 +370,7 @@ void VaxChannelCard::loadFromSettings()
     // Load the DeviceCard's 10 fields + hidden enable checkbox.
     m_deviceCard->loadFromSettings();
 
-    // Sync visible enable toggle from AppSettings (same key the hidden
-    // DeviceCard uses: audio/VaxN/Enabled).
-    if (m_enableChk) {
-        const bool on = AppSettings::instance()
-                            .value(m_prefix + QStringLiteral("/Enabled"),
-                                   QStringLiteral("False"))
-                            .toString() == QStringLiteral("True");
-        QSignalBlocker blk(m_enableChk);
-        m_enableChk->setChecked(on);
-    }
+    syncEnabledFromSettings();
 
     // Refresh node description label from persisted NodeDescription key.
     updateNodeDescLabel();
@@ -390,6 +394,20 @@ QString VaxChannelCard::currentDeviceName() const
     return AppSettings::instance()
                .value(m_prefix + QStringLiteral("/DeviceName"), QString())
                .toString();
+}
+
+void VaxChannelCard::syncEnabledFromSettings()
+{
+    // Sync visible enable toggle from AppSettings (same key the hidden
+    // DeviceCard uses: audio/VaxN/Enabled).
+    if (m_enableChk) {
+        const bool on = AppSettings::instance()
+                            .value(m_prefix + QStringLiteral("/Enabled"),
+                                   QStringLiteral("False"))
+                            .toString() == QStringLiteral("True");
+        QSignalBlocker blk(m_enableChk);
+        m_enableChk->setChecked(on);
+    }
 }
 
 bool VaxChannelCard::isChannelEnabled() const
@@ -883,6 +901,42 @@ AudioVaxPage::AudioVaxPage(RadioModel* model, QWidget* parent)
     readerTimer->start();
 }
 
+void AudioVaxPage::setReceiverAudioNote(RemoteReceiverAudioNote note)
+{
+    if (!m_compressedNote) {
+        return;
+    }
+    switch (note) {
+    case RemoteReceiverAudioNote::None:
+        break;
+    case RemoteReceiverAudioNote::OpusChosen:
+        m_compressedNote->setText(QStringLiteral(
+            "Receiver audio from the Core is compressed (Opus), so the weakest "
+            "digital-mode signals may not decode. Set Audio quality to Lossless "
+            "in Core connection if your network can carry it."));
+        break;
+    case RemoteReceiverAudioNote::LosslessUnavailable:
+        // The operator already chose Lossless; pointing them at it again
+        // would be wrong. Say the connection cannot carry it right now.
+        m_compressedNote->setText(QStringLiteral(
+            "Receiver audio from the Core is compressed (Opus): Lossless is chosen, "
+            "but this connection cannot carry it right now. The weakest "
+            "digital-mode signals may not decode."));
+        break;
+    }
+    m_compressedNote->setVisible(note != RemoteReceiverAudioNote::None);
+}
+
+bool AudioVaxPage::compressedAudioNoteShown() const
+{
+    return m_compressedNote && !m_compressedNote->isHidden();
+}
+
+QString AudioVaxPage::compressedAudioNoteText() const
+{
+    return m_compressedNote ? m_compressedNote->text() : QString();
+}
+
 void AudioVaxPage::refreshReaders()
 {
     for (int i = 0; i < m_channelCards.size(); ++i) {
@@ -957,6 +1011,25 @@ void AudioVaxPage::buildPage()
     subHeader->setWordWrap(true);
     insertBeforeStretch(subHeader);
 
+    // R-R3-43 / R-R3-44: in a remote window whose receiver streams are Opus,
+    // say what that costs digital modes and what avoids it. The measurement:
+    // 24 kbit/s Opus lost 12 of 180 FT8 decodes, all within about 2 dB of
+    // the decode limit; lossless lost none
+    // (docs/architecture/2026-09-20-remote-daemon-r3-verification/
+    // digital-modes-over-opus.md:156-178). Hidden until MainWindow says so.
+    m_compressedNote = new QLabel(
+        QStringLiteral(
+            "Receiver audio from the Core is compressed (Opus), so the weakest "
+            "digital-mode signals may not decode. Set Audio quality to Lossless "
+            "in Core connection if your network can carry it."),
+        this);
+    m_compressedNote->setObjectName(QStringLiteral("vaxCompressedAudioNote"));
+    m_compressedNote->setStyleSheet(
+        QStringLiteral("QLabel { color: #607080; font-size: 11px; }"));
+    m_compressedNote->setWordWrap(true);
+    m_compressedNote->setVisible(false);
+    insertBeforeStretch(m_compressedNote);
+
     // Four VAX channel cards (1–4).
     m_channelCards.reserve(4);
     for (int ch = 1; ch <= 4; ++ch) {
@@ -986,19 +1059,9 @@ void AudioVaxPage::buildPage()
         }
     }
 
-    // TX row — informational.
-    auto* txGroup = new QGroupBox(QStringLiteral("TX Monitor"), this);
-    txGroup->setStyleSheet(QLatin1String(kGroupStyle));
-    auto* txLayout = new QVBoxLayout(txGroup);
-    auto* txLabel = new QLabel(
-        QStringLiteral("TX → VAX routing is configured in the Transmit section. "
-                       "Phase 3M (SendIqToVax / TxMonitorToVax) will add "
-                       "per-band override here."),
-        txGroup);
-    txLabel->setStyleSheet(QStringLiteral("QLabel { color: #607080; font-size: 11px; }"));
-    txLabel->setWordWrap(true);
-    txLayout->addWidget(txLabel);
-    insertBeforeStretch(txGroup);
+    // R-R3-49 fix wave I2: the informational "TX Monitor" group is gone. Its
+    // only text promised a later per-band override and pointed at Send IQ to
+    // VAX and TX Monitor to VAX, which are hidden until built (iq-to-vax).
 }
 
 void AudioVaxPage::wirePillFeedback()
@@ -1006,6 +1069,16 @@ void AudioVaxPage::wirePillFeedback()
     if (!m_engine) {
         return;
     }
+
+    // R-R3-21: the open state and the "On" switch follow every change to a
+    // VAX output, including a container's VAX toggle and a remote window
+    // opening its outputs.
+    connect(m_engine, &AudioEngine::vaxBusOpenChanged, this, [this](int channel) {
+        if (auto* card = channelCard(channel)) {
+            card->setBusOpen(m_engine->isVaxBusOpen(channel));
+            card->syncEnabledFromSettings();
+        }
+    });
 
     connect(m_engine, &AudioEngine::vaxConfigChanged, this,
             [this](int channel, AudioDeviceConfig cfg) {

@@ -32,6 +32,7 @@
 
 - **MainWindow refactor**: m_spectrumWidget single-widget pointer replaced with m_panStack (PanadapterStack containing N PanadapterApplet instances). 125 call sites migrated to activeSpectrumWidget() helper for backward compatibility.
 - **RadioModel** gains TxSliceArbiter ownership + FFTRouter ownership + WidebandFftEngine instances (one per ADC, default 122.88 MHz).
+- **Network Watchdog now sets how long NereusSDR waits for the radio.** Setup > General > Options > Network Watchdog was saved but never used. It now sets how long NereusSDR waits for data before it treats the radio as lost: three seconds when on, no limit when off (R-R3-49). The radio's own safety timer stays on either way, so a radio cannot be left transmitting if the computer stops. So that a setting changed back when it did nothing does not suddenly take effect, the upgrade resets it to on once (settings schema v7). Turn it off again afterwards if you want it off.
 
 ### Deferred (post-bench polish backlog, queued for Phase 3F-1)
 

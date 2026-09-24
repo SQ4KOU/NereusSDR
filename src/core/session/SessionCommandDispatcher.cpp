@@ -42,6 +42,10 @@
 //                                    3): setAlexRxAntenna, one band's RX or
 //                                    RX-only antenna. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-21 (radioHardwareVersion
+//                                    4): setAlexBpfMode, one receive filter
+//                                    chain's filter policy. AI-assisted via
+//                                    Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: configurePgxl,
 //                                    disconnectPgxl and
 //                                    setPgxlConnectionSettings for the
@@ -395,6 +399,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "setAlexRxAntenna") {
         handleSetAlexRxAntenna(invoke);
+    } else if (invoke.commandVerb == "setAlexBpfMode") {
+        handleSetAlexBpfMode(invoke);
     } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning"
                || invoke.commandVerb == "nnr.tryAgain") {
         handleNnrAction(invoke);
@@ -1409,6 +1415,33 @@ void SessionCommandDispatcher::handleSetAlexRxAntenna(const SessionMessage& invo
     const bool receiveOnly = rxOnly.toBool();
     const QString reason = receiveOnly ? alex->setRxOnlyAntForBand(Band(band), antenna)
                                        : alex->setRxAntForBand(Band(band), antenna);
+    emitResult(invoke.commandVerb, invoke.commandId, reason.isEmpty(), reason, {});
+}
+
+// R-R3-46 / R-R3-21 (radioHardwareVersion 4): one receive filter chain's
+// filter policy from a remote window's filter policy dialog. The Core makes
+// the call its own dialog's Apply makes (AlexController::setBpfMode, through
+// its AlexAntennaFacade), saves it for its radio and publishes the chain's
+// state (rxFilter<N>Mode) to every window. The policy picks the receive
+// band-pass filter only, so a receive-only Core applies it too.
+void SessionCommandDispatcher::handleSetAlexBpfMode(const SessionMessage& invoke)
+{
+    int chain = 0;
+    int mode = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "chain", "mode" })
+        || findIntArgument(invoke.arguments, "chain", &chain) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "mode", &mode) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("setAlexBpfMode requires chain and mode whole numbers"), {});
+        return;
+    }
+    AlexAntennaFacade* const alex = m_radioModel->alexAntennaFacade();
+    if (alex == nullptr || !alex->isBound()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core has no filter settings ready."), {});
+        return;
+    }
+    const QString reason = alex->setBpfModeForChain(chain, mode);
     emitResult(invoke.commandVerb, invoke.commandId, reason.isEmpty(), reason, {});
 }
 

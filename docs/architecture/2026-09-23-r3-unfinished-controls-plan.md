@@ -102,6 +102,14 @@ goes.
 | fm-dev | Setup > DSP > FM deviation and de-emphasis | Hide; after R4 |
 | mic-acc | Phone/CW applet microphone source: the ACC item | Hide (with acc) |
 | dxcc-colour | DXCC spot colouring: the country table loads, but nothing switches the colouring on and no log import exists | After R4 (nothing visible claims it today) |
+| export-radio | Setup > Diagnostics > Export / Import: Export Connected Radio (the button only says it is not available) | Hide (added 2026-09-24 under the operator's decision-page rule, until built = hide) |
+| fm-tx | Setup > DSP > FM: the greyed FM transmit group | Hide until FM transmit is built (added 2026-09-24, same rule; asked 2026-09-24, the operator may override) |
+| fm-repeater | The VFO flag's FM repeater buttons (minus, simplex, plus): they store a transmit direction and FM transmit is not built | Hide until FM transmit is built (added 2026-09-24, same rule) |
+| ddc-routing | Setup > Hardware > DDC Routing: its choices do not steer the radio's receivers yet | Hide until multi-panadapter receiver routing is built (added 2026-09-24, same rule) |
+| remote-filter-policy | The filter policy dialog in a remote window says editing is not available; a local window edits it | Build: moved to the remote radio hardware plan's Task 6 (it needs a new Core property and a version; added 2026-09-24) |
+| hpf-bcast | Filter policy dialog: "HPF (broadcast band reject) enabled" (nothing reads it) | Hide (added 2026-09-24 under the operator's decision-page rule, until built = hide) |
+| freq-cal | Calibration: the frequency calibration Start button (nothing handles it) | Hide (added 2026-09-24, same rule) |
+| fm-flag | The VFO flag's FM page: the CTCSS tone mode and tone choices (no tone encoder or detector), the Offset box (a transmit shift) and Rev (it only changes the display) | Hide until built: controls that only serve FM transmit go with the FM transmit entry; a receive-side one that is not built gets its own entry (added 2026-09-24, same rule) |
 
 ## Global Constraints
 

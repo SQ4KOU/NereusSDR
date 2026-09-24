@@ -15,6 +15,10 @@
 //                 networkproto1.c MetisReadDirect [v2.10.3.15] for
 //                 Diagnostics > Connection Quality. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Network Watchdog wait is Thetis's 3000 ms
+//                 (networkproto1.c:292-294 [v2.10.3.15]) and the RUNSTOP test
+//                 seams no longer carry the setting. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -512,7 +516,13 @@ private:
     // instance members so tests can compress the reconnect timeline;
     // nothing outside the test suite calls setReconnectTimingForTest(),
     // so production timing is bit-identical to before.
-    static constexpr int kWatchdogSilenceMs    = 2000;          // silence → Error threshold
+    // R-R3-49: the wait for data while the Network Watchdog is on (was 2000,
+    // a NereusSDR value).
+    // From Thetis networkproto1.c:292-294 [v2.10.3.15]:
+    //   //MW0LGE_21g WSAWaitForMultipleEvents(1, &prn->hDataEvent, FALSE, WSA_INFINITE, FALSE);
+    //   //added similar timout code from ReadThreadMainLoop
+    //   DWORD retVal = WSAWaitForMultipleEvents(1, &prn->hDataEvent, FALSE, prn->wdt ? 3000 : WSA_INFINITE, FALSE);
+    static constexpr int kWatchdogSilenceMs    = 3000;          // silence → LinkLost threshold
     static constexpr int kReconnectIntervalMs  = 5000;          // delay between retry attempts
     static constexpr int kMaxReconnectAttempts = 3;             // max retries before staying in Error
 
@@ -931,6 +941,9 @@ public:
         m_watchdogSilenceMs   = watchdogSilenceMs;
         m_reconnectIntervalMs = reconnectIntervalMs;
     }
+    // R-R3-49: how long the link waits for data before it is declared lost
+    // while the Network Watchdog is on.
+    int watchdogSilenceMsForTest() const { return m_watchdogSilenceMs; }
     // Expose private composeCcForBank for regression-freeze capture (Task 1) and
     // byte-table assertion tests (Task 16).
     void composeCcForBankForTest(int bankIdx, quint8 out[5]) const { composeCcForBank(bankIdx, out); }
@@ -1050,27 +1063,23 @@ public:
     // Access buffer count for buffer-state tests.
     int txIqBufferedSamplesForTest() const { return m_txIqCount.load(std::memory_order_acquire); }
 
-    // ── 3M-1a E.5 RUNSTOP watchdog wire test seams ───────────────────────────
+    // ── RUNSTOP packet test seams (3M-1a E.5; R-R3-49) ──────────────────────
     // metisStartPacketForTest — compose the 64-byte RUNSTOP start packet that
-    // sendMetisStart() would send (without a live socket), so unit tests can
-    // assert the watchdog bit (pkt[3] bit 7) without needing a real UDP socket.
+    // sendMetisStart() would send (without a live socket).
     //
     // IMPORTANT: keep in sync with sendMetisStart() / sendMetisStop() in P1RadioConnection.cpp.
     //
-    // Wire format: pkt[3] = run_bits | watchdog_disable_bit
-    //   run_bits:     0x01 (IQ only) or 0x02 (IQ + mic)
-    //   watchdog_bit: 0x00 if m_watchdogEnabled == true, 0x80 if false
-    //
-    // Source: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:200-203, 399-400
-    //   eth_data[0] = run; eth_data[7] = watchdog_disable (1=disabled, 0=enabled)
+    // Wire format: pkt[3] = run_bits: 0x01 (IQ only) or 0x02 (IQ + mic).
+    // R-R3-49: the Network Watchdog setting is not sent here, as in Thetis
+    // (networkproto1.c:50 [v2.10.3.15]); bit 7 stays 0 (the HL2 gateware's
+    // watchdog_disable, dsopenhpsdr1.v:399-400, is never set).
     QByteArray metisStartPacketForTest(bool iqAndMic) const {
         QByteArray pkt(64, '\0');
         pkt[0] = static_cast<char>(0xEF);
         pkt[1] = static_cast<char>(0xFE);
         pkt[2] = static_cast<char>(0x04);
         const quint8 runBits     = iqAndMic ? quint8(0x02) : quint8(0x01);
-        const quint8 watchdogBit = m_watchdogEnabled ? quint8(0x00) : quint8(0x80);
-        pkt[3] = static_cast<char>(runBits | watchdogBit);
+        pkt[3] = static_cast<char>(runBits);
         return pkt;
     }
 
@@ -1078,18 +1087,14 @@ public:
     //
     // IMPORTANT: keep in sync with sendMetisStart() / sendMetisStop() in P1RadioConnection.cpp.
     //
-    // Wire format: pkt[3] = watchdog_disable_bit (run bits = 0)
-    //   0x00 if m_watchdogEnabled == true, 0x80 if false
-    //
-    // Source: Hermes-Lite2/gateware/rtl/dsopenhpsdr1.v:399-400
-    //   watchdog_disable <= eth_data[7]; // Bit 7 can be used to disable watchdog
+    // Wire format: pkt[3] = 0x00, whatever the Network Watchdog setting
+    // (Thetis networkproto1.c:85 [v2.10.3.15]).
     QByteArray metisStopPacketForTest() const {
         QByteArray pkt(64, '\0');
         pkt[0] = static_cast<char>(0xEF);
         pkt[1] = static_cast<char>(0xFE);
         pkt[2] = static_cast<char>(0x04);
-        const quint8 watchdogBit = m_watchdogEnabled ? quint8(0x00) : quint8(0x80);
-        pkt[3] = static_cast<char>(watchdogBit);
+        pkt[3] = static_cast<char>(0x00);
         return pkt;
     }
 #endif

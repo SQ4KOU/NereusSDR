@@ -42,10 +42,22 @@
 //                says whether an app is reading the channel where the
 //                platform reports it. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24: R-R3-43 / R-R3-44 / R-R3-21: a plain note, shown in a
+//                remote window while the Core's receiver streams are Opus,
+//                that the weakest digital-mode signals may not decode and
+//                that Lossless avoids it (setReceiverAudioCompressed, pushed
+//                by MainWindow through SetupDialog). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24: R-R3-43 / R-R3-44 fix wave: setReceiverAudioNote replaces
+//                setReceiverAudioCompressed; with Lossless chosen but not
+//                running the note says the connection cannot carry it right
+//                now. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
 // =================================================================
 
 #include "core/audio/VirtualCableDetector.h"
 #include "gui/HGauge.h"
+#include "gui/RemoteReceiverAudioNote.h"
 #include "gui/SetupPage.h"
 #include "gui/setup/DeviceCard.h"
 
@@ -152,6 +164,10 @@ public:
     // or the user toggles the channel off (setVaxEnabled(false) closes
     // the bus).
     void setBusOpen(bool open);
+    bool busOpenForTest() const { return m_busOpen; }
+    // R-R3-21: the "On" switch from audio/VaxN/Enabled (a container's VAX
+    // toggle writes it too). Emits nothing.
+    void syncEnabledFromSettings();
 
     // R-R3-21: the channel's audio level, linear 0..1, as the VAX applet's
     // meters read it (AudioEngine::vaxRxLevel). Shown in dB, -60..0.
@@ -234,6 +250,16 @@ public:
         return nullptr;
     }
 
+    // R-R3-43 / R-R3-44: in a remote window whose receiver streams (the
+    // ones feeding VAX) are Opus rather than lossless, shows the
+    // compressed-audio note: with Opus chosen it points to the Lossless
+    // choice; with Lossless chosen but not running it says the connection
+    // cannot carry it right now. None (the default, and always in a local
+    // window) hides it. SetupDialog forwards MainWindow's live value.
+    void setReceiverAudioNote(RemoteReceiverAudioNote note);
+    bool compressedAudioNoteShown() const;
+    QString compressedAudioNoteText() const;
+
 private:
     void buildPage();
     void wirePillFeedback();
@@ -242,6 +268,7 @@ private:
 
     AudioEngine*                m_engine{nullptr};
     QVector<VaxChannelCard*>    m_channelCards;  // index 0 = channel 1
+    QLabel*                     m_compressedNote{nullptr};
 
 protected:
     void showEvent(QShowEvent* event) override;

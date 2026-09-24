@@ -552,6 +552,8 @@ private slots:
             tci.setSwitch(true, 900, QHostAddress(QHostAddress::LocalHost));
             window.reportStationAccessoryRefusal(QStringLiteral("tci"),
                 QStringLiteral("Choose a TCI port from 1024 to 65535."), 101);
+            window.reportStationCommandFinished(101, false,
+                QStringLiteral("Choose a TCI port from 1024 to 65535."));
             QCoreApplication::processEvents();
             QVERIFY(!tci.switchOn());   // the Core's switch again
             QCOMPARE(tci.port(), port);
@@ -572,7 +574,7 @@ private slots:
             tci.setSwitch(true, port, QHostAddress(QHostAddress::LocalHost));
             coreSays(window, true, other);
             QCOMPARE(tci.port(), port);   // still waiting for its own echo
-            window.forgetAccessoryRequest(101);   // the Core accepted it
+            window.reportStationCommandFinished(101, true, QString());   // the Core accepted it
             QCoreApplication::processEvents();
             QVERIFY(tci.switchOn());
             QCOMPARE(tci.port(), other);

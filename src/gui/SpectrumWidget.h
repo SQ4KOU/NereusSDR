@@ -16,6 +16,8 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-09-24 : peakHoldEnabledChanged signal (R-R3-49, R-R3-21).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-08-08 — J.J. Boyd (KG4VCF). Two bench-reported defects.
 //                 (1) Extended pan: Sub-Epic F shipped the wideband DATA
 //                 path and never the paint, so the stored bins had no
@@ -1868,6 +1870,10 @@ signals:
 
     // Emitted when CTUN mode changes
     void ctunEnabledChanged(bool enabled);
+
+    // R-R3-21 (R3 unfinished controls fix wave M3): peak hold was turned
+    // on or off, so a container's Peak button lights at once.
+    void peakHoldEnabledChanged(bool enabled);
 
     // Emitted when m_ddcCenterHz changes (panadapter pan, band jump, etc.).
     // Used by MainWindow to re-push the CTUN slice offset into MaxBin's
