@@ -29,10 +29,12 @@
 #include "core/FaultLog.h"
 #include "core/settings/SettingsProxy.h"
 #include "core/Rf2ksConnection.h"
+#include "core/TxInterlockPolicy.h"
 #include "models/AccessoryDataModel.h"
 #include "models/RadioModel.h"
 #include "OperatorWording.h"
 
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -74,6 +76,7 @@ private slots:
     void recordsSavedBeforeCarryDeviceAndText();
     void mirroredListReplacesWithoutSaving();
     void historySurvivesACoreRestart();
+    void interlockAndPowerCapSurviveACoreRestart();
 };
 
 // Capture 12 events and verify only the 10 newest are retained, newest first.
@@ -277,14 +280,37 @@ void FaultLogTest::mirroredListReplacesWithoutSaving()
     QCOMPARE(changed.count(), 2);
 }
 
-// R-R3-47 / R-R3-22: a fault the Core records is in its settings, so the
-// Core that starts from those settings next time has it, and says so on its
-// `accessoryData` object.
+namespace {
+
+// What the Core's settings file on disk holds for `key` right now (never
+// written by the test: only the Core's own save path writes it).
+QString onDisk(const QString& key)
+{
+    NereusSDR::AppSettings disk(NereusSDR::AppSettings::instance().filePath());
+    disk.load();
+    return disk.value(key).toString();
+}
+
+// The Core stops without saving (a power loss): its settings in memory are
+// gone, and the next Core reads the file.
+void loseMemoryAndReload()
+{
+    NereusSDR::AppSettings::instance().clear();
+    NereusSDR::AppSettings::instance().load();
+}
+
+} // namespace
+
+// R-R3-47 / R-R3-22 (I3): a fault the Core records reaches its settings
+// file through the Core's own save path, shortly after it happens, so a
+// Core that loses power and starts again has it, and says so on its
+// `accessoryData` object. Clearing the history reaches the file the same
+// way. The test never writes the file itself.
 void FaultLogTest::historySurvivesACoreRestart()
 {
-    QTemporaryDir dir;
-    QVERIFY(dir.isValid());
-    const QString file = dir.filePath(QStringLiteral("nereusd.settings"));
+    const QString file = NereusSDR::AppSettings::instance().filePath();
+    QVERIFY(!file.isEmpty());
+    QFile::remove(file);
     NereusSDR::AppSettings::instance().clear();
     {
         NereusSDR::RadioModel core;
@@ -294,26 +320,69 @@ void FaultLogTest::historySurvivesACoreRestart()
             R"({"operational_interface":"UDP","error":"CAT timeout"})");
         QCOMPARE(core.rfkitFaultLog()->events().size(), 1);
         QVERIFY(core.accessoryDataModel()->rfkitFaults().contains(QStringLiteral("CAT timeout")));
-        // The Core's settings file, as nereusd saves it.
-        NereusSDR::AppSettings disk(file);
-        disk.setValue(QStringLiteral("RfKit_FaultHistory"),
-                      NereusSDR::AppSettings::instance().value(QStringLiteral("RfKit_FaultHistory")));
-        QVERIFY(disk.save());
+        QTRY_VERIFY_WITH_TIMEOUT(
+            onDisk(QStringLiteral("RfKit_FaultHistory")).contains(QStringLiteral("CAT timeout")),
+            3000);
+        // No clean stop: the model goes without a save of its own.
+    }
+    loseMemoryAndReload();
+
+    {
+        NereusSDR::RadioModel restarted;
+        QCOMPARE(restarted.rfkitFaultLog()->events().size(), 1);
+        const NereusSDR::FaultEvent ev = restarted.rfkitFaultLog()->events().first();
+        QCOMPARE(ev.device, QStringLiteral("rfkit"));
+        QCOMPARE(ev.detail, QStringLiteral("CAT timeout"));
+        QVERIFY(NereusSDR::OperatorWording::isPlain(ev.text));
+        QVERIFY(restarted.accessoryDataModel()->rfkitFaults().contains(
+            QStringLiteral("CAT timeout")));
+
+        // A window clears the history: the file follows.
+        QString reason;
+        QVERIFY(restarted.clearAccessoryFaultsForStation(QStringLiteral("rfkit"), &reason));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !onDisk(QStringLiteral("RfKit_FaultHistory")).contains(QStringLiteral("CAT timeout")),
+            3000);
+    }
+    loseMemoryAndReload();
+    {
+        NereusSDR::RadioModel again;
+        QVERIFY(again.rfkitFaultLog()->events().isEmpty());
     }
     NereusSDR::AppSettings::instance().clear();
-    NereusSDR::AppSettings reread(file);
-    reread.load();
-    NereusSDR::AppSettings::instance().setValue(QStringLiteral("RfKit_FaultHistory"),
-        reread.value(QStringLiteral("RfKit_FaultHistory")));
+    QFile::remove(file);
+}
 
-    NereusSDR::RadioModel restarted;
-    QCOMPARE(restarted.rfkitFaultLog()->events().size(), 1);
-    const NereusSDR::FaultEvent ev = restarted.rfkitFaultLog()->events().first();
-    QCOMPARE(ev.device, QStringLiteral("rfkit"));
-    QCOMPARE(ev.detail, QStringLiteral("CAT timeout"));
-    QVERIFY(NereusSDR::OperatorWording::isPlain(ev.text));
-    QVERIFY(restarted.accessoryDataModel()->rfkitFaults().contains(QStringLiteral("CAT timeout")));
+// I3: the interlock policy and the output limit a window sets reach the
+// Core's settings file through the Core's own save path.
+void FaultLogTest::interlockAndPowerCapSurviveACoreRestart()
+{
+    const QString file = NereusSDR::AppSettings::instance().filePath();
+    QFile::remove(file);
     NereusSDR::AppSettings::instance().clear();
+    {
+        NereusSDR::RadioModel core;
+        QString reason;
+        QVERIFY(core.setTxInterlockPolicyForStation(2, 1500, true, 2.5, &reason));
+        QVERIFY(core.setPgxlPowerCapForStation(true, 800, &reason));
+        QTRY_VERIFY_WITH_TIMEOUT(onDisk(QStringLiteral("PGXL_PowerCapW")) == QStringLiteral("800"),
+                                 3000);
+    }
+    loseMemoryAndReload();
+    {
+        NereusSDR::RadioModel restarted;
+        QCOMPARE(restarted.txInterlockPolicy()->mode(), NereusSDR::TxInterlockPolicy::Block);
+        QCOMPARE(restarted.txInterlockPolicy()->graceMs(), 1500);
+        QVERIFY(restarted.txInterlockPolicy()->swrGateEnabled());
+        QCOMPARE(NereusSDR::AppSettings::instance().value(
+                     QStringLiteral("PGXL_PowerCapEnabled")).toString(),
+                 QStringLiteral("True"));
+        QCOMPARE(NereusSDR::AppSettings::instance().value(
+                     QStringLiteral("PGXL_PowerCapW")).toString(),
+                 QStringLiteral("800"));
+    }
+    NereusSDR::AppSettings::instance().clear();
+    QFile::remove(file);
 }
 
 QTEST_GUILESS_MAIN(FaultLogTest)

@@ -9,6 +9,9 @@
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-47, R-R3-22). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Saves the records soon after a change
+//                                    (R-R3-47). AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/StationAccessoryData.h"
@@ -47,9 +50,15 @@ StationAccessoryData::StationAccessoryData(AccessoryDataModel* model, const Sour
     , m_model(model)
     , m_sources(sources)
 {
+    m_saveTimer.setSingleShot(true);
+    m_saveTimer.setInterval(kSaveDelayMs);
+    connect(&m_saveTimer, &QTimer::timeout, this, &StationAccessoryData::saveNow);
     for (FaultLog* log : { m_sources.pgxlFaults, m_sources.tgxlFaults, m_sources.rfkitFaults }) {
         if (log != nullptr) {
             connect(log, &FaultLog::changed, this, &StationAccessoryData::publishFaults);
+            // I3: a fault captured or cleared reaches the file soon, not
+            // only at a clean stop.
+            connect(log, &FaultLog::changed, this, &StationAccessoryData::scheduleSave);
         }
     }
     if (m_sources.pgxlDiagnostics != nullptr) {
@@ -75,6 +84,29 @@ StationAccessoryData::StationAccessoryData(AccessoryDataModel* model, const Sour
                 this, &StationAccessoryData::publishTuneMemory);
     }
     publishAll();
+}
+
+StationAccessoryData::~StationAccessoryData()
+{
+    if (m_saveTimer.isActive()) {
+        m_saveTimer.stop();
+        saveNow();
+    }
+}
+
+void StationAccessoryData::scheduleSave()
+{
+    if (!m_saveTimer.isActive()) {
+        m_saveTimer.start();
+    }
+}
+
+void StationAccessoryData::saveNow()
+{
+    QString error;
+    if (!AppSettings::instance().save(&error)) {
+        qCWarning(lcStationAccessoryData) << "Could not save the accessory records:" << error;
+    }
 }
 
 // static
@@ -269,6 +301,7 @@ bool StationAccessoryData::setInterlockPolicy(int mode, int graceMs, bool swrGat
     p->setSwrGateEnabled(swrGateEnabled);
     p->setSwrGateMax(static_cast<float>(swrGateMax));
     publishInterlock();
+    scheduleSave();
     return true;
 }
 
@@ -285,6 +318,7 @@ bool StationAccessoryData::setPowerCap(bool enabled, int watts, QString* reason)
                enabled ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(QStringLiteral("PGXL_PowerCapW"), watts);
     publishPowerCapSettings();
+    scheduleSave();
     return true;
 }
 

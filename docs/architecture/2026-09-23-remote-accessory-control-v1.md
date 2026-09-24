@@ -798,6 +798,9 @@ Station-wide, behind `setTxInterlockPolicy`: `PGXL_TxInterlockMode`
 `PGXL_PowerCapEnabled`, `PGXL_PowerCapW`. Behind `clearAccessoryFaults`
 (and written by the Core as it records faults): `PGXL_FaultHistory`,
 `TGXL_FaultHistory`, `RfKit_FaultHistory`. All mirrored on `accessoryData`.
+The Core writes its settings file within half a second of each of these
+changes (one write for a burst), not only at a clean stop, so a power loss
+at the station keeps them.
 
 Station-wide, mirrored on `accessoryData` and changed by the desktop app as
 station settings: `TGXL_Ant1_Label` to `TGXL_Ant3_Label`,
@@ -834,8 +837,9 @@ Station-wide, not yet behind a command: `PGXL_BroadcastDiscovery`,
 
 The Core records every accessory's faults and keeps each device's last 10,
 newest first, in its settings key (`PGXL_FaultHistory`,
-`TGXL_FaultHistory`, `RfKit_FaultHistory`), so the history survives a Core
-restart. The same JSON array travels in `accessoryData` (`pgxlFaults`,
+`TGXL_FaultHistory`, `RfKit_FaultHistory`), written to its settings file
+within half a second of each fault or clear, so the history survives a Core
+restart, including one after a power loss. The same JSON array travels in `accessoryData` (`pgxlFaults`,
 `tgxlFaults`, `rfkitFaults`); a window shows a new fault as soon as the
 Core records it.
 
