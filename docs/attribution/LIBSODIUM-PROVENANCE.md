@@ -38,9 +38,11 @@ ISC. The archive's `LICENSE` is copied byte for byte to
 (SHA-256 `508a76d186356c0dd807a670ef510964f8724557024796a2c426c6c0e19ab683`).
 Some compiled source files carry notices of their own (the scrypt code's
 BSD notices by Colin Percival and Alexander Peslyak, public-domain and CC0
-dedications). A `libsodium-notices.txt` collecting them
-(`scripts/collect-source-notices.py`, which has no libsodium preset yet)
-is still to be written.
+dedications). They are collected, byte for byte, in
+`packaging/third-party-licenses/libsodium-notices.txt`, written by
+`python3 scripts/collect-source-notices.py libsodium --build-dir <a built
+tree> --output packaging/third-party-licenses/libsodium-notices.txt`;
+rerun it after the pin changes.
 
 ## How it is built
 

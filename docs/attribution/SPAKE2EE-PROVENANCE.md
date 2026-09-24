@@ -34,7 +34,9 @@ BSD-2-Clause, "Copyright (c) 2017-2026, Frank Denis". The archive's
 `packaging/third-party-licenses/spake2-ee.txt`
 (SHA-256 `5538ee99f815dcf87fe40e1b9181fb1f928a2ce6613aeb3b03b8992cf87aa190`).
 The compiled files (`src/crypto_spake.c`, `src/crypto_spake.h`,
-`src/pushpop.h`) carry no notice of their own.
+`src/pushpop.h`) carry no notice of their own
+(`scripts/collect-source-notices.py spake2-ee --build-dir <a built tree>`
+finds none), so there is no `spake2-ee-notices.txt`.
 
 ## How it is built
 
