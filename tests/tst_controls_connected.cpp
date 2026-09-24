@@ -317,7 +317,26 @@ private slots:
         slice->setFrequency(5000000.0);   // WWV 5 MHz
         QVERIFY(bandFromFrequency(slice->frequency()) == Band::WWV);
         model->onBandButtonClicked(Band::Band20m);
-        QAction* wwv = actionByText(window, QStringLiteral("&WWV (10.0 MHz)"));
+        // Band entries are named by band only; each restores the band's
+        // saved frequency, so no entry lists a frequency.
+        QMenu* bandMenu = nullptr;
+        for (QMenu* m : window->findChildren<QMenu*>()) {
+            if (m->title() == QStringLiteral("&Band")) { bandMenu = m; }
+        }
+        QVERIFY(bandMenu != nullptr);
+        QList<QMenu*> menus{bandMenu};
+        int entries = 0;
+        while (!menus.isEmpty()) {
+            QMenu* m = menus.takeFirst();
+            for (QAction* entry : m->actions()) {
+                ++entries;
+                QVERIFY2(!entry->text().contains(QStringLiteral("MHz")),
+                         qPrintable(entry->text()));
+                if (entry->menu()) { menus << entry->menu(); }
+            }
+        }
+        QVERIFY(entries > 11);
+        QAction* wwv = actionByText(window, QStringLiteral("&WWV"));
         QVERIFY(wwv != nullptr);
         wwv->trigger();
         QCOMPARE(slice->frequency(), 5000000.0);

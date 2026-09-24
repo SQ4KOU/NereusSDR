@@ -5667,7 +5667,7 @@ nereus_add_test(tst_radio_model_spot_wiring)
 # unit test (see tst_mainwindow_status_bar_safety for the established
 # isolate-the-logic pattern), so this suite pins the surrounding
 # contracts instead: dialog ctor signatures match RadioModel accessor
-# return types, SpotModel::clear (Ctrl+Shift+K) empties every row,
+# return types, SpotModel::clear (Ctrl+Shift+X) empties every row,
 # SpotHubDialog::spotsClearedAll routes into SpotModel::clear, and the
 # three FreeDVReporterDialog signals (qsyRequested,
 # messageSendRequested, tuneRequested) carry the right argument shape

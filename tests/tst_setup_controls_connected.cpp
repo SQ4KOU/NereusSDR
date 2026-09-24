@@ -122,6 +122,11 @@ private slots:
         const RadioInfo info = savedRadioInfo();
         s.saveRadio(info, /*pinToMac=*/true, /*autoConnect=*/false);
         s.setLastConnected(info.macAddress);
+        // When the radio was last seen is not the toggle's to change.
+        const QString lastSeenKey =
+            QStringLiteral("radios/%1/lastSeen").arg(info.macAddress);
+        const QString lastSeen = QStringLiteral("2020-01-02T03:04:05Z");
+        s.setValue(lastSeenKey, lastSeen);
 
         StartupPrefsPage page(nullptr);
         auto* toggle = page.findChild<QPushButton*>(QStringLiteral("startupAutoConnect"));
@@ -133,6 +138,7 @@ private slots:
         QVERIFY(saved.has_value());
         QVERIFY(saved->autoConnect);
         QVERIFY(saved->pinToMac);  // the rest of the entry is kept
+        QCOMPARE(s.value(lastSeenKey).toString(), lastSeen);
     }
 
     // With no radio to connect to, it says why it is off.
@@ -242,6 +248,52 @@ private slots:
         }
     }
 
+    // With Setup open, the DSP controls follow a change of active slice:
+    // they show the new slice's values and change that slice only.
+    void dspControlsFollowTheActiveSlice()
+    {
+        RadioModel model;
+        SliceModel* first = ensureSlice(model);
+        QVERIFY(first != nullptr);
+        NrAnfSetupPage anfPage(&model);
+        CwSetupPage cwPage(&model);
+        AmSamSetupPage amPage(&model);
+        FmSetupPage fmPage(&model);
+        auto* anf = anfPage.findChild<QCheckBox*>(QStringLiteral("anfEnableCheck"));
+        auto* apf = cwPage.findChild<QPushButton*>(QStringLiteral("apfEnableButton"));
+        auto* center = cwPage.findChild<QSlider*>(QStringLiteral("apfCenterSlider"));
+        auto* am = amPage.findChild<QSlider*>(QStringLiteral("amSquelchThresholdSlider"));
+        auto* fm = fmPage.findChild<QSlider*>(QStringLiteral("fmSquelchThresholdSlider"));
+        QVERIFY(anf && apf && center && am && fm);
+
+        const int second = model.addSlice();
+        QVERIFY(second >= 0);
+        model.setActiveSlice(second);
+        SliceModel* active = model.activeSlice();
+        QVERIFY(active != nullptr && active != first);
+        active->setAnfEnabled(true);
+        active->setApfTuneHz(120);
+        active->setAmsqThresh(-90.0);
+        active->setFmsqThresh(-60.0);
+        QVERIFY(anf->isChecked());
+        QCOMPARE(center->value(), RadioModel::kApfCwPitchHz + 120);
+        QCOMPARE(am->value(), -90);
+        QCOMPARE(fm->value(), -60);
+
+        const bool firstAnf = first->anfEnabled();
+        const bool firstApf = first->apfEnabled();
+        const double firstAm = first->amsqThresh();
+        anf->setChecked(false);
+        apf->click();
+        am->setValue(-70);
+        QVERIFY(!active->anfEnabled());
+        QVERIFY(active->apfEnabled());
+        QCOMPARE(active->amsqThresh(), -70.0);
+        QCOMPARE(first->anfEnabled(), firstAnf);
+        QCOMPARE(first->apfEnabled(), firstApf);
+        QCOMPARE(first->amsqThresh(), firstAm);
+    }
+
     // Appearance > Meter Styles: the S-meter group is the S-meter's own
     // face, peak hold and decay, saved under its keys and applied to the
     // S-meter on screen.
@@ -278,6 +330,17 @@ private slots:
         decay->setCurrentIndex(decay->findData(QStringLiteral("Slow")));
         QCOMPARE(AppSettings::instance().value(QStringLiteral("PeakDecayRate")).toString(),
                  QStringLiteral("Slow"));
+
+        // A change from the S-meter's right-click menu shows on the page
+        // while Setup is open.
+        sMeter->setFaceStyle(SMeterWidget::FaceStyle::AgedCream);
+        QCOMPARE(face->currentData().toInt(),
+                 static_cast<int>(SMeterWidget::FaceStyle::AgedCream));
+        const bool peakWas = peak->isChecked();
+        sMeter->setPeakHoldEnabled(!peakWas);
+        QCOMPARE(peak->isChecked(), !peakWas);
+        sMeter->setPeakDecayRate(QStringLiteral("Fast"));
+        QCOMPARE(decay->currentData().toString(), QStringLiteral("Fast"));
         delete dialog;
         QVERIFY(sessions.replace({}, false));
     }

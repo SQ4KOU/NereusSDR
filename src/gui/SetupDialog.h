@@ -96,6 +96,12 @@ public:
     // is safe across server lifecycle changes.
     void setTciServer(class NereusSDR::TciServer* server);
 
+public:
+    // R-R3-21: the S-meter's face, peak hold or decay changed (its
+    // right-click menu); Appearance > Meter Styles shows the new values if
+    // it is open. MainWindow calls this.
+    void reloadMeterStyles();
+
 signals:
     void connectionsRequested();
     // Phase 3M-3a-ii Batch 6 (Task 3): forwarded from CfcSetupPage's

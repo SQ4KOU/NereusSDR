@@ -45,9 +45,10 @@ StartupPrefsPage::StartupPrefsPage(RadioModel* model, QWidget* parent)
     }
     connect(autoConnect, &QPushButton::toggled, this, [](bool on) {
         auto& s = AppSettings::instance();
-        const auto saved = s.savedRadio(s.lastConnected());
-        if (!saved.has_value()) { return; }
-        s.saveRadio(saved->info, saved->pinToMac, on);
+        const QString last = s.lastConnected();
+        if (!s.savedRadio(last).has_value()) { return; }
+        // Only the flag: saveRadio would also rewrite the radio's lastSeen.
+        s.setRadioAutoConnect(last, on);
         s.save();
     });
 

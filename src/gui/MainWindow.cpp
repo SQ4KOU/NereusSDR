@@ -7468,19 +7468,21 @@ void MainWindow::buildMenuBar()
         // R-R3-21: each entry goes through the band buttons' path, so the
         // band's saved frequency, mode and filter come back (and a first
         // visit uses the band's seed). It used to set the listed frequency
-        // directly, skipping the per-band memory.
+        // directly, skipping the per-band memory. Entries are named by band
+        // only: a band's entry restores its saved frequency, so a listed
+        // frequency would not match where it lands.
         const struct { const char* label; Band band; } hfBands[] = {
-            { "160m (1.8 MHz)",   Band::Band160m },
-            { "80m (3.5 MHz)",    Band::Band80m  },
-            { "60m (5.3 MHz)",    Band::Band60m  },
-            { "40m (7.0 MHz)",    Band::Band40m  },
-            { "30m (10.1 MHz)",   Band::Band30m  },
-            { "20m (14.0 MHz)",   Band::Band20m  },
-            { "17m (18.068 MHz)", Band::Band17m  },
-            { "15m (21.0 MHz)",   Band::Band15m  },
-            { "12m (24.89 MHz)",  Band::Band12m  },
-            { "10m (28.0 MHz)",   Band::Band10m  },
-            { "6m (50.0 MHz)",    Band::Band6m   },
+            { "160m",             Band::Band160m },
+            { "80m",              Band::Band80m  },
+            { "60m",              Band::Band60m  },
+            { "40m",              Band::Band40m  },
+            { "30m",              Band::Band30m  },
+            { "20m",              Band::Band20m  },
+            { "17m",              Band::Band17m  },
+            { "15m",              Band::Band15m  },
+            { "12m",              Band::Band12m  },
+            { "10m",              Band::Band10m  },
+            { "6m",               Band::Band6m   },
         };
         for (const auto& entry : hfBands) {
             const Band band = entry.band;
@@ -7509,7 +7511,7 @@ void MainWindow::buildMenuBar()
         });
     }
 
-    bandMenu->addAction(QStringLiteral("&WWV (10.0 MHz)"), this, [this]() {
+    bandMenu->addAction(QStringLiteral("&WWV"), this, [this]() {
         if (m_radioModel) { m_radioModel->onBandButtonClicked(Band::WWV); }
     });
 
@@ -9760,6 +9762,11 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
     connect(dialog, &SetupDialog::sMeterPeakDecayChanged, this, [sMeter](const QString& rate) {
         if (SMeterWidget* sm = sMeter()) { sm->setPeakDecayRate(rate); }
     });
+    // ...and the other way: a right-click change on the S-meter shows on
+    // the page while Setup is open.
+    if (SMeterWidget* sm = sMeter()) {
+        connect(sm, &SMeterWidget::settingsChanged, dialog, &SetupDialog::reloadMeterStyles);
+    }
     connect(dialog, &SetupDialog::connectionsRequested,
             this, &MainWindow::connectionRequestedByOperator);
     if (m_txApplet) {

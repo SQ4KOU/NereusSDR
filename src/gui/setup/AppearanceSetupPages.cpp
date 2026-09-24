@@ -17,6 +17,7 @@
 #include <QPushButton>
 #include <QHBoxLayout>
 #include <QMessageBox>
+#include <QSignalBlocker>
 
 #include <functional>
 
@@ -232,6 +233,31 @@ MeterStylesPage::MeterStylesPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("Meter Styles"), model, parent)
 {
     buildUI();
+}
+
+void MeterStylesPage::reloadSMeterSettings()
+{
+    using Face = SMeterWidget::FaceStyle;
+    const auto& s = AppSettings::instance();
+    if (m_faceCombo) {
+        const Face face = SMeterWidget::faceStyleFromKey(
+            s.value(QStringLiteral("SMeter_FaceStyle"),
+                    SMeterWidget::faceStyleKey(Face::AgedCream)).toString());
+        QSignalBlocker block(m_faceCombo);
+        m_faceCombo->setCurrentIndex(m_faceCombo->findData(static_cast<int>(face)));
+    }
+    if (m_peakHoldToggle) {
+        QSignalBlocker block(m_peakHoldToggle);
+        m_peakHoldToggle->setChecked(
+            s.value(QStringLiteral("PeakHoldEnabled"), QStringLiteral("True")).toString()
+            == QStringLiteral("True"));
+    }
+    if (m_decayRateCombo) {
+        const int at = m_decayRateCombo->findData(
+            s.value(QStringLiteral("PeakDecayRate"), QStringLiteral("Medium")).toString());
+        QSignalBlocker block(m_decayRateCombo);
+        m_decayRateCombo->setCurrentIndex(at >= 0 ? at : 1);
+    }
 }
 
 void MeterStylesPage::buildUI()

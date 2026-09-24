@@ -325,7 +325,7 @@ private slots:
         model->onBandButtonClicked(Band::Band20m);
         QVERIFY(bandFromFrequency(slice->frequency()) == Band::Band20m);
 
-        QAction* band40 = actionByText(window, QStringLiteral("40m (7.0 MHz)"));
+        QAction* band40 = actionByText(window, QStringLiteral("40m"));
         QVERIFY(band40 != nullptr);
         band40->trigger();
         QCOMPARE(slice->frequency(), 7123000.0);

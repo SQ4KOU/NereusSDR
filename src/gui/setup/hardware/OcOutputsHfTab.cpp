@@ -83,7 +83,6 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
-#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QVBoxLayout>
 

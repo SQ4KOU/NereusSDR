@@ -58,6 +58,11 @@
 //                 rxSUnitsReadout() / rxDbmReadout() / peakMarkerVisible() /
 //                 peakHoldLineVisible() hold the readout text and marker
 //                 conditions both faces share.  Test seams added.
+//   2026-09-24  settingsChanged() signal (R-R3-21) by J.J. Boyd (KG4VCF),
+//                 with AI-assisted transformation via Anthropic Claude Code:
+//                 emitted when the face, peak hold or peak decay changes, so
+//                 Setup > Appearance > Meter Styles follows a right-click
+//                 change while it is open.
 //                 NereusSDR-native; no upstream equivalent.
 // =================================================================
 #pragma once
@@ -173,6 +178,11 @@ public:
     // (0.0 = scale minimum, 1.0 = scale maximum).
     float testNeedleTarget() const { return m_targetNeedleFraction; }
     float testNeedleFraction() const { return m_needleFraction; }
+
+signals:
+    // R-R3-21: the face, peak hold or peak decay changed (and was saved),
+    // from the right-click menu or from Setup.
+    void settingsChanged();
 
 public slots:
     // Update the displayed RX level (S-meter dBm).

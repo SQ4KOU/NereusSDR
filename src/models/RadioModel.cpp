@@ -12496,8 +12496,7 @@ void RadioModel::wireSliceSignals(SliceModel* slice)
         if (rxCh) {
             // From Thetis setup.cs:17071 — freq = CWPitch + tuneOffset
             // CW pitch default 600 Hz from Thetis console.cs
-            static constexpr double kCwPitchHz = 600.0;
-            rxCh->setApfFreq(kCwPitchHz + static_cast<double>(hz));
+            rxCh->setApfFreq(static_cast<double>(kApfCwPitchHz) + static_cast<double>(hz));
         }
         scheduleSettingsSave();
     });

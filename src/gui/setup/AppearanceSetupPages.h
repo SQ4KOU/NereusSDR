@@ -49,6 +49,10 @@ class MeterStylesPage : public SetupPage {
 public:
     explicit MeterStylesPage(RadioModel* model, QWidget* parent = nullptr);
 
+    // R-R3-21: shows the S-meter's saved face, peak hold and decay again
+    // (a right-click change on the S-meter while this page is open).
+    void reloadSMeterSettings();
+
 signals:
     // R-R3-21: the S-meter settings its right-click menu holds. The page
     // saves them under the S-meter's own keys; MainWindow applies them to

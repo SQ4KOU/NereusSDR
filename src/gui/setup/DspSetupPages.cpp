@@ -105,6 +105,8 @@
 #include <QVBoxLayout>
 
 #include <cmath>
+#include <functional>
+#include <memory>
 
 namespace NereusSDR {
 
@@ -116,29 +118,62 @@ static void disableGroup(QGroupBox* grp)
     grp->setEnabled(false);
 }
 
-// R-R3-21: a squelch threshold slider (dB) bound both ways to one slice
-// setting; with no slice it says why it is off.
-static void bindSquelchThreshold(SliceModel* slice, QSlider* slider, QLabel* value,
+using SliceBindings = QList<QMetaObject::Connection>;
+
+// R-R3-21: keeps Setup controls bound to the active slice while the page is
+// open. bind(slice) makes the connections for one slice (slice is null when
+// there is none) and returns them; when the active slice changes they are
+// dropped and bind() runs again for the new one.
+static void bindToActiveSlice(QObject* owner, RadioModel* model,
+                              std::function<SliceBindings(SliceModel*)> bind)
+{
+    auto held = std::make_shared<SliceBindings>();
+    const auto rebind = [held, bind = std::move(bind)](SliceModel* slice) {
+        for (const QMetaObject::Connection& c : std::as_const(*held)) {
+            QObject::disconnect(c);
+        }
+        *held = bind(slice);
+    };
+    rebind(model ? model->activeSlice() : nullptr);
+    if (model) {
+        QObject::connect(model, &RadioModel::activeSliceChanged, owner,
+                         [model, rebind](int) { rebind(model->activeSlice()); });
+    }
+}
+
+// With no slice a control is off and says why; with one it is on again.
+static void setSliceAvailable(QWidget* w, bool available, const QString& tip = QString())
+{
+    w->setEnabled(available);
+    w->setToolTip(available ? tip : QStringLiteral("Connect to a radio to change this."));
+}
+
+// R-R3-21: a squelch threshold slider (dB) bound both ways to one setting of
+// the active slice; with no slice it says why it is off.
+static void bindSquelchThreshold(QObject* owner, RadioModel* model, QSlider* slider,
+                                 QLabel* value,
                                  double (SliceModel::*getter)() const,
                                  void (SliceModel::*setter)(double),
                                  void (SliceModel::*changed)(double))
 {
-    if (!slice) {
-        slider->setEnabled(false);
-        slider->setToolTip(QStringLiteral("Connect to a radio to change this."));
-        return;
-    }
-    const auto show = [slider, value](double dB) {
-        QSignalBlocker block(slider);
-        slider->setValue(static_cast<int>(std::lround(dB)));
-        value->setText(QStringLiteral("%1 dB").arg(slider->value()));
-    };
-    show((slice->*getter)());
-    QObject::connect(slider, &QSlider::valueChanged, slice, [slice, setter, value](int dB) {
-        value->setText(QStringLiteral("%1 dB").arg(dB));
-        (slice->*setter)(static_cast<double>(dB));
+    bindToActiveSlice(owner, model, [=](SliceModel* slice) {
+        SliceBindings conns;
+        setSliceAvailable(slider, slice != nullptr);
+        if (!slice) { return conns; }
+        const auto show = [slider, value](double dB) {
+            QSignalBlocker block(slider);
+            slider->setValue(static_cast<int>(std::lround(dB)));
+            value->setText(QStringLiteral("%1 dB").arg(slider->value()));
+        };
+        show((slice->*getter)());
+        conns << QObject::connect(slider, &QSlider::valueChanged, slice,
+                                  [slice, setter, value](int dB) {
+            value->setText(QStringLiteral("%1 dB").arg(dB));
+            (slice->*setter)(static_cast<double>(dB));
+        });
+        conns << QObject::connect(slice, changed, slider, show);
+        return conns;
     });
-    QObject::connect(slice, changed, slider, show);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1424,18 +1459,23 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         // sets (SliceModel::setAnfEnabled); it was a greyed placeholder.
         auto* anfEnableChk = new QCheckBox("Enable ANF");
         anfEnableChk->setObjectName(QStringLiteral("anfEnableCheck"));
-        anfEnableChk->setToolTip(tr("Enable Adaptive Notch Filter."));
-        if (slice) {
-            anfEnableChk->setChecked(slice->anfEnabled());
-            connect(anfEnableChk, &QCheckBox::toggled, slice, &SliceModel::setAnfEnabled);
-            connect(slice, &SliceModel::anfEnabledChanged, anfEnableChk, [anfEnableChk](bool on) {
+        const QString anfTip = tr("Enable Adaptive Notch Filter.");
+        bindToActiveSlice(this, model, [anfEnableChk, anfTip](SliceModel* s) {
+            SliceBindings conns;
+            setSliceAvailable(anfEnableChk, s != nullptr, anfTip);
+            if (!s) { return conns; }
+            {
+                QSignalBlocker block(anfEnableChk);
+                anfEnableChk->setChecked(s->anfEnabled());
+            }
+            conns << connect(anfEnableChk, &QCheckBox::toggled, s, &SliceModel::setAnfEnabled);
+            conns << connect(s, &SliceModel::anfEnabledChanged, anfEnableChk,
+                             [anfEnableChk](bool on) {
                 QSignalBlocker block(anfEnableChk);
                 anfEnableChk->setChecked(on);
             });
-        } else {
-            anfEnableChk->setEnabled(false);
-            anfEnableChk->setToolTip(tr("Connect to a radio to change this."));
-        }
+            return conns;
+        });
         grpLay->addWidget(anfEnableChk);
 
         tabLay->addStretch(1);
@@ -1787,9 +1827,10 @@ CwSetupPage::CwSetupPage(RadioModel* model, QWidget* parent)
     // flag's APF button and tune slider (SliceModel apfEnabled /
     // apfTuneHz). The centre is the CW pitch plus the slice's tune offset,
     // as RadioModel sends it: From Thetis setup.cs:17071 [v2.10.3.13] --
-    // freq = CWPitch + tuneOffset, with RadioModel's 600 Hz pitch. The
-    // range is the flag slider's -500..+500 Hz around it.
-    static constexpr int kApfPitchHz = 600;
+    // freq = CWPitch + tuneOffset, with RadioModel's pitch
+    // (RadioModel::kApfCwPitchHz). The range is the flag slider's
+    // -500..+500 Hz around it.
+    static constexpr int kApfPitchHz = RadioModel::kApfCwPitchHz;
     auto* apfCenter = new QSlider(Qt::Horizontal);
     apfCenter->setObjectName(QStringLiteral("apfCenterSlider"));
     apfCenter->setRange(kApfPitchHz - 500, kApfPitchHz + 500);
@@ -1807,32 +1848,35 @@ CwSetupPage::CwSetupPage(RadioModel* model, QWidget* parent)
     apfGain->setEnabled(false);
     addLabeledSlider(apfLay, "Gain", apfGain);
 
-    if (SliceModel* slice = model ? model->activeSlice() : nullptr) {
-        apfEnable->setChecked(slice->apfEnabled());
-        apfCenter->setValue(kApfPitchHz + slice->apfTuneHz());
+    bindToActiveSlice(this, model, [apfEnable, apfCenter, apfCenterValue](SliceModel* s) {
+        SliceBindings conns;
+        setSliceAvailable(apfEnable, s != nullptr);
+        setSliceAvailable(apfCenter, s != nullptr);
+        if (!s) { return conns; }
+        {
+            QSignalBlocker blockEnable(apfEnable);
+            QSignalBlocker blockCenter(apfCenter);
+            apfEnable->setChecked(s->apfEnabled());
+            apfCenter->setValue(kApfPitchHz + s->apfTuneHz());
+        }
         apfCenterValue->setText(QStringLiteral("%1 Hz").arg(apfCenter->value()));
-        connect(apfEnable, &QPushButton::toggled, slice, &SliceModel::setApfEnabled);
-        connect(apfCenter, &QSlider::valueChanged, slice,
-                [slice, apfCenterValue](int hz) {
+        conns << connect(apfEnable, &QPushButton::toggled, s, &SliceModel::setApfEnabled);
+        conns << connect(apfCenter, &QSlider::valueChanged, s, [s, apfCenterValue](int hz) {
             apfCenterValue->setText(QStringLiteral("%1 Hz").arg(hz));
-            slice->setApfTuneHz(hz - kApfPitchHz);
+            s->setApfTuneHz(hz - kApfPitchHz);
         });
-        connect(slice, &SliceModel::apfEnabledChanged, apfEnable, [apfEnable](bool on) {
+        conns << connect(s, &SliceModel::apfEnabledChanged, apfEnable, [apfEnable](bool on) {
             QSignalBlocker block(apfEnable);
             apfEnable->setChecked(on);
         });
-        connect(slice, &SliceModel::apfTuneHzChanged, apfCenter,
-                [apfCenter, apfCenterValue](int tune) {
+        conns << connect(s, &SliceModel::apfTuneHzChanged, apfCenter,
+                         [apfCenter, apfCenterValue](int tune) {
             QSignalBlocker block(apfCenter);
             apfCenter->setValue(kApfPitchHz + tune);
             apfCenterValue->setText(QStringLiteral("%1 Hz").arg(apfCenter->value()));
         });
-    } else {
-        for (QWidget* w : std::initializer_list<QWidget*>{apfEnable, apfCenter}) {
-            w->setEnabled(false);
-            w->setToolTip(tr("Connect to a radio to change this."));
-        }
-    }
+        return conns;
+    });
 
     // P1 full-parity §4.2 — subscribe to model so the Sidetone Volume row
     // visibility reflects the connected board's hasSidetoneGenerator flag
@@ -1933,7 +1977,7 @@ AmSamSetupPage::AmSamSetupPage(RadioModel* model, QWidget* parent)
     sqThresh->setRange(-160, 0);
     auto* sqThreshValue = new QLabel;
     addLabeledSlider(sqLay, "AM Squelch Threshold", sqThresh, sqThreshValue);
-    bindSquelchThreshold(model ? model->activeSlice() : nullptr, sqThresh, sqThreshValue,
+    bindSquelchThreshold(this, model, sqThresh, sqThreshValue,
                          &SliceModel::amsqThresh, &SliceModel::setAmsqThresh,
                          &SliceModel::amsqThreshChanged);
 
@@ -1971,7 +2015,7 @@ FmSetupPage::FmSetupPage(RadioModel* model, QWidget* parent)
     squelchThresh->setRange(-160, 0);
     auto* squelchThreshValue = new QLabel;
     addLabeledSlider(rxLay, "Squelch Threshold", squelchThresh, squelchThreshValue);
-    bindSquelchThreshold(model ? model->activeSlice() : nullptr, squelchThresh,
+    bindSquelchThreshold(this, model, squelchThresh,
                          squelchThreshValue, &SliceModel::fmsqThresh,
                          &SliceModel::setFmsqThresh, &SliceModel::fmsqThreshChanged);
 

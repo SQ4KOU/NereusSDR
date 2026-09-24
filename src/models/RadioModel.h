@@ -308,6 +308,12 @@ class RadioModel : public QObject {
 
 
 public:
+    // The CW pitch the APF centre is offset from: APF freq = CWPitch +
+    // tuneOffset. From Thetis setup.cs:17071 [v2.10.3.13]; CW pitch default
+    // 600 Hz from Thetis console.cs. Setup > DSP > CW's APF Center Freq
+    // uses the same value (R-R3-21).
+    static constexpr int kApfCwPitchHz = 600;
+
     // Remote-daemon R2 Task 4: which side of the wire this model's DSP
     // lives on. Local (default; unchanged behavior) owns a
     // RadioConnection and drives WdspEngine + AudioEngine from

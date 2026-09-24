@@ -1491,4 +1491,12 @@ void SetupDialog::applyPaVisibility(const BoardCapabilities& caps)
     }
 }
 
+
+void SetupDialog::reloadMeterStyles()
+{
+    for (MeterStylesPage* page : findChildren<MeterStylesPage*>()) {
+        page->reloadSMeterSettings();
+    }
+}
+
 } // namespace NereusSDR

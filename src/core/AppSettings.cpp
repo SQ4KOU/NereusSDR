@@ -993,6 +993,17 @@ void AppSettings::saveRadio(const RadioInfo& info, bool pinToMac, bool autoConne
     }
 }
 
+void AppSettings::setRadioAutoConnect(const QString& macKey, bool autoConnect)
+{
+    const QString prefix = radioKeyPrefix(macKey);
+    if (!contains(prefix + QStringLiteral("macAddress"))
+        && !contains(prefix + QStringLiteral("ipAddress"))) {
+        return;  // not a saved radio
+    }
+    setValue(prefix + QStringLiteral("autoConnect"),
+             autoConnect ? QStringLiteral("True") : QStringLiteral("False"));
+}
+
 void AppSettings::forgetRadio(const QString& macKey)
 {
     const QString prefix = radioKeyPrefix(macKey);
