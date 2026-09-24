@@ -872,6 +872,16 @@ public:
     // and activeChanged(false) is emitted. With no I/Q arriving the stop ends
     // at WDSP's 100 ms drain timeout.
     bool isActive() const { return m_active.load(); }
+
+#ifdef NEREUS_BUILD_TESTS
+    // Test-only: true while a no-drain stop is waiting for WDSP to report it
+    // done (m_pendingStop). Lets a test see processIq's feed finish the stop
+    // rather than the restart's finishPendingStop fallback.
+    bool stopPendingForTest() const
+    {
+        return m_pendingStop.load(std::memory_order_acquire) != 0;
+    }
+#endif
     void setActive(bool active);
 
     // Switch the channel off without waiting for WDSP to drain it

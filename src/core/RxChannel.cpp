@@ -1933,6 +1933,21 @@ void RxChannel::finishPendingStop()
     // state, so switch the channel on and stop it again, draining. With I/Q
     // flowing processIq feeds that drain; without it, the wait times out
     // and WDSP clears the flags itself.
+    //
+    // A window this does not close (review M3). processIq counts a no-drain
+    // stop done once fexchange2 stops writing, which is when the slew-down
+    // clears exchange and releases the flush thread
+    // (third_party/wdsp/src/iobuffs.c:558-562 [v2.10.3.15], unchanged from
+    // Thetis). The flush thread runs after that: it sets exec_bypass and
+    // then clears flushflag (third_party/wdsp/src/channel.c:152-162, Thetis
+    // wdsp/channel.c:134-144 [v2.10.3.15]). A restart that lands between
+    // the two has the exec_bypass reset of SetChannelState(ch, 1, ...)
+    // (third_party/wdsp/src/channel.c:309, Thetis wdsp/channel.c:291
+    // [v2.10.3.15]) undone by the flush, and the channel stays silent while
+    // it reports active. It is left alone: the window is the flush thread's
+    // wake-up, the only path that stops without a drain and restarts is
+    // setSampleRateLive, which puts at least 40 ms of fixed waits between
+    // the stop and the restart, and WDSP has the same race upstream.
     SetChannelState(m_channelId, 1, 0);
     SetChannelState(m_channelId, 0, 1);
     m_pendingStop.store(0, std::memory_order_release);

@@ -304,6 +304,15 @@ private slots:
         // Several DSP blocks of input: the slew-down completes in the first.
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
+        // The feed itself finished the stop, before any restart: processIq
+        // saw its sentinel survive fexchange2 and cleared the pending stop.
+        // A restart would hide a broken feed, since finishPendingStop then
+        // completes the stop itself. The wait only absorbs a loaded machine.
+        QTRY_VERIFY2_WITH_TIMEOUT(!rx->stopPendingForTest(),
+                                  "the no-drain stop was still pending after "
+                                  "the feed ran on through it",
+                                  2000);
+
         const Clock::time_point t0 = Clock::now();
         rx->setActive(true);
         const double restartMs = msSince(t0);
