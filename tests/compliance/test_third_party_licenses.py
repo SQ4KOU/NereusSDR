@@ -117,6 +117,48 @@ def test_multi_line_declarations_in_the_real_tree_are_found():
         assert multi_line in names
 
 
+def _add_crate_notices(root: Path, generated_from, pinned: str):
+    lic = root / "packaging" / "third-party-licenses"
+    readme = lic / "README.md"
+    readme.write_text(readme.read_text(encoding="utf-8").replace(
+        "| `foo.txt` | `foo.txt` |", "| `foo.txt`, `deepfilternet-crates.txt` | `foo.txt` |"),
+        encoding="utf-8")
+    header = "DeepFilterNet Rust crate notices\n\n"
+    if generated_from is not None:
+        header += f"DeepFilterNet commit: {generated_from}\n"
+    (lic / "deepfilternet-crates.txt").write_text(header, encoding="utf-8")
+    pin = root / "third_party" / "deepfilter"
+    pin.mkdir(parents=True, exist_ok=True)
+    (pin / "COMMIT").write_text(pinned + "\n", encoding="utf-8")
+    readme.write_text(readme.read_text(encoding="utf-8") +
+                      "| DeepFilterNet | `third_party/deepfilter` | x | desktop | "
+                      "`deepfilternet-crates.txt` |\n", encoding="utf-8")
+
+
+def test_crate_notices_from_the_pinned_commit_pass(tmp_path):
+    root = _make_tree(tmp_path)
+    _add_crate_notices(root, "d375b2d8aaaa", "d375b2d8aaaa")
+    code, out = _run(root)
+    assert code == 0, out
+
+
+def test_crate_notices_from_another_commit_fail(tmp_path):
+    root = _make_tree(tmp_path)
+    _add_crate_notices(root, "d375b2d8aaaa", "0123456789ab")
+    code, out = _run(root)
+    assert code == 1
+    assert "generated from DeepFilterNet d375b2d8aaaa" in out
+    assert "pins 0123456789ab" in out
+
+
+def test_crate_notices_naming_no_commit_fail(tmp_path):
+    root = _make_tree(tmp_path)
+    _add_crate_notices(root, None, "0123456789ab")
+    code, out = _run(root)
+    assert code == 1
+    assert "names no DeepFilterNet commit" in out
+
+
 def test_named_file_missing_fails(tmp_path):
     root = _make_tree(tmp_path)
     (root / "packaging" / "third-party-licenses" / "GPLv2.txt").unlink()

@@ -20,7 +20,11 @@ The check fails, printing one line per problem, when:
      the opening parenthesis);
   3. a file a row names is missing from the folder (or a sources row
      names no notice file at all);
-  4. a text file in the folder is named by no row.
+  4. a text file in the folder is named by no row;
+  5. deepfilternet-crates.txt names a DeepFilterNet commit other than the
+     one in third_party/deepfilter/COMMIT (or names none). The release
+     path downloads a prebuilt library and never regenerates the file, so
+     the committed file must match the pinned commit.
 
 Exceptions go only through EXCEPTED_SOURCES and EXCEPTED_TEXTS below, each
 with its reason.
@@ -40,6 +44,8 @@ from pathlib import Path
 
 LICENSE_DIR = Path("packaging/third-party-licenses")
 README = LICENSE_DIR / "README.md"
+CRATE_NOTICES = LICENSE_DIR / "deepfilternet-crates.txt"
+DEEPFILTER_COMMIT = Path("third_party/deepfilter/COMMIT")
 
 # Sources (a third_party/ directory name, or a FetchContent / ExternalProject
 # name) that need no row. Each entry carries its reason.
@@ -59,6 +65,7 @@ _SKIP_DIR_PREFIXES = (".", "build", "_deps", "cmake-build")
 _FETCH_RE = re.compile(
     r"\b(FetchContent_Declare|ExternalProject_Add)\s*\(\s*([A-Za-z0-9_.+-]+)")
 _TICK_RE = re.compile(r"`([^`]+)`")
+_CRATE_COMMIT_RE = re.compile(r"^DeepFilterNet commit: (\S+)$", re.MULTILINE)
 
 
 def _split_row(line: str) -> list[str]:
@@ -205,6 +212,23 @@ def check(root: Path) -> tuple[list[str], str]:
                 problems.append(
                     f"{entry.name} in {LICENSE_DIR.as_posix()}/ is named by no row "
                     f"in {README.as_posix()}")
+
+    # 5. The crate notices match the pinned DeepFilterNet commit.
+    crates = root / CRATE_NOTICES
+    pin_file = root / DEEPFILTER_COMMIT
+    if crates.is_file() and pin_file.is_file():
+        pinned = pin_file.read_text(encoding="utf-8").strip()
+        found = _CRATE_COMMIT_RE.search(
+            crates.read_text(encoding="utf-8", errors="replace"))
+        if found is None:
+            problems.append(
+                f"{CRATE_NOTICES.as_posix()} names no DeepFilterNet commit; "
+                f"regenerate it with setup-deepfilter.sh")
+        elif found.group(1) != pinned:
+            problems.append(
+                f"{CRATE_NOTICES.as_posix()} was generated from DeepFilterNet "
+                f"{found.group(1)}, but {DEEPFILTER_COMMIT.as_posix()} pins "
+                f"{pinned}; regenerate it with setup-deepfilter.sh")
 
     summary = (f"third-party licences: {library_count} libraries, "
                f"{len(named)} named files, all present")

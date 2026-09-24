@@ -4,13 +4,19 @@
 setup-deepfilter.sh and setup-deepfilter.ps1 build the DeepFilterNet
 library (libdeepfilter.a, deepfilter.dll) from the pinned DeepFilterNet
 commit with cargo. Every crate compiled into it has its own licence. This
-script lists them from `cargo metadata` over the checkout's Cargo.lock:
+script lists them from the checkout's Cargo.lock:
 
-  * starting at the library's package (deep_filter), it follows normal
-    dependencies only; dev- and build-dependencies, and proc-macro crates,
-    run on the build machine and are not linked in;
-  * without --filter-platform every platform's dependencies are followed,
+  * `cargo tree -p deep_filter --features ... -e normal,no-proc-macro`
+    gives the crates linked into the library: normal dependencies only
+    (dev- and build-dependencies, and proc-macro crates and what only they
+    use, run on the build machine and are not linked in), with the
+    features `cargo cbuild -p deep_filter` selects. `cargo metadata` alone
+    is not enough: its resolve unifies features across the whole
+    DeepFilterNet workspace, so it also lists crates only pyDF and
+    pyDF-data use (hdf5, rayon, jemalloc and others);
+  * `--target all` (the default) follows every platform's dependencies,
     so one file covers every package;
+  * `cargo metadata` then gives each crate's manifest and source directory;
   * for each crate it writes the name, version and licence expression from
     its manifest, then the licence and notice files from its source
     directory (LICENSE*, LICENCE*, COPYING*, NOTICE*, and the manifest's
@@ -24,10 +30,17 @@ reads only what the build already fetched):
       --features deep_filter/capi --commit <sha> \\
       --output packaging/third-party-licenses/deepfilternet-crates.txt
 
-Or from a saved `cargo metadata --format-version 1` output:
-  python3 scripts/collect-crate-notices.py --metadata metadata.json ...
+Or from a saved `cargo metadata --format-version 1` output, with an
+optional saved `cargo tree ... --prefix none -f '{p}'` output (without
+--tree the metadata's own graph is walked):
+  python3 scripts/collect-crate-notices.py --metadata metadata.json \\
+      --tree tree.txt ...
 
-Exit 0 on success, 1 when cargo metadata fails or the package is missing.
+The file's header names the DeepFilterNet commit it was generated from;
+scripts/check-third-party-licenses.py fails when that commit differs from
+third_party/deepfilter/COMMIT.
+
+Exit 0 on success, 1 when cargo fails or the package is missing.
 """
 
 from __future__ import annotations
@@ -42,22 +55,55 @@ from pathlib import Path
 _NOTICE_NAME = re.compile(r"^(licen[cs]e|copying|notice)([-_.].*)?$", re.IGNORECASE)
 
 
-def run_cargo_metadata(manifest: Path, features: str | None,
-                       filter_platform: str | None) -> dict:
+def run_cargo_metadata(manifest: Path, features: str | None) -> dict:
     cmd = ["cargo", "metadata", "--format-version", "1", "--locked", "--offline",
            "--manifest-path", str(manifest)]
     if features:
         cmd += ["--features", features]
-    if filter_platform:
-        cmd += ["--filter-platform", filter_platform]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise SystemExit(f"cargo metadata failed:\n{result.stderr}")
     return json.loads(result.stdout)
 
 
-def linked_packages(metadata: dict, root_name: str) -> list[dict]:
-    """Packages linked into root_name's library, root first, then by name."""
+def run_cargo_tree(manifest: Path, package: str, features: str | None,
+                   target: str) -> str:
+    cmd = ["cargo", "tree", "--locked", "--offline",
+           "--manifest-path", str(manifest), "-p", package,
+           "-e", "normal,no-proc-macro", "--target", target,
+           "--prefix", "none", "-f", "{p}"]
+    if features:
+        cmd += ["--features", features]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"cargo tree failed:\n{result.stderr}")
+    return result.stdout
+
+
+def parse_tree(text: str) -> set[tuple[str, str]]:
+    """(name, version) of every crate in `cargo tree --prefix none -f '{p}'`."""
+    crates: set[tuple[str, str]] = set()
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 2 or not fields[1].startswith("v"):
+            continue
+        crates.add((fields[0], fields[1][1:]))
+    return crates
+
+
+def _is_proc_macro(package: dict) -> bool:
+    # A proc-macro crate's library target has kind "proc-macro"; its test,
+    # bench and example targets have other kinds.
+    return any("proc-macro" in t.get("kind", []) for t in package.get("targets", []))
+
+
+def linked_packages(metadata: dict, root_name: str,
+                    tree: set[tuple[str, str]] | None = None) -> list[dict]:
+    """Packages linked into root_name's library, root first, then by name.
+
+    With tree (from parse_tree), the crates are exactly those; otherwise
+    the metadata's resolve graph is walked.
+    """
     packages = {p["id"]: p for p in metadata["packages"]}
     nodes = {n["id"]: n for n in metadata["resolve"]["nodes"]}
     roots = [pid for pid, p in packages.items()
@@ -65,9 +111,27 @@ def linked_packages(metadata: dict, root_name: str) -> list[dict]:
     if not roots:
         raise SystemExit(f"package {root_name} is not in the cargo metadata resolve")
 
-    def is_proc_macro(package: dict) -> bool:
-        kinds = [k for t in package.get("targets", []) for k in t.get("kind", [])]
-        return bool(kinds) and all(k == "proc-macro" for k in kinds)
+    if tree is not None:
+        by_key: dict[tuple[str, str], list[str]] = {}
+        for pid, p in packages.items():
+            by_key.setdefault((p["name"], p["version"]), []).append(pid)
+        chosen: list[str] = []
+        for key in sorted(tree):
+            ids = by_key.get(key)
+            if not ids:
+                raise SystemExit(
+                    f"{key[0]} {key[1]} from cargo tree is not in the cargo metadata")
+            if len(ids) > 1:
+                raise SystemExit(
+                    f"{key[0]} {key[1]} matches more than one cargo metadata package")
+            chosen.append(ids[0])
+        roots = [pid for pid in roots if pid in chosen]
+        if not roots:
+            raise SystemExit(f"package {root_name} is not in the cargo tree output")
+        root_set = set(roots)
+        return [packages[pid] for pid in roots] + sorted(
+            (packages[pid] for pid in chosen if pid not in root_set),
+            key=lambda p: (p["name"], p["version"]))
 
     seen: list[str] = []
     stack = list(roots)
@@ -80,7 +144,7 @@ def linked_packages(metadata: dict, root_name: str) -> list[dict]:
             kinds = dep.get("dep_kinds") or [{"kind": None}]
             if not any(k.get("kind") is None for k in kinds):
                 continue
-            if is_proc_macro(packages[dep["pkg"]]):
+            if _is_proc_macro(packages[dep["pkg"]]):
                 continue
             stack.append(dep["pkg"])
 
@@ -120,7 +184,8 @@ def _source_label(package: dict) -> str:
     return source
 
 
-def render(packages: list[dict], commit: str, command: str) -> str:
+def render(packages: list[dict], commit: str, command: str,
+           target: str = "all") -> str:
     rule = "=" * 72
     lines = [
         "DeepFilterNet Rust crate notices",
@@ -132,9 +197,17 @@ def render(packages: list[dict], commit: str, command: str) -> str:
         "source, copied byte for byte. A text identical to one written earlier",
         "in this file is named instead of repeated.",
         "",
-        f"Source: DeepFilterNet {commit}, crates as locked by its Cargo.lock.",
-        "Every platform's dependencies are included, so some crates listed are",
-        "compiled only into another platform's package.",
+        f"DeepFilterNet commit: {commit}",
+        "The crates are those locked by that commit's Cargo.lock.",
+    ]
+    if target == "all":
+        lines += [
+            "Every platform's dependencies are included, so some crates listed are",
+            "compiled only into another platform's package.",
+        ]
+    else:
+        lines.append(f"Only the dependencies of target {target} are included.")
+    lines += [
         f"Generated by: {command}",
         f"Crates: {len(packages)}",
         "",
@@ -171,20 +244,29 @@ def main(argv: list[str] | None = None) -> int:
                         help="saved `cargo metadata --format-version 1` output")
     parser.add_argument("--package", default="deep_filter")
     parser.add_argument("--features")
-    parser.add_argument("--filter-platform")
+    parser.add_argument("--tree", type=Path,
+                        help="saved `cargo tree --prefix none -f '{p}'` output "
+                             "(with --metadata)")
+    parser.add_argument("--target", default="all",
+                        help="cargo tree target triple, or all (the default)")
     parser.add_argument("--commit", required=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
 
+    tree: set[tuple[str, str]] | None = None
     if args.metadata is not None:
         metadata = json.loads(args.metadata.read_text(encoding="utf-8"))
+        if args.tree is not None:
+            tree = parse_tree(args.tree.read_text(encoding="utf-8"))
     else:
-        metadata = run_cargo_metadata(args.manifest_path, args.features,
-                                      args.filter_platform)
-    packages = linked_packages(metadata, args.package)
+        metadata = run_cargo_metadata(args.manifest_path, args.features)
+        tree = parse_tree(run_cargo_tree(args.manifest_path, args.package,
+                                         args.features, args.target))
+    packages = linked_packages(metadata, args.package, tree)
     command = ("python3 scripts/collect-crate-notices.py --package "
-               f"{args.package}" + (f" --features {args.features}" if args.features else ""))
-    output = render(packages, args.commit, command)
+               f"{args.package}" + (f" --features {args.features}" if args.features else "")
+               + f" --target {args.target}")
+    output = render(packages, args.commit, command, args.target)
     if args.output is None:
         sys.stdout.write(output)
     else:
