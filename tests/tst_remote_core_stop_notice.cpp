@@ -9,6 +9,10 @@
 // both version refusals (review finding I1: the reasons come from the
 // Core's own code, never a copied string), and a scripted Core that speaks
 // the link's own messages for any other refusal and for a dropped link.
+//
+// iPhone app Task 12: a new Core has no pairing token, so each real Core
+// here is the upgraded one that still has it (fakes/UpgradedCoreToken.h),
+// and the window signs in with that token as before.
 #include <QTest>
 #include <QCoreApplication>
 #include <QDockWidget>
@@ -41,6 +45,7 @@
 #include "gui/RemoteConnectionController.h"
 #include "models/RadioModel.h"
 #include "fakes/MainWindowTestSettings.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 
@@ -107,7 +112,7 @@ class RealCore final {
 public:
     explicit RealCore(const QList<quint16>& majors = LinkVersion::supportedMajors())
         : m_settings(m_dir.filePath(QStringLiteral("station.settings")))
-        , m_server(&m_station, m_settings, m_dir.path(), nullptr, majors)
+        , m_server(&m_station, m_settings, NereusSDR::Test::seedUpgradedCoreToken(m_dir.path()), nullptr, majors)
     {
         QObject::connect(&m_listener, &QWebSocketServer::newConnection, &m_server, [this] {
             m_server.acceptTransport(new WebSocketTransport(
@@ -269,7 +274,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         QWebSocketServer listener(QStringLiteral("stop notice test"),
                                   QWebSocketServer::NonSecureMode);
         QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
