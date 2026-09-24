@@ -106,7 +106,8 @@ void AudioTciPage::buildSampleRateGroup()
 
     // Slices C/D not exposed: informational note
     auto* noteLabel = new QLabel(
-        tr("Slices C and D are not exposed via TCI in Phase 3J-1."), group);
+        // R-R3-17: user words (TCI carries Slices A and B only, Phase 3J-1).
+        tr("Slices C and D are not available over TCI."), group);
     noteLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
     form->addRow(noteLabel);
 

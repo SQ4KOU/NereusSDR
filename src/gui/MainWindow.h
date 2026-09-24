@@ -105,6 +105,7 @@ namespace NereusSDR {
 enum class ToastSeverity : int;
 
 class RadioModel;
+class MeterItem;
 class ConnectionPanel;
 class SupportDialog;
 class WdspEngine;
@@ -129,6 +130,7 @@ class MeterPoller;
 class TitleBar;
 class VaxFirstRunDialog;
 class PsForm;
+class DiversityDialog;
 // Remote-daemon R2 Task 20 fix round 2: createSetupDialog() returns this,
 // and it is a slot, so the type appears in a moc-parsed signature.
 // Declared here rather than written inline as the elaborated
@@ -677,6 +679,34 @@ private slots:
     // Unknown keys are logged and ignored (current page unchanged).
     void openSetup(const QString& pageKey);
 
+    // R-R3-21: open Setup at the leaf labelled `label` (as SetupDialog's
+    // tree shows it). The menu entries that front an existing Setup page
+    // use this; Setup's own local/remote gating applies.
+    void openSetupAtPage(const QString& label);
+    // R-R3-21: Radio > Antenna Setup. Setup > Hardware Config on its
+    // Antenna / ALEX tab (the page's first tab when the radio has no ALEX).
+    void openAntennaSetup();
+    // R-R3-21: the Diversity dialog, shared by Tools > Diversity, DSP >
+    // Diversity and the VFO flag's right-click Diversity entry.
+    void openDiversityDialog();
+
+    // R-R3-21: a container's Mode, Filter, Antenna and Tune Step buttons and
+    // its VFO display act on the active slice (the band buttons already
+    // did); refreshContainerControls() shows that slice's state on them.
+    void wireContainerControls(class ContainerWidget* container);
+    // `only`: just that item (one added while the window runs).
+    void refreshContainerControls(MeterItem* only = nullptr);
+    // Tuning: only the VFO display items (frequency and band).
+    void refreshContainerFrequency();
+    void watchContainerItems(QWidget* content);
+    void onContainerItemAdded(MeterItem* item);
+    void followActiveSliceForContainers();
+    void onContainerModeClicked(int index);
+    void onContainerFilterClicked(int index);
+    void onContainerAntennaSelected(int index);
+    void onContainerTuneStepSelected(int index);
+    void onContainerFrequencyStep(int64_t deltaHz);
+
     // Phase 3P-II Phase 4 Task 97: soft-alert toast when peak forward power
     // exceeds the PGXL cap.  Connected to RadioModel::ampMetersChanged.
     // De-bounced: only one toast per exceedance event (re-arms when fwd drops
@@ -932,6 +962,13 @@ private:
     // Lazy-constructed on first openPureSignalDialog() call; lives for the
     // lifetime of MainWindow.  Hidden on close, never destroyed.
     PsForm* m_psForm{nullptr};
+    // R-R3-21: one Diversity dialog per window, kept across closes. It was
+    // a function-local static, shared by every window a session switch
+    // built, so the second window reopened a dialog its first window had
+    // already destroyed.
+    QPointer<DiversityDialog> m_diversityDialog;
+    // R-R3-21: the active slice's signals the container controls follow.
+    QList<QMetaObject::Connection> m_containerSliceConnections;
     QAction* m_actPureSignal{nullptr};
     QAction* m_actTxEqualizer{nullptr};
     QAction* m_actDspPureSignal{nullptr};

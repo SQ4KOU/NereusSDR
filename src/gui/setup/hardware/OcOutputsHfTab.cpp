@@ -18,6 +18,9 @@
 //   2026-09-23 - R-R3-46: TX pins, pin actions, external PA and reset
 //                 follow the transmit permission. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-23 - R-R3-21: Penny Ext Control reads and saves the radio's
+//                 own key through PennyLaneController. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-46: "Allow hot switching" follows the transmit
 //                permission. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
@@ -66,6 +69,7 @@
 
 #include "core/AppSettings.h"
 #include "core/OcMatrix.h"
+#include "core/accessories/PennyLaneController.h"
 #include "gui/ComboStyle.h"
 #include "models/Band.h"
 #include "models/PanadapterModel.h"
@@ -357,7 +361,7 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
                     "background: rgba(255,255,255,0.1);"
                     "border: 1px solid rgba(255,255,255,0.2);"
                     "border-radius: 6px;"));
-                led->setToolTip(tr("OC pin %1 — reflects last C&C OC byte sent to radio").arg(pin + 1));
+                led->setToolTip(tr("OC pin %1: shows the last OC byte sent to the radio").arg(pin + 1));
                 m_leds[pin] = led;
                 pinCol->addWidget(led, 0, Qt::AlignHCenter);
                 pinCol->addWidget(new QLabel(tr("%1").arg(pin + 1), ledGroup), 0, Qt::AlignHCenter);
@@ -380,11 +384,28 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
 
     // ── Wire master toggles → AppSettings ────────────────────────────────────
     // Issue #174: removed n2adrFilter writer — see Row 1 cleanup notes.
-    connect(m_pennyExtCtrl, &QCheckBox::toggled, this, [this](bool v) {
-        if (m_syncing) { return; }
-        AppSettings::instance().setValue(
-            QStringLiteral("hardware/oc/pennyExtCtrl"), v);
-    });
+    // R-R3-21: the checkbox mirrors PennyLaneController, which saves under
+    // the radio's own hardware/<mac>/penny/extCtrlEnabled. It used to write
+    // a global hardware/oc/pennyExtCtrl that nothing read (the controller
+    // adopts that old value once; see PennyLaneController::load).
+    if (m_model) {
+        PennyLaneController& penny = m_model->pennyLaneControllerMutable();
+        {
+            QSignalBlocker block(m_pennyExtCtrl);
+            m_pennyExtCtrl->setChecked(penny.extCtrlEnabled());
+        }
+        connect(&penny, &PennyLaneController::extCtrlEnabledChanged,
+                m_pennyExtCtrl, [this](bool on) {
+            QSignalBlocker block(m_pennyExtCtrl);
+            m_pennyExtCtrl->setChecked(on);
+        });
+        connect(m_pennyExtCtrl, &QCheckBox::toggled, this, [this](bool v) {
+            if (m_syncing || !m_model) { return; }
+            PennyLaneController& p = m_model->pennyLaneControllerMutable();
+            p.setExtCtrlEnabled(v);
+            p.save();
+        });
+    }
     connect(m_allowHotSwitching, &QCheckBox::toggled, this, [this](bool v) {
         if (m_syncing) { return; }
         AppSettings::instance().setValue(

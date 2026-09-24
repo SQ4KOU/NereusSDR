@@ -12,6 +12,9 @@
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
 //                 AppSettings XML persistence: key/value semantics (PascalCase keys, True/False string booleans, per-StationName nesting) port Thetis database.cs SaveVarsDictionary/RestoreVarsDictionary pattern; QXmlStream file I/O skeleton follows AetherSDR `src/core/AppSettings.{h,cpp}`.
+//   2026-09-23 - R-R3-21: migrateRenamedKeys() one-shot rename for keys
+//                 whose writer and reader disagreed (WsjtxSpotLifetime).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -990,6 +993,17 @@ void AppSettings::saveRadio(const RadioInfo& info, bool pinToMac, bool autoConne
     }
 }
 
+void AppSettings::setRadioAutoConnect(const QString& macKey, bool autoConnect)
+{
+    const QString prefix = radioKeyPrefix(macKey);
+    if (!contains(prefix + QStringLiteral("macAddress"))
+        && !contains(prefix + QStringLiteral("ipAddress"))) {
+        return;  // not a saved radio
+    }
+    setValue(prefix + QStringLiteral("autoConnect"),
+             autoConnect ? QStringLiteral("True") : QStringLiteral("False"));
+}
+
 void AppSettings::forgetRadio(const QString& macKey)
 {
     const QString prefix = radioKeyPrefix(macKey);
@@ -1390,6 +1404,59 @@ void AppSettings::migrateLegacyN2adrFilter(AppSettings& s)
     s.save();
 }
 
+// R-R3-21: legacy global Penny Ext Control -> per-MAC migration
+// ---------------------------------------------------------------------------
+
+void AppSettings::migrateLegacyPennyExtCtrl(AppSettings& s)
+{
+    static constexpr auto kLegacyKey = QLatin1String("hardware/oc/pennyExtCtrl");
+    static constexpr auto kRadioKey  = QLatin1String("penny/extCtrlEnabled");
+    if (!s.contains(QString(kLegacyKey))) {
+        return;  // nothing to carry over (also the idempotent path)
+    }
+
+    // The old checkbox stored a QVariant(bool), saved as "true"/"false";
+    // PennyLaneController reads "True"/"False".
+    const bool legacyOn = s.value(QString(kLegacyKey)).toString()
+                              .compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
+    const QString legacyValue = legacyOn ? QStringLiteral("True") : QStringLiteral("False");
+
+    const QList<SavedRadio> radios = s.savedRadios();
+    int migratedCount = 0;
+    int realRadios = 0;
+    bool placeholderRadios = false;
+    for (const SavedRadio& r : radios) {
+        // A manual radio saved without its MAC (key manual-<ip>-<port>, empty
+        // macAddress) or under a MANUAL:<ip>:<port> placeholder has no key
+        // PennyLaneController will read once the real MAC is known. Leave it
+        // alone; the global stays so its real-MAC entry takes it later.
+        const QString& mac = r.info.macAddress;
+        if (mac.isEmpty() || mac.startsWith(QStringLiteral("MANUAL:"))) {
+            placeholderRadios = true;
+            continue;
+        }
+        ++realRadios;
+        // A radio that already has its own value keeps it.
+        if (s.hardwareValue(mac, QString(kRadioKey)).isValid()) {
+            continue;
+        }
+        s.setHardwareValue(mac, QString(kRadioKey), legacyValue);
+        ++migratedCount;
+    }
+
+    if (realRadios > 0 && !placeholderRadios) {
+        s.remove(QString(kLegacyKey));
+        qDebug() << "Migrated legacy Penny Ext Control setting (" << legacyValue
+                 << ") to" << migratedCount << "saved radio(s); legacy global removed";
+    } else {
+        qDebug() << "Legacy Penny Ext Control setting (" << legacyValue
+                 << "): no saved radio with a known MAC yet, or one still without it; "
+                    "legacy global kept for next launch";
+    }
+    s.save();
+}
+
+// ---------------------------------------------------------------------------
 // Issue #174: orphan-key cleanup for hardware/oc/n2adrFilter
 // ---------------------------------------------------------------------------
 
@@ -1403,6 +1470,35 @@ void AppSettings::removeOrphanOcN2adrFilter(AppSettings& s)
     qDebug() << "Removed orphan settings key" << QString(kOrphanKey)
              << "(issue #174 — OcOutputsHfTab N2ADR checkbox had no consumer)";
     s.save();
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-21: one-shot renames (see AppSettings.h)
+// ---------------------------------------------------------------------------
+
+void AppSettings::migrateRenamedKeys(AppSettings& s)
+{
+    struct Rename { const char* oldKey; const char* newKey; };
+    static constexpr Rename kRenames[] = {
+        {"WsjtxSpotLifetime", "WsjtxSpotLifetimeSec"},
+    };
+    bool changed = false;
+    for (const Rename& r : kRenames) {
+        const QString oldKey = QString::fromLatin1(r.oldKey);
+        if (!s.contains(oldKey)) {
+            continue;
+        }
+        const QString newKey = QString::fromLatin1(r.newKey);
+        if (!s.contains(newKey)) {
+            s.setValue(newKey, s.value(oldKey));
+        }
+        s.remove(oldKey);
+        changed = true;
+        qDebug() << "Renamed settings key" << oldKey << "to" << newKey;
+    }
+    if (changed) {
+        s.save();
+    }
 }
 
 // ---------------------------------------------------------------------------

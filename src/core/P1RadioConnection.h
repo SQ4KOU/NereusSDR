@@ -11,6 +11,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - R-R3-21: EP6 sequence error count ported from Thetis
+//                 networkproto1.c MetisReadDirect [v2.10.3.15] for
+//                 Diagnostics > Connection Quality. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -517,6 +521,10 @@ private:
 
     quint32 m_epSendSeq{0};
     quint32 m_epRecvSeqExpected{0};
+    // R-R3-21: last EP6 sequence number received, for the sequence-error
+    // count. From Thetis networkproto1.c:28 "int MetisLastRecvSeq = 0;"
+    // [v2.10.3.15].
+    quint32 m_ep6LastRecvSeq{0};
     int     m_ccRoundRobinIdx{0};
 
     // 3M-1a E.3: force the next sendCommandFrame() to start with bank 0 so

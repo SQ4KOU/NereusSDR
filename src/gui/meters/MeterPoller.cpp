@@ -37,6 +37,11 @@
 //                 RX bindings once the local RX channel is gone instead of
 //                 leaving them frozen. J.J. Boyd (KG4VCF), with AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-09-24: R-R3-21: the Compression reading (TxComp) takes Thetis's
+//                 -30 floor, max(-30, TXA_COMP_AV) (console.cs:46979 with
+//                 dsp.cs:1056 [v2.10.3.15]); PROC off reads -30, not -400.
+//                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -583,7 +588,11 @@ void MeterPoller::pollTxMeters()
         // (the existing setRadioStatus() path); this reading is the WDSP
         // TXA output peak (post-ALC, pre-PA), a different quantity.
         // Both are useful; 3M-1a populates both for completeness.
-        { MeterBinding::TxComp,    static_cast<int>(TxMeterType::OutPeak) },   // TXA_OUT_PK [v2.10.3.13]
+        // R-R3-21: the compression reading. It read TXA_OUT_PK, the output
+        // peak, although TxComp is TXA_COMP_AV (MeterPoller.h) as in
+        // Thetis: From Thetis dsp.cs:1013-1014 [v2.10.3.15]
+        //   case MeterType.COMP: val = GetTXAMeter(channel, txaMeterType.TXA_COMP_AV);
+        { MeterBinding::TxComp,    static_cast<int>(TxMeterType::CompAvg) },   // TXA_COMP_AV [v2.10.3.15]
     };
 
     for (const auto& entry : kTxPollSet) {
@@ -596,12 +605,35 @@ void MeterPoller::pollTxMeters()
         Q_UNUSED(chanId)
         Q_UNUSED(entry)
 #endif
-        for (auto& guarded : m_targets) {
-            MeterWidget* target = guarded.data();
-            if (!target) { continue; }
-            target->updateMeterValue(entry.bindingId, value);
-        }
+        handOutTxReading(entry.bindingId, value);
     }
+}
+
+// Hands one WDSP transmit reading to the meters and to txMeterReading.
+void MeterPoller::handOutTxReading(int bindingId, double value)
+{
+    // R-R3-21: Thetis floors the Compression reading at -30 before any
+    // meter sees it (console.cs:46979 [v2.10.3.15]); PROC off (-400)
+    // reads -30.
+    if (bindingId == MeterBinding::TxComp) {
+        value = compressionReading(value);
+    }
+    for (auto& guarded : m_targets) {
+        MeterWidget* target = guarded.data();
+        if (!target) { continue; }
+        target->updateMeterValue(bindingId, value);
+    }
+    emit txMeterReading(bindingId, value);
+}
+
+// From Thetis console.cs:46979 [v2.10.3.15]:
+//   updateMetersReading(Reading.COMP, (float)Math.Max(-30.0f, -WDSP.CalculateTXMeter(1, WDSP.MeterType.COMP)), 0);
+// with dsp.cs:1013-1014 + :1056 [v2.10.3.15]: CalculateTXMeter reads
+// TXA_COMP_AV and returns -(float)val, so the reading is max(-30, raw).
+double MeterPoller::compressionReading(double rawTxaCompAv)
+{
+    if (!std::isfinite(rawTxaCompAv)) { return MeterBinding::kTxCompFloorDb; }
+    return std::max(MeterBinding::kTxCompFloorDb, rawTxaCompAv);
 }
 
 void MeterPoller::setRadioStatus(RadioStatus* status)

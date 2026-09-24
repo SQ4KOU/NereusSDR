@@ -195,20 +195,16 @@ void SupportDialog::buildUI()
              Style::kOverlayBorder, Style::kTextPrimary));
 }
 
-void SupportDialog::refreshLogViewer()
+QString SupportDialog::logTailText()
 {
-    updateLogInfo();
-
     QString path = LogManager::instance().logFilePath();
     if (path.isEmpty()) {
-        m_logViewer->setPlainText(QStringLiteral("No log file found."));
-        return;
+        return QStringLiteral("No log file found.");
     }
 
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        m_logViewer->setPlainText(QStringLiteral("Could not open log file."));
-        return;
+        return QStringLiteral("Could not open log file.");
     }
 
     // Read tail if file is large
@@ -218,8 +214,14 @@ void SupportDialog::refreshLogViewer()
         f.readLine();  // Skip partial first line
     }
 
-    QString content = QString::fromUtf8(f.readAll());
-    m_logViewer->setPlainText(content);
+    return QString::fromUtf8(f.readAll());
+}
+
+void SupportDialog::refreshLogViewer()
+{
+    updateLogInfo();
+
+    m_logViewer->setPlainText(logTailText());
 
     // Scroll to bottom
     auto cursor = m_logViewer->textCursor();

@@ -126,6 +126,11 @@ AboutDialog::AboutDialog(QWidget* parent)
     layout()->setSizeConstraint(QLayout::SetFixedSize);
 }
 
+QUrl AboutDialog::releaseNotesUrl()
+{
+    return QUrl(QStringLiteral("https://github.com/boydsoftprez/NereusSDR/releases"));
+}
+
 void AboutDialog::buildUI()
 {
     auto* mainLayout = new QVBoxLayout(this);
@@ -156,7 +161,7 @@ void AboutDialog::buildUI()
     mainLayout->addWidget(title);
 
     auto* version = new QLabel(
-        QStringLiteral("v%1 — Cross-platform SDR Console")
+        QStringLiteral("v%1: Cross-platform SDR Console")
             .arg(QCoreApplication::applicationVersion()),
         this);
     version->setAlignment(Qt::AlignCenter);
@@ -307,7 +312,7 @@ void AboutDialog::buildUI()
 
     auto* links = new QLabel(
         QStringLiteral(
-            "<a href=\"https://github.com/boydsoftprez/NereusSDR/releases\">"
+            "<a href=\"%1\">"
             "NereusSDR releases</a> &nbsp;·&nbsp; "
             "<a href=\"https://github.com/boydsoftprez/NereusSDR/tree/main/docs/attribution\">"
             "docs/attribution</a> &nbsp;·&nbsp; "
@@ -320,7 +325,8 @@ void AboutDialog::buildUI()
             "<a href=\"https://github.com/TAPR/OpenHPSDR-Protocol1-Programmers\">OpenHPSDR Protocol 1</a> &nbsp;·&nbsp; "
             "<a href=\"https://github.com/TAPR/OpenHPSDR-Protocol2-Programmers\">OpenHPSDR Protocol 2</a><br>"
             "<a href=\"https://community.apache-labs.com/index.php\">Apache-Labs Community</a> &nbsp;·&nbsp; "
-            "<a href=\"https://apache-labs.com/\">Apache-Labs Home</a>"),
+            "<a href=\"https://apache-labs.com/\">Apache-Labs Home</a>")
+            .arg(releaseNotesUrl().toString()),
         this);
     links->setOpenExternalLinks(true);
     links->setWordWrap(true);

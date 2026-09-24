@@ -423,6 +423,10 @@ public:
     // the `amplifier` and `rfkit` objects (remotePgxlControlVersion and
     // remoteRfKitControlVersion); 0 otherwise.
     int accessoryStatusVersion() const;
+    // R-R3-47: remotePgxlControlVersion. 2 on a Core that owns its
+    // accessories (the `amplifier` object and the configurePgxl,
+    // disconnectPgxl and setPgxlConnectionSettings verbs); 0 otherwise.
+    int pgxlControlVersion() const;
 
     // ---- Subsystem accessors, non-owning, for tests and diagnostics ----
     StateMirror* stateMirror() const { return m_mirror; }

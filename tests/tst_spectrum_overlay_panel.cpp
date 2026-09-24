@@ -151,7 +151,7 @@ private slots:
         QComboBox* iq = vaxIqCombo(h);
         QVERIFY(iq);
         QVERIFY(!iq->isEnabled());
-        QVERIFY(iq->toolTip().contains("reserved for future phase",
+        QVERIFY(iq->toolTip().contains("not available yet",
                                        Qt::CaseInsensitive));
     }
 

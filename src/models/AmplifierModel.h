@@ -28,6 +28,9 @@
 // Modification history (NereusSDR):
 //   2026-09-23  J.J. Boyd / KG4VCF  Created (R-R3-47, R-R3-22). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  The Core's controller owns the
+//                                    connection state (identity, phases).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/PgxlStatusGauges.h"
@@ -86,6 +89,10 @@ public:
 
     /// Why a window cannot change this object: the Core refuses every write.
     static QString readOnlyReason();
+    /// R-R3-25: why a receive-only Core refuses to operate the amplifier or
+    /// the tuner (or change the tuner's bypass or antenna). Also what a
+    /// window shows on its disabled Operate control.
+    static QString receiveOnlyOperateReason();
 
     explicit AmplifierModel(QObject* parent = nullptr);
 
@@ -118,6 +125,11 @@ public:
     /// and a local window only; a remote window never binds.
     void bindConnection(PgxlConnection* connection);
 
+    /// R-R3-47: the Core's StationPgxlController reports the connection
+    /// state (identity included) through setStationConnectionState(); the
+    /// bound connection then feeds only the amp's status frames.
+    void setConnectionStateOwnedByController(bool owned) { m_controllerOwnsConnection = owned; }
+
     /// Whether the station has the amp switched on (the 4O3A switch). Off
     /// reads as phase Disabled whenever the amp is not connected.
     void setAccessoryEnabled(bool enabled);
@@ -144,6 +156,7 @@ private:
     QPointer<PgxlConnection> m_conn;
     StationConnectionState m_connection;
     bool m_enabled{true};
+    bool m_controllerOwnsConnection{false};
     bool m_present{false};
     State m_state{State::Unknown};
     bool m_operate{false};

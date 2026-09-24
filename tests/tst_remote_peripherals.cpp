@@ -4,6 +4,12 @@
 // attach, updated, false and zero shown, stale on Core loss, no accessory
 // socket opened) and the same objects in-process in a local window. J.J.
 // Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-47 / R-R3-22 / R-R3-25: a remote window connects,
+// disconnects and configures the Core's Power Genius through the Core (the
+// Peripherals row and the Power Genius tab), opening no socket of its own;
+// a receive-only Core refuses the amp's operate and the tuner's operate,
+// bypass and antenna writes, changing nothing and sending nothing. J.J.
+// Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include <QtTest>
 
@@ -16,11 +22,16 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QCheckBox>
+#include <QTabWidget>
+#include <QTcpServer>
+#include <QTcpSocket>
 
 #include "OperatorWording.h"
 #include "core/PgxlConnection.h"
 #include "core/TgxlConnection.h"
 #include "core/SmartSdrApiListener.h"
+#include "core/StationPgxlController.h"
+#include "core/LanDiscovery.h"
 #include "core/AppSettings.h"
 #include "core/Rf2ksConnection.h"
 #include "core/session/IStationLink.h"
@@ -95,6 +106,39 @@ public:
     bool stationLinkReady() const override { return linkReady; }
     bool remoteAmplifierStatusAvailable() const override { return amplifierStatus; }
     bool remoteRfKitStatusAvailable() const override { return rfKitStatus; }
+
+    // R-R3-47: the Power Genius commands.
+    bool pgxlAvailable{false};
+    int pgxlConfigureCalls{0};
+    int pgxlDisconnectCalls{0};
+    int pgxlSettingsCalls{0};
+    QString pgxlHost;
+    quint16 pgxlPort{0};
+    bool pgxlAutoReconnect{true};
+    int pgxlKeepaliveSec{0};
+    int pgxlPingSec{-1};
+    bool remotePgxlControlAvailable() const override { return pgxlAvailable; }
+    CommandOutcome requestConfigurePgxl(const QString& host, quint16 port) override
+    {
+        ++pgxlConfigureCalls;
+        pgxlHost = host;
+        pgxlPort = port;
+        return {true, {}};
+    }
+    CommandOutcome requestDisconnectPgxl() override
+    {
+        ++pgxlDisconnectCalls;
+        return {true, {}};
+    }
+    CommandOutcome requestPgxlConnectionSettings(bool autoReconnect, int keepaliveSec,
+                                                 int pingSec) override
+    {
+        ++pgxlSettingsCalls;
+        pgxlAutoReconnect = autoReconnect;
+        pgxlKeepaliveSec = keepaliveSec;
+        pgxlPingSec = pingSec;
+        return {true, {}};
+    }
 };
 
 // Status lines and REST replies as the repository's parser tests carry
@@ -158,6 +202,9 @@ private slots:
     void remoteAmpAndRfKitAppletsFollowTheCore();
     void remoteAppletsSayWhyReadingsAreNotLive();
     void localAppletsShowTheSameValuesAsBefore();
+    void remotePgxlRowAndTabUseTheStationLink();
+    void remoteWindowSetsUpThePgxlThroughTheCore();
+    void receiveOnlyCoreRefusesTunerAndAmpOperation();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -171,7 +218,8 @@ void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
     QVERIFY(peripherals->isEnabled());
     QVERIFY(!page.findChild<PgxlAdvancedPage*>());
     QVERIFY(!page.findChild<TgxlAdvancedPage*>());
-    auto* master = page.findChild<QCheckBox*>();
+    // R-R3-47: the Power Genius tab has check boxes of its own now.
+    auto* master = page.findChild<QCheckBox*>(QStringLiteral("fourO3AMasterToggle"));
     QVERIFY(master);
     QVERIFY(!master->isEnabled());
     QVERIFY(master->toolTip().contains(QStringLiteral("Core")));
@@ -575,6 +623,310 @@ void RemotePeripheralsTest::localAppletsShowTheSameValuesAsBefore()
     conn->injectJsonForTesting(QStringLiteral("/power"), kRfKitIdle);
     QCOMPARE(rfKit.fwdGaugeValueForTesting(), 0);
     QVERIFY(!rfKit.staleIndicatorVisibleForTesting());
+}
+
+// R-R3-47: the remote Power Genius row and tab ask the Core (typed link
+// requests) and show the Core's state; no socket of this window's own.
+void RemotePeripheralsTest::remotePgxlRowAndTabUseTheStationLink()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    RecordingTgxlLink link;
+    model.attachStation(&link);
+    FourO3APage page(&model);
+    auto* host = page.findChild<QLineEdit*>(QStringLiteral("pgxlHostEdit"));
+    auto* port = page.findChild<QSpinBox*>(QStringLiteral("pgxlPortSpin"));
+    auto* rowConnect = page.findChild<QPushButton*>(QStringLiteral("pgxlConnectButton"));
+    auto* scan = page.findChild<QPushButton*>(QStringLiteral("pgxlScanButton"));
+    auto* status = page.findChild<QLabel*>(QStringLiteral("pgxlStatusLabel"));
+    auto* peripherals = page.findChild<PeripheralsPage*>();
+    auto* tabStatus = page.findChild<QLabel*>(QStringLiteral("remotePgxlStatus"));
+    auto* tabConnect = page.findChild<QPushButton*>(QStringLiteral("remotePgxlConnectButton"));
+    auto* operate = page.findChild<QPushButton*>(QStringLiteral("remotePgxlOperateButton"));
+    auto* apply = page.findChild<QPushButton*>(QStringLiteral("remotePgxlApplySettings"));
+    auto* keepalive = page.findChild<QSpinBox*>(QStringLiteral("remotePgxlKeepalive"));
+    auto* ping = page.findChild<QSpinBox*>(QStringLiteral("remotePgxlPing"));
+    auto* autoReconnect = page.findChild<QCheckBox*>(QStringLiteral("remotePgxlAutoReconnect"));
+    auto* tabs = page.findChild<QTabWidget*>();
+    QVERIFY(host && port && rowConnect && scan && status && peripherals && tabStatus
+            && tabConnect && operate && apply && keepalive && ping && autoReconnect && tabs);
+    QSignalSpy pgxlFrames(model.pgxlConnection(), &PgxlConnection::testFrameWrittenForTesting);
+
+    // An older Core: nothing to press, and it says why in user words.
+    QVERIFY(!rowConnect->isEnabled());
+    QCOMPARE(status->text(),
+             QStringLiteral("This Core does not offer Power Genius XL control to this app."));
+    QVERIFY(!tabs->isTabEnabled(1));
+    QVERIFY(OperatorWording::isPlain(status->text()));
+
+    link.pgxlAvailable = true;
+    model.reportStationLinkStateChanged();
+    QVERIFY(rowConnect->isEnabled());
+    QVERIFY(!scan->isEnabled());
+    QVERIFY(tabs->isTabEnabled(1));
+    QVERIFY(!operate->isEnabled());
+    QCOMPARE(operate->toolTip(), OperatorReasonText::forDisplay(
+                                     AmplifierModel::receiveOnlyOperateReason()));
+    QVERIFY(OperatorWording::isPlain(operate->toolTip()));
+
+    // Connect sends the draft to the Core; nothing local.
+    host->setText(QStringLiteral("amp.station.example"));
+    port->setValue(9018);
+    QVERIFY(QMetaObject::invokeMethod(peripherals, "onConnect", Qt::DirectConnection,
+                                      Q_ARG(int, 1)));
+    QCOMPARE(link.pgxlConfigureCalls, 1);
+    QCOMPARE(link.pgxlHost, QStringLiteral("amp.station.example"));
+    QCOMPARE(link.pgxlPort, quint16{9018});
+    QCOMPARE(link.configureCalls, 0);  // not the tuner's command
+
+    // The Core's state arrives; an identifying amp can be cancelled.
+    TunerModel::StationConnectionState identifying =
+        state(TunerModel::ConnectionPhase::Identifying, QStringLiteral("amp.station.example"), 9018);
+    model.amplifierModel()->setStationConnectionState(identifying);
+    QCOMPARE(rowConnect->text(), QStringLiteral("Cancel"));
+    QCOMPARE(status->text(), QStringLiteral("Identifying device"));
+    QCOMPARE(tabConnect->text(), QStringLiteral("Cancel"));
+    QVERIFY(QMetaObject::invokeMethod(peripherals, "onConnect", Qt::DirectConnection,
+                                      Q_ARG(int, 1)));
+    QCOMPARE(link.pgxlDisconnectCalls, 1);
+
+    // Connected, with the Core's identity.
+    TunerModel::StationConnectionState up =
+        state(TunerModel::ConnectionPhase::Connected, QStringLiteral("amp.station.example"), 9018);
+    up.deviceModel = QStringLiteral("PowerGeniusXL");
+    up.deviceSerial = QStringLiteral("10-200/24-0046");
+    up.deviceVersion = QStringLiteral("3.8.9");
+    model.amplifierModel()->setStationConnectionState(up);
+    QCOMPARE(rowConnect->text(), QStringLiteral("Disconnect"));
+    QCOMPARE(status->text(), QStringLiteral("Connected: PowerGeniusXL 10-200/24-0046"));
+    auto* identity = page.findChild<QLabel*>(QStringLiteral("remotePgxlIdentity"));
+    QVERIFY(identity->text().contains(QStringLiteral("10-200/24-0046")));
+    QVERIFY(QMetaObject::invokeMethod(&page, "onRemotePgxlConnectClicked", Qt::DirectConnection));
+    QCOMPARE(link.pgxlDisconnectCalls, 2);
+
+    // A refusal in the Core's words reaches the row in user words.
+    TunerModel::StationConnectionState wrong =
+        state(TunerModel::ConnectionPhase::Error, QStringLiteral("amp.station.example"), 9018,
+              QStringLiteral("Expected PowerGeniusXL at the connected endpoint; observed "
+                             "TunerGenius (serial 241288-1)."));
+    model.amplifierModel()->setStationConnectionState(wrong);
+    QVERIFY2(status->text().contains(QStringLiteral(
+                 "The device at this address is not a Power Genius.")), qPrintable(status->text()));
+    QVERIFY2(OperatorWording::isPlain(status->text()), qPrintable(status->text()));
+    QVERIFY2(OperatorWording::isPlain(tabStatus->text()), qPrintable(tabStatus->text()));
+    for (const QString& raw :
+         {QStringLiteral("No matching PGXL discovery announcement for 192.0.2.40:9008. Check the "
+                         "amplifier address, port and station LAN discovery."),
+          QStringLiteral("PGXL identity serial mismatch: expected 1, observed 2"),
+          QStringLiteral("PGXL native identity timed out"),
+          QStringLiteral("PGXL native info omitted a nonempty serial"),
+          QStringLiteral("PGXL native info failed with code 3"),
+          QStringLiteral("PGXL discovery approval timed out for serial 1"),
+          QStringLiteral("The station does not support remote PGXL configuration.")}) {
+        const QString shown = OperatorReasonText::forDisplay(raw);
+        QVERIFY2(shown != raw || !raw.contains(QStringLiteral("PGXL")), qPrintable(raw));
+        QVERIFY2(OperatorWording::isPlain(shown), qPrintable(shown));
+    }
+
+    // Connection settings go to the Core as one request.
+    autoReconnect->setChecked(false);
+    keepalive->setValue(45);
+    ping->setValue(0);
+    QVERIFY(QMetaObject::invokeMethod(&page, "onRemotePgxlApplySettingsClicked",
+                                      Qt::DirectConnection));
+    QCOMPARE(link.pgxlSettingsCalls, 1);
+    QVERIFY(!link.pgxlAutoReconnect);
+    QCOMPARE(link.pgxlKeepaliveSec, 45);
+    QCOMPARE(link.pgxlPingSec, 0);
+
+    QCOMPARE(pgxlFrames.count(), 0);
+    QVERIFY(!model.pgxlConnection()->isConnected());
+    QCOMPARE(model.pgxlConnection()->socketAttemptToken(), quint64(0));
+}
+
+// R-R3-47 / R-R3-22: end to end over the in-process loopback. The window
+// asks; the Core dials the amp (a loopback stand-in), identifies it, pairs
+// it; the window follows the Core's `amplifier` object and opens nothing.
+void RemotePeripheralsTest::remoteWindowSetsUpThePgxlThroughTheCore()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    AppSettings::instance().setValue(QStringLiteral("PeripheralsMigrationDone"),
+                                     QStringLiteral("True"));
+    QTcpServer amp;
+    QVERIFY(amp.listen(QHostAddress::LocalHost, 0));
+    RadioModel station;
+    station.enableStationAccessoryIdentity();
+    RadioInfo radio;
+    radio.macAddress = QStringLiteral("aa:bb:cc:dd:ee:73");
+    station.setLastRadioInfoForTest(radio);
+    station.setConnectionStateForTest(ConnectionState::Connected);
+    station.smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
+    station.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+    AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
+    StationServer server(&station, stationSettings, dir.path());
+    QSignalSpy stationFrames(station.pgxlConnection(), &PgxlConnection::testFrameWrittenForTesting);
+
+    RadioModel window(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&window, &proxy);
+    window.attachStation(&client);
+    PeripheralsPage page(&window);
+    auto* host = page.findChild<QLineEdit*>(QStringLiteral("pgxlHostEdit"));
+    auto* port = page.findChild<QSpinBox*>(QStringLiteral("pgxlPortSpin"));
+    auto* connectButton = page.findChild<QPushButton*>(QStringLiteral("pgxlConnectButton"));
+    auto* status = page.findChild<QLabel*>(QStringLiteral("pgxlStatusLabel"));
+    QVERIFY(host && port && connectButton && status);
+    QSignalSpy windowFrames(window.pgxlConnection(), &PgxlConnection::testFrameWrittenForTesting);
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QVERIFY(completed.wait(5000) || !completed.isEmpty());
+    QTRY_VERIFY(client.remotePgxlControlAvailable());
+    window.reportStationLinkStateChanged();
+    QTRY_VERIFY(connectButton->isEnabled());
+
+    // Connect: the Core dials, and the window follows its phase.
+    host->setText(QStringLiteral("127.0.0.1"));
+    port->setValue(amp.serverPort());
+    QVERIFY(QMetaObject::invokeMethod(&page, "onConnect", Qt::DirectConnection, Q_ARG(int, 1)));
+    QTRY_VERIFY(amp.hasPendingConnections());
+    QTcpSocket* peer = amp.nextPendingConnection();
+    peer->write("V3.8.9\n");
+    peer->flush();
+    QTRY_COMPARE(window.amplifierModel()->connectionPhase(),
+                 AmplifierModel::ConnectionPhase::Identifying);
+    QCOMPARE(status->text(), QStringLiteral("Identifying device"));
+    quint32 infoSeq = 0;
+    QTRY_VERIFY([&] {
+        for (const auto& row : stationFrames) {
+            const QString frame = row.first().toString();
+            if (frame.endsWith(QStringLiteral("|info"))) {
+                infoSeq = frame.mid(1, frame.indexOf(QLatin1Char('|')) - 1).toUInt();
+            }
+        }
+        return infoSeq != 0;
+    }());
+    peer->write(QStringLiteral("R%1|0|serial=10-200/24-0046  version=3.8.9 protocol=1.0 mains=240\n")
+                    .arg(infoSeq).toUtf8());
+    peer->flush();
+    auto* controller = station.findChild<StationPgxlController*>();
+    QVERIFY(controller);
+    QTRY_VERIFY(controller->findChild<LanDiscovery*>());
+    controller->findChild<LanDiscovery*>()->injectDatagramForTesting(
+        QStringLiteral("PowerGeniusXL ip=127.0.0.1 v=3.8.9 serial=10-200/24-0046 nickname=PowerGeniusXL"),
+        amp.serverPort());
+    QTRY_COMPARE(window.amplifierModel()->connectionPhase(),
+                 AmplifierModel::ConnectionPhase::Connected);
+    QTRY_COMPARE(status->text(), QStringLiteral("Connected: PowerGeniusXL 10-200/24-0046"));
+    QCOMPARE(window.amplifierModel()->configuredPort(), int(amp.serverPort()));
+    QCOMPARE(connectButton->text(), QStringLiteral("Disconnect"));
+
+    // Configure: the settings command reaches the Core and applies there.
+    const auto settingsOutcome = client.requestPgxlConnectionSettings(true, 40, 0);
+    QVERIFY(settingsOutcome.sent);
+    QTRY_COMPARE(AppSettings::instance().value(QStringLiteral("PGXL_KeepaliveSec")).toString(),
+                 QStringLiteral("40"));
+
+    // Disconnect: the Core closes it; the window shows it.
+    QVERIFY(QMetaObject::invokeMethod(&page, "onConnect", Qt::DirectConnection, Q_ARG(int, 1)));
+    QTRY_COMPARE(window.amplifierModel()->connectionPhase(),
+                 AmplifierModel::ConnectionPhase::Disconnected);
+    QVERIFY(!station.pgxlConnection()->isConnected());
+    QCOMPARE(status->text(), QStringLiteral("Disconnected"));
+
+    // The window opened no connection of its own.
+    QCOMPARE(windowFrames.count(), 0);
+    QCOMPARE(window.pgxlConnection()->socketAttemptToken(), quint64(0));
+    stationEnd->closeLink(QStringLiteral("test done"));
+    AppSettings::instance().clear();
+}
+
+// R-R3-25: a receive-only Core refuses a window's write to the tuner's
+// operate, bypass or antenna and to the amp's operate, with one plain
+// reason; nothing changes on the Core and nothing reaches the tuner.
+void RemotePeripheralsTest::receiveOnlyCoreRefusesTunerAndAmpOperation()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    RadioModel station;
+    station.setReceiveOnlyStationPolicy(true);
+    // The tuner is connected on the Core (offline parser seam): a write that
+    // got through would send `operate=`, `bypass=` or `activate ant=`.
+    station.tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+    QVERIFY(station.tgxlConnection()->isConnected());
+    station.tgxlConnection()->injectLineForTesting(
+        QStringLiteral("S0|state operate=0 bypass=0 antA=1 one_by_three=1"));
+    QSignalSpy tunerFrames(station.tgxlConnection(), &TgxlConnection::testFrameWrittenForTesting);
+    QSignalSpy ampFrames(station.pgxlConnection(), &PgxlConnection::testFrameWrittenForTesting);
+    const bool operateBefore = station.tunerModel()->isOperate();
+    const bool bypassBefore = station.tunerModel()->isBypass();
+    const int antennaBefore = station.tunerModel()->antennaA();
+    AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
+    StationServer server(&station, stationSettings, dir.path());
+
+    auto* core = new LoopbackTransport(QStringLiteral("core"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("raw-gui"), this);
+    core->linkTo(peer);
+    server.acceptTransport(core);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("guard-test"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    const auto messages = [peer] {
+        QList<SessionMessage> list;
+        for (const QByteArray& wire : peer->received()) {
+            SessionMessage message;
+            if (SessionMessages::decode(wire, &message)) { list.append(message); }
+        }
+        return list;
+    };
+    QTRY_VERIFY([&] {
+        for (const SessionMessage& m : messages()) {
+            if (m.kind == SessionMessageKind::SnapshotComplete) { return true; }
+        }
+        return false;
+    }());
+
+    peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+        "tuner", {MirrorUpdate{0, "isOperate", MirrorWireKind::Bool, QVariant(!operateBefore)}}, 11)));
+    peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+        "tuner", {MirrorUpdate{0, "isBypass", MirrorWireKind::Bool, QVariant(!bypassBefore)}}, 12)));
+    peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+        "tuner", {MirrorUpdate{0, "antennaA", MirrorWireKind::Int64, QVariant(qint64(3))}}, 13)));
+    peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+        "amplifier", {MirrorUpdate{0, "operate", MirrorWireKind::Bool, QVariant(true)}}, 14)));
+    QList<SessionPropertyResult> results;
+    QTRY_VERIFY([&] {
+        results.clear();
+        for (const SessionMessage& m : messages()) {
+            if (m.kind == SessionMessageKind::PropertyResult) {
+                results.append(m.propertyResults);
+            }
+        }
+        return results.size() >= 3;
+    }());
+    // The amp object is offered only on a Core that owns its accessories;
+    // this Core does not, so only the three tuner results are certain.
+    QTest::qWait(50);
+    int tunerRefusals = 0;
+    for (const SessionPropertyResult& result : results) {
+        QVERIFY(!result.accepted);
+        if (result.property != "operate") {
+            QCOMPARE(result.reason, AmplifierModel::receiveOnlyOperateReason());
+            ++tunerRefusals;
+        }
+    }
+    QCOMPARE(tunerRefusals, 3);
+    QVERIFY(OperatorWording::isPlain(AmplifierModel::receiveOnlyOperateReason()));
+    QCOMPARE(tunerFrames.count(), 0);
+    QCOMPARE(ampFrames.count(), 0);
+    QCOMPARE(station.tunerModel()->isOperate(), operateBefore);
+    QCOMPARE(station.tunerModel()->isBypass(), bypassBefore);
+    QCOMPARE(station.tunerModel()->antennaA(), antennaBefore);
+    core->closeLink(QStringLiteral("test done"));
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

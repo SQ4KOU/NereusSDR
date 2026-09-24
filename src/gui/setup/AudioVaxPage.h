@@ -56,6 +56,10 @@
 
 #include <optional>
 
+class QTimer;
+class QShowEvent;
+class QHideEvent;
+
 namespace NereusSDR {
 
 class AudioEngine;
@@ -149,6 +153,10 @@ public:
     // the bus).
     void setBusOpen(bool open);
 
+    // R-R3-21: the channel's audio level, linear 0..1, as the VAX applet's
+    // meters read it (AudioEngine::vaxRxLevel). Shown in dB, -60..0.
+    void setLevel(float linear);
+    double levelDbForTest() const;
     // R-R3-44: the "Consumers:" row. true / false where the platform
     // reports whether an app is reading this channel's output (macOS,
     // PipeWire), nullopt where it does not or the output is closed.
@@ -234,6 +242,16 @@ private:
 
     AudioEngine*                m_engine{nullptr};
     QVector<VaxChannelCard*>    m_channelCards;  // index 0 = channel 1
+
+protected:
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
+private:
+    // R-R3-21: 20 Hz level poll while the page is showing, the VAX
+    // applet's cadence (VaxApplet::pollLevels).
+    void pollLevels();
+    QTimer* m_levelTimer{nullptr};
 };
 
 } // namespace NereusSDR

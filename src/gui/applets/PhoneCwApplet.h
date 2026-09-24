@@ -130,6 +130,20 @@ public:
     // Switch the stacked widget page: 0=Phone, 1=CW, 2=FM
     void showPage(int index);
 
+public slots:
+    /// R-R3-21: the transmit compression reading, in dB, as the meters'
+    /// Compression bar receives it (MeterPoller's TxComp binding while
+    /// transmitting), max(-30, TXA_COMP_AV). MainWindow feeds it; receive
+    /// puts it back to the -30 floor, an empty gauge.
+    void setCompressionReading(double dB);
+
+public:
+    /// R-R3-21: the microphone source list, in combo order. Each entry
+    /// fronts TransmitModel's mic source and, for the radio's own jack,
+    /// its line-in (Hermes family) or XLR (Saturn) choice, as Setup >
+    /// Audio > TX Input sets them.
+    enum class MicInput { Mic = 0, Balanced = 1, Line = 2, Accessory = 3, Pc = 4 };
+
 signals:
     /// Phase 3M-3a-iii Task 15: emitted when the user right-clicks the VOX
     /// or DEXP [ON] button.  MainWindow listens and jumps the SetupDialog
@@ -154,6 +168,12 @@ private:
     // Phase 3M-1b: wire mic gain slider + mic level gauge timer.
     void wireControls();
     void updateTransmitControlAvailability();
+    // R-R3-21: mic profile combo from MicProfileManager, mic source combo
+    // from TransmitModel (items the radio lacks are disabled with why).
+    void rebuildMicProfileCombo();
+    void refreshMicSourceItems();
+    void showMicSourceFromModel();
+    void applyMicInput(MicInput input);
     // ── Shared ───────────────────────────────────────────────────────────────
     QStackedWidget* m_stack{nullptr};
     QButtonGroup*   m_tabGroup{nullptr};

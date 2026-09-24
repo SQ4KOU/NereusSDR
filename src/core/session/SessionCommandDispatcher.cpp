@@ -42,6 +42,11 @@
 //                                    3): setAlexRxAntenna, one band's RX or
 //                                    RX-only antenna. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: configurePgxl,
+//                                    disconnectPgxl and
+//                                    setPgxlConnectionSettings for the
+//                                    Core's Power Genius XL. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -336,6 +341,12 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleDisconnectTgxl(invoke);
     } else if (invoke.commandVerb == "setFourO3AEnabled") {
         handleSetFourO3AEnabled(invoke);
+    } else if (invoke.commandVerb == "configurePgxl") {
+        handleConfigurePgxl(invoke);
+    } else if (invoke.commandVerb == "disconnectPgxl") {
+        handleDisconnectPgxl(invoke);
+    } else if (invoke.commandVerb == "setPgxlConnectionSettings") {
+        handleSetPgxlConnectionSettings(invoke);
     } else if (invoke.commandVerb == "requestIoBoardProbe") {
         handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "setAlexRxAntenna") {
@@ -938,6 +949,79 @@ void SessionCommandDispatcher::handleDisconnectTgxl(const SessionMessage& invoke
     if (!m_radioModel->disconnectTgxlForStation(&reason)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    reason.isEmpty() ? QStringLiteral("TGXL disconnect was refused") : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-47 / R-R3-22: the Power Genius's address, as configureTgxl's.
+// Accepted means saved and identifying; `amplifier`.connectionPhase says
+// whether it connected.
+void SessionCommandDispatcher::handleConfigurePgxl(const SessionMessage& invoke)
+{
+    QString host;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "host", "port" })
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok
+        || port < 1 || port > 65535) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("invalid host or port argument"), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->configurePgxlForStation(host, static_cast<quint16>(port), &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("PGXL configuration was refused") : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+void SessionCommandDispatcher::handleDisconnectPgxl(const SessionMessage& invoke)
+{
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("disconnectPgxl takes no arguments"), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->disconnectPgxlForStation(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("PGXL disconnect was refused") : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-47: autoReconnect (bool), keepaliveSec (i64, 1 to 3600), pingSec
+// (i64, 0 to 3600), saved together on the Core and applied at once.
+void SessionCommandDispatcher::handleSetPgxlConnectionSettings(const SessionMessage& invoke)
+{
+    QVariant autoReconnect;
+    int keepaliveSec = 0;
+    int pingSec = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "autoReconnect", "keepaliveSec", "pingSec" })
+        || !findArgument(invoke.arguments, "autoReconnect", &autoReconnect)
+        || autoReconnect.typeId() != QMetaType::Bool
+        || !hasWireKind(invoke.arguments, "keepaliveSec", MirrorWireKind::Int64)
+        || !hasWireKind(invoke.arguments, "pingSec", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "keepaliveSec", &keepaliveSec) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "pingSec", &pingSec) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("setPgxlConnectionSettings requires an autoReconnect boolean "
+                                  "and keepaliveSec and pingSec whole numbers"), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setPgxlConnectionSettingsForStation(autoReconnect.toBool(), keepaliveSec,
+                                                           pingSec, &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("PGXL settings change was refused") : reason,
                    {});
         return;
     }

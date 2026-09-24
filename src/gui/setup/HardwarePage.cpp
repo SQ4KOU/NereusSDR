@@ -346,6 +346,20 @@ void HardwarePage::setTransmitPermitted(bool permitted, const QString& reason)
 // ── Test helper ───────────────────────────────────────────────────────────────
 
 #ifdef NEREUS_BUILD_TESTS
+bool HardwarePage::showAntennaTab()
+{
+    if (m_antennaAlexIdx < 0 || !m_tabs->isTabVisible(m_antennaAlexIdx)) {
+        return false;
+    }
+    m_tabs->setCurrentIndex(m_antennaAlexIdx);
+    return true;
+}
+
+QString HardwarePage::currentTabText() const
+{
+    return m_tabs->tabText(m_tabs->currentIndex());
+}
+
 bool HardwarePage::isTabVisibleForTest(Tab t) const
 {
     switch (t) {

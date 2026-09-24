@@ -108,6 +108,13 @@ public:
     bool remoteEditsAvailableForTest() const;
 #endif
 
+    // R-R3-21: Radio > Antenna Setup lands here. Selects the Antenna / ALEX
+    // tab while the radio has one; otherwise the page stays on its current
+    // tab. True when the antenna tab is showing.
+    bool showAntennaTab();
+    // The tab the page is showing (its QTabWidget text).
+    QString currentTabText() const;
+
     // R-R3-46: the transmit fields of each tab (TX antennas, relays,
     // external PA, User Dig Out, the PA's current calibration) follow the
     // transmit permission with its reason; the rest of the page stays live.

@@ -634,9 +634,13 @@ void AntennaAlexAntennaControlTab::buildConflictPolicyGroup(QVBoxLayout* outerLa
     layout->addWidget(hint);
 
     auto* btnGroup = new QButtonGroup(this);
-    auto* autoBtn  = new QRadioButton(tr("Auto - resolve silently when safe, toast on RX-only switch"), group);
-    auto* warnBtn  = new QRadioButton(tr("Warn - show TxBoundConfirmDialog before TX-bound re-route"), group);
-    auto* blockBtn = new QRadioButton(tr("Block - refuse add-slice when chain conflict would occur"), group);
+    // R-R3-17 / R-R3-21: user words. Warn is TxBoundConfirmDialog before a
+    // TX-bound re-route; Block refuses add-slice on a chain conflict.
+    auto* autoBtn  = new QRadioButton(tr("Auto - resolve it when safe, and show a notice when "
+                                         "only a receive antenna changes"), group);
+    auto* warnBtn  = new QRadioButton(tr("Warn - ask before moving the transmit antenna"), group);
+    auto* blockBtn = new QRadioButton(tr("Block - do not add the slice while its antenna is "
+                                         "in use by another slice"), group);
     btnGroup->addButton(autoBtn,  0);
     btnGroup->addButton(warnBtn,  1);
     btnGroup->addButton(blockBtn, 2);

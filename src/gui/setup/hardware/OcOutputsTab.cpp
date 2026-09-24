@@ -24,6 +24,9 @@
 //   2026-09-23 - R-R3-46: User Dig Out and the HF / SWL transmit
 //                 fields follow the transmit permission. J.J. Boyd (KG4VCF), AI-
 //                 assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-21: populate() routes the MAC into
+//                 PennyLaneController so Penny Ext Control saves per radio.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -71,6 +74,7 @@
 
 #include "core/BoardCapabilities.h"
 #include "core/OcMatrix.h"
+#include "core/accessories/PennyLaneController.h"
 #include "core/RadioDiscovery.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -158,6 +162,16 @@ void OcOutputsTab::populate(const RadioInfo& info, const BoardCapabilities& caps
     if (m_ocMatrix) {
         m_ocMatrix->setMacAddress(info.macAddress);
         m_ocMatrix->load();  // fires OcMatrix::changed() → HF tab re-syncs
+    }
+
+    // R-R3-21: Penny Ext Control saves per radio. Route the MAC here too so
+    // a window that did not connect the radio itself (a remote window, whose
+    // model never runs the local connect path) still reads and saves the
+    // radio's own key; the HF tab's checkbox follows extCtrlEnabledChanged.
+    if (m_model != nullptr) {
+        PennyLaneController& penny = m_model->pennyLaneControllerMutable();
+        penny.setMacAddress(info.macAddress);
+        penny.load();
     }
 
     // P1 full-parity §4.3: User Dig Out group visibility gates on hasPennyLane.

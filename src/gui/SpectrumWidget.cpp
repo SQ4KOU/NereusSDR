@@ -135,6 +135,7 @@
 #include "dbm_strip_math.h"
 #include "popup_placement.h"
 #include "models/BandPlanManager.h"
+#include "models/Band.h"
 #include "models/NotchModel.h"
 
 #include <QApplication>
@@ -5856,6 +5857,63 @@ void SpectrumWidget::applyViewWindowForExtendedClamp(double bandwidthHz)
         setFrequencyRange(m_centerHz, bandwidthHz);
     }
     emit bandwidthChangeRequested(bandwidthHz);
+}
+
+void SpectrumWidget::applyOperatorZoom(double centreHz, double bandwidthHz)
+{
+    // The Ctrl+wheel branch of wheelEvent(), for a zoom button.
+    const double newBw = std::clamp(bandwidthHz, 1000.0, maxZoomOutBandwidthHz());
+    applyViewWindow(centreHz, newBw);
+    emit centerChanged(m_centerHz);
+    emit bandwidthChangeRequested(newBw);
+    updateVfoPositions();
+    recomputeExtendedMode();
+#ifdef NEREUS_GPU_SPECTRUM
+    markOverlayDirty();
+#endif
+    update();
+}
+
+void SpectrumWidget::zoomBy(double factor)
+{
+    if (!(factor > 0.0) || m_bandwidthHz <= 0.0) { return; }
+    // Recentre on the VFO, as the Ctrl+wheel zoom does.
+    applyOperatorZoom(m_vfoHz, m_bandwidthHz * factor);
+}
+
+void SpectrumWidget::zoomToSegment()
+{
+    if (!m_bandPlanMgr) { return; }
+    const double vfoMhz = m_vfoHz / 1.0e6;
+    for (const BandSegment& seg : m_bandPlanMgr->segments()) {
+        if (vfoMhz >= seg.lowMhz && vfoMhz <= seg.highMhz && seg.highMhz > seg.lowMhz) {
+            applyOperatorZoom((seg.lowMhz + seg.highMhz) * 0.5e6,
+                              (seg.highMhz - seg.lowMhz) * 1.0e6);
+            return;
+        }
+    }
+}
+
+void SpectrumWidget::zoomToBand()
+{
+    if (!m_bandPlanMgr) { return; }
+    const Band band = bandFromFrequency(m_vfoHz);
+    double lowMhz = 0.0;
+    double highMhz = 0.0;
+    for (const BandSegment& seg : m_bandPlanMgr->segments()) {
+        const double mid = (seg.lowMhz + seg.highMhz) * 0.5e6;
+        if (bandFromFrequency(mid) != band) { continue; }
+        if (highMhz <= lowMhz) {
+            lowMhz = seg.lowMhz;
+            highMhz = seg.highMhz;
+        } else {
+            lowMhz = std::min(lowMhz, seg.lowMhz);
+            highMhz = std::max(highMhz, seg.highMhz);
+        }
+    }
+    const double vfoMhz = m_vfoHz / 1.0e6;
+    if (highMhz <= lowMhz || vfoMhz < lowMhz || vfoMhz > highMhz) { return; }
+    applyOperatorZoom((lowMhz + highMhz) * 0.5e6, (highMhz - lowMhz) * 1.0e6);
 }
 
 void SpectrumWidget::recomputeExtendedMode()

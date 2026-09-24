@@ -244,6 +244,9 @@ private:
     // Called at end of constructor after both rows are built.
     void wireStatusSignals();
     void refreshRemoteTgxlRow();
+    // R-R3-47 / R-R3-22: the Power Genius row in a remote window, a view of
+    // the Core's `amplifier` object plus the Core's PGXL commands.
+    void refreshRemotePgxlRow();
     bool isRemoteMode() const;
 
     RadioModel*   m_model{nullptr};
@@ -259,6 +262,8 @@ private:
     // unsent remote-TGXL draft.
     QString m_lastDisplayedCoreTgxlHost;
     quint16 m_lastDisplayedCoreTgxlPort{0};
+    QString m_lastDisplayedCorePgxlHost;
+    quint16 m_lastDisplayedCorePgxlPort{0};
 };
 
 } // namespace NereusSDR

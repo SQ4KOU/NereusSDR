@@ -88,6 +88,15 @@
 //                                    low-pass table and master TX switches
 //                                    and OC hot switching are transmit keys.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22 / R-R3-25:
+//                                    remotePgxlControlVersion 2 with the
+//                                    configurePgxl, disconnectPgxl and
+//                                    setPgxlConnectionSettings verbs (minor
+//                                    11); a receive-only Core refuses the
+//                                    tuner's isOperate, isBypass and antennaA
+//                                    writes and the amplifier's operate with
+//                                    one plain reason. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -291,6 +300,14 @@ bool isRfKitMessage(const SessionMessage& message)
 // the DSP > Options TX settings keys alike (R-R3-21).
 constexpr const char* kReceiveOnlyTransmitReason =
     "Transmit configuration is unavailable on this receive-only station.";
+
+// The tuner properties whose remote write reaches the tuner itself
+// (TunerModel::applyMirroredValue sends operate, bypass or antenna
+// commands). A receive-only Core never lets a write get there.
+bool isTunerTransmitPathProperty(const QByteArray& name)
+{
+    return name == "isOperate" || name == "isBypass" || name == "antennaA";
+}
 
 // DSP > Options TX combos persist to DspOptions<Setting><Mode>Tx
 // (DspOptionsPage::buildUI). The DspOptions prefix is Station-scoped, so
@@ -1030,6 +1047,16 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 QStringLiteral("Update this app to change notches on this Core."), {}));
             break;
         }
+        // R-R3-47: the Power Genius verbs came with remotePgxlControlVersion
+        // 2, in the minor-11 capability block.
+        if ((message.commandVerb == "configurePgxl" || message.commandVerb == "disconnectPgxl"
+             || message.commandVerb == "setPgxlConnectionSettings")
+            && it->agreedMinor < kRadioIdentitySessionProtocolMinor) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("Update this app to set up the Power Genius on this Core."), {}));
+            break;
+        }
         if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")
             && it->agreedMinor < kRemoteTgxlConfigSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
@@ -1401,6 +1428,12 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     }
     const bool receiveOnlyTransmitWrite = message.objectKey == QByteArray(kTransmitKey)
         && !m_radioModel.isNull() && m_radioModel->receiveOnlyStationPolicy();
+    // R-R3-25: the tuner's operate, bypass and antenna, and the amplifier's
+    // operate, on a receive-only Core.
+    const bool receiveOnlyStation = !m_radioModel.isNull()
+        && m_radioModel->receiveOnlyStationPolicy();
+    const bool tunerWrite = message.objectKey == QByteArray(kTunerKey);
+    const bool amplifierWrite = message.objectKey == QByteArray(kAmplifierKey);
     QSet<QByteArray> requested;
     for (const MirrorUpdate& update : message.updates) {
         if (requested.contains(update.name)) {
@@ -1415,6 +1448,13 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         }
         if (receiveOnlyTransmitWrite) {
             refusals.insert(update.name, QString::fromLatin1(kReceiveOnlyTransmitReason));
+            continue;
+        }
+        if (receiveOnlyStation
+            && ((tunerWrite && isTunerTransmitPathProperty(update.name))
+                || (amplifierWrite && update.name == "operate"))) {
+            // R-R3-25 / R-R3-47: these wait for remote transmit.
+            refusals.insert(update.name, AmplifierModel::receiveOnlyOperateReason());
             continue;
         }
         if (!stepAttRefusal.isEmpty()) {
@@ -1833,6 +1873,11 @@ int StationServer::accessoryStatusVersion() const
     return !m_radioModel.isNull() && m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
 }
 
+int StationServer::pgxlControlVersion() const
+{
+    return accessoryStatusVersion() >= 1 ? 2 : 0;
+}
+
 int StationServer::radioHardwareVersion() const
 {
     if (m_radioModel.isNull() || !m_radioModel->stepAttFacade()->isBound()) {
@@ -1880,8 +1925,10 @@ StationCapabilities StationServer::buildCapabilities() const
             // read-only `ioBoard` object and the per-band antenna verb.
             caps.radioHardwareVersion = radioHardwareVersion();
             // R-R3-47 / R-R3-22: 1 on a Core that owns its accessories: the
-            // read-only `amplifier` and `rfkit` objects.
-            caps.remotePgxlControlVersion = accessoryStatusVersion();
+            // read-only `amplifier` and `rfkit` objects. The Power Genius is 2
+            // there: also configurePgxl, disconnectPgxl and
+            // setPgxlConnectionSettings.
+            caps.remotePgxlControlVersion = pgxlControlVersion();
             caps.remoteRfKitControlVersion = accessoryStatusVersion();
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;

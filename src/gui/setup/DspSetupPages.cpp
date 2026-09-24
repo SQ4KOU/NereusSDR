@@ -104,6 +104,10 @@
 #include <QTableWidget>
 #include <QVBoxLayout>
 
+#include <cmath>
+#include <functional>
+#include <memory>
+
 namespace NereusSDR {
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -112,6 +116,64 @@ namespace NereusSDR {
 static void disableGroup(QGroupBox* grp)
 {
     grp->setEnabled(false);
+}
+
+using SliceBindings = QList<QMetaObject::Connection>;
+
+// R-R3-21: keeps Setup controls bound to the active slice while the page is
+// open. bind(slice) makes the connections for one slice (slice is null when
+// there is none) and returns them; when the active slice changes they are
+// dropped and bind() runs again for the new one.
+static void bindToActiveSlice(QObject* owner, RadioModel* model,
+                              std::function<SliceBindings(SliceModel*)> bind)
+{
+    auto held = std::make_shared<SliceBindings>();
+    const auto rebind = [held, bind = std::move(bind)](SliceModel* slice) {
+        for (const QMetaObject::Connection& c : std::as_const(*held)) {
+            QObject::disconnect(c);
+        }
+        *held = bind(slice);
+    };
+    rebind(model ? model->activeSlice() : nullptr);
+    if (model) {
+        QObject::connect(model, &RadioModel::activeSliceChanged, owner,
+                         [model, rebind](int) { rebind(model->activeSlice()); });
+    }
+}
+
+// With no slice a control is off and says why; with one it is on again.
+static void setSliceAvailable(QWidget* w, bool available, const QString& tip = QString())
+{
+    w->setEnabled(available);
+    w->setToolTip(available ? tip : QStringLiteral("Connect to a radio to change this."));
+}
+
+// R-R3-21: a squelch threshold slider (dB) bound both ways to one setting of
+// the active slice; with no slice it says why it is off.
+static void bindSquelchThreshold(QObject* owner, RadioModel* model, QSlider* slider,
+                                 QLabel* value,
+                                 double (SliceModel::*getter)() const,
+                                 void (SliceModel::*setter)(double),
+                                 void (SliceModel::*changed)(double))
+{
+    bindToActiveSlice(owner, model, [=](SliceModel* slice) {
+        SliceBindings conns;
+        setSliceAvailable(slider, slice != nullptr);
+        if (!slice) { return conns; }
+        const auto show = [slider, value](double dB) {
+            QSignalBlocker block(slider);
+            slider->setValue(static_cast<int>(std::lround(dB)));
+            value->setText(QStringLiteral("%1 dB").arg(slider->value()));
+        };
+        show((slice->*getter)());
+        conns << QObject::connect(slider, &QSlider::valueChanged, slice,
+                                  [slice, setter, value](int dB) {
+            value->setText(QStringLiteral("%1 dB").arg(dB));
+            (slice->*setter)(static_cast<double>(dB));
+        });
+        conns << QObject::connect(slice, changed, slider, show);
+        return conns;
+    });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1386,29 +1448,37 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         // Note: NrSlot::Off means ANF is included as part of the NR selector
         // but ANF itself doesn't have a dedicated NrSlot — in Thetis ANF is a
         // parallel stage enabled independently of the NR slot selection.
-        // For now expose an informational note and a placeholder Enable toggle
-        // that will be wired once SliceModel gains anfEnabled.
         auto* note = new QLabel(
-            "ANF is available via the VFO popup ANF button.\n"
-            "Advanced tuning (Taps, Delay, Gain, Leakage) will be added in a future phase.\n"
-            "Enable toggle below mirrors the VFO ANF button state (not yet wired).");
+            "This switch and the VFO flag's ANF button are the same setting.");
         note->setStyleSheet(kInfoLbl);
         note->setWordWrap(true);
         grpLay->addWidget(note);
 
-        // Placeholder Enable toggle — from Thetis chkDSPANFEnable [v2.10.3.13].
-        // NYI: SliceModel does not yet expose anfEnabled / setAnfEnabled.
-        // Deferred to the same phase that adds Taps/Delay/Gain/Leakage to SliceModel.
+        // From Thetis chkDSPANFEnable [v2.10.3.13]. R-R3-21: bound to the
+        // active slice's anfEnabled, the setting the VFO flag's ANF button
+        // sets (SliceModel::setAnfEnabled); it was a greyed placeholder.
         auto* anfEnableChk = new QCheckBox("Enable ANF");
-        anfEnableChk->setChecked(false);
-        // Tooltip source: Thetis setup.designer.cs chkDSPANFEnable [v2.10.3.13]
-        anfEnableChk->setToolTip(tr("Enable Adaptive Notch Filter. Full ANF tuning (Taps/Delay/"
-                                    "Gain/Leakage) coming in a future phase."));
-        anfEnableChk->setEnabled(false);  // NYI until SliceModel has anfEnabled
+        anfEnableChk->setObjectName(QStringLiteral("anfEnableCheck"));
+        const QString anfTip = tr("Enable Adaptive Notch Filter.");
+        bindToActiveSlice(this, model, [anfEnableChk, anfTip](SliceModel* s) {
+            SliceBindings conns;
+            setSliceAvailable(anfEnableChk, s != nullptr, anfTip);
+            if (!s) { return conns; }
+            {
+                QSignalBlocker block(anfEnableChk);
+                anfEnableChk->setChecked(s->anfEnabled());
+            }
+            conns << connect(anfEnableChk, &QCheckBox::toggled, s, &SliceModel::setAnfEnabled);
+            conns << connect(s, &SliceModel::anfEnabledChanged, anfEnableChk,
+                             [anfEnableChk](bool on) {
+                QSignalBlocker block(anfEnableChk);
+                anfEnableChk->setChecked(on);
+            });
+            return conns;
+        });
         grpLay->addWidget(anfEnableChk);
 
         tabLay->addStretch(1);
-        // No wiring: SliceModel::anfEnabled does not yet exist (Task 17 scope).
     }
 }
 
@@ -1438,11 +1508,10 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
     // gone: RadioModel's push resolves the channel and no-ops when there
     // isn't one.
     //
-    // Slice-tracking policy: binds to model->activeSlice() at construction,
-    // matching the sibling NrAnfSetupPage and AgcAlcSetupPage. Setup is not
-    // attached to any flag, so the rule is that it targets the active slice;
-    // switching slices needs a close and reopen of the dialog. Full dynamic
-    // rebind is deferred with the rest of the pages.
+    // Slice-tracking policy: Setup is not attached to any flag, so the rule
+    // is that it targets the active slice, and it follows a change of active
+    // slice while open (R-R3-21, bindToActiveSlice at the end). `slice` here
+    // only seeds the controls' first values.
     SliceModel* slice = model ? model->activeSlice() : nullptr;
 
     // Helper: integer slider, live value label showing "value / max" with unit.
@@ -1530,9 +1599,7 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
         tr("Controls the detection threshold for impulse noise.\n"
            "Lower = more aggressive (blanks weaker impulses too).\n"
            "Higher = more conservative (only strong clicks get blanked)."));
-    connect(nb1Thresh, &QSlider::valueChanged, this, [slice](int v) {
-        if (slice) { slice->setNb1Threshold(v); }
-    });
+    nb1Thresh->setObjectName(QStringLiteral("nb1ThresholdSlider"));
 
     // Transition — udDSPNBTransition: 0.01-2.00 ms, step 0.01, default 0.01.
     // Slider internal: 1-200 (×100 scale). Label shows "X.XX / 2.00 ms".
@@ -1541,13 +1608,8 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
         slice ? qRound(slice->nb1TransitionMs() * 100.0) : 1,
         100.0, 2, tr(" ms"),
         tr("Time to decrease/increase to/from zero amplitude around an\n"
-           "impulse. Controls how gradually the blanker fades in and out\n"
-           "— very short = crisp click; longer = gentler but audible."));
-    connect(nb1Trans, &QSlider::valueChanged, this, [slice](int v) {
-        // Slider is the x100 integer; the model stores real milliseconds and
-        // RadioModel does the ms -> seconds conversion on the way to WDSP.
-        if (slice) { slice->setNb1TransitionMs(static_cast<double>(v) / 100.0); }
-    });
+           "impulse. Controls how gradually the blanker fades in and out:\n"
+           "very short = crisp click; longer = gentler but audible."));
 
     // Lead — udDSPNBLead: 0.01-2.00 ms, default 0.01.
     QSlider* nb1Lead = addScaledSlider(nb1Lay, tr("Lead"),
@@ -1557,9 +1619,6 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
         tr("Time at zero amplitude BEFORE the detected impulse. Blanks\n"
            "the leading edge of the click that the detector would\n"
            "otherwise miss. Raise slightly if clicks still get through."));
-    connect(nb1Lead, &QSlider::valueChanged, this, [slice](int v) {
-        if (slice) { slice->setNb1LeadMs(static_cast<double>(v) / 100.0); }
-    });
 
     // Lag — udDSPNBLag: 0.01-2.00 ms, default 0.01.
     QSlider* nb1Lag = addScaledSlider(nb1Lay, tr("Lag"),
@@ -1569,9 +1628,6 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
         tr("Time to remain at zero amplitude AFTER the impulse. Blanks\n"
            "the decay tail of the click. Raise this if pops still have\n"
            "an audible ringing after the initial transient."));
-    connect(nb1Lag, &QSlider::valueChanged, this, [slice](int v) {
-        if (slice) { slice->setNb1LagMs(static_cast<double>(v) / 100.0); }
-    });
 
     // NB2 Mode — Thetis comboDSPNOBmode.
     auto* nb1Mode = new QComboBox;
@@ -1585,10 +1641,6 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
         "a replacement waveform from surrounding samples to reduce\n"
         "audible artifacts on voice peaks."));
     addLabeledCombo(nb1Lay, "NB2 Mode", nb1Mode);
-    connect(nb1Mode, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, [slice](int v) {
-        if (slice) { slice->setNb2Mode(v); }
-    });
 
     // ── NB2 Threshold — intentionally absent (Thetis parity) ─────────────────
     // Thetis has no NB2 threshold UI. NB2 runs at cmaster.c:68 [v2.10.3.13]
@@ -1620,9 +1672,6 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
         tr("Multiple of the running noise power at which a sample is\n"
            "flagged as a candidate outlier. Lower = more aggressive\n"
            "first-pass detection; higher = miss weaker noise."));
-    connect(snbK1, &QSlider::valueChanged, this, [slice](int v) {
-        if (slice) { slice->setSnbK1(static_cast<double>(v) / 10.0); }
-    });
 
     // Threshold 2 — udDSPSNBThresh2: 4.0-60.0, step 0.1, default 20.0.
     // Slider internal: 40-600 (×10 scale).
@@ -1630,13 +1679,10 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
         40, 600,
         qRound((slice ? slice->snbK2() : 20.0) * 10.0),
         10.0, 1, QString{},
-        tr("Multiplier applied to the final detection threshold — confirms\n"
+        tr("Multiplier applied to the final detection threshold. It confirms\n"
            "candidates from Threshold 1 as real noise outliers. Lower =\n"
            "more aggressive overall blanking; higher = fewer false triggers\n"
            "on genuine voice peaks."));
-    connect(snbK2, &QSlider::valueChanged, this, [slice](int v) {
-        if (slice) { slice->setSnbK2(static_cast<double>(v) / 10.0); }
-    });
 
     // SNB Output Bandwidth — NOT in Thetis Setup page. Thetis sets it
     // automatically per mode in rxa.cs:112-124. Kept as a NereusSDR-native
@@ -1649,19 +1695,70 @@ NbSnbSetupPage::NbSnbSetupPage(RadioModel* model, QWidget* parent)
            "Smaller = focuses the blanker on the active passband;\n"
            "larger = covers wider modes (FM, DRM). Default 6000 Hz\n"
            "covers SSB + AM comfortably."));
-    connect(snbOutBw, &QSlider::valueChanged, this, [slice](int v) {
-        if (slice) { slice->setSnbOutputBandwidthHz(v); }
-    });
 
-    // No slice yet means Setup was opened before any receiver existed. The
-    // controls have nothing to address, so disable rather than silently
-    // dropping the operator's adjustments.
-    if (!slice) {
-        nb1Grp->setEnabled(false);
-        snbGrp->setEnabled(false);
-        nb1Grp->setToolTip(tr("Connect to a radio to tune the noise blanker."));
-        snbGrp->setToolTip(tr("Connect to a radio to tune the noise blanker."));
-    }
+    // R-R3-21: the controls act on the active slice and follow it while
+    // Setup is open (bindToActiveSlice). Every connection is owned by the
+    // slice, so removing it while the page is open leaves nothing pointing
+    // at it (the page used to keep a raw pointer to the slice it was built
+    // with). No slice yet means Setup was opened before any receiver
+    // existed: the controls have nothing to address, so they are disabled
+    // rather than silently dropping the operator's adjustments.
+    const QString noSliceTip = tr("Connect to a radio to tune the noise blanker.");
+    bindToActiveSlice(this, model, [=](SliceModel* s) {
+        SliceBindings conns;
+        nb1Grp->setEnabled(s != nullptr);
+        snbGrp->setEnabled(s != nullptr);
+        nb1Grp->setToolTip(s ? QString() : noSliceTip);
+        snbGrp->setToolTip(s ? QString() : noSliceTip);
+        if (!s) { return conns; }
+
+        // Show the slice's values (the value labels follow), then connect.
+        auto showing = std::make_shared<bool>(false);
+        const auto show = [=]() {
+            *showing = true;
+            nb1Thresh->setValue(s->nb1Threshold());
+            nb1Trans->setValue(qRound(s->nb1TransitionMs() * 100.0));
+            nb1Lead->setValue(qRound(s->nb1LeadMs() * 100.0));
+            nb1Lag->setValue(qRound(s->nb1LagMs() * 100.0));
+            nb1Mode->setCurrentIndex(s->nb2Mode());
+            snbK1->setValue(qRound(s->snbK1() * 10.0));
+            snbK2->setValue(qRound(s->snbK2() * 10.0));
+            snbOutBw->setValue(s->snbOutputBandwidthHz());
+            *showing = false;
+        };
+        show();
+
+        // Control -> slice. The sliders hold x100 / x10 integers; the model
+        // stores real values and RadioModel converts on the way to WDSP.
+        const auto toSlice = [&conns, s, showing](QSlider* sl, auto apply) {
+            conns << connect(sl, &QSlider::valueChanged, s, [s, showing, apply](int v) {
+                if (!*showing) { apply(s, v); }
+            });
+        };
+        toSlice(nb1Thresh, [](SliceModel* m, int v) { m->setNb1Threshold(v); });
+        toSlice(nb1Trans, [](SliceModel* m, int v) { m->setNb1TransitionMs(v / 100.0); });
+        toSlice(nb1Lead, [](SliceModel* m, int v) { m->setNb1LeadMs(v / 100.0); });
+        toSlice(nb1Lag, [](SliceModel* m, int v) { m->setNb1LagMs(v / 100.0); });
+        toSlice(snbK1, [](SliceModel* m, int v) { m->setSnbK1(v / 10.0); });
+        toSlice(snbK2, [](SliceModel* m, int v) { m->setSnbK2(v / 10.0); });
+        toSlice(snbOutBw, [](SliceModel* m, int v) { m->setSnbOutputBandwidthHz(v); });
+        conns << connect(nb1Mode, QOverload<int>::of(&QComboBox::currentIndexChanged), s,
+                         [s, showing](int v) {
+            if (!*showing) { s->setNb2Mode(v); }
+        });
+
+        // Slice -> controls (the VFO flag or a remote change).
+        for (auto signal : {&SliceModel::nb1ThresholdChanged, &SliceModel::nb2ModeChanged,
+                            &SliceModel::snbOutputBandwidthHzChanged}) {
+            conns << connect(s, signal, nb1Grp, show);
+        }
+        for (auto signal : {&SliceModel::nb1TransitionMsChanged, &SliceModel::nb1LeadMsChanged,
+                            &SliceModel::nb1LagMsChanged, &SliceModel::snbK1Changed,
+                            &SliceModel::snbK2Changed}) {
+            conns << connect(s, signal, nb1Grp, show);
+        }
+        return conns;
+    });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1749,21 +1846,64 @@ CwSetupPage::CwSetupPage(RadioModel* model, QWidget* parent)
     QVBoxLayout* apfLay = qobject_cast<QVBoxLayout*>(apfGrp->layout());
 
     auto* apfEnable = new QPushButton("Enable");
+    apfEnable->setCheckable(true);
+    apfEnable->setObjectName(QStringLiteral("apfEnableButton"));
     addLabeledToggle(apfLay, "Enable", apfEnable);
 
+    // R-R3-21: Enable and Center Freq are the active slice's APF, the VFO
+    // flag's APF button and tune slider (SliceModel apfEnabled /
+    // apfTuneHz). The centre is the CW pitch plus the slice's tune offset,
+    // as RadioModel sends it: From Thetis setup.cs:17071 [v2.10.3.13] --
+    // freq = CWPitch + tuneOffset, with RadioModel's pitch
+    // (RadioModel::kApfCwPitchHz). The range is the flag slider's
+    // -500..+500 Hz around it.
+    static constexpr int kApfPitchHz = RadioModel::kApfCwPitchHz;
     auto* apfCenter = new QSlider(Qt::Horizontal);
-    apfCenter->setRange(200, 3000);
-    addLabeledSlider(apfLay, "Center Freq", apfCenter);
+    apfCenter->setObjectName(QStringLiteral("apfCenterSlider"));
+    apfCenter->setRange(kApfPitchHz - 500, kApfPitchHz + 500);
+    auto* apfCenterValue = new QLabel;
+    addLabeledSlider(apfLay, "Center Freq", apfCenter, apfCenterValue);
 
+    // No slice setting holds these two yet; they stay as they were.
     auto* apfBw = new QSlider(Qt::Horizontal);
     apfBw->setRange(10, 500);
+    apfBw->setEnabled(false);
     addLabeledSlider(apfLay, "Bandwidth", apfBw);
 
     auto* apfGain = new QSlider(Qt::Horizontal);
     apfGain->setRange(0, 100);
+    apfGain->setEnabled(false);
     addLabeledSlider(apfLay, "Gain", apfGain);
 
-    disableGroup(apfGrp);
+    bindToActiveSlice(this, model, [apfEnable, apfCenter, apfCenterValue](SliceModel* s) {
+        SliceBindings conns;
+        setSliceAvailable(apfEnable, s != nullptr);
+        setSliceAvailable(apfCenter, s != nullptr);
+        if (!s) { return conns; }
+        {
+            QSignalBlocker blockEnable(apfEnable);
+            QSignalBlocker blockCenter(apfCenter);
+            apfEnable->setChecked(s->apfEnabled());
+            apfCenter->setValue(kApfPitchHz + s->apfTuneHz());
+        }
+        apfCenterValue->setText(QStringLiteral("%1 Hz").arg(apfCenter->value()));
+        conns << connect(apfEnable, &QPushButton::toggled, s, &SliceModel::setApfEnabled);
+        conns << connect(apfCenter, &QSlider::valueChanged, s, [s, apfCenterValue](int hz) {
+            apfCenterValue->setText(QStringLiteral("%1 Hz").arg(hz));
+            s->setApfTuneHz(hz - kApfPitchHz);
+        });
+        conns << connect(s, &SliceModel::apfEnabledChanged, apfEnable, [apfEnable](bool on) {
+            QSignalBlocker block(apfEnable);
+            apfEnable->setChecked(on);
+        });
+        conns << connect(s, &SliceModel::apfTuneHzChanged, apfCenter,
+                         [apfCenter, apfCenterValue](int tune) {
+            QSignalBlocker block(apfCenter);
+            apfCenter->setValue(kApfPitchHz + tune);
+            apfCenterValue->setText(QStringLiteral("%1 Hz").arg(apfCenter->value()));
+        });
+        return conns;
+    });
 
     // P1 full-parity §4.2 — subscribe to model so the Sidetone Volume row
     // visibility reflects the connected board's hasSidetoneGenerator flag
@@ -1857,16 +1997,23 @@ AmSamSetupPage::AmSamSetupPage(RadioModel* model, QWidget* parent)
     QGroupBox* sqGrp = addSection("Squelch");
     QVBoxLayout* sqLay = qobject_cast<QVBoxLayout*>(sqGrp->layout());
 
+    // R-R3-21: the active slice's AM squelch threshold (SliceModel
+    // amsqThresh, dB, sent to WDSP SetRXAAMSQThreshold by RadioModel).
     auto* sqThresh = new QSlider(Qt::Horizontal);
+    sqThresh->setObjectName(QStringLiteral("amSquelchThresholdSlider"));
     sqThresh->setRange(-160, 0);
-    addLabeledSlider(sqLay, "AM Squelch Threshold", sqThresh);
+    auto* sqThreshValue = new QLabel;
+    addLabeledSlider(sqLay, "AM Squelch Threshold", sqThresh, sqThreshValue);
+    bindSquelchThreshold(this, model, sqThresh, sqThreshValue,
+                         &SliceModel::amsqThresh, &SliceModel::setAmsqThresh,
+                         &SliceModel::amsqThreshChanged);
 
+    // No slice setting holds the tail yet; it stays as it was.
     auto* sqMaxTail = new QSpinBox;
     sqMaxTail->setRange(1, 1000);
     sqMaxTail->setSuffix(" ms");
+    sqMaxTail->setEnabled(false);
     addLabeledSpinner(sqLay, "Max Tail", sqMaxTail);
-
-    disableGroup(sqGrp);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1888,14 +2035,22 @@ FmSetupPage::FmSetupPage(RadioModel* model, QWidget* parent)
     rxDeviation->addItems({"5k", "2.5k"});
     addLabeledCombo(rxLay, "Deviation", rxDeviation);
 
+    // R-R3-21: the active slice's FM squelch threshold (SliceModel
+    // fmsqThresh, dB; RxChannel::setFmsqThresh converts it for WDSP).
     auto* squelchThresh = new QSlider(Qt::Horizontal);
+    squelchThresh->setObjectName(QStringLiteral("fmSquelchThresholdSlider"));
     squelchThresh->setRange(-160, 0);
-    addLabeledSlider(rxLay, "Squelch Threshold", squelchThresh);
+    auto* squelchThreshValue = new QLabel;
+    addLabeledSlider(rxLay, "Squelch Threshold", squelchThresh, squelchThreshValue);
+    bindSquelchThreshold(this, model, squelchThresh,
+                         squelchThreshValue, &SliceModel::fmsqThresh,
+                         &SliceModel::setFmsqThresh, &SliceModel::fmsqThreshChanged);
 
+    // No slice setting holds these two yet; they stay as they were.
+    rxDeviation->setEnabled(false);
     auto* deEmphasis = new QPushButton("Enable");
+    deEmphasis->setEnabled(false);
     addLabeledToggle(rxLay, "De-Emphasis", deEmphasis);
-
-    disableGroup(rxGrp);
 
     // ── TX ────────────────────────────────────────────────────────────────────
     QGroupBox* txGrp = addSection("TX");

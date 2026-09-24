@@ -126,6 +126,12 @@ public:
     void reflowStackedItems();
     void inferStackFromGeometry();
 
+signals:
+    // R-R3-21: an item was added (restore, a preset, Container settings
+    // Apply), so MainWindow can give it the saved meter settings and the
+    // active slice's state.
+    void itemAdded(NereusSDR::MeterItem* item);
+
 protected:
 #ifdef NEREUS_GPU_SPECTRUM
     void initialize(QRhiCommandBuffer* cb) override;

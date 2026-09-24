@@ -45,6 +45,11 @@
 //                 applies the saved high-resolution filter setting without
 //                 writing it back. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-21: applyHighResFilter() / applyPersistedHighResFilter()
+//                 let MainWindow apply the saved high-resolution filter
+//                 setting at startup and when the receive channel appears,
+//                 not only when this page opens. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -185,6 +190,76 @@ void wireCheckPersist(QCheckBox* check, const QString& key)
 }
 
 }  // namespace
+
+// R-R3-21: the high-resolution filter setting used to reach the filter
+// displays only when this page was built, so a restart lost it until the
+// operator opened Setup. The fan-out lives here so the page and MainWindow
+// (startup, and each time the receive channel is created or destroyed)
+// apply it the same way.
+//
+// bindRxChannel(rxCh) is called unconditionally: when high-res is ON the
+// channel supplies the FIR curve; when OFF the pointer is held but unused
+// (paintHighResolutionFilterCurve is gated on m_highResolution).  A nullptr
+// channel causes paintHighResolutionFilterCurve to return early gracefully.
+//
+// R3 Setup fix wave (R-R3-21): the fan-out does not save. Only the
+// operator's toggle does; building the page (in a remote window, from the
+// Core's settings, possibly offline) must not write the value it has just
+// read back to the Core.
+// The receive channel the filter graphs draw the high-resolution curve
+// from: channel 0 (see applyHighResFilter below).
+static RxChannel* filterGraphChannel(RadioModel* rm)
+{
+    return rm->rxChannelForSlice(0);
+}
+
+void DspOptionsPage::applyHighResFilter(RadioModel* rm, bool highRes)
+{
+    ContainerManager* cm = rm ? rm->containerManager() : nullptr;
+    if (!cm) {
+        return;
+    }
+
+    // Phase 3F Sub-Epic J Task 11: RadioModel::rxChannelForSlice()
+    // replaces the direct wdspEngine()->rxChannel() reach -- src/gui/
+    // no longer touches WdspEngine directly. Still channel 0: containers
+    // and their MeterItems are not slice-scoped today (forEachMeterItem
+    // fans out to every container regardless of which slice, if any, it
+    // is showing), so there is no "this item's slice" to resolve yet.
+    // Whether this fan-out should instead follow the active slice
+    // (Task 4 gave the container S-meter that treatment) is a separate,
+    // larger question left for a follow-up, not a mechanical routing fix.
+    RxChannel* rxCh = filterGraphChannel(rm);
+
+    cm->forEachMeterItem([highRes, rxCh](MeterItem* item) {
+        if (auto* fdi = qobject_cast<FilterDisplayItem*>(item)) {
+            fdi->bindRxChannel(rxCh);
+            fdi->setHighResolution(highRes);
+        }
+    });
+}
+
+void DspOptionsPage::applyPersistedHighResFilterTo(RadioModel* rm, MeterItem* item)
+{
+    auto* fdi = qobject_cast<FilterDisplayItem*>(item);
+    if (!rm || !fdi) {
+        return;
+    }
+    fdi->bindRxChannel(filterGraphChannel(rm));
+    fdi->setHighResolution(
+        AppSettings::instance().value(
+            QStringLiteral("DspOptionsHighResFilterCharacteristics"),
+            QStringLiteral("False")).toString() == QLatin1String("True"));
+}
+
+void DspOptionsPage::applyPersistedHighResFilter(RadioModel* rm)
+{
+    const bool persistedHighRes =
+        AppSettings::instance().value(
+            QStringLiteral("DspOptionsHighResFilterCharacteristics"),
+            QStringLiteral("False")).toString() == QLatin1String("True");
+    applyHighResFilter(rm, persistedHighRes);
+}
 
 // ── Construction ──────────────────────────────────────────────────────────────
 
@@ -376,7 +451,7 @@ void DspOptionsPage::buildUI()
     //   dsp_buf_cw_rx    = 64    (no CW TX)
     //   dsp_buf_dig_rx   = 64    dsp_buf_dig_tx   = 64
     const QString kBufTooltip = tr(
-        "Sets the DSP internal buffer size — larger values yield sharper "
+        "Sets the internal buffer size. Larger values give sharper "
         "filters but add latency.");
 
     QComboBox* unusedTxStub = nullptr;
@@ -405,7 +480,7 @@ void DspOptionsPage::buildUI()
     // Defaults from Thetis console.cs:39141-39216 [v2.10.3.13] — all 4096
     // for every mode/direction.
     const QString kFiltTooltip = tr(
-        "Sets the FIR filter length — larger values yield sharper "
+        "Sets the FIR filter length. Larger values give sharper "
         "filter skirts but add CPU and latency.");
 
     auto* fszPhone = buildModeSubgroup(tr("SSB/AM"), kFilterSizes,
@@ -524,43 +599,11 @@ void DspOptionsPage::buildUI()
 
     loadCheck(m_highResFilterChars, "DspOptionsHighResFilterCharacteristics", false);
 
-    // Task 4.4: helper that fans out high-res mode + RxChannel binding to all
-    // live FilterDisplayItem instances.  Extracted so it can be called both on
-    // initial construction (to apply the persisted value) and on toggle.
-    //
-    // bindRxChannel(rxCh) is called unconditionally: when high-res is ON the
-    // channel supplies the FIR curve; when OFF the pointer is held but unused
-    // (paintHighResolutionFilterCurve is gated on m_highResolution).  A nullptr
-    // channel causes paintHighResolutionFilterCurve to return early gracefully.
-    //
-    // R3 Setup fix wave (R-R3-21): the fan-out does not save. Only the
-    // operator's toggle below does; building the page (in a remote window,
-    // from the Core's settings, possibly offline) must not write the value
-    // it has just read back to the Core.
+    // Task 4.4: fans out high-res mode + RxChannel binding to all live
+    // FilterDisplayItem instances, on initial construction (to apply the
+    // persisted value) and on toggle. See applyHighResFilter() above.
     auto applyHighResFanOut = [this](bool v) {
-        RadioModel* rm = model();
-        ContainerManager* cm = rm ? rm->containerManager() : nullptr;
-        if (!cm) {
-            return;
-        }
-
-        // Phase 3F Sub-Epic J Task 11: RadioModel::rxChannelForSlice()
-        // replaces the direct wdspEngine()->rxChannel() reach -- src/gui/
-        // no longer touches WdspEngine directly. Still channel 0: containers
-        // and their MeterItems are not slice-scoped today (forEachMeterItem
-        // fans out to every container regardless of which slice, if any, it
-        // is showing), so there is no "this item's slice" to resolve yet.
-        // Whether this fan-out should instead follow the active slice
-        // (Task 4 gave the container S-meter that treatment) is a separate,
-        // larger question left for a follow-up, not a mechanical routing fix.
-        RxChannel* rxCh = rm ? rm->rxChannelForSlice(0) : nullptr;
-
-        cm->forEachMeterItem([v, rxCh](MeterItem* item) {
-            if (auto* fdi = qobject_cast<FilterDisplayItem*>(item)) {
-                fdi->bindRxChannel(rxCh);
-                fdi->setHighResolution(v);
-            }
-        });
+        applyHighResFilter(model(), v);
     };
 
     // Wire toggle → persist + fan-out.
@@ -576,13 +619,7 @@ void DspOptionsPage::buildUI()
     // before the first paint.
     // NOTE: ContainerManager::forEachMeterItem() is safe to call during buildUI()
     // because SetupDialog is constructed after all containers are initialised.
-    {
-        const bool persistedHighRes =
-            AppSettings::instance().value(
-                QStringLiteral("DspOptionsHighResFilterCharacteristics"),
-                QStringLiteral("False")).toString() == QLatin1String("True");
-        applyHighResFanOut(persistedHighRes);
-    }
+    applyPersistedHighResFilter(model());
 
     layout->addWidget(m_highResFilterChars);
 
@@ -591,7 +628,7 @@ void DspOptionsPage::buildUI()
     // Task 4.6 subscribes to RadioModel::dspChangeMeasured(qint64).
     // Placeholder text shown until the first rebuild occurs.
     // =========================================================================
-    m_timeToLastChangeLabel = new QLabel(tr("Time to last change: — (no change yet)"), this);
+    m_timeToLastChangeLabel = new QLabel(tr("Time to last change: none yet"), this);
     m_timeToLastChangeLabel->setStyleSheet(QStringLiteral("color: #888;"));
 
     // Wire to RadioModel::dspChangeMeasured if model is available.
@@ -708,8 +745,8 @@ void DspOptionsPage::recomputeWarnings()
         m_bufPhoneTx, m_bufFmTx, m_bufDigTx);
     m_warnBufferSize->setVisible(bufferSizeDifferentRX || bufferSizeDifferentTX);
     m_warnBufferSize->setToolTip(
-        tr("Buffer sizes differ across modes — WDSP will use the mode-specific "
-           "value and no implicit conversion happens. Set all modes to the same "
+        tr("Buffer sizes differ across modes. Each mode uses its own "
+           "value and nothing is converted. Set all modes to the same "
            "buffer size if you want a consistent configuration."));
 
     const bool filterSizeDifferentRX = comboValuesDiffer4(
@@ -718,7 +755,7 @@ void DspOptionsPage::recomputeWarnings()
         m_filtSizePhoneTx, m_filtSizeFmTx, m_filtSizeDigTx);
     m_warnFilterSize->setVisible(filterSizeDifferentRX || filterSizeDifferentTX);
     m_warnFilterSize->setToolTip(
-        tr("Filter sizes differ across modes — WDSP will use the mode-specific "
+        tr("Filter sizes differ across modes. Each mode uses its own "
            "value. Set all modes to the same filter size for a consistent "
            "configuration."));
 
@@ -728,8 +765,8 @@ void DspOptionsPage::recomputeWarnings()
         m_filtTypePhoneTx, m_filtTypeFmTx, m_filtTypeDigTx);
     m_warnBufferType->setVisible(filterTypeDifferentRX || filterTypeDifferentTX);
     m_warnBufferType->setToolTip(
-        tr("Filter types differ across modes — some modes use Linear Phase and "
-           "others use Low Latency. WDSP will use the mode-specific type."));
+        tr("Filter types differ across modes: some modes use Linear Phase and "
+           "others use Low Latency. Each mode uses its own type."));
 }
 
 }  // namespace NereusSDR
