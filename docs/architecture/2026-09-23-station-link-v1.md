@@ -1586,7 +1586,7 @@ matches what the client sends.
 
 | Key | Meaning | Default |
 | --- | --- | --- |
-| `radio` | `"static"`: a model reporting a connected Hermes Lite 2 (MAC `AA:BB:CC:DD:EE:01`) with no radio behind it, so nothing changes on its own; `"connectable"`: a model connected to the fake Protocol 1 radio, receive processing and all; the runner waits for PureSignal's first status poll after the station starts, so its readiness (`canActuate`, off on a receive-only station) has settled, and for each slice's signal readings to leave the no-reading value, before the client attaches | `"static"` |
+| `radio` | `"static"`: a model reporting a connected Hermes Lite 2 (MAC `AA:BB:CC:DD:EE:01`) with no radio behind it, so nothing changes on its own; `"connectable"`: a model connected to the fake Protocol 1 radio, receive processing and all; PureSignal's readiness (`canActuate`) is off on a receive-only station from the moment the station makes the radio receive-only, and the runner waits for each slice's signal readings to leave the no-reading value before the client attaches | `"static"` |
 | `slices` | slices before the client connects | 1 |
 | `panadapters` | panadapters before the client connects | 0 |
 | `coreAccessories` | the Core owns its accessories: the `tuner`, `amplifier`, `rfkit` and `accessoryData` objects and the accessory commands | false |

@@ -164,6 +164,10 @@ PureSignalSessionFacade::PureSignalSessionFacade(RadioModel* radio, PureSignal* 
         connect(radio, &RadioModel::pureSignalCoordinatorReady, this,
                 &PureSignalSessionFacade::setCoordinator);
         connect(radio, &RadioModel::connectionStateChanged, this, [this]() { refreshStatus(); });
+        // canActuate depends on the station's receive-only policy; follow a
+        // change on the same call, not on the coordinator's next poll.
+        connect(radio, &RadioModel::receiveOnlyStationPolicyChanged, this,
+                [this]() { refreshStatus(); });
         if (radio->twoToneController()) {
             connect(radio->twoToneController(), &TwoToneController::twoToneActiveChanged,
                     this, [this]() { refreshStatus(); });

@@ -12027,12 +12027,16 @@ void RadioModel::onCaptureStatusChanged(const CaptureSupervisor::Status& status)
 
 void RadioModel::setReceiveOnlyStationPolicy(bool receiveOnly)
 {
+    const bool changed = m_receiveOnlyStationPolicy != receiveOnly;
     m_receiveOnlyStationPolicy = receiveOnly;
     if (receiveOnly) {
         // A local-role hardware owner does not otherwise install the MOX
         // precheck until radio TX setup. The daemon policy must be effective
         // during boot and while disconnected too.
         installBandPlanMoxCheck();
+    }
+    if (changed) {
+        emit receiveOnlyStationPolicyChanged(receiveOnly);
     }
 }
 

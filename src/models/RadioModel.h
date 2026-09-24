@@ -3201,6 +3201,11 @@ signals:
     // emit pureSignalCoordinatorReady(...) directly to inject a test-owned
     // coordinator into the applet wiring.
     void pureSignalCoordinatorReady(NereusSDR::PureSignal* coordinator);
+    // iPhone app Part A fix wave (R-IOS-01): the station's receive-only
+    // policy changed. Readiness that depends on it (PureSignal's
+    // canActuate, which the session facade publishes) follows at once
+    // instead of on the coordinator's next status poll.
+    void receiveOnlyStationPolicyChanged(bool receiveOnly);
     void settingsSaveErrorChanged(const QString& reason);
     void sliceAdded(int index);
     void sliceRemoved(int index);

@@ -51,6 +51,11 @@
 //                                    connectable station waits for
 //                                    PureSignal's readiness to settle.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
+//                                    PureSignal's readiness follows the
+//                                    receive-only station at once; only
+//                                    the slices' readings are waited for.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -70,7 +75,6 @@
 #include "core/ConnectionState.h"
 #include "core/StepAttenuatorController.h"
 #include "core/dsp/DspAssetService.h"
-#include "core/PureSignal.h"
 #include "core/meters/SliceMeterPump.h"
 #include "core/security/TokenStore.h"
 #include "core/session/LinkVersion.h"
@@ -203,27 +207,18 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         station->server->setMediaEnabled(true);
     }
     if (station->harness) {
-        // Task 4b (R-IOS-01): a StationServer makes its radio receive-only
+        // A StationServer makes its radio receive-only
         // (setReceiveOnlyStationPolicy), which turns PureSignal's readiness
-        // (canActuate) off. The pureSignal object reads that on the
-        // coordinator's next status poll (PureSignal::pollTimerTick, every
-        // 100 ms). Wait for one poll after the server exists, so the
-        // snapshot always carries the settled value instead of whichever
-        // side of that poll the client happened to attach on.
-        PureSignal* const coordinator = station->model->pureSignal();
+        // (canActuate) off; the pureSignal object follows on that call
+        // (RadioModel::receiveOnlyStationPolicyChanged), so it is settled
+        // here already.
         PureSignalSessionFacade* const facade = station->model->pureSignalFacade();
-        if (coordinator == nullptr || facade == nullptr) {
-            return QStringLiteral("the connectable radio has no PureSignal");
+        if (facade == nullptr || facade->canActuate()) {
+            return QStringLiteral("PureSignal's readiness did not follow the receive-only "
+                                  "station");
         }
-        QSignalSpy polled(coordinator, &PureSignal::ps3StatusChanged);
-        if (!polled.wait(5000)) {
-            return QStringLiteral("PureSignal never polled its status");
-        }
-        if (facade->canActuate() != coordinator->canActuate()) {
-            return QStringLiteral("PureSignal's readiness did not settle");
-        }
-        // The same for each slice's signal readings: the meter pump writes
-        // the no-reading value until the receiver's meter has one.
+        // Each slice's signal readings: the meter pump writes the
+        // no-reading value until the receiver's meter has one.
         const bool readings = QTest::qWaitFor([station]() {
             for (SliceModel* slice : station->model->slices()) {
                 if (slice->signalStrengthDbm() <= SliceMeterPump::kNoReadingDbm
