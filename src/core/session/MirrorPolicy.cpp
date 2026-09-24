@@ -23,6 +23,9 @@
 //   2026-09-23 - R-R3-47 / R-R3-22: AmplifierModel and RfKitModel, all
 //                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-45: SliceModel outputRoute is Outbound until the
+//                 headphones plan's remote window task makes it two-way.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -87,7 +90,7 @@ namespace {
 // WRITE. Listing them keeps the table total, so the guard can name a
 // newly added property instead of silently accepting it.
 const MirrorPolicy::Entry kEntries[] = {
-    // ---- SliceModel (109 entries) ----
+    // ---- SliceModel (110 entries) ----
     { "SliceModel", "frequency", MirrorDirection::Bidirectional },
     { "SliceModel", "dspMode", MirrorDirection::Bidirectional },
     { "SliceModel", "filterLow", MirrorDirection::Bidirectional },
@@ -265,6 +268,10 @@ const MirrorPolicy::Entry kEntries[] = {
     // Outbound here too.
     { "SliceModel", "snrDb", MirrorDirection::Outbound },
     { "SliceModel", "lastRadeRxCallsign", MirrorDirection::Outbound },
+    // R-R3-45: speakers or headphones. Outbound, the direction every
+    // unlisted property already had; the headphones plan's remote window
+    // task (Task 2) makes it two-way with the headphones mix it plays.
+    { "SliceModel", "outputRoute", MirrorDirection::Outbound },
 
     // ---- TransmitModel (15 entries) ----
     { "TransmitModel", "mox", MirrorDirection::Bidirectional },

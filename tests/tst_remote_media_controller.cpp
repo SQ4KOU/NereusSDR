@@ -1610,6 +1610,10 @@ private slots:
         sourceSlice->setFrequency(centre - 30000);
         QCOMPARE(station.streamCentreHz(stream), centre);
         QTRY_COMPARE(remote.sliceById(sliceId)->frequency(), centre - 30000);
+        // The window's pan takes C-Tune from the Core's pin once the pin is
+        // mirrored and the pan's spectrum context is accepted; until then a
+        // zoom is a view change only. Wait for it, as a user would see it.
+        QTRY_VERIFY(widget->ctunEnabled());
         widget->setVfoFrequency(centre - 30000);
         QSignalSpy notices(&remote, &RadioModel::sliceAddRejected);
         const QPointF inSpectrum(widget->width() * 0.25, widget->height() * 0.2);

@@ -16,6 +16,8 @@
 //                                    Code.
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-47: AmplifierModel::State.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-45: SliceModel::OutputRoute.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorEnumDomain.h"
@@ -23,6 +25,7 @@
 #include "core/WdspTypes.h"
 #include "models/AmplifierModel.h"
 #include "models/Band.h"
+#include "models/SliceModel.h"
 #include "models/TunerModel.h"
 
 #include <QHash>
@@ -120,6 +123,12 @@ const DomainTable& table()
             AmplifierModel::State::TransmitA,
             AmplifierModel::State::TransmitB,
             AmplifierModel::State::Fault,
+        });
+
+        // R-R3-45: each receiver plays on the speakers or the headphones.
+        declare<SliceModel::OutputRoute>(&t, {
+            SliceModel::OutputRoute::Speakers,
+            SliceModel::OutputRoute::Headphones,
         });
 
         // From src/models/Band.h. Count is deliberately ABSENT: it is an
