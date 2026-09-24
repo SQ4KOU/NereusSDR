@@ -86,6 +86,10 @@
 //                 Presets, Spectrum Peaks, Waterfall Defaults, 3D View and
 //                 Export / Import are ThisComputer. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23: R3 receiver audio plan, Task 4 (R-R3-42). Audio > TCI and
+//                 CAT & Network > TCI Server are ThisComputer and work in a
+//                 remote window. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -1097,14 +1101,13 @@ void SetupDialog::buildTree()
                  [this] { return wrapWithAudioBackendStrip(new AudioTxInputPage(m_model)); });
     registerPage(audio, "VAX", SetupScope::Mixed,
                  [this] { return wrapWithAudioBackendStrip(new AudioVaxPage(m_model)); });
-    // R-R3-21: Audio > TCI reached this process's audio engine only through
-    // the backend strip, which no longer counts (see
-    // wrapWithAudioBackendStrip). Its remote behaviour is unchanged in this
-    // plan: declared unavailable with the reason the local-DSP gate gave it.
-    markRemoteUnavailable(
-        registerPage(audio, "TCI", SetupScope::Core,
-                     [this] { return wrapWithAudioBackendStrip(new AudioTciPage(m_model)); }),
-        m_localUnavailableReason);
+    // R-R3-42: Audio > TCI configures the TCI server that runs on this
+    // computer, in a remote window as in a local one, and its keys are this
+    // computer's (SettingsScope "Tci"). It reaches no local DSP (the backend
+    // strip goes through localAudioDevices()), so it works in a remote
+    // window, connected or not.
+    registerPage(audio, "TCI", SetupScope::ThisComputer,
+                 [this] { return wrapWithAudioBackendStrip(new AudioTciPage(m_model)); });
     registerPage(audio, "Advanced", SetupScope::Mixed,
                  [this] { return wrapWithAudioBackendStrip(new AudioAdvancedPage(m_model)); });
     // Phase 3M-1c J.3: TX Profile editor.
@@ -1281,7 +1284,8 @@ void SetupDialog::buildTree()
     // ── CAT & Network ─────────────────────────────────────────────────────────
     QTreeWidgetItem* cat = addCategory("CAT & Network");
     registerPage(cat, "Serial Ports", SetupScope::ThisComputer, [] { return new CatSerialPortsPage; });
-    registerPage(cat, "TCI Server", SetupScope::Core, [this]() -> QWidget* {
+    // R-R3-42: this computer's TCI server and its own settings.
+    registerPage(cat, "TCI Server", SetupScope::ThisComputer, [this]() -> QWidget* {
         // Phase 3J-1 review P2.4: forward CatTciServerPage::tciServerEnableToggled
         // through SetupDialog so wireSetupDialog() can connect it to the live
         // TciServer::start() / stop() path in MainWindow.

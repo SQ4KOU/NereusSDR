@@ -5158,6 +5158,17 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tst_tci_tx_mutex PRIVATE Qt6::WebSockets)
 endif()
 
+# ── R3 receiver audio plan, Task 4 (R-R3-42, R-R3-21, R-R3-25) ───────────────
+# TCI served by a remote window: no local taps, receive audio from the Core's
+# receiver streams (fake source and the real RemoteMediaController against an
+# in-process Core, Opus and lossless), every app on a receiver gets all of
+# it, an older Core leaves audio_start unanswered, vfo/modulation act on the
+# Core's slice. NereusSDR-native remote boundary; no upstream port applies.
+if(Qt6WebSockets_FOUND)
+    nereus_add_test(tst_tci_remote_window fakes/LoopbackTransport.cpp)
+    target_link_libraries(tst_tci_remote_window PRIVATE Qt6::WebSockets)
+endif()
+
 # ── Phase 3J-1 Task 1.1: TCI verification matrix runner ──────────────────────
 # Loads tests/data/tci/matrix.csv and feeds each row's command into
 # TciProtocol::handleCommand(), asserting the response + notification queue

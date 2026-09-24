@@ -13,6 +13,10 @@
 // Modification history (NereusSDR):
 //   2026-05-10 — Phase 3J-1 Task 3.1 by J.J. Boyd (KG4VCF);
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-23 - R3 receiver audio plan, Task 4 (R-R3-42, R-R3-25) by
+//                J.J. Boyd (KG4VCF): remote-window branches in the init
+//                burst, trx, vfo and modulation. AI-assisted transformation
+//                via Anthropic Claude Code.
 
 #include "TciProtocol.h"
 #include "AppSettings.h"
@@ -260,7 +264,10 @@ QStringList TciProtocol::buildInitBurst() const
     lines << QStringLiteral("device:%1;").arg(deviceName);
 
     // From Thetis TCIServer.cs:2529 [v2.10.3.13]
-    lines << QStringLiteral("receive_only:false;");
+    // R-R3-42 / R-R3-25: a remote window's receivers belong to a Core that
+    // does not transmit for it, so it tells the app it only receives.
+    lines << (m_remoteWindow ? QStringLiteral("receive_only:true;")
+                             : QStringLiteral("receive_only:false;"));
 
     // From Thetis TCIServer.cs:2530 [v2.10.3.13] — locked at 2 per design doc §1.2;
     // Slice C/D are NereusSDR-internal and not exposed via TCI in Phase 3J-1.
@@ -879,8 +886,9 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     // From Thetis TCIServer.cs:2472-2476 [v2.10.3.13]
     lines << buildSplitEnableLine(0, split[0]);
     lines << buildSplitEnableLine(1, bRX2Enabled && split[1]);
-    lines << buildTxEnableLine(0, !mox);
-    lines << buildTxEnableLine(1, bRX2Enabled && !mox);
+    // R-R3-42 / R-R3-25: neither receiver can transmit from a remote window.
+    lines << buildTxEnableLine(0, !m_remoteWindow && !mox);
+    lines << buildTxEnableLine(1, !m_remoteWindow && bRX2Enabled && !mox);
 
     // From Thetis TCIServer.cs:2478-2481 [v2.10.3.13]
     lines << buildRxChannelEnableLine(0, 0, true);
@@ -1590,7 +1598,20 @@ QString TciProtocol::handleVfoCommand(const QStringList& args)
         // Rapid VFO bursts within a 5ms drain tick collapse to 1 frame per key.
         // From Thetis sendVFO at TCIServer.cs:2061-2093 [v2.10.3.13] — format string.
         const QString vfoKey   = QStringLiteral("vfo:%1,%2").arg(rx).arg(chan);
-        const QString vfoFrame = QStringLiteral("vfo:%1,%2,%3;").arg(rx).arg(chan).arg(hz);
+        // R-R3-42: in a remote window the slice is the Core's. Answer with
+        // what the slice holds now, not with what was asked: a write the
+        // slice refused (a locked slice) re-broadcasts the current value,
+        // and the Core's own answer reaches every client through the
+        // slice's frequency broadcast when it arrives.
+        qint64 answered = hz;
+        if (m_remoteWindow) {
+            QMetaObject::invokeMethod(m_radio, "vfoHz",
+                                      Qt::DirectConnection,
+                                      Q_RETURN_ARG(qint64, answered),
+                                      Q_ARG(int, rx),
+                                      Q_ARG(int, chan));
+        }
+        const QString vfoFrame = QStringLiteral("vfo:%1,%2,%3;").arg(rx).arg(chan).arg(answered);
         m_vfoCoalescer.update(vfoKey, vfoFrame);
         return {};
     }
@@ -1771,6 +1792,18 @@ QString TciProtocol::handleModulationCommand(const QStringList& args)
 
         QMetaObject::invokeMethod(m_radio, "setMode", Qt::DirectConnection,
                                   Q_ARG(int, rx), Q_ARG(QString, modeOut));
+        // R-R3-42: in a remote window, answer with the mode the slice holds
+        // now (see handleVfoCommand); the Core's answer follows through the
+        // slice's mode broadcast.
+        if (m_remoteWindow) {
+            QString held;
+            QMetaObject::invokeMethod(m_radio, "mode", Qt::DirectConnection,
+                                      Q_RETURN_ARG(QString, held),
+                                      Q_ARG(int, rx));
+            if (!held.isEmpty()) {
+                modeOut = held.toUpper();
+            }
+        }
         // MW0LGE_22b mods are uppcase on the sun, replicate
         // From Thetis TCIServer.cs:2155 [v2.10.3.13] — sendMode format string.
         // Upstream tags preserved: //MW0LGE (from cited TCIServer.cs:2154) [v2.10.3.15]
@@ -1859,6 +1892,14 @@ QString TciProtocol::handleTrxCommand(const QStringList& args)
             return {};
         }
         const bool mox = (boolStr == QStringLiteral("true"));
+        // R-R3-42 / R-R3-25: a remote window never keys the transmitter.
+        // No MOX write and no broadcast; the asking app alone hears that
+        // its receiver is not transmitting. TciServer tells the operator
+        // why, in plain words, off the wire.
+        if (m_remoteWindow) {
+            (void)mox;
+            return buildTrxLine(rx, false);
+        }
         // Phase 8: store via setMox. In Phase 17 this becomes TCIPTT + VFOATX/VFOBTX logic.
         QMetaObject::invokeMethod(m_radio, "setMox",
                                   Qt::DirectConnection,

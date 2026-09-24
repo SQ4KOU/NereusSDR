@@ -393,8 +393,30 @@ const QSet<QString> kCoreExemptExact = {
     QStringLiteral("SettingsSchemaVersion"),
 };
 
+// R-R3-42: keys of a server that src/core implements but only this
+// computer's window runs. The TCI server (src/core/TciServer.cpp,
+// TciProtocol.cpp) lives in src/core because it drives RadioModel, yet
+// only MainWindow constructs one and the Core runs none
+// (tciServerIsBuiltOnlyByTheWindow() below pins that). Its settings are
+// read by that core code AND written by two Setup pages, which is the
+// exact shape assertion (b) exists to reject for a Station key; for this
+// family it is the intended shape, because both ends are this computer.
+// Exempt from (a) and (b) both, by prefix, and only this prefix.
+const QStringList kThisComputerServerPrefixes = {
+    QStringLiteral("Tci"),
+};
+
+bool isThisComputerServerKey(const QString& key)
+{
+    for (const QString& prefix : kThisComputerServerPrefixes) {
+        if (key.startsWith(prefix)) { return true; }
+    }
+    return false;
+}
+
 bool isCoreExempt(const QString& key)
 {
+    if (isThisComputerServerKey(key)) { return true; }
     if (kCoreExemptExact.contains(key)) { return true; }
     for (const QString& prefix : kCoreExemptPrefixes) {
         if (key.startsWith(prefix)) { return true; }
@@ -547,8 +569,14 @@ private slots:
             << QStringLiteral("DisplayFftSize") << int(SettingsScope::Station);
         QTest::newRow("DisplayNoiseFloorColor is OperatorLocal (rendering)")
             << QStringLiteral("DisplayNoiseFloorColor") << int(SettingsScope::OperatorLocal);
-        QTest::newRow("TciServerPort is Station (server config)")
-            << QStringLiteral("TciServerPort") << int(SettingsScope::Station);
+        // R-R3-42: the TCI server runs on this computer, in a remote window
+        // as in a local one, so its settings are this computer's.
+        QTest::newRow("TciServerPort is OperatorLocal (this computer's TCI server)")
+            << QStringLiteral("TciServerPort") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("TciEmulateSunSDR2Pro is OperatorLocal (this computer's TCI server)")
+            << QStringLiteral("TciEmulateSunSDR2Pro") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("TciSliceAGain is OperatorLocal (the TCI applet's gain slider)")
+            << QStringLiteral("TciSliceAGain") << int(SettingsScope::OperatorLocal);
         QTest::newRow("TciLogWindowGeometry is OperatorLocal (GUI dialog geometry)")
             << QStringLiteral("TciLogWindowGeometry") << int(SettingsScope::OperatorLocal);
         QTest::newRow("hardware/oc/pennyExtCtrl is Station (oc is a literal segment, not a MAC)")
@@ -720,14 +748,15 @@ private slots:
     // against the literal string classifySettingsKey would need to
     // mis-strip to "TciSliceA" for this to accidentally pass for the
     // wrong reason (both "TciSliceA" and "TciSliceA_OutputSampleRate"
-    // classify Station via the same "Tci" prefix, so a scope-only
-    // assertion here would not actually prove the suffix survived).
+    // classify the same via the "Tci" prefix -- OperatorLocal since
+    // R-R3-42 -- so a scope-only assertion here would not actually prove
+    // the suffix survived).
     void nonDigitSuffixIsNotStripped()
     {
         const QString real = QStringLiteral("TciSliceA_OutputSampleRate");
-        QCOMPARE(int(classifySettingsKey(real)), int(SettingsScope::Station));
+        QCOMPARE(int(classifySettingsKey(real)), int(SettingsScope::OperatorLocal));
         // If stripping fired here it would classify "TciSliceA" instead,
-        // which still resolves Station via the same prefix -- so also
+        // which still resolves the same via the same prefix -- so also
         // pin a key that would flip OperatorLocal->something-else-entirely
         // under a wrong all-suffix-strip, to make a regression loud
         // instead of silent: RfKit_Ant1_Label's only "trailing" digit
@@ -865,6 +894,31 @@ private slots:
         QCOMPARE(classifySettingsKey(QStringLiteral("Region")), SettingsScope::Station);
     }
 
+    // R-R3-42: the exemption above is honest only while the TCI server is
+    // built by the window alone. A Core (nereusd, DaemonApp) that built one
+    // would read settings this computer keeps to itself.
+    void tciServerIsBuiltOnlyByTheWindow()
+    {
+        const QString root = QStringLiteral(NEREUS_SOURCE_DIR);
+        const QRegularExpression construct(
+            QStringLiteral("new\\s+TciServer\\s*\\(|make_(unique|shared)<\\s*TciServer\\s*>"));
+        QStringList builders;
+        int scanned = 0;
+        QDirIterator it(root + QStringLiteral("/src"), {QStringLiteral("*.cpp"), QStringLiteral("*.h")},
+                        QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString path = it.next();
+            QFile file(path);
+            if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) { continue; }
+            ++scanned;
+            if (construct.match(QString::fromUtf8(file.readAll())).hasMatch()) {
+                builders << QDir(root).relativeFilePath(path);
+            }
+        }
+        QVERIFY2(scanned > 300, qPrintable(QStringLiteral("only %1 files scanned").arg(scanned)));
+        QCOMPARE(builders, QStringList{QStringLiteral("src/gui/MainWindow.cpp")});
+    }
+
     // ---- Step 4: the completeness sweep --------------------------------
     void completenessSweep()
     {
@@ -945,7 +999,9 @@ private slots:
         // and a core/models consumer must classify Station. No exemption
         // list here on purpose -- a key a Setup page writes into the same
         // namespace a core consumer reads is exactly the shape of the
-        // failure this test exists to catch. See this file's header
+        // failure this test exists to catch. The one carve-out is this
+        // computer's own TCI server (kThisComputerServerPrefixes, R-R3-42),
+        // whose keys must instead classify OperatorLocal. See this file's header
         // comment ("Fix round 1 (review) correction") for why this
         // assertion's LIVE reach, given (a) above already ran to
         // completion over the same coreModelsKeys, is narrower than "any
@@ -962,6 +1018,16 @@ private slots:
 
         QStringList overlapNotStation;
         for (const QString& key : std::as_const(overlap)) {
+            if (isThisComputerServerKey(key)) {
+                // This computer's own TCI server; see
+                // kThisComputerServerPrefixes. It must then be this
+                // computer's setting, never the Core's.
+                QVERIFY2(classifySettingsKey(key) == SettingsScope::OperatorLocal,
+                         qPrintable(QStringLiteral("%1 configures this computer's TCI "
+                                                   "server but is not this computer's")
+                                        .arg(key)));
+                continue;
+            }
             if (classifySettingsKey(key) != SettingsScope::Station) {
                 overlapNotStation << key;
             }

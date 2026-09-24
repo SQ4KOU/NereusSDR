@@ -123,7 +123,7 @@ operator receive session. The three exceptions found are listed under
 | Tuner Genius applet | Transmit + Core-owned accessory | `TunerApplet::setTransmitPermitted`, `setStationConnected`; remote menu uses `requestDisconnectTgxl` | `tst_station_accessory_state`, `tst_remote_peripherals` |
 | RF-Kit RF2K-S applet: OPERATE, antenna buttons, Disconnect/Reconnect | **Unavailable (gated here)** | shown when the Core has RF-Kit enabled: `rfKitEnabled` is mirrored Bidirectional and its inbound write emits `rfKitEnabledChanged(true)` even with no radio MAC; the controls drive this computer's own `Rf2ksConnection`, so they carry the Power Genius amplifier reason | `tst_remote_gui_gating` (`remoteRfKitAppletControlsAreUnavailable`); hardware pending (S1) |
 | RF-Kit RF2K-S applet: gauges, tuner status, Open RF-Kit Advanced | GUI-local display / Setup RF-Kit (declared unavailable remotely) | availability follows the mirrored `rfKitEnabled` | hardware pending (S1) |
-| TCI Server and TCI Clients applets | GUI-local server on this computer | local `TciServer` start/stop, gains, client close | hardware pending (S1); open question in F6 |
+| TCI Server and TCI Clients applets | GUI-local server on this computer (R-R3-42) | local `TciServer` start/stop, gains, client close; in a remote window receive audio for TCI receiver N is the Core's slice N (`RemoteMediaController::requestReceiverAudio` while an app listens), `vfo`/`modulation` act on the Core's slice, transmit and raw I/Q are refused with the reason on the applet's notice line, a toast and the TCI log window, never on the TCI wire | `tst_tci_remote_window`, `tst_tci_tx_mutex`, `tst_tci_iq_roundtrip`; hardware pending (JTDX over TCI in a remote window, Opus and lossless) |
 | S-meter header and right-click menu | GUI-local | `SMeter_*`, `PeakHold*` keys; needle fed by `MeterPoller::setRemoteRadioModel` | `tst_remote_meter_poller` |
 | VFO flag: frequency, wheel, AF, AGC, pan, mute, BIN, SQL, AGC-T/AUTO, NB, NR bank and popups, ANF, SNB, APF, FM/DIG/RTTY containers, mode, filters, RIT, step, lock, close, sample rate, antenna picker | Station-backed | `SliceModel` setters (mirrored), `removeSlice` / `requestSliceSampleRate` verbs | mirror suites, `tst_remote_slice_commands`, `tst_nnr_controls`; hardware pending (S1) |
 | VFO flag: XIT, TX badge, Make TX slice, BYPS, filter Shift-click | Transmit | `VfoWidget::setTransmitPermitted` `:3214-3254`, MainWindow `:1784-1792` | `tst_remote_tx_presentation` |
@@ -153,7 +153,7 @@ visible and are not listed.
 | Hardware > Hardware Config, DDC Routing | **Unavailable (gated here)** | `HardwarePage` never learns a MAC remotely (`currentRadioChanged` is local-connect only, `RadioModel.cpp:14541`), so `onTabSettingChanged` drops every edit; DDC override keys are per-MAC and unread | `tst_remote_gui_gating` (`remoteDeclaredUnavailableSetupLeavesSayWhy`) |
 | PA > PA Gain, Watt Meter, PA Values | Unavailable (not shown) | category hidden: remote capabilities are the Unknown board's, `hasPaProfile` false | `tst_remote_gui_gating` (`remotePaCategoryIsNotShown`) |
 | Audio > Devices | GUI-local (scope ThisComputer), usable connected or not | Speakers, Headphones and Microphone cards pick this computer's devices through `RadioModel::localAudioDevices()`, which the local-DSP audit does not count; a card saves `audio/{Speakers,Headphones,TxInput}/*` then hands the config to the engine, and remote playback re-reads `audio/Speakers` on `speakersConfigChanged`. The title-bar picker is a shortcut to the same setting. Headphones behaves as it does locally. Remote playback still refuses speaker formats other than 48 kHz stereo (receiver audio plan). Microphone status and Retry follow this computer's capture | `tst_remote_gui_gating` (`remoteDevicesPageWorksOnThisComputer`, `everyRemoteSetupPageIsEitherLocalDspFreeOrDisabled`), `tst_settings_scope` (card keys); speaker restart on a real device hardware pending (S1) |
-| Audio > VAX, TCI, Advanced | Unavailable (local-DSP gate; reason added here) | VAX and Advanced reach `audioEngine()` themselves; TCI reached it only through the backend strip, which no longer counts, so it is declared unavailable with the same reason (`markRemoteUnavailable`). Advanced Reset in a remote window removes only this computer's `audio/*` keys (never `audio/DspRate`, `audio/DspBlockSize`) and re-creates no VAX output; local Reset unchanged | `tst_remote_gui_gating` (`remoteLocalDspSetupPagesShowAPlainReason`), `tst_audio_advanced_page` |
+| Audio > VAX, Advanced | Unavailable (local-DSP gate; reason added here) | VAX and Advanced reach `audioEngine()` themselves. Audio > TCI left this row with R-R3-42: it is ThisComputer and works in a remote window (CAT & Network > TCI Server row). Advanced Reset in a remote window removes only this computer's `audio/*` keys (never `audio/DspRate`, `audio/DspBlockSize`) and re-creates no VAX output; local Reset unchanged | `tst_remote_gui_gating` (`remoteLocalDspSetupPagesShowAPlainReason`), `tst_audio_advanced_page` |
 | Audio > TX Input | Mixed: this computer's PC microphone usable; mic source, Mic Gain and radio microphone hardware **Transmit (gated here)** | PC Mic backend, device, buffer, Test Mic and Retry through `RadioModel::localAudioDevices()`, saved to `audio/TxInput/*`; Test Mic opens this computer's microphone and meters it. `AudioTxInputPage::setTransmitPermitted` gates the Mic Source group, Mic Gain and the Hermes / Orion-MkII / Saturn radio mic groups with the transmit reason; while the Core's settings are unavailable the same controls carry "Connect to the Core to change these." instead (`setStationSettingsAvailable`, one combined gate). No longer a whole-page transmit leaf | `tst_remote_gui_gating` (`remoteTxInputKeepsThisComputersMicrophoneUsable`), `tst_audio_tx_input_pc_mic_group` (`testMic_opensThisComputersMicrophoneInARemoteWindow`) |
 | Audio > TX Profile | Transmit | `MicProfileManager`, `TransmitModel` | `tst_remote_tx_presentation` |
 | DSP > AGC/ALC (RX AGC) | Station-backed | `SliceModel` AGC setters | mirror suites; hardware pending (S1) |
@@ -172,7 +172,7 @@ visible and are not listed.
 | Appearance > Colors & Theme, Meter Styles | GUI-local | `SpectrumWidget` colours, `AppearanceSmallModeFilterOnVfos` | n/a |
 | Appearance > Gradients, Skins, Collapsible Display | Placeholder | disabled | n/a |
 | CAT & Network > Serial Ports, TCP/IP CAT, MIDI Control | Placeholder | no writes | n/a |
-| CAT & Network > TCI Server | GUI-local server; `Tci*` keys are Station-scoped | `CatTciServerPage`, local `TciServer` restart | hardware pending (S1); F6 |
+| CAT & Network > TCI Server, Audio > TCI | GUI-local server; ThisComputer pages, `Tci*` keys are this computer's (R-R3-42; values a Core stored are ignored, not migrated) | `CatTciServerPage`, `AudioTciPage`, local `TciServer` restart | `tst_remote_gui_gating` (`remoteTciPagesWorkOnThisComputer`), `tst_settings_scope`, `tst_remote_window_harness` (`freshWindowFirstConnectRaisesNoOfflineEditWarning`); hardware pending (S1) |
 | CAT & Network > 4O3A | Station-backed | remote master toggle through `requestFourO3AEnabled`, placeholder PGXL/TGXL tabs, no interlock page | `tst_remote_peripherals` |
 | CAT & Network > Remote Station | GUI-local | `connectionsRequested` -> `connectionRequestedByOperator` | `tst_remote_gui_gating` (`theRemoteStationPageStaysUsableOnARemoteModel`) |
 | CAT & Network > RF-Kit | **Unavailable (gated here)** | `RfKitPage` connects this computer's own `RfKitConnection` (`RfKitPage.cpp:174-190`) | `tst_remote_gui_gating` (`remoteDeclaredUnavailableSetupLeavesSayWhy`) |
@@ -304,10 +304,12 @@ suites listed in the verification line, pass unchanged.
   gives the transmit reason remotely while transmit is denied, and once it
   is permitted says the vocoder runs on the station computer and cannot be
   reset from a remote window.
-- **F6, TCI server in a remote window.** A remote window runs its own TCI
-  server against the mirrored model. Receive state follows the Core; TX
-  audio would feed this window's inert TX channel. Whether the server should
-  run remotely at all is a product decision, not decided here.
+- **F6, TCI server in a remote window.** Decided by the operator on
+  2026-09-23 and built by the R3 receiver audio plan, Task 4 (R-R3-42): a
+  remote window serves TCI to apps on its computer. Commands act on the
+  Core's slices; receive audio for TCI receiver N is the Core's slice N
+  from the network; transmit and raw I/Q are refused in plain words until
+  remote transmit; the TCI settings belong to this computer.
 
 
 ## Current follow-ups (September 22)

@@ -5,6 +5,11 @@
 // encode → QWebSocket sendBinaryMessage → client decodes streamType=0.
 //
 // Phase 3J-1 Task 18.1.
+//
+// R3 receiver audio plan, Task 4 (R-R3-42), 2026-09-23, J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code: a remote window refuses
+// iq_start with no subscription and no echo, and tells the operator why,
+// never the app.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -18,6 +23,7 @@
 
 #include "core/TciServer.h"
 #include "core/AppSettings.h"
+#include "models/RadioModel.h"
 
 using namespace NereusSDR;
 
@@ -28,6 +34,7 @@ private slots:
     void iq_stop_early_out_no_frames();
     void iq_swap_flag_swaps_i_q_pairs();
     void always_stream_iq_overrides_subscription();
+    void remote_window_refuses_iq_start();
 };
 
 // ── iq_start_subscribes_then_frames_arrive() ─────────────────────────────────
@@ -271,6 +278,47 @@ void TestTciIqRoundtrip::always_stream_iq_overrides_subscription()
 
     // Restore defaults for cleanliness.
     AppSettings::instance().setValue(QStringLiteral("TciAlwaysStreamIq"), QStringLiteral("False"));
+    client.close();
+    server.stop();
+}
+
+void TestTciIqRoundtrip::remote_window_refuses_iq_start()
+{
+    AppSettings::instance().setValue(QStringLiteral("TciAlwaysStreamIq"), QStringLiteral("False"));
+    RadioModel remote(RadioModel::Role::Remote);
+    TciServer server(&remote);
+    QSignalSpy notices(&server, &TciServer::operatorNotice);
+    QVERIFY(server.start(0));
+
+    QWebSocket client;
+    QSignalSpy connected(&client, &QWebSocket::connected);
+    QSignalSpy text(&client, &QWebSocket::textMessageReceived);
+    QSignalSpy binary(&client, &QWebSocket::binaryMessageReceived);
+    client.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    const auto lines = [&text] {
+        QStringList out;
+        for (const auto& call : text) { out << call.at(0).toString(); }
+        return out;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(lines().contains(QStringLiteral("ready;")), 3000);
+    const int linesBefore = int(text.count());
+
+    client.sendTextMessage(QStringLiteral("iq_start:0;"));
+    QTRY_COMPARE_WITH_TIMEOUT(notices.count(), 1, 3000);
+    QTest::qWait(100);
+    QCOMPARE(server.activeIqSubscriberCount(0), 0);
+    QVERIFY(!lines().mid(linesBefore).contains(QStringLiteral("iq_start:0;")));
+    const QString reason = notices.constFirst().at(1).toString();
+    QCOMPARE(reason, QString::fromLatin1(TciServer::kRemoteIqRefusedReason));
+    for (const QString& line : lines()) {
+        QVERIFY2(!line.contains(reason), qPrintable(line));
+    }
+    // Even pushed at the server, I/Q reaches no app of a remote window.
+    server.injectRawIqForTest(QVector<float>(2048, 0.25f));
+    QTest::qWait(100);
+    QCOMPARE(binary.count(), 0);
+
     client.close();
     server.stop();
 }

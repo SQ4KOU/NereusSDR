@@ -80,6 +80,10 @@
 //                 with a plain reason in a remote session. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-23 -- R3 receiver audio plan, Task 4 (R-R3-42): Audio > TCI
+//                 and TCI Server work in a remote window. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -581,6 +585,9 @@ private slots:
         QCOMPARE(scopeOf(QStringLiteral("Devices")), SetupScope::ThisComputer);
         QCOMPARE(scopeOf(QStringLiteral("TX Input")), SetupScope::Mixed);
         QCOMPARE(scopeOf(QStringLiteral("Advanced")), SetupScope::Mixed);
+        // R-R3-42: this computer's TCI server.
+        QCOMPARE(scopeOf(QStringLiteral("TCI")), SetupScope::ThisComputer);
+        QCOMPARE(scopeOf(QStringLiteral("TCI Server")), SetupScope::ThisComputer);
     }
 
     // R-R3-23: the sweep catches a ThisComputer page that reaches an
@@ -1477,16 +1484,16 @@ private slots:
     // remote model but gave no reason, so the operator saw a greyed page
     // and nothing else. R-R3-23 narrowed the set: Devices and TX Input
     // pick this computer's devices and now work (cases below). VAX and
-    // Advanced still reach this process's engine themselves; TCI reached it
-    // only through the backend strip, which no longer counts, so it keeps
-    // its remote behaviour by declaration, with the same reason.
+    // Advanced still reach this process's engine themselves. TCI reached it
+    // only through the backend strip, which no longer counts; since R-R3-42
+    // it configures this computer's TCI server and works in a remote window
+    // (remoteTciPagesWorkOnThisComputer).
     // ====================================================================
     void remoteLocalDspSetupPagesShowAPlainReason_data()
     {
         QTest::addColumn<QString>("label");
         QTest::addColumn<bool>("reachesLocalDsp");
         QTest::newRow("VAX") << QStringLiteral("VAX") << true;
-        QTest::newRow("TCI") << QStringLiteral("TCI") << false;
         QTest::newRow("Advanced") << QStringLiteral("Advanced") << true;
     }
 
@@ -1578,6 +1585,33 @@ private slots:
                      .toString(),
                  QString::number(samples));
         QCOMPARE(remote.localDspHandOutCount(), handOutsBefore);
+    }
+
+    // R-R3-42: Audio > TCI and CAT & Network > TCI Server configure the TCI
+    // server that runs on this computer and serves apps here, in a remote
+    // window as in a local one. Both are usable, show no reason, reach no
+    // local DSP, and save to this computer's own settings.
+    void remoteTciPagesWorkOnThisComputer()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        dialog.setTransmitPermitted(false, QStringLiteral("Remote transmit is unavailable"));
+        const int handOutsBefore = remote.localDspHandOutCount();
+        for (const char* label : {"TCI", "TCI Server"}) {
+            const QString name = QString::fromLatin1(label);
+            dialog.selectPage(name);
+            QWidget* const page = dialog.realizedPageForTest(name);
+            QVERIFY2(page != nullptr, label);
+            QVERIFY2(page->isEnabled(), label);
+            QVERIFY2(page->toolTip().isEmpty(), label);
+            QVERIFY2(dialog.findChild<QLabel*>(QStringLiteral("setupLocalUnavailable"))->isHidden(),
+                     label);
+            QTreeWidgetItem* const leaf = setupLeaf(dialog, name);
+            QVERIFY2(leaf != nullptr, label);
+            QVERIFY2(leaf->toolTip(0).isEmpty(), label);
+        }
+        QCOMPARE(remote.localDspHandOutCount(), handOutsBefore);
+        QCOMPARE(classifySettingsKey(QStringLiteral("TciServerPort")), SettingsScope::OperatorLocal);
     }
 
     // R-R3-36: TX Input is Mixed. This computer's PC microphone (backend,

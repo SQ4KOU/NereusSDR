@@ -44,6 +44,12 @@
 //                                    daemon restart and reconnect. AI-
 //                                    assisted transformation via Anthropic
 //                                    Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio plan, Task 4
+//                                    (R-R3-42): the sample Station key is
+//                                    StationCallsign; TCI keys are this
+//                                    computer's now. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -225,7 +231,7 @@ void TstSessionLinkLoss::killedDaemonEntersDefinedStaleStateThenReconnectsToARes
     QTemporaryDir settingsDir1;
     QVERIFY(settingsDir1.isValid());
     AppSettings stationSettings1(settingsDir1.filePath(QStringLiteral("NereusSDR.settings")));
-    stationSettings1.setValue(QStringLiteral("TciServerPort"), QStringLiteral("50123"));
+    stationSettings1.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50123"));
 
     // TWO slices, and the restarted daemon below has ONE. Whole-branch
     // review, Important 1: this slot used to build both daemons with
@@ -276,7 +282,7 @@ void TstSessionLinkLoss::killedDaemonEntersDefinedStaleStateThenReconnectsToARes
     QVERIFY(!client.mirroredObjectKeys().isEmpty());
 
     QVERIFY(proxy.ready());
-    QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("0")).toString(),
+    QCOMPARE(proxy.value(QStringLiteral("StationCallsign"), QStringLiteral("0")).toString(),
              QStringLiteral("50123"));
 
     // ---- Kill the daemon: a clean TCP close, no SessionEnd message ----
@@ -312,17 +318,17 @@ void TstSessionLinkLoss::killedDaemonEntersDefinedStaleStateThenReconnectsToARes
 
     // SettingsProxy: keeps serving the cache for reads, drops writes.
     QVERIFY(!proxy.ready());
-    QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("0")).toString(),
+    QCOMPARE(proxy.value(QStringLiteral("StationCallsign"), QStringLiteral("0")).toString(),
              QStringLiteral("50123"));
     QSignalSpy outboundWhileOffline(&proxy, &SettingsProxy::outboundWriteRequested);
-    proxy.setValue(QStringLiteral("TciServerPort"), QStringLiteral("60000"));
+    proxy.setValue(QStringLiteral("StationCallsign"), QStringLiteral("60000"));
     QCOMPARE(outboundWhileOffline.count(), 0);
     // The LOCAL cache still updates optimistically (SettingsProxy.h's own
     // "offline behaviour": ready() gates the OUTBOUND side only) -- this
     // is what keeps a remote GUI's Setup page interactive while stale.
-    QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("0")).toString(),
+    QCOMPARE(proxy.value(QStringLiteral("StationCallsign"), QStringLiteral("0")).toString(),
              QStringLiteral("60000"));
-    QVERIFY(proxy.droppedWhileOffline().contains(QStringLiteral("TciServerPort")));
+    QVERIFY(proxy.droppedWhileOffline().contains(QStringLiteral("StationCallsign")));
 
     // No automatic reconnect: this session was established via
     // startSession(), which never latches a URL.
@@ -332,7 +338,7 @@ void TstSessionLinkLoss::killedDaemonEntersDefinedStaleStateThenReconnectsToARes
     QTemporaryDir settingsDir2;
     QVERIFY(settingsDir2.isValid());
     AppSettings stationSettings2(settingsDir2.filePath(QStringLiteral("NereusSDR.settings")));
-    stationSettings2.setValue(QStringLiteral("TciServerPort"), QStringLiteral("50999"));
+    stationSettings2.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50999"));
 
     auto stationModel2 = makeStationRadioModel(0);
     stationModel2->slices().first()->setFrequency(14200000.0);
@@ -376,7 +382,7 @@ void TstSessionLinkLoss::killedDaemonEntersDefinedStaleStateThenReconnectsToARes
         QByteArray("slice:") + QByteArray::number(secondSliceId)));
 
     QVERIFY(proxy.ready());
-    QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("0")).toString(),
+    QCOMPARE(proxy.value(QStringLiteral("StationCallsign"), QStringLiteral("0")).toString(),
              QStringLiteral("50999"));
 }
 
@@ -387,7 +393,7 @@ void TstSessionLinkLoss::silentlyDeadPeerIsDetectedNotJustACleanClose()
     QTemporaryDir settingsDir;
     QVERIFY(settingsDir.isValid());
     AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
-    stationSettings.setValue(QStringLiteral("TciServerPort"), QStringLiteral("50123"));
+    stationSettings.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50123"));
 
     auto stationModel = makeStationRadioModel(0);
     StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
@@ -475,7 +481,7 @@ void TstSessionLinkLoss::silentlyDeadPeerIsDetectedNotJustACleanClose()
     QVERIFY(!clientModel.isConnected());
     QVERIFY2(client.isStale(), "isStale() was not entered on heartbeat detection");
     QVERIFY(!proxy.ready());
-    QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("0")).toString(),
+    QCOMPARE(proxy.value(QStringLiteral("StationCallsign"), QStringLiteral("0")).toString(),
              QStringLiteral("50123"));
 
     // And it recovers: a reconnect (manual here -- this session has no

@@ -10,6 +10,12 @@
 //   4. trx:0,false; from clientA → mutex released.
 //
 // Phase 3J-1 Task 17.1.
+//
+// R3 receiver audio plan, Task 4 (R-R3-42, R-R3-25), 2026-09-23, J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code: in a remote window
+// transmit is refused. No MOX write, no TX audio lock, no TX_CHRONO, the
+// app hears trx:N,false, and the plain reason goes to the operator, never
+// onto the TCI wire.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -23,6 +29,7 @@
 
 #include "core/TciServer.h"
 #include "core/TciBinaryFrame.h"
+#include "models/RadioModel.h"
 
 using namespace NereusSDR;
 
@@ -51,6 +58,7 @@ class TestTciTxMutex : public QObject {
 private slots:
     void tx_mutex_single_client_claim_and_release();
     void tx_mutex_second_client_frame_is_dropped();
+    void remote_window_refuses_transmit_off_the_wire();
 };
 
 // ── tx_mutex_single_client_claim_and_release() ───────────────────────────────
@@ -191,6 +199,68 @@ void TestTciTxMutex::tx_mutex_second_client_frame_is_dropped()
     // ── Cleanup ───────────────────────────────────────────────────────────────
     clientA.close();
     clientB.close();
+    server.stop();
+}
+
+void TestTciTxMutex::remote_window_refuses_transmit_off_the_wire()
+{
+    RadioModel remote(RadioModel::Role::Remote);
+    TciServer server(&remote);
+    QVERIFY(server.isRemoteWindow());
+    QSignalSpy notices(&server, &TciServer::operatorNotice);
+    QSignalSpy txOwner(&server, &TciServer::txAudioActiveClientChanged);
+    QVERIFY(server.start(0));
+
+    QWebSocket client;
+    QSignalSpy connected(&client, &QWebSocket::connected);
+    QSignalSpy text(&client, &QWebSocket::textMessageReceived);
+    QSignalSpy binary(&client, &QWebSocket::binaryMessageReceived);
+    client.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    const auto lines = [&text] {
+        QStringList out;
+        for (const auto& call : text) { out << call.at(0).toString(); }
+        return out;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(lines().contains(QStringLiteral("ready;")), 3000);
+    const int linesBefore = int(text.count());
+
+    client.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(lines().mid(linesBefore).contains(QStringLiteral("trx:0,false;")),
+                             3000);
+    // Past several TX_CHRONO periods: none was sent and nothing was keyed.
+    QTest::qWait(150);
+    QCOMPARE(binary.count(), 0);
+    QCOMPARE(server.activeTxClientCount(), 0);
+    QCOMPARE(txOwner.count(), 0);
+    QVERIFY(!remote.mox());
+    QVERIFY(!lines().mid(linesBefore).contains(QStringLiteral("trx:0,true;")));
+
+    // A TX audio frame from the app lands nowhere.
+    client.sendBinaryMessage(makeTxFrame(128));
+    QTest::qWait(50);
+    QCOMPARE(server.peekTxRingSize(), 0);
+
+    // The operator is told why, once per 30 s as a toast; the app never is.
+    QCOMPARE(notices.count(), 1);
+    const QString reason = notices.constFirst().at(1).toString();
+    QCOMPARE(reason, QString::fromLatin1(TciServer::kRemoteTransmitRefusedReason));
+    QVERIFY(!notices.constFirst().at(0).toString().isEmpty());   // the app's host:port
+    QVERIFY(notices.constFirst().at(2).toBool());
+    client.sendTextMessage(QStringLiteral("trx:0,true;"));
+    QTRY_COMPARE_WITH_TIMEOUT(notices.count(), 2, 3000);
+    QVERIFY(!notices.at(1).at(2).toBool());
+    for (const QString& line : lines()) {
+        QVERIFY2(!line.contains(reason), qPrintable(line));
+    }
+
+    // Releasing is answered the same way and is no refusal.
+    client.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTest::qWait(100);
+    QCOMPARE(notices.count(), 2);
+    QVERIFY(!remote.mox());
+
+    client.close();
     server.stop();
 }
 

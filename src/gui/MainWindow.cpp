@@ -11,6 +11,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-42: the TCI server asks the Core
+//                 for a receiver's audio while an app listens, and its
+//                 refusals and stops reach a toast and the TCI log window
+//                 in plain words. AI-assisted implementation via Anthropic
+//                 Claude Code.
 //   2026-09-23 - J.J. Boyd (KG4VCF). R3 Setup fix wave (R-R3-21, R-R3-10):
 //                 while connected to a Core whose settings have not
 //                 arrived, Setup says "The Core has not sent its
@@ -553,6 +558,17 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
                     if (m_tciClientCount > 0) { --m_tciClientCount; }
                     updateTciIndicator();
                 });
+        // R-R3-42: what TCI refused (transmit or raw I/Q in a remote window)
+        // or why a receiver's audio stopped, in the operator's words. Never
+        // on the TCI wire; the applet and the TCI log window show it too.
+        connect(m_tciServer, &TciServer::operatorNotice, this,
+                [this](const QString& peer, const QString& reason, bool raiseToast) {
+            qCInfo(lcConnection) << "TCI notice" << peer << ":" << reason;
+            if (raiseToast) {
+                showToast(tr("TCI: %1").arg(OperatorReasonText::forDisplay(reason)),
+                          ToastSeverity::Warning, 5000);
+            }
+        });
         connect(m_tciServer, &TciServer::txAudioActiveClientChanged,
                 this, [this](QWebSocket* owner) {
                     m_tciHasTxClient = (owner != nullptr);
@@ -1148,6 +1164,24 @@ void MainWindow::ensureRemoteSession()
         connect(m_remoteMedia, &RemoteMediaController::recoveryRequested,
                 m_remoteConnection, &RemoteConnectionController::recoverMediaSession,
                 Qt::QueuedConnection);
+#ifdef HAVE_WEBSOCKETS
+        // R-R3-42: TCI receiver N plays the Core's slice N, asked for while
+        // an app listens. The controller is deleted before the TCI server
+        // (see ~MainWindow), so the server's final release finds it gone.
+        if (m_tciServer) {
+            const QPointer<RemoteMediaController> media(m_remoteMedia);
+            TciServer::RemoteReceiverAudio source;
+            source.request = [media](int sliceId, IReceiverPcmSink* sink) {
+                if (media) { media->requestReceiverAudio(sliceId, sink); }
+            };
+            source.release = [media](int sliceId, IReceiverPcmSink* sink) {
+                if (media) { media->releaseReceiverAudio(sliceId, sink); }
+            };
+            source.unavailableReason =
+                QString::fromLatin1(RemoteMediaController::kReceiverAudioUnavailableReason);
+            m_tciServer->setRemoteReceiverAudio(std::move(source));
+        }
+#endif
 
         connect(m_stationClient, &StationClient::handshakeComplete, this, [this]() {
             qCInfo(lcConnection) << "Station handshake complete:" << m_remoteConnection->endpointText();
@@ -9350,6 +9384,14 @@ void MainWindow::showTciLogWindow()
         connect(m_tciServer, &TciServer::messageLogged,
                 m_tciLogWindow, &TciLogWindow::appendEntry,
                 Qt::QueuedConnection);
+        // R-R3-42: the operator's notices, in plain words, between the
+        // wire lines (never sent to an app).
+        connect(m_tciServer, &TciServer::operatorNotice, m_tciLogWindow,
+                [log = m_tciLogWindow](const QString& peer, const QString& reason, bool) {
+            log->appendEntry(QStringLiteral("note"), peer,
+                             OperatorReasonText::forDisplay(reason),
+                             QDateTime::currentMSecsSinceEpoch());
+        }, Qt::QueuedConnection);
     }
     m_tciLogWindow->show();
     m_tciLogWindow->raise();

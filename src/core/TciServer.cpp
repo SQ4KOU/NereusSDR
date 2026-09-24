@@ -17,6 +17,12 @@
 //                (KG4VCF): the compat-flag seed is left to the computer
 //                that owns the keys. AI-assisted transformation via
 //                Anthropic Claude Code.
+//   2026-09-23 - R3 receiver audio plan, Task 4 (R-R3-42, R-R3-21,
+//                R-R3-25) by J.J. Boyd (KG4VCF): remote-window mode, a
+//                per-receiver history read by each client at its own
+//                position, left-channel mono, and the corrected seed note
+//                (the Tci keys are this computer's). AI-assisted
+//                transformation via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -40,6 +46,7 @@
 #include "RxChannel.h"
 #include "TxChannel.h"
 #include "AppSettings.h"  // Phase 18: TciIqSwap + TciAlwaysStreamIq flags
+#include "session/media/RemoteAudioContext.h"  // R-R3-42: receiver stop reasons
 #include "settings/ISettingsBackend.h"  // R3 Setup fix wave: seed only keys this computer owns
 
 // Phase 16 Task 16.3 (sub-commit b): WDSP RESAMPLEF lifecycle.
@@ -58,6 +65,9 @@ void* create_resampleFV(int in_rate, int out_rate);
 void  xresampleFV(float* input, float* output, int numsamps, int* outsamps, void* ptr);
 void  destroy_resampleFV(void* ptr);
 }
+
+#include <algorithm>
+#include <cmath>
 
 #include <QElapsedTimer>
 #include <QHostAddress>
@@ -83,7 +93,14 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     // From design doc §1 — TciServer owns one TciProtocol; it is the shared
     // dispatch engine across all clients (single-instance, transport-blind).
     , m_protocol(std::make_unique<TciProtocol>(model, this))
+    , m_remoteWindow(model != nullptr && model->role() == RadioModel::Role::Remote)
 {
+    // R-R3-42: a remote window's receivers are the Core's.
+    m_protocol->setRemoteWindow(m_remoteWindow);
+    for (auto& history : m_rxHistory) {
+        history.assign(static_cast<std::size_t>(kRxHistoryFrames) * 2, 0.0f);
+    }
+
     // Phase 3J-1 closeout Item 12 (2026-05-12): seed per-slice RX gain atomics
     // to 1.0 (0 dB).  TciApplet pushes the persisted slice-A gain via
     // setSliceRxGainLinear on construction; this default is the fallback
@@ -114,11 +131,15 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     // Idempotent: only seeds when key is absent; explicit user "False"
     // setting (toggled off in UI) is respected.
     //
-    // R3 Setup fix wave (R-R3-17 / R-R3-21): a remote window does not own
-    // these keys; the Core does, and seeds them itself. Before the Core's
-    // settings arrive contains() is false for every one of its keys, so
-    // seeding here counted as an edit made while the link was down and,
-    // on the first connect, as one that "did not stick".
+    // R3 receiver audio plan, Task 4 (R-R3-42): the Tci keys belong to this
+    // computer (SettingsScope), in a remote window as in a local one: only
+    // MainWindow builds a TciServer, the Core runs none, and every reader
+    // of these two flags defaults to True. So a remote window seeds them in
+    // its own store exactly as a local one does. The guard below stays for
+    // a key the installed remote backend does handle: before the Core's
+    // settings arrive contains() is false for every one of its keys, and a
+    // seed there would count as an edit made while the link was down (R3
+    // Setup fix wave, R-R3-17 / R-R3-21).
     {
         auto& s = AppSettings::instance();
         const ISettingsBackend* const remote = s.remoteBackend();
@@ -210,97 +231,19 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         }
 
         // Phase 16 Task 16.3 (sub-commit c): RX audio drain.
-        // For each client that has audio subscriptions, read from the per-slice
-        // AudioRingSpsc, optionally resample, encode as a TCI binary frame, and
-        // send directly via sendBinaryMessage.
-        //
         // From Thetis TCIServer.cs:5444-5512 [v2.10.3.13] — the sendRXAudioStream
         // loop reads samples, resamples, encodes, and calls sendBinaryFrame.
         // NereusSDR replicates this per drain-tick rather than in a dedicated thread.
+        //
+        // R-R3-42: the rings are emptied once per tick into each receiver's
+        // history, then every subscribed client takes its own next block
+        // from its own read position (sendRxAudioBlock).
+        collectRxAudio();
         for (auto cit = m_clients.begin(); cit != m_clients.end(); ++cit) {
             QWebSocket* ws = cit.key();
-            auto& session  = cit.value();
-
-            for (int rx : session->audioStreamEnabled) {
-                if (rx < 0 || rx >= kMaxTciRxSlices) { continue; }
-
-                // Number of interleaved float samples to pop each tick.
-                // audioStreamSamples is per-channel; multiply by channels.
-                const int channels = session->audioStreamChannels;  // 1 or 2
-                const int perChSamples = session->audioStreamSamples;  // default 2048
-                const int totalSamples = perChSamples * channels;
-                const int wantBytes = totalSamples * static_cast<int>(sizeof(float));
-
-                if (m_audioRing[rx].usedBytes() < static_cast<size_t>(wantBytes)) {
-                    continue;  // not enough data yet; wait for next tick
-                }
-
-                // Pop from the ring into the scratch buffer.
-                // Scratch is sized for kMaxDrainSamples = 2048*2 floats.
-                const int maxScratch = kMaxDrainSamples;
-                if (totalSamples > maxScratch) { continue; }  // safety
-
-                const qint64 got = m_audioRing[rx].popInto(
-                    reinterpret_cast<uint8_t*>(m_drainScratch.data()),
-                    wantBytes);
-                if (got < wantBytes) { continue; }
-
-                // Phase 3J-1 closeout Item 12 (2026-05-12): apply per-slice
-                // TCI RX gain BEFORE resample (so the gain stays in the 48k
-                // domain and the resampler sees clean amplitude).  Item 13:
-                // track block peak |sample| for TciApplet's slice level meter
-                // -- replaces the fake sine-wave placeholder.
-                const float sliceGain =
-                    m_sliceRxGainLinear[rx].load(std::memory_order_acquire);
-                float blockPeak = 0.0f;
-                if (sliceGain != 1.0f) {
-                    for (int i = 0; i < totalSamples; ++i) {
-                        m_drainScratch[i] *= sliceGain;
-                        const float a = std::fabs(m_drainScratch[i]);
-                        if (a > blockPeak) { blockPeak = a; }
-                    }
-                } else {
-                    // No gain adjust -- just track peak without mutating samples.
-                    for (int i = 0; i < totalSamples; ++i) {
-                        const float a = std::fabs(m_drainScratch[i]);
-                        if (a > blockPeak) { blockPeak = a; }
-                    }
-                }
-                m_sliceRxPeakAbs[rx].store(blockPeak, std::memory_order_release);
-
-                // Resample if the client requested a rate other than 48000 Hz.
-                // Phase 16: xresampleFV resamples in-place using the per-session
-                // per-slice RESAMPLEF instance created in handleAudioSubscribe.
-                const float* samples = m_drainScratch.data();
-                int outSamples = totalSamples;
-
-                auto rIt = session->audioResamplers.find(rx);
-                if (rIt != session->audioResamplers.end() &&
-                    session->audioSampleRate != 48000) {
-                    // Allocate a temporary output buffer on the stack.
-                    // Max output = totalSamples * max_ratio (48000/8000 = 6).
-                    static constexpr int kMaxOutSamples = kMaxDrainSamples * 8;
-                    static thread_local std::array<float, kMaxOutSamples> outBuf{};
-                    xresampleFV(m_drainScratch.data(), outBuf.data(),
-                                totalSamples, &outSamples, rIt.value());
-                    samples = outBuf.data();
-                }
-
-                // Encode + send binary frame.
-                // From Thetis TCIServer.cs:5510 [v2.10.3.13]:
-                //   sendBinaryFrame(buildStreamPayload(receiver, sampleRate,
-                //       sampleType, interleaved.Length, RX_AUDIO_STREAM,
-                //       channels, encoded));
-                const QByteArray frame = TciBinaryFrame::buildStreamPayload(
-                    rx,
-                    session->audioSampleRate,
-                    session->audioSampleType,
-                    outSamples,         // flat count (length field in header)
-                    static_cast<int>(TciStreamType::RxAudioStream),
-                    channels,
-                    samples);
-
-                ws->sendBinaryMessage(frame);
+            TciClientSession& session = *cit.value();
+            for (int rx : std::as_const(session.audioStreamEnabled)) {
+                sendRxAudioBlock(ws, session, rx);
             }
         }
     });
@@ -342,7 +285,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // sensors via Display.tciRX1Sig).  Without this, NereusSDR's TCI
         // clients would see raw ADC dBFS while the GUI shows antenna dBm.
         double rx1Dbm = -140.0;
-        if (m_model) {
+        // R-R3-42: a remote window has no receiver of its own to meter.
+        if (m_model && !m_remoteWindow) {
             if (auto* wdsp = m_model->wdspEngine()) {
                 if (auto* rx = wdsp->rxChannel(0)) {
                     rx1Dbm = rx->getMeter(RxMeterType::SignalAvg)
@@ -446,7 +390,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // channel exists to avoid a WDSP nullptr deref against an
         // unallocated stage.
         double micDbm = -140.0;
-        if (auto* wdsp = m_model->wdspEngine()) {
+        if (auto* wdsp = m_remoteWindow ? nullptr : m_model->wdspEngine()) {
             if (wdsp->txChannel(WdspEngine::kTxChannelId) != nullptr) {
                 micDbm = GetTXAMeter(WdspEngine::kTxChannelId,
                                      static_cast<int>(TxMeterType::MicAvg));
@@ -512,6 +456,10 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
 void TciServer::hookAudioAndIqTaps()
 {
     if (!m_model) { return; }
+    // R-R3-42: a remote window's receivers are on the Core. Receive audio
+    // comes from the Core's receiver streams (setRemoteReceiverAudio), and
+    // raw I/Q is not offered, so neither local tap is hooked.
+    if (m_remoteWindow) { return; }
 
     // ── (a) RX audio tap ────────────────────────────────────────────────────
     //
@@ -1274,6 +1222,14 @@ void TciServer::hookGlobalBroadcasts()
 TciServer::~TciServer()
 {
     stop();
+    // R-R3-42: stop() releases every receiver stream it held; this covers
+    // a server that was never started (nothing is held then either).
+    for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
+        if (m_remoteRequested[rx] && m_remoteAudio.release) {
+            m_remoteRequested[rx] = false;
+            m_remoteAudio.release(rx, this);
+        }
+    }
 }
 
 // ── start() ─────────────────────────────────────────────────────────────────
@@ -1441,6 +1397,11 @@ void TciServer::stop()
         ws->deleteLater();
     }
     m_clients.clear();
+
+    // R-R3-42: no app listens any more; release the Core's receivers.
+    for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
+        updateRemoteReceiverDemand(rx);
+    }
 
     m_server->close();
     delete m_server;
@@ -1625,6 +1586,11 @@ void TciServer::onClientDisconnected()
 
     m_clients.erase(it);
     ws->deleteLater();
+
+    // R-R3-42: the last app listening to a Core receiver releases it.
+    for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
+        updateRemoteReceiverDemand(rx);
+    }
 }
 
 // ── totalResamplerInstances() ─────────────────────────────────────────────────
@@ -1697,6 +1663,9 @@ void TciServer::handleAudioSubscribe(std::shared_ptr<TciClientSession>& session,
         return;  // idempotent — Thetis HashSet.Add returns false on duplicate
     }
     session->audioStreamEnabled.insert(rx);
+    // R-R3-42: this client hears the receiver from now on, at its own pace.
+    session->audioReadFrame.insert(rx, rx >= 0 && rx < kMaxTciRxSlices
+                                           ? m_rxFramesWritten[rx] : 0);
 
     if (!session->audioResamplers.contains(rx)) {
         const int inRate  = 48000;                        // WDSP RX output is always 48 kHz
@@ -1730,6 +1699,7 @@ void TciServer::handleAudioUnsubscribe(std::shared_ptr<TciClientSession>& sessio
         return;  // idempotent
     }
     session->audioStreamEnabled.remove(rx);
+    session->audioReadFrame.remove(rx);
 
     auto rIt = session->audioResamplers.find(rx);
     if (rIt != session->audioResamplers.end()) {
@@ -1754,6 +1724,7 @@ void TciServer::cleanupResamplers(std::shared_ptr<TciClientSession>& session)
     }
     session->audioResamplers.clear();
     session->audioStreamEnabled.clear();
+    session->audioReadFrame.clear();
 }
 
 // ── onAudioFrameReady() ──────────────────────────────────────────────────────
@@ -1809,6 +1780,235 @@ void TciServer::onAudioFrameReady(int slice, const float* L, const float* R,
         total * static_cast<int>(sizeof(float)));
 }
 
+// ── collectRxAudio() / sendRxAudioBlock() ────────────────────────────────────
+//
+// R-R3-42. The producers (the DSP thread locally, a receive worker in a
+// remote window) push interleaved stereo frames into m_audioRing[rx], a
+// single-consumer ring. Before this, every subscribed client popped that
+// one ring, so two apps on one receiver each received about half of its
+// blocks. Now the drain tick is the ring's only consumer: it moves
+// everything into m_rxHistory[rx], and each client reads the history from
+// its own position. Main thread only; the history is allocated once.
+
+void TciServer::collectRxAudio()
+{
+    constexpr int kFrameBytes = 2 * static_cast<int>(sizeof(float));
+    for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
+        std::vector<float>& history = m_rxHistory[rx];
+        bool arrived = false;
+        while (true) {
+            const qint64 got = m_audioRing[rx].popInto(
+                reinterpret_cast<uint8_t*>(m_drainScratch.data()),
+                static_cast<qint64>(kMaxDrainSamples) * static_cast<qint64>(sizeof(float)));
+            const int frames = static_cast<int>(got / kFrameBytes);
+            if (frames <= 0) {
+                break;
+            }
+            arrived = true;
+            for (int i = 0; i < frames; ++i) {
+                const std::size_t slot = static_cast<std::size_t>(
+                    (m_rxFramesWritten[rx] + static_cast<quint64>(i)) % kRxHistoryFrames);
+                history[2 * slot]     = m_drainScratch[static_cast<std::size_t>(2 * i)];
+                history[2 * slot + 1] = m_drainScratch[static_cast<std::size_t>(2 * i + 1)];
+            }
+            m_rxFramesWritten[rx] += static_cast<quint64>(frames);
+        }
+        // A receiver whose stop the operator was told about is back. The
+        // notice goes once no receiver is stopped, unless something newer
+        // than a stop (a refused transmit) is showing.
+        if (arrived && m_rxStoppedNotice[rx]) {
+            m_rxStoppedNotice[rx] = false;
+            m_remoteUnavailable[rx] = false;
+            bool anyStopped = false;
+            for (bool stopped : m_rxStoppedNotice) { anyStopped = anyStopped || stopped; }
+            if (!anyStopped && m_noticeFromReceiverStop) {
+                m_noticeReason.clear();
+                emit operatorNoticeCleared();
+            }
+        }
+    }
+}
+
+void TciServer::sendRxAudioBlock(QWebSocket* ws, TciClientSession& session, int rx)
+{
+    if (rx < 0 || rx >= kMaxTciRxSlices) { return; }
+
+    // audioStreamSamples is per channel (frames); default 2048.
+    const int channels     = session.audioStreamChannels;  // 1 or 2
+    const int frames       = session.audioStreamSamples;
+    const int totalSamples = frames * channels;
+    if (frames <= 0 || totalSamples > kMaxDrainSamples) { return; }  // safety
+
+    const quint64 written = m_rxFramesWritten[rx];
+    auto posIt = session.audioReadFrame.find(rx);
+    if (posIt == session.audioReadFrame.end()) {
+        posIt = session.audioReadFrame.insert(rx, written);
+    }
+    quint64& readPos = posIt.value();
+    if (written - readPos > static_cast<quint64>(kRxHistoryFrames)) {
+        // Fell behind by more than the history holds: skip to the oldest
+        // audio still there, a dropout rather than a stale backlog.
+        readPos = written - static_cast<quint64>(kRxHistoryFrames);
+    }
+    if (written - readPos < static_cast<quint64>(frames)) {
+        return;  // not a whole block yet; wait for the next tick
+    }
+
+    // Phase 3J-1 closeout Item 12 (2026-05-12): apply per-slice TCI RX gain
+    // BEFORE resample (so the gain stays in the 48k domain and the
+    // resampler sees clean amplitude).  Item 13: track block peak |sample|
+    // for TciApplet's slice level meter.
+    const float sliceGain = m_sliceRxGainLinear[rx].load(std::memory_order_acquire);
+    const std::vector<float>& history = m_rxHistory[rx];
+    float blockPeak = 0.0f;
+    for (int i = 0; i < frames; ++i) {
+        const std::size_t slot = static_cast<std::size_t>(
+            (readPos + static_cast<quint64>(i)) % kRxHistoryFrames);
+        const float left  = history[2 * slot] * sliceGain;
+        const float right = history[2 * slot + 1] * sliceGain;
+        if (channels <= 1) {
+            // From Thetis TCIServer.cs:5897-5900 [v2.10.3.15]: a mono
+            // stream carries the left channel: leftPending.CopyTo(...,
+            // packetSamples). Before R-R3-42 this path took half a block of
+            // interleaved L/R floats and sent them as mono samples.
+            m_drainScratch[static_cast<std::size_t>(i)] = left;
+            blockPeak = std::max(blockPeak, std::fabs(left));
+        } else {
+            m_drainScratch[static_cast<std::size_t>(2 * i)]     = left;
+            m_drainScratch[static_cast<std::size_t>(2 * i + 1)] = right;
+            blockPeak = std::max({blockPeak, std::fabs(left), std::fabs(right)});
+        }
+    }
+    readPos += static_cast<quint64>(frames);
+    m_sliceRxPeakAbs[rx].store(blockPeak, std::memory_order_release);
+
+    // Resample if the client requested a rate other than 48000 Hz.
+    // Phase 16: xresampleFV resamples using the per-session per-slice
+    // RESAMPLEF instance created in handleAudioSubscribe.
+    const float* samples = m_drainScratch.data();
+    int outSamples = totalSamples;
+    auto rIt = session.audioResamplers.find(rx);
+    if (rIt != session.audioResamplers.end() && session.audioSampleRate != 48000) {
+        // Max output = totalSamples * max_ratio (384000/48000 = 8).
+        static constexpr int kMaxOutSamples = kMaxDrainSamples * 8;
+        static thread_local std::array<float, kMaxOutSamples> outBuf{};
+        xresampleFV(m_drainScratch.data(), outBuf.data(),
+                    totalSamples, &outSamples, rIt.value());
+        samples = outBuf.data();
+    }
+
+    // Encode + send binary frame.
+    // From Thetis TCIServer.cs:5510 [v2.10.3.13]:
+    //   sendBinaryFrame(buildStreamPayload(receiver, sampleRate,
+    //       sampleType, interleaved.Length, RX_AUDIO_STREAM,
+    //       channels, encoded));
+    const QByteArray frame = TciBinaryFrame::buildStreamPayload(
+        rx,
+        session.audioSampleRate,
+        session.audioSampleType,
+        outSamples,         // flat count (length field in header)
+        static_cast<int>(TciStreamType::RxAudioStream),
+        channels,
+        samples);
+    ws->sendBinaryMessage(frame);
+}
+
+// ── R-R3-42: remote window receiver audio ────────────────────────────────────
+
+void TciServer::setRemoteReceiverAudio(RemoteReceiverAudio source)
+{
+    for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
+        if (m_remoteRequested[rx]) {
+            m_remoteRequested[rx] = false;
+            m_remoteUnavailable[rx] = false;
+            if (m_remoteAudio.release) {
+                m_remoteAudio.release(rx, this);
+            }
+        }
+    }
+    m_remoteAudio = std::move(source);
+    for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
+        updateRemoteReceiverDemand(rx);
+    }
+}
+
+bool TciServer::remoteReceiverRequested(int rx) const
+{
+    return rx >= 0 && rx < kMaxTciRxSlices && m_remoteRequested[rx];
+}
+
+void TciServer::updateRemoteReceiverDemand(int rx)
+{
+    if (!m_remoteWindow || rx < 0 || rx >= kMaxTciRxSlices) { return; }
+    bool wanted = false;
+    for (auto it = m_clients.cbegin(); it != m_clients.cend() && !wanted; ++it) {
+        wanted = it.value()->audioStreamEnabled.contains(rx);
+    }
+    if (wanted && !m_remoteRequested[rx]) {
+        if (!m_remoteAudio.request) { return; }  // asked for once wired
+        m_remoteRequested[rx] = true;
+        qCInfo(lcTci) << "TciServer: asking the Core for receiver" << rx << "audio";
+        // May call receiverAudioStopped() before it returns (no media yet,
+        // or a Core that cannot send it).
+        m_remoteAudio.request(rx, this);
+    } else if (!wanted && m_remoteRequested[rx]) {
+        m_remoteRequested[rx] = false;
+        m_remoteUnavailable[rx] = false;
+        qCInfo(lcTci) << "TciServer: releasing receiver" << rx << "audio";
+        if (m_remoteAudio.release) {
+            m_remoteAudio.release(rx, this);
+        }
+    }
+}
+
+void TciServer::receiverAudioBlock(int sliceId, const float* interleavedStereo, int frames)
+{
+    // Receive worker thread, under the stream's fan-out lock: copy and go.
+    // This worker is the ring's only producer in a remote window (no
+    // RxChannel tap is hooked there), and one receiver stream per slice
+    // delivers at a time.
+    if (sliceId < 0 || sliceId >= kMaxTciRxSlices || !interleavedStereo || frames <= 0) {
+        return;
+    }
+    m_audioRing[sliceId].tryPushCopy(
+        reinterpret_cast<const uint8_t*>(interleavedStereo),
+        static_cast<qint64>(frames) * 2 * static_cast<qint64>(sizeof(float)));
+}
+
+void TciServer::receiverAudioStopped(int sliceId, const QString& reason)
+{
+    if (sliceId < 0 || sliceId >= kMaxTciRxSlices) { return; }
+    if (!m_remoteAudio.unavailableReason.isEmpty()
+        && reason == m_remoteAudio.unavailableReason) {
+        m_remoteUnavailable[sliceId] = true;
+    }
+    m_rxStoppedNotice[sliceId] = true;
+    qCInfo(lcTci) << "TciServer: receiver" << sliceId << "audio stopped:" << reason;
+    // No toast while the window has no media connection yet (an app that
+    // starts before the window connects, or a link that drops): the window
+    // already says that, and the audio returns by itself. The applet and
+    // the TCI log window still show it.
+    const bool quiet =
+        reason == remoteAudioOffReasonToWire(RemoteAudioOffReason::MediaNotReady);
+    raiseOperatorNotice(QString(), reason, /*receiverStop=*/true, quiet);
+}
+
+void TciServer::raiseOperatorNotice(const QString& peer, const QString& reason,
+                                    bool receiverStop, bool quiet)
+{
+    // A repeat of the same reason within 30 s is logged and shown, but not
+    // toasted again: WSJT-X, for one, asks to transmit every period.
+    constexpr qint64 kRepeatToastQuietMs = 30000;
+    const bool repeat = reason == m_noticeReason && m_noticeClock.isValid()
+        && m_noticeClock.elapsed() < kRepeatToastQuietMs;
+    m_noticeReason = reason;
+    m_noticeFromReceiverStop = receiverStop;
+    if (!repeat) {
+        m_noticeClock.start();
+    }
+    emit operatorNotice(peer, reason, !repeat && !quiet);
+}
+
 // ── onTextMessageReceived() ──────────────────────────────────────────────────
 
 void TciServer::onTextMessageReceived(const QString& msg)
@@ -1859,6 +2059,19 @@ void TciServer::onTextMessageReceived(const QString& msg)
             const int rx = trimmed.mid(kAudioStart.size()).trimmed().toInt(&ok);
             if (ok && rx >= 0 && rx <= 1) {
                 handleAudioSubscribe(session, rx);
+                if (m_remoteWindow) {
+                    // R-R3-42: TCI receiver N is the Core's slice N, asked
+                    // for while at least one app listens.
+                    updateRemoteReceiverDemand(rx);
+                    if (m_remoteUnavailable[rx]) {
+                        // This Core cannot send a receiver's audio: the app
+                        // is not told the stream started (the operator is,
+                        // through the notice receiverAudioStopped raised).
+                        handleAudioUnsubscribe(session, rx);
+                        updateRemoteReceiverDemand(rx);
+                        return;
+                    }
+                }
                 // Phase 26 review finding #2: send confirmation echo.
                 // From Thetis TCIServer.cs:5891-5906 [v2.10.3.13] —
                 // handleAudioStart calls sendAudioStartStop(rx, true) after
@@ -1872,6 +2085,7 @@ void TciServer::onTextMessageReceived(const QString& msg)
             const int rx = trimmed.mid(kAudioStop.size()).trimmed().toInt(&ok);
             if (ok && rx >= 0 && rx <= 1) {
                 handleAudioUnsubscribe(session, rx);
+                updateRemoteReceiverDemand(rx);  // R-R3-42: last app out releases it
                 // Phase 26 review finding #2: send confirmation echo.
                 // From Thetis TCIServer.cs:5891-5906 [v2.10.3.13] —
                 // handleAudioStart calls sendAudioStartStop(rx, false) after
@@ -1886,7 +2100,16 @@ void TciServer::onTextMessageReceived(const QString& msg)
             // update m_iqStreamEnabled per-listener.
             bool ok = false;
             const int rx = trimmed.mid(kIqStart.size()).trimmed().toInt(&ok);
-            if (ok && rx >= 0 && rx <= 1) {
+            if (m_remoteWindow) {
+                // R-R3-42: raw I/Q is not offered from a remote window. No
+                // subscription and no echo; the operator hears why.
+                if (ok && rx >= 0 && rx <= 1) {
+                    qCInfo(lcTci) << "TciServer: iq_start refused in a remote window, peer"
+                                  << session->peer;
+                    raiseOperatorNotice(session->peer,
+                                        QString::fromLatin1(kRemoteIqRefusedReason));
+                }
+            } else if (ok && rx >= 0 && rx <= 1) {
                 if (!session->iqStreamEnabled.contains(rx)) {
                     session->iqStreamEnabled.insert(rx);
                     qCInfo(lcTci) << "TciServer: IQ stream subscribed rx" << rx
@@ -2149,7 +2372,18 @@ void TciServer::onTextMessageReceived(const QString& msg)
                     const bool wantsMox = (parts.at(1).trimmed().compare(
                         QLatin1String("true"), Qt::CaseInsensitive) == 0);
 
-                    if (hasTciArg && wantsMox) {
+                    if (m_remoteWindow) {
+                        // R-R3-42 / R-R3-25: no TX audio lock and no
+                        // TX_CHRONO in a remote window. TciProtocol answers
+                        // trx:N,false without touching MOX; the operator
+                        // hears why.
+                        if (wantsMox) {
+                            qCInfo(lcTci) << "TciServer: transmit refused in a remote window, peer"
+                                          << session->peer;
+                            raiseOperatorNotice(session->peer,
+                                                QString::fromLatin1(kRemoteTransmitRefusedReason));
+                        }
+                    } else if (hasTciArg && wantsMox) {
                         // Client wants TX audio ownership.
                         // From Thetis TCIServer.cs:7625-7643 [v2.10.3.13] —
                         // TryAcquireActiveTxAudioListener: grant if no current
@@ -2506,7 +2740,8 @@ void TciServer::startTxChrono(QWebSocket* client, int trx)
 
 void TciServer::setTciTxGainLinear(float lin)
 {
-    if (!m_model) { return; }
+    // R-R3-42: a remote window has no transmit channel of its own.
+    if (!m_model || m_remoteWindow) { return; }
     if (auto* wdsp = m_model->wdspEngine()) {
         if (auto* tx = wdsp->txChannel(WdspEngine::kTxChannelId)) {
             tx->setTciTxGainLinear(lin);
@@ -2516,7 +2751,7 @@ void TciServer::setTciTxGainLinear(float lin)
 
 float TciServer::tciTxPeakAbs() const
 {
-    if (!m_model) { return 0.0f; }
+    if (!m_model || m_remoteWindow) { return 0.0f; }
     if (auto* wdsp = m_model->wdspEngine()) {
         if (auto* tx = wdsp->txChannel(WdspEngine::kTxChannelId)) {
             return tx->tciTxPeakAbs();
