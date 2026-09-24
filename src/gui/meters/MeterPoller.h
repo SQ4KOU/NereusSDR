@@ -107,6 +107,13 @@ namespace MeterBinding {
     constexpr int TxSwr          = 102;  // SWR (computed fwd/rev ratio)
     constexpr int TxMic          = 103;  // TXA_MIC_AV
     constexpr int TxComp         = 104;  // TXA_COMP_AV
+
+    // R-R3-21: the floor Thetis puts on the Compression reading.
+    // From Thetis console.cs:46979 [v2.10.3.15]:
+    //   updateMetersReading(Reading.COMP, (float)Math.Max(-30.0f, -WDSP.CalculateTXMeter(1, WDSP.MeterType.COMP)), 0);
+    // CalculateTXMeter already returns -(float)val (dsp.cs:1056 [v2.10.3.15]),
+    // so the two negations cancel: the reading is max(-30, TXA_COMP_AV).
+    constexpr double kTxCompFloorDb = -30.0;
     constexpr int TxAlc          = 105;  // TXA_ALC_AV
 
     // TX meters — new (Phase 3G-4)
@@ -237,6 +244,16 @@ public:
 
 signals:
     void remoteSliceLevelUpdated(int sliceId, double dbm);
+    /// R-R3-21: each transmit reading pollTxMeters() hands the meters
+    /// (bindingId is a MeterBinding Tx* id), for controls outside a meter
+    /// container: the Phone/CW applet's compression gauge.
+    void txMeterReading(int bindingId, double value);
+
+public:
+    /// R-R3-21: the Compression reading Thetis shows for a raw TXA_COMP_AV
+    /// value: max(-30, raw). With PROC off WDSP returns -400 (meter.c
+    /// xmeter), which reads -30; a non-finite value also reads -30.
+    static double compressionReading(double rawTxaCompAv);
 
 public slots:
     // Switch between RX and TX meter polling.
@@ -257,6 +274,19 @@ private:
     // registered MeterWidget targets.
     // Porting from Thetis dsp.cs:999-1050 [v2.10.3.13] CalculateTXMeter.
     void pollTxMeters();
+    // pollTxMeters()'s hand-out of one raw reading (the Compression floor
+    // applies here).
+    void handOutTxReading(int bindingId, double rawValue);
+
+#ifdef NEREUS_BUILD_TESTS
+public:
+    // Test seam: what pollTxMeters() does with one raw WDSP reading.
+    void handOutTxReadingForTest(int bindingId, double rawValue)
+    {
+        handOutTxReading(bindingId, rawValue);
+    }
+private:
+#endif
 
     // ── SMeterWidget poll helper (Task 41, Phase 3P-II) ──────────────────────
     // Branches on m_sMeter->rxMode() to read the correct WDSP source and

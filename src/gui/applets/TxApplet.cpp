@@ -427,7 +427,7 @@ void TxApplet::buildUI()
         m_voxBtn->setAccessibleName(QStringLiteral("VOX voice-operated transmit"));
         m_voxBtn->setObjectName(QStringLiteral("TxVoxButton"));
         m_voxBtn->setToolTip(QStringLiteral(
-            "VOX — voice-operated transmit.  Left-click to toggle.\n"
+            "VOX: voice-operated transmit.  Left-click to toggle.\n"
             "Right-click to open the DEXP/VOX setup page."));
         // CustomContextMenu so right-click hits the openSetupRequested slot
         // instead of the default platform menu.
@@ -582,7 +582,7 @@ void TxApplet::buildUI()
         m_levBtn->setAccessibleName(QStringLiteral("TX Leveler enable"));
         m_levBtn->setObjectName(QStringLiteral("TxLevButton"));
         m_levBtn->setToolTip(QStringLiteral(
-            "TX Leveler — slow speech-leveling AGC. Improves intelligibility on weak speech."));
+            "TX Leveler: slow speech-leveling AGC. Improves intelligibility on weak speech."));
         row->addWidget(m_levBtn, 1);
 
         m_eqBtn = new QPushButton(QStringLiteral("EQ"), this);
@@ -608,7 +608,7 @@ void TxApplet::buildUI()
         m_cfcBtn->setAccessibleName(QStringLiteral("Continuous Frequency Compressor enable"));
         m_cfcBtn->setObjectName(QStringLiteral("TxCfcButton"));
         m_cfcBtn->setToolTip(QStringLiteral(
-            "CFC — 10-band continuous frequency compressor. Left-click to "
+            "CFC: 10-band continuous frequency compressor. Left-click to "
             "toggle. Right-click to open the CFC dialog."));
         // Right-click → modeless TxCfcDialog (mirrors EQ button pattern).
         m_cfcBtn->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -635,7 +635,7 @@ void TxApplet::buildUI()
         applyComboStyle(m_profileCombo);
         m_profileCombo->setAccessibleName(QStringLiteral("TX profile"));
         m_profileCombo->setToolTip(QStringLiteral(
-            "TX Profile — left-click to switch.  Right-click to edit "
+            "TX Profile: left-click to switch.  Right-click to edit "
             "(Setup → Audio → TX Profile)."));
         // Custom context-menu policy so right-click emits
         // customContextMenuRequested instead of the default popup.
@@ -1834,7 +1834,7 @@ void TxApplet::setCurrentBand(Band band)
 // Mode categories:
 //   Allowed (LSB/USB/DIGL/DIGU): normal "Manual transmit (MOX)" tooltip.
 //   CW (CWL/CWU):                CW TX deferred to Phase 3M-2.
-//   Audio (AM/SAM/DSB/FM/DRM):   AM/FM TX deferred to Phase 3M-3 (audio modes).
+//   FM, DRM:                     not yet transmit modes (FM waits on 3M-3b).
 //   SPEC:                        Never a TX mode.
 //
 // This helper is static so TxApplet tests can call it directly without
@@ -1853,13 +1853,18 @@ QString TxApplet::tooltipForMode(DSPMode mode)
     case DSPMode::DSB:
         return QStringLiteral("Manual transmit (MOX)");
 
+    // R-R3-17 / R-R3-21: the same user words BandPlanGuard refuses with.
+    // CW transmit is Phase 3M-2; FM transmit waits on pre-emphasis (Phase
+    // 3M-3b). DRM names DRM.
     case DSPMode::CWL:
     case DSPMode::CWU:
-        return QStringLiteral("CW TX coming in Phase 3M-2");
+        return QStringLiteral("CW transmit is not available yet");
 
     case DSPMode::FM:
+        return QStringLiteral("FM transmit is not available yet");
+
     case DSPMode::DRM:
-        return QStringLiteral("FM TX coming in Phase 3M-3b (pre-emphasis)");
+        return QStringLiteral("DRM transmit is not available yet");
 
     case DSPMode::SPEC:
     default:

@@ -1135,6 +1135,7 @@ void SMeterWidget::setFaceStyle(FaceStyle style)
     m_faceCacheKey.clear();
     AppSettings::instance().setValue("SMeter_FaceStyle", faceStyleKey(style));
     update();
+    emit settingsChanged();
 }
 
 QString SMeterWidget::faceStyleKey(FaceStyle style)
@@ -1210,6 +1211,7 @@ void SMeterWidget::setPeakHoldEnabled(bool enabled)
                                      enabled ? QString("True") : QString("False"));
     updateNeedleTarget();
     update();
+    emit settingsChanged();
 }
 
 void SMeterWidget::setPeakHoldTimeMs(int ms)
@@ -1239,6 +1241,7 @@ void SMeterWidget::setPeakDecayRate(const QString& rate)
                             : (rate == "Slow")  ? QString("Slow")
                                                 : QString("Medium");
     AppSettings::instance().setValue("PeakDecayRate", canonical);
+    emit settingsChanged();
 }
 
 void SMeterWidget::resetPeak()

@@ -20,13 +20,17 @@
 
 #include "OperatorWording.h"
 #include "PanStatusSamples.h"
+#include "core/WdspTypes.h"
 #include "core/dsp/NnrSettings.h"
+#include "core/safety/BandPlanGuard.h"
 #include "core/session/media/SpectrumEndpoint.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteMediaController.h"
+#include "gui/applets/TxApplet.h"
 #include "gui/setup/FourO3APage.h"
 #include "gui/widgets/NnrControls.h"
+#include "models/Band.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -173,6 +177,87 @@ QStringList trLiterals(const QString& source)
 QString sourcePath(const char* relative)
 {
     return QDir(QStringLiteral(NEREUS_SOURCE_DIR)).filePath(QString::fromLatin1(relative));
+}
+
+// Developer wording a user must never read (R-R3-17, R-R3-21): roadmap phase
+// and task numbers, design-document references, environment variables,
+// internal class and function names, and bug-tracker notes. The em dash is
+// checked separately, on the strings this sweep names.
+const QRegularExpression& developerWording()
+{
+    static const QRegularExpression pattern(QStringLiteral(
+        "\\bPhase \\d|\\bTask \\d|\\b\\d[A-Z]-\\d|design spec|\u00a7|\\\\u00a7"
+        "|\\bQT_[A-Z_]+=|Feature request|\\b(follow-up|future|later) phase"
+        "|\\b[A-Z][a-z]+[A-Z][A-Za-z]*(Dialog|Toast|Widget|Applet|Page|Controller|Model)\\b"
+        "|addSliceOnPan"));
+    return pattern;
+}
+
+// The first piece of developer wording in `text`, an em dash included, or an
+// empty string.
+QString developerWordingIn(const QString& text)
+{
+    const QRegularExpressionMatch match = developerWording().match(text);
+    if (match.hasMatch()) {
+        return match.captured(0);
+    }
+    if (text.contains(QChar(0x2014)) || text.contains(QLatin1String("\\u2014"))) {
+        return QStringLiteral("em dash");
+    }
+    return {};
+}
+
+// The string literals a user can read in a source file: codeLiterals()
+// without the ones inside a log statement (qDebug / qInfo / qWarning /
+// qCritical and their qC* forms, up to the statement's ';'), which only the
+// log shows. Placeholders on the operator's decision list (the "NYI"
+// strings) are left to the unfinished-controls plan.
+QStringList userVisibleLiterals(const QString& path)
+{
+    static const QRegularExpression token(QStringLiteral(
+        "(\"(?:[^\"\\\\\\n]|\\\\.)*\")|(;)|(\\bqC?(?:Debug|Info|Warning|Critical|Fatal)\\b)"));
+    QString code;
+    for (const QString& line : codeWithoutComments(path).split(QLatin1Char('\n'))) {
+        if (!line.trimmed().startsWith(QLatin1Char('#'))) {
+            code += line + QLatin1Char('\n');
+        }
+    }
+    QStringList found;
+    bool inLog = false;
+    QRegularExpressionMatchIterator it = token.globalMatch(code);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch m = it.next();
+        if (!m.captured(3).isEmpty()) {
+            inLog = true;
+        } else if (!m.captured(2).isEmpty()) {
+            inLog = false;
+        } else if (!inLog) {
+            const QString text = m.captured(1).mid(1, m.captured(1).size() - 2);
+            if (!text.contains(QLatin1String("NYI"))) {
+                found.append(text);
+            }
+        }
+    }
+    return found;
+}
+
+// Every string literal in a source file's code: comments and preprocessor
+// lines left out, adjacent literals joined, escapes kept as written.
+QStringList codeLiterals(const QString& path)
+{
+    static const QRegularExpression literal(QStringLiteral("\"((?:[^\"\\\\\\n]|\\\\.)*)\""));
+    QString code;
+    for (const QString& line : codeWithoutComments(path).split(QLatin1Char('\n'))) {
+        if (!line.trimmed().startsWith(QLatin1Char('#'))) {
+            code += line + QLatin1Char('\n');
+        }
+    }
+    QStringList found;
+    QRegularExpressionMatchIterator it = literal.globalMatch(code);
+    while (it.hasNext()) {
+        found.append(it.next().captured(1));
+    }
+    return found;
 }
 
 } // namespace
@@ -657,6 +742,249 @@ private slots:
                 QVERIFY2(!stationWord.match(shown).hasMatch(), qPrintable(reason + QStringLiteral(" -> ") + shown));
             }
         }
+    }
+
+    // R3 controls that work, Task 3 (R-R3-17, R-R3-21): the developer
+    // wording users could read outside the unfinished-control placeholders
+    // (transmit refusals, test-entry tooltips, the antenna conflict policy
+    // choices, the Speech Processor tag, the TCI slice note, the VAX consumer
+    // row, the overlay's IQ channel, the log view and the RF-Kit tuner
+    // buttons) is gone and its replacement is in user words. Files whose
+    // other strings are all plain are scanned whole, so new developer wording
+    // there fails too; MainWindow and the VAX page still carry placeholders
+    // the unfinished-controls plan retires, so only their named strings are
+    // checked.
+    void developerWordingIsGoneOutsideThePlaceholders()
+    {
+        const struct {
+            const char* file;
+            bool wholeFile;
+            QStringList gone;
+            QStringList shown;
+        } sites[] = {
+            {"src/core/safety/BandPlanGuard.cpp", true,
+             {"coming in Phase", "RX/TX band mismatch \u2014"},
+             {"CW transmit is not available yet", "FM transmit is not available yet",
+              "DRM transmit is not available yet",
+              "RX/TX band mismatch: cross-band TX disabled"}},
+            {"src/gui/applets/TxApplet.cpp", true,
+             {"coming in Phase"},
+             {"CW transmit is not available yet", "FM transmit is not available yet",
+              "DRM transmit is not available yet"}},
+            {"src/gui/MainWindow.cpp", false,
+             {"Phase 3F closeout:", "AntennaSwitchToast surface",
+              "TxBoundConfirmDialog surface", "conflict-detection state machine ships"},
+             {"Show the antenna switch notice to see how it looks. No antenna changes, "
+              "and antennas do not switch on their own yet.",
+              "Show the question asked before the transmit antenna moves, to see how it "
+              "looks. No antenna changes, and adding a slice does not ask it yet."}},
+            {"src/gui/setup/hardware/AntennaAlexAntennaControlTab.cpp", true,
+             {"TxBoundConfirmDialog before", "toast on RX-only switch", "refuse add-slice"},
+             {"Auto - resolve it when safe, and show a notice when only a receive antenna "
+              "changes",
+              "Warn - ask before moving the transmit antenna",
+              "Block - do not add the slice while its antenna is in use by another slice"}},
+            {"src/gui/setup/TransmitSetupPages.cpp", true, {"3M-3a-iii"}, {}},
+            {"src/gui/setup/AudioTciPage.cpp", true,
+             {"Phase 3J-1"}, {"Slices C and D are not available over TCI."}},
+            {"src/gui/setup/AudioVaxPage.cpp", false,
+             {"Task 24+", "override \u2014 no consumer", "no consumer"},
+             {"Whether an app such as WSJT-X has this VAX channel open.",
+              "No program is using this device"}},
+            {"src/gui/SpectrumOverlayPanel.cpp", true,
+             {"design spec", "reserved for future phase"},
+             {"Sending I/Q to a VAX channel is not available yet."}},
+            {"src/gui/diagnostics/DiagnosticsPhaseHPages.cpp", true,
+             {"QT_LOGGING_TO_CONSOLE", "follow-up phase"},
+             {"The 60 s history graph is not shown yet.",
+              "Exporting one radio's settings is not available yet. Use 'Export All "
+              "Settings' for now."}},
+            // Fix wave item 2: the VFO flag's tooltips carried Thetis and
+            // WDSP file cites and WDSP function names; the cites are
+            // comments beside the strings now.
+            // Follow-up: the HL2 throttle notice named the ep2 stream.
+            {"src/core/P1RadioConnection.cpp", false,
+             {"LAN throttled; pausing ep2"},
+             {"The Hermes Lite 2 asked for a pause because its network link is busy."}},
+            {"src/gui/widgets/VfoWidget.cpp", false,
+             {"From Thetis", "patchpanel.c", "(SetRXAPanelRun)", "(SetRXAPanelBinaural)",
+              "Maps to Thetis", "Alex.cs", "nob.c", "matches AetherSDR",
+              "NNR: WDSP neural"},
+             {"Audio pan: left/right stereo balance (\u2212100 = full left, 0 = center, "
+              "+100 = full right)",
+              "Mute the receive audio",
+              "Binaural audio: I and Q play in separate ears, for a stereo image in headphones",
+              "RX Bypass on TX: routes the receive path through the bypass relay while "
+              "transmitting.",
+              "NNR: neural noise reduction. Left-click activates, right-click adjusts settings"}},
+            {"src/gui/applets/Rf2ksApplet.cpp", true,
+             {"G200C267", "Feature request", "tuner write verb"},
+             {"The amplifier's firmware does not let NereusSDR tune or bypass it.\\n"
+              "Press TUNE or BYPASS on the amplifier's front panel.\\n"
+              "These buttons turn on when the amplifier's firmware allows it."}},
+        };
+        for (const auto& site : sites) {
+            const QStringList literals = codeLiterals(sourcePath(site.file));
+            QVERIFY2(literals.size() >= 5, site.file);
+            const QString code = literals.join(QLatin1Char('\n'));
+            for (const QString& old : site.gone) {
+                QVERIFY2(!code.contains(old),
+                         qPrintable(QStringLiteral("%1 still shows: %2")
+                                        .arg(QLatin1String(site.file), old)));
+            }
+            for (const QString& text : site.shown) {
+                QVERIFY2(literals.contains(text),
+                         qPrintable(QStringLiteral("%1 lacks: %2")
+                                        .arg(QLatin1String(site.file), text)));
+                QVERIFY2(OperatorWording::isPlain(text),
+                         qPrintable(text + QStringLiteral(" [")
+                                    + OperatorWording::internalTermIn(text)
+                                    + QLatin1Char(']')));
+                QVERIFY2(developerWordingIn(text).isEmpty(),
+                         qPrintable(text + QStringLiteral(" [") + developerWordingIn(text)
+                                    + QLatin1Char(']')));
+            }
+            if (!site.wholeFile) {
+                continue;
+            }
+            for (const QString& text : literals) {
+                QVERIFY2(!developerWording().match(text).hasMatch(),
+                         qPrintable(QStringLiteral("%1: %2")
+                                        .arg(QLatin1String(site.file), text)));
+            }
+        }
+    }
+
+    // Fix wave item 12: no user-visible string in the files the R3 controls
+    // plan touched carries an em dash; prose uses periods, colons,
+    // semicolons, parentheses or commas, and a lone empty-value mark in a
+    // readout is an en dash. Log lines and the decision-list placeholders
+    // are not read by the operator here and are left out.
+    void noEmDashInUserVisibleStrings()
+    {
+        const char* files[] = {
+            "src/gui/AboutDialog.cpp",
+            "src/gui/MainWindow.cpp",
+            "src/gui/SpectrumOverlayPanel.cpp",
+            "src/gui/SpotHubDialog.cpp",
+            "src/gui/applets/PhoneCwApplet.cpp",
+            "src/gui/applets/TxApplet.cpp",
+            "src/gui/diagnostics/DiagnosticsPhaseHPages.cpp",
+            "src/gui/diagnostics/RadioStatusPage.cpp",
+            "src/gui/setup/AudioVaxPage.cpp",
+            "src/gui/setup/DspOptionsPage.cpp",
+            "src/gui/setup/DspSetupPages.cpp",
+            "src/gui/setup/TransmitSetupPages.cpp",
+            "src/gui/setup/hardware/OcOutputsHfTab.cpp",
+            "src/gui/widgets/VfoWidget.cpp",
+            "src/gui/widgets/RxDashboard.cpp",
+            "src/models/RadioModel.cpp",
+            "src/core/P1RadioConnection.cpp",
+        };
+        for (const char* file : files) {
+            const QStringList literals = userVisibleLiterals(sourcePath(file));
+            QVERIFY2(literals.size() >= 5, file);
+            for (const QString& text : literals) {
+                QVERIFY2(!text.contains(QChar(0x2014)) && !text.contains(QLatin1String("\\u2014")),
+                         qPrintable(QStringLiteral("%1: %2").arg(QLatin1String(file), text)));
+            }
+        }
+        // The readouts' empty-value mark is the en dash.
+        const QStringList status = userVisibleLiterals(
+            sourcePath("src/gui/diagnostics/RadioStatusPage.cpp"));
+        QVERIFY(status.contains(QString(QChar(0x2013))));
+        QVERIFY(status.contains(QString(QChar(0x2013)) + QStringLiteral(" W")));
+    }
+
+    // Fix wave items 2 and 12: the strings rewritten without em dashes or
+    // developer wording read in user words.
+    void rewordedStringsArePlain()
+    {
+        const struct { const char* file; QStringList texts; } sites[] = {
+            {"src/gui/MainWindow.cpp",
+             {"PA status: OK", "PA status: FAULT (the PA tripped and MOX dropped)",
+              "NereusSDR: FFTW Wisdom"}},
+            {"src/gui/SpotHubDialog.cpp",
+             {"Enter Callsign Here (4-12 characters, required to publish spots)",
+              "Enter Grid Here (Maidenhead, e.g. EM73 or EM73XY)"}},
+            {"src/gui/applets/TxApplet.cpp",
+             {"TX Leveler: slow speech-leveling AGC. Improves intelligibility on weak speech."}},
+            {"src/gui/diagnostics/DiagnosticsPhaseHPages.cpp",
+             {"\u2713 No issues: every setting is within this radio's range.", "[%1] %2: %3"}},
+            {"src/gui/diagnostics/RadioStatusPage.cpp",
+             {"No issues found. Settings are valid.", "[%1] %2: %3"}},
+            {"src/gui/setup/AudioVaxPage.cpp",
+             {"No program is using this device", "\u26a0  Not bound. Pick a virtual cable",
+              "\u26a0  Disabled. Enable it to route audio"}},
+            {"src/gui/setup/DspOptionsPage.cpp",
+             {"Sets the internal buffer size. Larger values give sharper filters but add latency.",
+              "Time to last change: none yet"}},
+            {"src/gui/setup/hardware/OcOutputsHfTab.cpp",
+             {"OC pin %1: shows the last OC byte sent to the radio"}},
+            {"src/models/RadioModel.cpp",
+             {"Band %1 ignored: the slice is locked. Unlock it to change bands."}},
+            {"src/core/P1RadioConnection.cpp",
+             {"No response from radio within %1 ms. Check the IP address, radio power and "
+              "network.",
+              "The Hermes Lite 2 asked for a pause because its network link is busy."}},
+        };
+        for (const auto& site : sites) {
+            const QStringList literals = userVisibleLiterals(sourcePath(site.file));
+            for (const QString& written : site.texts) {
+                const QString text = written;
+                QVERIFY2(literals.contains(text),
+                         qPrintable(QStringLiteral("%1 lacks: %2")
+                                        .arg(QLatin1String(site.file), text)));
+                QVERIFY2(OperatorWording::isPlain(text),
+                         qPrintable(text + QStringLiteral(" [")
+                                    + OperatorWording::internalTermIn(text) + QLatin1Char(']')));
+                QVERIFY2(developerWordingIn(text).isEmpty(),
+                         qPrintable(text + QStringLiteral(" [") + developerWordingIn(text)
+                                    + QLatin1Char(']')));
+            }
+        }
+    }
+
+    // The same task: every transmit refusal and MOX tooltip, for every mode,
+    // is plain, and the DRM one names DRM rather than FM.
+    void transmitRefusalsNameTheModeInUserWords()
+    {
+        using safety::BandPlanGuard;
+        BandPlanGuard guard;
+        const auto region = safety::Region::UnitedStates;
+        constexpr std::int64_t kInBandHz = 14'200'000;  // US 20 m
+        QStringList shown;
+        for (int m = int(DSPMode::LSB); m <= int(DSPMode::RADE_L); ++m) {
+            const auto mode = DSPMode(m);
+            shown << guard.checkMoxAllowed(region, kInBandHz, mode, Band::Band20m,
+                                           Band::Band20m, false, false).reason
+                  << TxApplet::tooltipForMode(mode);
+        }
+        shown << guard.checkMoxAllowed(region, 14'500'000, DSPMode::USB, Band::Band20m,
+                                       Band::Band20m, false, false).reason
+              << guard.checkMoxAllowed(region, kInBandHz, DSPMode::USB, Band::Band20m,
+                                       Band::Band40m, true, false).reason;
+        shown.removeAll(QString());
+        QVERIFY2(shown.size() >= 16, qPrintable(QString::number(shown.size())));
+        for (const QString& text : std::as_const(shown)) {
+            QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+            QVERIFY2(developerWordingIn(text).isEmpty(),
+                     qPrintable(text + QStringLiteral(" [") + developerWordingIn(text)
+                                + QLatin1Char(']')));
+        }
+
+        const QString drmRefusal = guard.checkMoxAllowed(region, kInBandHz, DSPMode::DRM,
+                                                         Band::Band20m, Band::Band20m,
+                                                         false, false).reason;
+        const QString drmTip = TxApplet::tooltipForMode(DSPMode::DRM);
+        static const QRegularExpression fm(QStringLiteral("\\bFM\\b"));
+        for (const QString& text : {drmRefusal, drmTip}) {
+            QVERIFY2(text.contains(QLatin1String("DRM")), qPrintable(text));
+            QVERIFY2(!fm.match(text).hasMatch(), qPrintable(text));
+        }
+        QVERIFY(guard.checkMoxAllowed(region, kInBandHz, DSPMode::FM, Band::Band20m,
+                                      Band::Band20m, false, false)
+                    .reason.contains(QLatin1String("FM")));
     }
 
     void remoteFourO3APageIsInUserWords()

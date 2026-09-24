@@ -439,6 +439,12 @@ public:
                               bool noiseFloorValid = true);
 
     // --- Small filter display mode (Task 3.4 — Appearance > Meter Styles) ---
+    // R-R3-21: open one of the flag's tabs (the status bar's badges do).
+    // Opening the tab already open leaves it open.
+    enum class Tab { Audio = 0, Dsp = 1, Mode = 2, XRit = 3, Vax = 4 };
+    void showTab(Tab tab);
+    int activeTab() const { return m_activeTab; }
+
     void setSmallFilterMode(bool small);
     bool smallFilterMode() const { return m_smallFilterMode; }
 
@@ -625,6 +631,9 @@ signals:
     void filterPolicyRequested(int chainIndex);
     void removeSliceRequested(int sliceIndex);
     void antennaChangeRequested(int sliceIndex, const QString& antennaName);
+    // R-R3-21: the right-click Diversity entry. MainWindow opens the
+    // Diversity dialog, the same one Tools > Diversity opens.
+    void diversityRequested();
 
 private slots:
     // Phase 3F Sub-Epic C Task 9: TX badge click slot. Emits

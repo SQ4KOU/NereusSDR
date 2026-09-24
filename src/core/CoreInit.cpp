@@ -156,6 +156,15 @@ bool initialize(const QString& profile)
     // the now-removed OcOutputsHfTab checkbox. Idempotent.
     AppSettings::removeOrphanOcN2adrFilter(AppSettings::instance());
 
+    // R-R3-21: the global "hardware/oc/pennyExtCtrl" Setup used to save
+    // goes to every saved radio's own Penny Ext Control key, then away.
+    // Idempotent.
+    AppSettings::migrateLegacyPennyExtCtrl(AppSettings::instance());
+
+    // R-R3-21: settings whose writer and reader used different names keep
+    // the value users saved under the old name. Idempotent.
+    AppSettings::migrateRenamedKeys(AppSettings::instance());
+
     // v0.3.0 / v0.3.x settings schema migrations: must run after load(),
     // after other one-shot migrations above. v3 retires legacy display
     // keys; v4 retires DisplayAverageAlpha after the averaging-math fix

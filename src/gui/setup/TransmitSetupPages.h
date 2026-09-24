@@ -32,6 +32,10 @@
 //                 NereusSDR's architecture; see TransmitSetupPages.cpp info
 //                 row tooltip for the rationale.  J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-21: Speech Processor's AM-SQ / DEXP button opens
+//                 Transmit > DEXP/VOX (it asked for a "VOX/DEXP" page that
+//                 does not exist). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -257,7 +261,8 @@ private:
                          const QString& buttonText,
                          const QString& buttonTooltip,
                          const QString& linkPage,           // empty → button is a placeholder
-                         const QString& futurePhaseTag);    // empty → no "(3M-3a-X)" suffix
+                         const QString& futurePhaseTag,     // empty → no "(3M-3a-X)" suffix
+                         const QString& linkCategory = QStringLiteral("DSP"));
 
     // Section: Active Profile
     QLabel*      m_activeProfileLabel{nullptr};

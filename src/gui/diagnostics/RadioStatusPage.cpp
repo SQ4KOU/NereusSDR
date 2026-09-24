@@ -238,7 +238,7 @@ void RadioStatusPage::buildStatusBar(QFrame* bar)
         hdr->setStyleSheet(QStringLiteral("font-size: 9px; color: %1;")
                                .arg(QLatin1String(Style::kTextTertiary)));
         v->addWidget(hdr);
-        m_radioLabel = makeCol(QStringLiteral("—"));
+        m_radioLabel = makeCol(QStringLiteral("–"));
         v->addWidget(m_radioLabel);
         h->addLayout(v);
     }
@@ -266,7 +266,7 @@ void RadioStatusPage::buildStatusBar(QFrame* bar)
         hdr->setStyleSheet(QStringLiteral("font-size: 9px; color: %1;")
                                .arg(QLatin1String(Style::kTextTertiary)));
         v->addWidget(hdr);
-        m_firmwareLabel = makeCol(QStringLiteral("—"));
+        m_firmwareLabel = makeCol(QStringLiteral("–"));
         v->addWidget(m_firmwareLabel);
         h->addLayout(v);
     }
@@ -291,9 +291,9 @@ void RadioStatusPage::buildStatusBar(QFrame* bar)
         if (!m_model->name().isEmpty()) {
             radioStr = m_model->name();
         }
-        m_radioLabel->setText(radioStr.isEmpty() ? QStringLiteral("—") : radioStr);
+        m_radioLabel->setText(radioStr.isEmpty() ? QStringLiteral("–") : radioStr);
         m_firmwareLabel->setText(m_model->version().isEmpty()
-                                     ? QStringLiteral("—") : m_model->version());
+                                     ? QStringLiteral("–") : m_model->version());
     }
 }
 
@@ -369,7 +369,7 @@ void RadioStatusPage::buildPaStatusCard(QFrame* card)
         row->addStretch();
         // PA voltage is not a separately-exposed status field in Thetis
         // (see RadioStatus.h header comment re: source-first deviation).
-        m_paVoltageLabel = new QLabel(QStringLiteral("—"), card);
+        m_paVoltageLabel = new QLabel(QStringLiteral("–"), card);
         m_paVoltageLabel->setStyleSheet(QStringLiteral(
             "font-size: 10px; font-weight: bold; color: %1; border: none;"
         ).arg(QLatin1String(Style::kTextInactive)));
@@ -402,7 +402,7 @@ void RadioStatusPage::buildPowerCard(QFrame* card)
                                .arg(QLatin1String(Style::kTextSecondary)));
         row->addWidget(lbl);
         row->addStretch();
-        m_forwardLabel = new QLabel(QStringLiteral("— W"), card);
+        m_forwardLabel = new QLabel(QStringLiteral("– W"), card);
         m_forwardLabel->setStyleSheet(QStringLiteral(
             "font-size: 10px; font-weight: bold; color: %1; border: none;"
         ).arg(QLatin1String(Style::kTextPrimary)));
@@ -426,7 +426,7 @@ void RadioStatusPage::buildPowerCard(QFrame* card)
                                .arg(QLatin1String(Style::kTextSecondary)));
         row->addWidget(lbl);
         row->addStretch();
-        m_reflectedLabel = new QLabel(QStringLiteral("— W"), card);
+        m_reflectedLabel = new QLabel(QStringLiteral("– W"), card);
         m_reflectedLabel->setStyleSheet(QStringLiteral(
             "font-size: 10px; font-weight: bold; color: %1; border: none;"
         ).arg(QLatin1String(Style::kTextPrimary)));
@@ -550,7 +550,7 @@ void RadioStatusPage::buildConnectionCard(QFrame* card)
                                .arg(QLatin1String(Style::kTextSecondary)));
         row->addWidget(lbl);
         row->addStretch();
-        out = new QLabel(QStringLiteral("—"), card);
+        out = new QLabel(QStringLiteral("–"), card);
         out->setStyleSheet(QStringLiteral(
             "font-size: 10px; font-weight: bold; color: %1; border: none;"
         ).arg(QLatin1String(Style::kTextPrimary)));
@@ -702,8 +702,8 @@ void RadioStatusPage::onPowerChanged(double forward, double reflected, double sw
         m_reflectedLabel->setText(QStringLiteral("%1 W").arg(reflected, 0, 'f', 1));
         m_swrLabel->setText(QStringLiteral("%1:1").arg(swr, 0, 'f', 1));
     } else {
-        m_forwardLabel->setText(QStringLiteral("— W"));
-        m_reflectedLabel->setText(QStringLiteral("— W"));
+        m_forwardLabel->setText(QStringLiteral("– W"));
+        m_reflectedLabel->setText(QStringLiteral("– W"));
         m_swrLabel->setText(QStringLiteral("1.0:1"));
     }
 
@@ -781,7 +781,9 @@ void RadioStatusPage::onBwPollTick()
         ).arg(QLatin1String(Style::kTextPrimary)));
     }
 
-    m_bwSeqGapLabel->setText(QStringLiteral("—"));  // Phase 3L will fill this in
+    // R-R3-21: the EP6 sequence error count P1RadioConnection keeps (the
+    // Connection Quality page shows the same number).
+    m_bwSeqGapLabel->setText(QString::number(bw.ep6SequenceErrorCount()));
 }
 
 void RadioStatusPage::refreshPttPills()
@@ -818,7 +820,7 @@ void RadioStatusPage::refreshHygieneRows()
     const QVector<SettingsHygiene::Issue> issues = m_model->settingsHygiene().issues();
 
     if (issues.isEmpty()) {
-        auto* item = new QListWidgetItem(QStringLiteral("No issues found — settings are valid."));
+        auto* item = new QListWidgetItem(QStringLiteral("No issues found. Settings are valid."));
         item->setForeground(QColor(QLatin1String(Style::kGreenText)));
         m_issueList->addItem(item);
         return;
@@ -826,7 +828,7 @@ void RadioStatusPage::refreshHygieneRows()
 
     for (const auto& issue : issues) {
         auto* item = new QListWidgetItem(
-            QStringLiteral("[%1] %2 — %3")
+            QStringLiteral("[%1] %2: %3")
                 .arg(issue.severity == SettingsHygiene::Severity::Critical ? QStringLiteral("CRIT")
                      : issue.severity == SettingsHygiene::Severity::Warning ? QStringLiteral("WARN")
                      : QStringLiteral("INFO"),

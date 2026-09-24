@@ -102,6 +102,10 @@
 //                                    preserved verbatim from upstream
 //                                    `:146-178`. AI tooling:
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-21: the WSJT-X Spot Life slider
+//                                    reads and saves WsjtxSpotLifetimeSec,
+//                                    the name RadioModel reads. AI
+//                                    tooling: Anthropic Claude Code.
 
 #include "SpotHubDialog.h"
 
@@ -342,6 +346,77 @@ SpotHubDialog::SpotHubDialog(DxClusterClient* clusterClient,
 // RadioModel::restoreSpotClientAutoStartState now re-applies identity
 // from the User/* fall-back chain before calling startConnection(),
 // and skips the call entirely when no identity is configured.
+QString SpotHubDialog::identityError(const QString& call, const QString& grid)
+{
+    // Validate callsign.
+    if (call.isEmpty()) {
+        return QStringLiteral("Callsign is required.");
+    }
+    if (call.length() < 3 || call.length() > 12) {
+        return QStringLiteral("Callsign must be 3 to 12 characters.");
+    }
+    // Validate Maidenhead grid: 4 or 6 chars, alpha+digit pattern
+    // (e.g. EM73 or EM73XY). Reject anything else.
+    if (grid.length() != 4 && grid.length() != 6) {
+        return QStringLiteral("Grid must be 4 or 6 character Maidenhead (e.g. EM73 or EM73XY).");
+    }
+    return QString();
+}
+
+void SpotHubDialog::saveIdentity(const QString& call, const QString& gridSquare,
+                                 const QString& message)
+{
+    auto& settings = AppSettings::instance();
+    // Canonical keys.
+    settings.setValue("User/Callsign", call);
+    settings.setValue("User/GridSquare", gridSquare);
+    settings.setValue("FreeDvReporter/Message", message);
+    settings.setValue("User/IdentityLastSaved",
+                      QDateTime::currentDateTime().toString(Qt::ISODate));
+
+    // Propagate to legacy per-source keys. Existing per-source-tab
+    // readers (Cluster / RBN / PSK Reporter) keep reading their
+    // per-source key on construction; propagation keeps them in
+    // sync with the central Settings entry.
+    //
+    // 2026-05-12 (PR #238 review P2): PSK Reporter keys unified
+    // on the slash-key family RadioModel reads
+    // (RadioModel.cpp:1000-1004, :1575-1582).  Flat-key writes
+    // were orphaned (nothing read them on restore), so a user
+    // who saved identity via Save & Propagate, restarted the
+    // app, and clicked PSK Start without re-entering the PSK
+    // tab would emit IPFIX datagrams with empty receiver
+    // fields.  Flat keys retained for DxCluster / Rbn (unrelated).
+    settings.setValue("DxClusterCallsign", call);
+    settings.setValue("RbnCallsign", call);
+    settings.setValue("PskReporter/Callsign", call);
+    settings.setValue("PskReporter/GridSquare", gridSquare);
+    settings.setValue("FreeDvReporter/Callsign", call);
+    settings.setValue("FreeDvReporter/GridSquare", gridSquare);
+
+    settings.save();
+}
+
+void SpotHubDialog::applyIdentityToClients(FreeDVReporterClient* freedv,
+                                           PskReporterClient* psk,
+                                           const QString& call,
+                                           const QString& gridSquare,
+                                           const QString& message)
+{
+    // Push to live clients if non-null. A connection that is
+    // already up picks up the new identity without disconnect.
+    // Version string comes from CMake (NEREUSSDR_VERSION); the
+    // FreeDV / PSK Reporter pools want a versioned client tag.
+    const QString version =
+        QStringLiteral("NereusSDR/") + QStringLiteral(NEREUSSDR_VERSION);
+    if (freedv) {
+        freedv->setIdentity(call, gridSquare, message, version);
+    }
+    if (psk) {
+        psk->setIdentity(call, gridSquare, version);
+    }
+}
+
 void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
 {
     auto* page = new QWidget;
@@ -365,7 +440,7 @@ void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
         s.value("User/Callsign").toString().trimmed().isEmpty();
     if (needsFirstRunPrompt) {
         auto* firstRunBanner = new QLabel(
-            "First-time setup — enter your callsign and grid square "
+            "First-time setup: enter your callsign and grid square "
             "below.  Spot sources stay disconnected until your "
             "callsign is set.");
         firstRunBanner->setObjectName("settingsFirstRunBanner");
@@ -395,7 +470,7 @@ void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
         s.value("User/Callsign").toString());
     m_settingsCallEdit->setObjectName("settingsCallEdit");
     m_settingsCallEdit->setPlaceholderText(
-        "Enter Callsign Here (4-12 chars — required to publish spots)");
+        "Enter Callsign Here (4-12 characters, required to publish spots)");
     m_settingsCallEdit->setMaxLength(12);
     m_settingsCallEdit->setStyleSheet(kLineEditStyle);
     grid->addWidget(m_settingsCallEdit, row, 1);
@@ -406,7 +481,7 @@ void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
         s.value("User/GridSquare").toString());
     m_settingsGridEdit->setObjectName("settingsGridEdit");
     m_settingsGridEdit->setPlaceholderText(
-        "Enter Grid Here (Maidenhead — e.g. EM73 or EM73XY)");
+        "Enter Grid Here (Maidenhead, e.g. EM73 or EM73XY)");
     m_settingsGridEdit->setMaxLength(6);
     m_settingsGridEdit->setStyleSheet(kLineEditStyle);
     grid->addWidget(m_settingsGridEdit, row, 1);
@@ -465,66 +540,14 @@ void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
         m_settingsErrorLabel->clear();
         m_settingsSavedLabel->clear();
 
-        // Validate callsign.
-        if (call.isEmpty()) {
-            m_settingsErrorLabel->setText("Callsign is required.");
-            return;
-        }
-        if (call.length() < 3 || call.length() > 12) {
-            m_settingsErrorLabel->setText(
-                "Callsign must be 3 to 12 characters.");
-            return;
-        }
-        // Validate Maidenhead grid: 4 or 6 chars, alpha+digit pattern
-        // (e.g. EM73 or EM73XY). Reject anything else.
-        if (gridSquare.length() != 4 && gridSquare.length() != 6) {
-            m_settingsErrorLabel->setText(
-                "Grid must be 4 or 6 character Maidenhead (e.g. EM73 or EM73XY).");
+        const QString error = identityError(call, gridSquare);
+        if (!error.isEmpty()) {
+            m_settingsErrorLabel->setText(error);
             return;
         }
 
-        auto& settings = AppSettings::instance();
-        // Canonical keys.
-        settings.setValue("User/Callsign", call);
-        settings.setValue("User/GridSquare", gridSquare);
-        settings.setValue("FreeDvReporter/Message", message);
-        settings.setValue("User/IdentityLastSaved",
-                          QDateTime::currentDateTime().toString(Qt::ISODate));
-
-        // Propagate to legacy per-source keys. Existing per-source-tab
-        // readers (Cluster / RBN / PSK Reporter) keep reading their
-        // per-source key on construction; propagation keeps them in
-        // sync with the central Settings entry.
-        //
-        // 2026-05-12 (PR #238 review P2): PSK Reporter keys unified
-        // on the slash-key family RadioModel reads
-        // (RadioModel.cpp:1000-1004, :1575-1582).  Flat-key writes
-        // were orphaned (nothing read them on restore), so a user
-        // who saved identity via Save & Propagate, restarted the
-        // app, and clicked PSK Start without re-entering the PSK
-        // tab would emit IPFIX datagrams with empty receiver
-        // fields.  Flat keys retained for DxCluster / Rbn (unrelated).
-        settings.setValue("DxClusterCallsign", call);
-        settings.setValue("RbnCallsign", call);
-        settings.setValue("PskReporter/Callsign", call);
-        settings.setValue("PskReporter/GridSquare", gridSquare);
-        settings.setValue("FreeDvReporter/Callsign", call);
-        settings.setValue("FreeDvReporter/GridSquare", gridSquare);
-
-        settings.save();
-
-        // Push to live clients if non-null. A connection that is
-        // already up picks up the new identity without disconnect.
-        // Version string comes from CMake (NEREUSSDR_VERSION); the
-        // FreeDV / PSK Reporter pools want a versioned client tag.
-        const QString version =
-            QStringLiteral("NereusSDR/") + QStringLiteral(NEREUSSDR_VERSION);
-        if (m_freedvClient) {
-            m_freedvClient->setIdentity(call, gridSquare, message, version);
-        }
-        if (m_pskClient) {
-            m_pskClient->setIdentity(call, gridSquare, version);
-        }
+        saveIdentity(call, gridSquare, message);
+        applyIdentityToClients(m_freedvClient, m_pskClient, call, gridSquare, message);
         // 2026-05-12 bench fix #2: propagate the new identity into
         // each per-source tab's QLineEdit so the user sees the
         // change in every editable field, not just the Settings tab.
@@ -1334,7 +1357,9 @@ void SpotHubDialog::buildWsjtxTab(QTabWidget* tabs)
     lifeLabel->setStyleSheet("QLabel { color: #808080; font-size: 12px; }");
     decodeRow->addWidget(lifeLabel);
 
-    int wsjtxLife = s.value("WsjtxSpotLifetime", 120).toInt();
+    // R-R3-21: WsjtxSpotLifetimeSec is the name RadioModel reads; this
+    // saved WsjtxSpotLifetime, which nothing read (CoreInit migrates it).
+    int wsjtxLife = s.value("WsjtxSpotLifetimeSec", 120).toInt();
     auto* wsjtxLifeSlider = new QSlider(Qt::Horizontal);
     wsjtxLifeSlider->setObjectName("wsjtxLifeSlider");
     wsjtxLifeSlider->setRange(30, 300);
@@ -1351,7 +1376,7 @@ void SpotHubDialog::buildWsjtxTab(QTabWidget* tabs)
     connect(wsjtxLifeSlider, &QSlider::valueChanged, this, [wsjtxLifeValue](int v) {
         wsjtxLifeValue->setText(QString("%1s").arg(v));
         auto& settings = AppSettings::instance();
-        settings.setValue("WsjtxSpotLifetime", v);
+        settings.setValue("WsjtxSpotLifetimeSec", v);
         settings.save();
     });
     layout->addLayout(decodeRow);

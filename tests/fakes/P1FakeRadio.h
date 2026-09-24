@@ -49,6 +49,11 @@ public:
     // frames manually with sendEp6Frames(N).  Default is enabled.
     void setAutoStreamEnabled(bool enabled);
 
+    // Skip `count` ep6 sequence numbers, as a radio whose frames were lost
+    // on the way would appear: the next frame sent carries a number `count`
+    // past the one it would have had.
+    void skipEp6Sequence(quint32 count) { m_ep6Seq += count; }
+
     int  ep2FramesReceived() const { return m_ep2Count; }
     bool isRunning()         const { return m_running; }
     int  metisStopCount()    const { return m_stopCount; }

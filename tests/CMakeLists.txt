@@ -2368,7 +2368,7 @@ nereus_add_test(tst_band_plan_guard_mode_allow_list)
 #   MoxController::setMoxCheck(fn) + moxRejected(QString) signal.
 #
 # MoxController cases (8):
-#   1. CWL → moxRejected("CW TX coming in Phase 3M-2"); state stays Rx.
+#   1. CWL → moxRejected("CW transmit is not available yet"); state stays Rx.
 #   2. CWU → moxRejected with CW reason.
 #   3. AM  → accepted (AM/SAM/DSB TX enabled); FM still rejected.
 #   4. FM  → moxRejected with audio-modes reason.
@@ -2381,8 +2381,9 @@ nereus_add_test(tst_band_plan_guard_mode_allow_list)
 #
 # TxApplet::tooltipForMode static helper (12):
 #   USB/LSB/DIGL/DIGU → normal "Manual transmit (MOX)" tooltip.
-#   CWL/CWU → "CW TX coming in Phase 3M-2".
-#   AM/SAM/DSB → allowed; FM/DRM → "FM TX coming in Phase 3M-3b (pre-emphasis)".
+#   CWL/CWU → "CW transmit is not available yet".
+#   AM/SAM/DSB → allowed; FM → "FM transmit is not available yet";
+#   DRM → "DRM transmit is not available yet".
 #   SPEC → "Mode not supported for TX".
 #
 # Total: ~20 test cases. Uses QTEST_GUILESS_MAIN; no RadioModel required.
@@ -2599,6 +2600,10 @@ nereus_add_test(tst_remote_meter_poller)
 # R-R3-13: every numeric container meter item shows no reading (-400 dBm
 # sentinel or non-finite) as "--" and a real -140 dBm floor as a number.
 nereus_add_test(tst_meter_item_no_reading)
+# R-R3-21: the Compression reading's Thetis floor, the container bar and
+# the Phone/CW gauge mapping (reversed gauges: maximum is empty).
+nereus_add_test(tst_compression_reading)
+target_compile_definitions(tst_compression_reading PRIVATE NEREUS_BUILD_TESTS)
 
 # ── RX meter cal offset port (Thetis-faithful) ───────────────────────────────
 # Verifies the per-radio factory default lookup (rxMeterCalOffsetDefaultFor)
@@ -5740,7 +5745,7 @@ nereus_add_test(tst_radio_model_spot_wiring)
 # unit test (see tst_mainwindow_status_bar_safety for the established
 # isolate-the-logic pattern), so this suite pins the surrounding
 # contracts instead: dialog ctor signatures match RadioModel accessor
-# return types, SpotModel::clear (Ctrl+Shift+K) empties every row,
+# return types, SpotModel::clear (Ctrl+Shift+X) empties every row,
 # SpotHubDialog::spotsClearedAll routes into SpotModel::clear, and the
 # three FreeDVReporterDialog signals (qsyRequested,
 # messageSendRequested, tuneRequested) carry the right argument shape
@@ -5765,6 +5770,11 @@ nereus_add_test(tst_mainwindow_tools_spot_hub)
 # database.cs port, but the keys exercised here are all NereusSDR
 # additions for Phase 3J-2 + 3R.
 nereus_add_test(tst_spot_settings_round_trip)
+
+# R3 controls that work, Task 1 (R-R3-21): the Spot Hub's WSJT-X colour
+# swatches and Spot Life slider reach the spots RadioModel adds, and a
+# lifetime saved under the old WsjtxSpotLifetime name is migrated.
+nereus_add_test(tst_wsjtx_spot_settings)
 
 # ── Phase 3J-2 + 3R M2: SpotHub Display tab knobs end-to-end ───────────────
 # Pins the consumer side of the Display tab loop introduced by
@@ -6955,6 +6965,21 @@ nereus_add_test(tst_core_target_store)
 nereus_add_test(tst_station_startup_selection)
 nereus_add_test(tst_gui_session_coordinator)
 target_compile_definitions(tst_gui_session_coordinator PRIVATE NEREUS_BUILD_TESTS)
+# R3 controls that work, Task 1 (R-R3-21, R-R3-17): shortcut uniqueness in
+# local and remote windows, developer-only Tools test entries, startup
+# apply of saved meter settings, Band > HF band memory, the bundled DXCC
+# table, and Connection Quality's EP6 sequence gap count.
+nereus_add_test(tst_controls_that_work)
+target_compile_definitions(tst_controls_that_work PRIVATE NEREUS_BUILD_TESTS)
+# R3 controls that work, Task 2 (R-R3-21): menu entries, the Phone/CW
+# applet's transmit controls, container controls, the pan overlay's ATT
+# and zoom buttons and the status badges reach their existing features.
+nereus_add_test(tst_controls_connected)
+target_compile_definitions(tst_controls_connected PRIVATE NEREUS_BUILD_TESTS)
+# ...and the Setup controls: Startup & Preferences, DSP ANF / CW peak
+# filter / AM and FM squelch, Meter Styles S-meter, Logs, VAX level.
+nereus_add_test(tst_setup_controls_connected)
+target_compile_definitions(tst_setup_controls_connected PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_connection_selector)
 nereus_add_test(tst_station_lan_cache)
 nereus_add_test(tst_station_lan_transport)

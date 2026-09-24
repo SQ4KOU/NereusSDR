@@ -96,6 +96,12 @@ public:
     // is safe across server lifecycle changes.
     void setTciServer(class NereusSDR::TciServer* server);
 
+public:
+    // R-R3-21: the S-meter's face, peak hold or decay changed (its
+    // right-click menu); Appearance > Meter Styles shows the new values if
+    // it is open. MainWindow calls this.
+    void reloadMeterStyles();
+
 signals:
     void connectionsRequested();
     // Phase 3M-3a-ii Batch 6 (Task 3): forwarded from CfcSetupPage's
@@ -129,6 +135,12 @@ signals:
     // Task 3.6: forwarded from RadioInfoTab — ANAN-8000DLE volts/amps toggle.
     // MainWindow::setVoltsAmpsVisible() is the handler.
     void anan8000DleVoltsAmpsChanged(bool visible);
+
+    // R-R3-21: forwarded from Appearance > Meter Styles. MainWindow applies
+    // them to the S-meter on screen.
+    void sMeterFaceChanged(int faceStyle);
+    void sMeterPeakHoldChanged(bool enabled);
+    void sMeterPeakDecayChanged(const QString& rate);
 
     // Phase 3P-II Phase 4 Task 95: forwarded from TgxlAdvancedPage::antennaLabelChanged.
     // MainWindow::wireSetupDialog connects this to TunerApplet::onAntennaLabelChanged.

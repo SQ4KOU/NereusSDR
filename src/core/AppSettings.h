@@ -12,6 +12,9 @@
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
 //                 AppSettings XML persistence: key/value semantics (PascalCase keys, True/False string booleans, per-StationName nesting) port Thetis database.cs SaveVarsDictionary/RestoreVarsDictionary pattern; QXmlStream file I/O skeleton follows AetherSDR `src/core/AppSettings.{h,cpp}`.
+//   2026-09-23 - R-R3-21: migrateRenamedKeys() one-shot rename for keys
+//                 whose writer and reader disagreed (WsjtxSpotLifetime).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -447,6 +450,10 @@ public:
     // Save (or update) a radio entry. Overwrites if macKey already exists.
     // Does NOT call save() — caller must save() or rely on shutdown flush.
     void saveRadio(const RadioInfo& info, bool pinToMac, bool autoConnect);
+    // R-R3-21: changes only a saved radio's auto-connect flag (saveRadio
+    // would also rewrite its other fields and its lastSeen time). No-op for
+    // a radio that is not saved.
+    void setRadioAutoConnect(const QString& macKey, bool autoConnect);
 
     // Remove the entry for macKey. No-op if not found.
     void forgetRadio(const QString& macKey);
@@ -675,6 +682,26 @@ public:
     // one-shot removes the orphan key so it doesn't linger in users'
     // settings files after upgrade.  Idempotent (no-op if key absent).
     static void removeOrphanOcN2adrFilter(AppSettings& s);
+
+    // R-R3-21: Setup's Penny Ext Control checkbox used to save a global
+    // "hardware/oc/pennyExtCtrl" that nothing read; PennyLaneController
+    // reads per-MAC "hardware/<mac>/penny/extCtrlEnabled". Copies the
+    // global value to every saved radio that has no value of its own, then
+    // removes the global key (kept while no radio is saved, or while a
+    // manual radio is saved without its real MAC, so a later launch can
+    // still carry it over), so a radio added later starts
+    // at Thetis's default (True) instead of the old global value.
+    // Same shape as migrateLegacyN2adrFilter. Idempotent.
+    static void migrateLegacyPennyExtCtrl(AppSettings& s);
+
+    // R-R3-21: one-shot renames for settings whose writer and reader used
+    // different names, so the saved value was never read. Each old name is
+    // read once and written under the name everything now uses, then
+    // removed; a value already saved under the new name wins. Idempotent.
+    //   WsjtxSpotLifetime -> WsjtxSpotLifetimeSec (Spot Hub WSJT-X Spot Life)
+    // Penny Ext Control's rename is per radio and happens in
+    // PennyLaneController::load().
+    static void migrateRenamedKeys(AppSettings& s);
 
 private:
     // Private default constructor — used only by instance().

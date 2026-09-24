@@ -161,7 +161,7 @@ void TestBandPlanGuardModeAllowList::cwl_checkMox_reasonIsCwPhase()
     auto r = guard.checkMoxAllowed(kRegion, kValidHz, DSPMode::CWL,
                                    kBand20m, kBand20m, false, false);
     QVERIFY(!r.ok);
-    QCOMPARE(r.reason, QStringLiteral("CW TX coming in Phase 3M-2"));
+    QCOMPARE(r.reason, QStringLiteral("CW transmit is not available yet"));
 }
 
 void TestBandPlanGuardModeAllowList::cwu_checkMox_reasonIsCwPhase()
@@ -170,7 +170,7 @@ void TestBandPlanGuardModeAllowList::cwu_checkMox_reasonIsCwPhase()
     auto r = guard.checkMoxAllowed(kRegion, kValidHz, DSPMode::CWU,
                                    kBand20m, kBand20m, false, false);
     QVERIFY(!r.ok);
-    QCOMPARE(r.reason, QStringLiteral("CW TX coming in Phase 3M-2"));
+    QCOMPARE(r.reason, QStringLiteral("CW transmit is not available yet"));
 }
 
 void TestBandPlanGuardModeAllowList::am_checkMox_isAllowed()
@@ -206,7 +206,7 @@ void TestBandPlanGuardModeAllowList::fm_checkMox_reasonIsAudioModes()
     auto r = guard.checkMoxAllowed(kRegion, kValidHz, DSPMode::FM,
                                    kBand20m, kBand20m, false, false);
     QVERIFY(!r.ok);
-    QCOMPARE(r.reason, QStringLiteral("FM TX coming in Phase 3M-3b (pre-emphasis)"));
+    QCOMPARE(r.reason, QStringLiteral("FM transmit is not available yet"));
 }
 
 void TestBandPlanGuardModeAllowList::drm_checkMox_reasonIsAudioModes()
@@ -215,7 +215,7 @@ void TestBandPlanGuardModeAllowList::drm_checkMox_reasonIsAudioModes()
     auto r = guard.checkMoxAllowed(kRegion, kValidHz, DSPMode::DRM,
                                    kBand20m, kBand20m, false, false);
     QVERIFY(!r.ok);
-    QCOMPARE(r.reason, QStringLiteral("FM TX coming in Phase 3M-3b (pre-emphasis)"));
+    QCOMPARE(r.reason, QStringLiteral("DRM transmit is not available yet"));
 }
 
 void TestBandPlanGuardModeAllowList::spec_checkMox_reasonIsNotSupported()
@@ -272,7 +272,7 @@ void TestBandPlanGuardModeAllowList::lsb_crossBandTx_returnsBandReject()
     auto r = guard.checkMoxAllowed(kRegion, kValidHz, DSPMode::LSB,
                                    kBand20m, Band::Band40m, /*preventDifferentBand=*/true, false);
     QVERIFY(!r.ok);
-    QCOMPARE(r.reason, QStringLiteral("RX/TX band mismatch — cross-band TX disabled"));
+    QCOMPARE(r.reason, QStringLiteral("RX/TX band mismatch: cross-band TX disabled"));
 }
 
 QTEST_GUILESS_MAIN(TestBandPlanGuardModeAllowList)

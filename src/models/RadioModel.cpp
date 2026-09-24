@@ -108,6 +108,10 @@
 //                 restores its attenuator and preamp and sends them to the
 //                 radio (Thetis console.cs:17325 [v2.10.3.15]). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-21: onWsjtxSpotReceived colours each decode with the
+//                 Spot Hub's WSJT-X swatch for its kind (AetherSDR
+//                 MainWindow_Spots.cpp [@1e0718ad]). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-23 - R-R3-46 fix wave: attenuator follows slice A, ioBoard,
 //                 OC reload, torn load reads, remote meter offset 0. J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -2643,10 +2647,38 @@ void RadioModel::onWsjtxSpotReceived(const DxSpot& spot)
     // WSJT-X spots are real-time and dense; AetherSDR's
     // DxClusterDialog.cpp:1201 [@0cd4559] defaults to 120 s lifetime for
     // the dialog's UI, so reuse that here.
+    // R-R3-21: the Spot Hub's Spot Life slider saves WsjtxSpotLifetimeSec
+    // (it saved WsjtxSpotLifetime, which nothing read; CoreInit migrates it).
     const int lifetime = s.value(QStringLiteral("WsjtxSpotLifetimeSec"),
                                  120).toInt();
-    const QString color = s.value(QStringLiteral("WsjtxSpotColor"),
-                                  QStringLiteral("#00FF00")).toString();
+    // R-R3-21: the colour the Spot Hub's WSJT-X swatches saved for this
+    // decode's kind. This read a WsjtxSpotColor that nothing wrote.
+    // From AetherSDR src/gui/MainWindow_Spots.cpp:585-622 [@1e0718ad]:
+    // calling me, then CQ POTA, then CQ, then the default. AetherSDR's
+    // WsjtxFilter* gating in the same block is not ported here.
+    const QString& msg = spot.comment;
+    const bool isCQ = msg.startsWith(QStringLiteral("CQ "));
+    const bool isPOTA = msg.contains(QStringLiteral("CQ POTA"));
+    bool isCallingMe = false;
+    {
+        const QString myCall = s.value(QStringLiteral("DxClusterCallsign")).toString();
+        if (!myCall.isEmpty()) {
+            const QStringList parts = msg.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            if (parts.size() >= 2 && parts[0] == myCall) {
+                isCallingMe = true;
+            }
+        }
+    }
+    QString color;
+    if (isCallingMe) {
+        color = s.value(QStringLiteral("WsjtxColorCallingMe"), QStringLiteral("#FF0000")).toString();
+    } else if (isPOTA) {
+        color = s.value(QStringLiteral("WsjtxColorPOTA"), QStringLiteral("#00FFFF")).toString();
+    } else if (isCQ) {
+        color = s.value(QStringLiteral("WsjtxColorCQ"), QStringLiteral("#00FF00")).toString();
+    } else {
+        color = s.value(QStringLiteral("WsjtxColorDefault"), QStringLiteral("#FFFFFF")).toString();
+    }
     const int idx = m_spotModel->dedupIndexFor(spot.dxCall, spot.freqMhz);
     m_spotModel->applySpotStatus(idx, kvsFromSpot(spot, lifetime, color));
 
@@ -7993,7 +8025,7 @@ void RadioModel::onBandButtonClicked(Band band)
         // saveToSettings(newBand) baked that stale freq into the new
         // band's slot. Full short-circuit is simpler and matches the
         // common user mental model of "lock = slice is inert".
-        const QString reason = QStringLiteral("Band %1 ignored: slice is locked — unlock to change bands")
+        const QString reason = QStringLiteral("Band %1 ignored: the slice is locked. Unlock it to change bands.")
                                    .arg(bandLabel(band));
         qCDebug(lcConnection) << reason;
         emit bandClickIgnored(band, reason);
@@ -12682,8 +12714,7 @@ void RadioModel::wireSliceSignals(SliceModel* slice)
         if (rxCh) {
             // From Thetis setup.cs:17071 — freq = CWPitch + tuneOffset
             // CW pitch default 600 Hz from Thetis console.cs
-            static constexpr double kCwPitchHz = 600.0;
-            rxCh->setApfFreq(kCwPitchHz + static_cast<double>(hz));
+            rxCh->setApfFreq(static_cast<double>(kApfCwPitchHz) + static_cast<double>(hz));
         }
         scheduleSettingsSave();
     });
@@ -17028,11 +17059,11 @@ void RadioModel::onMoxHardwareFlipped(bool isTx)
 QString RadioModel::connectionUptimeText() const
 {
     if (!m_connectionStartedAt.isValid()) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     const qint64 elapsedSec = m_connectionStartedAt.secsTo(QDateTime::currentDateTime());
     if (elapsedSec < 0) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     const qint64 h  = elapsedSec / 3600;
     const qint64 m  = (elapsedSec % 3600) / 60;
@@ -17051,7 +17082,7 @@ QString RadioModel::connectionUptimeText() const
 QString RadioModel::connectedRadioName() const
 {
     if (!isConnected() || m_lastRadioInfo.name.isEmpty()) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     return m_lastRadioInfo.name;
 }
@@ -17059,7 +17090,7 @@ QString RadioModel::connectedRadioName() const
 QString RadioModel::connectionProtocolText() const
 {
     if (!isConnected()) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     return QString::number(static_cast<int>(m_lastRadioInfo.protocol));
 }
@@ -17067,7 +17098,7 @@ QString RadioModel::connectionProtocolText() const
 QString RadioModel::connectionFirmwareText() const
 {
     if (!isConnected() || m_lastRadioInfo.firmwareVersion <= 0) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     return QStringLiteral("v") + QString::number(m_lastRadioInfo.firmwareVersion);
 }
@@ -17075,7 +17106,7 @@ QString RadioModel::connectionFirmwareText() const
 QString RadioModel::connectionIpText() const
 {
     if (!isConnected()) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     return m_lastRadioInfo.address.toString()
            + QStringLiteral(" : ")
@@ -17085,7 +17116,7 @@ QString RadioModel::connectionIpText() const
 QString RadioModel::connectionMacText() const
 {
     if (!isConnected() || m_lastRadioInfo.macAddress.isEmpty()) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     return m_lastRadioInfo.macAddress;
 }
@@ -17099,7 +17130,7 @@ QString RadioModel::connectionSampleRateText() const
 {
     const int rateHz = connectionSampleRateHz();
     if (rateHz <= 0) {
-        return QStringLiteral("—");
+        return QStringLiteral("–");
     }
     if (rateHz % 1000 == 0) {
         return QString::number(rateHz / 1000) + QStringLiteral(" kHz");
@@ -17839,7 +17870,7 @@ QString RadioModel::buildConnectionTooltip() const
     const double rxMbps = m_connection ? m_connection->rxByteRate(1000) : 0.0;
 
     QString lines;
-    lines += QStringLiteral("%1 — Connected %2\n")
+    lines += QStringLiteral("%1, connected %2\n")
                  .arg(connectedRadioName(), connectionUptimeText());
     lines += QStringLiteral("  %1 · %2\n")
                  .arg(connectionIpText(), connectionMacText());

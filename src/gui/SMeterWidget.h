@@ -58,6 +58,11 @@
 //                 rxSUnitsReadout() / rxDbmReadout() / peakMarkerVisible() /
 //                 peakHoldLineVisible() hold the readout text and marker
 //                 conditions both faces share.  Test seams added.
+//   2026-09-24  settingsChanged() signal (R-R3-21) by J.J. Boyd (KG4VCF),
+//                 with AI-assisted transformation via Anthropic Claude Code:
+//                 emitted when the face, peak hold or peak decay changes, so
+//                 Setup > Appearance > Meter Styles follows a right-click
+//                 change while it is open.
 //                 NereusSDR-native; no upstream equivalent.
 // =================================================================
 #pragma once
@@ -174,6 +179,11 @@ public:
     float testNeedleTarget() const { return m_targetNeedleFraction; }
     float testNeedleFraction() const { return m_needleFraction; }
 
+signals:
+    // R-R3-21: the face, peak hold or peak decay changed (and was saved),
+    // from the right-click menu or from Setup.
+    void settingsChanged();
+
 public slots:
     // Update the displayed RX level (S-meter dBm).
     // From AetherSDR src/gui/SMeterWidget.h:38 [@0cd4559]
@@ -213,6 +223,13 @@ public slots:
     // NereusSDR-native; no upstream equivalent.
     void setFaceStyle(FaceStyle style);
 
+    // Persisted name <-> enum for SMeter_FaceStyle, and the menu label.
+    // Public for Setup > Appearance > Meter Styles, which offers the same
+    // faces (R-R3-21).
+    static QString faceStyleKey(FaceStyle style);
+    static FaceStyle faceStyleFromKey(const QString& key);
+    static QString faceStyleLabel(FaceStyle style);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
     // Right-click context menu delegates to buildContextMenu().
@@ -227,10 +244,6 @@ private:
     void paintClassic(QPainter& p);
     void paintVintage(QPainter& p);
 
-    // Persisted name <-> enum for SMeter_FaceStyle, and the menu label.
-    static QString faceStyleKey(FaceStyle style);
-    static FaceStyle faceStyleFromKey(const QString& key);
-    static QString faceStyleLabel(FaceStyle style);
 
     void updateNeedleTarget();
     void animateNeedle();

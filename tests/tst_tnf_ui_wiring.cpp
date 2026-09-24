@@ -321,7 +321,8 @@ private slots:
             QKeySequence(QStringLiteral("Ctrl+Shift+R")),
             QKeySequence(QStringLiteral("Ctrl+Shift+D")),
             QKeySequence(Qt::CTRL | Qt::Key_X),
-            QKeySequence(QStringLiteral("Ctrl+Shift+K")),
+            // Clear all spots (R-R3-21: was a second Ctrl+Shift+K).
+            QKeySequence(QStringLiteral("Ctrl+Shift+X")),
         };
         QVERIFY2(!taken.contains(MainWindow::tnfToggleShortcut()),
                  "TNF accelerator collides with one MainWindow already "

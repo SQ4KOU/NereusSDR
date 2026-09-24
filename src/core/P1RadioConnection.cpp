@@ -17,6 +17,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - R-R3-21: EP6 sequence error count ported from Thetis
+//                 networkproto1.c MetisReadDirect [v2.10.3.15] for
+//                 Diagnostics > Connection Quality. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -2643,6 +2647,27 @@ void P1RadioConnection::onReadyRead()
             // Shell-chrome sub-PR-2 B.1: record ingress bytes for ▼ Mbps readout.
             recordBytesReceived(static_cast<qint64>(data.size()));
 
+            // R-R3-21: EP6 sequence gaps, the count Diagnostics > Connection
+            // Quality names. From Thetis networkproto1.c:171-194 MetisReadDirect
+            // [v2.10.3.15]: an EF FE 01 frame for endpoint 6 carries its
+            // sequence number big-endian in bytes 4-7; each frame whose
+            // number is not one past the last counts one error:
+            //   if (seqnum != (1 + MetisLastRecvSeq)) {
+            //       SeqError += 1;
+            //   }
+            //   MetisLastRecvSeq = seqnum;
+            {
+                const auto* hdr = reinterpret_cast<const quint8*>(data.constData());
+                if (hdr[0] == 0xEF && hdr[1] == 0xFE && hdr[2] == 0x01 && hdr[3] == 0x06) {
+                    const quint32 seqnum = (quint32(hdr[4]) << 24) | (quint32(hdr[5]) << 16)
+                                         | (quint32(hdr[6]) << 8)  |  quint32(hdr[7]);
+                    if (seqnum != (1 + m_ep6LastRecvSeq)) {
+                        if (m_bwMonitor) { m_bwMonitor->recordEp6SequenceError(); }
+                    }
+                    m_ep6LastRecvSeq = seqnum;
+                }
+            }
+
             parseEp6Frame(data);
         }
     }
@@ -2860,8 +2885,8 @@ void P1RadioConnection::onConnectTimeout()
     setState(ConnectionState::Disconnected);
 
     emit connectFailed(ConnectFailure::Timeout,
-                       QStringLiteral("No response from radio within %1 ms — "
-                                      "check IP address, radio power, and network")
+                       QStringLiteral("No response from radio within %1 ms. Check the "
+                                      "IP address, radio power and network.")
                            .arg(kConnectTimeoutMs));
 }
 
@@ -4013,7 +4038,7 @@ void P1RadioConnection::hl2CheckBandwidthMonitor()
                                     << "watchdog ticks;"
                                     << "throttle events:" << m_bwMonitor->throttleEventCount();
             emit errorOccurred(RadioConnectionError::None,
-                               QStringLiteral("HL2 LAN throttled — pausing ep2"));
+                               QStringLiteral("The Hermes Lite 2 asked for a pause because its network link is busy."));
         } else if (!nowThrottled && m_hl2Throttled) {
             m_hl2Throttled = false;
             qCInfo(lcConnection) << "HL2: LAN throttle cleared — ep6 stream resumed";
@@ -4046,7 +4071,7 @@ void P1RadioConnection::hl2CheckBandwidthMonitor()
                                     << m_hl2ThrottleCount << "watchdog ticks;"
                                     << "pausing ep2 command frames";
             emit errorOccurred(RadioConnectionError::None,
-                               QStringLiteral("HL2 LAN throttled — pausing ep2"));
+                               QStringLiteral("The Hermes Lite 2 asked for a pause because its network link is busy."));
         }
     } else {
         // Sequence advanced — clear throttle.

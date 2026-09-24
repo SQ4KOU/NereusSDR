@@ -140,6 +140,7 @@
 #include <memory>
 
 #include "core/AppSettings.h"
+#include "core/BuildIdentity.h"
 #include "core/AudioEngine.h"
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
@@ -1870,6 +1871,7 @@ private slots:
         // Import have no Core controls and are ThisComputer (R3 Setup fix
         // wave, final review I4); so is VAX (R-R3-44).
         const QMap<QString, int> coreControls{
+            {QStringLiteral("Startup & Preferences"), 2}, // callsign, grid (R-R3-21)
             {QStringLiteral("Options"), 1},             // General: Region
             {QStringLiteral("Spectrum Defaults"), 5},   // FFT size, window, Hz/bin, fps x2
             {QStringLiteral("Grid & Scales"), 3},       // dB max, dB min, copy
@@ -3572,6 +3574,10 @@ private slots:
     // ====================================================================
     void toolsMenuTestEntriesAreDisabledInARemoteSession()
     {
+        // R-R3-21: the test entries exist only in developer builds, which
+        // carry a smoke-build tag (tst_controls_that_work covers release).
+        BuildIdentity::setBuildTag(QStringLiteral("test@0000000"));
+        const auto clearBuildTag = qScopeGuard([] { BuildIdentity::setBuildTag(QString()); });
         // The arrangement tst_gui_session_coordinator makes first: no VAX
         // first-run dialog, and no discovery broadcast from the local
         // windows onto the LAN.
