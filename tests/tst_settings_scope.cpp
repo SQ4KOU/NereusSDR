@@ -577,6 +577,18 @@ private slots:
             << QStringLiteral("TciEmulateSunSDR2Pro") << int(SettingsScope::OperatorLocal);
         QTest::newRow("TciSliceAGain is OperatorLocal (the TCI applet's gain slider)")
             << QStringLiteral("TciSliceAGain") << int(SettingsScope::OperatorLocal);
+        // R-R3-44: a remote window's VAX channel per Core and slice is this
+        // computer's (RemoteVaxRouter::settingsKey); the Core's own
+        // Slice<N>/VaxChannel stays the Core's.
+        QTest::newRow("RemoteVax/<core>/Slice1/Channel is OperatorLocal (this computer's VAX)")
+            << QStringLiteral("RemoteVax/3f1a9c0d22b4e6f7/Slice1/Channel")
+            << int(SettingsScope::OperatorLocal);
+        QTest::newRow("Slice1/VaxChannel is Station (the Core's own VAX)")
+            << QStringLiteral("Slice1/VaxChannel") << int(SettingsScope::Station);
+        QTest::newRow("audio/Vax1/RxGain is OperatorLocal (this computer's VAX gain)")
+            << QStringLiteral("audio/Vax1/RxGain") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("audio/Vax1/Muted is OperatorLocal (this computer's VAX mute)")
+            << QStringLiteral("audio/Vax1/Muted") << int(SettingsScope::OperatorLocal);
         QTest::newRow("TciLogWindowGeometry is OperatorLocal (GUI dialog geometry)")
             << QStringLiteral("TciLogWindowGeometry") << int(SettingsScope::OperatorLocal);
         QTest::newRow("hardware/oc/pennyExtCtrl is Station (oc is a literal segment, not a MAC)")
@@ -866,6 +878,25 @@ private slots:
         QVERIFY2(offenders.isEmpty(),
                  qPrintable(QStringLiteral("ThisComputer Setup pages write the Core's settings: %1")
                                 .arg(offenders.join(QStringLiteral(", ")))));
+    }
+
+    // R-R3-44: Audio > VAX is a ThisComputer page, so the sweep above
+    // covers every key its class writes.
+    void vaxPageIsSweptAsThisComputers()
+    {
+        const QString root = QStringLiteral(NEREUS_SOURCE_DIR);
+        QFile dialog(root + QStringLiteral("/src/gui/SetupDialog.cpp"));
+        QVERIFY(dialog.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QList<ThisComputerPage> pages =
+            thisComputerPages(QString::fromUtf8(dialog.readAll()));
+        bool found = false;
+        for (const ThisComputerPage& page : pages) {
+            if (page.label == QStringLiteral("VAX")) {
+                found = true;
+                QVERIFY(page.classes.contains(QStringLiteral("AudioVaxPage")));
+            }
+        }
+        QVERIFY2(found, "Audio > VAX is not registered ThisComputer");
     }
 
     // The sweep above must be able to fail: a Core key in a ThisComputer

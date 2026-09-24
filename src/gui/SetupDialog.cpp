@@ -90,6 +90,11 @@
 //                 CAT & Network > TCI Server are ThisComputer and work in a
 //                 remote window. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-23: R3 receiver audio plan, Task 5 (R-R3-44). Audio > VAX is
+//                 ThisComputer and Audio > Advanced reaches this computer's
+//                 engine, so both work in a remote window. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -1099,7 +1104,11 @@ void SetupDialog::buildTree()
     // longer a whole-page transmit leaf.
     registerPage(audio, "TX Input", SetupScope::Mixed,  // I.1
                  [this] { return wrapWithAudioBackendStrip(new AudioTxInputPage(m_model)); });
-    registerPage(audio, "VAX", SetupScope::Mixed,
+    // R-R3-44: the VAX channels are this computer's in a remote window as in
+    // a local one (a remote window feeds them from the Core's receiver
+    // streams), and the page writes only this computer's audio/Vax* keys,
+    // so it works in every window, connected or not.
+    registerPage(audio, "VAX", SetupScope::ThisComputer,
                  [this] { return wrapWithAudioBackendStrip(new AudioVaxPage(m_model)); });
     // R-R3-42: Audio > TCI configures the TCI server that runs on this
     // computer, in a remote window as in a local one, and its keys are this
@@ -1108,6 +1117,10 @@ void SetupDialog::buildTree()
     // window, connected or not.
     registerPage(audio, "TCI", SetupScope::ThisComputer,
                  [this] { return wrapWithAudioBackendStrip(new AudioTciPage(m_model)); });
+    // R-R3-44: Mixed. Its VAX groups (VAX feedback tuning, the VAX flags,
+    // detected cables, Reset) are this computer's and work in a remote
+    // window; the DSP group writes the Core's audio/DspRate and
+    // audio/DspBlockSize and follows the Core's settings availability.
     registerPage(audio, "Advanced", SetupScope::Mixed,
                  [this] { return wrapWithAudioBackendStrip(new AudioAdvancedPage(m_model)); });
     // Phase 3M-1c J.3: TX Profile editor.

@@ -26,6 +26,11 @@
 //                                    model while limited asks for a retry.
 //                                    NereusSDR-original. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-44: setVaxChannelStore(); with a
+//                                    store set, setVaxChannel() keeps the
+//                                    channel there and writes no setting.
+//                                    NereusSDR-original. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2880,11 +2885,21 @@ void SliceModel::setVaxChannel(int ch)
     const int prev = m_vaxChannel.exchange(ch, std::memory_order_acq_rel);
     if (prev == ch) { return; }
 
-    AppSettings::instance().setValue(
-        slicePrefix(m_sliceIndex) + QStringLiteral("VaxChannel"),
-        QString::number(ch));
+    if (m_vaxChannelStore) {
+        // R-R3-44: a remote window keeps it on this computer.
+        m_vaxChannelStore(m_sliceIndex, ch);
+    } else {
+        AppSettings::instance().setValue(
+            slicePrefix(m_sliceIndex) + QStringLiteral("VaxChannel"),
+            QString::number(ch));
+    }
 
     emit vaxChannelChanged(ch);
+}
+
+void SliceModel::setVaxChannelStore(VaxChannelStore store)
+{
+    m_vaxChannelStore = std::move(store);
 }
 
 // ── Phase 3J-2 Task D5: per-slice live SNR (NereusSDR-native) ──

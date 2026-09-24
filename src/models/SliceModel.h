@@ -21,6 +21,10 @@
 //   2026-09-23 : R-R3-40 runtime NNR limit (nnrLimit, nnrRetryRequested),
 //                 by J.J. Boyd (KG4VCF), with Anthropic Claude Code
 //                 assistance.
+//   2026-09-23 : R-R3-44 setVaxChannelStore(): in a remote window a
+//                 slice's VAX channel is this computer's, never the Core's
+//                 Slice<N>/VaxChannel. By J.J. Boyd (KG4VCF), with
+//                 Anthropic Claude Code assistance.
 // =================================================================
 
 //=================================================================
@@ -1142,6 +1146,14 @@ public:
     int vaxChannel() const { return m_vaxChannel.load(std::memory_order_acquire); }
     void setVaxChannel(int ch);
 
+    // R-R3-44: where setVaxChannel() keeps the channel. Unset (a local
+    // window), it writes Slice<N>/VaxChannel as before. Set, it calls the
+    // store instead and writes no setting: a remote window's RadioModel
+    // installs one on every slice, because the Core's Slice<N>/VaxChannel
+    // is the Core computer's VAX, not this one's. Owner thread.
+    using VaxChannelStore = std::function<void(int sliceIndex, int channel)>;
+    void setVaxChannelStore(VaxChannelStore store);
+
     // ── Phase 3J-2 Task D5: per-slice live SNR (NereusSDR-native) ──
     // NaN sentinel means "no SNR available." setSnrDb() emits
     // snrDbChanged only on actual change: NaN -> NaN is a no-op,
@@ -1510,6 +1522,7 @@ private:
 
     // ── Phase 3O VAX routing ──────────────────────────────────────────────────
     std::atomic<int> m_vaxChannel{0};  // 0=Off, 1..4=VAX N. Atomic for audio-thread-safe reads.
+    VaxChannelStore m_vaxChannelStore;  // R-R3-44: see setVaxChannelStore()
 
     // ── Phase 3J-2 Task D5: live SNR (NereusSDR-native) ──
     // Default NaN means "no SNR available." Populated by RadeChannel

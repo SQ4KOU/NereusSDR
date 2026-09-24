@@ -12,6 +12,12 @@
 // exposed to the system — not a device the user picks. DeviceCard 7-row
 // form removed from visible layout; replaced with PipeWire-era info rows.
 // DeviceCard retained hidden for API compatibility.
+//
+// 2026-09-23 (R-R3-44): J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+// Claude Code. The engine comes from RadioModel::localAudioDevices(): the
+// VAX channels are this computer's in a remote window as in a local one,
+// so the page works there. The "Consumers:" row shows whether an app is
+// reading each channel where the platform reports it.
 // =================================================================
 
 #include "AudioVaxPage.h"
@@ -33,6 +39,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -266,13 +273,14 @@ VaxChannelCard::VaxChannelCard(int channel, QWidget* parent)
         auto* consumersLbl = new QLabel(tr("Consumers:"), this);
         consumersLbl->setStyleSheet(
             QStringLiteral("QLabel { color: #607080; font-size: 11px; }"));
-        m_consumerLabel = new QLabel(
-            // TODO(later-task): wire live consumer count from engine's
-            // owned PipeWireBus collection via Task 24+ accessor.
-            QStringLiteral("—"), this);
+        // R-R3-44: whether an app is reading this channel, where the
+        // platform reports it (AudioVaxPage::refreshReaders).
+        m_consumerLabel = new QLabel(this);
+        m_consumerLabel->setObjectName(QStringLiteral("vaxConsumerLabel"));
         m_consumerLabel->setStyleSheet(QLatin1String(kSpecRowPlaceholderStyle));
-        m_consumerLabel->setToolTip(tr("Live consumer count not yet wired "
-                                       "(deferred to Task 24+)."));
+        m_consumerLabel->setToolTip(tr("Whether an app such as WSJT-X has this "
+                                       "VAX channel open."));
+        setReaderState(std::nullopt);
         form->addRow(consumersLbl, m_consumerLabel);
 
         // "Level:" HGauge row.
@@ -448,6 +456,25 @@ void VaxChannelCard::onInnerEnabledChanged(bool on)
     }
     updateBadge();
     emit enabledChanged(m_channel, on);
+}
+
+void VaxChannelCard::setReaderState(std::optional<bool> reading)
+{
+    if (!m_consumerLabel) {
+        return;
+    }
+    if (!reading) {
+        m_consumerLabel->setText(tr("Not reported on this computer"));
+    } else if (*reading) {
+        m_consumerLabel->setText(tr("An app is reading this channel"));
+    } else {
+        m_consumerLabel->setText(tr("No app is reading this channel"));
+    }
+}
+
+QString VaxChannelCard::readerText() const
+{
+    return m_consumerLabel ? m_consumerLabel->text() : QString();
 }
 
 void VaxChannelCard::setBusOpen(bool open)
@@ -836,10 +863,24 @@ void VaxChannelCard::onAutoDetectClicked()
 // ---------------------------------------------------------------------------
 AudioVaxPage::AudioVaxPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("VAX"), model, parent)
-    , m_engine(model ? model->audioEngine() : nullptr)
+    // R-R3-44: this computer's VAX outputs, live in a remote window too.
+    , m_engine(model ? model->localAudioDevices() : nullptr)
 {
     buildPage();
     wirePillFeedback();
+    refreshReaders();
+    auto* readerTimer = new QTimer(this);
+    readerTimer->setInterval(1000);
+    connect(readerTimer, &QTimer::timeout, this, &AudioVaxPage::refreshReaders);
+    readerTimer->start();
+}
+
+void AudioVaxPage::refreshReaders()
+{
+    for (int i = 0; i < m_channelCards.size(); ++i) {
+        m_channelCards[i]->setReaderState(
+            m_engine ? m_engine->vaxOutputHasReader(i + 1) : std::nullopt);
+    }
 }
 
 void AudioVaxPage::buildPage()

@@ -13,6 +13,12 @@
 // removes only this computer's audio/* keys (never a key the Core holds,
 // such as audio/DspRate and audio/DspBlockSize) and recreates no VAX
 // outputs; local Reset is unchanged.
+//
+// 2026-09-23: R-R3-44 by J.J. Boyd (KG4VCF), with AI-assisted
+// implementation via Anthropic Claude Code. Usable in a remote window: the
+// engine comes from RadioModel::localAudioDevices() (the VAX groups are
+// this computer's), the DSP group follows the Core's settings
+// availability, and Send IQ to VAX is refused there with a plain reason.
 // =================================================================
 
 #include "AudioAdvancedPage.h"
@@ -93,7 +99,8 @@ static const char* kComboStyle =
 
 AudioAdvancedPage::AudioAdvancedPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("Advanced"), model, parent)
-    , m_engine(model ? model->audioEngine() : nullptr)
+    // R-R3-44: this computer's engine, live in a remote window too.
+    , m_engine(model ? model->localAudioDevices() : nullptr)
 {
     buildDspSection();
     buildVacFeedbackSection();
@@ -181,6 +188,16 @@ void AudioAdvancedPage::loadDspSettings()
 
     const int blockIdx = m_dspBlockCombo->findData(block);
     if (blockIdx >= 0) { m_dspBlockCombo->setCurrentIndex(blockIdx); }
+}
+
+QString AudioAdvancedPage::remoteSendIqReason()
+{
+    return tr("Sending the receiver's I/Q to VAX is not available while connected to a Core.");
+}
+
+void AudioAdvancedPage::setStationSettingsAvailable(bool available, const QString& reason)
+{
+    gateStationControls({m_dspRateCombo, m_dspBlockCombo}, available, reason);
 }
 
 // ---------------------------------------------------------------------------
@@ -335,6 +352,14 @@ void AudioAdvancedPage::buildFeatureFlagsSection()
         m_sendIqToVaxCheck->setChecked(on);
         auto* note = new QLabel(
             QStringLiteral("(reserved for Phase 3M — no routing yet)"), box);
+        // R-R3-44: a remote window never acts on it. The Core's raw I/Q is
+        // not sent to this computer, so there is nothing to put on VAX.
+        if (model() && !model()->ownsLocalDsp()) {
+            m_sendIqToVaxCheck->setEnabled(false);
+            m_sendIqToVaxCheck->setToolTip(remoteSendIqReason());
+            m_sendIqToVaxCheck->setAccessibleDescription(remoteSendIqReason());
+            note->setText(remoteSendIqReason());
+        }
         note->setStyleSheet(QLatin1String(kNoteStyle));
         row->addWidget(m_sendIqToVaxCheck);
         row->addWidget(note);

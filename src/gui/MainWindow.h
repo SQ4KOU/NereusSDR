@@ -894,6 +894,9 @@ private:
     // stack (StationClient.h drags in the whole message codec).
     class StationClient* m_stationClient{nullptr};
     class RemoteMediaController* m_remoteMedia{nullptr};
+    // R-R3-44: this computer's VAX channels, fed from the Core's receiver
+    // streams. Remote windows only; deleted right after m_remoteMedia.
+    class RemoteVaxRouter* m_remoteVax{nullptr};
     class RemoteTelemetryController* m_remoteTelemetry{nullptr};
     class RemoteConnectionController* m_remoteConnection{nullptr};
     class RemoteConnectionPanel* m_remoteConnectionPanel{nullptr};

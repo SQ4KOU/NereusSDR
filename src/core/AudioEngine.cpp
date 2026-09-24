@@ -117,6 +117,13 @@
 //                 macOS Intel / Core Audio.  Pairs with new IAudioBus::flush()
 //                 (default no-op) and PortAudioBus::flush() (atomic
 //                 ringRead := ringWrite).
+//   2026-09-23: R-R3-44 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. openVaxOutputs() (a remote window's VAX
+//                 outputs without starting the engine), vaxOutputPacing() /
+//                 writeVaxOutput() / vaxOutputHasReader() for its VAX
+//                 feeder, a per-channel lock around VAX output replacement,
+//                 and setVaxOutputsAllowed(false) so nereusd publishes no VAX
+//                 devices. The local VAX tee is unchanged.
 // =================================================================
 
 #include "AudioEngine.h"
@@ -142,6 +149,7 @@
 #endif
 
 #include <QCoreApplication>
+#include <QStandardPaths>
 
 #include <portaudio.h>
 
@@ -445,22 +453,17 @@ void AudioEngine::start()
     // On Windows m_vaxBus / m_vaxTxBus stay null here.
     // TODO(sub-phase-9-byo): wire user-picked virtual cables via
     // setVaxConfig() once the Setup → Audio → VAX BYO UI lands.
-    for (int channel = 1; channel <= 4; ++channel) {
-        const int idx = channel - 1;
-        if (m_vaxBus[idx]) {
-            // Caller wired an explicit device via setVaxConfig() before
-            // start() ran — honour that and don't clobber it with the
-            // platform-native bus.
-            continue;
-        }
-        m_vaxBus[idx] = makeVaxBus(channel);
-        if (m_vaxBus[idx]) {
-            qCInfo(lcAudio) << "VAX" << channel << "bus opened (eager)"
-                            << "[" << m_vaxBus[idx]->backendName() << "]";
-        }
+    //
+    // R-R3-44: the loop moved into openVaxOutputSlots(), which a remote
+    // window reaches through openVaxOutputs(); on nereusd
+    // (vaxOutputsAllowed() false) it opens nothing, and neither is the VAX
+    // TX device opened below.
+    openVaxOutputSlots();
+    if (!m_vaxOutputsAllowed) {
+        qCInfo(lcAudio) << "VAX devices are not published on this computer (Core)";
     }
 
-    if (!m_vaxTxBus) {
+    if (!m_vaxTxBus && m_vaxOutputsAllowed) {
         m_vaxTxBus = makeVaxTxBus();
         if (m_vaxTxBus) {
             qCInfo(lcAudio) << "VAX TX bus opened (eager)"
@@ -516,8 +519,9 @@ void AudioEngine::stop()
     // TX-poll consumer release any reference to the TX bus before the
     // RX taps come down.
     m_vaxTxBus.reset();
-    for (auto& bus : m_vaxBus) {
-        bus.reset();
+    for (int idx = 0; idx < 4; ++idx) {
+        std::lock_guard<std::mutex> lock(m_vaxBusMutex[idx]);
+        m_vaxBus[idx].reset();
     }
 
     if (!m_running) {
@@ -608,9 +612,14 @@ std::unique_ptr<IAudioBus> AudioEngine::makeVaxBus(int channel)
     // 48 kHz stereo float32 — this is the contract both CoreAudioHalBus and
     // LinuxPipeBus enforce in open(), and it matches the spec §8.1 wire
     // format the HAL plugin / pactl source expose to consumer apps.
-    if (channel < 1 || channel > 4) {
+    if (channel < 1 || channel > 4 || !m_vaxOutputsAllowed) {
         return nullptr;
     }
+#ifdef NEREUS_BUILD_TESTS
+    if (m_vaxBusFactoryForTest) {
+        return m_vaxBusFactoryForTest(channel);
+    }
+#endif
 
     AudioFormat fmt;
     fmt.sampleRate = 48000;
@@ -686,6 +695,16 @@ std::unique_ptr<IAudioBus> AudioEngine::makeVaxTxBus()
     // outgoing audio (WSJT-X, fldigi, VARA). Consumption (pull() into
     // TxChannel) is a Phase 3M concern — see m_vaxTxBus comment in
     // AudioEngine.h and the TODO in start().
+    //
+    // R-R3-44: nereusd publishes no VAX device of either direction.
+    if (!m_vaxOutputsAllowed) {
+        return nullptr;
+    }
+#ifdef NEREUS_BUILD_TESTS
+    if (m_vaxBusFactoryForTest) {
+        return m_vaxBusFactoryForTest(0);
+    }
+#endif
     AudioFormat fmt;
     fmt.sampleRate = 48000;
     fmt.channels   = 2;
@@ -1058,7 +1077,13 @@ void AudioEngine::setVaxConfig(int channel, const AudioDeviceConfig& cfg)
         return;
     }
     const int idx = channel - 1;
+    // R-R3-44: a remote window's VAX feeder writes this slot from its own
+    // worker; it waits while the output is replaced.
+    std::unique_lock<std::mutex> busLock(m_vaxBusMutex[idx]);
     m_vaxBus[idx].reset();
+    if (!m_vaxOutputsAllowed) {
+        return;
+    }
 
 #if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
     // Empty deviceName = user has not picked a BYO override. Fall back to
@@ -1074,6 +1099,7 @@ void AudioEngine::setVaxConfig(int channel, const AudioDeviceConfig& cfg)
                             << "bus restored (native HAL fallback)"
                             << "[" << m_vaxBus[idx]->backendName() << "]";
         }
+        busLock.unlock();
         emit vaxConfigChanged(channel, cfg);
         return;
     }
@@ -1087,6 +1113,7 @@ void AudioEngine::setVaxConfig(int channel, const AudioDeviceConfig& cfg)
         qCInfo(lcAudio) << "VAX" << channel << "bus reconfigured (BYO)"
                         << "[" << m_vaxBus[idx]->backendName() << "]";
     }
+    busLock.unlock();
     emit vaxConfigChanged(channel, cfg);
 }
 
@@ -1096,8 +1123,13 @@ void AudioEngine::setVaxEnabled(int channel, bool on)
         return;
     }
     const int idx = channel - 1;
+    // R-R3-44: see setVaxConfig().
+    std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
     if (!on) {
         m_vaxBus[idx].reset();
+        return;
+    }
+    if (!m_vaxOutputsAllowed) {
         return;
     }
     // Already populated (eagerly opened by start() on Mac/Linux, or via a
@@ -1129,12 +1161,114 @@ void AudioEngine::setVaxEnabled(int channel, bool on)
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// R-R3-44: VAX outputs in a remote window, none on the Core
+// ---------------------------------------------------------------------------
+
+void AudioEngine::setVaxOutputsAllowed(bool allowed)
+{
+    m_vaxOutputsAllowed = allowed;
+}
+
+void AudioEngine::openVaxOutputs()
+{
+#ifdef NEREUS_BUILD_TESTS
+    // A remote window built by a test (the window harness, the gating
+    // sweeps) must not attach to this computer's real VAX devices: the
+    // macOS ring is shared with any NereusSDR running here. A test that
+    // wants outputs supplies them through setVaxBusFactoryForTest().
+    if (QStandardPaths::isTestModeEnabled() && !m_vaxBusFactoryForTest) {
+        qCInfo(lcAudio) << "VAX outputs not opened: test run with no test VAX devices";
+        return;
+    }
+#endif
+    openVaxOutputSlots();
+}
+
+void AudioEngine::openVaxOutputSlots()
+{
+    for (int channel = 1; channel <= 4; ++channel) {
+        const int idx = channel - 1;
+        std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
+        if (m_vaxBus[idx]) {
+            // Caller wired an explicit device via setVaxConfig() before
+            // start() ran — honour that and don't clobber it with the
+            // platform-native bus.
+            continue;
+        }
+        m_vaxBus[idx] = makeVaxBus(channel);
+        if (m_vaxBus[idx]) {
+            qCInfo(lcAudio) << "VAX" << channel << "bus opened (eager)"
+                            << "[" << m_vaxBus[idx]->backendName() << "]";
+        }
+    }
+}
+
+std::optional<IAudioBus::OutputPacing> AudioEngine::vaxOutputPacing(int channel)
+{
+    if (channel < 1 || channel > 4) {
+        return std::nullopt;
+    }
+    std::lock_guard<std::mutex> busLock(m_vaxBusMutex[channel - 1]);
+    IAudioBus* bus = m_vaxBus[channel - 1].get();
+    if (bus == nullptr || !bus->isOpen()) {
+        return std::nullopt;
+    }
+    return bus->outputPacing();
+}
+
+bool AudioEngine::writeVaxOutput(int channel, const float* stereo, int frames)
+{
+    if (channel < 1 || channel > 4 || stereo == nullptr || frames <= 0
+        || frames > kMaxVaxWriteFrames) {
+        return false;
+    }
+    const int idx = channel - 1;
+    // The same channel gain and mute the local tee in rxBlockReady applies.
+    // The receiver stream already carries the slice's audio with its AF gain
+    // undone (feedSliceTaps on the Core), the tee's other factor.
+    const bool muted = m_vaxMuted[idx].load(std::memory_order_acquire);
+    const float gain = muted ? 0.0f : m_vaxRxGain[idx].load(std::memory_order_acquire);
+    // Worker-thread scratch, never an audio callback: 32 KiB on the stack.
+    std::array<float, kMaxVaxWriteFrames * 2> scaled;
+    const int count = frames * 2;
+    for (int i = 0; i < count; ++i) {
+        if (!std::isfinite(stereo[i])) {
+            return false;
+        }
+        scaled[static_cast<size_t>(i)] = stereo[i] * gain;
+    }
+    std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
+    IAudioBus* bus = m_vaxBus[idx].get();
+    if (bus == nullptr || !bus->isOpen()) {
+        return false;
+    }
+    const auto bytes = static_cast<qint64>(count) * static_cast<qint64>(sizeof(float));
+    return bus->push(reinterpret_cast<const char*>(scaled.data()), bytes) == bytes;
+}
+
+std::optional<bool> AudioEngine::vaxOutputHasReader(int channel)
+{
+    if (channel < 1 || channel > 4) {
+        return std::nullopt;
+    }
+    // Owner thread, the only thread that replaces the output, so no lock:
+    // the platform query (CoreAudio's device list) must not hold up a
+    // feeder writing this channel.
+    const IAudioBus* bus = m_vaxBus[channel - 1].get();
+    if (bus == nullptr || !bus->isOpen()) {
+        return std::nullopt;
+    }
+    return bus->outputHasReader();
+}
+
 #ifdef NEREUS_BUILD_TESTS
 void AudioEngine::setVaxBusForTest(int channel, std::unique_ptr<IAudioBus> bus)
 {
     if (channel < 1 || channel > 4) {
         return;
     }
+    std::lock_guard<std::mutex> busLock(m_vaxBusMutex[channel - 1]);
     m_vaxBus[channel - 1] = std::move(bus);
 }
 
@@ -2236,15 +2370,18 @@ void AudioEngine::resetAudioSettings()
     // Windows leave the slot null until the user picks a device.
     for (int ch = 1; ch <= 4; ++ch) {
         const int idx = ch - 1;
-        m_vaxBus[idx].reset();
+        {
+            std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
+            m_vaxBus[idx].reset();
 #if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
-        m_vaxBus[idx] = makeVaxBus(ch);
-        if (m_vaxBus[idx]) {
-            qCInfo(lcAudio) << "VAX" << ch
-                            << "bus restored to native HAL (reset)"
-                            << "[" << m_vaxBus[idx]->backendName() << "]";
-        }
+            m_vaxBus[idx] = makeVaxBus(ch);
+            if (m_vaxBus[idx]) {
+                qCInfo(lcAudio) << "VAX" << ch
+                                << "bus restored to native HAL (reset)"
+                                << "[" << m_vaxBus[idx]->backendName() << "]";
+            }
 #endif
+        }
         emit vaxConfigChanged(ch, AudioDeviceConfig{});
     }
 

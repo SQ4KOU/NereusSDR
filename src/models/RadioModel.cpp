@@ -61,6 +61,11 @@
 //                 move, setActive, delete) for remote windows, and a
 //                 remote window's add routed as a request.
 //                 NereusSDR-original; no Thetis logic.
+//   2026-09-23 : R-R3-44 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. A remote window's slices keep their VAX
+//                 channel through setRemoteVaxChannelStore(), never the
+//                 Core's Slice<N>/VaxChannel. NereusSDR-original; no Thetis
+//                 logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -6142,6 +6147,16 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         // slice ID owns its NR selection even when another slice has focus.
         slice->restoreNnrSettings();
         wireNnrSettings(slice);
+    } else {
+        // R-R3-44: a remote window's VAX channels are this computer's. The
+        // slice keeps its channel through the window's store (set by
+        // setRemoteVaxChannelStore, possibly later) and never writes the
+        // Core's Slice<N>/VaxChannel, which is the Core computer's VAX.
+        slice->setVaxChannelStore([this](int sliceIndex, int channel) {
+            if (m_remoteVaxChannelStore) {
+                m_remoteVaxChannelStore(sliceIndex, channel);
+            }
+        });
     }
     // Phase 3F: stamp the owning pan id BEFORE the sliceAdded() emit below,
     // so the MainWindow handler routes the new VfoWidget to the correct
@@ -14233,6 +14248,15 @@ void RadioModel::saveSliceState(SliceModel* slice)
     // harmless).
     // Phase 3M-1a G.3. Source: Thetis console.cs:3087-3091 [v2.10.3.13].
     m_transmitModel.save();
+}
+
+void RadioModel::setRemoteVaxChannelStore(SliceModel::VaxChannelStore store)
+{
+    if (m_role != Role::Remote) {
+        qCWarning(lcConnection) << "setRemoteVaxChannelStore ignored on a local model";
+        return;
+    }
+    m_remoteVaxChannelStore = std::move(store);
 }
 
 void RadioModel::setPcCaptureAllowed(bool allowed)

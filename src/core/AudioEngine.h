@@ -120,6 +120,14 @@
 //                 returns to its pre-D.1 form: drain m_txInputBus and
 //                 convert to float32 mono, no accumulator side effects.
 //                 Plan: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
+//   2026-09-23: R-R3-44 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. VAX in a remote window: openVaxOutputs() opens
+//                 the four VAX receive outputs without starting the engine,
+//                 vaxOutputPacing() / writeVaxOutput() / vaxOutputHasReader()
+//                 let a feeder on its own worker write a channel paced by
+//                 that output's clock (per-channel lock against the owner
+//                 thread replacing the output), and setVaxOutputsAllowed()
+//                 lets nereusd publish no VAX devices at all.
 // =================================================================
 
 #include "AudioDeviceConfig.h"
@@ -390,6 +398,50 @@ public:
     // the bus regardless of how it was constructed. On Windows it remains
     // the lazy PortAudio path (creates a default-config PortAudioBus).
     void setVaxEnabled(int channel, bool on);
+
+    // ── R-R3-44: VAX outputs in a remote window, none on the Core ─────────
+    // False on nereusd (DaemonApp): the Core host publishes no VAX devices,
+    // so start() opens neither the VAX outputs nor the VAX TX device, and
+    // setVaxConfig / setVaxEnabled / openVaxOutputs / resetAudioSettings
+    // open none. Set before start(). Owner thread.
+    void setVaxOutputsAllowed(bool allowed);
+    bool vaxOutputsAllowed() const { return m_vaxOutputsAllowed; }
+
+    // A remote window opens the four VAX receive outputs start() opens (the
+    // engine itself never starts there), skipping a slot that already has
+    // one. It opens no VAX TX device: VAX as the microphone waits for
+    // remote transmit. In a test run (QStandardPaths test mode) it opens
+    // only what setVaxBusFactoryForTest() supplies. Owner thread.
+    void openVaxOutputs();
+
+    // A remote window's VAX feeder writes a channel from its own worker
+    // thread, never an audio callback. vaxOutputPacing() is the output's
+    // playback timing (nullopt when the output is closed or reports none);
+    // writeVaxOutput() writes interleaved 48 kHz stereo with the channel's
+    // VAX gain and mute applied as the local VAX tee applies them (muted
+    // writes silence, so the output's clock keeps running), and returns
+    // false when the output is closed or the block is not finite. Both take
+    // the channel's lock, which the owner thread also takes to replace the
+    // output. At most kMaxVaxWriteFrames per call.
+    static constexpr int kMaxVaxWriteFrames = 4096;
+    std::optional<IAudioBus::OutputPacing> vaxOutputPacing(int channel);
+    bool writeVaxOutput(int channel, const float* stereo, int frames);
+    // Whether an app is reading the channel's output, where the platform
+    // reports it (IAudioBus::outputHasReader); nullopt otherwise or when
+    // the channel has no output. Owner thread.
+    std::optional<bool> vaxOutputHasReader(int channel);
+
+#ifdef NEREUS_BUILD_TESTS
+    // R-R3-44 test seam: makeVaxBus() (channel 1..4) and makeVaxTxBus()
+    // (channel 0) build the platform's VAX device through this factory
+    // instead, so a test never attaches to this computer's real VAX
+    // devices. An empty function restores the platform. Not consulted
+    // while vaxOutputsAllowed() is false.
+    void setVaxBusFactoryForTest(std::function<std::unique_ptr<IAudioBus>(int channel)> factory)
+    {
+        m_vaxBusFactoryForTest = std::move(factory);
+    }
+#endif
 
 #ifdef NEREUS_BUILD_TESTS
     // Test seam — inject a fake IAudioBus into a VAX slot so unit tests
@@ -821,6 +873,9 @@ private:
     // wiring lands in Sub-Phase 9 via setVaxConfig().
     std::unique_ptr<IAudioBus> makeVaxBus(int channel);
 
+    // R-R3-44: start()'s and openVaxOutputs()'s loop over VAX 1..4.
+    void openVaxOutputSlots();
+
     // Sub-Phase 8.5: construct + open the platform-native VAX TX virtual
     // bus. Opened so coreaudiod / pactl register the virtual TX device for
     // 3rd-party apps. Pulled from in Phase 3M when txOwnerSlot() != MicDirect.
@@ -882,6 +937,15 @@ private:
     // Opened in start(), reset in stop(); consumption is a Phase 3M concern.
     std::unique_ptr<IAudioBus> m_vaxTxBus;
     std::array<std::unique_ptr<IAudioBus>, 4> m_vaxBus;
+    // R-R3-44: taken by the owner thread whenever it replaces a VAX output
+    // and by a remote window's VAX feeder around every pacing read and
+    // write. The local VAX tee on the DSP thread never takes it.
+    std::array<std::mutex, 4> m_vaxBusMutex;
+    // R-R3-44: see setVaxOutputsAllowed().
+    bool m_vaxOutputsAllowed{true};
+#ifdef NEREUS_BUILD_TESTS
+    std::function<std::unique_ptr<IAudioBus>(int)> m_vaxBusFactoryForTest;
+#endif
     MasterMixer m_masterMix;
 
     // Second mixer whose output is the anti-VOX reference, not the speakers.

@@ -988,6 +988,9 @@ set(CORE_SOURCES
     # R-R3-23 Task 2: RFC 3550 jitter/sequence measurement for one receiver context.
     src/core/session/media/RtpReceptionStats.cpp
     src/core/session/media/RemoteAudioReceiver.cpp
+    # R-R3-44: a remote window's VAX channel fed by a receiver stream, paced
+    # by the VAX output's own clock.
+    src/core/audio/RemoteVaxFeeder.cpp
     # R1 Task 7: consumer-to-stream subscription set extracted from the
     # router-mutation half of MainWindow::rebuildFftRouting. Rebuilds an
     # FFTRouter from its own subscription set on demand, so the daemon can
@@ -1199,6 +1202,8 @@ set(GUI_SOURCES
     src/gui/SliceFlagPresentationBinding.cpp
     src/gui/SliceFlagPresentationBinding.h
     src/gui/RemoteMediaController.cpp
+    # R-R3-44: a remote window's VAX channels, fed by receiver streams.
+    src/gui/RemoteVaxRouter.cpp
     src/gui/RemoteAudioStatus.cpp
     src/gui/RemoteDisplayAllocator.cpp
     src/gui/PanStatusText.cpp

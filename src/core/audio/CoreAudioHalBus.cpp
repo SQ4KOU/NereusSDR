@@ -22,6 +22,11 @@
 //                 silence-fill + TX poll timers deferred to Phase 3M.
 //                 Shm paths: /aethersdr-dax-* → /nereussdr-vax-*.
 //                 Sample rate: 24 kHz → 48 kHz (spec §8.1).
+//   2026-09-23: R-R3-44: outputPacing() from the ring's read and write
+//                 positions and outputHasReader() from CoreAudio, so a
+//                 remote window's VAX feeder can pace itself by the reading
+//                 app's clock. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "CoreAudioHalBus.h"
@@ -32,15 +37,20 @@
 #include <QLoggingCategory>
 
 #ifdef Q_OS_MAC
+#include <CoreAudio/CoreAudio.h>
+#include <CoreFoundation/CoreFoundation.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
 
+#include <QByteArray>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace NereusSDR {
 
@@ -164,6 +174,8 @@ bool CoreAudioHalBus::open(const AudioFormat& format) {
     m_block->channels   = 2;
     std::memset(&m_block->reserved[0], 0, sizeof(m_block->reserved));
     m_block->active.store(1, std::memory_order_release);
+    m_pacingLastReadPos.store(0, std::memory_order_relaxed);
+    m_pacingConsumedSamples.store(0, std::memory_order_relaxed);
 
     m_negFormat = format;
     m_open = true;
@@ -331,6 +343,97 @@ qint64 CoreAudioHalBus::pull(char* data, qint64 maxBytes) {
     (void)data;
     (void)maxBytes;
     return 0;
+#endif
+}
+
+std::optional<IAudioBus::OutputPacing> CoreAudioHalBus::outputPacing() const {
+    if (!isProducer() || !m_open || m_block == nullptr) {
+        return std::nullopt;
+    }
+#ifdef Q_OS_MAC
+    const uint32_t rp = m_block->readPos.load(std::memory_order_acquire);
+    const uint32_t wp = m_block->writePos.load(std::memory_order_acquire);
+    // readPos is 32-bit and wraps after about 12 hours; the unsigned
+    // difference from the last read is the progress since then.
+    const uint32_t last = m_pacingLastReadPos.exchange(rp, std::memory_order_acq_rel);
+    const quint64 consumed =
+        m_pacingConsumedSamples.fetch_add(uint32_t(rp - last), std::memory_order_acq_rel)
+        + uint32_t(rp - last);
+    // More than a ring ahead means the writer lapped a reader that is not
+    // reading; the plugin then jumps to recent data, so the whole ring is
+    // what is queued.
+    const uint32_t queued = std::min<uint32_t>(wp - rp, VaxShmBlock::RING_SIZE);
+    OutputPacing pacing;
+    pacing.consumedFrames = consumed / 2;
+    pacing.queuedFrames = static_cast<int>(queued / 2);
+    pacing.capacityFrames = static_cast<int>(VaxShmBlock::RING_SIZE / 2);
+    pacing.callbackFrames = 0;
+    return pacing;
+#else
+    return std::nullopt;
+#endif
+}
+
+std::optional<bool> CoreAudioHalBus::outputHasReader() const {
+    if (!isProducer()) {
+        return std::nullopt;
+    }
+#ifdef Q_OS_MAC
+    // The plugin's device UID for this channel, as hal-plugin/NereusSDRVAX.cpp
+    // registers it ("com.nereussdr.vax.rx.%d").
+    const QByteArray wanted =
+        QByteArrayLiteral("com.nereussdr.vax.rx.") + QByteArray::number(static_cast<int>(m_role));
+    AudioObjectPropertyAddress devicesAddr = {
+        kAudioHardwarePropertyDevices,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain,
+    };
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &devicesAddr,
+                                       0, nullptr, &size) != noErr
+        || size == 0) {
+        return std::nullopt;
+    }
+    std::vector<AudioDeviceID> devices(size / sizeof(AudioDeviceID));
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &devicesAddr,
+                                   0, nullptr, &size, devices.data()) != noErr) {
+        return std::nullopt;
+    }
+    devices.resize(size / sizeof(AudioDeviceID));
+    for (const AudioDeviceID device : devices) {
+        AudioObjectPropertyAddress uidAddr = {
+            kAudioDevicePropertyDeviceUID,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain,
+        };
+        CFStringRef uid = nullptr;
+        UInt32 uidSize = sizeof(CFStringRef);
+        if (AudioObjectGetPropertyData(device, &uidAddr, 0, nullptr, &uidSize, &uid) != noErr
+            || uid == nullptr) {
+            continue;
+        }
+        char buffer[128] = {};
+        const bool named = CFStringGetCString(uid, buffer, sizeof(buffer), kCFStringEncodingUTF8);
+        CFRelease(uid);
+        if (!named || wanted != QByteArray(buffer)) {
+            continue;
+        }
+        AudioObjectPropertyAddress runningAddr = {
+            kAudioDevicePropertyDeviceIsRunningSomewhere,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain,
+        };
+        UInt32 running = 0;
+        UInt32 runningSize = sizeof(running);
+        if (AudioObjectGetPropertyData(device, &runningAddr, 0, nullptr,
+                                       &runningSize, &running) != noErr) {
+            return std::nullopt;
+        }
+        return running != 0;
+    }
+    return std::nullopt;
+#else
+    return std::nullopt;
 #endif
 }
 

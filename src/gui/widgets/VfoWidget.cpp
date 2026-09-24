@@ -27,6 +27,11 @@
 //                 receiver below the saved NNR choice. J.J. Boyd (KG4VCF),
 //                 with AI-assisted implementation via Anthropic Claude Code.
 //                 Later the same day: its colour from StyleConstants.
+//   2026-09-23 - R-R3-44: the VAX tab's channel selector works in a remote
+//                 window again: it picks this computer's VAX channel for the
+//                 Core's slice (kept on this computer, not the Core).
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3284,14 +3289,11 @@ void VfoWidget::setRadioModel(RadioModel* model)
     m_radioModel = model;
     if (model && model->role() == RadioModel::Role::Remote) {
         setTransmitPermitted(false);
-        // R-R3-21: a slice's VAX channel is not mirrored to the Core and
-        // remote audio plays through the speakers only, so the selector
-        // would move nothing. Same reason the VAX applet gives.
-        if (m_vaxSelector) {
-            m_vaxSelector->setEnabled(false);
-            m_vaxSelector->setToolTip(
-                tr("VAX audio channels are not available while connected to a Core."));
-        }
+        // R-R3-44: the VAX selector stays live. In a remote window it picks
+        // this computer's VAX channel for the Core's slice; the remote model
+        // keeps the choice on this computer (RadioModel::
+        // setRemoteVaxChannelStore) and RemoteVaxRouter feeds the channel
+        // from the Core's receiver stream.
     }
 }
 

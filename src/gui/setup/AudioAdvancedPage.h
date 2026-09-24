@@ -9,6 +9,13 @@
 //
 // Sub-Phase 12 Task 12.4 (2026-04-20): Written by J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+//
+// 2026-09-23 (R-R3-44): J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+// Claude Code. Usable in a remote window: the engine comes from
+// RadioModel::localAudioDevices(), the VAX groups are this computer's, the
+// DSP group (the Core's audio/DspRate and audio/DspBlockSize) follows the
+// Core's settings availability, and Send IQ to VAX is refused there with
+// a plain reason.
 // =================================================================
 
 #include "gui/SetupPage.h"
@@ -47,6 +54,12 @@ public:
     // Event filter — blocks wheel events on un-focused combo boxes inside
     // the scroll area (same pattern as DeviceCard).
     bool eventFilter(QObject* obj, QEvent* event) override;
+
+    // R-R3-44: the DSP group writes the Core's settings in a remote window.
+    void setStationSettingsAvailable(bool available, const QString& reason) override;
+
+    // The plain reason Send IQ to VAX gives in a remote window.
+    static QString remoteSendIqReason();
 
 private:
     // Section builders.

@@ -125,6 +125,12 @@
 //                                    values a Core stored are ignored, not
 //                                    migrated. AI-assisted transformation
 //                                    via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio plan, Task 5
+//                                    (R-R3-44): the "RemoteVax/" prefix, a
+//                                    remote window's VAX channel per Core
+//                                    and slice, is OperatorLocal.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -315,6 +321,12 @@ const Rule kPrefixes[] = {
     // R-R3-38: client target selection and each Core's trust tuple never
     // belong to the selected station's settings snapshot.
     { "ConnectionTargets/", SettingsScope::OperatorLocal },
+
+    // R-R3-44: which of this computer's VAX channels a remote window gives
+    // each of a Core's slices (RemoteVaxRouter::settingsKey,
+    // "RemoteVax/<core>/Slice<N>/Channel"). This computer's VAX, kept per
+    // Core; never the Core's own Slice<N>/VaxChannel.
+    { "RemoteVax/", SettingsScope::OperatorLocal },
 
     // PGXL / TGXL / RF2K-S: physically attached to the station (the
     // amplifier/tuner sits at the radio site, not on an operator's

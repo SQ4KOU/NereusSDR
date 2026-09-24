@@ -7122,6 +7122,12 @@ nereus_add_test(tst_daemon_telemetry fakes/LoopbackTransport.cpp)
 nereus_add_test(tst_host_telemetry_sampler EXTRA_LABELS core)
 nereus_add_test(tst_remote_audio_receiver)
 nereus_add_test(tst_remote_audio_session fakes/LoopbackTransport.cpp)
+# R-R3-44 (R3 receiver audio plan, Task 5): VAX in a remote window. The
+# feed contract (two 10-minute runs of the harness clock at +/-200 ppm
+# through WDSP rmatch), the Core opening no VAX device, the per-Core
+# choice, and end to end against the in-process Core, Opus and lossless.
+nereus_add_test(tst_remote_vax_feeder fakes/LoopbackTransport.cpp)
+set_tests_properties(tst_remote_vax_feeder PROPERTIES TIMEOUT 300)
 # R-R3-23: the audio-context wire codec in both negotiated shapes.
 nereus_add_test(tst_remote_audio_context)
 # R-R3-01/08: the spectrum-context wire codec in both negotiated shapes.

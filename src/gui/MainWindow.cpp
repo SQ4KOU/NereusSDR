@@ -40,6 +40,11 @@
 //                 passband Shift-click, and the RADE applet for its
 //                 profile combo and Reset vocoder. AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-44: a remote window opens this
+//                 computer's VAX outputs and feeds them from the Core's
+//                 receiver streams (RemoteVaxRouter); the VAX applet's TX
+//                 row takes the transmit permission. AI-assisted
+//                 implementation via Anthropic Claude Code.
 //   2026-09-22 — J.J. Boyd (KG4VCF). Invoke the Aether-derived pan-stack
 //                 shutdown before QWidget destroys its graphics backend.
 //                 AI-assisted integration via OpenAI Codex.
@@ -390,6 +395,8 @@ warren@wpratt.com
 #include "core/session/StationClient.h"
 #include "RemoteConnectionController.h"
 #include "gui/RemoteMediaController.h"
+#include "gui/RemoteVaxRouter.h"
+#include "core/session/media/IReceiverPcmSink.h"
 #include "core/settings/SettingsProxy.h"
 #include "setup/DspSetupPages.h"   // NrAnfSetupPage::selectSubtab
 #include "gui/DspAssetDialog.h"
@@ -1012,6 +1019,11 @@ MainWindow::~MainWindow()
     // RadioModel child and its speaker AudioEngine.
     delete m_remoteMedia;
     m_remoteMedia = nullptr;
+    // R-R3-44: likewise the VAX feeders' workers, which write this
+    // computer's VAX outputs on the same engine. The controller is gone, so
+    // the router's final releases find nothing to release.
+    delete m_remoteVax;
+    m_remoteVax = nullptr;
     delete m_remoteConnectionPanel;
     m_remoteConnectionPanel = nullptr;
     delete m_remoteConnection;
@@ -1182,6 +1194,33 @@ void MainWindow::ensureRemoteSession()
             m_tciServer->setRemoteReceiverAudio(std::move(source));
         }
 #endif
+        // R-R3-44: VAX in a remote window. This computer's VAX outputs open
+        // here (the engine never starts in a remote window), and each VAX
+        // channel carries the Core's slice assigned to it, asked for while
+        // an app reads the channel (where the platform says) and released
+        // otherwise. The router is deleted right after the controller (see
+        // ~MainWindow).
+        if (AudioEngine* vaxEngine = m_radioModel->localAudioDevices()) {
+            vaxEngine->openVaxOutputs();
+            m_remoteVax = new RemoteVaxRouter(m_radioModel, vaxEngine,
+                                              RemoteVaxRouter::coreKeyFor(m_station), this);
+            const QPointer<RemoteMediaController> media(m_remoteMedia);
+            RemoteVaxRouter::ReceiverAudio vaxSource;
+            vaxSource.request = [media](int sliceId, IReceiverPcmSink* sink) {
+                if (media) { media->requestReceiverAudio(sliceId, sink); }
+            };
+            vaxSource.release = [media](int sliceId, IReceiverPcmSink* sink) {
+                if (media) { media->releaseReceiverAudio(sliceId, sink); }
+            };
+            m_remoteVax->setReceiverAudio(std::move(vaxSource));
+            connect(m_remoteVax, &RemoteVaxRouter::notice, this,
+                    [this](int channel, const QString& reason) {
+                qCInfo(lcConnection) << "VAX" << channel << "notice:" << reason;
+                showToast(tr("VAX %1: %2").arg(channel)
+                              .arg(OperatorReasonText::forDisplay(reason)),
+                          ToastSeverity::Warning, 5000);
+            });
+        }
 
         connect(m_stationClient, &StationClient::handshakeComplete, this, [this]() {
             qCInfo(lcConnection) << "Station handshake complete:" << m_remoteConnection->endpointText();
@@ -10310,6 +10349,10 @@ void MainWindow::applyRemoteRoleGating()
     if (m_phoneCwApplet) {
         m_phoneCwApplet->setTransmitPermitted(transmitPermitted, transmitReason);
     }
+    // R-R3-44: the VAX applet's TX row (VAX as the microphone).
+    if (m_vaxApplet) {
+        m_vaxApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+    }
     // R-R3-21: the RX applet's XIT row and TX passband Shift-click.
     if (m_rxApplet) {
         m_rxApplet->setTransmitPermitted(transmitPermitted, transmitReason);
@@ -11725,11 +11768,11 @@ void MainWindow::tryAutoReconnect()
 void MainWindow::checkVaxFirstRun()
 {
     // R-R3-23: skipped in a remote window, as the Linux audio first-run
-    // below already is. A remote window opens no VAX outputs (the VAX
-    // applet and Setup page say so), so offering to bind virtual cables
-    // to them would set up something that does nothing, and would record
-    // audio/FirstRunComplete and the cable fingerprint for a later local
-    // session that never saw the dialog.
+    // below already is. R-R3-44: a remote window does open this computer's
+    // VAX outputs, but only the ones start() would open (Setup > Audio >
+    // VAX changes them); the check would record audio/FirstRunComplete and
+    // the cable fingerprint for a later local session that never saw the
+    // dialog, so it still runs only in a local window.
     if (!m_radioModel->ownsLocalDsp()) {
         return;
     }
