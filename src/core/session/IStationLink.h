@@ -131,22 +131,22 @@ public:
     // R3 remote C-Tune. Default refusals retain source compatibility for
     // older test links and transports that do not negotiate this capability.
     virtual CommandOutcome requestStreamCtunPinned(int, bool)
-    { return { false, QStringLiteral("Remote C-Tune is not supported by this station link.") }; }
+    { return { false, QStringLiteral("Remote C-Tune is not supported by this link to the Core.") }; }
     virtual CommandOutcome requestStreamCentre(int, double)
-    { return { false, QStringLiteral("Remote C-Tune is not supported by this station link.") }; }
+    { return { false, QStringLiteral("Remote C-Tune is not supported by this link to the Core.") }; }
 
     // Task 4d remote TGXL configuration.  Defaults preserve existing test
     // links and transports which have not negotiated the accessory feature.
     virtual CommandOutcome requestConfigureTgxl(const QString&, quint16)
-    { return { false, QStringLiteral("Remote TGXL configuration is not supported by this station link.") }; }
+    { return { false, QStringLiteral("Remote TGXL configuration is not supported by this link to the Core.") }; }
     virtual CommandOutcome requestDisconnectTgxl()
-    { return { false, QStringLiteral("Remote TGXL configuration is not supported by this station link.") }; }
+    { return { false, QStringLiteral("Remote TGXL configuration is not supported by this link to the Core.") }; }
 
     // Task 4d remote 4O3A master control.  The station owns both the
     // persisted per-MAC intent and the listener; a remote GUI only asks it
     // to change that intent and waits for its mirrored state to return.
     virtual CommandOutcome requestFourO3AEnabled(bool)
-    { return { false, QStringLiteral("Remote 4O3A control is not supported by this station link.") }; }
+    { return { false, QStringLiteral("Remote 4O3A control is not supported by this link to the Core.") }; }
 
     /// Feature gate for accessory controls.  The default keeps every
     /// existing link inert until it explicitly implements the negotiated
@@ -197,7 +197,7 @@ public:
     /// the station network, switched by this app's one TCI switch and port.
     virtual bool stationTciAvailable() const { return false; }
     virtual CommandOutcome requestStationTci(bool, quint16)
-    { return { false, QStringLiteral("This Core has no TCI server for the station.") }; }
+    { return { false, QStringLiteral("This Core has no TCI server.") }; }
     /// R-R3-48: the Core this window uses runs on this computer and serves
     /// TCI here, so the window runs no TCI server of its own. Kept while the
     /// link is down (the Core keeps its server), false for another Core.
@@ -254,10 +254,10 @@ public:
     { return QStringLiteral("This Core does not let this app change the Tuner Genius's own settings. Updating the Core may help."); }
 
     virtual CommandOutcome requestApplyNnrModels(quint32)
-    { return { false, QStringLiteral("NNR model application is not supported by this station link.") }; }
+    { return { false, QStringLiteral("NNR model application is not supported by this link to the Core.") }; }
     virtual bool nnrControlAvailable() const { return false; }
     virtual CommandOutcome requestNnrDiagnostics(int, int, int)
-    { return { false, QStringLiteral("NNR diagnostics are not supported by this station link.") }; }
+    { return { false, QStringLiteral("NNR diagnostics are not supported by this link to the Core.") }; }
 
     // R-R3-46 (radioHardwareVersion 2): ask the Core to probe its radio's
     // HL2 I/O board. The default refuses, for links that did not negotiate

@@ -2764,7 +2764,7 @@ QMap<QString, QString> kvsFromSpot(const NereusSDR::DxSpot& spot,
 // so the toast reads as a sentence.
 QString noStationReason(const QString& action)
 {
-    return QStringLiteral("Not connected to a station, so %1 was not sent.").arg(action);
+    return QStringLiteral("Not connected to a Core, so %1 was not sent.").arg(action);
 }
 
 }  // namespace
@@ -3533,7 +3533,7 @@ bool RadioModel::flexBeaconRunningForTest() const
 bool RadioModel::setStationTciForStation(bool enabled, int port, QString* reason)
 {
     if (m_role != Role::Local || !m_stationTci) {
-        if (reason) { *reason = QStringLiteral("This Core has no TCI server for the station."); }
+        if (reason) { *reason = QStringLiteral("This Core has no TCI server."); }
         return false;
     }
     return m_stationTci->setEnabled(enabled, port, reason);
@@ -5030,7 +5030,7 @@ bool RadioModel::setNnrDiagnosticMode(int sliceId, int testMode, int outputMode,
     }
     if (role() == Role::Remote) {
         const auto result = m_station ? m_station->requestNnrDiagnostics(sliceId, testMode, outputMode)
-            : IStationLink::CommandOutcome{false, tr("The station is not connected.")};
+            : IStationLink::CommandOutcome{false, tr("This app is not connected to the Core.")};
         if (reason) { *reason = result.reason; }
         return result.sent;
     }
@@ -8560,7 +8560,7 @@ bool RadioModel::setActiveSliceById(int sliceId)
             QStringLiteral("the request to make slice %1 active").arg(sliceId);
         if (sliceById(sliceId) == nullptr) {
             emit sliceAddRejected(
-                QStringLiteral("Slice %1 is not on this station.").arg(sliceId));
+                QStringLiteral("Slice %1 is not on this Core.").arg(sliceId));
             return false;
         }
         if (m_station == nullptr) {

@@ -1431,7 +1431,7 @@ void SetupDialog::buildTree()
         }
         return fourO3A;
     });
-    registerPage(cat, "Remote Station", SetupScope::ThisComputer, [this] {
+    registerPage(cat, "Remote Access", SetupScope::ThisComputer, [this] {
         auto* page = new RemoteStationPage;
         connect(page, &RemoteStationPage::connectionsRequested,
                 this, &SetupDialog::connectionsRequested);

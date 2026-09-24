@@ -3476,7 +3476,7 @@ void VfoWidget::setTransmitPermitted(bool permitted, const QString& reason)
 {
     m_transmitPermitted = permitted;
     m_transmitPermissionReason = reason.isEmpty()
-        ? tr("Transmit controls are unavailable until the station confirms transmit permission.")
+        ? tr("Transmit controls are unavailable until the Core confirms transmit permission.")
         : reason;
     updateTransmitControlAvailability();
 }

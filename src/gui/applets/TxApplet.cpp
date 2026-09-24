@@ -526,9 +526,12 @@ void TxApplet::buildUI()
                              " color: #ffffff;"
                              "}"));
         m_monBtn->setAccessibleName(QStringLiteral("Monitor enable"));
+        // R-R3-21: MON plays your own transmitted audio as it sounds on the
+        // air, in the output chosen beside it (R-R3-45).
         m_monBtn->setToolTip(QStringLiteral(
-            "Monitor: mix received audio into headphones during TX.\n"
-            "Does NOT persist across restarts (safety)."));
+            "Monitor: hear your own transmitted audio as it sounds on the air, "
+            "on the output chosen next to MON (SPEAKERS or PHONES).\n"
+            "MON is off each time NereusSDR starts, for safety."));
         monRow->addWidget(m_monBtn, 1);
 
         // R-R3-45: where MON plays, beside MON. An exclusive pair in the
@@ -2160,7 +2163,7 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
 {
     m_transmitPermitted = permitted;
     const QString reason = unavailableReason.isEmpty()
-        ? tr("Transmit controls are unavailable until the station confirms "
+        ? tr("Transmit controls are unavailable until the Core confirms "
              "transmit permission.")
         : unavailableReason;
 

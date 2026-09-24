@@ -1177,7 +1177,7 @@ void StationClient::setMaxMissedPongs(int misses)
 
 QString StationClient::handshakeDeadlineReason()
 {
-    return QStringLiteral("The station did not finish connecting.");
+    return QStringLiteral("The Core did not finish connecting.");
 }
 
 void StationClient::setHandshakeDeadlineMs(int ms)
@@ -3114,11 +3114,11 @@ StationClient::CommandOutcome StationClient::requestRfKitEnabled(bool enabled)
 StationClient::CommandOutcome StationClient::requestStationTci(bool enabled, quint16 port)
 {
     if (!stationTciAvailable()) {
-        return { false, QStringLiteral("This Core has no TCI server for the station.") };
+        return { false, QStringLiteral("This Core has no TCI server.") };
     }
     return sendCommand("setStationTci", -1,
                        { boolArgument("enabled", enabled), intArgument("port", port) },
-                       QStringLiteral("the station's TCI server switch"));
+                       QStringLiteral("the Core's TCI server switch"));
 }
 
 // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory records

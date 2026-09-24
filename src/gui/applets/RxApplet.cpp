@@ -1463,7 +1463,7 @@ void RxApplet::setTransmitPermitted(bool permitted, const QString& reason)
 {
     m_transmitPermitted = permitted;
     const QString text = reason.isEmpty()
-        ? tr("Transmit controls are unavailable until the station confirms "
+        ? tr("Transmit controls are unavailable until the Core confirms "
              "transmit permission.")
         : reason;
     static constexpr auto kSavedTooltip = "RxAppletSavedTransmitTooltip";

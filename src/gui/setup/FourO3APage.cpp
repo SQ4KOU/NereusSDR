@@ -533,14 +533,14 @@ void FourO3APage::refreshRemotePgxlTab()
         ? QString() : OperatorReasonText::forDisplay(amp->connectionError());
     QString text;
     switch (phase) {
-    case Phase::Disabled: text = tr("Disabled at station"); break;
+    case Phase::Disabled: text = tr("Disabled at the Core"); break;
     case Phase::Disconnected: text = tr("Disconnected"); break;
-    case Phase::Discovering: text = tr("Discovering at station"); break;
-    case Phase::Connecting: text = tr("Connecting at station"); break;
+    case Phase::Discovering: text = tr("Discovering at the Core"); break;
+    case Phase::Connecting: text = tr("Connecting at the Core"); break;
     case Phase::Identifying: text = tr("Identifying device"); break;
     case Phase::Retrying:
-        text = error.isEmpty() ? tr("Retrying at station")
-                               : tr("Retrying at station: %1").arg(error);
+        text = error.isEmpty() ? tr("Retrying at the Core")
+                               : tr("Retrying at the Core: %1").arg(error);
         break;
     case Phase::Connected: text = tr("Connected"); break;
     case Phase::Error:

@@ -431,6 +431,7 @@ void AudioAdvancedPage::onResetClicked()
 {
     // Addendum §2.5 — verbatim confirm modal copy.
     // R-R3-21 (2026-09-24): "device bindings" reads "device choices".
+    // R-R3-21 (2026-09-24): "DSP sample rate" reads "Audio processing rate".
     QMessageBox dlg(this);
     dlg.setWindowTitle(QStringLiteral("Reset all audio to defaults?"));
     dlg.setText(QStringLiteral("Reset all audio to defaults?"));
@@ -438,7 +439,7 @@ void AudioAdvancedPage::onResetClicked()
         QStringLiteral(
             "This will clear:\n"
             "\u2022 All device choices (Speakers / Headphones / TX Input / VAX 1\u20134)\n"
-            "\u2022 DSP sample rate and block size\n"
+            "\u2022 Audio processing rate and block size\n"
             "\u2022 Feature flags\n"
             "\n"
             "Your per-slice VAX channel assignments will be kept. "

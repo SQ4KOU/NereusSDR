@@ -65,7 +65,7 @@ QString remoteAudioHeadline(RemoteAudioStatus::State state)
     case State::MutedHere:
         return QStringLiteral("Muted on this computer");
     case State::RadioOffline:
-        return QStringLiteral("Radio offline at the station");
+        return QStringLiteral("Radio offline at the Core");
     case State::CoreCouldNotStart:
         return QStringLiteral("Core could not start audio");
     case State::Starting:

@@ -270,7 +270,7 @@ quint32 PureSignalSessionFacade::requestAction(Ps3Action action, const QVariantM
     }
     if (remote()) {
         if (!m_available || !m_remoteRequest) {
-            m_lastError = QStringLiteral("This station does not support PureSignal 3 controls.");
+            m_lastError = QStringLiteral("This Core does not offer PureSignal controls to this app.");
             emit statusChanged();
             return 0;
         }

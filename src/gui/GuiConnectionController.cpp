@@ -335,7 +335,7 @@ void GuiConnectionController::connectTarget(const QString& key)
             } else if (matches.isEmpty()) {
                 editCore(); // Address/name only. Never adopt an advertised pin.
             } else {
-                m_selector->setNotice(tr("Several saved entries use this Core identity. Choose the intended entry under Your stations."));
+                m_selector->setNotice(tr("Several saved entries use this Core identity. Choose the intended entry under Your Cores."));
             }
             refresh();
             return;

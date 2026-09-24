@@ -206,12 +206,12 @@ QWidget* showSetupLeaf(SetupDialog* dialog, const QString& label)
     return stack->currentWidget();
 }
 
-// The Setup dialog's Remote Station page, reached the way an operator
+// The Setup dialog's Remote Access page, reached the way an operator
 // reaches it: File > Settings..., then its entry in the page tree.
 QPushButton* openSetupConnectionsButton(RemoteWindowHarness& h)
 {
     SetupDialog* dialog = openSettings(h);
-    if (!showSetupLeaf(dialog, QStringLiteral("Remote Station"))) { return nullptr; }
+    if (!showSetupLeaf(dialog, QStringLiteral("Remote Access"))) { return nullptr; }
     return dialog->findChild<QPushButton*>(QStringLiteral("remoteStationConnections"));
 }
 
@@ -1330,7 +1330,7 @@ private slots:
         QPushButton* const radeReset = rade->resetVocoderButtonForTest();
         QVERIFY(!radeReset->isEnabled());
         QCOMPARE(radeReset->toolTip(),
-                 QStringLiteral("The RADE vocoder runs on the station computer and "
+                 QStringLiteral("The RADE vocoder runs on the Core's computer and "
                                 "cannot be reset from a remote window."));
 
         StationCapabilities withdrawn = h.server().buildCapabilities();

@@ -172,7 +172,7 @@ bool WdspEngine::setNnrModelPaths(const std::array<QString, 2>& paths, QString* 
 {
     if (reason) reason->clear();
     if (m_initialized || m_initializationInProgress || !m_rxChannels.empty()) {
-        if (reason) *reason = QStringLiteral("NNR model changes apply after disconnecting and reconnecting the station.");
+        if (reason) *reason = QStringLiteral("NNR model changes apply after the radio is disconnected and connected again.");
         return false;
     }
     for (const QString& path : paths) {

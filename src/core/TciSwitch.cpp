@@ -167,17 +167,17 @@ QString TciSwitch::stationLine(const RadioModel* model)
         return {};
     }
     if (!station->listening()) {
-        return QStringLiteral("The station's TCI server is not running.");
+        return QStringLiteral("The Core's TCI server is not running.");
     }
     if (link->coreServesTciOnThisComputer()) {
         return QStringLiteral("The Core on this computer serves TCI apps here, port %1.")
             .arg(station->port());
     }
     if (station->stationAddress().isEmpty()) {
-        return QStringLiteral("Also at the station, port %1, for apps on the Core's computer.")
+        return QStringLiteral("Also at the Core, port %1, for apps on the Core's computer.")
             .arg(station->port());
     }
-    return QStringLiteral("Also at the station: %1, port %2")
+    return QStringLiteral("Also at the Core: %1, port %2")
         .arg(station->stationAddress()).arg(station->port());
 }
 

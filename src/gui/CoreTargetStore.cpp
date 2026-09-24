@@ -84,7 +84,7 @@ bool validateTarget(const SavedCoreTarget& target, QString* error)
         return false;
     }
     if (!RemoteStationOptions::isValidStationUrl(target.connection.url)) {
-        setError(error, QStringLiteral("Saved Core target has an invalid station address."));
+        setError(error, QStringLiteral("Saved Core target has an invalid Core address."));
         return false;
     }
     return true;
@@ -240,7 +240,7 @@ bool CoreTargetStore::load(QString* error)
     const QString legacyUrl =
         m_settings.value(QStringLiteral("RemoteStationUrl"), QString()).toString();
     if (!legacyUrl.isEmpty() && !RemoteStationOptions::isValidStationUrl(legacyUrl)) {
-        setError(error, QStringLiteral("Legacy station address is invalid; correct it before migrating."));
+        setError(error, QStringLiteral("Legacy Core address is invalid; correct it before migrating."));
         return false;
     }
 
