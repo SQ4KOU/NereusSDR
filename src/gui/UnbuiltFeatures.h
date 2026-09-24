@@ -100,6 +100,8 @@ enum class UnbuiltFeature {
     FmTransmit,       // Setup > DSP > FM transmit group; the VFO flag's FM repeater minus,
                       // simplex and plus buttons (table rows fm-tx and fm-repeater)
     DdcRouting,       // Setup > Hardware > DDC Routing (multi-panadapter receiver routing)
+    HpfBroadcastReject,   // The filter policy dialog's "HPF (broadcast band reject) enabled"
+    FrequencyCalibration, // Setup > Hardware > Calibration: the frequency calibration Start button
 };
 
 namespace UnbuiltFeatures {

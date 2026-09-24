@@ -104,6 +104,7 @@
 #include "gui/SpectrumOverlayPanel.h"
 #include "gui/SpotHubDialog.h"
 #include "gui/UnbuiltFeatures.h"
+#include "gui/widgets/FilterPolicyDialog.h"
 #include "gui/applets/PhoneCwApplet.h"
 #include "gui/applets/Rf2ksApplet.h"
 #include "gui/containers/ContainerManager.h"
@@ -270,6 +271,7 @@ public:
 
     ~Hosts()
     {
+        m_filterPolicy.reset();
         m_containerDialog.reset();
         m_container.reset();
         m_flagHost.reset();
@@ -430,6 +432,14 @@ public:
         if (!m_bandButtons) { m_bandButtons = std::make_unique<BandButtonItem>(); }
         return m_bandButtons.get();
     }
+    // The pan's filter policy dialog for chain 0, on the window's model.
+    FilterPolicyDialog* filterPolicy()
+    {
+        if (!m_filterPolicy && window() != nullptr) {
+            m_filterPolicy = std::make_unique<FilterPolicyDialog>(0, m_window->radioModel());
+        }
+        return m_filterPolicy.get();
+    }
 
 private:
     GuiSessionCoordinator& m_sessions;
@@ -449,11 +459,12 @@ private:
     std::unique_ptr<FilterButtonItem> m_filterButtons;
     std::unique_ptr<AntennaButtonItem> m_antennaButtons;
     std::unique_ptr<BandButtonItem> m_bandButtons;
+    std::unique_ptr<FilterPolicyDialog> m_filterPolicy;
 };
 
 // The hosts a surface lives on. The per-feature pass builds only the hosts
 // its feature's surfaces need, and checks every surface on those hosts.
-enum class Host { Window, Setup, SpotHub, NetDiag, Applets, Flag, Container };
+enum class Host { Window, Setup, SpotHub, NetDiag, Applets, Flag, Container, FilterPolicy };
 
 struct Surface {
     QString name;
@@ -747,6 +758,18 @@ QMap<F, QList<Surface>> surfaces()
                           flagButton(QStringLiteral("simplexBtn")),
                           flagButton(QStringLiteral("txHighBtn"))};
     map[F::DdcRouting] = {setupPage(QStringLiteral("DDC Routing"))};
+    // Plan rows hpf-bcast and freq-cal (added 2026-09-24): nothing reads the
+    // one or handles the other.
+    map[F::HpfBroadcastReject] = {
+        Surface{QStringLiteral("filter policy HPF checkbox"), Host::FilterPolicy, [](Hosts& h) {
+                    FilterPolicyDialog* d = h.filterPolicy();
+                    const auto* b = d ? d->findChild<QCheckBox*>(QStringLiteral("filterPolicyHpfCheck"))
+                                      : nullptr;
+                    return b != nullptr && !b->isHidden();
+                }}};
+    map[F::FrequencyCalibration] = {onPage(QStringLiteral("Hardware Config"),
+                                           QStringLiteral("frequency calibration Start"),
+                                           named(QStringLiteral("freqCalStartButton")))};
     return map;
 }
 

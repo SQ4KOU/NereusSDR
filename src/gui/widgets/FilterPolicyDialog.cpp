@@ -11,6 +11,9 @@
 // Modification history (NereusSDR):
 //   2026-05-27 Created in C++20/Qt6 for NereusSDR by J.J. Boyd (KG4VCF),
 //              with AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-24 R-R3-49 / R-R3-21: the HPF checkbox is hidden until built
+//              (hpf-bcast). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//              Claude Code.
 // =================================================================
 //
 // no-port-check: NereusSDR-original
@@ -19,6 +22,7 @@
 
 #include "core/accessories/AlexController.h"
 #include "gui/StyleConstants.h"
+#include "gui/UnbuiltFeatures.h"
 #include "models/RadioModel.h"
 
 #include <QButtonGroup>
@@ -119,6 +123,10 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWi
     hpfBox->setChecked(true);  // Default; bind to AlexController HPF state in Sub-Epic G.
     hpfBox->setStyleSheet(QLatin1String(Style::kCheckBoxStyle));
     hpfBox->setVisible(stationState == nullptr);
+    hpfBox->setObjectName(QStringLiteral("filterPolicyHpfCheck"));
+    // R-R3-49 (hpf-bcast): nothing reads this checkbox yet; hidden until the
+    // broadcast band reject filter is built.
+    UnbuiltFeatures::hideUnlessBuilt(hpfBox, UnbuiltFeature::HpfBroadcastReject);
     main->addWidget(hpfBox);
 
     // Footer buttons

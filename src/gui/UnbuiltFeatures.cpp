@@ -217,6 +217,10 @@ const QList<Entry>& all()
                         "repeater minus, simplex and plus buttons")},
         {F::DdcRouting, QStringLiteral("ddc-routing"),
          QStringLiteral("Setup > Hardware > DDC Routing (multi-panadapter receiver routing)")},
+        {F::HpfBroadcastReject, QStringLiteral("hpf-bcast"),
+         QStringLiteral("Filter policy dialog: HPF (broadcast band reject) enabled")},
+        {F::FrequencyCalibration, QStringLiteral("freq-cal"),
+         QStringLiteral("Setup > Hardware > Calibration: frequency calibration Start")},
     };
     return entries;
 }
