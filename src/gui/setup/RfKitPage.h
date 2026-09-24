@@ -36,6 +36,7 @@
 //                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include <QHash>
 #include <QWidget>
 
 class QCheckBox;
@@ -119,6 +120,9 @@ private:
     bool m_touchedAutoReconnect{false};
     bool m_touchedPoll{false};
     bool m_touchedLabel[4]{false, false, false, false};
+    // Rework follow-up 3: values saved and not yet echoed by the Core.
+    QHash<QString, QString> m_savedPending;
+    void settleSaved(const QString& key);
     void refreshBandFollow();
     void onConnectClicked();
     void onDisconnectClicked();

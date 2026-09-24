@@ -2623,6 +2623,25 @@ void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
     QCOMPARE(page.pollIntervalForTesting()->value(), 1234);
     QCOMPARE(page.antennaLabelEditForTesting(2)->text(), QStringLiteral("Wire"));
 
+    // Rework follow-up 3: a Save whose writes never reach the Core (the
+    // settings link not ready: they are dropped) keeps the marks, so the
+    // Core's settings arriving later do not overwrite the operator's
+    // values; a Save the Core takes (its settings echo) clears them.
+    cw.proxy.setReady(false);
+    page.saveButtonForTesting()->click();   // poll 1234, ANT 2 "Wire": dropped
+    QTest::qWait(100);
+    QCOMPARE(cw.stationSettings.value(QStringLiteral("RfKit_PollIntervalMs")).toString(),
+             QStringLiteral("4000"));
+    cw.proxy.setReady(true);
+    cw.stationSettings.setValue(QStringLiteral("RfKit_PollIntervalMs"), QStringLiteral("4500"));
+    QTest::qWait(200);
+    QCOMPARE(page.pollIntervalForTesting()->value(), 1234);
+    page.saveButtonForTesting()->click();   // taken this time
+    QTRY_COMPARE(cw.stationSettings.value(QStringLiteral("RfKit_PollIntervalMs")).toString(),
+                 QStringLiteral("1234"));
+    cw.stationSettings.setValue(QStringLiteral("RfKit_PollIntervalMs"), QStringLiteral("4600"));
+    QTRY_COMPARE(page.pollIntervalForTesting()->value(), 4600);
+
     // Nothing but reads and the reset reached the Core's amp; the window
     // opened no connection of its own.
     for (const QString& line : amp.lines) {

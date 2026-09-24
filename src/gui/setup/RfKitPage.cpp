@@ -26,7 +26,7 @@
 //                 settings, Reset amp error through the Core
 //                 (remoteRfKitControlVersion 3); the page follows another
 //                 window's changes to them, except fields the operator
-//                 changed and has not saved. J.J. Boyd (KG4VCF),
+//                 changed and the Core has not yet taken. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -287,6 +287,9 @@ QWidget* RfKitPage::buildRf2ksTab()
         // poll interval on the Core shows here too.
         connect(m_model, &RadioModel::stationSettingChanged, this,
                 [this](const QString& key) {
+            // Rework follow-up 3: a saved value the Core now has ends its
+            // field's mark (checked before the refresh reads the Core).
+            settleSaved(key);
             if (key.isEmpty() || key == QLatin1String("RfKit_AutoReconnect")
                 || key == QLatin1String("RfKit_PollIntervalMs")) {
                 refreshRemoteSettings();
@@ -374,6 +377,29 @@ void RfKitPage::refreshRemoteSettings()
                 && i < labels.size()) {
                 m_antLabelEdits[i]->setText(labels.at(i));
             }
+        }
+    }
+}
+
+void RfKitPage::settleSaved(const QString& key)
+{
+    auto& s = AppSettings::instance();
+    for (auto it = m_savedPending.begin(); it != m_savedPending.end();) {
+        if ((key.isEmpty() || key == it.key()) && s.value(it.key()).toString() == it.value()) {
+            const QString& k = it.key();
+            if (k == QLatin1String("RfKit_AutoReconnect")) {
+                m_touchedAutoReconnect = false;
+            } else if (k == QLatin1String("RfKit_PollIntervalMs")) {
+                m_touchedPoll = false;
+            } else {
+                const int n = k.mid(9, 1).toInt();   // RfKit_Ant<N>_Label
+                if (n >= 1 && n <= 4) {
+                    m_touchedLabel[n - 1] = false;
+                }
+            }
+            it = m_savedPending.erase(it);
+        } else {
+            ++it;
         }
     }
 }
@@ -472,10 +498,17 @@ void RfKitPage::saveRf2ksSettings()
         for (int i = 0; i < 4; ++i) {
             s.setValue(QStringLiteral("RfKit_Ant%1_Label").arg(i + 1),
                        m_antLabelEdits[i]->text());
-            m_touchedLabel[i] = false;
+            m_savedPending.insert(QStringLiteral("RfKit_Ant%1_Label").arg(i + 1),
+                                  m_antLabelEdits[i]->text());
         }
-        m_touchedAutoReconnect = false;
-        m_touchedPoll = false;
+        // Rework follow-up 3: the marks stay until the Core has these values
+        // (its settings echo them); writes that never reach it (the link
+        // not ready) leave the operator's values in place.
+        m_savedPending.insert(QStringLiteral("RfKit_AutoReconnect"),
+                              m_autoReconnect->isChecked() ? QStringLiteral("True")
+                                                           : QStringLiteral("False"));
+        m_savedPending.insert(QStringLiteral("RfKit_PollIntervalMs"),
+                              QString::number(m_pollIntervalSpin->value()));
         return;
     }
     // Per-radio peripherals refactor (2026-05-26): the three connection
