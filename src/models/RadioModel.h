@@ -1791,7 +1791,7 @@ public:
     // (enableStationTci), and from the Core's values in a remote window.
     StationTciModel* stationTciModel() const { return m_stationTciModel; }
     // R-R3-48: the Core's station TCI server (nullptr outside the Core).
-    StationTciController* stationTciController() const { return m_stationTci; }
+    StationTciController* stationTciController() const { return m_stationTci.get(); }
     // R-R3-47: the Core's RF-Kit controller (nullptr outside the Core).
     StationRfKitController* stationRfKitController() const { return m_stationRfKit; }
     // SmartSDR API server on TCP 4992. Owned by RadioModel; lifetime matches.
@@ -5111,8 +5111,10 @@ private:
     // and its state, and the RF-Kit's band follow over that server.
     StationRfKitController* m_stationRfKit{nullptr};
     StationTciModel*        m_stationTciModel{nullptr};
-    StationTciController*   m_stationTci{nullptr};
-    RfKitBandFollow*        m_rfKitBandFollow{nullptr};
+    // M6: owned here and destroyed first in ~RadioModel (they hold this
+    // model's slices and receivers), not through Qt parenting.
+    std::unique_ptr<StationTciController> m_stationTci;
+    std::unique_ptr<RfKitBandFollow>      m_rfKitBandFollow;
 
     // Phase 3P-III: RF-Kit RF2K-S connection. unique_ptr with Qt parent=this
     // so destruction order is deterministic and QObject hierarchy is intact.

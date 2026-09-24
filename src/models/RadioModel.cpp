@@ -152,7 +152,9 @@
 //                AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-47 fix wave: Reset amp error for a window
 //                (resetRfKitErrorForStation) and a window's RF-Kit
-//                auto-reconnect and poll interval applied at once.
+//                auto-reconnect and poll interval applied at once; the
+//                station TCI controller and RF-Kit band follow owned by
+//                std::unique_ptr, not raw delete.
 //                NereusSDR-original; no Thetis logic. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
 // =================================================================
@@ -2606,10 +2608,8 @@ RadioModel::~RadioModel()
 {
     // R-R3-48: the station TCI server holds this model's slices and
     // receivers; stop it while they still exist.
-    delete m_rfKitBandFollow;
-    m_rfKitBandFollow = nullptr;
-    delete m_stationTci;
-    m_stationTci = nullptr;
+    m_rfKitBandFollow.reset();
+    m_stationTci.reset();
     teardownConnection();
     qDeleteAll(m_slices);
     qDeleteAll(m_panadapters);
@@ -3418,13 +3418,13 @@ void RadioModel::enableStationAccessoryIdentity()
 void RadioModel::enableStationTci(const QString& bindOverride)
 {
     if (m_role != Role::Local || m_stationTci) { return; }
-    m_stationTci = new StationTciController(this, m_stationTciModel, this);
+    m_stationTci = std::make_unique<StationTciController>(this, m_stationTciModel);
     m_stationTci->setBindOverride(bindOverride);
     if (isConnected() && !m_lastRadioInfo.address.isNull()) {
         m_stationTci->setRadioAddress(m_lastRadioInfo.address);
     }
     // R-R3-48: the RF-Kit follows the band as an app of this server.
-    m_rfKitBandFollow = new RfKitBandFollow(m_rfKitModel, this);
+    m_rfKitBandFollow = std::make_unique<RfKitBandFollow>(m_rfKitModel);
     m_rfKitBandFollow->setServer(m_stationTci->server());
     // R-R3-22: the one station rule, when the Core has set it, wins over
     // the override given here.

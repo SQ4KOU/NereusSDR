@@ -30,8 +30,9 @@
 //                "cannot send" answer unsubscribes the apps and tells them.
 //                AI-assisted transformation via Anthropic Claude Code.
 //   2026-09-24 - R-R3-48 / R-R3-25: the station server tells the operator
-//                why a TX profile or XIT change was not made. J.J. Boyd
-//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                why a TX profile or XIT change was not made; its extra
+//                listeners go through deleteLater, not raw delete. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -1289,7 +1290,8 @@ bool TciServer::start(const QList<QHostAddress>& bindAddresses, quint16 port)
             qCWarning(lcTci) << "TciServer: failed to listen on"
                              << bindAddresses.at(i).toString() << "port" << boundPort
                              << errStr;
-            delete extra;
+            // M6: Qt ownership (parented to this); it never listened.
+            extra->deleteLater();
             stop();
             emit errorOccurred(errStr);
             return false;
@@ -1478,8 +1480,9 @@ void TciServer::stop()
     delete m_server;
     m_server = nullptr;
     for (QWebSocketServer* extra : std::as_const(m_extraServers)) {
+        // M6: closed now, so the port is free at once; Qt deletes it.
         extra->close();
-        delete extra;
+        extra->deleteLater();
     }
     m_extraServers.clear();
 
