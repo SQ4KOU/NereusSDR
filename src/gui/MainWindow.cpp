@@ -373,6 +373,7 @@ warren@wpratt.com
 #include "core/LogCategories.h"
 #include "containers/ContainerManager.h"
 #include "containers/ContainerWidget.h"
+#include "containers/ContainerButtonDispatcher.h"
 #include "containers/ContainerSettingsDialog.h"
 #include "meters/MeterWidget.h"
 #include "meters/MeterItem.h"
@@ -383,6 +384,8 @@ warren@wpratt.com
 #include "meters/FilterButtonItem.h"
 #include "meters/AntennaButtonItem.h"
 #include "meters/TuneStepButtonItem.h"
+#include "meters/BandButtonItem.h"
+#include "meters/OtherButtonItem.h"
 #include "models/FilterPresetStore.h"
 #include "core/SkuUiProfile.h"
 // Remote Daemon R2 Task 12: source-selector wiring below (setSourceSelector).
@@ -2905,6 +2908,8 @@ void MainWindow::wireSpectrumSliceControls(SpectrumWidget* sw,
     // through the now-unpinned allocator.
     connect(sw, &SpectrumWidget::ctunEnabledChanged, this,
             [this, panId, sw](bool enabled) {
+        // R-R3-21: a container's CTUN button lights from its slice's pan.
+        refreshContainerControls();
         if (!m_radioModel->ownsLocalDsp()) { return; }
         if (m_radioModel->receiverManager()) {
             m_radioModel->receiverManager()->setDdcFrequencyLocked(enabled);
@@ -3923,31 +3928,71 @@ void MainWindow::buildUI()
             this, refreshFilterIndicators);
     refreshFilterIndicators();
 
-    // Issue #118 — helper: wire a container's bandClicked signal through
-    // the RadioModel handler. Invoked from the containerAdded callback,
-    // which fires for every container materialized by ContainerManager
-    // (runtime-added, restoreState(), and createDefaultContainers()).
-    auto wireContainerBandClick = [this](ContainerWidget* c) {
-        if (!c) { return; }
-        connect(c, &ContainerWidget::bandClicked, this, [this](int idx) {
-            m_radioModel->onBandButtonClicked(bandFromUiIndex(idx));
-        });
-    };
+    // R-R3-21 / R-R3-49: the container buttons' targets. Power, the
+    // transmit gate, the panadapter of a slice and this computer's VAX
+    // outputs live on this window; the rest on RadioModel.
+    {
+        ContainerButtonDispatcher::Hooks hooks;
+        hooks.powerOn = [this] { return m_actDisconnect && m_actDisconnect->isEnabled(); };
+        hooks.powerCanToggle = [this] { return m_actConnect && m_actConnect->isEnabled(); };
+        hooks.togglePower = [this] {
+            // Radio > Disconnect / Radio > Connect: this window's radio, or
+            // in a remote window its Core.
+            if (m_actDisconnect && m_actDisconnect->isEnabled()) {
+                m_actDisconnect->trigger();
+            } else if (m_actConnect && m_actConnect->isEnabled()) {
+                m_actConnect->trigger();
+            }
+        };
+        hooks.transmitPermitted = [this] { return transmitControlsPermitted(); };
+        hooks.remoteTransmitReason =
+            tr("Remote transmit controls are not available from this Core yet.");
+        hooks.spectrumFor = [this](SliceModel* s) { return spectrumForSlice(s); };
+        // R-R3-49: VAX 1 / VAX 2 open and close this computer's VAX
+        // outputs, as Setup > Audio > VAX does (live in a remote window).
+        hooks.vaxDevices = m_radioModel->localAudioDevices();
+        m_containerButtons = std::make_unique<ContainerButtonDispatcher>(
+            m_radioModel, std::move(hooks));
+    }
 
     connect(m_containerManager, &ContainerManager::containerAdded, this,
-            [this, wireContainerBandClick](const QString& id) {
+            [this](const QString& id) {
         if (auto* c = m_containerManager->container(id)) {
             c->setBoardCapabilities(m_radioModel->boardCapabilities());
-            wireContainerBandClick(c);
             wireContainerControls(c);
         }
     });
-    // R-R3-21: follow the active slice so the container controls show it.
-    connect(m_radioModel, &RadioModel::activeSliceChanged, this,
-            [this](int) { followActiveSliceForContainers(); });
+    // R-R3-21: every slice's state reaches the containers set to it.
     connect(m_radioModel, &RadioModel::sliceAdded, this,
-            [this](int) { followActiveSliceForContainers(); });
-    followActiveSliceForContainers();
+            [this](int) { watchSlicesForContainers(); });
+    connect(m_radioModel, &RadioModel::sliceRemoved, this,
+            [this](int) { watchSlicesForContainers(); });
+    // The function buttons' global targets: they light from the target.
+    {
+        const auto refresh = [this]() { refreshContainerControls(); };
+        connect(&m_radioModel->transmitModel(), &TransmitModel::monEnabledChanged,
+                this, refresh);
+        connect(m_radioModel, &RadioModel::tuneRefused, this, refresh);
+        connect(m_radioModel, &RadioModel::connectionStateChanged, this, refresh);
+        if (MoxController* mox = m_radioModel->moxController()) {
+            connect(mox, &MoxController::moxStateChanged, this, refresh);
+            connect(mox, &MoxController::moxRejected, this, refresh);
+            connect(mox, &MoxController::manualMoxChanged, this, refresh);
+        }
+        if (TwoToneController* twoTone = m_radioModel->twoToneController()) {
+            connect(twoTone, &TwoToneController::twoToneActiveChanged, this, refresh);
+        }
+        if (PureSignalSessionFacade* ps = m_radioModel->pureSignalFacade()) {
+            connect(ps, &PureSignalSessionFacade::statusChanged, this, refresh);
+            if (PureSignalSettings* settings = ps->settings()) {
+                connect(settings, &PureSignalSettings::autoCalEnabledChanged, this, refresh);
+            }
+        }
+        if (NotchModel* notches = m_radioModel->notchModel()) {
+            connect(notches, &NotchModel::globalEnabledChanged, this, refresh);
+        }
+    }
+    watchSlicesForContainers();
 
     // Create the MeterPoller BEFORE restoreState / populateDefaultMeter
     // so the meterReadyForPolling signal fires into a live poller as
@@ -9477,22 +9522,52 @@ void MainWindow::openSetup(const QString& pageKey)
 //
 // Each ButtonBoxItem is a port of a Thetis MeterManager.cs button box; its
 // click did nothing past ContainerWidget's relay (only the band buttons were
-// connected). They now act on the active slice through the same SliceModel
-// setters the VFO flag and the RX applet use, so a remote window changes the
-// Core's slice exactly as those do. Acting on the container's own slice is a
-// later change (the unfinished-controls plan, Task 3).
+// connected). They act through the same SliceModel setters the VFO flag and
+// the RX applet use, so a remote window changes the Core's slice exactly as
+// those do. R-R3-49 (the unfinished-controls plan, Task 3): each acts on the
+// container's own slice (ContainerWidget::rxSource(), slices A to D), as
+// Thetis's meter acts on its own RX (MeterManager.cs:9424 [v2.10.3.15]
+// passes the meter's RX with every click), and the function and band
+// buttons go through ContainerButtonDispatcher.
+
+namespace {
+
+// The container's meter (its content, or the one inside it), as
+// ContainerManager::forEachMeterItem finds it.
+MeterWidget* containerMeter(const ContainerWidget* c)
+{
+    QWidget* content = c ? c->content() : nullptr;
+    if (!content) { return nullptr; }
+    if (auto* meter = qobject_cast<MeterWidget*>(content)) { return meter; }
+    return content->findChild<MeterWidget*>();
+}
+
+} // namespace
 
 void MainWindow::wireContainerControls(ContainerWidget* c)
 {
     if (!c) { return; }
-    connect(c, &ContainerWidget::modeClicked, this, &MainWindow::onContainerModeClicked);
-    connect(c, &ContainerWidget::filterClicked, this, &MainWindow::onContainerFilterClicked);
-    connect(c, &ContainerWidget::antennaSelected,
-            this, &MainWindow::onContainerAntennaSelected);
-    connect(c, &ContainerWidget::tuneStepSelected,
-            this, &MainWindow::onContainerTuneStepSelected);
-    connect(c, &ContainerWidget::frequencyChangeRequested,
-            this, &MainWindow::onContainerFrequencyStep);
+    // Issue #118: the band buttons, now on the container's own slice.
+    connect(c, &ContainerWidget::bandClicked, this, [this, c](int idx) {
+        if (!m_containerButtons) { return; }
+        showContainerButtonReason(m_containerButtons->clickBand(idx, c->rxSource()));
+    });
+    connect(c, &ContainerWidget::modeClicked, this,
+            [this, c](int index) { onContainerModeClicked(c, index); });
+    connect(c, &ContainerWidget::filterClicked, this,
+            [this, c](int index) { onContainerFilterClicked(c, index); });
+    connect(c, &ContainerWidget::antennaSelected, this,
+            [this, c](int index) { onContainerAntennaSelected(c, index); });
+    connect(c, &ContainerWidget::tuneStepSelected, this,
+            [this, c](int index) { onContainerTuneStepSelected(c, index); });
+    connect(c, &ContainerWidget::frequencyChangeRequested, this,
+            [this, c](int64_t deltaHz) { onContainerFrequencyStep(c, deltaHz); });
+    connect(c, &ContainerWidget::otherButtonClicked, this,
+            [this, c](int buttonId) { onContainerOtherButtonClicked(c, buttonId); });
+    connect(c, &ContainerWidget::unavailableButtonClicked,
+            this, &MainWindow::showContainerButtonReason);
+    connect(c, &ContainerWidget::rxSourceChanged, this,
+            [this, c](int) { refreshContainer(c); });
     // An item added later (a preset, Container settings > Apply) gets the
     // saved meter settings and the slice's state as it arrives; one refresh
     // now covers restored containers.
@@ -9524,34 +9599,96 @@ void MainWindow::onContainerItemAdded(MeterItem* item)
     refreshContainerControls(item);
 }
 
-void MainWindow::followActiveSliceForContainers()
+SliceModel* MainWindow::containerSlice(const ContainerWidget* c) const
+{
+    if (!c || !m_containerButtons) { return nullptr; }
+    return m_containerButtons->sliceFor(c->rxSource());
+}
+
+void MainWindow::watchSlicesForContainers()
 {
     for (const QMetaObject::Connection& conn : std::as_const(m_containerSliceConnections)) {
         QObject::disconnect(conn);
     }
     m_containerSliceConnections.clear();
-    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
-    if (slice) {
-        const auto refresh = [this]() { refreshContainerControls(); };
-        // Tuning changes only what the VFO displays show; the buttons are
-        // left alone on every tuning step.
+    if (!m_radioModel) { return; }
+    const auto refresh = [this]() { refreshContainerControls(); };
+    for (SliceModel* slice : m_radioModel->slices()) {
+        if (!slice) { continue; }
+        // Tuning changes only what the VFO displays and band buttons of
+        // the containers on that slice show; the rest are left alone on
+        // every tuning step.
         m_containerSliceConnections
             << connect(slice, &SliceModel::frequencyChanged, this,
-                       [this]() { refreshContainerFrequency(); })
+                       [this, slice]() { refreshContainerFrequency(slice); })
             << connect(slice, &SliceModel::dspModeChanged, this, refresh)
             << connect(slice, &SliceModel::filterChanged, this, refresh)
             << connect(slice, &SliceModel::stepHzChanged, this, refresh)
             << connect(slice, &SliceModel::rxAntennaChanged, this, refresh)
-            << connect(slice, &SliceModel::txAntennaChanged, this, refresh);
+            << connect(slice, &SliceModel::txAntennaChanged, this, refresh)
+            << connect(slice, &SliceModel::anfEnabledChanged, this, refresh)
+            << connect(slice, &SliceModel::snbEnabledChanged, this, refresh)
+            << connect(slice, &SliceModel::mutedChanged, this, refresh)
+            << connect(slice, &SliceModel::binauralEnabledChanged, this, refresh);
     }
     refreshContainerControls();
 }
 
 void MainWindow::refreshContainerControls(MeterItem* only)
 {
-    if (!m_containerManager || !m_radioModel) { return; }
-    SliceModel* slice = m_radioModel->activeSlice();
-    if (!slice) { return; }
+    if (!m_containerManager || !m_radioModel || !m_containerButtons) { return; }
+    for (ContainerWidget* c : m_containerManager->allContainers()) {
+        if (!c) { continue; }
+        if (only) {
+            MeterWidget* meter = containerMeter(c);
+            if (meter && meter->items().contains(only)) {
+                refreshContainer(c, only);
+                return;
+            }
+            continue;
+        }
+        refreshContainer(c);
+    }
+}
+
+void MainWindow::refreshContainer(ContainerWidget* c, MeterItem* only)
+{
+    if (!c || !m_radioModel || !m_containerButtons) { return; }
+    MeterWidget* meter = containerMeter(c);
+    if (!meter) { return; }
+    const int rxSource = c->rxSource();
+    SliceModel* slice = containerSlice(c);
+
+    // Function buttons and band buttons, whatever the slice (the function
+    // buttons' global targets do not need it; the dispatcher reports a
+    // slice that is not open on the ones that do).
+    const auto applyAlways = [&](MeterItem* item) {
+        if (auto* other = qobject_cast<OtherButtonItem*>(item)) {
+            m_containerButtons->apply(other, rxSource);
+            return true;
+        }
+        if (auto* band = qobject_cast<BandButtonItem*>(item)) {
+            m_containerButtons->applyBand(band, rxSource);
+            return true;
+        }
+        return false;
+    };
+
+    if (!slice) {
+        const auto applyNoSlice = [&](MeterItem* item) {
+            if (applyAlways(item)) { return; }
+            if (auto* box = qobject_cast<ButtonBoxItem*>(item)) {
+                m_containerButtons->applySliceAvailability(box, rxSource);
+            }
+        };
+        if (only) {
+            applyNoSlice(only);
+        } else {
+            for (MeterItem* item : meter->items()) { applyNoSlice(item); }
+        }
+        c->update();
+        return;
+    }
 
     const QString modeName = SliceModel::modeName(slice->dspMode());
     int modeIndex = -1;
@@ -9594,6 +9731,10 @@ void MainWindow::refreshContainerControls(MeterItem* only)
     const Band band = bandFromFrequency(slice->frequency());
 
     const auto applyTo = [&](MeterItem* item) {
+        if (applyAlways(item)) { return; }
+        if (auto* box = qobject_cast<ButtonBoxItem*>(item)) {
+            m_containerButtons->applySliceAvailability(box, rxSource);
+        }
         if (auto* mode = qobject_cast<ModeButtonItem*>(item)) {
             mode->setActiveMode(modeIndex);
         } else if (auto* filter = qobject_cast<FilterButtonItem*>(item)) {
@@ -9622,38 +9763,58 @@ void MainWindow::refreshContainerControls(MeterItem* only)
         }
     };
     if (only) {
-        applyTo(only);  // the added item's container repaints on its own
-        return;
+        applyTo(only);
+    } else {
+        for (MeterItem* item : meter->items()) { applyTo(item); }
     }
-    m_containerManager->forEachMeterItem(applyTo);
-    for (ContainerWidget* c : m_containerManager->allContainers()) {
-        if (c) { c->update(); }
-    }
+    c->update();
 }
 
-void MainWindow::refreshContainerFrequency()
+void MainWindow::refreshContainerFrequency(SliceModel* slice)
 {
-    if (!m_containerManager || !m_radioModel) { return; }
-    SliceModel* slice = m_radioModel->activeSlice();
-    if (!slice) { return; }
+    if (!m_containerManager || !m_radioModel || !m_containerButtons || !slice) { return; }
     const Band band = bandFromFrequency(slice->frequency());
-    bool any = false;
-    m_containerManager->forEachMeterItem([&](MeterItem* item) {
-        if (auto* vfo = qobject_cast<VfoDisplayItem*>(item)) {
-            vfo->setFrequency(static_cast<int64_t>(std::llround(slice->frequency())));
-            vfo->setBandLabel(bandLabel(band));
-            any = true;
-        }
-    });
-    if (!any) { return; }
     for (ContainerWidget* c : m_containerManager->allContainers()) {
-        if (c) { c->update(); }
+        if (!c || containerSlice(c) != slice) { continue; }
+        MeterWidget* meter = containerMeter(c);
+        if (!meter) { continue; }
+        bool any = false;
+        for (MeterItem* item : meter->items()) {
+            if (auto* vfo = qobject_cast<VfoDisplayItem*>(item)) {
+                vfo->setFrequency(static_cast<int64_t>(std::llround(slice->frequency())));
+                vfo->setBandLabel(bandLabel(band));
+                any = true;
+            } else if (auto* bands = qobject_cast<BandButtonItem*>(item)) {
+                // The band buttons follow the slice's band however it
+                // changes: a band button, the VFO, a spot, the Core.
+                m_containerButtons->applyBand(bands, c->rxSource());
+                any = true;
+            }
+        }
+        if (any) { c->update(); }
     }
 }
 
-void MainWindow::onContainerModeClicked(int index)
+void MainWindow::onContainerOtherButtonClicked(ContainerWidget* c, int buttonId)
 {
-    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    if (!c || !m_containerButtons) { return; }
+    const QString reason = m_containerButtons->click(
+        static_cast<OtherButtonItem::ButtonId>(buttonId), c->rxSource());
+    showContainerButtonReason(reason);
+    // Targets with no change signal of their own (peak hold, VAX) light
+    // from this refresh.
+    refreshContainerControls();
+}
+
+void MainWindow::showContainerButtonReason(const QString& reason)
+{
+    if (reason.isEmpty()) { return; }
+    showToast(reason, ToastSeverity::Warning, 3000);
+}
+
+void MainWindow::onContainerModeClicked(ContainerWidget* c, int index)
+{
+    SliceModel* slice = containerSlice(c);
     if (!slice) { return; }
     // From Thetis MeterManager.cs:10277 [v2.10.3.15] (clsModeButtonBox.setMode):
     //   if (abortForLockedVFO()) return;
@@ -9663,9 +9824,9 @@ void MainWindow::onContainerModeClicked(int index)
     slice->setDspMode(SliceModel::modeFromName(label));
 }
 
-void MainWindow::onContainerFilterClicked(int index)
+void MainWindow::onContainerFilterClicked(ContainerWidget* c, int index)
 {
-    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    SliceModel* slice = containerSlice(c);
     FilterPresetStore* store = m_radioModel ? m_radioModel->filterPresetStore() : nullptr;
     if (!slice || !store) { return; }
     // From Thetis MeterManager.cs:7952 [v2.10.3.15] (clsFilterButtonBox.MouseUp):
@@ -9677,9 +9838,9 @@ void MainWindow::onContainerFilterClicked(int index)
     slice->setFilter(presets[index].low, presets[index].high);
 }
 
-void MainWindow::onContainerAntennaSelected(int index)
+void MainWindow::onContainerAntennaSelected(ContainerWidget* c, int index)
 {
-    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    SliceModel* slice = containerSlice(c);
     if (!slice) { return; }
     // From Thetis MeterManager.cs:9974-9985 [v2.10.3.15] (clsAntennaButtonBox.MouseUp):
     //   if (index >= 0 && index <= 2) setRXAntenna(index, _rx1_band);
@@ -9710,9 +9871,9 @@ void MainWindow::onContainerAntennaSelected(int index)
     }
 }
 
-void MainWindow::onContainerTuneStepSelected(int index)
+void MainWindow::onContainerTuneStepSelected(ContainerWidget* c, int index)
 {
-    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    SliceModel* slice = containerSlice(c);
     const int hz = TuneStepButtonItem::stepHz(index);
     if (!slice || hz <= 0) { return; }
     // From Thetis MeterManager.cs:8242 [v2.10.3.15] (clsTunestepButtons.MouseUp):
@@ -9720,9 +9881,9 @@ void MainWindow::onContainerTuneStepSelected(int index)
     slice->setStepHz(hz);
 }
 
-void MainWindow::onContainerFrequencyStep(int64_t deltaHz)
+void MainWindow::onContainerFrequencyStep(ContainerWidget* c, int64_t deltaHz)
 {
-    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    SliceModel* slice = containerSlice(c);
     if (!slice || deltaHz == 0) { return; }
     // SliceModel::setFrequency refuses a locked slice itself.
     slice->setFrequency(slice->frequency() + static_cast<double>(deltaHz));
@@ -10954,6 +11115,9 @@ void MainWindow::applyRemoteRoleGating()
     for (VfoWidget* flag : m_vfoWidgetsBySlice) {
         if (flag) { flag->setTransmitPermitted(transmitPermitted, transmitReason); }
     }
+    // R-R3-21: the container function buttons: the transmit ones are
+    // unavailable with this reason, Power follows the Core session.
+    refreshContainerControls();
     // R-R3-21 / R-R3-10: the Core's settings availability too. Pushed on
     // every link change: StationClient marks the settings not ready before
     // it reports a lost or closed session, and ready (with the snapshot)
@@ -12162,6 +12326,9 @@ void MainWindow::onConnectionStateChanged()
     // local-only even when the mirrored radio reports Connected.
     applyRemoteRoleGating();
     refreshRemoteConnectionUi();
+    // R-R3-21: the container Power and transmit buttons follow the
+    // Connect / Disconnect enablement set just above.
+    refreshContainerControls();
 }
 
 // Phase 3I Task 17 / Phase 3Q Task 10 — auto-reconnect on launch.

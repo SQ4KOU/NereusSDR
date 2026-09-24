@@ -6981,6 +6981,11 @@ target_compile_definitions(tst_setup_controls_connected PRIVATE NEREUS_BUILD_TES
 # windows, saved values kept, a saved Voice Rec/Play control kept.
 nereus_add_test(tst_unbuilt_features)
 target_compile_definitions(tst_unbuilt_features PRIVATE NEREUS_BUILD_TESTS)
+# R3 unfinished controls, Task 3 (R-R3-49, R-R3-21): the container function
+# and band buttons act on the container's own slice; the ones with nothing
+# behind them are hidden through the unbuilt list.
+nereus_add_test(tst_other_button_item)
+target_compile_definitions(tst_other_button_item PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_connection_selector)
 nereus_add_test(tst_station_lan_cache)
 nereus_add_test(tst_station_lan_transport)

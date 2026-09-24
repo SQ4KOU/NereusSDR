@@ -142,6 +142,10 @@ const QList<Entry>& all()
          QStringLiteral("Phone/CW applet FM page")},
         {F::RfkitTune, QStringLiteral("rfkit-tune"),
          QStringLiteral("RF-Kit applet TUNE and BYPASS")},
+        {F::ContainerButtons, QStringLiteral("macro-buttons"),
+         QStringLiteral("Container function buttons with nothing behind them: RX2, SUB RX, "
+                        "Pan Swap, AVG, filter Var1 and Var2, antenna Rx/Tx, and the macro "
+                        "buttons")},
         {F::Voice, QStringLiteral("voice"),
          QStringLiteral("Voice record and play container control; VFO flag record and play; "
                         "DVK on the status bar")},

@@ -1338,6 +1338,7 @@ set(GUI_SOURCES
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainer.cpp
     src/gui/containers/ContainerManager.cpp
+    src/gui/containers/ContainerButtonDispatcher.cpp
     src/gui/containers/ContainerSettingsDialog.cpp
     src/gui/containers/MmioEndpointsDialog.cpp
     src/gui/containers/MmioVariablePickerPopup.cpp

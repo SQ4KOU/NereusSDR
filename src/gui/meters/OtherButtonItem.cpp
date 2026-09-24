@@ -10,6 +10,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-49 / R-R3-21: VAX 1 / VAX 2 captions, buttons with no
+//                 NereusSDR feature hidden through UnbuiltFeatures, lit and
+//                 available state per button id. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -60,7 +64,8 @@ namespace NereusSDR {
 static const char* const kCoreLabels[] = {
     "PWR", "RX2", "MON", "TUN", "MOX", "2TON", "DUP", "PS",
     "PLAY", "REC", "ANF", "SNB", "MNF", "AVG", "PEAK", "CTUN",
-    "VAC1", "VAC2", "MUTE", "BIN", "SUB", "SWAP", "XPA",
+    // R-R3-49: VAC1 / VAC2 read VAX 1 / VAX 2, NereusSDR's name for them.
+    "VAX 1", "VAX 2", "MUTE", "BIN", "SUB", "SWAP", "XPA",
     "SPEC", "PAN", "SCP", "SCP2", "PHS",
     "WF", "HIST", "PANF", "PANS", "SPCS", "OFF"
 };
@@ -87,6 +92,17 @@ OtherButtonItem::OtherButtonItem(QObject* parent)
         setupButton(idx, QStringLiteral("M%1").arg(i));
         button(idx).visible = false;
         button(idx).onColour = QColor(0x00, 0x70, 0xc0);
+        // R-R3-49: the macro buttons are built after R4.
+        setButtonHiddenUntilBuilt(
+            idx, !UnbuiltFeatures::isBuilt(UnbuiltFeature::ContainerButtons));
+    }
+
+    // R-R3-49: a button whose feature NereusSDR does not have is not drawn
+    // (layout time only; the saved visibility bits are untouched).
+    for (int i = 0; i < kCoreButtonCount; ++i) {
+        if (const auto feature = unbuiltFeatureFor(static_cast<ButtonId>(i))) {
+            setButtonHiddenUntilBuilt(i, !UnbuiltFeatures::isBuilt(*feature));
+        }
     }
 
     connect(this, &ButtonBoxItem::buttonClicked, this, &OtherButtonItem::onButtonClicked);
@@ -100,6 +116,70 @@ void OtherButtonItem::setButtonState(ButtonId id, bool on)
             button(i).on = on;
             return;
         }
+    }
+}
+
+bool OtherButtonItem::buttonState(ButtonId id) const
+{
+    const int index = indexOf(id);
+    return index >= 0 && button(index).on;
+}
+
+int OtherButtonItem::indexOf(ButtonId id) const
+{
+    const int idVal = static_cast<int>(id);
+    for (int i = 0; i < m_buttonMap.size() && i < buttonCount(); ++i) {
+        if (m_buttonMap[i] == idVal) { return i; }
+    }
+    return -1;
+}
+
+void OtherButtonItem::setButtonAvailable(ButtonId id, bool available, const QString& reason)
+{
+    ButtonBoxItem::setButtonAvailable(indexOf(id), available, reason);
+}
+
+bool OtherButtonItem::isButtonAvailable(ButtonId id) const
+{
+    return ButtonBoxItem::isButtonAvailable(indexOf(id));
+}
+
+bool OtherButtonItem::isButtonShown(ButtonId id) const
+{
+    return ButtonBoxItem::isButtonShown(indexOf(id));
+}
+
+std::optional<UnbuiltFeature> OtherButtonItem::unbuiltFeatureFor(ButtonId id)
+{
+    switch (id) {
+    // Thetis's two-receiver layout (RX2 on, sub receiver, pan swap) has no
+    // place among slices A to D; AVG is built after R4 with the display work.
+    case ButtonId::Rx2:
+    case ButtonId::SubRx:
+    case ButtonId::PanSwap:
+    case ButtonId::Avg:
+        return UnbuiltFeature::ContainerButtons;
+    case ButtonId::Dup:
+        return UnbuiltFeature::Fdx;             // full duplex
+    case ButtonId::Play:
+    case ButtonId::Rec:
+        return UnbuiltFeature::Voice;           // the voice keyer
+    case ButtonId::Xpa:
+        return UnbuiltFeature::OcExtras;        // external PA
+    case ButtonId::Spectrum:
+    case ButtonId::Panadapter:
+    case ButtonId::Scope:
+    case ButtonId::Scope2:
+    case ButtonId::Phase:
+    case ButtonId::Waterfall:
+    case ButtonId::Histogram:
+    case ButtonId::Panafall:
+    case ButtonId::Panascope:
+    case ButtonId::Spectrascope:
+    case ButtonId::DisplayOff:
+        return UnbuiltFeature::DisplayMode;
+    default:
+        return std::nullopt;
     }
 }
 

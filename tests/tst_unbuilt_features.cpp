@@ -26,12 +26,21 @@
 // nothing to show is offered or found (Logging & Performance, once its
 // Performance checkboxes went).
 //
+// R3 unfinished controls, Task 3 (R-R3-49, R-R3-21): the container function
+// buttons with nothing behind them (RX2, SUB, SWAP, AVG, filter Var1 and
+// Var2, antenna Rx/Tx: "macro-buttons"; DUP, PLAY, REC, XPA, the display
+// modes, the antenna and band XVTR under their features' entries) are
+// surfaces of the list like any other.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, Task 1.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, Task 2.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, Task 3.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
 // =================================================================
@@ -85,11 +94,16 @@
 #include "gui/containers/ContainerManager.h"
 #include "gui/containers/ContainerSettingsDialog.h"
 #include "gui/containers/ContainerWidget.h"
+#include "gui/meters/AntennaButtonItem.h"
+#include "gui/meters/BandButtonItem.h"
+#include "gui/meters/FilterButtonItem.h"
 #include "gui/meters/ItemGroup.h"
+#include "gui/meters/OtherButtonItem.h"
 #include "gui/meters/MeterWidget.h"
 #include "gui/meters/MeterItem.h"
 #include "gui/meters/VoiceRecordPlayItem.h"
 #include "gui/widgets/VfoWidget.h"
+#include "models/Band.h"
 #include "models/RadioModel.h"
 
 using namespace NereusSDR;
@@ -379,6 +393,29 @@ public:
         return m_meter;
     }
 
+    // R3 Task 3: the container function, filter, antenna and band buttons,
+    // built when first asked for (after the list is set for the pass).
+    OtherButtonItem* otherButtons()
+    {
+        if (!m_otherButtons) { m_otherButtons = std::make_unique<OtherButtonItem>(); }
+        return m_otherButtons.get();
+    }
+    FilterButtonItem* filterButtons()
+    {
+        if (!m_filterButtons) { m_filterButtons = std::make_unique<FilterButtonItem>(); }
+        return m_filterButtons.get();
+    }
+    AntennaButtonItem* antennaButtons()
+    {
+        if (!m_antennaButtons) { m_antennaButtons = std::make_unique<AntennaButtonItem>(); }
+        return m_antennaButtons.get();
+    }
+    BandButtonItem* bandButtons()
+    {
+        if (!m_bandButtons) { m_bandButtons = std::make_unique<BandButtonItem>(); }
+        return m_bandButtons.get();
+    }
+
 private:
     GuiSessionCoordinator& m_sessions;
     bool m_remote{false};
@@ -393,6 +430,10 @@ private:
     std::unique_ptr<ContainerWidget> m_container;
     MeterWidget* m_meter{nullptr};
     std::unique_ptr<ContainerSettingsDialog> m_containerDialog;
+    std::unique_ptr<OtherButtonItem> m_otherButtons;
+    std::unique_ptr<FilterButtonItem> m_filterButtons;
+    std::unique_ptr<AntennaButtonItem> m_antennaButtons;
+    std::unique_ptr<BandButtonItem> m_bandButtons;
 };
 
 // The hosts a surface lives on. The per-feature pass builds only the hosts
@@ -443,6 +484,16 @@ QMap<F, QList<Surface>> surfaces()
                            return namedShown<QWidget>(h.spotHub(), name);
                        }};
     };
+    // R3 Task 3: one container function button, by id.
+    const auto functionButton = [](const QString& caption, OtherButtonItem::ButtonId id) {
+        return Surface{QStringLiteral("container button ") + caption, Host::Container,
+                       [id](Hosts& h) { return h.otherButtons()->isButtonShown(id); }};
+    };
+    const auto boxButton = [](const QString& what,
+                              std::function<ButtonBoxItem*(Hosts&)> box, int index) {
+        return Surface{QStringLiteral("container ") + what, Host::Container,
+                       [box, index](Hosts& h) { return box(h)->isButtonShown(index); }};
+    };
     const auto applet = [](const QString& what, std::function<bool(Hosts&)> check) {
         return Surface{what, Host::Applets, std::move(check)};
     };
@@ -463,7 +514,22 @@ QMap<F, QList<Surface>> surfaces()
     };
 
     QMap<F, QList<Surface>> map;
-    map[F::DisplayMode] = {menu(QStringLiteral("&Display Mode"))};
+    using B = OtherButtonItem::ButtonId;
+    const auto filters = [](Hosts& h) -> ButtonBoxItem* { return h.filterButtons(); };
+    const auto antennas = [](Hosts& h) -> ButtonBoxItem* { return h.antennaButtons(); };
+    const auto bands = [](Hosts& h) -> ButtonBoxItem* { return h.bandButtons(); };
+    map[F::DisplayMode] = {menu(QStringLiteral("&Display Mode")),
+                           functionButton(QStringLiteral("SPEC"), B::Spectrum),
+                           functionButton(QStringLiteral("PAN"), B::Panadapter),
+                           functionButton(QStringLiteral("SCP"), B::Scope),
+                           functionButton(QStringLiteral("SCP2"), B::Scope2),
+                           functionButton(QStringLiteral("PHS"), B::Phase),
+                           functionButton(QStringLiteral("WF"), B::Waterfall),
+                           functionButton(QStringLiteral("HIST"), B::Histogram),
+                           functionButton(QStringLiteral("PANF"), B::Panafall),
+                           functionButton(QStringLiteral("PANS"), B::Panascope),
+                           functionButton(QStringLiteral("SPCS"), B::Spectrascope),
+                           functionButton(QStringLiteral("OFF"), B::DisplayOff)};
     map[F::UiScale] = {menu(QStringLiteral("&UI Scale")), setupPage(QStringLiteral("UI Scale & Theme"))};
     map[F::MinimalMode] = {menu(QStringLiteral("&Minimal Mode")),
                            setupPage(QStringLiteral("Collapsible Display"))};
@@ -473,6 +539,8 @@ QMap<F, QList<Surface>> surfaces()
                 [](Hosts& h) { return h.categoryShown(QStringLiteral("Keyboard")); }}};
     map[F::Equalizer] = {menu(QStringLiteral("&Equalizer..."))};
     map[F::Transverters] = {
+        boxButton(QStringLiteral("antenna XVTR"), antennas, 5),
+        boxButton(QStringLiteral("band XVTR"), bands, uiIndexFromBand(Band::XVTR)),
         menu(QStringLiteral("Trans&verters…")), menu(QStringLiteral("&VHF")),
         onPage(QStringLiteral("Hardware Config"), QStringLiteral("XVTR tab"), tab(QStringLiteral("XVTR"))),
         onPage(QStringLiteral("Hardware Config"), QStringLiteral("OC VHF tab"), tab(QStringLiteral("VHF")))};
@@ -513,12 +581,22 @@ QMap<F, QList<Surface>> surfaces()
                             return false;
                         })};
     map[F::FmPage] = {applet(QStringLiteral("Phone/CW FM page"), phonePage(2))};
+    map[F::ContainerButtons] = {
+        functionButton(QStringLiteral("RX2"), B::Rx2),
+        functionButton(QStringLiteral("SUB"), B::SubRx),
+        functionButton(QStringLiteral("SWAP"), B::PanSwap),
+        functionButton(QStringLiteral("AVG"), B::Avg),
+        boxButton(QStringLiteral("filter Var1"), filters, 10),
+        boxButton(QStringLiteral("filter Var2"), filters, 11),
+        boxButton(QStringLiteral("antenna Rx/Tx"), antennas, 9)};
     map[F::RfkitTune] = {
         applet(QStringLiteral("RF-Kit TUNE"),
                [](Hosts& h) { return textShown(h.rfKit(), QStringLiteral("TUNE")); }),
         applet(QStringLiteral("RF-Kit BYPASS"),
                [](Hosts& h) { return textShown(h.rfKit(), QStringLiteral("BYPASS")); })};
     map[F::Voice] = {
+        functionButton(QStringLiteral("PLAY"), B::Play),
+        functionButton(QStringLiteral("REC"), B::Rec),
         status(QStringLiteral("statusDvkLabel")),
         Surface{QStringLiteral("slice flag record"), Host::Flag, [](Hosts& h) {
                     QPushButton* b = h.flag()->recordButtonForTest();
@@ -551,7 +629,7 @@ QMap<F, QList<Surface>> surfaces()
                     }
                     return false;
                 }}};
-    map[F::Fdx] = {status(QStringLiteral("statusFdxLabel"))};
+    map[F::Fdx] = {status(QStringLiteral("statusFdxLabel")), functionButton(QStringLiteral("DUP"), B::Dup)};
     map[F::Navigation] = {setupPage(QStringLiteral("Navigation"))};
     map[F::Sam] = {onPage(QStringLiteral("AM/SAM"), QStringLiteral("SAM group"), named(QStringLiteral("samGroup")))};
     map[F::Skins] = {setupPage(QStringLiteral("Skins"))};
@@ -585,6 +663,7 @@ QMap<F, QList<Surface>> surfaces()
     map[F::AntennaConflict] = {onPage(QStringLiteral("Hardware Config"), QStringLiteral("conflict policy"),
                                       named(QStringLiteral("antennaConflictPolicyGroup")))};
     map[F::OcExtras] = {
+        functionButton(QStringLiteral("XPA"), B::Xpa),
         onPage(QStringLiteral("Hardware Config"), QStringLiteral("hot switching"), named(QStringLiteral("ocAllowHotSwitching"))),
         onPage(QStringLiteral("Hardware Config"), QStringLiteral("USB BCD"), named(QStringLiteral("ocUsbBcdGroup"))),
         onPage(QStringLiteral("Hardware Config"), QStringLiteral("external PA"), named(QStringLiteral("ocExternalPaGroup")))};

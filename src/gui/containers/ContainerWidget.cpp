@@ -10,6 +10,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-21: the receiver source names slices A to D (saved
+//                 1..4, so a saved RX1 / RX2 reads as slice A / B), and an
+//                 unavailable button's reason is relayed. J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  ucMeter.cs
@@ -262,10 +266,10 @@ void ContainerWidget::updateTitleBar()
 
 void ContainerWidget::updateTitle()
 {
-    // Thetis ucMeter.cs:625-639
-    QString prefix = QStringLiteral("RX");
+    // Thetis ucMeter.cs:625-639 ("RX" + the receiver number); NereusSDR
+    // names the container's slice.
     QString firstLine = m_notes.section(QLatin1Char('\n'), 0, 0);
-    QString title = prefix + QString::number(m_rxSource);
+    QString title = sliceNameForRxSource(m_rxSource);
     if (!firstLine.isEmpty()) {
         title += QStringLiteral(" ") + firstLine;
     }
@@ -292,7 +296,19 @@ void ContainerWidget::setupBorder()
 // --- Property setters ---
 
 void ContainerWidget::setId(const QString& id) { m_id = id; m_id.remove(QLatin1Char('|')); }
-void ContainerWidget::setRxSource(int rx) { m_rxSource = rx; updateTitle(); }
+void ContainerWidget::setRxSource(int rx)
+{
+    const bool changed = (m_rxSource != rx);
+    m_rxSource = rx;
+    updateTitle();
+    if (changed) { emit rxSourceChanged(rx); }
+}
+
+QString ContainerWidget::sliceNameForRxSource(int rx)
+{
+    if (rx < 1 || rx > 26) { return QStringLiteral("Slice"); }
+    return QStringLiteral("Slice %1").arg(QChar(QLatin1Char(static_cast<char>('A' + rx - 1))));
+}
 
 void ContainerWidget::setDockMode(DockMode mode)
 {
@@ -718,6 +734,12 @@ void ContainerWidget::doResize(int w, int h)
 
 void ContainerWidget::wireInteractiveItem(MeterItem* item)
 {
+    if (auto* box = qobject_cast<ButtonBoxItem*>(item)) {
+        connect(box, &ButtonBoxItem::unavailableButtonClicked, this,
+                [this](int, const QString& reason) {
+            emit unavailableButtonClicked(reason);
+        });
+    }
     if (auto* band = qobject_cast<BandButtonItem*>(item)) {
         connect(band, &BandButtonItem::bandClicked,
                 this, &ContainerWidget::bandClicked);

@@ -40,12 +40,13 @@ namespace NereusSDR {
 
 // One entry per unbuilt feature. The comment on each names its surfaces.
 enum class UnbuiltFeature {
-    DisplayMode,      // View > Display Mode
+    DisplayMode,      // View > Display Mode; the eleven container display-mode buttons
     UiScale,          // View > UI Scale; Setup > General > UI Scale & Theme
     MinimalMode,      // View > Minimal Mode; Setup > Appearance > Collapsible Display
     Keyboard,         // View > Keyboard Shortcuts; Setup > Keyboard > Shortcuts
     Equalizer,        // DSP > Equalizer (built after R4)
-    Transverters,     // Radio > Transverters; Band > VHF; Hardware > XVTR; OC Outputs VHF tab
+    Transverters,     // Radio > Transverters; Band > VHF; Hardware > XVTR; OC Outputs VHF tab;
+                      // the container band and antenna XVTR buttons
     BandStack,        // Band > Band Stacking; the band stack dots on the status bar
     Cwx,              // Tools > CWX; Phone/CW applet CW page; CW keyer settings; CWX on the status bar
     Memories,         // Tools > Memory Manager; the Spot Hub Memories option
@@ -56,8 +57,12 @@ enum class UnbuiltFeature {
     PhoneMon,         // Phone/CW applet MON and its level
     FmPage,           // Phone/CW applet FM page
     RfkitTune,        // RF-Kit applet TUNE and BYPASS
-    Voice,            // Voice Rec/Play container control; VFO flag record and play; DVK on the status bar
-    Fdx,              // FDX on the status bar
+    ContainerButtons, // Container buttons with nothing behind them: RX2, SUB RX, Pan Swap
+                      // (Thetis's two-receiver layout), AVG, filter Var1 and Var2,
+                      // antenna Rx/Tx, and the macro buttons (built after R4)
+    Voice,            // Voice Rec/Play container control; VFO flag record and play; DVK on the status bar;
+                      // the container Play and Rec buttons
+    Fdx,              // FDX on the status bar; the container DUP button
     Navigation,       // Setup > General > Navigation
     Sam,              // Setup > DSP > AM/SAM synchronous AM options (built after R4)
     Skins,            // Setup > Appearance > Skins
@@ -72,7 +77,8 @@ enum class UnbuiltFeature {
     IqToVax,          // Setup > Audio > Advanced Send IQ to VAX, TX Monitor to VAX
     MuteVaxDuringTx,  // Setup > Audio > Advanced Mute VAX during TX on other slice (built after R4)
     AntennaConflict,  // Setup > Hardware > Antenna Control conflict policy
-    OcExtras,         // Setup > Hardware > OC Outputs hot switching, USB BCD, external PA
+    OcExtras,         // Setup > Hardware > OC Outputs hot switching, USB BCD, external PA;
+                      // the container xPA button
     MultimeterHolds,  // Setup > Display > Multimeter peak hold, text hold, digital delay, history (built after R4)
     WsjtxFilters,     // Spot Hub WSJT-X filters (three) (built after R4)
     RbnRateLimit,     // Spot Hub RBN rate limit (built after R4)

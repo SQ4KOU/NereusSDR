@@ -18,6 +18,11 @@
 //   2026-09-24 - R-R3-49: the Discord control, its factory entries and its
 //                 editor are removed. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-21: the container's slice choice lists slices A to D
+//                 (a saved RX1 / RX2 reads as slice A / B), and the item
+//                 editor opens for the button boxes and the VFO display (its
+//                 tags match what they save). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -837,18 +842,21 @@ void ContainerSettingsDialog::buildContainerPropertiesSection(QVBoxLayout* paren
     m_borderCheck = new QCheckBox(bar);
     m_borderCheck->setStyleSheet("QCheckBox { color: #c8d8e8; }");
 
-    // RX Source
-    QLabel* rxLabel = new QLabel(QStringLiteral("RX:"), bar);
+    // R-R3-21: the slice the container's controls act on, slices A to D.
+    // Saved as 1..4 (Thetis's RX field), so a layout saved as RX1 / RX2
+    // reads as slice A / B.
+    QLabel* rxLabel = new QLabel(QStringLiteral("Slice:"), bar);
     rxLabel->setStyleSheet(kLabelStyle);
     m_rxSourceCombo = new QComboBox(bar);
-    m_rxSourceCombo->addItem(QStringLiteral("RX1"), 1);
-    m_rxSourceCombo->addItem(QStringLiteral("RX2"), 2);
+    for (int rx = 1; rx <= 4; ++rx) {
+        m_rxSourceCombo->addItem(ContainerWidget::sliceNameForRxSource(rx), rx);
+    }
     m_rxSourceCombo->setStyleSheet(
         "QComboBox { background: #0a0a18; color: #c8d8e8;"
         "  border: 1px solid #1e2e3e; border-radius: 3px; padding: 2px 4px; }"
         "QComboBox QAbstractItemView { background: #0a0a18; color: #c8d8e8;"
         "  border: 1px solid #205070; selection-background-color: #00b4d8; }");
-    m_rxSourceCombo->setFixedWidth(64);
+    m_rxSourceCombo->setFixedWidth(76);
 
     // Show on RX / TX
     QLabel* showRxLabel = new QLabel(QStringLiteral("Show RX:"), bar);
@@ -2286,6 +2294,9 @@ QWidget* ContainerSettingsDialog::buildTypeSpecificEditor(MeterItem* item)
 
     BaseItemEditor* ed = nullptr;
 
+    // R-R3-21: each tag is the one its item saves (serialize()); the button
+    // boxes and the VFO display were listed under names they never write,
+    // so their editors never opened.
     if      (typeTag == QLatin1String("BAR"))            ed = new BarItemEditor(this);
     else if (typeTag == QLatin1String("SOLID"))          ed = new SolidColourItemEditor(this);
     else if (typeTag == QLatin1String("SPACER"))         ed = new SpacerItemEditor(this);
@@ -2305,15 +2316,15 @@ QWidget* ContainerSettingsDialog::buildTypeSpecificEditor(MeterItem* item)
     else if (typeTag == QLatin1String("FILTERDISPLAY"))  ed = new FilterDisplayItemEditor(this);
     else if (typeTag == QLatin1String("ROTATOR"))        ed = new RotatorItemEditor(this);
     else if (typeTag == QLatin1String("CLOCK"))          ed = new ClockItemEditor(this);
-    else if (typeTag == QLatin1String("VFODISPLAY"))     ed = new VfoDisplayItemEditor(this);
+    else if (typeTag == QLatin1String("VFO"))            ed = new VfoDisplayItemEditor(this);
     else if (typeTag == QLatin1String("CLICKBOX"))       ed = new ClickBoxItemEditor(this);
     else if (typeTag == QLatin1String("DATAOUT"))        ed = new DataOutItemEditor(this);
-    else if (typeTag == QLatin1String("BANDBUTTON"))     ed = new BandButtonItemEditor(this);
-    else if (typeTag == QLatin1String("MODEBUTTON"))     ed = new ModeButtonItemEditor(this);
-    else if (typeTag == QLatin1String("FILTERBUTTON"))   ed = new FilterButtonItemEditor(this);
-    else if (typeTag == QLatin1String("ANTENNABUTTON"))  ed = new AntennaButtonItemEditor(this);
-    else if (typeTag == QLatin1String("TUNESTEPBUTTON")) ed = new TuneStepButtonItemEditor(this);
-    else if (typeTag == QLatin1String("OTHERBUTTON"))    ed = new OtherButtonItemEditor(this);
+    else if (typeTag == QLatin1String("BANDBTNS"))       ed = new BandButtonItemEditor(this);
+    else if (typeTag == QLatin1String("MODEBTNS"))       ed = new ModeButtonItemEditor(this);
+    else if (typeTag == QLatin1String("FILTERBTNS"))     ed = new FilterButtonItemEditor(this);
+    else if (typeTag == QLatin1String("ANTENNABTNS"))    ed = new AntennaButtonItemEditor(this);
+    else if (typeTag == QLatin1String("TUNESTEPBTNS"))   ed = new TuneStepButtonItemEditor(this);
+    else if (typeTag == QLatin1String("OTHERBTNS"))      ed = new OtherButtonItemEditor(this);
     else if (typeTag == QLatin1String("VOICERECPLAY"))   ed = new VoiceRecordPlayItemEditor(this);
 
     if (ed) {

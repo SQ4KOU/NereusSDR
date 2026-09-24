@@ -1390,6 +1390,10 @@ public:
     // Issue #118.
     void onBandButtonClicked(NereusSDR::Band band);
 
+    // R-R3-21: the same, on `slice` (a container's own slice, which need
+    // not be the active one). No-op if `slice` is null.
+    void onBandButtonClicked(SliceModel* slice, NereusSDR::Band band);
+
     // Panadapter management (client-side)
     QList<PanadapterModel*> panadapters() const { return m_panadapters; }
     int addPanadapter();

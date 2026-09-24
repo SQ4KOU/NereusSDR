@@ -72,6 +72,7 @@
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+#include <memory>
 #include <QMainWindow>
 #include <QLabel>
 #include <QAction>
@@ -106,6 +107,7 @@ enum class ToastSeverity : int;
 
 class RadioModel;
 class MeterItem;
+class ContainerButtonDispatcher;
 class ConnectionPanel;
 class SupportDialog;
 class WdspEngine;
@@ -690,22 +692,31 @@ private slots:
     // Diversity and the VFO flag's right-click Diversity entry.
     void openDiversityDialog();
 
-    // R-R3-21: a container's Mode, Filter, Antenna and Tune Step buttons and
-    // its VFO display act on the active slice (the band buttons already
-    // did); refreshContainerControls() shows that slice's state on them.
+    // R-R3-21 / R-R3-49: a container's band, mode, filter, antenna, tune
+    // step and function buttons and its VFO display act on the container's
+    // own slice (ContainerWidget::rxSource(), slices A to D), never on the
+    // active slice; refreshContainerControls() shows each container its
+    // slice's state. A container set to a slice that is not open shows its
+    // buttons unavailable, and a click says why and changes nothing.
     void wireContainerControls(class ContainerWidget* container);
     // `only`: just that item (one added while the window runs).
     void refreshContainerControls(MeterItem* only = nullptr);
-    // Tuning: only the VFO display items (frequency and band).
-    void refreshContainerFrequency();
+    void refreshContainer(class ContainerWidget* container, MeterItem* only = nullptr);
+    // Tuning: only the VFO display and band items of the containers on
+    // `slice` (frequency and band).
+    void refreshContainerFrequency(SliceModel* slice);
     void watchContainerItems(QWidget* content);
     void onContainerItemAdded(MeterItem* item);
-    void followActiveSliceForContainers();
-    void onContainerModeClicked(int index);
-    void onContainerFilterClicked(int index);
-    void onContainerAntennaSelected(int index);
-    void onContainerTuneStepSelected(int index);
-    void onContainerFrequencyStep(int64_t deltaHz);
+    void watchSlicesForContainers();
+    SliceModel* containerSlice(const class ContainerWidget* container) const;
+    void onContainerModeClicked(class ContainerWidget* container, int index);
+    void onContainerFilterClicked(class ContainerWidget* container, int index);
+    void onContainerAntennaSelected(class ContainerWidget* container, int index);
+    void onContainerTuneStepSelected(class ContainerWidget* container, int index);
+    void onContainerFrequencyStep(class ContainerWidget* container, int64_t deltaHz);
+    void onContainerOtherButtonClicked(class ContainerWidget* container, int buttonId);
+    // A click that changed nothing: the reason, as a toast.
+    void showContainerButtonReason(const QString& reason);
 
     // Phase 3P-II Phase 4 Task 97: soft-alert toast when peak forward power
     // exceeds the PGXL cap.  Connected to RadioModel::ampMetersChanged.
@@ -967,8 +978,11 @@ private:
     // built, so the second window reopened a dialog its first window had
     // already destroyed.
     QPointer<DiversityDialog> m_diversityDialog;
-    // R-R3-21: the active slice's signals the container controls follow.
+    // R-R3-21: every slice's signals the container controls follow.
     QList<QMetaObject::Connection> m_containerSliceConnections;
+    // R-R3-21 / R-R3-49: maps each container function and band button to
+    // its target on the container's own slice.
+    std::unique_ptr<ContainerButtonDispatcher> m_containerButtons;
     QAction* m_actPureSignal{nullptr};
     QAction* m_actTxEqualizer{nullptr};
     QAction* m_actDspPureSignal{nullptr};

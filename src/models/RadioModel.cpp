@@ -7879,9 +7879,13 @@ bool RadioModel::setActiveSliceById(int sliceId)
 
 void RadioModel::onBandButtonClicked(Band band)
 {
-    SliceModel* slice = activeSlice();
+    onBandButtonClicked(activeSlice(), band);
+}
+
+void RadioModel::onBandButtonClicked(SliceModel* slice, Band band)
+{
     if (!slice) {
-        // No active slice (pre-connection, between-slice teardown, etc.).
+        // No slice (pre-connection, between-slice teardown, etc.).
         // Silent — avoids log spam from UI events firing during startup.
         return;
     }
