@@ -5,7 +5,9 @@ macOS, deepfilter.dll on Windows) is compiled from the Rust crates
 listed here. Each entry gives the crate, its version, the licence
 expression in its manifest, and the licence and notice files from its
 source, copied byte for byte. A text identical to one written earlier
-in this file is named instead of repeated.
+in this file is named instead of repeated. Where a crate's source has
+no licence text, a text from upstream is added, marked as such, with
+its source and commit.
 
 DeepFilterNet commit: d375b2d8309e0935d165700c91da9de862a99c31
 The crates are those locked by that commit's Cargo.lock.
@@ -2507,6 +2509,32 @@ Licence: MIT
 Source: crates.io
 
 (no licence or notice file in the crate's source directory)
+
+---- LICENSE, from upstream, not from the crate's source ----
+Note: added upstream after 0.2.2 (commit dbc2ec80, 2021); covers 2017-2019.
+From: https://github.com/eira-fransham/crunchy (LICENSE) at dbc2ec80924bdcc7479f7b5442d9f23c510c9d5b
+
+The MIT License (MIT)
+
+Copyright 2017-2019 Vurich.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ========================================================================
 dlv-list 0.5.2
@@ -5181,6 +5209,30 @@ Licence: MIT
 Source: crates.io
 
 (no licence or notice file in the crate's source directory)
+
+---- MIT.txt, from upstream, not from the crate's source ----
+Note: realfft ships no licence text upstream; its manifest declares MIT; this is the SPDX list's MIT text.
+Authors (as its Cargo.toml lists them): HEnquist <henrik.enquist@gmail.com>
+From: https://github.com/spdx/license-list-data (text/MIT.txt, tag v3.29.0) at 31ba1a50e5397e00a304dbadc76531740e89ee48
+
+MIT License
+
+Copyright (c) <year> <copyright holders>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the
+following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial
+portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ========================================================================
 redox_syscall 0.4.1

@@ -162,3 +162,81 @@ def test_missing_package_is_an_error(tmp_path):
          "--package", "nope", "--commit", "x"], capture_output=True, text=True)
     assert result.returncode == 1
     assert "nope" in result.stderr
+
+
+# ── Upstream texts for crates that ship none (R-R3-50) ──────────────────
+
+def test_supplement_texts_are_the_pinned_bytes():
+    import hashlib
+    assert set(cn.SUPPLEMENTS) == {("crunchy", "0.2.2"), ("realfft", "3.3.0")}
+    for key, entry in cn.SUPPLEMENTS.items():
+        digest = hashlib.sha256(entry["text"].encode("utf-8")).hexdigest()
+        assert digest == entry["sha256"], key
+        assert len(entry["pin"]) == 40, key
+        assert entry["source"].startswith("https://github.com/"), key
+
+
+def _no_licence_crate(tmp_path, name, version, authors=None):
+    package = _crate(tmp_path, f"{name}-{version}", {"README.md": b"readme\n"},
+                     license="MIT")
+    package["name"] = name
+    package["version"] = version
+    package["id"] = f"{name} {version}"
+    if authors is not None:
+        package["authors"] = authors
+    return package
+
+
+def test_supplements_are_written_marked_for_crates_without_a_text(tmp_path):
+    packages = [
+        _no_licence_crate(tmp_path, "crunchy", "0.2.2", ["Vurich <jackefransham@hotmail.co.uk>"]),
+        _no_licence_crate(tmp_path, "realfft", "3.3.0", ["HEnquist <henrik.enquist@gmail.com>"]),
+        # Another version of a supplemented crate gets no supplement.
+        _no_licence_crate(tmp_path, "realfft", "3.4.0", ["HEnquist <henrik.enquist@gmail.com>"]),
+    ]
+    text = cn.render(packages, "d375b2d8", "cmd")
+    crunchy = cn.SUPPLEMENTS[("crunchy", "0.2.2")]
+    mit = cn.SUPPLEMENTS[("realfft", "3.3.0")]
+    assert ("crunchy 0.2.2\nLicence: MIT\nSource: crates.io\n\n"
+            "(no licence or notice file in the crate's source directory)\n\n"
+            "---- LICENSE, from upstream, not from the crate's source ----\n"
+            "Note: added upstream after 0.2.2 (commit dbc2ec80, 2021); covers 2017-2019.\n"
+            "From: https://github.com/eira-fransham/crunchy (LICENSE) at "
+            "dbc2ec80924bdcc7479f7b5442d9f23c510c9d5b\n\n"
+            + crunchy["text"]) in text
+    assert "Copyright 2017-2019 Vurich." in text
+    assert ("realfft 3.3.0\nLicence: MIT\nSource: crates.io\n\n"
+            "(no licence or notice file in the crate's source directory)\n\n"
+            "---- MIT.txt, from upstream, not from the crate's source ----\n"
+            "Note: realfft ships no licence text upstream; its manifest declares MIT; "
+            "this is the SPDX list's MIT text.\n"
+            "Authors (as its Cargo.toml lists them): HEnquist <henrik.enquist@gmail.com>\n"
+            "From: https://github.com/spdx/license-list-data (text/MIT.txt, tag v3.29.0) at "
+            "31ba1a50e5397e00a304dbadc76531740e89ee48\n\n"
+            + mit["text"]) in text
+    assert text.endswith("realfft 3.4.0\nLicence: MIT\nSource: crates.io\n\n"
+                         "(no licence or notice file in the crate's source directory)\n\n")
+    assert text.count("---- MIT.txt, from upstream") == 1
+
+
+def test_supplement_is_not_added_when_the_crate_ships_a_text(tmp_path):
+    package = _crate(tmp_path, "crunchy-shipped", {"LICENSE": b"its own\n"}, license="MIT")
+    package["name"], package["version"] = "crunchy", "0.2.2"
+    text = cn.render([package], "d375b2d8", "cmd")
+    assert "---- LICENSE ----\nits own" in text
+    assert "from upstream, not from the crate's source" not in text
+
+
+def test_committed_crate_file_holds_the_supplements_as_generated():
+    # The committed file is what the generator writes for these two crates,
+    # so a regeneration keeps them.
+    committed = (REPO / "packaging" / "third-party-licenses"
+                 / "deepfilternet-crates.txt").read_text(encoding="utf-8")
+    for name, version, authors in (
+            ("crunchy", "0.2.2", ["Vurich <jackefransham@hotmail.co.uk>"]),
+            ("realfft", "3.3.0", ["HEnquist <henrik.enquist@gmail.com>"])):
+        package = {"name": name, "version": version, "authors": authors}
+        block = "\n".join(
+            ["(no licence or notice file in the crate's source directory)"]
+            + cn.supplement_lines(package))
+        assert block + "\n\n" in committed, name
