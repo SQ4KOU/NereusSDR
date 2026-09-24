@@ -306,6 +306,23 @@ quint32 PureSignalSessionFacade::requestAction(Ps3Action action, const QVariantM
     return id;
 }
 
+bool PureSignalSessionFacade::argumentsFit(Ps3Action action, const QVariantMap& arguments)
+{
+    if (action == Ps3Action::SetTwoTone) {
+        return oneArgument(arguments, "enabled", QMetaType::Bool);
+    }
+    if (action == Ps3Action::SaveCorrection) {
+        return oneArgument(arguments, "label", QMetaType::QString)
+            && !arguments.value("label").toString().trimmed().isEmpty()
+            && arguments.value("label").toString().size() <= 128;
+    }
+    if (action == Ps3Action::RestoreCorrection) {
+        return oneArgument(arguments, "assetId", QMetaType::QString)
+            && arguments.value("assetId").toString().size() <= 80;
+    }
+    return noArguments(arguments);
+}
+
 Ps3ActionResult PureSignalSessionFacade::executeAction(Ps3Action action,
                                                        const QVariantMap& arguments,
                                                        quint32 operationId)
@@ -313,17 +330,7 @@ Ps3ActionResult PureSignalSessionFacade::executeAction(Ps3Action action,
     const auto fail = [operationId](const QString& reason) {
         return Ps3ActionResult{operationId, Ps3ActionPhase::Failed, reason, {}};
     };
-    bool valid = noArguments(arguments);
-    if (action == Ps3Action::SetTwoTone) {
-        valid = oneArgument(arguments, "enabled", QMetaType::Bool);
-    } else if (action == Ps3Action::SaveCorrection) {
-        valid = oneArgument(arguments, "label", QMetaType::QString)
-            && !arguments.value("label").toString().trimmed().isEmpty()
-            && arguments.value("label").toString().size() <= 128;
-    } else if (action == Ps3Action::RestoreCorrection) {
-        valid = oneArgument(arguments, "assetId", QMetaType::QString)
-            && arguments.value("assetId").toString().size() <= 80;
-    }
+    const bool valid = argumentsFit(action, arguments);
     if (!valid || operationId == 0 || m_pending.contains(operationId) || m_queued.contains(operationId)
         || m_pending.size() >= 128) {
         return fail(QStringLiteral("The Core could not read this PureSignal request."));

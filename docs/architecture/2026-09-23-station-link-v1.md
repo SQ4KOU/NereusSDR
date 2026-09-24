@@ -1717,10 +1717,11 @@ same on every machine.
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false |
-| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments and, where it takes any, with one argument renamed |
+| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments and, where it takes any, with one argument renamed; the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot |
 
 `tst_link_conformance_session` also checks that every verb in the
-`commands` table is invoked both ways by some fixture.
+`commands` table is invoked both ways by some fixture, and that the two
+legs of each get different answers.
 
 ### 16.4 Media vectors
 

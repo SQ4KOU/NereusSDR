@@ -73,6 +73,10 @@
 //                                    R-R3-21): every refusal reason in
 //                                    operator words. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
+//                                    a PureSignal request's arguments are
+//                                    read before the transmit gate.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -582,6 +586,14 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
     if (!action) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("The Core does not know this PureSignal action."), {});
+        return;
+    }
+    // Read the request before deciding on it: a request that is not one
+    // this action takes is refused as unreadable, not with the transmit
+    // gate's reason below, so the app learns what it sent was wrong.
+    if (!PureSignalSessionFacade::argumentsFit(*action, *arguments)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this PureSignal request."), {});
         return;
     }
     const bool stop = *action == Ps3Action::OffReset

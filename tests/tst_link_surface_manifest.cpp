@@ -672,6 +672,12 @@ void TstLinkSurfaceManifest::everyListedVerbIsRoutedAndNoOtherIs()
         dispatcher.dispatch(SessionMessages::commandInvoke(verb, id, {}));
     }
 
+    // Only "routed or not" is asked here: with default arguments on this
+    // one harness many verbs are refused for reasons of their own. That a
+    // verb reads its arguments (a renamed one gets a different answer) is
+    // held per verb, on a station set up for it, by the session fixtures'
+    // rightAndWrongLegsGetDifferentAnswers (tst_link_conformance_session).
+
     // requestSliceSampleRate answers on a later turn of the model's loop.
     QTRY_COMPARE_WITH_TIMEOUT(results.size(), static_cast<int>(id), 10000);
     for (quint32 i = 1; i <= id; ++i) {

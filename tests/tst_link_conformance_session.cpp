@@ -493,6 +493,7 @@ private slots:
     void sessionFixtures_data();
     void sessionFixtures();
     void everyVerbIsInvokedRightAndWrong();
+    void rightAndWrongLegsGetDifferentAnswers();
     void everyFixtureRunsOnTheStation();
     void appFixturesHoldOnlyWhatAConformantClientSends();
     void theConformanceCheckCatchesWhatAnAppCannotSend();
@@ -651,6 +652,97 @@ void TstLinkConformanceSession::everyVerbIsInvokedRightAndWrong()
                      qPrintable(verb + QStringLiteral(" is never invoked with a wrong name")));
         }
     }
+}
+
+void TstLinkConformanceSession::rightAndWrongLegsGetDifferentAnswers()
+{
+    // A verb invoked with its own arguments and again with one renamed
+    // must get two different answers, or the fixture does not show the
+    // station read the arguments at all (a refusal made before reading
+    // them answers both alike). The answer compared is every
+    // command.result for the invoke's id (PureSignal answers twice), each
+    // as accepted and reason.
+    QStringList same;
+    int compared = 0;
+    for (const LinkFixtures::Entry& entry :
+         LinkFixtures::entries(m_manifest, QStringLiteral("session"))) {
+        const QJsonArray steps = fixture(entry.id).value(QStringLiteral("steps")).toArray();
+        QHash<QString, QString> right;
+        QHash<QString, QString> wrong;
+        for (int i = 0; i < steps.size(); ++i) {
+            const QJsonObject step = steps.at(i).toObject();
+            const QJsonObject message = step.value(QStringLiteral("message")).toObject();
+            if (step.value(QStringLiteral("from")).toString() != QStringLiteral("client")
+                || message.value(QStringLiteral("type")).toString()
+                       != QStringLiteral("command.invoke")
+                || message.value(QStringLiteral("args")).toArray().isEmpty()) {
+                continue;
+            }
+            const QJsonValue id = message.value(QStringLiteral("id"));
+            const QJsonValue refersTo = id.isString()
+                ? QJsonValue(id.toString().replace(QStringLiteral("$int:"), QStringLiteral("$ref:")))
+                : id;
+            QStringList answers;
+            for (int j = i + 1; j < steps.size(); ++j) {
+                const QJsonObject reply = steps.at(j).toObject().value(QStringLiteral("message")).toObject();
+                if (reply.value(QStringLiteral("type")).toString() == QStringLiteral("command.result")
+                    && reply.value(QStringLiteral("id")) == refersTo) {
+                    answers.append(QStringLiteral("%1 %2")
+                                       .arg(reply.value(QStringLiteral("accepted")).toBool())
+                                       .arg(reply.value(QStringLiteral("reason")).toString()));
+                }
+            }
+            const QString answer = answers.join(QStringLiteral(" / "));
+            bool renamed = false;
+            for (const QJsonValue& arg : message.value(QStringLiteral("args")).toArray()) {
+                renamed = renamed
+                    || arg.toObject().value(QStringLiteral("name")).toString()
+                           == QStringLiteral("conformanceWrongName");
+            }
+            const QString verb = message.value(QStringLiteral("verb")).toString();
+            (renamed ? wrong : right).insert(verb, answer);
+        }
+        for (auto it = wrong.constBegin(); it != wrong.constEnd(); ++it) {
+            if (!right.contains(it.key())) {
+                continue;
+            }
+            ++compared;
+            if (right.value(it.key()) == it.value()) {
+                same.append(QStringLiteral("%1 %2: both legs answered \"%3\"")
+                                .arg(entry.id, it.key(), it.value()));
+            }
+        }
+    }
+    QVERIFY2(compared >= 25, qPrintable(QString::number(compared)));
+    QVERIFY2(same.isEmpty(), qPrintable(same.join(QLatin1Char('\n'))));
+
+    // nnr.applyModelSelection names the selection it applies by the
+    // revision the snapshot gave (dspAssets' selectionRevision), as an app
+    // does; any other revision is refused before the arguments matter.
+    const QJsonArray steps =
+        fixture(QStringLiteral("session-verbs-nnr")).value(QStringLiteral("steps")).toArray();
+    double snapshotRevision = -1.0;
+    double invokedRevision = -2.0;
+    for (const QJsonValue& value : steps) {
+        const QJsonObject step = value.toObject();
+        const QJsonObject message = step.value(QStringLiteral("message")).toObject();
+        if (message.value(QStringLiteral("type")).toString() == QStringLiteral("object.create")
+            && message.value(QStringLiteral("key")).toString() == QStringLiteral("dspAssets")) {
+            for (const QJsonValue& p : message.value(QStringLiteral("properties")).toArray()) {
+                if (p.toObject().value(QStringLiteral("name")).toString()
+                    == QStringLiteral("selectionRevision")) {
+                    snapshotRevision = p.toObject().value(QStringLiteral("value")).toDouble();
+                }
+            }
+        }
+        if (step.value(QStringLiteral("role")).toString() == QStringLiteral("behaviour")
+            && message.value(QStringLiteral("verb")).toString()
+                   == QStringLiteral("nnr.applyModelSelection")) {
+            invokedRevision = message.value(QStringLiteral("args")).toArray().at(0).toObject()
+                                  .value(QStringLiteral("value")).toDouble();
+        }
+    }
+    QCOMPARE(invokedRevision, snapshotRevision);
 }
 
 void TstLinkConformanceSession::everyFixtureRunsOnTheStation()

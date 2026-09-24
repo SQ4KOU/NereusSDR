@@ -68,6 +68,9 @@ public:
     void receiveDisplaySnapshot(const Ps3Snapshot& snapshot);
     static QByteArray actionVerb(Ps3Action action);
     static std::optional<Ps3Action> actionForVerb(const QByteArray& verb);
+    /// Whether `arguments` are exactly what `action` takes (names, types
+    /// and limits), as executeAction reads them.
+    static bool argumentsFit(Ps3Action action, const QVariantMap& arguments);
 
 signals:
     void statusChanged();
