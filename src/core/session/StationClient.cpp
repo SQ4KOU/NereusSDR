@@ -93,6 +93,9 @@
 //   2026-09-24 - R-R3-47: remoteRfKitControlVersion 3 (the resetRfKitError
 //                 request, the RF-Kit page's settings from a remote window).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-46 / R-R3-21: radioHardwareVersion 4, the filter
+//                 policy request (setAlexBpfMode) and its plain reason.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2866,6 +2869,33 @@ StationClient::CommandOutcome StationClient::requestAlexRxAntenna(Band band, int
                        { intArgument("band", static_cast<int>(band)),
                          intArgument("antenna", antenna), boolArgument("rxOnly", rxOnly) },
                        QStringLiteral("the antenna change"));
+}
+
+bool StationClient::filterPolicyEditAvailable() const
+{
+    return remoteHardwareConfigAvailable() && m_capabilities.radioHardwareVersion >= 4;
+}
+
+QString StationClient::filterPolicyUnavailableReason() const
+{
+    if (filterPolicyEditAvailable()) {
+        return {};
+    }
+    if (!m_handshakeComplete) {
+        return QStringLiteral("Connect to the Core to change the filter policy.");
+    }
+    return QStringLiteral("This Core cannot change its filter policy for this app. "
+                          "Updating the Core may help.");
+}
+
+StationClient::CommandOutcome StationClient::requestFilterPolicy(int chain, int mode)
+{
+    if (!filterPolicyEditAvailable()) {
+        return {false, filterPolicyUnavailableReason()};
+    }
+    return sendCommand("setAlexBpfMode", -1,
+                       { intArgument("chain", chain), intArgument("mode", mode) },
+                       QStringLiteral("the filter policy change"));
 }
 
 StationClient::CommandOutcome StationClient::requestIoBoardProbe()

@@ -123,6 +123,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47: remoteRfKitControlVersion 3
 //                                    with the resetRfKitError verb.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-21: radioHardwareVersion
+//                                    4 with the setAlexBpfMode verb, the
+//                                    filter policy from a remote window.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1150,6 +1154,18 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 QStringLiteral("Update this app to set up the RF-Kit amplifier on this Core."), {}));
             break;
         }
+        // R-R3-46 / R-R3-21: the filter policy verb came with
+        // radioHardwareVersion 4, in the minor-11 block.
+        if (message.commandVerb == "setAlexBpfMode"
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || radioHardwareVersion() < 4)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change the filter policy on this Core.")
+                    : QStringLiteral("The Core has no filter settings ready."), {}));
+            break;
+        }
         // I4 (R-R3-47): Reset amp error came with remoteRfKitControlVersion 3.
         if (message.commandVerb == "resetRfKitError"
             && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
@@ -2117,8 +2133,10 @@ int StationServer::radioHardwareVersion() const
         return 1;
     }
     // 3: the `ioBoard` object and the per-band antenna verb
-    // (setAlexRxAntenna), R-R3-46 fix wave.
-    return m_radioModel->ioBoardFacade()->isBound() ? 3 : 2;
+    // (setAlexRxAntenna), R-R3-46 fix wave. 4: the filter policy verb
+    // (setAlexBpfMode), R-R3-46 / R-R3-21, applied through the same
+    // `alexAntennas` facade.
+    return m_radioModel->ioBoardFacade()->isBound() ? 4 : 2;
 }
 
 StationCapabilities StationServer::buildCapabilities() const
@@ -2152,7 +2170,8 @@ StationCapabilities StationServer::buildCapabilities() const
             // `stepAtt` object (DaemonApp binds it before the server starts);
             // 2 once its Alex antennas are behind `alexAntennas` too, with
             // the hardware apply step and the I/O board probe; 3 with the
-            // read-only `ioBoard` object and the per-band antenna verb.
+            // read-only `ioBoard` object and the per-band antenna verb; 4
+            // with the filter policy verb.
             caps.radioHardwareVersion = radioHardwareVersion();
             // R-R3-47 / R-R3-22: 1 on a Core that owns its accessories: the
             // read-only `amplifier` and `rfkit` objects. The Power Genius is 2

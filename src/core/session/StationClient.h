@@ -613,6 +613,11 @@ public:
     /// one band's RX antenna (rxOnly false, 1..3) or RX-only antenna
     /// (rxOnly true, 0..3) on the Core.
     CommandOutcome requestAlexRxAntenna(Band band, int antenna, bool rxOnly);
+    /// R-R3-46 / R-R3-21 (radioHardwareVersion 4). Verb "setAlexBpfMode":
+    /// one receive filter chain's filter policy on the Core.
+    bool filterPolicyEditAvailable() const override;
+    QString filterPolicyUnavailableReason() const override;
+    CommandOutcome requestFilterPolicy(int chain, int mode) override;
     CommandOutcome requestNnrDiagnostics(int sliceId, int testMode, int outputMode) override;
     /// R-R3-40: the station can clear a runtime NNR limit on request
     /// (negotiated minor 11 and NNR control).

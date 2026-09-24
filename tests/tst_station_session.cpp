@@ -5496,8 +5496,9 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
     run(kRadioIdentitySessionProtocolMinor, &current, &currentResults);
     // R-R3-46: 3, since the Core's Alex antennas and the hardware apply
     // step (2), and its I/O board and the per-band antenna verb (3, fix
-    // wave) are behind it too.
-    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 3);
+    // wave) are behind it too; 4 with the filter policy verb (R-R3-46 /
+    // R-R3-21).
+    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 4);
     // Schema, object, the Core's change and the accepted write's echo.
     QVERIFY(aboutStepAtt(current) >= 3);
     QCOMPARE(currentResults.size(), 1);
@@ -6085,7 +6086,7 @@ void TstStationSession::windowBandAntennaEditKeepsTheCoresNewerBands()
     joinHardwareWindow(s, coreStore, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 3);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 4);
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
     AlexAntennaFacade* window = s.window->alexAntennaFacade();
     QVERIFY(window->hasBandEditSender());
@@ -6135,7 +6136,7 @@ void TstStationSession::windowShowsTheCoresIoBoard()
     joinHardwareWindow(s, settings, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 3);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 4);
     const IoBoardHl2& windowBoard = s.window->ioBoard();
     QVERIFY(!windowBoard.isDetected());
 

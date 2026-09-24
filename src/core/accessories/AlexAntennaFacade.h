@@ -41,6 +41,11 @@
 //                                    a time (setBandEditSender, the Core's
 //                                    setRxAntForBand). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-21 (radioHardwareVersion
+//                                    4): the Core's filter policy for a
+//                                    remote window (setBpfModeForChain,
+//                                    bpfModeApplied). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "models/Band.h"
@@ -115,6 +120,19 @@ public:
     QString setRxAntForBand(Band band, int antenna);
     QString setRxOnlyAntForBand(Band band, int antenna);
 
+    /// The receive filter chains AlexController keeps a filter policy for
+    /// (Alex0 / ADC0 and Alex1 / ADC1).
+    static constexpr int kFilterChainCount = 2;
+
+    /// R-R3-46 / R-R3-21 (radioHardwareVersion 4). The Core (bound): one
+    /// chain's filter policy, 0 Auto, 1 Force filter, 2 Force bypass
+    /// (AlexController::BpfMode), through the controller's setBpfMode, the
+    /// call the local filter policy dialog makes. Empty when taken as
+    /// asked; otherwise the plain reason it was not. Emits bpfModeApplied
+    /// when the policy changed, so the Core saves it for its radio and
+    /// every window follows it.
+    QString setBpfModeForChain(int chain, int mode);
+
     /// A remote window: whether its Hardware Config edits can reach the Core
     /// now and, when they cannot, why, in plain words. Starts unavailable,
     /// with the "connect to the Core" reason.
@@ -173,6 +191,8 @@ signals:
     /// A band edit did not reach the Core or the Core refused it; the held
     /// values are unchanged, so a view that showed the click re-reads them.
     void bandEditRefused();
+    /// The Core (bound): setBpfModeForChain changed `chain`'s policy.
+    void bpfModeApplied(int chain);
 
 private:
     using BandList = std::array<int, kBandCount>;

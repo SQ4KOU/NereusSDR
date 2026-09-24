@@ -195,6 +195,9 @@ private:
     // R-R3-46 fix wave (radioHardwareVersion 3): one band's RX or RX-only
     // antenna, applied through the Core's AlexAntennaFacade.
     void handleSetAlexRxAntenna(const NereusSDR::SessionMessage& invoke);
+    // R-R3-46 / R-R3-21 (radioHardwareVersion 4): one receive filter
+    // chain's filter policy, applied through the Core's AlexAntennaFacade.
+    void handleSetAlexBpfMode(const NereusSDR::SessionMessage& invoke);
     // nnr.setDiagnostics, nnr.resetTuning and (R-R3-40, minor 11)
     // nnr.tryAgain, each addressed to one slice ID.
     void handleNnrAction(const NereusSDR::SessionMessage& invoke);

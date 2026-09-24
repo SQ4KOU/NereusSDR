@@ -85,6 +85,10 @@
 //                 SliceModel::loadFromSettings(), so its VAX channel comes
 //                 back too; a remote window's slice leaves its output route
 //                 to the Core. NereusSDR-original; no Thetis logic.
+//   2026-09-24 : R-R3-46 / R-R3-21 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. A filter policy a remote window
+//                 changes on the Core is saved for the Core's radio and
+//                 reaches every window. NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -735,6 +739,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_alexAntennaFacade = new AlexAntennaFacade(this);
     if (role == Role::Local) {
         m_alexAntennaFacade->bindController(&m_alexController);
+        // R-R3-46 / R-R3-21 (radioHardwareVersion 4): a filter policy a
+        // remote window set on the Core is saved for the Core's radio
+        // (AlexController::save writes Alex{0,1}_BpfMode with the rest of
+        // its per-radio keys) and published to every window as
+        // rxFilter<N>Mode, even when the chain's effective filter did not
+        // change (a wideband chain stays bypassed).
+        connect(m_alexAntennaFacade, &AlexAntennaFacade::bpfModeApplied, this, [this](int) {
+            m_alexControllerDirty = true;
+            scheduleSettingsSave();
+            emit filterStateChanged();
+        });
     }
     // R-R3-46 (radioHardwareVersion 3): the HL2 I/O board, read-only. The
     // Core follows its own board; a remote window writes the Core's values

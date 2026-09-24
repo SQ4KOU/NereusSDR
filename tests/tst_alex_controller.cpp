@@ -400,6 +400,72 @@ private slots:
         f.bindController(&a);
         QVERIFY(!f.applyRemoteProperty("txAntennas", QStringLiteral("1,1")));
     }
+
+    // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the Core applies a remote
+    // window's filter policy through the controller's setBpfMode, the call
+    // the local filter policy dialog makes, and lands on the same filter
+    // selection a local Apply produces.
+    void facade_bound_applies_the_filter_policy_as_the_local_dialog_does() {
+        AlexController core;
+        AlexController local;
+        const std::array<Band, 5> slices{Band::Band20m, Band::Count, Band::Count,
+                                         Band::Count, Band::Count};
+        core.notifySlicesOnAdc(0, slices);
+        local.notifySlicesOnAdc(0, slices);
+        AlexAntennaFacade f;
+        f.bindController(&core);
+        QSignalSpy applied(&f, &AlexAntennaFacade::bpfModeApplied);
+
+        for (const auto mode : {AlexController::BpfMode::ForceBypass,
+                                AlexController::BpfMode::ForceBand,
+                                AlexController::BpfMode::Auto}) {
+            QCOMPARE(f.setBpfModeForChain(0, int(mode)), QString());
+            local.setBpfMode(0, mode);  // the local dialog's Apply
+            QCOMPARE(core.bpfMode(0), mode);
+            QCOMPARE(core.adcState(0).effective, local.adcState(0).effective);
+            QCOMPARE(core.adcState(0).reasonText, local.adcState(0).reasonText);
+            QCOMPARE(core.adcState(0).currentBpfBand, local.adcState(0).currentBpfBand);
+        }
+        QCOMPARE(applied.count(), 3);
+        QCOMPARE(applied.last().at(0).toInt(), 0);
+
+        // The policy it already has: taken, nothing to save.
+        QCOMPARE(f.setBpfModeForChain(0, int(AlexController::BpfMode::Auto)), QString());
+        QCOMPARE(applied.count(), 3);
+
+        // The second chain on its own.
+        QCOMPARE(f.setBpfModeForChain(1, int(AlexController::BpfMode::ForceBypass)), QString());
+        QCOMPARE(core.bpfMode(1), AlexController::BpfMode::ForceBypass);
+        QCOMPARE(core.bpfMode(0), AlexController::BpfMode::Auto);
+        QCOMPARE(applied.last().at(0).toInt(), 1);
+
+        // A wideband chain stays bypassed, but its policy still changes and
+        // is still announced (so the Core saves and publishes it).
+        core.setWidebandActive(1, true);
+        const int before = applied.count();
+        QCOMPARE(f.setBpfModeForChain(1, int(AlexController::BpfMode::ForceBand)), QString());
+        QCOMPARE(core.bpfMode(1), AlexController::BpfMode::ForceBand);
+        QCOMPARE(core.adcState(1).effective, AlexController::BpfEffective::WidebandLocked);
+        QCOMPARE(applied.count(), before + 1);
+    }
+
+    void facade_filter_policy_refuses_what_the_controller_cannot_take() {
+        AlexAntennaFacade unbound;
+        QVERIFY(!unbound.setBpfModeForChain(0, 1).isEmpty());
+
+        AlexController core;
+        AlexAntennaFacade f;
+        f.bindController(&core);
+        QSignalSpy applied(&f, &AlexAntennaFacade::bpfModeApplied);
+        for (const auto& [chain, mode] : {std::pair{2, 1}, std::pair{-1, 1},
+                                           std::pair{0, 3}, std::pair{0, -1}}) {
+            const QString reason = f.setBpfModeForChain(chain, mode);
+            QVERIFY2(!reason.isEmpty(), qPrintable(QStringLiteral("%1/%2").arg(chain).arg(mode)));
+        }
+        QCOMPARE(core.bpfMode(0), AlexController::BpfMode::Auto);
+        QCOMPARE(core.bpfMode(1), AlexController::BpfMode::Auto);
+        QCOMPARE(applied.count(), 0);
+    }
 };
 
 QTEST_APPLESS_MAIN(TestAlexController)

@@ -124,9 +124,13 @@ struct StationCapabilities {
     QString radioAddress;
     /// R-R3-46 / R-R3-11: 1 means the Core mirrors its step attenuator and
     /// preamp as the `stepAtt` object and applies a window's edits to it
-    /// through its own controller (2 will add the hardware settings). Sent
-    /// last in the same block as the three above, so only at minor 11. 0: a
-    /// window keeps today's behaviour and does not write `stepAtt`.
+    /// through its own controller. 2 adds the Alex antenna settings
+    /// (`alexAntennas`), the hardware apply step and the I/O board probe; 3
+    /// the read-only `ioBoard` object and the setAlexRxAntenna command; 4
+    /// the setAlexBpfMode command (a receive filter chain's filter policy,
+    /// R-R3-46 / R-R3-21). Sent last in the same block as the three above,
+    /// so only at minor 11. 0: a window keeps today's behaviour and does
+    /// not write `stepAtt`.
     int radioHardwareVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
