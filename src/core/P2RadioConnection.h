@@ -531,7 +531,7 @@ private:
 
     // --- Run state (from Thetis _radionet, network.h:65-66) ---
     bool m_running{false};           // prn->run
-    int m_wdt{0};                    // prn->wdt; byte 38, always 1 once connected (R-R3-49, see setWatchdogEnabled)
+    int m_wdt{1};                    // prn->wdt; byte 38, always 1 so it is never 0 on the wire (R-R3-49, see setWatchdogEnabled)
     bool m_intentionalDisconnect{false};
 
     // --- MOX (transmit) state (3M-1a E.7) ---
