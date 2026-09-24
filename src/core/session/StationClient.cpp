@@ -91,7 +91,9 @@
 //                 accessoryRequestRefused, never the slice toast. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-47: remoteRfKitControlVersion 3 (the resetRfKitError
-//                 request, the RF-Kit page's settings from a remote window).
+//                 request, the RF-Kit page's settings from a remote window);
+//                 a Core setting's change is reported to the window's pages
+//                 (stationSettingChanged).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -1786,6 +1788,8 @@ void StationClient::handleSettingsSnapshot(const SessionMessage& message)
         for (auto it = data.constBegin(); it != data.constEnd(); ++it) {
             m_radioModel->scheduleRemoteOcReload(it.key());
         }
+        // Follow-up 6: pages showing the Core's settings re-read them.
+        m_radioModel->reportStationSettingChanged(QString());
     }
 
     // Ready only NOW, never earlier. SliceModel, NotchModel,
@@ -1844,6 +1848,9 @@ void StationClient::handleSettingsValue(const SessionMessage& message)
     // window's copy, so its next save cannot send a stale cell back.
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteOcReload(key);
+        // Follow-up 6: another window's (or the Core's) change reaches the
+        // pages that show it.
+        m_radioModel->reportStationSettingChanged(key);
     }
 }
 

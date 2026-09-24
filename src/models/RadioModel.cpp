@@ -4553,6 +4553,13 @@ void RadioModel::forgetAccessoryRequest(quint32 commandId)
     m_pageShownAccessoryRequests.remove(commandId);
 }
 
+void RadioModel::reportStationSettingChanged(const QString& key)
+{
+    if (m_role == Role::Remote) {
+        emit stationSettingChanged(key);
+    }
+}
+
 void RadioModel::reportStationRetuneRejected(int sliceId, const QString& reason)
 {
     if (m_role != Role::Remote) {

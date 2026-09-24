@@ -559,6 +559,10 @@ public:
     void noteAccessoryRequestShownOnPage(quint32 commandId);
     /// The request was accepted: nothing to claim.
     void forgetAccessoryRequest(quint32 commandId);
+    /// Follow-up 6: one of the Core's station settings changed (`key`), or
+    /// a whole snapshot arrived (empty). Role::Remote only; emits
+    /// stationSettingChanged for the pages that show those settings.
+    void reportStationSettingChanged(const QString& key);
 
     /// The station refused a sample-rate change, with its own reason.
     /// Role::Remote only. Routed to sliceRetuneRejected, which carries the
@@ -3278,6 +3282,8 @@ signals:
     /// settings (`device` "pgxl" or "tgxl"); `reason` is the Core's words.
     void accessoryRequestRefused(const QString& device, const QString& reason,
                                  bool shownOnPage);
+    /// Remote window: a Core station setting changed (empty: a snapshot).
+    void stationSettingChanged(const QString& key);
 
     /// Phase 3F Sub-Epic I closeout, defect F4: the operator retuned a slice
     /// to a frequency no DDC can reach, and the frequency has been rolled

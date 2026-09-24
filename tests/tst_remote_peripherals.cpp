@@ -2382,28 +2382,37 @@ void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
     QTRY_VERIFY(localAmp.lines.mid(localMark).contains(QStringLiteral("POST /error/reset")));
     local.rfKitConnection()->disconnect();
 
-    // Save: the station's settings, then applied by the Core at once.
+    // Save: the station's settings, sent over the link through the
+    // window's settings proxy (follow-up 5: nothing here writes the Core's
+    // store or calls its apply by hand), then applied by the Core at once.
+    QTRY_VERIFY(cw.proxy.ready());
+    AppSettings::instance().setRemoteBackend(&cw.proxy);
+    const auto restoreBackend = qScopeGuard([] {
+        AppSettings::instance().setRemoteBackend(nullptr);
+    });
     page.autoReconnectForTesting()->setChecked(false);
     page.pollIntervalForTesting()->setValue(2500);
     page.antennaLabelEditForTesting(1)->setText(QStringLiteral("Beam"));
     page.antennaLabelEditForTesting(4)->setText(QStringLiteral("Loop"));
     page.saveButtonForTesting()->click();
-    auto& s = AppSettings::instance();
-    QCOMPARE(s.value(QStringLiteral("RfKit_AutoReconnect")).toString(), QStringLiteral("False"));
-    QCOMPARE(s.value(QStringLiteral("RfKit_PollIntervalMs")).toString(), QStringLiteral("2500"));
-    QCOMPARE(s.value(QStringLiteral("RfKit_Ant1_Label")).toString(), QStringLiteral("Beam"));
-    QCOMPARE(s.value(QStringLiteral("RfKit_Ant4_Label")).toString(), QStringLiteral("Loop"));
-    // The station settings write reaches the Core's live objects (as
-    // StationServer does after storing it).
-    for (const char* key : {"RfKit_AutoReconnect", "RfKit_PollIntervalMs", "RfKit_Ant1_Label",
-                            "RfKit_Ant4_Label"}) {
-        station.applyRemoteAccessorySetting(QString::fromLatin1(key));
-    }
+    QTRY_COMPARE(cw.stationSettings.value(QStringLiteral("RfKit_PollIntervalMs")).toString(),
+                 QStringLiteral("2500"));
+    QCOMPARE(cw.stationSettings.value(QStringLiteral("RfKit_AutoReconnect")).toString(),
+             QStringLiteral("False"));
+    QCOMPARE(cw.stationSettings.value(QStringLiteral("RfKit_Ant1_Label")).toString(),
+             QStringLiteral("Beam"));
+    QTRY_COMPARE(station.rfKitConnection()->pollIntervalMs(), 2500);
     QVERIFY(!station.rfKitConnection()->autoReconnect());
-    QCOMPARE(station.rfKitConnection()->pollIntervalMs(), 2500);
     QTRY_COMPARE(window.accessoryDataModel()->rfkitAntennaLabels().value(0),
                  QStringLiteral("Beam"));
     QCOMPARE(window.accessoryDataModel()->rfkitAntennaLabels().value(3), QStringLiteral("Loop"));
+
+    // Follow-up 6: another window changes them on the Core: this page
+    // follows.
+    cw.stationSettings.setValue(QStringLiteral("RfKit_PollIntervalMs"), QStringLiteral("3000"));
+    cw.stationSettings.setValue(QStringLiteral("RfKit_AutoReconnect"), QStringLiteral("True"));
+    QTRY_COMPARE(page.pollIntervalForTesting()->value(), 3000);
+    QTRY_VERIFY(page.autoReconnectForTesting()->isChecked());
 
     // Nothing but reads and the reset reached the Core's amp; the window
     // opened no connection of its own.

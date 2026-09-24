@@ -24,7 +24,8 @@
 //   2026-09-24 -- R-R3-47: every control works from a remote window: the
 //                 connection settings and antenna names as station
 //                 settings, Reset amp error through the Core
-//                 (remoteRfKitControlVersion 3). J.J. Boyd (KG4VCF),
+//                 (remoteRfKitControlVersion 3); the page follows another
+//                 window's changes to them. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -281,6 +282,15 @@ QWidget* RfKitPage::buildRf2ksTab()
         // I4: the Core's settings and names, and whether it takes them.
         connect(m_model, &RadioModel::stationLinkStateChanged,
                 this, &RfKitPage::refreshRemoteSettings);
+        // Follow-up 6: another window's change to automatic retry or the
+        // poll interval on the Core shows here too.
+        connect(m_model, &RadioModel::stationSettingChanged, this,
+                [this](const QString& key) {
+            if (key.isEmpty() || key == QLatin1String("RfKit_AutoReconnect")
+                || key == QLatin1String("RfKit_PollIntervalMs")) {
+                refreshRemoteSettings();
+            }
+        });
         if (AccessoryDataModel* data = m_model->accessoryDataModel()) {
             connect(data, &AccessoryDataModel::labelsChanged,
                     this, &RfKitPage::refreshRemoteSettings);

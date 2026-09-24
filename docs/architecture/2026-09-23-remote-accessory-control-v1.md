@@ -1017,8 +1017,8 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   same way. Below 2 the page says "This Core does not offer RF-Kit
   amplifier setup to this app." and changes nothing. With
   `remoteRfKitControlVersion` 3 the page's automatic retry, poll interval
-  and four antenna names show the Core's values and Save writes them as
-  station settings; Reset amp error state sends `resetRfKitError`, and a
+  and four antenna names show the Core's values (following another
+  window's change to them) and Save writes them as station settings; Reset amp error state sends `resetRfKitError`, and a
   refusal shows in the status line. Below 3 those controls are shown,
   unchangeable, with "This Core does not let this app change these
   settings. Updating the Core may help."
@@ -1260,8 +1260,11 @@ rewrite the fixtures, and update this document in the same commit.
   works every control: its Reset amp error reaches the Core's amp as
   `POST /error/reset`, the same request a local page's button sends to its
   own amp (both fakes record it); refused with no amp admitted, on the
-  accessory route; Save writes automatic retry, poll interval and the four
-  names as station settings, which the Core applies to its connection;
+  accessory route; Save sends automatic retry, poll interval and the four
+  names over the link as station settings (through the window's settings
+  proxy to the Core's store), which the Core applies to its connection on
+  arrival, and the page follows a change made on the Core by another
+  window;
   below `remoteRfKitControlVersion` 3 the controls stay unchangeable with
   a plain reason. `tst_station_rfkit_controller`: the Core's reset reaches
   only an admitted amp. `tst_station_accessory_state`: `resetRfKitError`
