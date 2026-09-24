@@ -383,10 +383,31 @@ bool acceptedOff(const RemoteMediaController& media, quint32 generation,
         && context->offReason == reason;
 }
 
-// What the controller logs when this computer's speaker cannot be opened.
+// What the controller logs when this computer's speaker cannot start remote
+// playback because it reports no playback timing (R-R3-23: any rate and
+// channel count it offers is accepted).
 const char* const kSpeakerOpenFailedLog =
-    "Remote audio playback failed: Remote audio requires a 48 kHz stereo speaker "
-    "device with playback timing";
+    "Remote audio playback failed: The selected speaker device does not report "
+    "its playback timing";
+
+// R-R3-23: the amplitude of a `hz` tone in one channel of audio heard at
+// `rateHz` with `channels` interleaved, over its last `frames` frames.
+double lastToneAmplitude(const QVector<float>& heard, int channels, int channel, double hz,
+                         int rateHz, qint64 frames)
+{
+    const qint64 total = heard.size() / channels;
+    double cosine = 0.0;
+    double sine = 0.0;
+    qint64 counted = 0;
+    for (qint64 frame = std::max<qint64>(0, total - frames); frame < total; ++frame) {
+        const double phase = 2.0 * 3.14159265358979323846 * hz * double(frame) / double(rateHz);
+        const double sample = heard.at(frame * channels + channel);
+        cosine += sample * std::cos(phase);
+        sine += sample * std::sin(phase);
+        ++counted;
+    }
+    return counted > 0 ? 2.0 * std::hypot(cosine, sine) / double(counted) : 0.0;
+}
 
 // What it logs when a playing speaker stops reporting timing: the worker's
 // pacing check or its next write notices first, with the bounded detail.
@@ -3792,6 +3813,82 @@ private slots:
             }
         }
         client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-23: a remote window plays the Core's audio on whatever speaker
+    // format this computer's Devices page set: 44.1 or 96 kHz stereo, or a
+    // mono device, over the real encrypted session. The speaker plays at
+    // its own rate and the slice tones come out at their own pitch; a mono
+    // speaker hears both slices. No refusal and no problem is shown.
+    void playsOnTheSpeakerFormatThisComputerChose_data()
+    {
+        QTest::addColumn<int>("rate");
+        QTest::addColumn<int>("channels");
+        QTest::newRow("44.1 kHz stereo") << 44100 << 2;
+        QTest::newRow("96 kHz stereo") << 96000 << 2;
+        QTest::newRow("48 kHz mono") << 48000 << 1;
+    }
+    void playsOnTheSpeakerFormatThisComputerChose()
+    {
+        using State = RemoteAudioStatus::State;
+        QFETCH(int, rate);
+        QFETCH(int, channels);
+        Test::RemoteAudioSessionHarness h;
+        QVERIFY(h.remoteBus->open(AudioFormat{rate, channels, AudioFormat::Sample::Float32}));
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QSignalSpy errors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QTimer source;
+        source.setInterval(10);
+        source.setTimerType(Qt::PreciseTimer);
+        connect(&source, &QTimer::timeout, &source, [&h] { h.feedMixedTone(); });
+        QTimer speaker; // 10 ms of the speaker's own rate at a time
+        speaker.setInterval(10);
+        speaker.setTimerType(Qt::PreciseTimer);
+        connect(&speaker, &QTimer::timeout, &speaker, [&h, rate] { h.remoteBus->render(rate / 100); });
+        source.start();
+        speaker.start();
+        h.connectSession();
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        const qsizetype heardAtPlaying = h.remoteBus->heard.size() / channels;
+        QTRY_VERIFY_WITH_TIMEOUT(h.remoteBus->heard.size() / channels >= heardAtPlaying + rate, 10000);
+        source.stop();
+        speaker.stop();
+        QCOMPARE(errors.size(), 0);
+        QCOMPARE(remoteMedia.audioStatus().state, State::Playing);
+        QVERIFY(!remoteMedia.audioStatus().problem.has_value());
+        const RemoteAudioReceiverTelemetry playback = remoteMedia.audioTelemetry();
+        QVERIFY(playback.running);
+        QVERIFY(playback.deviceConsumedFrames > 0);
+        QVERIFY(playback.speakerQueuedMs && *playback.speakerQueuedMs < 100.0);
+
+        // The last half second heard: each slice's tone at its own pitch
+        // (at a wrong rate it would be heard at pitch x 48 kHz / rate).
+        const QVector<float> heard = h.remoteBus->heard;
+        const qint64 half = rate / 2;
+        const double toneA = Test::RemoteAudioSessionHarness::kSliceAToneHz;
+        const double toneB = Test::RemoteAudioSessionHarness::kSliceBToneHz;
+        const int channelA = 0;
+        const int channelB = channels == 2 ? 1 : 0;
+        const double a = lastToneAmplitude(heard, channels, channelA, toneA, rate, half);
+        const double b = lastToneAmplitude(heard, channels, channelB, toneB, rate, half);
+        qInfo().noquote() << QStringLiteral("%1 Hz %2 ch: slice A %3, slice B %4")
+                                 .arg(rate).arg(channels).arg(a, 0, 'f', 4).arg(b, 0, 'f', 4);
+        // Heard stereo levels at 48 kHz are about 0.062 and 0.042; a mono
+        // speaker hears each at about half (tst_remote_audio_receiver
+        // checks the mix exactly).
+        QVERIFY2(a > 0.02 && b > 0.015, qPrintable(QStringLiteral("%1 %2").arg(a).arg(b)));
+        if (channels == 2) {
+            // Each slice stays on its side of the pan.
+            const double aRight = lastToneAmplitude(heard, channels, 1, toneA, rate, half);
+            QVERIFY2(aRight < a / 3.0, qPrintable(QStringLiteral("%1 %2").arg(aRight).arg(a)));
+        }
+        if (rate != 48000) {
+            const double wrongA = lastToneAmplitude(heard, channels, channelA,
+                                                    toneA * 48000.0 / rate, rate, half);
+            QVERIFY2(wrongA < a / 10.0, qPrintable(QStringLiteral("%1 %2").arg(wrongA).arg(a)));
+        }
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
     // R-R3-23 (a): a real speaker loss becomes a lasting playback problem

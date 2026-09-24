@@ -128,6 +128,11 @@
 //                 that output's clock (per-channel lock against the owner
 //                 thread replacing the output), and setVaxOutputsAllowed()
 //                 lets nereusd publish no VAX devices at all.
+//   2026-09-23: R-R3-23 / R-R3-07 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Remote playback plays on any
+//                 speaker rate and channel count the Devices page offers:
+//                 remotePlaybackFormat() names the format begin accepted,
+//                 and writeRemotePlayback() takes blocks in it.
 // =================================================================
 
 #include "AudioDeviceConfig.h"
@@ -359,11 +364,24 @@ public:
 
     // Remote RX playback owns only the existing speakers bus. The caller must
     // stop/join its playback worker before this AudioEngine is destroyed.
-    // Begin/end run on the owner thread; pacing/write are worker-safe.
+    // Begin/end run on the owner thread; format/pacing/write are worker-safe.
+    //
+    // R-R3-23: begin accepts the speaker at the rate and channel count it
+    // opened at: float samples, one or two channels, a rate from
+    // kMinRemotePlaybackRateHz to kMaxRemotePlaybackRateHz (the Devices
+    // page offers 44.1 kHz to 384 kHz), with playback timing.
+    // remotePlaybackFormat() is that format until end, nullopt otherwise.
+    // writeRemotePlayback() takes interleaved float frames in that format
+    // (its channel count), at most kMaxRemotePlaybackFrames; it fails once
+    // the device has reopened in another format, so the caller restarts.
+    static constexpr int kMinRemotePlaybackRateHz = 8'000;
+    static constexpr int kMaxRemotePlaybackRateHz = 384'000;
+    static constexpr int kMaxRemotePlaybackFrames = 4096;
     bool beginRemotePlayback(QString* error = nullptr);
     void endRemotePlayback();
+    std::optional<AudioFormat> remotePlaybackFormat();
     std::optional<IAudioBus::OutputPacing> remotePlaybackPacing();
-    bool writeRemotePlayback(const QVector<float>& stereo);
+    bool writeRemotePlayback(const QVector<float>& pcm);
 
     void setHeadphonesConfig(const AudioDeviceConfig& cfg);
     // R-R3-36: stores the TX input selection and hands it to the capture
@@ -914,6 +932,7 @@ private:
 
     std::unique_ptr<IAudioBus> m_speakersBus;
     bool m_remotePlayback{false}; // protected by m_speakersBusMutex
+    AudioFormat m_remotePlaybackFormat; // protected by m_speakersBusMutex
     std::unique_ptr<IAudioBus> m_headphonesBus;
     // Test-injected TX input only (setTxInputBusForTest); production reads
     // the capture supervisor's reader. R-R3-36.

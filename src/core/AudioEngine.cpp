@@ -154,6 +154,7 @@
 #include <portaudio.h>
 
 #include <algorithm>
+#include <array>
 #include <vector>
 
 namespace NereusSDR {
@@ -953,13 +954,27 @@ bool AudioEngine::beginRemotePlayback(QString* error)
         if (error) { *error = QStringLiteral("Could not open the selected speaker device"); }
         return false;
     }
+    // R-R3-23: any rate and channel count the Devices page offers. The
+    // receiver matches the stream to this rate and mixes it to one channel
+    // for a mono device; a format outside that is refused in plain words.
     const AudioFormat format = m_speakersBus->negotiatedFormat();
-    if (format.sampleRate != kMasterMixSampleRateHz || format.channels != 2
-        || format.sample != AudioFormat::Sample::Float32 || !m_speakersBus->outputPacing()) {
-        if (error) { *error = QStringLiteral("Remote audio requires a 48 kHz stereo speaker device with playback timing"); }
+    if ((format.channels != 1 && format.channels != 2)
+        || format.sampleRate < kMinRemotePlaybackRateHz
+        || format.sampleRate > kMaxRemotePlaybackRateHz
+        || format.sample != AudioFormat::Sample::Float32) {
+        if (error) {
+            *error = QStringLiteral("Remote audio cannot play on a speaker device set to "
+                                    "%1 channels at %2 Hz")
+                         .arg(format.channels).arg(format.sampleRate);
+        }
+        return false;
+    }
+    if (!m_speakersBus->outputPacing()) {
+        if (error) { *error = QStringLiteral("The selected speaker device does not report its playback timing"); }
         return false;
     }
     m_speakersBus->flush();
+    m_remotePlaybackFormat = format;
     m_remotePlayback = true;
     return true;
 }
@@ -968,34 +983,50 @@ void AudioEngine::endRemotePlayback()
 {
     std::lock_guard<std::mutex> lock(m_speakersBusMutex);
     m_remotePlayback = false;
+    m_remotePlaybackFormat = AudioFormat{};
     if (m_speakersBus) { m_speakersBus->flush(); }
+}
+
+std::optional<AudioFormat> AudioEngine::remotePlaybackFormat()
+{
+    std::lock_guard<std::mutex> lock(m_speakersBusMutex);
+    if (!m_remotePlayback) { return std::nullopt; }
+    return m_remotePlaybackFormat;
 }
 
 std::optional<IAudioBus::OutputPacing> AudioEngine::remotePlaybackPacing()
 {
     std::lock_guard<std::mutex> lock(m_speakersBusMutex);
+    // A device reopened in another format no longer matches the stream the
+    // receiver makes for it: no pacing, so the receiver restarts.
     if (!m_remotePlayback || !m_speakersBus || !m_speakersBus->isOpen()
-        || m_speakersBus->negotiatedFormat() != AudioFormat{}) { return std::nullopt; }
+        || m_speakersBus->negotiatedFormat() != m_remotePlaybackFormat) { return std::nullopt; }
     return m_speakersBus->outputPacing();
 }
 
-bool AudioEngine::writeRemotePlayback(const QVector<float>& stereo)
+bool AudioEngine::writeRemotePlayback(const QVector<float>& pcm)
 {
     // Bounded worker-side scratch; never called by the device callback.
-    if (stereo.size() != 480 * 2) { return false; }
-    std::array<float, 480 * 2> scaled;
+    // The block is interleaved in the format begin accepted (one or two
+    // channels); the channel count is checked again under the lock.
+    if (pcm.isEmpty() || pcm.size() > qsizetype(kMaxRemotePlaybackFrames) * 2) { return false; }
+    std::array<float, kMaxRemotePlaybackFrames * 2> scaled;
     const float gain = m_masterVolume.load(std::memory_order_acquire);
-    for (qsizetype i = 0; i < stereo.size(); ++i) {
-        if (!std::isfinite(stereo[i])) { return false; }
-        scaled[static_cast<size_t>(i)] = stereo[i] * gain;
+    for (qsizetype i = 0; i < pcm.size(); ++i) {
+        if (!std::isfinite(pcm[i])) { return false; }
+        scaled[static_cast<size_t>(i)] = pcm[i] * gain;
     }
     std::lock_guard<std::mutex> lock(m_speakersBusMutex);
     if (!m_remotePlayback || !m_speakersBus || !m_speakersBus->isOpen()
-        || m_speakersBus->negotiatedFormat() != AudioFormat{}) { return false; }
+        || m_speakersBus->negotiatedFormat() != m_remotePlaybackFormat) { return false; }
+    const int channels = m_remotePlaybackFormat.channels;
+    if (channels <= 0 || pcm.size() % channels != 0
+        || pcm.size() / channels > kMaxRemotePlaybackFrames) { return false; }
+    const int frames = int(pcm.size() / channels);
     if (m_masterMuted.load(std::memory_order_acquire)) { return true; }
     const auto pacing = m_speakersBus->outputPacing();
-    if (!pacing || pacing->capacityFrames - pacing->queuedFrames < 480) { return false; }
-    const auto bytes = static_cast<qint64>(sizeof(scaled));
+    if (!pacing || pacing->capacityFrames - pacing->queuedFrames < frames) { return false; }
+    const auto bytes = static_cast<qint64>(pcm.size()) * qint64(sizeof(float));
     return m_speakersBus->push(reinterpret_cast<const char*>(scaled.data()), bytes) == bytes;
 }
 
