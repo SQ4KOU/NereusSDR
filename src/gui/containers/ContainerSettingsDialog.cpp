@@ -986,7 +986,7 @@ void ContainerSettingsDialog::buildButtonBar()
     m_btnPreset = makeBtn(QStringLiteral("Presets\u2026"), this);
     m_btnImport = makeBtn(QStringLiteral("Import"),        this);
     m_btnExport = makeBtn(QStringLiteral("Export"),        this);
-    m_btnMmio   = makeBtn(QStringLiteral("MMIO Variables\u2026"), this);
+    m_btnMmio   = makeBtn(QStringLiteral("Meter Data Sources (MMIO)\u2026"), this);
 
     barLayout->addWidget(m_btnSave);
     barLayout->addWidget(m_btnLoad);

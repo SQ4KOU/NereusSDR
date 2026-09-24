@@ -163,10 +163,11 @@ void CatTciServerPage::buildServerGroup()
     // From Thetis setup.designer.cs:57979-57983 [v2.10.3.13] — chkTCIEnable
     m_enableCheck = new QCheckBox(tr("Enable TCI Server"), group);
     m_enableCheck->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
-    m_enableCheck->setToolTip(tr("Enable the built-in TCI (Transceiver Control Interface) WebSocket server. "
-                                 "In a window on a Core, this switch and the port below are the "
-                                 "Core's: they turn the station's TCI server on or off, and they "
-                                 "show a change made from another window or the phone."));
+    // R-R3-21 / R-R3-48 (operator wording, 2026-09-24): in a window on a
+    // Core the switch and port are the Core's; the station line below says
+    // so in that window.
+    m_enableCheck->setToolTip(tr("Turn on the TCI server so programs like WSJT-X or JTDX "
+                                 "can control this radio."));
     m_enableCheck->setChecked(
         s.value(QStringLiteral("TciServerEnabled"), QStringLiteral("False")).toString()
         == QStringLiteral("True"));
@@ -201,11 +202,11 @@ void CatTciServerPage::buildServerGroup()
     m_bindAddressCombo = new QComboBox(group);
     m_bindAddressCombo->setStyleSheet(QString::fromLatin1(Style::kComboStyle));
     m_bindAddressCombo->setToolTip(tr(
-        "Network interface the TCI server binds to. "
-        "Loopback (127.0.0.1) accepts connections only from this machine. "
-        "Any interface (0.0.0.0) accepts from anywhere on your LAN. "
-        "TCI has no authentication — choose a specific LAN IP or 0.0.0.0 "
-        "only if your network is trusted."));
+        "The IP address the TCI server listens on. "
+        "127.0.0.1 accepts programs on this computer only. "
+        "0.0.0.0 accepts them from anywhere on your network. "
+        "TCI has no password, so choose a network address or 0.0.0.0 "
+        "only on a network you trust."));
     populateBindAddressCombo();
     connect(m_bindAddressCombo,
             QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -218,7 +219,7 @@ void CatTciServerPage::buildServerGroup()
         emit tciServerBindOrPortChanged(addr,
             static_cast<quint16>(m_portSpin ? m_portSpin->value() : 50001));
     });
-    form->addRow(tr("Bind interface:"), m_bindAddressCombo);
+    form->addRow(tr("Listen on:"), m_bindAddressCombo);
 
     // Port spinbox + Default button
     // From Thetis setup.designer.cs:57991-57998 [v2.10.3.13] — udTCIPort (default 50001)
@@ -229,7 +230,7 @@ void CatTciServerPage::buildServerGroup()
     // server and the Core's) when editing finishes (Enter, focus leaving,
     // the arrows), not for every keystroke.
     m_portSpin->setKeyboardTracking(false);
-    m_portSpin->setToolTip(tr("TCP port the TCI WebSocket server listens on (1024–65535). "
+    m_portSpin->setToolTip(tr("The TCP port the TCI server listens on (1024–65535). "
                                "Default is 50001. Requires server restart to take effect."));
     m_portSpin->setValue(
         s.value(QStringLiteral("TciServerPort"), 50001).toInt());
@@ -757,10 +758,10 @@ void CatTciServerPage::populateBindAddressCombo()
 
     // Well-known IPv4 options first.
     m_bindAddressCombo->addItem(
-        tr("Loopback only (127.0.0.1)"),
+        tr("This computer only (127.0.0.1)"),
         QStringLiteral("127.0.0.1"));
     m_bindAddressCombo->addItem(
-        tr("Any IPv4 interface (0.0.0.0) — exposes to LAN"),
+        tr("Any IPv4 address (0.0.0.0), open to your network"),
         QStringLiteral("0.0.0.0"));
 
     // Enumerate detected NICs.  Skip loopback (already in the well-known
@@ -775,7 +776,7 @@ void CatTciServerPage::populateBindAddressCombo()
             const QHostAddress ip = entry.ip();
             if (ip.isNull()) { continue; }
             if (ip.protocol() == QAbstractSocket::IPv4Protocol) {
-                const QString label = QStringLiteral("%1 — %2")
+                const QString label = QStringLiteral("%1 (%2)")
                     .arg(iface.name(), ip.toString());
                 m_bindAddressCombo->addItem(label, ip.toString());
             }
@@ -784,10 +785,10 @@ void CatTciServerPage::populateBindAddressCombo()
 
     // IPv6 well-known options.
     m_bindAddressCombo->addItem(
-        tr("Loopback IPv6 (::1)"),
+        tr("This computer only, IPv6 (::1)"),
         QStringLiteral("::1"));
     m_bindAddressCombo->addItem(
-        tr("Any IPv6 interface (::) — exposes to LAN"),
+        tr("Any IPv6 address (::), open to your network"),
         QStringLiteral("::"));
 
     // Enumerate non-link-local IPv6 NICs (link-local addresses include a
@@ -802,7 +803,7 @@ void CatTciServerPage::populateBindAddressCombo()
             if (ip.isNull()) { continue; }
             if (ip.protocol() == QAbstractSocket::IPv6Protocol) {
                 if (ip.isLinkLocal()) { continue; }
-                const QString label = QStringLiteral("%1 — %2")
+                const QString label = QStringLiteral("%1 (%2)")
                     .arg(iface.name(), ip.toString());
                 m_bindAddressCombo->addItem(label, ip.toString());
             }
@@ -937,8 +938,8 @@ void CatTcpIpPage::buildUI()
     m_enableCheck->setToolTip(QStringLiteral("Turn on the network CAT server"));
     grid->addWidget(m_enableCheck, 0, 0, 1, 2);
 
-    // Bind IP
-    auto* ipLabel = new QLabel(QStringLiteral("Bind IP:"), group);
+    // Listen address (R-R3-21: "Listen on:", as on the TCI page)
+    auto* ipLabel = new QLabel(QStringLiteral("Listen on:"), group);
     ipLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
     grid->addWidget(ipLabel, 1, 0);
 

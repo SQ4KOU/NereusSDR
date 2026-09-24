@@ -430,13 +430,14 @@ void AudioAdvancedPage::buildResetSection()
 void AudioAdvancedPage::onResetClicked()
 {
     // Addendum §2.5 — verbatim confirm modal copy.
+    // R-R3-21 (2026-09-24): "device bindings" reads "device choices".
     QMessageBox dlg(this);
     dlg.setWindowTitle(QStringLiteral("Reset all audio to defaults?"));
     dlg.setText(QStringLiteral("Reset all audio to defaults?"));
     dlg.setInformativeText(
         QStringLiteral(
             "This will clear:\n"
-            "\u2022 All device bindings (Speakers / Headphones / TX Input / VAX 1\u20134)\n"
+            "\u2022 All device choices (Speakers / Headphones / TX Input / VAX 1\u20134)\n"
             "\u2022 DSP sample rate and block size\n"
             "\u2022 Feature flags\n"
             "\n"

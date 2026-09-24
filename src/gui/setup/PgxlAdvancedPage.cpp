@@ -541,7 +541,7 @@ void PgxlAdvancedPage::buildPairingSection(QVBoxLayout* topLay)
     sliceLay->addWidget(m_sliceA);
     sliceLay->addWidget(m_sliceB);
     sliceLay->addStretch();
-    form->addRow(QStringLiteral("Slice Binding:"), sliceWidget);
+    form->addRow(QStringLiteral("Follows slice:"), sliceWidget);
 
     auto* sliceGroup = new QButtonGroup(this);
     sliceGroup->addButton(m_sliceA);

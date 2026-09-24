@@ -1765,7 +1765,7 @@ void SpotHubDialog::buildFreeDvTab(QTabWidget* tabs)
     int row = 0;
 
     grid->addWidget(new QLabel("Server:"), row, 0);
-    auto* serverLabel = new QLabel("qso.freedv.org (WebSocket)");
+    auto* serverLabel = new QLabel("qso.freedv.org");
     serverLabel->setStyleSheet("QLabel { color: #808890; }");
     grid->addWidget(serverLabel, row, 1);
     row++;
