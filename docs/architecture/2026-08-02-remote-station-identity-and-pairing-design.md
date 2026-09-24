@@ -179,6 +179,16 @@ A daemon accepts pairing only while its pairing window is open.
 - **Closes permanently on the first successful pair.**
 - **Reopens** from the daemon console, or from an already-paired device.
 
+**Note (2026-09-24, the iPhone plan's Part C fix wave).** "No timer" still
+holds for the unclaimed window, but it now has an attempt ceiling: five
+burned codes in a row close any open window, and only the console (or, on a
+claimed Core, a paired device) reopens it. On an unclaimed Core that means
+the console, so physical access decides. A reopened window also closes by
+itself 10 minutes after it opened. Reopening starts afresh, with no failures
+counted and no wait. A paired device cannot revoke the last device while no
+token is active, so the window never reopens by itself after the first pair.
+The link document's section 3.6 carries the numbers.
+
 That last route is what makes adding a second device pleasant: the operator adds
 a phone from an already-paired laptop and never approaches the radio.
 

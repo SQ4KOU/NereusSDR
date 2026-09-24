@@ -10,6 +10,10 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (R1-I2): a reopened pairing window
+//               lasts 10 minutes, five burned codes in a row close any window,
+//               and reopening starts afresh. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/PairingWindow.h"
@@ -49,8 +53,13 @@ PairingWindow::PairingWindow(DeviceStore& devices, QObject* parent)
     , m_nameplate(static_cast<int>(QRandomGenerator::system()->bounded(1, kLocalNameplateMax + 1)))
 {
     m_wait = new QTimer(this);
+    m_wait->setObjectName(QStringLiteral("pairingCodeWait"));
     m_wait->setSingleShot(true);
     connect(m_wait, &QTimer::timeout, this, &PairingWindow::poll);
+    m_expiry = new QTimer(this);
+    m_expiry->setObjectName(QStringLiteral("pairingWindowExpiry"));
+    m_expiry->setSingleShot(true);
+    connect(m_expiry, &QTimer::timeout, this, &PairingWindow::poll);
     connect(&m_devices, &DeviceStore::devicesChanged, this, &PairingWindow::followDevices);
     followDevices();
 }
@@ -67,13 +76,31 @@ void PairingWindow::setClock(Clock clock)
     m_clock = clock ? std::move(clock) : Clock(&monotonicMs);
 }
 
+bool PairingWindow::isOpenState(State state)
+{
+    return state == State::OpenUnclaimed || state == State::OpenReopened;
+}
+
+void PairingWindow::startAfresh()
+{
+    m_failures = 0;
+    m_nextCodeAt = 0;
+    m_wait->stop();
+}
+
 void PairingWindow::followDevices()
 {
     const bool claimed = m_devices.isClaimed();
-    if (!claimed && m_state != State::OpenUnclaimed) {
-        // A new Core, or one that lost its last device: open, no timer.
+    if (!claimed && (m_state == State::ClosedClaimed || m_state == State::OpenReopened)) {
+        // A new Core, or one reset to unclaimed from its console (the only
+        // way a claimed Core gets here): open, no timer, a fresh count. A
+        // window the attempt ceiling closed (ClosedUnclaimed) stays shut
+        // until the console reopens it.
+        m_expiry->stop();
+        startAfresh();
         commit(State::OpenUnclaimed, codeFor(State::OpenUnclaimed));
-    } else if (claimed && m_state == State::OpenUnclaimed) {
+    } else if (claimed
+               && (m_state == State::OpenUnclaimed || m_state == State::ClosedUnclaimed)) {
         // The first device claimed it.
         m_wait->stop();
         commit(State::ClosedClaimed, QString());
@@ -86,6 +113,10 @@ void PairingWindow::commit(State state, const QString& code)
     // on the first signal sees the whole change: one change, not two.
     const bool stateMoved = m_state != state;
     const bool codeMoved = m_code != code;
+    if (isOpenState(m_state) && !isOpenState(state)) {
+        m_expiry->stop();
+        m_openUntil = 0;
+    }
     m_state = state;
     m_code = code;
     if (stateMoved) {
@@ -100,7 +131,7 @@ void PairingWindow::commit(State state, const QString& code)
 
 QString PairingWindow::codeFor(State state)
 {
-    if (state == State::ClosedClaimed || m_codeInUse) {
+    if (!isOpenState(state) || m_codeInUse) {
         return {};
     }
     if (!m_code.isEmpty()) {
@@ -123,9 +154,20 @@ QString PairingWindow::codeFor(State state)
 
 void PairingWindow::reopen()
 {
-    if (m_state != State::ClosedClaimed) {
+    if (isOpen()) {
         return;
     }
+    // Whoever reopens it (the console, or a paired device on a claimed
+    // Core) starts it afresh: no failures counted and no wait.
+    startAfresh();
+    if (m_state == State::ClosedUnclaimed) {
+        // The attempt ceiling shut an unclaimed Core's window; only the
+        // console reaches this (no device is paired). No timer, as before.
+        commit(State::OpenUnclaimed, codeFor(State::OpenUnclaimed));
+        return;
+    }
+    m_openUntil = now() + kReopenedLifetimeMs;
+    m_expiry->start(static_cast<int>(kReopenedLifetimeMs));
     commit(State::OpenReopened, codeFor(State::OpenReopened));
 }
 
@@ -136,6 +178,17 @@ void PairingWindow::close()
     }
     m_wait->stop();
     commit(State::ClosedClaimed, QString());
+}
+
+void PairingWindow::closeForCeiling()
+{
+    m_wait->stop();
+    const State closed =
+        m_state == State::OpenUnclaimed ? State::ClosedUnclaimed : State::ClosedClaimed;
+    qCInfo(lcPairing) << "Pairing closed after" << m_failures
+                      << "wrong pairing codes in a row; it opens again only from the Core's "
+                         "console or a paired device";
+    commit(closed, QString());
 }
 
 void PairingWindow::setNameplate(int nameplate)
@@ -185,7 +238,13 @@ void PairingWindow::pairingFailed()
 {
     m_codeInUse = false;
     ++m_failures;
-    // 5 s, 10 s, 20 s, ... 300 s.
+    if (isOpen() && m_failures >= kMaxConsecutiveFailures) {
+        // The attempt ceiling (fix wave R1-I2): the fifth burn in a row
+        // closes the window, reopened or unclaimed.
+        closeForCeiling();
+        return;
+    }
+    // 5 s, 10 s, 20 s, 40 s (the ceiling closes the window before 80 s).
     const int doublings = std::min(m_failures - 1, 16);
     const qint64 wait = std::min<qint64>(kFirstRetryMs << doublings, kMaxRetryMs);
     m_nextCodeAt = now() + wait;
@@ -206,6 +265,17 @@ qint64 PairingWindow::retryAfterMs() const
 
 void PairingWindow::poll()
 {
+    if (m_state == State::OpenReopened && m_openUntil > 0 && now() >= m_openUntil) {
+        // A reopened window's lifetime is over (fix wave R1-I2).
+        qCInfo(lcPairing) << "Pairing closed: it was open for"
+                          << kReopenedLifetimeMs / 60000 << "minutes";
+        m_wait->stop();
+        commit(State::ClosedClaimed, QString());
+        return;
+    }
+    if (m_state == State::OpenReopened && m_openUntil > 0 && !m_expiry->isActive()) {
+        m_expiry->start(static_cast<int>(std::max<qint64>(0, m_openUntil - now())));
+    }
     if (!isOpen() || m_codeInUse || !m_code.isEmpty()) {
         return;
     }

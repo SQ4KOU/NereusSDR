@@ -56,6 +56,10 @@
 //   2026-09-24: the status page binds with the listener's dual-stack rule
 //               (iPhone app Task 17, R-IOS-08, R-R3-26). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R1-I2): a reopened pairing window
+//               lasts 10 minutes, five burned codes in a row close any window,
+//               and reopening starts afresh. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -831,6 +835,7 @@ StationLanPairing DaemonApp::stationLanPairingFor(const StationServer& server)
     case PairingWindow::State::OpenReopened:
         return StationLanPairing::Code;
     case PairingWindow::State::ClosedClaimed:
+    case PairingWindow::State::ClosedUnclaimed:
         break;
     }
     return StationLanPairing::Closed;

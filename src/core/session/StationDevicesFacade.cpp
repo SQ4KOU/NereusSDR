@@ -17,6 +17,10 @@
 //   2026-09-24: Part C fix wave (R1-I1): the last device is not
 //               revoked while no token is active. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R1-I2): a reopened pairing window
+//               lasts 10 minutes, five burned codes in a row close any window,
+//               and reopening starts afresh. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationDevicesFacade.h"
@@ -304,6 +308,11 @@ DeviceAdminResult StationDevicesFacade::resetUnclaimed()
                                       "Try again.")};
     }
     qCInfo(lcDevices) << "The Core was reset to unclaimed from its console";
+    // The device list's change opens a claimed Core's window; one the
+    // attempt ceiling had closed (already unclaimed) opens here, afresh.
+    if (m_pairingWindow != nullptr) {
+        m_pairingWindow->reopen();
+    }
     refresh();
     resumeRefresh();
     return {true, QString()};

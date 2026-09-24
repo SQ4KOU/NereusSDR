@@ -40,6 +40,10 @@
 //   2026-09-24: the page binds where the listener binds, dual stack for
 //               "::" (R-R3-26). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R1-I2): a reopened pairing window
+//               lasts 10 minutes, five burned codes in a row close any window,
+//               and reopening starts afresh. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -348,6 +352,31 @@ private slots:
         QVERIFY2(!body.contains(reopenedCode), "the reopened window's code is on the page");
         QVERIFY(!body.contains(reopenedCode.section(QLatin1Char('-'), 1)));
         QVERIFY(!core.page->showsCode());
+    }
+
+    void aWindowTheCeilingClosedShowsNoCodeAndSaysHowToReopen()
+    {
+        // Fix wave R1-I2: five burned codes in a row shut an unclaimed
+        // Core's window until its console reopens it.
+        Core core;
+        QVERIFY(core.listen());
+        qint64 clock = 1000000;
+        core.window().setClock([&clock] { return clock; });
+        QStringList codes;
+        for (int i = 0; i < PairingWindow::kMaxConsecutiveFailures; ++i) {
+            clock += core.window().retryAfterMs();
+            core.window().poll();
+            codes << core.window().currentCode();
+            QVERIFY(core.window().takeCode(core.window().codeSerial()));
+            core.window().pairingFailed();
+        }
+        QCOMPARE(core.window().state(), PairingWindow::State::ClosedUnclaimed);
+        const QString body = bodyOf(core.get());
+        QVERIFY(!core.page->showsCode());
+        QVERIFY(body.contains(QStringLiteral("nereusd pairing open")));
+        for (const QString& code : std::as_const(codes)) {
+            QVERIFY(!body.contains(code));
+        }
     }
 
     void anUpgradedCoreClaimedByItsTokenShowsNoCode()

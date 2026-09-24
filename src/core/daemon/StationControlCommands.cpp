@@ -8,6 +8,10 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (R1-I2): a reopened pairing window
+//               lasts 10 minutes, five burned codes in a row close any window,
+//               and reopening starts afresh. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/StationControlCommands.h"
@@ -174,6 +178,9 @@ StationControlReply StationControlCommands::status() const
         } else if (window->state() == PairingWindow::State::OpenReopened) {
             pairing = QStringLiteral("open for one more device "
                                      "(nereusd pairing show gives the code)");
+        } else if (window->state() == PairingWindow::State::ClosedUnclaimed) {
+            pairing = QStringLiteral("closed after too many wrong pairing codes "
+                                     "(nereusd pairing open opens it again)");
         }
         lines << QStringLiteral("Pairing: %1").arg(pairing);
     }
@@ -200,6 +207,10 @@ StationControlReply StationControlCommands::pairingShow(const QString& lead) con
     case PairingWindow::State::ClosedClaimed:
         lines << QStringLiteral("Pairing is closed. nereusd pairing open lets one more device "
                                 "pair.");
+        return {true, lines.join(QLatin1Char('\n'))};
+    case PairingWindow::State::ClosedUnclaimed:
+        lines << QStringLiteral("Pairing closed after too many wrong pairing codes. nereusd "
+                                "pairing open opens it again.");
         return {true, lines.join(QLatin1Char('\n'))};
     case PairingWindow::State::OpenUnclaimed:
         lines << QStringLiteral("Pairing is open: no device has paired with this Core yet.");
@@ -260,6 +271,7 @@ StationControlReply StationControlCommands::pairingClose() const
         return {false, QStringLiteral("Pairing stays open until the first device pairs with "
                                       "this Core.")};
     case PairingWindow::State::ClosedClaimed:
+    case PairingWindow::State::ClosedUnclaimed:
         return {true, QStringLiteral("Pairing is already closed.")};
     case PairingWindow::State::OpenReopened:
         break;

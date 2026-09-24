@@ -258,13 +258,24 @@ a new connection (section 3.5). An `auth.request` after `pair.start`, or a
 connection's:
 
 - `OpenUnclaimed`: the Core has no paired device and no active token
-  (`DeviceStore::isClaimed` false). Open with no timer. One tap pairs,
-  and so does the code.
+  (`DeviceStore::isClaimed` false). Open with no timer, but with the
+  attempt ceiling below. One tap pairs, and so does the code.
 - `ClosedClaimed`: the Core is claimed and the window is shut. Nothing
   pairs.
 - `OpenReopened`: reopened on a claimed Core, from the Core's console or
   by a paired device (`pairing.open`, section 9.1). Only the code pairs.
-  It closes after one successful pairing, or on `pairing.close`.
+  It closes after one successful pairing, on `pairing.close`, or 10
+  minutes after it opened (`PairingWindow::kReopenedLifetimeMs`).
+- `ClosedUnclaimed`: an unclaimed Core whose window the attempt ceiling
+  closed. Nothing pairs until the console reopens it (`nereusd pairing
+  open`); no device is paired to do it, so physical access decides.
+
+**The attempt ceiling.** Five burned codes in a row
+(`PairingWindow::kMaxConsecutiveFailures`) close any open window,
+reopened or unclaimed. A closed window opens again only from the Core's
+console or, on a claimed Core, from a paired device (`pairing.open`).
+Reopening starts afresh: no failures counted and no wait, so the code is
+there at once.
 
 The first pairing closes an unclaimed window, for good. `devices.revoke`
 never removes the last device while no token is active (section 9.1), so a
@@ -298,8 +309,8 @@ is either paired with or burned: a wrong code, a `pair.fail` from the
 device, or the connection ending first all burn it. Only one exchange
 holds the code at a time, and a second one's step 1 is refused. After a
 burned code the next one appears after 5 s. The wait doubles after each
-consecutive failure, up to 300 s (`kFirstRetryMs`, `kMaxRetryMs`), and a
-successful pairing resets it. While no code is shown, `pair.start` in
+consecutive failure (`kFirstRetryMs`; 5, 10, 20 and 40 s, since the fifth
+burn closes the window), and a successful pairing resets it. While no code is shown, `pair.start` in
 code mode is refused, and `retryAfterMs` says when the next one appears.
 
 **The messages** (every binary value is base64url without padding):

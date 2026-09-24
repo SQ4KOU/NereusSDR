@@ -755,6 +755,7 @@ private slots:
             QCOMPARE(pairing, StationLanPairing::Code);
             break;
         case PairingWindow::State::ClosedClaimed:
+        case PairingWindow::State::ClosedUnclaimed:
             QCOMPARE(pairing, StationLanPairing::Closed);
             break;
         }
@@ -1163,4 +1164,8 @@ private slots:
 };
 
 QTEST_MAIN(TstDaemonApp)
-#include "tst_daemon_app.moc"
+#include "tst_daemon_app.moc"//   2026-09-24: Part C fix wave (R1-I2): a reopened pairing window
+//               lasts 10 minutes, five burned codes in a row close any window,
+//               and reopening starts afresh. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+

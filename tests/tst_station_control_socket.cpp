@@ -36,6 +36,10 @@
 //   2026-09-24: Part C fix wave (R1-I1): the last device is not
 //               revoked while no token is active. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R1-I2): a reopened pairing window
+//               lasts 10 minutes, five burned codes in a row close any window,
+//               and reopening starts afresh. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -486,6 +490,57 @@ private slots:
             QCOMPARE(core.server()->pairingWindow()->state(), PairingWindow::State::OpenUnclaimed);
             QVERIFY(endedWithCode(tokenWindow, QStringLiteral("pairingRequired")));
         }
+    }
+
+    void theConsoleReopensAWindowTheAttemptCeilingClosed()
+    {
+        // Fix wave R1-I2: five burned codes in a row shut an unclaimed
+        // Core's window; only its console opens it again, by pairing open
+        // or by a reset.
+        Core core;
+        QVERIFY(core.start());
+        PairingWindow* window = core.server()->pairingWindow();
+        qint64 clock = 1000000;
+        window->setClock([&clock] { return clock; });
+        const auto burnFive = [window, &clock] {
+            for (int i = 0; i < PairingWindow::kMaxConsecutiveFailures; ++i) {
+                clock += window->retryAfterMs();
+                window->poll();
+                QVERIFY(window->takeCode(window->codeSerial()));
+                window->pairingFailed();
+            }
+        };
+        burnFive();
+        QCOMPARE(window->state(), PairingWindow::State::ClosedUnclaimed);
+
+        StationControlReply reply = core.run({QStringLiteral("status")});
+        QVERIFY(reply.text.contains(QStringLiteral("Pairing: closed after too many wrong")));
+        reply = core.run({QStringLiteral("pairing"), QStringLiteral("show")});
+        QVERIFY(reply.ok);
+        verifyPlain(reply);
+        QVERIFY(reply.text.contains(QStringLiteral("Pairing closed after too many wrong "
+                                                   "pairing codes.")));
+        QVERIFY(!reply.text.contains(QStringLiteral("Pairing code:")));
+        reply = core.run({QStringLiteral("pairing"), QStringLiteral("close")});
+        QVERIFY(reply.ok);
+        QCOMPARE(reply.text, QStringLiteral("Pairing is already closed."));
+
+        reply = core.run({QStringLiteral("pairing"), QStringLiteral("open")});
+        QVERIFY2(reply.ok, qPrintable(reply.text));
+        verifyPlain(reply);
+        QCOMPARE(window->state(), PairingWindow::State::OpenUnclaimed);
+        QVERIFY(!window->currentCode().isEmpty());
+        QVERIFY(reply.text.contains(window->currentCode()));
+        QCOMPARE(window->consecutiveFailures(), 0);
+
+        // A reset opens it too.
+        burnFive();
+        QCOMPARE(window->state(), PairingWindow::State::ClosedUnclaimed);
+        reply = core.run(
+            {QStringLiteral("reset"), QStringLiteral("--unclaimed"), QStringLiteral("--yes")});
+        QVERIFY2(reply.ok, qPrintable(reply.text));
+        QCOMPARE(window->state(), PairingWindow::State::OpenUnclaimed);
+        QVERIFY(!window->currentCode().isEmpty());
     }
 
     void resetMovesADamagedDeviceListAside()

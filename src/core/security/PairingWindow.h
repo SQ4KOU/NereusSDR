@@ -9,10 +9,11 @@
 // docs/architecture/2026-08-02-remote-station-identity-and-pairing-design.md
 // section 4.5).
 //
-// Three states:
+// Four states:
 //
 //   OpenUnclaimed  the Core has no paired device and no pairing token
-//                  (DeviceStore::isClaimed() false). Open with NO timer:
+//                  (DeviceStore::isClaimed() false). Open with NO timer
+//                  (but with the attempt ceiling below):
 //                  an unclaimed Core holds nothing worth taking, and a
 //                  timer would expire while the operator fetches a phone.
 //                  One tap on the Core's own network pairs, and so does
@@ -22,7 +23,14 @@
 //   OpenReopened   the operator reopened it, from the Core's console or
 //                  from a paired device (`pairing.open`): the code pairs
 //                  (not one tap); it closes after one successful pairing,
-//                  close() or `pairing.close`.
+//                  close() or `pairing.close`, or kReopenedLifetimeMs
+//                  (10 minutes) after it opened.
+//   ClosedUnclaimed an unclaimed window the attempt ceiling closed. Only
+//                  the console's reopen() opens it again.
+//
+// The attempt ceiling (fix wave R1-I2): kMaxConsecutiveFailures (5)
+// burned codes in a row close any open window, reopened or unclaimed, and
+// reopening starts afresh (no failures, no wait).
 //
 // The state follows the device store: the first pairing claims the Core
 // and closes an unclaimed window; a Core reset to unclaimed from its
@@ -34,8 +42,9 @@
 // where the Core first commits to it, so exactly one guess is made per
 // code, even with several connections trying at once. A success claims
 // (or closes); anything else burns it: the next code appears after 5 s,
-// the wait doubling after each consecutive failure up to 300 s, and a
-// success resets it. retryAfterMs() says when.
+// the wait doubling after each consecutive failure (up to 300 s, though
+// the ceiling closes the window at the fifth), and a success resets it.
+// retryAfterMs() says when.
 //
 // Time comes from an injected clock (milliseconds, monotonic); a
 // single-shot timer calls poll() when a wait ends, and a test advances its
@@ -52,6 +61,10 @@
 //               Claude Code.
 //   2026-09-24: Part C fix wave (R1-I1): the last device is not
 //               revoked while no token is active. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R1-I2): a reopened pairing window
+//               lasts 10 minutes, five burned codes in a row close any window,
+//               and reopening starts afresh. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
@@ -70,7 +83,7 @@ class PairingWindow : public QObject {
     Q_OBJECT
 
 public:
-    enum class State { ClosedClaimed, OpenUnclaimed, OpenReopened };
+    enum class State { ClosedClaimed, OpenUnclaimed, OpenReopened, ClosedUnclaimed };
     Q_ENUM(State)
 
     using Clock = std::function<qint64()>;
@@ -81,16 +94,24 @@ public:
     static constexpr qint64 kMaxRetryMs = 300000;
     /// The nameplate until the rendezvous supplies one: 1 to this.
     static constexpr int kLocalNameplateMax = 99;
+    /// Fix wave R1-I2 (the controller's ruling, 2026-09-24): consecutive
+    /// burned codes that close any open window, and how long a reopened
+    /// window stays open.
+    static constexpr int kMaxConsecutiveFailures = 5;
+    static constexpr qint64 kReopenedLifetimeMs = 10 * 60 * 1000;
 
     /// `devices` is not owned and must outlive this object.
     explicit PairingWindow(DeviceStore& devices, QObject* parent = nullptr);
     ~PairingWindow() override;
 
     State state() const { return m_state; }
-    bool isOpen() const { return m_state != State::ClosedClaimed; }
+    bool isOpen() const { return isOpenState(m_state); }
 
-    /// Opens the window on a claimed Core (OpenReopened) with a code, from
-    /// the console or a paired device. Nothing to do when it is open.
+    /// Opens a closed window afresh (no failures, no wait) with a code: on
+    /// a claimed Core OpenReopened, for kReopenedLifetimeMs, from the
+    /// console or a paired device; on an unclaimed Core the attempt ceiling
+    /// closed (ClosedUnclaimed) OpenUnclaimed again, from the console.
+    /// Nothing to do when it is open.
     void reopen();
     /// Closes a reopened window. An unclaimed Core's window stays open.
     void close();
@@ -139,7 +160,12 @@ signals:
     void codeChanged(const QString& code);
 
 private:
+    static bool isOpenState(State state);
     void followDevices();
+    /// No failures counted and no wait (reopen() and a reset).
+    void startAfresh();
+    /// The attempt ceiling: closes the open window.
+    void closeForCeiling();
     /// Sets the state and the code, then signals each that moved.
     void commit(State state, const QString& code);
     /// The code to show in `state`: the current one, a new one, or none
@@ -150,6 +176,7 @@ private:
     DeviceStore& m_devices;
     Clock m_clock;
     QTimer* m_wait = nullptr;
+    QTimer* m_expiry = nullptr;
     State m_state = State::ClosedClaimed;
     QString m_code;
     quint64 m_serial = 0;
@@ -157,6 +184,8 @@ private:
     bool m_codeInUse = false;
     int m_failures = 0;
     qint64 m_nextCodeAt = 0;
+    /// When a reopened window closes by itself; 0 for none.
+    qint64 m_openUntil = 0;
 };
 
 } // namespace NereusSDR

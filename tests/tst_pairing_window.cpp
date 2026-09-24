@@ -12,8 +12,11 @@
 //   - the code is single use: takeCode() succeeds once per code, never for
 //     a code that has changed, and never while another exchange holds it;
 //   - a failure burns the code; the next appears after 5 s, the wait
-//     doubling after each consecutive failure up to 300 s, reset by a
-//     success; retryAfterMs() says when;
+//     doubling after each consecutive failure, reset by a success;
+//     retryAfterMs() says when; the fifth consecutive burn closes the
+//     window (unclaimed or reopened), and reopening starts it afresh;
+//   - a reopened window closes after 10 minutes; an unclaimed one has no
+//     lifetime;
 //
 // then the admit paths: a new Core is OpenUnclaimed with no timer; the
 // first pairing claims it (ClosedClaimed); reopen() opens OpenReopened,
@@ -30,6 +33,10 @@
 //               Claude Code.
 //   2026-09-24: Part C fix wave (R1-I1): the last device is not
 //               revoked while no token is active. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R1-I2): a reopened pairing window
+//               lasts 10 minutes, five burned codes in a row close any window,
+//               and reopening starts afresh. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
@@ -168,10 +175,12 @@ private slots:
         QVERIFY(codes.at(1).at(0).toString() == f.window->currentCode());
     }
 
-    void theWaitDoublesUpTo300Seconds()
+    void theWaitDoublesUntilTheCeiling()
     {
+        // 5 s, 10 s, 20 s, 40 s; the fifth consecutive burn closes the
+        // window (fiveBurnedCodesClose... below).
         Fixture f;
-        const QList<qint64> expected{5000, 10000, 20000, 40000, 80000, 160000, 300000, 300000};
+        const QList<qint64> expected{5000, 10000, 20000, 40000};
         for (const qint64 wait : expected) {
             f.burn();
             QCOMPARE(f.window->retryAfterMs(), wait);
@@ -206,19 +215,140 @@ private slots:
         QCOMPARE(f.window->retryAfterMs(), qint64(5000));
     }
 
-    void aWaitSurvivesClosingAndReopening()
+    void reopeningResetsTheWait()
     {
+        // Fix wave R1-I2: whoever reopens the window (the console, or a
+        // paired device) starts it afresh: a code at once, no failures.
         Fixture f;
         QVERIFY(f.store->add(makeDevice()));
         f.window->reopen();
         f.burn();
+        f.advance(5000);
+        f.burn();
+        QCOMPARE(f.window->consecutiveFailures(), 2);
         f.window->close();
         f.window->reopen();
-        // Reopening does not skip the wait.
-        QVERIFY(f.window->currentCode().isEmpty());
-        QCOMPARE(f.window->retryAfterMs(), qint64(5000));
-        f.advance(5000);
         QVERIFY(!f.window->currentCode().isEmpty());
+        QCOMPARE(f.window->retryAfterMs(), qint64(0));
+        QCOMPARE(f.window->consecutiveFailures(), 0);
+        f.burn();
+        QCOMPARE(f.window->retryAfterMs(), PairingWindow::kFirstRetryMs);
+    }
+
+    void fiveBurnedCodesCloseAnUnclaimedWindow()
+    {
+        // Fix wave R1-I2: the unclaimed window has no timer, but it has an
+        // attempt ceiling. The fifth consecutive burn closes it, and only
+        // the console reopens it (reopen()); nothing on the network does.
+        Fixture f;
+        QCOMPARE(PairingWindow::kMaxConsecutiveFailures, 5);
+        QSignalSpy states(f.window.get(), &PairingWindow::stateChanged);
+        for (int i = 1; i < PairingWindow::kMaxConsecutiveFailures; ++i) {
+            f.burn();
+            QVERIFY(f.window->isOpen());
+            f.advance(f.window->retryAfterMs());
+            QVERIFY(!f.window->currentCode().isEmpty());
+        }
+        f.burn();
+        QCOMPARE(f.window->state(), PairingWindow::State::ClosedUnclaimed);
+        QVERIFY(!f.window->isOpen());
+        QVERIFY(f.window->currentCode().isEmpty());
+        QCOMPARE(f.window->retryAfterMs(), qint64(0));
+        QCOMPARE(states.size(), 1);
+        // It stays shut, whatever the time.
+        f.advance(24LL * 60 * 60 * 1000);
+        QCOMPARE(f.window->state(), PairingWindow::State::ClosedUnclaimed);
+        QVERIFY(f.window->currentCode().isEmpty());
+        QVERIFY(!f.window->takeCode(f.window->codeSerial()));
+        // close() leaves it as it is.
+        f.window->close();
+        QCOMPARE(f.window->state(), PairingWindow::State::ClosedUnclaimed);
+        // The console reopens it: a code at once, the count reset.
+        f.window->reopen();
+        QCOMPARE(f.window->state(), PairingWindow::State::OpenUnclaimed);
+        QVERIFY(!f.window->currentCode().isEmpty());
+        QCOMPARE(f.window->consecutiveFailures(), 0);
+        QCOMPARE(f.window->retryAfterMs(), qint64(0));
+        // Still unclaimed and with no timer.
+        f.advance(24LL * 60 * 60 * 1000);
+        QCOMPARE(f.window->state(), PairingWindow::State::OpenUnclaimed);
+    }
+
+    void fiveBurnedCodesCloseAReopenedWindow()
+    {
+        Fixture f;
+        QVERIFY(f.store->add(makeDevice()));
+        f.window->reopen();
+        for (int i = 1; i < PairingWindow::kMaxConsecutiveFailures; ++i) {
+            f.burn();
+            f.advance(f.window->retryAfterMs());
+        }
+        QCOMPARE(f.window->state(), PairingWindow::State::OpenReopened);
+        f.burn();
+        QCOMPARE(f.window->state(), PairingWindow::State::ClosedClaimed);
+        QVERIFY(f.window->currentCode().isEmpty());
+        f.window->reopen();
+        QCOMPARE(f.window->state(), PairingWindow::State::OpenReopened);
+        QVERIFY(!f.window->currentCode().isEmpty());
+        QCOMPARE(f.window->consecutiveFailures(), 0);
+    }
+
+    void aSuccessResetsTheCeiling()
+    {
+        // The ceiling counts consecutive burns: a pairing in between starts
+        // the count again.
+        Fixture f;
+        QVERIFY(f.store->add(makeDevice()));
+        f.window->reopen();
+        for (int i = 1; i < PairingWindow::kMaxConsecutiveFailures; ++i) {
+            f.burn();
+            f.advance(f.window->retryAfterMs());
+        }
+        QVERIFY(f.window->takeCode(f.window->codeSerial()));
+        QVERIFY(f.store->add(makeDevice()));
+        f.window->pairingSucceeded();
+        f.window->reopen();
+        f.burn();
+        QCOMPARE(f.window->state(), PairingWindow::State::OpenReopened);
+        QCOMPARE(f.window->consecutiveFailures(), 1);
+    }
+
+    void aReopenedWindowClosesAfterTenMinutes()
+    {
+        Fixture f;
+        QCOMPARE(PairingWindow::kReopenedLifetimeMs, qint64(10 * 60 * 1000));
+        QVERIFY(f.store->add(makeDevice()));
+        f.window->reopen();
+        QTimer* expiry = f.window->findChild<QTimer*>(QStringLiteral("pairingWindowExpiry"));
+        QVERIFY(expiry != nullptr);
+        QVERIFY(expiry->isActive());
+        QVERIFY(expiry->isSingleShot());
+        QCOMPARE(expiry->interval(), int(PairingWindow::kReopenedLifetimeMs));
+        // Burns do not lengthen it.
+        f.burn();
+        f.advance(PairingWindow::kReopenedLifetimeMs - 1);
+        QCOMPARE(f.window->state(), PairingWindow::State::OpenReopened);
+        f.advance(1);
+        QCOMPARE(f.window->state(), PairingWindow::State::ClosedClaimed);
+        QVERIFY(f.window->currentCode().isEmpty());
+        QVERIFY(!expiry->isActive());
+        // Reopened, it has ten minutes again.
+        f.window->reopen();
+        QVERIFY(expiry->isActive());
+        f.advance(PairingWindow::kReopenedLifetimeMs - 1);
+        QCOMPARE(f.window->state(), PairingWindow::State::OpenReopened);
+        // Closed early, its timer stops.
+        f.window->close();
+        QVERIFY(!expiry->isActive());
+    }
+
+    void theUnclaimedWindowHasNoLifetime()
+    {
+        Fixture f;
+        QTimer* expiry = f.window->findChild<QTimer*>(QStringLiteral("pairingWindowExpiry"));
+        QVERIFY(expiry == nullptr || !expiry->isActive());
+        f.advance(PairingWindow::kReopenedLifetimeMs * 10);
+        QCOMPARE(f.window->state(), PairingWindow::State::OpenUnclaimed);
     }
 
     void theWaitEndsByItsOwnTimer()
@@ -228,7 +358,7 @@ private slots:
         // of waiting for it.
         Fixture f;
         f.burn();
-        QTimer* timer = f.window->findChild<QTimer*>();
+        QTimer* timer = f.window->findChild<QTimer*>(QStringLiteral("pairingCodeWait"));
         QVERIFY(timer != nullptr);
         QVERIFY(timer->isActive());
         QVERIFY(timer->isSingleShot());
@@ -253,7 +383,7 @@ private slots:
         f.advance(24LL * 60 * 60 * 1000);
         QCOMPARE(f.window->state(), PairingWindow::State::OpenUnclaimed);
         QVERIFY(f.window->currentCode() == code);
-        QTimer* timer = f.window->findChild<QTimer*>();
+        QTimer* timer = f.window->findChild<QTimer*>(QStringLiteral("pairingCodeWait"));
         QVERIFY(timer == nullptr || !timer->isActive());
     }
 

@@ -8,6 +8,10 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (R1-I2): a reopened pairing window
+//               lasts 10 minutes, five burned codes in a row close any window,
+//               and reopening starts afresh. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/StationStatusPage.h"
@@ -224,6 +228,12 @@ QString StationStatusPage::renderPage() const
                       "<p>Type this code into the NereusSDR app on your phone or computer to "
                       "pair it with this Core.</p>")
                       .arg(server->pairingWindow()->currentCode().toHtmlEscaped());
+    } else if (server->pairingWindow() != nullptr
+               && server->pairingWindow()->state() == PairingWindow::State::ClosedUnclaimed) {
+        pairing = QStringLiteral("<p>No device has paired with this Core yet.</p>"
+                                 "<p>Pairing closed after too many wrong pairing codes. Run "
+                                 "nereusd pairing open on this Core's computer to open it "
+                                 "again.</p>");
     } else {
         pairing = QStringLiteral("<p>No device has paired with this Core yet.</p>"
                                  "<p>A new pairing code appears here shortly.</p>");
