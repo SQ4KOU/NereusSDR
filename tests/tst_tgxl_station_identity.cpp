@@ -346,6 +346,52 @@ private slots:
         QVERIFY(!server.hasPendingConnections());
     }
 
+    // I2 (R-R3-47): a Tuner Genius that is switched off records one fault
+    // for the outage, not one per retry. A tuner that was admitted and then
+    // drops records one (the drop), and the retries after it none. The next
+    // admission starts a new outage.
+    void oneFaultPerOutage()
+    {
+        QTcpServer reservation;
+        QVERIFY(reservation.listen(QHostAddress::LocalHost, 0));
+        const quint16 port = reservation.serverPort();
+        reservation.close();   // nothing answers: connection refused
+
+        RadioModel model; prepare(model);
+        model.tgxlConnection()->testSetReconnectBackoffUnitMs(20);
+        QSignalSpy retries(model.tgxlConnection(), &TgxlConnection::reconnectAttempt);
+        QString reason;
+        QVERIFY(model.configureTgxlForStation(QStringLiteral("127.0.0.1"), port, &reason));
+        QTRY_VERIFY_WITH_TIMEOUT(retries.count() >= 4, 3000);
+        QCOMPARE(model.tgxlFaultLog()->events().size(), 1);
+        QCOMPARE(model.tgxlFaultLog()->events().first().state, QStringLiteral("connection"));
+
+        // The tuner comes back and is admitted; then it drops again.
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost, port));
+        QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(), 3000);
+        QSignalSpy frames(model.tgxlConnection(), &TgxlConnection::testFrameWrittenForTesting);
+        auto* peer = server.nextPendingConnection();
+        peer->write("V1.2.17\n"); peer->flush();
+        QTRY_VERIFY_WITH_TIMEOUT(infoSequence(frames) != 0, 3000);
+        auto* discovery = model.findChild<LanDiscovery*>();
+        QVERIFY(discovery);
+        sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
+        QTRY_VERIFY(!model.tgxlConnection()->identityInfo().serial.isEmpty());
+        announce(discovery, port, QStringLiteral("TunerGeniusXL"), QStringLiteral("241288-1"));
+        QTRY_COMPARE(model.tunerModel()->connectionPhase(),
+                     TunerModel::ConnectionPhase::Connected);
+        QCOMPARE(model.tgxlFaultLog()->events().size(), 1);
+
+        server.close();
+        retries.clear();
+        peer->disconnectFromHost();
+        QTRY_VERIFY_WITH_TIMEOUT(retries.count() >= 4, 3000);
+        QCOMPARE(model.tgxlFaultLog()->events().size(), 2);
+        QCOMPARE(model.tgxlFaultLog()->events().first().state, QStringLiteral("link"));   // newest first
+        QVERIFY(model.disconnectTgxlForStation(&reason));
+    }
+
     void endpointReplacementRejectsStaleDiscoveryAndInfo()
     {
         QTcpServer oldServer, newServer;

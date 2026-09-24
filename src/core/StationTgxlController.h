@@ -72,5 +72,9 @@ private:
     quint64 m_attempt{0};
     quint64 m_generation{0};
     bool m_running{false};
+    // I2: one fault per outage. Set when this outage's fault is recorded
+    // (the drop, or the first failure to connect); kept across Retrying;
+    // cleared on Connected and on a new scope, start or cancel.
+    bool m_outageFaulted{false};
 };
 } // namespace NereusSDR

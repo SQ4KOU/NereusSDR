@@ -6,6 +6,8 @@
 // AI-assisted via Anthropic Claude Code.
 // 2026-09-24: R-R3-47 / R-R3-22: deviceSettings, the tuner's own settings
 // for a window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-47: one connection fault per outage. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/StationTgxlController.h"
 #include "core/LanDiscovery.h"
 #include <QHostAddress>
@@ -58,6 +60,7 @@ StationTgxlController::StationTgxlController(TgxlConnection* connection,
         m_state.phase = Phase::Connected;
         m_state.error.clear();
         m_state.peerAddress = m_peer;
+        m_outageFaulted = false;   // I2: the outage, if any, is over
         publish();
     });
     connect(connection, &TgxlConnection::disconnected, this, [this] {
@@ -74,9 +77,13 @@ StationTgxlController::StationTgxlController(TgxlConnection* connection,
             m_state.phase = Phase::Disconnected;
         }
         m_state.peerAddress.clear();
+        const bool record = wasConnected && !m_outageFaulted;
+        if (wasConnected) {
+            m_outageFaulted = true;   // I2: this drop is the outage's fault
+        }
         QPointer<StationTgxlController> self(this);
         publish();
-        if (self && wasConnected) {
+        if (self && record) {
             emit faultObserved(QStringLiteral("link"),
                                QStringLiteral("The Tuner Genius stopped answering."), QString());
         }
@@ -86,7 +93,10 @@ StationTgxlController::StationTgxlController(TgxlConnection* connection,
         if (!m_running) { return; }
         stopDiscovery();
         m_attempt = 0;
-        const bool newError = m_state.phase != Phase::Error || m_state.error != reason;
+        // I2: every backoff step fails again and passes through Retrying;
+        // only the outage's first failure is a fault.
+        const bool newError = !m_outageFaulted;
+        m_outageFaulted = true;
         m_state.phase = Phase::Error;
         m_state.error = reason;
         m_state.peerAddress.clear();
@@ -146,6 +156,7 @@ void StationTgxlController::resetScope(const QString& host, quint16 port,
 
     clearIdentity();
     m_settings->reset();
+    m_outageFaulted = false;
     m_state = {};
     m_state.configuredHost = host;
     m_state.configuredPort = port;
@@ -158,6 +169,7 @@ void StationTgxlController::start(const QString& host, quint16 port)
     cancel();
     const auto generation = ++m_generation;
     m_running = true;
+    m_outageFaulted = false;
     m_state.configuredHost = host;
     m_state.configuredPort = port;
     m_state.phase = Phase::Connecting;
@@ -178,6 +190,7 @@ void StationTgxlController::cancel(bool disabled)
     if (m_connection) { m_connection->disconnect(); }
     clearIdentity();
     m_settings->reset();
+    m_outageFaulted = false;
     m_state.phase = disabled ? Phase::Disabled : Phase::Disconnected;
     m_state.error.clear();
     publish();

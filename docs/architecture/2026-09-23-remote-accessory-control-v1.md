@@ -845,7 +845,7 @@ What the Core records:
 | --- | --- | --- | --- |
 | PGXL | the amp's word, for example `FAULT` | A state word beginning `FAULT` after one that did not | "The Power Genius reported a fault." plus " Likely cause: high SWR." / " Likely cause: the amplifier was too hot." / " Likely cause: too much drive from the radio." when the readings point to one |
 | TGXL | `link` | A connection the Core had admitted drops (never an operator's disconnect) | "The Tuner Genius stopped answering." |
-| TGXL | `connection` | An attempt ends at an error (for example another device answering at the address) | "The Core could not connect to the Tuner Genius." |
+| TGXL | `connection` | An attempt ends at an error (for example another device answering at the address), once per outage: the retries after it record nothing until the tuner is admitted again or the address changes, and a drop already recorded as `link` is that outage's one fault | "The Core could not connect to the Tuner Genius." |
 | RF2K-S | `link` | The admitted amp stops answering | "The RF-Kit amplifier stopped answering." |
 | RF2K-S | `identity` | `/info` names another device, or none | the identity reason (see "How the Core identifies the RF2K-S") |
 | RF2K-S | `interface` | The amp reports a new error on its operating interface | "The RF-Kit amplifier reported a problem with how it follows the radio." |
