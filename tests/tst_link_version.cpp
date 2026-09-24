@@ -33,6 +33,12 @@
 //                                    accepts its major; the empty-majors
 //                                    guard; a TLS 1.1 handshake refused.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 completion carry, review I1
+//                                    (R-R3-38, R-IOS-01): the refusal worded
+//                                    with "Core" by SessionEndReasons; a
+//                                    client that refuses records the
+//                                    version end. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -49,11 +55,13 @@
 #include <QSslSocket>
 #include <QTemporaryDir>
 
+#include <algorithm>
 #include <optional>
 
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/session/LinkVersion.h"
+#include "core/session/SessionEndReasons.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
@@ -126,8 +134,8 @@ private slots:
     void agreeMajorTable_data();
     void agreeMajorTable();
     void supportedMajorsAreThisMajorAndTheOneBefore();
-    void refusalTextNamesBothSidesInPlainWords_data();
-    void refusalTextNamesBothSidesInPlainWords();
+    void refusalNamesBothSidesInPlainWords_data();
+    void refusalNamesBothSidesInPlainWords();
 
     // ---- The hello ----
     void helloCarriesMajorsAndFeatures();
@@ -234,32 +242,32 @@ void TstLinkVersion::supportedMajorsAreThisMajorAndTheOneBefore()
     QCOMPARE(kSessionProtocolMinor, quint16(11));
 }
 
-void TstLinkVersion::refusalTextNamesBothSidesInPlainWords_data()
+void TstLinkVersion::refusalNamesBothSidesInPlainWords_data()
 {
     QTest::addColumn<MajorList>("station");
     QTest::addColumn<MajorList>("client");
     QTest::addColumn<QString>("expected");
 
-    QTest::newRow("station older")
+    QTest::newRow("Core older")
         << MajorList{1} << MajorList{2, 3}
-        << QStringLiteral("This station runs link version 1 and this app runs version 3. "
-                          "Update the station.");
+        << QStringLiteral("This Core runs link version 1 and this app runs version 3. "
+                          "Update the Core.");
     QTest::newRow("app older")
         << MajorList{2, 3} << MajorList{1}
-        << QStringLiteral("This station runs link version 3 and this app runs version 1. "
+        << QStringLiteral("This Core runs link version 3 and this app runs version 1. "
                           "Update this app.");
     QTest::newRow("app with one major")
         << MajorList{1} << MajorList{3}
-        << QStringLiteral("This station runs link version 1 and this app runs version 3. "
-                          "Update the station.");
+        << QStringLiteral("This Core runs link version 1 and this app runs version 3. "
+                          "Update the Core.");
 }
 
-void TstLinkVersion::refusalTextNamesBothSidesInPlainWords()
+void TstLinkVersion::refusalNamesBothSidesInPlainWords()
 {
     QFETCH(MajorList, station);
     QFETCH(MajorList, client);
     QFETCH(QString, expected);
-    const QString text = LinkVersion::refusalText(station, client);
+    const QString text = SessionEndReasons::versionRefused(station, client);
     QCOMPARE(text, expected);
     QVERIFY2(OperatorWording::isPlain(text), qPrintable(OperatorWording::internalTermIn(text)));
 }
@@ -470,7 +478,7 @@ void TstLinkVersion::stationNegotiation()
     const MajorList named = clientMajors.isEmpty() ? MajorList{quint16(clientMajor)}
                                                    : clientMajors;
     const QString reason = end.value(QStringLiteral("reason")).toString();
-    QCOMPARE(reason, LinkVersion::refusalText(stationMajors, named));
+    QCOMPARE(reason, SessionEndReasons::versionRefused(stationMajors, named));
     QVERIFY(OperatorWording::isPlain(reason));
 }
 
@@ -615,7 +623,14 @@ void TstLinkVersion::clientNegotiation()
     QVERIFY(station->received().isEmpty());
     const MajorList named = stationMajors.isEmpty() ? MajorList{quint16(stationMajor)}
                                                     : stationMajors;
-    QCOMPARE(client.lastError(), LinkVersion::refusalText(named, clientMajors));
+    QCOMPARE(client.lastError(), SessionEndReasons::versionRefused(named, clientMajors));
+    // R-R3-38: this client's own refusal records the same version end as
+    // the Core's, so the window offers the same next steps.
+    const StationEndReport report = client.lastEndReport();
+    QCOMPARE(report.kind, StationEndReport::Kind::VersionRefused);
+    QCOMPARE(report.reason, client.lastError());
+    QCOMPARE(report.coreMajor, int(*std::max_element(named.cbegin(), named.cend())));
+    QCOMPARE(report.appMajor, int(*std::max_element(clientMajors.cbegin(), clientMajors.cend())));
     QVERIFY(OperatorWording::isPlain(client.lastError()));
     QVERIFY(!client.isReconnectPending());
     QCOMPARE(retries.count(), 0);
@@ -730,7 +745,7 @@ HandshakeOutcome handshakeTo(quint16 port, QSsl::SslProtocol protocol)
     QSignalSpy disconnected(&client, &QAbstractSocket::disconnected);
     client.connectToHostEncrypted(QHostAddress(QHostAddress::LocalHost).toString(), port);
     // Event-driven: returns as soon as the handshake ends either way.
-    QTest::qWaitFor([&]() {
+    (void)QTest::qWaitFor([&]() {
         return !encrypted.isEmpty() || !failed.isEmpty() || !disconnected.isEmpty();
     }, 10000);
     if (!encrypted.isEmpty()) {

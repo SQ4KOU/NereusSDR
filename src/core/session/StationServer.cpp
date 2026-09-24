@@ -158,6 +158,11 @@
 //                                    R-R3-21): the accessory settings and
 //                                    RF-Kit reset refusals in plain words.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 completion carry, review I1
+//                                    (R-R3-21, R-R3-38, R-IOS-01): the
+//                                    takeover and version reasons come from
+//                                    SessionEndReasons, which the app parses.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -172,6 +177,7 @@
 #include "core/session/MirrorSchema.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionCommandDispatcher.h"
+#include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/StateMirror.h"
 #include "core/settings/SettingsProxyServer.h"
@@ -1391,7 +1397,7 @@ void StationServer::handleHello(SessionTransport* transport, const SessionMessag
     // on another major, and is refused naming both sides' versions.
     if (!m_supportedMajors.contains(message.protocolMajor)) {
         const QString reason =
-            LinkVersion::refusalText(m_supportedMajors, message.supportedMajors);
+            SessionEndReasons::versionRefused(m_supportedMajors, message.supportedMajors);
         qCWarning(lcStation) << "Refusing a client on link major" << message.protocolMajor
                              << "(it supports" << message.supportedMajors
                              << "; this station supports" << m_supportedMajors << "):"
@@ -1497,8 +1503,7 @@ void StationServer::promoteToSession(SessionTransport* transport)
                                       ? m_peers.value(m_session).description
                                       : QStringLiteral("<unknown>");
         const QString reason =
-            QStringLiteral("Another app at %1 connected to the Core and took over. Connect again to take it back.")
-                .arg(description);
+            SessionEndReasons::takenOver(description);
         qCInfo(lcStation) << "Preempting session" << displaced << "for" << description;
         // NOT retryable, and deliberately so even though the CONDITION is
         // transient. Another authenticated peer has deliberately taken the

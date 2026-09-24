@@ -282,10 +282,10 @@ share none.
   retrying, and shows the station's wording (below).
 - The station refuses any other `major` with `session.end`, `retryable`
   false, and a reason naming both sides' newest versions and the side to
-  update (`LinkVersion::refusalText(station majors, client majors)`), for
-  example "This station runs link version 1 and this app runs version 3.
-  Update the station." The reason is plain words and an app shows it as
-  sent.
+  update (`SessionEndReasons::versionRefused(station majors, client
+  majors)`), for example "This Core runs link version 1 and this app runs
+  version 3. Update the Core." The reason is plain words and an app shows
+  it as sent.
 - An equal major agrees the lower of the two minors
   (`std::min(kSessionProtocolMinor, message.protocolMinor)`), and each end
   keeps to what the agreed minor allows.
@@ -296,7 +296,7 @@ share none.
 | `[1, 2]` | `[2, 3]` | 2 |
 | `[3, 4]` | `[2, 3]` | 3 |
 | `[2, 3]` | `[1]` | none: refused, "Update this app." |
-| `[1]` | `[2, 3]` | none: refused, "Update the station." |
+| `[1]` | `[2, 3]` | none: refused, "Update the Core." |
 
 A second major does not exist yet. The station and the desktop client take
 their lists as a constructor argument, so the negotiation is tested with
@@ -1469,6 +1469,17 @@ that is not retryable it stops and tells the operator.
 | Heartbeat timeout | `session.end` | true |
 | Station shutting down | `session.end` "The Core is shutting down." | true |
 
+The takeover and version reasons are worded in one place,
+`src/core/session/SessionEndReasons.{h,cpp}`: "Another app at
+*address:port* connected to the Core and took over. Connect again to take
+it back." and "This Core runs link version *N* and this app runs version
+*M*. Update the Core." (or "Update this app." when the app is the older
+side). An app that offers its own next steps for these two (take the Core
+back, check for updates) reads them by these exact words; the desktop
+client does (`SessionEndReasons::parse`). This is interim: a later part of
+the iPhone plan (Part C) adds an end code to `session.end` that replaces
+reading the words.
+
 Only one session is authenticated at a time. A second connection that
 authenticates takes the session: the station ends the first with
 `retryable` false, so the two clients do not trade the radio back and
@@ -1849,10 +1860,10 @@ same on every machine.
 | `wrong-token` | `auth.result` refused, `retryable` false, then the close |
 | `connection-limit` | With eight other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
-| `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This station runs link version 1 and this app runs version 2. Update the station.", `retryable` false |
+| `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This Core runs link version 1 and this app runs version 2. Update the Core.", `retryable` false |
 | `version-declares` | A `hello` with `majors` `[1]` and a declared feature is accepted, and authentication follows |
 | `version-app-one-ahead` | An app supporting `[1, 2]` chooses 1, the highest it shares with the station, and is accepted |
-| `version-app-two-ahead` | An app supporting `[2, 3]` that sends major 3 gets `session.end` "This station runs link version 1 and this app runs version 3. Update the station.", `retryable` false |
+| `version-app-two-ahead` | An app supporting `[2, 3]` that sends major 3 gets `session.end` "This Core runs link version 1 and this app runs version 3. Update the Core.", `retryable` false |
 | `lower-minor` | A `hello` with minor 4 agrees minor 4: the capabilities without the minor-11 entries, and a minor-11 verb refused with a plain reason |
 | `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |

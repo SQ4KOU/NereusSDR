@@ -1,0 +1,66 @@
+#pragma once
+// =================================================================
+// src/core/session/SessionEndReasons.h  (NereusSDR)
+// =================================================================
+//
+// no-port-check: NereusSDR-original.
+//
+// The two session ends an app needs its own buttons for, worded in one
+// place (R-R3-21, R-R3-38, R-IOS-01): another app took the Core over, and
+// the link versions are too far apart. The Core formats them for its
+// `session.end` reason (StationServer), the desktop client formats the
+// version reason for a Core it refuses itself (StationClient::handleHello),
+// and the desktop client parses the reason back (stationEndReport) to
+// offer Take it back or Check for updates.
+//
+// The link carries only a reason and the retryable flag for a session end
+// (station link section 12.4), so the parse reads the Core's own words.
+// Part C of the iPhone plan puts an end code in `session.end` that
+// replaces it.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 completion carry, review finding
+//                                    I1 (R-R3-21, R-R3-38, R-IOS-01): the
+//                                    takeover and version reasons, formatted
+//                                    and parsed in one place, worded with
+//                                    "Core". AI-assisted transformation via
+//                                    Anthropic Claude Code.
+// =================================================================
+
+#include <QList>
+#include <QString>
+#include <QtGlobal>
+
+namespace NereusSDR::SessionEndReasons {
+
+/// Another app took the Core over. `otherApp` is how the Core names it,
+/// its network address and port (WebSocketTransport::peerDescription(),
+/// "address:port").
+QString takenOver(const QString& otherApp);
+
+/// The Core and the app share no link major. Names each side's newest
+/// version and the side to update, for example "This Core runs link
+/// version 1 and this app runs version 3. Update the Core."
+QString versionRefused(const QList<quint16>& coreMajors, const QList<quint16>& appMajors);
+
+struct Parsed {
+    enum class Kind {
+        Other,          ///< neither of the two
+        TakenOver,      ///< takenOver()
+        VersionRefused, ///< versionRefused()
+    };
+    Kind kind = Kind::Other;
+    /// TakenOver only: the other app's network address without its port,
+    /// IPv4 written as IPv4. Empty when the Core named no address (it
+    /// writes "<unknown>" or "<detached>" then).
+    QString otherAppAddress;
+    /// VersionRefused only: each side's newest link major.
+    int coreMajor = -1;
+    int appMajor = -1;
+};
+
+/// Reads a reason formatted by takenOver() or versionRefused().
+Parsed parse(const QString& reason);
+
+} // namespace NereusSDR::SessionEndReasons

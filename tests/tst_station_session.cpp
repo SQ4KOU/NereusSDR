@@ -75,6 +75,7 @@
 #include "core/security/CertificateStore.h"
 #include "core/security/TokenStore.h"
 #include "core/session/LinkVersion.h"
+#include "core/session/SessionEndReasons.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/session/SessionMessages.h"
@@ -2152,8 +2153,8 @@ void TstStationSession::majorVersionMismatchRefusesNamingBothVersions()
     // Section 7.0: "refused with a message naming both versions rather
     // than failing obscurely". BOTH, not just the offending one; since the
     // iPhone app's Task 4 (R-IOS-01) in plain words, naming each side's
-    // link version (LinkVersion::refusalText).
-    QCOMPARE(reason, LinkVersion::refusalText({kSessionProtocolMajor}, {wrongMajor}));
+    // link version (SessionEndReasons::versionRefused).
+    QCOMPARE(reason, SessionEndReasons::versionRefused({kSessionProtocolMajor}, {wrongMajor}));
     QVERIFY2(reason.contains(QStringLiteral("version %1").arg(kSessionProtocolMajor)),
              qPrintable(reason));
     QVERIFY2(reason.contains(QStringLiteral("version %1").arg(wrongMajor)),
@@ -2177,7 +2178,8 @@ void TstStationSession::majorVersionMismatchRefusesNamingBothVersions()
 
     QTRY_COMPARE(ended.count(), 1);
     const QString clientReason = ended.first().first().toString();
-    QCOMPARE(clientReason, LinkVersion::refusalText({wrongMajor}, {kSessionProtocolMajor}));
+    QCOMPARE(clientReason,
+             SessionEndReasons::versionRefused({wrongMajor}, {kSessionProtocolMajor}));
     QVERIFY2(clientReason.contains(QStringLiteral("version %1").arg(kSessionProtocolMajor)),
              qPrintable(clientReason));
     QVERIFY2(clientReason.contains(QStringLiteral("version %1").arg(wrongMajor)),

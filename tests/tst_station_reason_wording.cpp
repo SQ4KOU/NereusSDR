@@ -70,6 +70,11 @@
 //                                    settings, filter policy, RF-Kit reset,
 //                                    off-network and TCI reason sites.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 completion carry, review I1
+//                                    (R-R3-21, R-R3-38, R-IOS-01): the
+//                                    takeover and version reasons scanned in
+//                                    SessionEndReasons.cpp.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -587,8 +592,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("m_wsServer->errorString()"),
           // dropPeer's and sendRejected's parameter, from this file's calls.
           QStringLiteral("reason"),
-          // LinkVersion::refusalText, scanned below.
-          QStringLiteral("LinkVersion::refusalText(m_supportedMajors, message.supportedMajors)"),
+          // SessionEndReasons' version and takeover reasons, scanned below.
+          QStringLiteral("SessionEndReasons::versionRefused(m_supportedMajors, "
+                         "message.supportedMajors)"),
+          QStringLiteral("SessionEndReasons::takenOver(description)"),
           // Each model's readOnlyReason, scanned below.
           QStringLiteral("IoBoardHl2Facade::readOnlyReason()"),
           QStringLiteral("AmplifierModel::readOnlyReason()"),
@@ -664,11 +671,13 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("isValid"), QStringLiteral("apply")}, {}, 5, {},
          // The reject lambda's parameter: the literals isValid passes it.
          {QStringLiteral("message")}},
-        // The link version refusal, sent in session.end.
-        // Version numbers, and "Update the station." or "Update this app."
-        {"src/core/session/LinkVersion.cpp", {QStringLiteral("refusalText")}, {}, 2,
-         {QStringLiteral("stationNewest"), QStringLiteral("clientNewest"),
-          QStringLiteral("update")}},
+        // The link version refusal and the takeover, sent in session.end.
+        // Version numbers, "Update the Core." or "Update this app.", and
+        // the other app's network address (WebSocketTransport::peerDescription).
+        {"src/core/session/SessionEndReasons.cpp",
+         {QStringLiteral("takenOver"), QStringLiteral("versionRefused")}, {}, 4,
+         {QStringLiteral("coreNewest"), QStringLiteral("appNewest"), QStringLiteral("update"),
+          QStringLiteral("otherApp")}},
         // The window's reason it keeps: its own parameter, from this file.
         {"src/core/accessories/AlexAntennaFacade.cpp", {}, {}, 6, {}, {QStringLiteral("kept")}},
         // The attenuator's range in dB.

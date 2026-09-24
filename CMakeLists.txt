@@ -1104,6 +1104,9 @@ set(CORE_SOURCES
     src/core/session/SessionMessages.cpp
     # iPhone app Task 4 (R-IOS-01): link majors agreed both ways.
     src/core/session/LinkVersion.cpp
+    # R3 completion carry, review I1 (R-R3-38, R-IOS-01): the takeover and
+    # version reasons, formatted and parsed in one place.
+    src/core/session/SessionEndReasons.cpp
     src/core/session/StationTelemetry.cpp
     # R2 Task 11: command verbs. Turns a decoded CommandInvoke SessionMessage
     # into the corresponding RadioModel call (addSlice / removeSlice /

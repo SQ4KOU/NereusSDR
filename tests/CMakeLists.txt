@@ -7291,6 +7291,9 @@ nereus_add_test(tst_link_surface_manifest_regen
 nereus_add_test(tst_link_version
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# R3 completion carry, review I1 (R-R3-21, R-R3-38, R-IOS-01): the takeover
+# and version reasons, formatted and parsed back in one place.
+nereus_add_test(tst_session_end_reasons EXTRA_LABELS session)
 nereus_add_test(tst_link_conformance_control
     LinkFixtures.cpp
     fakes/LoopbackTransport.cpp

@@ -13,6 +13,11 @@
 //                                    refusal wording. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 completion carry, review I1
+//                                    (R-R3-38, R-IOS-01): the refusal
+//                                    wording moves to SessionEndReasons.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/LinkVersion.h"
@@ -22,15 +27,6 @@
 #include <algorithm>
 
 namespace NereusSDR::LinkVersion {
-
-namespace {
-
-quint16 newest(const QList<quint16>& majors)
-{
-    return majors.isEmpty() ? quint16(0) : *std::max_element(majors.cbegin(), majors.cend());
-}
-
-} // namespace
 
 QList<quint16> supportedMajors()
 {
@@ -46,20 +42,6 @@ std::optional<quint16> agreeMajor(QList<quint16> ours, QList<quint16> theirs)
         }
     }
     return agreed;
-}
-
-QString refusalText(QList<quint16> station, QList<quint16> client)
-{
-    const quint16 stationNewest = newest(station);
-    const quint16 clientNewest = newest(client);
-    // The side with the older newest version is the one to update.
-    const QString update = stationNewest < clientNewest
-                               ? QStringLiteral("Update the station.")
-                               : QStringLiteral("Update this app.");
-    return QStringLiteral("This station runs link version %1 and this app runs version %2. %3")
-        .arg(stationNewest)
-        .arg(clientNewest)
-        .arg(update);
 }
 
 QList<quint16> parseMajorList(const QString& text, QString* error)

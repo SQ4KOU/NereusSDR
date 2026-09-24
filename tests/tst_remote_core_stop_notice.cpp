@@ -5,22 +5,32 @@
 // window stays as it is, says what happened in plain words over its
 // content, offers the next steps as buttons and does not retry. A dropped
 // link still retries as before. Each case runs a real remote MainWindow
-// against a loopback Core: the real StationServer for the takeover, and a
-// scripted Core that speaks the link's own messages for the refusals.
+// against a loopback Core: the real StationServer for the takeover and
+// both version refusals (review finding I1: the reasons come from the
+// Core's own code, never a copied string), and a scripted Core that speaks
+// the link's own messages for any other refusal and for a dropped link.
 #include <QTest>
 #include <QCoreApplication>
 #include <QDockWidget>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QWebSocket>
 #include <QWebSocketServer>
 
+#include <memory>
+
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
+#include "core/session/LinkVersion.h"
+#include "core/session/SessionEndReasons.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/StationClient.h"
@@ -89,6 +99,98 @@ private:
     quint16 m_helloMajor;
     QString m_endReason;
     bool m_retryable;
+};
+
+// The real Core on a loopback WebSocket listener, as the session tests run
+// it, advertising `majors` (the build's own by default).
+class RealCore final {
+public:
+    explicit RealCore(const QList<quint16>& majors = LinkVersion::supportedMajors())
+        : m_settings(m_dir.filePath(QStringLiteral("station.settings")))
+        , m_server(&m_station, m_settings, m_dir.path(), nullptr, majors)
+    {
+        QObject::connect(&m_listener, &QWebSocketServer::newConnection, &m_server, [this] {
+            m_server.acceptTransport(new WebSocketTransport(
+                m_listener.nextPendingConnection(), StationServer::kMaxIncomingMessageBytes));
+        });
+    }
+    bool listen() { return m_listener.listen(QHostAddress::LocalHost, 0); }
+    QString url() const
+    {
+        return QStringLiteral("ws://127.0.0.1:%1").arg(m_listener.serverPort());
+    }
+    QString token() const { return m_server.token(); }
+    StationServer& server() { return m_server; }
+
+private:
+    QTemporaryDir m_dir;
+    AppSettings m_settings;
+    RadioModel m_station;
+    StationServer m_server;
+    QWebSocketServer m_listener{QStringLiteral("stop notice core"),
+                                QWebSocketServer::NonSecureMode};
+};
+
+// Passes the link between the window and a real Core unchanged, except
+// that the app's hello names `major` and `majors` instead of its own: an
+// app on other link versions, which this build of the app cannot be. The
+// Core's answer, its refusal included, is its own.
+class HelloRewritingRelay final : public QObject {
+public:
+    HelloRewritingRelay(QString coreUrl, quint16 major, QList<quint16> majors)
+        : m_coreUrl(std::move(coreUrl)), m_major(major), m_majors(std::move(majors))
+    {
+        connect(&m_server, &QWebSocketServer::newConnection, this, [this] {
+            QWebSocket* app = m_server.nextPendingConnection();
+            app->setParent(this);
+            ++connections;
+            auto* core = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
+            auto pending = std::make_shared<QStringList>();
+            connect(core, &QWebSocket::connected, this, [core, pending] {
+                for (const QString& text : *pending) { core->sendTextMessage(text); }
+                pending->clear();
+            });
+            connect(core, &QWebSocket::textMessageReceived, app,
+                    [app](const QString& text) { app->sendTextMessage(text); });
+            connect(core, &QWebSocket::disconnected, app, [app] { app->close(); });
+            connect(app, &QWebSocket::textMessageReceived, this,
+                    [this, core, pending](const QString& text) {
+                const QString out = rewriteHello(text);
+                if (core->state() == QAbstractSocket::ConnectedState) {
+                    core->sendTextMessage(out);
+                } else {
+                    pending->append(out);
+                }
+            });
+            connect(app, &QWebSocket::disconnected, core, [core] { core->close(); });
+            core->open(QUrl(m_coreUrl));
+        });
+    }
+    bool listen() { return m_server.listen(QHostAddress::LocalHost, 0); }
+    QString url() const
+    {
+        return QStringLiteral("ws://127.0.0.1:%1").arg(m_server.serverPort());
+    }
+    int connections = 0;
+
+private:
+    QString rewriteHello(const QString& text) const
+    {
+        QJsonObject message = QJsonDocument::fromJson(text.toUtf8()).object();
+        if (message.value(QStringLiteral("type")).toString() != QLatin1String("hello")) {
+            return text;
+        }
+        message.insert(QStringLiteral("major"), int(m_major));
+        QJsonArray majors;
+        for (const quint16 major : m_majors) { majors.append(int(major)); }
+        message.insert(QStringLiteral("majors"), majors);
+        return QString::fromUtf8(QJsonDocument(message).toJson(QJsonDocument::Compact));
+    }
+
+    QWebSocketServer m_server{QStringLiteral("hello relay"), QWebSocketServer::NonSecureMode};
+    QString m_coreUrl;
+    quint16 m_major;
+    QList<quint16> m_majors;
 };
 
 struct StopBannerView {
@@ -239,67 +341,41 @@ private slots:
         QCOMPARE(otherControls.stopNotice(), CoreStopNotice::TakenOver);
     }
 
-    // The Core refuses this app for good because the app's link version is
-    // older: the window says to update this app and offers Choose another
-    // Core and Check for updates; it does not retry.
-    void coreRefusesAnOlderApp()
+    // The Core refuses an app on link versions it does not run: here an app
+    // two majors ahead (versions 2 and 3; this build of the app cannot be
+    // one, so a relay rewrites its hello). The Core's own refusal reaches
+    // the window, which says to update the Core, offers Choose another
+    // Core but not Check for updates, and does not retry.
+    void coreRefusesAnAppAhead()
     {
-        const QString reason = QStringLiteral(
-            "Protocol major version mismatch: station speaks 2.0, client speaks 1.11. "
-            "A differing major means an incompatible wire contract.");
-        ScriptedCore core(kSessionProtocolMajor, reason);
+        RealCore core;
         QVERIFY(core.listen());
+        HelloRewritingRelay relay(core.url(), 3, {2, 3});
+        QVERIFY(relay.listen());
         SettingsProxy proxy;
         ScopedRemoteBackend remoteBackend(&proxy);
-        MainWindow window({core.url(), QStringLiteral("token"), {}, true}, nullptr,
+        MainWindow window({relay.url(), core.token(), {}, true}, nullptr,
                           MainWindow::ConnectionStartup::Deferred);
         window.setConnectionPickerManaged(true);
         StationClient* const client = window.findChild<StationClient*>();
         QVERIFY(client);
         client->setReconnectBackoffUnitMs(20);
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("^Refusing a client on link major")));
         window.startInitialConnection();
         QTRY_COMPARE(client->lastEndReport().kind, StationEndReport::Kind::VersionRefused);
         QTRY_VERIFY(!client->isConnectionActive());
+        QCOMPARE(client->lastEndReport().reason,
+                 SessionEndReasons::versionRefused(LinkVersion::supportedMajors(), {2, 3}));
+        QCOMPARE(client->lastEndReport().reason,
+                 QStringLiteral("This Core runs link version 1 and this app runs version 3. "
+                                "Update the Core."));
+        QCOMPARE(client->lastEndReport().coreMajor, 1);
+        QCOMPARE(client->lastEndReport().appMajor, 3);
+        QVERIFY(!core.server().hasAuthenticatedSession());
 
         const StopBannerView view = bannerOf(window);
         QVERIFY(view.banner);
-        QVERIFY(view.banner->isVisibleTo(&window));
-        QCOMPARE(view.title->text(), QStringLiteral("Update this app"));
-        QCOMPARE(view.text->text(),
-                 QStringLiteral("This app is too old to work with this Core. Update "
-                                "NereusSDR on this computer to use it. This window does "
-                                "not reconnect by itself."));
-        QVERIFY(!view.takeBack->isVisibleTo(&window));
-        QVERIFY(view.chooseCore->isVisibleTo(&window));
-        QVERIFY(view.checkUpdates->isVisibleTo(&window));
-        verifyPlain(view);
-
-        QTest::qWait(200);
-        QCOMPARE(core.connections, 1);
-        QVERIFY(!client->isReconnectPending());
-    }
-
-    // The same refusal the other way round: the Core is older, so updating
-    // this app does not help and Check for updates is not offered.
-    void coreRefusesANewerApp()
-    {
-        const QString reason = QStringLiteral(
-            "Protocol major version mismatch: station speaks 0.9, client speaks 1.11. "
-            "A differing major means an incompatible wire contract.");
-        ScriptedCore core(kSessionProtocolMajor, reason);
-        QVERIFY(core.listen());
-        SettingsProxy proxy;
-        ScopedRemoteBackend remoteBackend(&proxy);
-        MainWindow window({core.url(), QStringLiteral("token"), {}, true}, nullptr,
-                          MainWindow::ConnectionStartup::Deferred);
-        window.setConnectionPickerManaged(true);
-        StationClient* const client = window.findChild<StationClient*>();
-        QVERIFY(client);
-        client->setReconnectBackoffUnitMs(20);
-        window.startInitialConnection();
-        QTRY_VERIFY(!client->isConnectionActive());
-
-        const StopBannerView view = bannerOf(window);
         QVERIFY(view.banner->isVisibleTo(&window));
         QCOMPARE(view.title->text(), QStringLiteral("Update the Core"));
         QCOMPARE(view.text->text(),
@@ -310,34 +386,56 @@ private slots:
         QVERIFY(!view.checkUpdates->isVisibleTo(&window));
         QVERIFY(!view.takeBack->isVisibleTo(&window));
         verifyPlain(view);
+
         QTest::qWait(200);
-        QCOMPARE(core.connections, 1);
+        QCOMPARE(relay.connections, 1);
+        QVERIFY(!client->isReconnectPending());
     }
 
-    // This app refuses a Core whose hello names a newer major: the same
-    // message as the Core's own refusal of an older app.
-    void appRefusesANewerCore()
+    // This app refuses a real Core that runs only a newer link version
+    // (3): the app finds the mismatch itself, records the same end as the
+    // Core's refusal, and the window says to update this app and offers
+    // Check for updates. It sends no hello and does not retry.
+    void appRefusesACoreAhead()
     {
-        ScriptedCore core(quint16(kSessionProtocolMajor + 1));
+        RealCore core({3});
         QVERIFY(core.listen());
         SettingsProxy proxy;
         ScopedRemoteBackend remoteBackend(&proxy);
-        MainWindow window({core.url(), QStringLiteral("token"), {}, true}, nullptr,
+        MainWindow window({core.url(), core.token(), {}, true}, nullptr,
                           MainWindow::ConnectionStartup::Deferred);
+        window.setConnectionPickerManaged(true);
         StationClient* const client = window.findChild<StationClient*>();
         QVERIFY(client);
         client->setReconnectBackoffUnitMs(20);
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("^No link major shared")));
         window.startInitialConnection();
         QTRY_VERIFY(!client->isConnectionActive());
         QCOMPARE(client->lastEndReport().kind, StationEndReport::Kind::VersionRefused);
-        QCOMPARE(client->lastEndReport().coreMajor, int(kSessionProtocolMajor + 1));
+        QCOMPARE(client->lastEndReport().reason,
+                 QStringLiteral("This Core runs link version 3 and this app runs version 1. "
+                                "Update this app."));
+        QCOMPARE(client->lastEndReport().coreMajor, 3);
+        QCOMPARE(client->lastEndReport().appMajor, 1);
+        QVERIFY(!core.server().hasAuthenticatedSession());
 
         const StopBannerView view = bannerOf(window);
         QVERIFY(view.banner->isVisibleTo(&window));
         QCOMPARE(view.title->text(), QStringLiteral("Update this app"));
+        QCOMPARE(view.text->text(),
+                 QStringLiteral("This app is too old to work with this Core. Update "
+                                "NereusSDR on this computer to use it. This window does "
+                                "not reconnect by itself."));
+        QVERIFY(view.chooseCore->isVisibleTo(&window));
+        QVERIFY(view.checkUpdates->isVisibleTo(&window));
+        QVERIFY(!view.takeBack->isVisibleTo(&window));
         verifyPlain(view);
+
+        const quint32 epoch = client->sessionEpoch();
         QTest::qWait(200);
-        QCOMPARE(core.connections, 1);
+        QVERIFY(!client->isReconnectPending());
+        QCOMPARE(client->sessionEpoch(), epoch);
     }
 
     // Any other end the Core marks not retryable: the Core's reason in

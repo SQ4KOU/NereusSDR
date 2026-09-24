@@ -107,6 +107,11 @@
 //   2026-09-24 - Lane B takes integration (R-IOS-01, R-R3-21): a refusal
 //                with no reason says the Core refused it. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R3 completion carry, review I1 (R-R3-21, R-R3-38,
+//                R-IOS-01): the stop message reads the Core's takeover and
+//                version reasons through SessionEndReasons, and a version
+//                this app refuses itself records the same end. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -115,6 +120,7 @@
 #include "core/FaultLog.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/ObjectRegistry.h"
+#include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
 #include "core/settings/SettingsProxy.h"
 #include "models/AmplifierModel.h"
@@ -142,7 +148,6 @@
 #include <QCryptographicHash>
 #include <QHostAddress>
 #include <QLoggingCategory>
-#include <QRegularExpression>
 #include <QSslCertificate>
 #include <QSslError>
 #include <QStringList>
@@ -273,15 +278,9 @@ bool isLocalNetworkAddress(const QString& host)
 // R-R3-38: reads a session end the Core marked not retryable into what the
 // window offers next. The link carries only a reason and the retryable
 // flag (station link section 12.4), so the two ends that need their own
-// buttons are told apart by the Core's reason as StationServer writes it:
-//   StationServer::promoteToSession:
-//     "Displaced by a newer authenticated connection from %1"
-//     where %1 is WebSocketTransport::peerDescription(), "address:port".
-//   StationServer::handleHello:
-//     "Protocol major version mismatch: station speaks %1.%2, client
-//     speaks %3.%4. ..."
-// OperatorReasonText matches the same two reasons for its wording. A Core
-// that rewords either still ends the session and is still not retried; the
+// buttons are told apart by the reason, worded and read in one place
+// (SessionEndReasons). OperatorReasonText words the same reasons for
+// display. Any other reason still ends the session and is not retried; the
 // window then shows it as a plain refusal with the Core's reason.
 StationEndReport stationEndReport(const QString& reason)
 {
@@ -289,36 +288,20 @@ StationEndReport stationEndReport(const QString& reason)
     report.kind = StationEndReport::Kind::Refused;
     report.reason = reason;
 
-    static const QRegularExpression takenOver(
-        QStringLiteral("^Displaced by a newer authenticated connection from (.*)$"));
-    if (const QRegularExpressionMatch match = takenOver.match(reason); match.hasMatch()) {
+    // Interim: Part C's end code in session.end replaces parsing the reason.
+    const SessionEndReasons::Parsed parsed = SessionEndReasons::parse(reason);
+    switch (parsed.kind) {
+    case SessionEndReasons::Parsed::Kind::TakenOver:
         report.kind = StationEndReport::Kind::TakenOver;
-        // "address:port"; the port says nothing to the operator. The Core
-        // writes "<unknown>" or "<detached>" when it has no address, which
-        // does not parse as one and leaves the name empty.
-        static const QRegularExpression withPort(QStringLiteral("^(.+):([0-9]+)$"));
-        const QRegularExpressionMatch parts = withPort.match(match.captured(1).trimmed());
-        if (parts.hasMatch()) {
-            QHostAddress address(parts.captured(1));
-            bool mapped = false;
-            const quint32 v4 = address.toIPv4Address(&mapped);
-            if (mapped) {
-                address = QHostAddress(v4);
-            }
-            if (!address.isNull()) {
-                report.takenOverBy = address.toString();
-            }
-        }
-        return report;
-    }
-
-    static const QRegularExpression version(QStringLiteral(
-        "^Protocol major version mismatch: station speaks ([0-9]+)\\.[0-9]+, "
-        "client speaks ([0-9]+)\\.[0-9]+"));
-    if (const QRegularExpressionMatch match = version.match(reason); match.hasMatch()) {
+        report.takenOverBy = parsed.otherAppAddress;
+        break;
+    case SessionEndReasons::Parsed::Kind::VersionRefused:
         report.kind = StationEndReport::Kind::VersionRefused;
-        report.coreMajor = match.captured(1).toInt();
-        report.appMajor = match.captured(2).toInt();
+        report.coreMajor = parsed.coreMajor;
+        report.appMajor = parsed.appMajor;
+        break;
+    case SessionEndReasons::Parsed::Kind::Other:
+        break;
     }
     return report;
 }
@@ -1513,20 +1496,16 @@ void StationClient::handleHello(const SessionMessage& message)
     const std::optional<quint16> agreed =
         LinkVersion::agreeMajor(m_supportedMajors, message.supportedMajors);
     if (!agreed) {
-        m_lastError = LinkVersion::refusalText(message.supportedMajors, m_supportedMajors);
+        m_lastError =
+            SessionEndReasons::versionRefused(message.supportedMajors, m_supportedMajors);
         qCWarning(lcStationClient) << "No link major shared with the station (it supports"
                                    << message.supportedMajors << "; this client supports"
                                    << m_supportedMajors << "):" << m_lastError;
         // R-R3-38: this app refused the Core, for good, for the same
-        // reason the Core would have refused it.
-        m_lastEndReport = StationEndReport{};
-        m_lastEndReport.kind = StationEndReport::Kind::VersionRefused;
-        m_lastEndReport.reason = m_lastError;
-        m_lastEndReport.appMajor = m_supportedMajors.isEmpty()
-            ? -1 : int(*std::max_element(m_supportedMajors.cbegin(), m_supportedMajors.cend()));
-        m_lastEndReport.coreMajor = message.supportedMajors.isEmpty()
-            ? -1 : int(*std::max_element(message.supportedMajors.cbegin(),
-                                         message.supportedMajors.cend()));
+        // reason the Core would have refused it: the same end as the
+        // Core's refusal, so the window shows the same version notice
+        // whichever side finds the mismatch.
+        m_lastEndReport = stationEndReport(m_lastError);
         disconnectFromStation(m_lastError);
         return;
     }
