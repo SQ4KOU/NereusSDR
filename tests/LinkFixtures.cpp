@@ -14,6 +14,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): linkMajors().
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
+//                                    linkMajors read against the
+//                                    station's supported majors.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -40,6 +44,7 @@
 #include <vector>
 
 #include "core/dsp/Ps3Snapshot.h"
+#include "core/session/LinkVersion.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationLanAnnouncement.h"
 #include "core/session/StationServer.h"
@@ -261,8 +266,28 @@ QString LinkFixtures::checkManifest(const QJsonObject& manifest, const QString& 
     if (!problem.isEmpty()) {
         return problem;
     }
-    if (manifest.value(QStringLiteral("linkMajors")).toArray() != QJsonArray{1}) {
-        return QStringLiteral("manifest: linkMajors must be [1]");
+    // The link majors the suite covers: whole numbers from 1 to 65535,
+    // oldest first without repeats, each one this station supports
+    // (LinkVersion::supportedMajors(), not a list written here).
+    const QJsonArray majors = manifest.value(QStringLiteral("linkMajors")).toArray();
+    if (majors.isEmpty()) {
+        return QStringLiteral("manifest: linkMajors must name at least one link major");
+    }
+    const QList<quint16> supported = LinkVersion::supportedMajors();
+    double previous = 0.0;
+    for (const QJsonValue& value : majors) {
+        const double major = value.toDouble(-1.0);
+        if (!value.isDouble() || major < 1.0 || major > 65535.0
+            || major != static_cast<double>(static_cast<qint64>(major)) || major <= previous) {
+            return QStringLiteral("manifest: linkMajors must be whole numbers from 1 to 65535, "
+                                  "oldest first, without repeats");
+        }
+        if (!supported.contains(static_cast<quint16>(major))) {
+            return QStringLiteral("manifest: linkMajors names %1, which this station does not "
+                                  "support")
+                .arg(static_cast<qint64>(major));
+        }
+        previous = major;
     }
     const QDir root(directory);
     QSet<QString> ids;

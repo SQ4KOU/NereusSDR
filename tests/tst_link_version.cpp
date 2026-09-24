@@ -30,8 +30,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
 //                                    a client built before `majors` is
 //                                    served by a station that still
-//                                    accepts its major. AI-assisted via
-//                                    Anthropic Claude Code.
+//                                    accepts its major; the empty-majors
+//                                    guard; a TLS 1.1 handshake refused.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -44,6 +45,7 @@
 #include <QRegularExpression>
 #include <QSignalSpy>
 #include <QSslConfiguration>
+#include <QSslServer>
 #include <QSslSocket>
 #include <QTemporaryDir>
 
@@ -153,6 +155,7 @@ private slots:
 
     // ---- TLS ----
     void stationTlsMinimumIsTls12OrLater();
+    void stationRefusesATls11Handshake();
 
 private:
     QTemporaryDir m_securityDir;
@@ -700,6 +703,89 @@ void TstLinkVersion::stationTlsMinimumIsTls12OrLater()
     QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
     // Read back from the listener itself, not from the code that built it.
     QCOMPARE(server.tlsConfiguration().protocol(), QSsl::TlsV1_2OrLater);
+    server.close();
+}
+
+namespace {
+
+enum class HandshakeOutcome { Encrypted, Refused, NoAnswer };
+
+/// Opens a client offering only `protocol` to `port` on this machine and
+/// reports whether the handshake completed. The certificate is not
+/// checked: the question is only which protocol versions the listener
+/// agrees to.
+HandshakeOutcome handshakeTo(quint16 port, QSsl::SslProtocol protocol)
+{
+    QSslSocket client;
+    QSslConfiguration config = client.sslConfiguration();
+    config.setProtocol(protocol);
+    // OpenSSL 3 refuses TLS 1.0 and 1.1 below security level 0; the
+    // client lowers its own level so that only the listener decides.
+    config.setBackendConfigurationOption(QByteArrayLiteral("CipherString"),
+                                         QByteArrayLiteral("DEFAULT@SECLEVEL=0"));
+    config.setPeerVerifyMode(QSslSocket::VerifyNone);
+    client.setSslConfiguration(config);
+    QSignalSpy encrypted(&client, &QSslSocket::encrypted);
+    QSignalSpy failed(&client, &QAbstractSocket::errorOccurred);
+    QSignalSpy disconnected(&client, &QAbstractSocket::disconnected);
+    client.connectToHostEncrypted(QHostAddress(QHostAddress::LocalHost).toString(), port);
+    // Event-driven: returns as soon as the handshake ends either way.
+    QTest::qWaitFor([&]() {
+        return !encrypted.isEmpty() || !failed.isEmpty() || !disconnected.isEmpty();
+    }, 10000);
+    if (!encrypted.isEmpty()) {
+        return HandshakeOutcome::Encrypted;
+    }
+    return failed.isEmpty() && disconnected.isEmpty() ? HandshakeOutcome::NoAnswer
+                                                      : HandshakeOutcome::Refused;
+}
+
+} // namespace
+
+void TstLinkVersion::stationRefusesATls11Handshake()
+{
+    if (!QSslSocket::supportsSsl()) {
+        QSKIP("Qt reports no working TLS backend on this machine");
+    }
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("station.settings")));
+    RadioModel model;
+    StationServer server(&model, settings, m_securityDir.path());
+    QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+
+    // The control: a listener of this test's own, with the station's
+    // certificate and key, that allows TLS 1.1. If a TLS 1.1 client cannot
+    // finish a handshake even there, this platform's TLS library will not
+    // offer TLS 1.1 at all, and the refusal below would prove nothing.
+    QSslServer control;
+    QSslConfiguration permissive = server.tlsConfiguration();
+    QT_WARNING_PUSH
+    QT_WARNING_DISABLE_DEPRECATED
+    permissive.setProtocol(QSsl::TlsV1_0OrLater);
+    QT_WARNING_POP
+    permissive.setBackendConfigurationOption(QByteArrayLiteral("CipherString"),
+                                             QByteArrayLiteral("DEFAULT@SECLEVEL=0"));
+    control.setSslConfiguration(permissive);
+    QVERIFY(control.listen(QHostAddress::LocalHost, 0));
+    // QSsl::TlsV1_1 is deprecated in Qt 6; it is exactly what this test
+    // offers.
+    QT_WARNING_PUSH
+    QT_WARNING_DISABLE_DEPRECATED
+    constexpr QSsl::SslProtocol kTls11 = QSsl::TlsV1_1;
+    QT_WARNING_POP
+    // The control listener itself works: a TLS 1.2 client gets through.
+    QCOMPARE(handshakeTo(control.serverPort(), QSsl::TlsV1_2), HandshakeOutcome::Encrypted);
+    if (handshakeTo(control.serverPort(), kTls11) != HandshakeOutcome::Encrypted) {
+        QSKIP("This platform's TLS library cannot make a TLS 1.1 connection, even to a "
+              "listener that allows it, so the station's refusal cannot be shown here. "
+              "stationTlsMinimumIsTls12OrLater still reads the minimum back.");
+    }
+    control.close();
+
+    // The station's own listener refuses the same client.
+    QCOMPARE(handshakeTo(server.serverPort(), kTls11), HandshakeOutcome::Refused);
+    // And serves one that offers TLS 1.2.
+    QCOMPARE(handshakeTo(server.serverPort(), QSsl::TlsV1_2), HandshakeOutcome::Encrypted);
     server.close();
 }
 

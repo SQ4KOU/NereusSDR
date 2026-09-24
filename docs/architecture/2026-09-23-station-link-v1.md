@@ -50,7 +50,11 @@ and the [R3 plan](2026-09-20-remote-daemon-r3-plan.md).
   configuration (`QSslConfiguration::defaultConfiguration()`) and sets the
   minimum explicitly: `setProtocol(QSsl::TlsV1_2OrLater)`, TLS 1.2 or later,
   whatever Qt's default becomes. `tst_link_version` reads it back from the
-  listener (`StationServer::tlsConfiguration()`). The station does not ask for
+  listener (`StationServer::tlsConfiguration()`), and offers the listener a
+  client that speaks only TLS 1.1: the station refuses it and serves a TLS
+  1.2 client. (That test first shows the TLS 1.1 client finishing a
+  handshake with a listener of its own that allows TLS 1.1, so the refusal
+  is the station's, not the TLS library's.) The station does not ask for
   a client certificate (`setPeerVerifyMode(QSslSocket::VerifyNone)`); the
   client's proof of identity is the token (section 3.3).
 - The control port is set by `remote_port` in `nereusd.conf`
@@ -1492,7 +1496,9 @@ files against its own client.
   `{"linkMajors":[1],"fixtures":[{"id":"<fixture id>","file":"<path under v1/>","kind":"control"|"session"|"media","requires":{"<feature>":<version>}}]}`.
   `requires` names the capability versions a fixture exercises, and is
   `{}` for a fixture every major-1 station passes. `linkMajors` is the
-  link majors the suite covers; each runner runs its fixtures once per
+  link majors the suite covers, whole numbers from 1 to 65535, oldest
+  first, without repeats; the station's runners check each against the
+  majors the station supports (`LinkVersion::supportedMajors()`). Each runner runs its fixtures once per
   major in it, against a station that offers that major, and fails when
   this station does not offer it. Every file under
   `control/`, `sessions/` and `media/` is listed once; a media entry names

@@ -34,6 +34,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): linkMajors().
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
+//                                    linkMajors read against the
+//                                    station's supported majors.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -79,7 +83,8 @@ public:
     /// the file is missing or is not one JSON object.
     static QJsonObject readObject(const QString& path, QString* error);
 
-    /// manifest.json, checked: linkMajors [1], every entry's four fields,
+    /// manifest.json, checked: linkMajors (whole numbers, oldest first,
+    /// each one LinkVersion::supportedMajors() holds), every entry's fields,
     /// unique ids, a known kind, an existing file (a media entry names its
     /// .bin and needs the .expect.json beside it), and every file under
     /// control/, sessions/ and media/ listed exactly once. Empty on pass.

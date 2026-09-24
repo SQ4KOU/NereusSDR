@@ -27,6 +27,10 @@
 //                                    the manifest.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
+//                                    linkMajors read against the
+//                                    station's supported majors.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -132,6 +136,18 @@ void TstLinkConformanceControl::manifestIsWellFormed()
     broken.insert(QStringLiteral("fixtures"), fixtures);
     const QString refused = LinkFixtures::checkManifest(broken, LinkFixtures::dataDirectory());
     QVERIFY2(refused.contains(QStringLiteral("no-such-fixture.json")), qPrintable(refused));
+
+    // linkMajors is read against the majors this station supports.
+    QJsonObject unsupported = m_manifest;
+    QJsonArray majors;
+    for (const quint16 major : LinkVersion::supportedMajors()) {
+        majors.append(int(major));
+    }
+    majors.append(int(LinkVersion::supportedMajors().last()) + 1);
+    unsupported.insert(QStringLiteral("linkMajors"), majors);
+    const QString beyond =
+        LinkFixtures::checkManifest(unsupported, LinkFixtures::dataDirectory());
+    QVERIFY2(beyond.contains(QStringLiteral("does not support")), qPrintable(beyond));
 }
 
 void TstLinkConformanceControl::directionsCoverEveryKind()
