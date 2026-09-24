@@ -292,7 +292,6 @@ warren@wpratt.com
 #include "gui/AntennaPopupBuilder.h"
 #include "gui/UnbuiltFeatures.h"
 #include "gui/OperatorReasonText.h"
-#include "gui/applets/NyiOverlay.h"
 #include "core/BoardCapabilities.h"
 #include "core/SkuUiProfile.h"
 #include "core/HpsdrModel.h"
@@ -2834,7 +2833,7 @@ void VfoWidget::buildFloatingButtons()
         }
     });
 
-    // Record button — checkable, NYI-badged (no consumer in Stage 1)
+    // Record button: checkable, disabled (no consumer yet)
     m_recBtn = makeBtn(QStringLiteral("\u23FA"), kFloatingBtn);
     // From Thetis console.resx:2028 — ckQuickRec.ToolTip
     m_recBtn->setToolTip(QStringLiteral("Quick Record of \"off the air\" signals"));
@@ -2844,9 +2843,9 @@ void VfoWidget::buildFloatingButtons()
             emit recordToggled(on);
         }
     });
-    NyiOverlay::markNyi(m_recBtn, QStringLiteral("phase3g10-stage2"));
+    m_recBtn->setEnabled(false);  // nothing behind it until the voice recorder is built
 
-    // Play button — checkable, NYI-badged (no consumer in Stage 1)
+    // Play button: checkable, disabled (no consumer yet)
     m_playBtn = makeBtn(QStringLiteral("\u25B6"), kFloatingBtn);
     // From Thetis console.resx:1941 — ckQuickPlay.ToolTip
     m_playBtn->setToolTip(QStringLiteral("Quick Playback of signals recorded \"off the air\""));
@@ -2856,7 +2855,7 @@ void VfoWidget::buildFloatingButtons()
             emit playToggled(on);
         }
     });
-    NyiOverlay::markNyi(m_playBtn, QStringLiteral("phase3g10-stage2"));
+    m_playBtn->setEnabled(false);  // nothing behind it until the voice recorder is built
 
     // R-R3-49: record and play are hidden until the voice recorder is
     // built; positionFloatingButtons() keeps them out of the strip.

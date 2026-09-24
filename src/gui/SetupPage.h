@@ -50,10 +50,6 @@ public:
     // Always true in a local window.
     virtual void setStationSettingsAvailable(bool available, const QString& reason);
 
-    // ── Static NYI marker ─────────────────────────────────────────────────────
-    // Marks a widget as Not Yet Implemented: disables it and sets a tooltip.
-    static void markNyi(QWidget* widget, const QString& phase);
-
     // ── Section builder ───────────────────────────────────────────────────────
     // Add a titled group box section to the page content area.
     QGroupBox* addSection(const QString& title);

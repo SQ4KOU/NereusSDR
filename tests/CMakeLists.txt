@@ -6986,6 +6986,11 @@ target_compile_definitions(tst_unbuilt_features PRIVATE NEREUS_BUILD_TESTS)
 # behind them are hidden through the unbuilt list.
 nereus_add_test(tst_other_button_item)
 target_compile_definitions(tst_other_button_item PRIVATE NEREUS_BUILD_TESTS)
+# R3 unfinished controls, Task 4 (R-R3-49, R-R3-21): no control the app
+# builds, local or remote, carries a not-yet-implemented mark or tooltip,
+# including the surfaces hidden until their feature is built.
+nereus_add_test(tst_no_placeholder_marks)
+target_compile_definitions(tst_no_placeholder_marks PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_connection_selector)
 nereus_add_test(tst_station_lan_cache)
 nereus_add_test(tst_station_lan_transport)

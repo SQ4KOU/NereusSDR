@@ -96,7 +96,6 @@ void ConnectionQualityPage::buildUI()
         QStringLiteral("The 60 s history graph is not shown yet."));
     m_historyPlaceholder->setStyleSheet(QStringLiteral("color: #888;"));
     histLayout->addWidget(m_historyPlaceholder);
-    SetupPage::markNyi(m_historyPlaceholder, QStringLiteral("3P-H follow-up"));
     histGroup->setObjectName(QStringLiteral("connectionHistoryGroup"));
     UnbuiltFeatures::hideUnlessBuilt(histGroup, UnbuiltFeature::ConnectionHistory);
 

@@ -89,7 +89,6 @@
 #include "gui/meters/MeterPoller.h"
 #include "gui/ComboStyle.h"
 #include "gui/widgets/DexpPeakMeter.h"
-#include "NyiOverlay.h"
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
 #include "core/MicProfileManager.h"
@@ -125,11 +124,6 @@ static constexpr int kLeftColW = 70;
 static constexpr int kValueW   = 36;
 // kGap (4) removed — only used by the CW page, now a placeholder (Phase 3M-2).
 
-// NYI phase tags
-static const QString kNyiPhone  = QStringLiteral("Phase 3I-1");
-// kNyiCw removed — CW page is now a placeholder (Phase 3M-2 deferred).
-static const QString kNyiVax    = QStringLiteral("Phase 3-VAX");
-static const QString kNyiFm     = QStringLiteral("Phase 3I-1");
 
 // Phone/CW-specific button background — bluer (#1a3a5a) than the
 // canonical kButtonBg (#1a2a3a) used by Style::buttonBaseStyle().
@@ -568,7 +562,9 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
         vbox->addLayout(row);
     }
 
-    // ── Mark Phone controls NYI (wired controls NOT marked) ──────────────────
+    // ── Phone controls with nothing behind them yet (wired ones are live) ───
+    // R-R3-49: these stay disabled and are hidden through the unbuilt list
+    // (acc, phone-mon); they carry no not-yet-implemented mark or tooltip.
     // #1  m_levelGauge       — wired (Phase 3M-1b mic level gauge)
     // #5  m_micLevelSlider   — wired (Phase 3M-1b mic gain)
     // #7  m_procBtn / m_procSlider — wired (Phase 3M-3a-ii post-bench cleanup)
@@ -578,10 +574,10 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
     //     m_dexpSlider is decorative-only per Thetis quirk, see wireControls())
     // #2 m_compGauge, #3 m_micProfileCombo, #4 m_micSourceCombo and #13
     // m_amCarSlider: wired (R-R3-21, see wireControls()).
-    NyiOverlay::markNyi(m_accBtn,           kNyiPhone);   // #6
+    m_accBtn->setEnabled(false);   // #6
     // #8 m_vaxBtn: wired (Phase 3M-VAX-toggle)
-    NyiOverlay::markNyi(m_monBtn,           kNyiPhone);   // #9
-    NyiOverlay::markNyi(m_monSlider,        kNyiPhone);   // #9 slider
+    m_monBtn->setEnabled(false);   // #9
+    m_monSlider->setEnabled(false);   // #9 slider
 }
 
 // ── CW page — placeholder until Phase 3M-2 ───────────────────────────────────
@@ -834,23 +830,25 @@ void PhoneCwApplet::buildFmPage(QWidget* page)
 
     vbox->addStretch();
 
-    // ── Mark all FM controls NYI (Phase 3I-1) ────────────────────────────────
-    NyiOverlay::markNyi(m_fmMicSlider,     kNyiFm);
-    NyiOverlay::markNyi(m_fmMicLabel,      kNyiFm);
-    NyiOverlay::markNyi(m_dev5kBtn,        kNyiFm);
-    NyiOverlay::markNyi(m_dev25kBtn,       kNyiFm);
-    NyiOverlay::markNyi(m_ctcssBtn,        kNyiFm);
-    NyiOverlay::markNyi(m_ctcssCombo,      kNyiFm);
-    NyiOverlay::markNyi(m_simplexBtn,      kNyiFm);
-    NyiOverlay::markNyi(m_rptOffsetSlider, kNyiFm);
-    NyiOverlay::markNyi(m_rptOffsetLabel,  kNyiFm);
-    NyiOverlay::markNyi(m_offsetMinusBtn,  kNyiFm);
-    NyiOverlay::markNyi(m_offsetPlusBtn,   kNyiFm);
-    NyiOverlay::markNyi(m_offsetRevBtn,    kNyiFm);
-    NyiOverlay::markNyi(m_fmProfileCombo,  kNyiFm);
-    NyiOverlay::markNyi(m_fmMemCombo,      kNyiFm);
-    NyiOverlay::markNyi(m_fmMemPrev,       kNyiFm);
-    NyiOverlay::markNyi(m_fmMemNext,       kNyiFm);
+    // ── FM controls: nothing behind them yet ─────────────────────────────────
+    // R-R3-49: the FM page is hidden through the unbuilt list (fm-page); the
+    // controls stay disabled and carry no not-yet-implemented mark.
+    m_fmMicSlider->setEnabled(false);
+    m_fmMicLabel->setEnabled(false);
+    m_dev5kBtn->setEnabled(false);
+    m_dev25kBtn->setEnabled(false);
+    m_ctcssBtn->setEnabled(false);
+    m_ctcssCombo->setEnabled(false);
+    m_simplexBtn->setEnabled(false);
+    m_rptOffsetSlider->setEnabled(false);
+    m_rptOffsetLabel->setEnabled(false);
+    m_offsetMinusBtn->setEnabled(false);
+    m_offsetPlusBtn->setEnabled(false);
+    m_offsetRevBtn->setEnabled(false);
+    m_fmProfileCombo->setEnabled(false);
+    m_fmMemCombo->setEnabled(false);
+    m_fmMemPrev->setEnabled(false);
+    m_fmMemNext->setEnabled(false);
 }
 
 // ── wireControls — Phase 3M-1b mic gain slider + mic level gauge ─────────────

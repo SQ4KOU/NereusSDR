@@ -7061,7 +7061,6 @@ void MainWindow::buildMenuBar()
     {
         QAction* transvertersAction = radioMenu->addAction(QStringLiteral("Trans&verters…"));
         transvertersAction->setEnabled(false);
-        transvertersAction->setToolTip(QStringLiteral("NYI — Phase X"));
         // R-R3-49: hidden until transverters are built.
         UnbuiltFeatures::hideUnlessBuilt(transvertersAction, UnbuiltFeature::Transverters);
     }
@@ -7225,9 +7224,6 @@ void MainWindow::buildMenuBar()
 
     {
         QMenu* displayModeMenu = viewMenu->addMenu(QStringLiteral("&Display Mode"));
-        QAction* placeholder = displayModeMenu->addAction(QStringLiteral("(NYI placeholder)"));
-        placeholder->setEnabled(false);
-        placeholder->setToolTip(QStringLiteral("NYI — Phase X"));
         // R-R3-49: hidden until display modes are built.
         UnbuiltFeatures::hideUnlessBuilt(displayModeMenu->menuAction(),
                                          UnbuiltFeature::DisplayMode);
@@ -7249,7 +7245,6 @@ void MainWindow::buildMenuBar()
             QAction* a = uiScaleMenu->addAction(QString::fromUtf8(s.label));
             a->setCheckable(true);
             a->setEnabled(false);
-            a->setToolTip(QStringLiteral("NYI — Phase X"));
             if (s.isDefault) { a->setChecked(true); }
             scaleGroup->addAction(a);
         }
@@ -7271,7 +7266,6 @@ void MainWindow::buildMenuBar()
         QAction* minimalAction = viewMenu->addAction(QStringLiteral("&Minimal Mode"));
         minimalAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
         minimalAction->setEnabled(false);
-        minimalAction->setToolTip(QStringLiteral("NYI — Phase X"));
         // R-R3-49: hidden until minimal mode is built.
         UnbuiltFeatures::hideUnlessBuilt(minimalAction, UnbuiltFeature::MinimalMode);
     }
@@ -7302,7 +7296,6 @@ void MainWindow::buildMenuBar()
     {
         QAction* kbAction = viewMenu->addAction(QStringLiteral("&Keyboard Shortcuts..."));
         kbAction->setEnabled(false);
-        kbAction->setToolTip(QStringLiteral("NYI — Phase X"));
         // R-R3-49: hidden until keyboard shortcut editing is built.
         UnbuiltFeatures::hideUnlessBuilt(kbAction, UnbuiltFeature::Keyboard);
     }
@@ -7588,7 +7581,6 @@ void MainWindow::buildMenuBar()
     {
         QAction* eqAction = dspMenu->addAction(QStringLiteral("&Equalizer..."));
         eqAction->setEnabled(false);
-        eqAction->setToolTip(QStringLiteral("NYI — Phase 3I-3"));
         // R-R3-49: hidden until the receive equalizer is built.
         UnbuiltFeatures::hideUnlessBuilt(eqAction, UnbuiltFeature::Equalizer);
     }
@@ -7647,9 +7639,6 @@ void MainWindow::buildMenuBar()
 
     {
         QMenu* vhfMenu = bandMenu->addMenu(QStringLiteral("&VHF"));
-        QAction* placeholder = vhfMenu->addAction(QStringLiteral("(NYI — Phase X)"));
-        placeholder->setEnabled(false);
-        placeholder->setToolTip(QStringLiteral("VHF bands NYI — Phase X"));
         // R-R3-49: hidden until transverters are built.
         UnbuiltFeatures::hideUnlessBuilt(vhfMenu->menuAction(), UnbuiltFeature::Transverters);
     }
@@ -7675,7 +7664,6 @@ void MainWindow::buildMenuBar()
     {
         QAction* bandStackAction = bandMenu->addAction(QStringLiteral("Band &Stacking..."));
         bandStackAction->setEnabled(false);
-        bandStackAction->setToolTip(QStringLiteral("NYI — Phase X"));
         // R-R3-49: hidden until band stacking is built.
         UnbuiltFeatures::hideUnlessBuilt(bandStackAction, UnbuiltFeature::BandStack);
     }
@@ -7943,21 +7931,18 @@ void MainWindow::buildMenuBar()
         QAction* cwxAction = toolsMenu->addAction(QStringLiteral("C&WX..."));
         cwxAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_X));
         cwxAction->setEnabled(false);
-        cwxAction->setToolTip(QStringLiteral("NYI — Phase X"));
         // R-R3-49: hidden until CWX is built.
         UnbuiltFeatures::hideUnlessBuilt(cwxAction, UnbuiltFeature::Cwx);
     }
     {
         QAction* memAction = toolsMenu->addAction(QStringLiteral("&Memory Manager..."));
         memAction->setEnabled(false);
-        memAction->setToolTip(QStringLiteral("NYI — Phase X"));
         // R-R3-49: hidden until memories are built.
         UnbuiltFeatures::hideUnlessBuilt(memAction, UnbuiltFeature::Memories);
     }
     {
         QAction* catAction = toolsMenu->addAction(QStringLiteral("&CAT Control..."));
         catAction->setEnabled(false);
-        catAction->setToolTip(QStringLiteral("NYI — Phase 3K"));
         // R-R3-49: hidden until CAT is built.
         UnbuiltFeatures::hideUnlessBuilt(catAction, UnbuiltFeature::Cat);
     }
@@ -7977,7 +7962,6 @@ void MainWindow::buildMenuBar()
     {
         QAction* midiAction = toolsMenu->addAction(QStringLiteral("&MIDI Mapping..."));
         midiAction->setEnabled(false);
-        midiAction->setToolTip(QStringLiteral("NYI — Phase X"));
         // R-R3-49: hidden until MIDI control is built.
         UnbuiltFeatures::hideUnlessBuilt(midiAction, UnbuiltFeature::Midi);
     }
@@ -8046,20 +8030,17 @@ void MainWindow::buildMenuBar()
     {
         QAction* gettingStartedAction = helpMenu->addAction(QStringLiteral("&Getting Started"));
         gettingStartedAction->setEnabled(false);
-        gettingStartedAction->setToolTip(QStringLiteral("NYI — Phase X"));
         // R-R3-49: hidden until the help pages are built.
         UnbuiltFeatures::hideUnlessBuilt(gettingStartedAction, UnbuiltFeature::Help);
     }
     {
         QAction* helpAction = helpMenu->addAction(QStringLiteral("&NereusSDR Help"));
         helpAction->setEnabled(false);
-        helpAction->setToolTip(QStringLiteral("NYI — Phase X"));
         UnbuiltFeatures::hideUnlessBuilt(helpAction, UnbuiltFeature::Help);
     }
     {
         QAction* dataModesAction = helpMenu->addAction(QStringLiteral("Understanding &Data Modes"));
         dataModesAction->setEnabled(false);
-        dataModesAction->setToolTip(QStringLiteral("NYI — Phase X"));
         UnbuiltFeatures::hideUnlessBuilt(dataModesAction, UnbuiltFeature::Help);
     }
 
@@ -8281,7 +8262,7 @@ void MainWindow::buildStatusBar()
         painter.end();
         bandStackLabel->setPixmap(pm);
     }
-    bandStackLabel->setToolTip(QStringLiteral("Band Stack (NYI)"));
+    bandStackLabel->setToolTip(QStringLiteral("Band stack"));
     bandStackLabel->setCursor(Qt::PointingHandCursor);
     bandStackLabel->setObjectName(QStringLiteral("statusBandStackDots"));
 
@@ -8427,7 +8408,7 @@ void MainWindow::buildStatusBar()
     auto* cwxLabel = new QLabel(QStringLiteral("CWX"), barWidget);
     cwxLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: #404858; font-weight: bold; font-size: 11px; }"));
-    cwxLabel->setToolTip(QStringLiteral("CW Keyer (NYI)"));
+    cwxLabel->setToolTip(QStringLiteral("CW keyer"));
     cwxLabel->setCursor(Qt::PointingHandCursor);
     cwxLabel->setObjectName(QStringLiteral("statusCwxLabel"));
 
@@ -8435,7 +8416,7 @@ void MainWindow::buildStatusBar()
     auto* dvkLabel = new QLabel(QStringLiteral("DVK"), barWidget);
     dvkLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: #404858; font-weight: bold; font-size: 11px; }"));
-    dvkLabel->setToolTip(QStringLiteral("Digital Voice Keyer (NYI)"));
+    dvkLabel->setToolTip(QStringLiteral("Digital voice keyer"));
     dvkLabel->setCursor(Qt::PointingHandCursor);
     dvkLabel->setObjectName(QStringLiteral("statusDvkLabel"));
 
@@ -8443,7 +8424,7 @@ void MainWindow::buildStatusBar()
     auto* fdxLabel = new QLabel(QStringLiteral("FDX"), barWidget);
     fdxLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: #404858; font-weight: bold; font-size: 11px; }"));
-    fdxLabel->setToolTip(QStringLiteral("Full Duplex (NYI)"));
+    fdxLabel->setToolTip(QStringLiteral("Full duplex"));
     fdxLabel->setCursor(Qt::PointingHandCursor);
     fdxLabel->setObjectName(QStringLiteral("statusFdxLabel"));
     // R-R3-49: each of the three is hidden until its feature is built. The
