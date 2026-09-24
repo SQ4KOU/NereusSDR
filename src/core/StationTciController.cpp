@@ -8,6 +8,9 @@
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-24: R-R3-48 rework follow-up: the first listen failure logged
 // once. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: Lane B takes integration (R-IOS-01, R-R3-21): the blocked-port error
+// says the Core's address and the Core's TCI server. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include "core/StationTciController.h"
 
 #include "core/AppSettings.h"
@@ -81,16 +84,17 @@ QString StationTciController::blockedReason(quint16 port, const QList<QHostAddre
     }
     if (thisComputer && stationAddresses.isEmpty()) {
         return QStringLiteral("Another program on the Core's computer is using port %1, so "
-                              "apps there cannot reach the station's TCI server. The Core keeps "
+                              "apps there cannot reach the Core's TCI server. The Core keeps "
                               "trying.").arg(port);
     }
     if (!thisComputer) {
-        return QStringLiteral("Another program is using port %1 at the station address %2, so "
-                              "devices at the station cannot reach the station's TCI server. "
+        return QStringLiteral("Another program is using port %1 at the Core's address %2, so "
+                              "devices on the radio's network cannot reach the Core's TCI "
+                              "server. "
                               "The Core keeps trying.").arg(port).arg(stationAddresses.join(QStringLiteral(", ")));
     }
     return QStringLiteral("Another program is using port %1 on the Core's computer and at the "
-                          "station address %2, so the station's TCI server cannot start. The "
+                          "Core's address %2, so the Core's TCI server cannot start. The "
                           "Core keeps trying.").arg(port).arg(stationAddresses.join(QStringLiteral(", ")));
 }
 

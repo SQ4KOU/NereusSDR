@@ -104,6 +104,9 @@
 //   2026-09-24 - R-R3-46 / R-R3-21: radioHardwareVersion 4, the filter
 //                 policy request (setAlexBpfMode) and its plain reason.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Lane B takes integration (R-IOS-01, R-R3-21): a refusal
+//                with no reason says the Core refused it. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -3271,7 +3274,7 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         // is indistinguishable from the click having silently done
         // nothing, which is the shape of the defect this round closes.
         const QString reason = message.reason.isEmpty()
-            ? QStringLiteral("The station refused the request without giving a reason.")
+            ? QStringLiteral("The Core refused the request without giving a reason.")
             : message.reason;
         // requestSliceSampleRate is the one verb whose refusal already has
         // a slice-scoped signal locally (sliceRetuneRejected, which
@@ -3361,7 +3364,7 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         const QPointer<StationClient> self(this);
         const QString finishedReason = message.accepted ? QString()
             : message.reason.isEmpty()
-                ? QStringLiteral("The station refused the request without giving a reason.")
+                ? QStringLiteral("The Core refused the request without giving a reason.")
                 : message.reason;
         m_radioModel->reportStationCommandFinished(message.commandId, message.accepted,
                                                    finishedReason);

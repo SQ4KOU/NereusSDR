@@ -154,6 +154,10 @@
 //                                    change is applied to the Core's radio
 //                                    when it arrives. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Lane B takes integration (R-IOS-01,
+//                                    R-R3-21): the accessory settings and
+//                                    RF-Kit reset refusals in plain words.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1271,7 +1275,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
                     ? QStringLiteral("Update this app to reset the RF-Kit amplifier's error on "
                                      "this Core.")
-                    : QStringLiteral("Station accessory configuration is unavailable."), {}));
+                    : QStringLiteral("This Core cannot reset its RF-Kit amplifier's error."), {}));
             break;
         }
         if (message.commandVerb == "setStationTci"
@@ -1310,7 +1314,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
                     ? QStringLiteral("Update this app to change the Power Genius's own settings "
                                      "on this Core.")
-                    : QStringLiteral("Station accessory configuration is unavailable."), {}));
+                    : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
             break;
         }
         if (isTgxlDeviceSettingsVerb(message.commandVerb)
@@ -1321,7 +1325,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
                     ? QStringLiteral("Update this app to change the Tuner Genius's own settings "
                                      "on this Core.")
-                    : QStringLiteral("Station accessory configuration is unavailable."), {}));
+                    : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
             break;
         }
         if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")

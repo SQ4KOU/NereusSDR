@@ -12,6 +12,9 @@
 // settings reach the (fake) amp as the local page's own commands, with the
 // amp's answers and values published on AccessorySettingsModel. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: Lane B takes integration (R-IOS-01, R-R3-21): another amp off
+// the network leaves this one's plain not-found reason. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include "OperatorWording.h"
 #include <QPointer>
@@ -687,7 +690,9 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(model.amplifierModel()->connectionPhase(), Phase::Error, 6000);
         const QString error = model.amplifierModel()->connectionError();
         QVERIFY2(!error.contains(QStringLiteral("different network")), qPrintable(error));
-        QVERIFY(error.startsWith(QStringLiteral("No matching PGXL discovery announcement")));
+        QVERIFY2(error.startsWith(QStringLiteral("The Core did not find a Power Genius at this "
+                                                  "address")),
+                 qPrintable(error));
         QString reason;
         QVERIFY(model.disconnectPgxlForStation(&reason));
     }

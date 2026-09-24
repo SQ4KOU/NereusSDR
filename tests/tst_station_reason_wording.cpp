@@ -65,6 +65,11 @@
 //                                    its own is named with its source;
 //                                    forwarding sites; real minimums.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Lane B takes integration (R-IOS-01,
+//                                    R-R3-21): integration's accessory
+//                                    settings, filter policy, RF-Kit reset,
+//                                    off-network and TCI reason sites.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -590,6 +595,7 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("RfKitModel::readOnlyReason()"),
           QStringLiteral("StationTciModel::readOnlyReason()"),
           QStringLiteral("AccessoryDataModel::readOnlyReason()"),
+          QStringLiteral("AccessorySettingsModel::readOnlyReason()"),
           // Literals inserted into `refusals` in this file.
           QStringLiteral("refusals.value(update.name)"),
           // The attenuator and antenna facades' settle reasons, scanned below.
@@ -604,7 +610,11 @@ const QList<ReasonSource>& reasonSources()
           // A code windows compare, not a reason (section 17).
           QStringLiteral("m_displayBudgetReason")}},
         // command.result for every verb.
-        {"src/core/session/SessionCommandDispatcher.cpp", {}, {}, 30, {},
+        // The device's name ("Power Genius", "Tuner Genius") and what the
+        // request asked, both this file's own literals
+        // (handleAccessoryDeviceSettings).
+        {"src/core/session/SessionCommandDispatcher.cpp", {}, {}, 30,
+         {QStringLiteral("device"), QStringLiteral("what")},
          {// Out-parameters and results of the scanned model, facade and
           // allocator functions each verb calls (RadioModel, the PureSignal
           // facade, SliceModel, AlexAntennaFacade, DspAssetService,
@@ -616,7 +626,9 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("receiveOnly ? alex->setRxOnlyAntForBand(Band(band), antenna) : "
                          "alex->setRxAntForBand(Band(band), antenna)"),
           // A function of this file, its literal scanned here.
-          QStringLiteral("notRepresentableReason()")}},
+          QStringLiteral("notRepresentableReason()"),
+          // AlexAntennaFacade's filter policy refusal, scanned below.
+          QStringLiteral("alex->setBpfModeForChain(chain, mode)")}},
         // property.result for a write the mirror refuses.
         {"src/core/session/StateMirror.cpp", {}, {}, 5, {},
          {// A function of this file, and a model's applyMirroredValue
@@ -670,7 +682,11 @@ const QList<ReasonSource>& reasonSources()
         // Power in watts.
         {"src/core/StationAccessoryData.cpp", {}, {}, 4,
          {QStringLiteral("forwardW"), QStringLiteral("limitW")}},
-        {"src/core/StationTciController.cpp", {}, {}, 1},
+        // The port number and the Core's addresses (blockedReason).
+        {"src/core/StationTciController.cpp", {}, {}, 1,
+         {QStringLiteral("port"), QStringLiteral("stationAddresses.join(QStringLiteral(\", \"))")},
+         {// TciServer's own error text, kept for the Core's log line only.
+          QStringLiteral("error")}},
         // The SWR limit's range, one decimal.
         {"src/core/settings/SettingsProxyServer.cpp", {}, {}, 3,
          {QStringLiteral("kSwrProtectionLimitMin, 0, 'f', 1"),
@@ -702,6 +718,21 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("QString::fromLatin1(kRetireReasonSliceRemoved)")}},
         {"src/core/session/media/SpectrumEndpoint.h", {}, {}, 3},
         {"src/models/AccessoryDataModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
+        {"src/models/AccessorySettingsModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
+        // A Power Genius or Tuner Genius on another network: its
+        // connectionError, through the controllers' rejectIdentity. The
+        // device's name and its address.
+        {"src/core/StationNetwork.cpp", {QStringLiteral("offNetworkReason")}, {}, 1,
+         {QStringLiteral("deviceName, address")}},
+        // Reset amp error's refusal (resetRfKitError).
+        {"src/core/StationRfKitController.cpp", {QStringLiteral("resetError")}, {}, 1},
+        // The amp's and tuner's own settings: the refusals of their
+        // commands and the answers the `accessorySettings` object carries.
+        // The device's name ("Power Genius", "Tuner Genius").
+        {"src/core/StationDeviceSettings.cpp", {}, {}, 10,
+         {QStringLiteral("deviceName()"), QStringLiteral("device")},
+         {// validateNetwork's result, this file's own literals.
+          QStringLiteral("problem")}},
         {"src/models/AmplifierModel.cpp",
          {QStringLiteral("readOnlyReason"), QStringLiteral("receiveOnlyOperateReason")}, {}, 2},
         {"src/models/RfKitModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
@@ -719,7 +750,14 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("configurePgxlForStation"), QStringLiteral("disconnectPgxlForStation"),
           QStringLiteral("setPgxlConnectionSettingsForStation"),
           QStringLiteral("setRfKitEnabledForStation"), QStringLiteral("configureRfKitForStation"),
-          QStringLiteral("disconnectRfKitForStation"), QStringLiteral("setNnrDiagnosticMode"),
+          QStringLiteral("disconnectRfKitForStation"), QStringLiteral("resetRfKitErrorForStation"),
+          QStringLiteral("refuseNoStationDevice"), QStringLiteral("setPgxlNameForStation"),
+          QStringLiteral("setPgxlHardwareForStation"), QStringLiteral("setPgxlNetworkForStation"),
+          QStringLiteral("savePgxlSettingsForStation"),
+          QStringLiteral("readPgxlSettingsForStation"), QStringLiteral("setTgxlNameForStation"),
+          QStringLiteral("setTgxlNetworkForStation"),
+          QStringLiteral("saveTgxlSettingsForStation"),
+          QStringLiteral("readTgxlSettingsForStation"), QStringLiteral("setNnrDiagnosticMode"),
           QStringLiteral("applyNnrModelSelection"), QStringLiteral("addNotchFromStation"),
           QStringLiteral("moveNotchFromStation"), QStringLiteral("setNotchActiveFromStation"),
           QStringLiteral("deleteNotchFromStation"), QStringLiteral("requestIoBoardProbe"),
@@ -769,6 +807,14 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/TciServer.h", "operatorNoticeReason", "a remote window's own TCI notice"},
         {"src/models/RadioModel.cpp", "noStationReason",
          "a remote window's own notice when it has no link to the Core"},
+        {"src/models/RadioModel.cpp", "reportStationAccessoryRefusal",
+         "a remote window passes the Core's refusal on to its own pages"},
+        {"src/core/session/IStationLink.h", "pgxlDeviceSettingsUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/session/IStationLink.h", "tgxlDeviceSettingsUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/session/IStationLink.h", "filterPolicyUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
         {"src/models/RadioModel.h", "rxFilter0Reason",
          "the filter badge's status label (AlexController), not a refusal"},
         {"src/models/RadioModel.h", "rxFilter1Reason",
@@ -813,8 +859,14 @@ const QList<ReasonSource>& propertyTextSources()
           QStringLiteral("requestNnrDiagnostics"), QStringLiteral("restoreNnrSettings")},
          {}, 3},
         {"src/models/PureSignalSettings.cpp", {QStringLiteral("load")}, {}, 1},
-        // The station TCI server's error (StationTciModel error).
-        {"src/core/StationTciController.cpp", {}, {}, 1, {}, {}, true},
+        // The station TCI server's error (StationTciModel error), worded by
+        // blockedReason. The port number and the Core's addresses.
+        {"src/core/StationTciController.cpp", {}, {}, 1,
+         {QStringLiteral("port"), QStringLiteral("stationAddresses.join(QStringLiteral(\", \"))")},
+         {// TciServer's own error text, kept for the Core's log line only.
+          QStringLiteral("error")},
+         true},
+
         // The 4O3A listener's error (fourO3AListenerError).
         {"src/core/SmartSdrApiListener.cpp", {}, {}, 1, {}, {}, true},
         // The settings save error (settingsSaveError) and the receive

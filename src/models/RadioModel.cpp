@@ -166,6 +166,10 @@
 //                connect and on change (Thetis setup.cs:2195, 18024-18028
 //                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - Lane B takes integration (R-IOS-01, R-R3-21): the
+//                accessory settings and RF-Kit reset refusals in plain
+//                words. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3596,7 +3600,7 @@ void RadioModel::applyRemoteAccessorySetting(const QString& key)
 namespace {
 bool refuseNoStationDevice(QString* reason)
 {
-    if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+    if (reason) { *reason = QStringLiteral("This Core cannot change its amplifier and tuner settings."); }
     return false;
 }
 } // namespace
@@ -3951,7 +3955,7 @@ bool RadioModel::disconnectRfKitForStation(QString* reason)
 bool RadioModel::resetRfKitErrorForStation(QString* reason)
 {
     if (m_role != Role::Local || !m_stationRfKit) {
-        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        if (reason) { *reason = QStringLiteral("This Core cannot reset its RF-Kit amplifier's error."); }
         return false;
     }
     return m_stationRfKit->resetError(reason);

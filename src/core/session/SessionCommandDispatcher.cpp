@@ -91,6 +91,11 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47: resetRfKitError (the RF-Kit
 //                                    page's Reset amp error). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Lane B takes integration (R-IOS-01,
+//                                    R-R3-21): the filter policy request's
+//                                    unreadable-request reason in plain
+//                                    words.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -1635,7 +1640,7 @@ void SessionCommandDispatcher::handleSetAlexBpfMode(const SessionMessage& invoke
         || findIntArgument(invoke.arguments, "chain", &chain) != ArgumentStatus::Ok
         || findIntArgument(invoke.arguments, "mode", &mode) != ArgumentStatus::Ok) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("setAlexBpfMode requires chain and mode whole numbers"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
     AlexAntennaFacade* const alex = m_radioModel->alexAntennaFacade();
