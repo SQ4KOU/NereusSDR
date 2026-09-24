@@ -2134,6 +2134,15 @@ target_link_libraries(nereus-media-probe PRIVATE NereusCore)
 nereus_apply_warnings(nereus-media-probe)
 nereus_apply_warnings(nereus-audio-capture)
 
+# Digital-mode decode bench codec stage (R-R3-43, R-R3-23). Developer
+# measurement tool, kept out of routine builds and installs: runs audio files
+# through the Core's own Opus and L16 codec objects for
+# tools/digital-mode-opus-bench/run-bench.py.
+add_executable(nereus-opus-bench-codec EXCLUDE_FROM_ALL
+    tools/digital-mode-opus-bench/opus-bench-codec.cpp)
+target_link_libraries(nereus-opus-bench-codec PRIVATE NereusCore)
+nereus_apply_warnings(nereus-opus-bench-codec)
+
 # NNR model cost benchmark (R-R3-40). Developer measurement tools, kept out
 # of routine builds and installs. nereus-nnr-bench links wdsp_static as the
 # application does. nereus-nnr-bench-relaxed links its own copy of nnet.c
