@@ -83,6 +83,10 @@
 //   2026-09-24 - R-R3-49: the Network Watchdog setting applied where the
 //                radio is (setNetworkWatchdogEnabled / applyNetworkWatchdog).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-21: before a pool is sized, the slice-limit refusal
+//                names the Core only on a Core (NereusSDR in a window with
+//                no Core); stale slice-limit comments corrected.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3310,9 +3314,10 @@ signals:
     void widebandSpectrumReady(int adcIndex, QVector<float> dbmBins);
     void widebandSourceChanged(int adcIndex);
     void widebandSpectrumAvailable(int adcIndex, quint32 sourceGeneration);
-    // Phase 3F Sub-Epic C Task 7: emitted when addSliceOnPan rejects a
-    // request because the maxSlices() cap has been reached.  Status-bar /
-    // toast subscribers wire to this signal in Sub-Epic C Tasks 8-9.
+    // Phase 3F Sub-Epic C Task 7: emitted when addSliceOnPan or addSlice
+    // rejects a request because the slice limit (sliceChannelLimit()) has
+    // been reached; `reason` is sliceCapReason()'s words. MainWindow shows
+    // it as a toast.
     void sliceAddRejected(QString reason);
     /// R-R3-47 / R-R3-22: the Core refused a request for an accessory's own
     /// settings (`device` "pgxl" or "tgxl"); `reason` is the Core's words.
@@ -4229,9 +4234,10 @@ private:
                      const ReceiveSliceState* restoreSeed = nullptr);
 
     /// The operator's reason for a refused add at the slice cap:
-    /// "<radio> supports a maximum of <cap> slices" ("1 slice" for one), or
-    /// "The Core supports a maximum of ..." before a radio has sized the
-    /// stream pool. One wording for addSliceOnPan() and addSlice(), and so
+    /// "<radio> supports a maximum of <cap> slices" ("1 slice" for one), or,
+    /// before a radio has sized the stream pool, "The Core supports a
+    /// maximum of ..." on a Core and "NereusSDR supports a maximum of ..."
+    /// in a window with no Core. One wording for addSliceOnPan() and addSlice(), and so
     /// for the session verbs that relay them (Phase 3F design section 3).
     QString sliceCapReason(int cap) const;
 

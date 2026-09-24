@@ -170,6 +170,10 @@
 //                accessory settings and RF-Kit reset refusals in plain
 //                words. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-24 - R-R3-21: before a pool is sized, the slice-limit refusal
+//                names the Core only on a Core (NereusSDR in a window with
+//                no Core); stale slice-limit comments corrected.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -7195,10 +7199,15 @@ QString RadioModel::sliceCapReason(int cap) const
 {
     // Fix wave 1, I1: plain and grammatical for any count.
     const QString slices = cap == 1 ? tr("1 slice") : tr("%1 slices").arg(cap);
-    // Before a radio has sized the stream pool the ceiling is the Core's
-    // own (sliceChannelLimit), so the Core is named, not a radio.
+    // Before a radio has sized the stream pool the ceiling is this
+    // computer's own (sliceChannelLimit), so no radio is named: the Core on
+    // a Core (and in a remote window, whose Core decides), NereusSDR in a
+    // window with no Core (R-R3-21). Only a Core has the station listener
+    // rule (DaemonApp sets it).
     if (m_streamAllocator.streamCount() <= 0) {
-        return tr("The Core supports a maximum of %1").arg(slices);
+        const bool core = m_role == Role::Remote || m_stationBind.has_value();
+        return core ? tr("The Core supports a maximum of %1").arg(slices)
+                    : tr("NereusSDR supports a maximum of %1").arg(slices);
     }
     // RadioInfo.name carries the friendly product label (e.g. "ANAN-G2");
     // fall back to a generic phrase when it has none.
@@ -18059,7 +18068,7 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     rxChannelIds.erase(std::unique(rxChannelIds.begin(), rxChannelIds.end()),
                        rxChannelIds.end());
 
-    // ── Step 1: Stop every RX channel, draining channel 0 last ────────────
+    // ── Step 1: Stop every running RX channel, the lowest last, drained ──
     // Upstream switches off every receiver channel, the sub-receivers with
     // no drain and the main channel last with a drain, while data is still
     // flowing so each one slews down and flushes:

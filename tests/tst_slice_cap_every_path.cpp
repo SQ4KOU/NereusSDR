@@ -25,6 +25,9 @@
 // to the same ceiling and words as addSlice, before and after connect, and
 // the limit is worded "1 slice" or "N slices".
 //
+// Task 9 (R-R3-21): before a pool is sized, the refusal names the Core on a
+// Core and NereusSDR in a window with no Core.
+//
 // Covers: a local addSlice() at the cap returns -1, creates nothing and
 // emits the cap message; the session verb at the cap is refused with the
 // same plain reason and the Core creates nothing, both against a sized
@@ -303,8 +306,10 @@ private slots:
 
     void neverConnectedWindowAddsFiveSlicesWithPlusRxAndIsRefusedTheSixth()
     {
-        // Fix wave 1, I1: a window with no radio yet takes the Core's own
+        // Fix wave 1, I1: a window with no radio yet takes the absolute
         // ceiling on its +RX path, not maxSlices()'s disconnected 1.
+        // Task 9: a window with no Core names NereusSDR, not a Core it
+        // does not have.
         RadioModel model; // no radio has ever connected: no stream pool
         QCOMPARE(WdspEngine::kMaxSliceChannels, 5);
         QSignalSpy rejected(&model, &RadioModel::sliceAddRejected);
@@ -317,7 +322,7 @@ private slots:
         model.addSliceOnPan(QStringLiteral("pan-0"));
         QCOMPARE(rejected.count(), 1);
         const QString reason = rejected.at(0).at(0).toString();
-        QCOMPARE(reason, QStringLiteral("The Core supports a maximum of 5 slices"));
+        QCOMPARE(reason, QStringLiteral("NereusSDR supports a maximum of 5 slices"));
         QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
         QCOMPARE(model.slices().size(), 5);
         QVERIFY(model.sliceById(5) == nullptr);
@@ -326,6 +331,9 @@ private slots:
     void neverConnectedCoreRefusesTheSixthSessionAddSliceOnPan()
     {
         RadioModel model; // no radio has ever connected: no stream pool
+        // A Core's model, as DaemonApp sets it up: the station listener
+        // rule is what only a Core has.
+        model.setStationBind(QString());
         QCOMPARE(WdspEngine::kMaxSliceChannels, 5);
         DispatchHarness harness(&model);
 

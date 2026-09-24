@@ -5541,11 +5541,6 @@ void MainWindow::buildUI()
         });
     }
 
-    // Phase 3F Sub-Epic C Task 8: toast on slice-add rejection.
-    // RadioModel::addSliceOnPan() emits sliceAddRejected(reason) when the
-    // SKU cap blocks a +RX click (e.g. "Hermes Lite 2 supports a maximum
-    // of 1 slices"). Surface that for 4 seconds so the operator sees why
-    // the click did nothing.
     connect(m_radioModel, &RadioModel::settingsSaveErrorChanged, this,
             [this](const QString& reason) {
         if (!reason.isEmpty()) {
@@ -5555,6 +5550,11 @@ void MainWindow::buildUI()
             showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Error, 10000);
         }
     });
+    // Phase 3F Sub-Epic C Task 8: toast on slice-add rejection.
+    // RadioModel::addSliceOnPan() and addSlice() emit sliceAddRejected(reason)
+    // when the slice limit blocks a +RX click (e.g. "Hermes Lite 2 supports
+    // a maximum of 1 slice"). Surface that for 4 seconds so the operator
+    // sees why the click did nothing.
     connect(m_radioModel, &RadioModel::sliceAddRejected, this,
             [this](const QString& reason) {
         // A remote window's refusal is the Core's text; shown in user words.
