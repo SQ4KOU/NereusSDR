@@ -220,6 +220,7 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-47 | Station accessories (Power Genius XL, Tuner Genius XL, RF-Kit RF2K-S) connect to the Core only. The Core checks each device's identity before admitting it, keeps it connected, follows the band, records its faults, and relays status, meters and faults to every client; clients change connection settings and the interlock policy through documented, versioned session commands, so the desktop remote window and the iPhone app are thin clients of one API. Transmit-coupled accessory actions wait for remote transmit. |
 | R-R3-48 | The Core serves TCI on the station network for station devices such as the RF-Kit, switched by the same TCI switch and port as the app and remembered on the Core; transmit requests over it are refused until remote transmit. |
 | R-R3-49 | Every control a user can see does what its label says. A control whose feature is not built yet is hidden in local and remote windows through one list that names each unbuilt feature, and appears when its feature is built. Controls the operator chose to remove are gone; values users saved for them stay in the settings file. |
+| R-R3-50 | Every library compiled into or shipped with a NereusSDR desktop package or a Core package has its licence text and a row in `packaging/third-party-licenses/README.md`, and CI fails when a vendored or fetched library has none. |
 
 The September 21 user request explicitly adds banner telemetry restoration and
 the current Aether telemetry graph port. Upstream was fetched from
