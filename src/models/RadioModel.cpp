@@ -7171,9 +7171,7 @@ int RadioModel::addSlice(const QString& initialPanId)
     // when it connects (closeSlicesPastChannelLimit, bindReceiveLayoutSlices).
     const int sliceCap = sliceChannelLimit();
     if (m_slices.size() >= sliceCap) {
-        emit sliceAddRejected(m_streamAllocator.streamCount() > 0
-            ? sliceCapReason(sliceCap)
-            : QStringLiteral("The Core supports a maximum of %1 slices").arg(sliceCap));
+        emit sliceAddRejected(sliceCapReason(sliceCap));
         return -1;
     }
 
@@ -7187,12 +7185,19 @@ int RadioModel::addSlice(const QString& initialPanId)
 
 QString RadioModel::sliceCapReason(int cap) const
 {
+    // Fix wave 1, I1: plain and grammatical for any count.
+    const QString slices = cap == 1 ? tr("1 slice") : tr("%1 slices").arg(cap);
+    // Before a radio has sized the stream pool the ceiling is the Core's
+    // own (sliceChannelLimit), so the Core is named, not a radio.
+    if (m_streamAllocator.streamCount() <= 0) {
+        return tr("The Core supports a maximum of %1").arg(slices);
+    }
     // RadioInfo.name carries the friendly product label (e.g. "ANAN-G2");
-    // fall back to a generic phrase when disconnected.
+    // fall back to a generic phrase when it has none.
     const QString radioLabel = m_lastRadioInfo.name.isEmpty()
-                                   ? QStringLiteral("This radio")
+                                   ? tr("This radio")
                                    : m_lastRadioInfo.name;
-    return QStringLiteral("%1 supports a maximum of %2 slices").arg(radioLabel).arg(cap);
+    return tr("%1 supports a maximum of %2").arg(radioLabel, slices);
 }
 
 int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
@@ -7828,7 +7833,7 @@ void RadioModel::addSliceOnPan(const QString& panId)
     // addendum section 6.1: "routes pan-affecting creation through
     // addSliceOnPan".
     //
-    // Ahead of the maxSlices() cap check below, on purpose. On a remote
+    // Ahead of the slice cap check below, on purpose. On a remote
     // client that cap is the STATION's to enforce, and reading it here
     // before the handshake has landed a capability descriptor gives the
     // disconnected default of 1, so a local check would refuse every
@@ -7846,10 +7851,13 @@ void RadioModel::addSliceOnPan(const QString& panId)
         return;
     }
 
-    if (m_slices.size() >= maxSlices()) {
-        // Surface a human-readable cap reason for the status-bar / toast
-        // wiring landing in Sub-Epic C Tasks 8-9.
-        emit sliceAddRejected(sliceCapReason(maxSlices()));
+    // Fix wave 1, I1 (Phase 3F design section 3, R-R3-21, R-R3-27): the same
+    // ceiling and words as addSlice(). maxSlices() reads 1 until the radio
+    // connects, so a window's +RX was refused at one slice before connect
+    // while the session verb addSlice allowed the Core's own ceiling.
+    const int sliceCap = sliceChannelLimit();
+    if (m_slices.size() >= sliceCap) {
+        emit sliceAddRejected(sliceCapReason(sliceCap));
         return;
     }
 

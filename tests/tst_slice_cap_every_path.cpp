@@ -21,6 +21,10 @@
 // through the same receive-layout toast (ReceiveLayoutNotices) a remote
 // window uses.
 //
+// Fix wave 1, I1: addSliceOnPan, the verb every window's +RX sends, is held
+// to the same ceiling and words as addSlice, before and after connect, and
+// the limit is worded "1 slice" or "N slices".
+//
 // Covers: a local addSlice() at the cap returns -1, creates nothing and
 // emits the cap message; the session verb at the cap is refused with the
 // same plain reason and the Core creates nothing, both against a sized
@@ -103,6 +107,13 @@ public:
     {
         link.sendFromClient(SessionMessages::encode(SessionMessages::commandInvoke(
             "addSlice", commandId, { strArg("initialPanId", QStringLiteral("pan-0")) })));
+    }
+
+    // The verb every window's +RX sends (MainWindow -> addSliceOnPan).
+    void invokeAddSliceOnPan(quint32 commandId, const QString& panId = QStringLiteral("pan-0"))
+    {
+        link.sendFromClient(SessionMessages::encode(SessionMessages::commandInvoke(
+            "addSliceOnPan", commandId, { strArg("panId", panId) })));
     }
 
     LoopbackStationLink link;
@@ -238,14 +249,38 @@ private slots:
 
     void addSliceOnPanAndAddSliceShareTheCapWording()
     {
-        // Disconnected, addSliceOnPan's cap is maxSlices() == 1.
+        // Fix wave 1, I1: addSliceOnPan (every window's +RX) is held to the
+        // same ceiling as addSlice, with the same words.
         RadioModel model;
+        model.configureStreamPool(/*userDdcCount*/ 5, /*maxSlices*/ 2, 192000);
         QSignalSpy rejected(&model, &RadioModel::sliceAddRejected);
         model.addSliceOnPan(QStringLiteral("pan-0"));
-        model.addSliceOnPan(QStringLiteral("pan-1"));
+        model.addSliceOnPan(QStringLiteral("pan-0"));
+        QCOMPARE(rejected.count(), 0);
+        QCOMPARE(model.slices().size(), 2);
+
+        model.addSliceOnPan(QStringLiteral("pan-0"));
+        QCOMPARE(model.addSlice(QStringLiteral("pan-0")), -1);
+        QCOMPARE(model.slices().size(), 2);
+        QCOMPARE(rejected.count(), 2);
+        const QString reason = QStringLiteral("This radio supports a maximum of 2 slices");
+        QCOMPARE(rejected.at(0).at(0).toString(), reason);
+        QCOMPARE(rejected.at(1).at(0).toString(), reason);
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+    }
+
+    void aOneSliceLimitIsWordedInTheSingular()
+    {
+        RadioModel model;
+        model.configureStreamPool(/*userDdcCount*/ 1, /*maxSlices*/ 1, 192000);
+        QSignalSpy rejected(&model, &RadioModel::sliceAddRejected);
+        model.addSliceOnPan(QStringLiteral("pan-0"));
+        QCOMPARE(rejected.count(), 0);
+        model.addSliceOnPan(QStringLiteral("pan-0"));
         QCOMPARE(rejected.count(), 1);
-        QCOMPARE(rejected.at(0).at(0).toString(),
-                 QStringLiteral("This radio supports a maximum of 1 slices"));
+        const QString reason = rejected.at(0).at(0).toString();
+        QCOMPARE(reason, QStringLiteral("This radio supports a maximum of 1 slice"));
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
     }
 
     void remoteWindowReproducesStationSlicesPastItsOwnCount()
@@ -266,21 +301,43 @@ private slots:
 
     // ── Before the first radio connect (R-R3-27) ─────────────────────────
 
-    void neverConnectedCoreRefusesTheSixthSessionAddSlice()
+    void neverConnectedWindowAddsFiveSlicesWithPlusRxAndIsRefusedTheSixth()
+    {
+        // Fix wave 1, I1: a window with no radio yet takes the Core's own
+        // ceiling on its +RX path, not maxSlices()'s disconnected 1.
+        RadioModel model; // no radio has ever connected: no stream pool
+        QCOMPARE(WdspEngine::kMaxSliceChannels, 5);
+        QSignalSpy rejected(&model, &RadioModel::sliceAddRejected);
+        for (int i = 0; i < 5; ++i) {
+            model.addSliceOnPan(QStringLiteral("pan-0"));
+        }
+        QCOMPARE(rejected.count(), 0);
+        QCOMPARE(model.slices().size(), 5);
+
+        model.addSliceOnPan(QStringLiteral("pan-0"));
+        QCOMPARE(rejected.count(), 1);
+        const QString reason = rejected.at(0).at(0).toString();
+        QCOMPARE(reason, QStringLiteral("The Core supports a maximum of 5 slices"));
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        QCOMPARE(model.slices().size(), 5);
+        QVERIFY(model.sliceById(5) == nullptr);
+    }
+
+    void neverConnectedCoreRefusesTheSixthSessionAddSliceOnPan()
     {
         RadioModel model; // no radio has ever connected: no stream pool
         QCOMPARE(WdspEngine::kMaxSliceChannels, 5);
         DispatchHarness harness(&model);
 
         for (quint32 id = 1; id <= 5; ++id) {
-            harness.invokeAddSlice(id);
+            harness.invokeAddSliceOnPan(id);
             QCOMPARE(harness.results.size(), qsizetype(id));
             QVERIFY2(harness.results.last().accepted,
                      qPrintable(harness.results.last().reason));
         }
         QCOMPARE(model.slices().size(), 5);
 
-        harness.invokeAddSlice(6);
+        harness.invokeAddSliceOnPan(6);
         QCOMPARE(harness.results.size(), 6);
         const SessionMessage& refused = harness.results.last();
         QVERIFY(!refused.accepted);
@@ -289,6 +346,13 @@ private slots:
         QVERIFY(refused.affectedKeys.isEmpty());
         QCOMPARE(model.slices().size(), 5);
         QVERIFY(model.sliceById(5) == nullptr);
+
+        // The addSlice verb is held to the same ceiling, in the same words.
+        harness.invokeAddSlice(7);
+        QCOMPARE(harness.results.size(), 7);
+        QVERIFY(!harness.results.last().accepted);
+        QCOMPARE(harness.results.last().reason, refused.reason);
+        QCOMPARE(model.slices().size(), 5);
     }
 
     // ── A smaller board connects (R-R3-34) ───────────────────────────────
@@ -333,7 +397,7 @@ private slots:
 
         DispatchHarness harness(model);
         for (quint32 id = 1; id <= 3; ++id) {
-            harness.invokeAddSlice(id);
+            harness.invokeAddSliceOnPan(id);
             QVERIFY2(harness.results.last().accepted,
                      qPrintable(harness.results.last().reason));
         }

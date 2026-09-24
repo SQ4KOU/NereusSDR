@@ -437,7 +437,10 @@ private slots:
 
     void addSliceOnPanCommandCreatesOrRelaysCapRejection()
     {
-        RadioModel model; // disconnected: maxSlices() == 1
+        RadioModel model;
+        // A stream pool sized for one slice: the cap addSliceOnPan holds
+        // to (sliceChannelLimit()).
+        model.configureStreamPool(/*userDdcCount*/ 5, /*maxSlices*/ 1, 192000);
         DispatchHarness harness(&model);
 
         harness.invoke("addSliceOnPan", 1, { strArg("panId", QStringLiteral("pan-a")) });
