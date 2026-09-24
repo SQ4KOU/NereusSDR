@@ -40,6 +40,10 @@
 //                                    so a remote window leaves the route to
 //                                    the Core. AI-assisted implementation via
 //                                    Anthropic Claude Code. NereusSDR-original.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-IOS-01: activeWriteReason(), the
+//                                    refusal of a write to `active` in plain
+//                                    operator words. AI-assisted via
+//                                    Anthropic Claude Code. NereusSDR-original.
 // =================================================================
 
 //=================================================================
@@ -709,6 +713,11 @@ void SliceModel::setStationAutoAgcNoiseFloor(double dbm, bool valid, quint64 gen
 // owner to go through instead. signalStrengthDbm (Task 12) is the one
 // exception: there is no other owner to name, because on a Role::Remote
 // model the mirror's inbound apply IS the value's sole legitimate writer.
+QString SliceModel::activeWriteReason()
+{
+    return QStringLiteral("To make a slice active, select it; this cannot be set directly.");
+}
+
 QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVariant& value)
 {
     if (propertyName == "signalStrengthDbm") {
@@ -761,10 +770,9 @@ QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVa
         // SessionCommandDispatcher's setActiveSliceById verb is the real,
         // reachable path; name that instead, the same way StateMirror.cpp's
         // kVerbHints table names requestSliceSampleRate for sampleRateHz.
-        return QStringLiteral(
-            "active is exclusive across a pan's slices and arbitrated by "
-            "RadioModel::setActiveSliceById(); use the setActiveSliceById "
-            "command verb instead of writing this property directly");
+        // R-IOS-01: in operator words; the way in is the setActiveSliceById
+        // command, which is what selecting a slice sends.
+        return activeWriteReason();
     }
     if (propertyName == "txSlice") {
         return QStringLiteral(

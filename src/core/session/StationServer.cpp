@@ -111,6 +111,10 @@
 //                                    in plain words before anything is
 //                                    applied. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-IOS-01: a write to a slice's
+//                                    `active` is refused with
+//                                    SliceModel::activeWriteReason().
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1548,7 +1552,11 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         }
         if (!outboundClass.isEmpty()
             && !MirrorPolicy::inboundAllowed(outboundClass, update.name)) {
-            refusals.insert(update.name, QString::fromLatin1(kOutboundWriteReason));
+            // `active` has a way in of its own: selecting the slice.
+            refusals.insert(update.name,
+                            outboundClass == "SliceModel" && update.name == "active"
+                                ? SliceModel::activeWriteReason()
+                                : QString::fromLatin1(kOutboundWriteReason));
             continue;
         }
         const MirrorApplyResult result = m_mirror->applyInbound(message.objectKey, update.name, update.value);

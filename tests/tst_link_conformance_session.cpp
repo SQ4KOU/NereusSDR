@@ -67,8 +67,10 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationServer.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include "LinkFixtures.h"
+#include "OperatorWording.h"
 #include "fakes/ConnectableRadioModel.h"
 #include "fakes/LoopbackTransport.h"
 
@@ -240,6 +242,7 @@ private slots:
     void sessionFixtures_data();
     void sessionFixtures();
     void everyVerbIsInvokedRightAndWrong();
+    void refusalsOfOutboundWritesArePlain();
     void alteredFixturesFailReadably();
 
 private:
@@ -384,6 +387,42 @@ void TstLinkConformanceSession::everyVerbIsInvokedRightAndWrong()
                      qPrintable(verb + QStringLiteral(" is never invoked with a wrong name")));
         }
     }
+}
+
+void TstLinkConformanceSession::refusalsOfOutboundWritesArePlain()
+{
+    // The property-write fixture pins the station's two refusals of an
+    // outbound write, and an operator may read both.
+    const QJsonObject o = fixture(QStringLiteral("session-property-write"));
+    QVERIFY(!o.isEmpty());
+    QSet<QString> reasons;
+    for (const QJsonValue& step : o.value(QStringLiteral("steps")).toArray()) {
+        const QJsonObject message = step.toObject().value(QStringLiteral("message")).toObject();
+        if (message.value(QStringLiteral("type")).toString() != QStringLiteral("property.result")) {
+            continue;
+        }
+        for (const QJsonValue& result : message.value(QStringLiteral("results")).toArray()) {
+            const QJsonObject r = result.toObject();
+            const QString property = r.value(QStringLiteral("property")).toString();
+            if (property == QStringLiteral("active")
+                || property == QStringLiteral("signalStrengthDbm")) {
+                reasons.insert(property + QLatin1Char('=')
+                               + r.value(QStringLiteral("reason")).toString());
+            }
+        }
+    }
+    const QString active = SliceModel::activeWriteReason();
+    QVERIFY2(reasons.contains(QStringLiteral("active=") + active), qPrintable(active));
+    QVERIFY2(OperatorWording::isPlain(active), qPrintable(active));
+    bool signal = false;
+    for (const QString& entry : reasons) {
+        if (entry.startsWith(QStringLiteral("signalStrengthDbm="))) {
+            signal = true;
+            const QString reason = entry.section(QLatin1Char('='), 1);
+            QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        }
+    }
+    QVERIFY(signal);
 }
 
 void TstLinkConformanceSession::alteredFixturesFailReadably()
