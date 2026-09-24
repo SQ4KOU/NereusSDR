@@ -96,6 +96,12 @@ goes.
 | spot-auto-bg | Spot display automatic background colour | Remove |
 | tci-extras | TCI rate limit, CW to CWU, TX channel, sensor intervals, the three RX2 VFO options, stream channels | Hide; after R4 |
 | tci-sliceb | TCI Slice B rate | Remove |
+| small-filter | Setup > Appearance small filter display on the VFO flag (the flag stores the setting but draws nothing with it) | Hide |
+| apf-params | Setup > DSP > CW peak filter bandwidth and gain (no setting behind them; the peak filter's on and off works) | Hide; after R4 |
+| am-tail | Setup > DSP > AM/SAM maximum squelch tail | Hide; after R4 |
+| fm-dev | Setup > DSP > FM deviation and de-emphasis | Hide; after R4 |
+| mic-acc | Phone/CW applet microphone source: the ACC item | Hide (with acc) |
+| dxcc-colour | DXCC spot colouring: the country table loads, but nothing switches the colouring on and no log import exists | After R4 (nothing visible claims it today) |
 
 ## Global Constraints
 
@@ -259,7 +265,8 @@ in a remote window as today), Mute (`SliceModel::setMuted`), BIN
 `AudioEngine::setVaxEnabled` for channels 1 and 2). These are hidden (through Task 1's
 list, never written into the saved visibility): RX2, SUB RX and Pan Swap (they belong to
 Thetis's RX1/RX2 structure), DUP (full duplex), Play and Rec (voice keyer), xPA (external
-PA), AVG (built after R4 with the display work), and the eleven display modes. The macro
+PA), AVG (built after R4 with the display work), Var1, Var2, Rx/Tx and XVTR (no setting behind
+them; XVTR goes with the transverters), and the eleven display modes. The macro
 buttons stay hidden (built after R4).
 
 **Acceptance:**
