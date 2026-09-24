@@ -1415,6 +1415,7 @@ set(GUI_SOURCES
     src/gui/ColorSwatchButton.cpp
     src/gui/SpectrumOverlayPanel.cpp
     src/gui/SetupDialog.cpp
+    src/gui/UnbuiltFeatures.cpp
     src/gui/SetupPage.cpp
     src/gui/setup/GeneralSetupPages.cpp
     src/gui/setup/GeneralOptionsPage.cpp

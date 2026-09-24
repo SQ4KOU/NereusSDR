@@ -6976,6 +6976,11 @@ target_compile_definitions(tst_controls_connected PRIVATE NEREUS_BUILD_TESTS)
 # filter / AM and FM squelch, Meter Styles S-meter, Logs, VAX level.
 nereus_add_test(tst_setup_controls_connected)
 target_compile_definitions(tst_setup_controls_connected PRIVATE NEREUS_BUILD_TESTS)
+# R3 unfinished controls, Task 1 (R-R3-49, R-R3-21): the one list of
+# unbuilt features, every surface hidden through it in local and remote
+# windows, saved values kept, a saved Voice Rec/Play control kept.
+nereus_add_test(tst_unbuilt_features)
+target_compile_definitions(tst_unbuilt_features PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_connection_selector)
 nereus_add_test(tst_station_lan_cache)
 nereus_add_test(tst_station_lan_transport)

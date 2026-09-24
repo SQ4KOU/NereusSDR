@@ -41,6 +41,11 @@
 //                                    are ignored. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49: the Core page floor drops by
+//                                    the three leaves not registered while
+//                                    their features are not built.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -885,7 +890,10 @@ private slots:
             QVERIFY2(!page->isEnabled(), qPrintable((*it)->text(0)));
             ++corePages;
         }
-        QVERIFY(corePages >= 25);
+        // R-R3-49: three Core leaves are not registered while their
+        // features are not built (TX Profiles, Signal Generator, Hardware
+        // Tests).
+        QVERIFY(corePages >= 22);
         QCOMPARE(writes.size(), 0);
         QCOMPARE(removes.size(), 0);
         const QSet<QString> held = h.proxy().droppedWhileOffline() - heldBefore;

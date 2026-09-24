@@ -20,6 +20,7 @@
 #include "gui/HGauge.h"
 #include "core/session/IStationLink.h"
 #include "gui/StyleConstants.h"
+#include "gui/UnbuiltFeatures.h"
 #include "models/RadioModel.h"
 #include "models/RfKitModel.h"
 
@@ -188,6 +189,9 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
     actionRow->addWidget(m_tuneBtn,   2);
     actionRow->addWidget(m_bypassBtn, 1);
     tunerLay->addLayout(actionRow);
+    // R-R3-49: hidden until tuning and bypass from NereusSDR are built.
+    UnbuiltFeatures::hideUnlessBuilt(m_tuneBtn, UnbuiltFeature::RfkitTune);
+    UnbuiltFeatures::hideUnlessBuilt(m_bypassBtn, UnbuiltFeature::RfkitTune);
 
     root->addWidget(tunerWrap);
 

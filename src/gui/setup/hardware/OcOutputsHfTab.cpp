@@ -24,6 +24,10 @@
 //   2026-09-24 - R-R3-46: "Allow hot switching" follows the transmit
 //                permission. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-24 - R-R3-49: hot switching, USB BCD output and External PA
+//                 control are hidden until they are applied
+//                 (UnbuiltFeatures).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -66,6 +70,7 @@
 
 #include "OcOutputsHfTab.h"
 #include "HardwareTransmitGate.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include "core/AppSettings.h"
 #include "core/OcMatrix.h"
@@ -151,7 +156,10 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
 
         m_allowHotSwitching = new QCheckBox(tr("Allow hot switching"), this);
         m_allowHotSwitching->setToolTip(tr("Allow OC output lines to switch while transmitting"));
+        m_allowHotSwitching->setObjectName(QStringLiteral("ocAllowHotSwitching"));
         row->addWidget(m_allowHotSwitching);
+        // R-R3-49: saved but not applied; hidden until it is.
+        UnbuiltFeatures::hideUnlessBuilt(m_allowHotSwitching, UnbuiltFeature::OcExtras);
         // R-R3-46: OC lines switching while transmitting is a transmit setting.
         m_transmitWidgets.append(m_allowHotSwitching);
 
@@ -256,6 +264,9 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
         // Source: Thetis setup.designer.cs grpUSBBCD [@501e3f5]
         {
             auto* bcdGroup = new QGroupBox(tr("USB BCD output"), this);
+            bcdGroup->setObjectName(QStringLiteral("ocUsbBcdGroup"));
+            // R-R3-49: saved but not applied; hidden until it is.
+            UnbuiltFeatures::hideUnlessBuilt(bcdGroup, UnbuiltFeature::OcExtras);
             auto* bcdLayout = new QVBoxLayout(bcdGroup);
 
             m_usbBcdEnabled = new QCheckBox(tr("Enable BCD"), bcdGroup);
@@ -302,6 +313,9 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
         // Source: Thetis setup.designer.cs grpExtPAControlHF [@501e3f5]
         {
             auto* paGroup = new QGroupBox(tr("External PA control"), this);
+            paGroup->setObjectName(QStringLiteral("ocExternalPaGroup"));
+            // R-R3-49: saved but not applied; hidden until it is.
+            UnbuiltFeatures::hideUnlessBuilt(paGroup, UnbuiltFeature::OcExtras);
             auto* paLayout = new QVBoxLayout(paGroup);
 
             auto* modelRow = new QHBoxLayout();

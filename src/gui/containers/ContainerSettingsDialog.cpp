@@ -11,6 +11,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-49: the Voice Rec/Play control is not offered or
+//                 listed until the voice recorder is built; one already in a
+//                 container is kept. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -162,6 +166,7 @@ mw0lge@grange-lane.co.uk
 #include "../meters/TuneStepButtonItem.h"
 #include "../meters/OtherButtonItem.h"
 #include "../meters/VoiceRecordPlayItem.h"
+#include "../UnbuiltFeatures.h"
 #include "../meters/DiscordButtonItem.h"
 #include "../meters/VfoDisplayItem.h"
 #include "../meters/ClockItem.h"
@@ -1146,7 +1151,11 @@ void ContainerSettingsDialog::onAddItem()
     controlsMenu->addAction(QStringLiteral("Antenna Buttons"),   this, [this]{ addNewItem(QStringLiteral("ANTENNABTNS")); });
     controlsMenu->addAction(QStringLiteral("Tune Step Buttons"), this, [this]{ addNewItem(QStringLiteral("TUNESTEPBTNS")); });
     controlsMenu->addAction(QStringLiteral("Other Buttons"),     this, [this]{ addNewItem(QStringLiteral("OTHERBTNS")); });
-    controlsMenu->addAction(QStringLiteral("Voice Rec/Play"),    this, [this]{ addNewItem(QStringLiteral("VOICERECPLAY")); });
+    QAction* voiceAction =
+        controlsMenu->addAction(QStringLiteral("Voice Rec/Play"), this,
+                                [this]{ addNewItem(QStringLiteral("VOICERECPLAY")); });
+    // R-R3-49: not offered until the voice recorder is built.
+    UnbuiltFeatures::hideUnlessBuilt(voiceAction, UnbuiltFeature::Voice);
     controlsMenu->addAction(QStringLiteral("VFO Display"),       this, [this]{ addNewItem(QStringLiteral("VFO")); });
     controlsMenu->addAction(QStringLiteral("Discord Buttons"),   this, [this]{ addNewItem(QStringLiteral("DISCORDBTNS")); });
 
@@ -1587,6 +1596,11 @@ void ContainerSettingsDialog::refreshItemList()
             label += QStringLiteral(" [id:%1]").arg(bindingId);
         }
         m_itemList->addItem(label);
+        // R-R3-49: an item whose feature is not built yet stays in the
+        // container (and is saved with it) but is not listed.
+        if (!MeterWidget::itemFeatureBuilt(item)) {
+            m_itemList->item(m_itemList->count() - 1)->setHidden(true);
+        }
     }
 }
 

@@ -8,6 +8,7 @@
 #include "gui/StyleConstants.h"
 #include "gui/LanScanDialog.h"
 #include "gui/OperatorReasonText.h"
+#include "gui/UnbuiltFeatures.h"
 #include "core/AppSettings.h"
 // Remote-daemon R2 Task 20: RemoteStationPage validates its URL field with
 // the same rule src/main.cpp applies to --station, so a value the field
@@ -272,6 +273,8 @@ void CatTciServerPage::buildServerGroup()
         AppSettings::instance().setValue(QStringLiteral("TciRateLimitMsgsPerSec"), v);
     });
     form->addRow(tr("Rate limit:"), m_rateLimitSpin);
+    // R-R3-49: nothing applies the rate limit yet; hidden until it does.
+    UnbuiltFeatures::hideUnlessBuilt(m_rateLimitSpin, UnbuiltFeature::TciExtras);
 
     // Show Log button — Phase 3J-1 closeout Item 2 (2026-05-12) wires the
     // click through SetupDialog up to MainWindow, which owns the lazy-
@@ -382,6 +385,7 @@ void CatTciServerPage::buildCompatibilityGroup()
                                           on ? QStringLiteral("True") : QStringLiteral("False"));
     });
     form->addRow(QString(), m_cwBecomesCwuCheck);
+    UnbuiltFeatures::hideUnlessBuilt(m_cwBecomesCwuCheck, UnbuiltFeature::TciExtras);
 
     contentLayout()->addWidget(group);
 }
@@ -486,6 +490,7 @@ void CatTciServerPage::buildAudioStreamGroup()
         AppSettings::instance().setValue(QStringLiteral("TciTxChannel"), text);
     });
     form->addRow(tr("TX channel:"), m_txChannelCombo);
+    UnbuiltFeatures::hideUnlessBuilt(m_txChannelCombo, UnbuiltFeature::TciExtras);
 
     contentLayout()->addWidget(group);
 }
@@ -546,6 +551,8 @@ void CatTciServerPage::buildSensorsGroup()
     form->addRow(noteLabel);
 
     contentLayout()->addWidget(group);
+    // R-R3-49: the sensor intervals are not applied yet; hidden until they are.
+    UnbuiltFeatures::hideUnlessBuilt(group, UnbuiltFeature::TciExtras);
 }
 
 // ---------------------------------------------------------------------------
@@ -613,6 +620,9 @@ void CatTciServerPage::buildVfoQuirksGroup()
     form->addRow(QString(), m_copyRx2VfobToVfoaCheck);
 
     contentLayout()->addWidget(group);
+    // R-R3-49: the three RX2 VFO options are not applied yet; hidden until
+    // they are.
+    UnbuiltFeatures::hideUnlessBuilt(group, UnbuiltFeature::TciExtras);
 }
 
 // ---------------------------------------------------------------------------

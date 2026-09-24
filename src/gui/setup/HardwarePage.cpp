@@ -17,6 +17,9 @@
 //                 to the Core, which applies them (radioHardwareVersion 2);
 //                 transmit fields follow the transmit permission.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the XVTR and Bandwidth Monitor tabs stay hidden
+//                 (UnbuiltFeatures) until their features are built.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -65,6 +68,7 @@
 //============================================================================================//
 
 #include "HardwarePage.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include "hardware/RadioInfoTab.h"
 #include "hardware/AntennaAlexTab.h"
@@ -136,6 +140,11 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
     m_hl2OptionsIdx  = m_tabs->addTab(m_hl2OptionsTab,  tr("HL2 Options"));
     m_hl2IoIdx       = m_tabs->addTab(m_hl2IoTab,       tr("HL2 I/O"));
     m_bwMonitorIdx   = m_tabs->addTab(m_bwMonitorTab,   tr("Bandwidth Monitor"));
+    // R-R3-49: tabs whose feature is not built yet stay hidden, before and
+    // after a radio is known (onCurrentRadioChanged ANDs the same check).
+    m_tabs->setTabVisible(m_xvtrIdx, UnbuiltFeatures::isBuilt(UnbuiltFeature::Transverters));
+    m_tabs->setTabVisible(m_bwMonitorIdx,
+                          UnbuiltFeatures::isBuilt(UnbuiltFeature::BandwidthMonitor));
 
     // ── Wire per-tab settingChanged → write-through persistence (Task 21) ─────
     // Lambda helper: generic connect for any tab type that has settingChanged.
@@ -273,7 +282,8 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
     m_tabs->setTabText(m_ocOutputsIdx,
         caps.hasIoBoardHl2 ? tr("Hermes Lite Control") : tr("OC Outputs"));
 
-    m_tabs->setTabVisible(m_xvtrIdx,        caps.xvtrJackCount > 0);
+    m_tabs->setTabVisible(m_xvtrIdx,        caps.xvtrJackCount > 0
+                                            && UnbuiltFeatures::isBuilt(UnbuiltFeature::Transverters));
     m_tabs->setTabVisible(m_diversityIdx,   caps.hasDiversityReceiver);
     // Calibration tab is always visible — its 4 remaining groups (Freq Cal,
     // Level Cal, HPSDR Diag, TX Display) apply to every board, and Group 5
@@ -283,7 +293,8 @@ void HardwarePage::onCurrentRadioChanged(const RadioInfo& info)
     // category gate in SetupDialog.cpp.
     m_tabs->setTabVisible(m_hl2OptionsIdx,  caps.hasIoBoardHl2);
     m_tabs->setTabVisible(m_hl2IoIdx,       caps.hasIoBoardHl2);
-    m_tabs->setTabVisible(m_bwMonitorIdx,   caps.hasBandwidthMonitor);
+    m_tabs->setTabVisible(m_bwMonitorIdx,   caps.hasBandwidthMonitor
+                                            && UnbuiltFeatures::isBuilt(UnbuiltFeature::BandwidthMonitor));
 
     // Populate each tab with the new board info.
     m_radioInfoTab->populate(info, caps);

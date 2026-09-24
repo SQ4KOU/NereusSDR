@@ -16,6 +16,7 @@
 #include "AudioTciPage.h"
 #include "core/AppSettings.h"
 #include "gui/StyleConstants.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include <QFormLayout>
 #include <QGroupBox>
@@ -173,6 +174,8 @@ void AudioTciPage::buildFormatGroup()
             m_channelsCombo->currentData().toInt());
     });
     form->addRow(tr("Channels:"), m_channelsCombo);
+    // R-R3-49: the stream channel count is not applied yet; hidden until it is.
+    UnbuiltFeatures::hideUnlessBuilt(m_channelsCombo, UnbuiltFeature::TciExtras);
 
     // Block size (shared key with CatTciServerPage Group 4)
     m_blockSizeSpin = new QSpinBox(group);
@@ -230,6 +233,7 @@ void AudioTciPage::buildTxDirectionGroup()
         AppSettings::instance().setValue(QStringLiteral("TciTxChannel"), text);
     });
     form->addRow(tr("TX channel:"), m_txChannelCombo);
+    UnbuiltFeatures::hideUnlessBuilt(m_txChannelCombo, UnbuiltFeature::TciExtras);
 
     // TX stream buffering
     m_txBufferingSpin = new QSpinBox(group);

@@ -33,6 +33,10 @@
 //                 m_voxDlyLabel/m_voxPeakMeter removed.  DEXP row (#11)
 //                 stays.  pollDexpMeters() trimmed to drive only the DEXP
 //                 strip; VOX peak polling lives on TxApplet now.
+//   2026-09-24 - R-R3-49: +ACC and the ACC microphone source, MON and its
+//                 level, and the CW and FM pages are hidden (UnbuiltFeatures)
+//                 until built; with one page left there are no page tabs.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -95,11 +99,13 @@
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 #include "gui/StyleConstants.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include <QButtonGroup>
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QListView>
 #include <QPainter>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -237,6 +243,21 @@ void PhoneCwApplet::buildUI()
 
     m_stack->setCurrentIndex(0);
     root->addWidget(m_stack);
+
+    // R-R3-49: controls whose feature is not built yet are hidden. The CW
+    // and FM pages are never shown (showPage falls back to Phone), and with
+    // Phone the only page left the applet shows no page tabs.
+    UnbuiltFeatures::hideUnlessBuilt(m_cwTabBtn, UnbuiltFeature::Cwx);
+    if (!UnbuiltFeatures::isBuilt(UnbuiltFeature::Cwx)) {
+        m_phoneTabBtn->setVisible(false);
+    }
+    UnbuiltFeatures::hideUnlessBuilt(m_accBtn, UnbuiltFeature::Acc);
+    if (!UnbuiltFeatures::isBuilt(UnbuiltFeature::Acc)) {
+        if (auto* list = qobject_cast<QListView*>(m_micSourceCombo->view())) {
+            list->setRowHidden(static_cast<int>(MicInput::Accessory), true);
+        }
+    }
+    UnbuiltFeatures::hideRowUnlessBuilt(m_monBtn, UnbuiltFeature::PhoneMon);
 
     // ── Wire tab buttons via QButtonGroup ────────────────────────────────────
     connect(m_tabGroup, &QButtonGroup::idToggled, this,
@@ -1511,6 +1532,11 @@ void PhoneCwApplet::pollDexpMeters()
 
 void PhoneCwApplet::showPage(int index)
 {
+    // R-R3-49: a page whose feature is not built yet is not shown; Phone is.
+    if ((index == 1 && !UnbuiltFeatures::isBuilt(UnbuiltFeature::Cwx))
+        || (index == 2 && !UnbuiltFeatures::isBuilt(UnbuiltFeature::FmPage))) {
+        index = 0;
+    }
     if (m_stack) {
         m_stack->setCurrentIndex(index);
     }

@@ -65,7 +65,9 @@ private slots:
         // its PC microphone controls are this computer's and stay live, and
         // only its controls held for the radio follow the permission
         // (tst_remote_gui_gating, remoteTxInputKeepsThisComputersMicrophoneUsable).
-        for (const char* label : {"TX Profile", "Power", "TX Profiles",
+        // Transmit > TX Profiles (a page that only says it moved) is not
+        // registered while it is on the unbuilt list (R-R3-49).
+        for (const char* label : {"TX Profile", "Power",
                                   "Speech Processor", "DEXP/VOX"}) {
             QTest::newRow(label) << QString::fromLatin1(label);
         }

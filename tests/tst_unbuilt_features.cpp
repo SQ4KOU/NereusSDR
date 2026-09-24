@@ -1,0 +1,820 @@
+// =================================================================
+// tests/tst_unbuilt_features.cpp  (NereusSDR)
+// =================================================================
+//
+// no-port-check: NereusSDR-original test. It drives real local and remote
+// MainWindows, Setup pages, dialogs, applets and containers; no upstream
+// logic is ported here.
+//
+// R3 unfinished controls, Task 1 (R-R3-49, R-R3-21): one list names every
+// feature that is not built yet (UnbuiltFeatures), and every surface that
+// fronts one is hidden through it, in local and remote windows.
+//   - The test enumerates the list: every entry has surface checks here, so
+//     a feature added to the list without its surfaces fails.
+//   - Nothing on the list shows in a local or a remote window.
+//   - Marking one feature built makes each of its surfaces appear, and no
+//     other feature's surface.
+//   - Hidden is not removed: saved values for hidden controls come back
+//     unchanged after a start and a save.
+//   - A saved container holding a Voice Rec/Play control loads, does not
+//     show or list it, does not offer a new one, and saves it back.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, Task 1.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
+// =================================================================
+
+#include <QtTest/QtTest>
+#include <QAbstractButton>
+#include <QAction>
+#include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QFile>
+#include <QGroupBox>
+#include <QLabel>
+#include <QListView>
+#include <QListWidget>
+#include <QMap>
+#include <QMenu>
+#include <QPointer>
+#include <QPushButton>
+#include <QScopeGuard>
+#include <QSlider>
+#include <QSplitter>
+#include <QStackedWidget>
+#include <QTabWidget>
+#include <QTreeWidget>
+#include <QWidget>
+
+#include <functional>
+#include <memory>
+
+#include "core/AppSettings.h"
+#include "core/BuildIdentity.h"
+#include "core/RadioDiscovery.h"
+#include "gui/GuiSessionCoordinator.h"
+#include "gui/MainWindow.h"
+#include "gui/NetworkDiagnosticsDialog.h"
+#include "gui/SetupDialog.h"
+#include "gui/SpectrumWidget.h"
+#include "gui/SpotHubDialog.h"
+#include "gui/UnbuiltFeatures.h"
+#include "gui/applets/PhoneCwApplet.h"
+#include "gui/applets/Rf2ksApplet.h"
+#include "gui/containers/ContainerManager.h"
+#include "gui/containers/ContainerSettingsDialog.h"
+#include "gui/containers/ContainerWidget.h"
+#include "gui/meters/MeterWidget.h"
+#include "gui/meters/MeterItem.h"
+#include "gui/meters/VoiceRecordPlayItem.h"
+#include "gui/widgets/VfoWidget.h"
+#include "models/RadioModel.h"
+
+using namespace NereusSDR;
+
+namespace {
+
+using F = UnbuiltFeature;
+
+StationStartupSelection remoteCore()
+{
+    // Never dialled: replace(..., false) builds the remote window without
+    // starting its connection.
+    return {{QStringLiteral("ws://127.0.0.1:4433"), {}, {}, true}, QStringLiteral("core")};
+}
+
+// True when `w` would be on screen once `root` is: nothing between them is
+// hidden, except by a stacked widget choosing another page (a tab not
+// selected is still offered).
+bool shownWithin(const QWidget* w, const QWidget* root)
+{
+    if (w == nullptr) { return false; }
+    for (const QWidget* p = w; p != nullptr && p != root; p = p->parentWidget()) {
+        const bool stackPage = qobject_cast<const QStackedWidget*>(p->parentWidget()) != nullptr;
+        if (p->isHidden() && !stackPage) { return false; }
+    }
+    return true;
+}
+
+template <typename T>
+bool namedShown(const QWidget* root, const QString& name)
+{
+    if (root == nullptr) { return false; }
+    const T* w = root->findChild<T*>(name);
+    return shownWithin(w, root);
+}
+
+// A label or button with exactly this text, shown.
+bool textShown(const QWidget* root, const QString& text)
+{
+    if (root == nullptr) { return false; }
+    for (const QLabel* label : root->findChildren<QLabel*>()) {
+        if (label->text() == text && shownWithin(label, root)) { return true; }
+    }
+    for (const QAbstractButton* button : root->findChildren<QAbstractButton*>()) {
+        if (button->text() == text && shownWithin(button, root)) { return true; }
+    }
+    return false;
+}
+
+bool groupShown(const QWidget* root, const QString& title)
+{
+    if (root == nullptr) { return false; }
+    for (const QGroupBox* group : root->findChildren<QGroupBox*>()) {
+        if (group->title() == title && shownWithin(group, root)) { return true; }
+    }
+    return false;
+}
+
+// A tab with this text, offered in any tab widget under `root`.
+bool tabShown(const QWidget* root, const QString& text)
+{
+    if (root == nullptr) { return false; }
+    for (const QTabWidget* tabs : root->findChildren<QTabWidget*>()) {
+        for (int i = 0; i < tabs->count(); ++i) {
+            if (tabs->tabText(i) == text && tabs->isTabVisible(i)
+                && shownWithin(tabs, root)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool actionShown(const QWidget* root, const QString& text)
+{
+    for (const QAction* action : root->findChildren<QAction*>()) {
+        if (action->text() == text && action->isVisible()) { return true; }
+    }
+    return false;
+}
+
+// Everything the surface checks build, once each, for one set of marks in
+// the list. A fresh set is built after the list changes, because every
+// surface reads the list when it is built.
+class Hosts {
+public:
+    Hosts(GuiSessionCoordinator& sessions, bool remote)
+        : m_sessions(sessions), m_remote(remote) {}
+
+    ~Hosts()
+    {
+        m_containerDialog.reset();
+        m_container.reset();
+        m_flagHost.reset();
+        m_rfKit.reset();
+        m_phoneCw.reset();
+    }
+
+    bool remote() const { return m_remote; }
+
+    MainWindow* window()
+    {
+        if (m_window == nullptr) {
+            const bool ok = m_remote ? m_sessions.replace(remoteCore(), false)
+                                     : m_sessions.replace({}, false);
+            m_window = ok ? m_sessions.window() : nullptr;
+            if (m_window != nullptr) {
+                // Wide enough that the status bar folds nothing away.
+                m_window->resize(4000, 1000);
+                m_window->show();
+                QCoreApplication::processEvents();
+            }
+        }
+        return m_window;
+    }
+
+    SetupDialog* setup()
+    {
+        if (m_setup == nullptr && window() != nullptr) {
+            // The dialog MainWindow::createSetupDialog() builds, on the
+            // window's own model (that slot is private).
+            m_setup = new SetupDialog(m_window->radioModel(), m_window);
+        }
+        return m_setup;
+    }
+
+    bool pageRegistered(const QString& label)
+    {
+        return setup() != nullptr && m_setup->pageLabelsForTest().contains(label);
+    }
+
+    bool categoryShown(const QString& label)
+    {
+        if (setup() == nullptr) { return false; }
+        const auto* tree = m_setup->findChild<QTreeWidget*>();
+        for (int i = 0; tree != nullptr && i < tree->topLevelItemCount(); ++i) {
+            if (tree->topLevelItem(i)->text(0) == label && !tree->topLevelItem(i)->isHidden()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    QWidget* page(const QString& label)
+    {
+        if (!pageRegistered(label)) { return nullptr; }
+        return m_setup->realizePageForTest(label);
+    }
+
+    SpotHubDialog* spotHub()
+    {
+        if (m_spotHub == nullptr && window() != nullptr) {
+            QMetaObject::invokeMethod(m_window, "openSpotHub", Qt::DirectConnection);
+            m_spotHub = m_window->findChild<SpotHubDialog*>();
+        }
+        return m_spotHub;
+    }
+
+    NetworkDiagnosticsDialog* networkDiagnostics()
+    {
+        if (m_netDiag == nullptr && window() != nullptr) {
+            m_netDiag = new NetworkDiagnosticsDialog(m_window->radioModel(), nullptr, m_window);
+        }
+        return m_netDiag;
+    }
+
+    PhoneCwApplet* phoneCw()
+    {
+        if (window() == nullptr) { return nullptr; }
+        if (auto* applet = m_window->findChild<PhoneCwApplet*>()) { return applet; }
+        if (!m_phoneCw) {
+            m_phoneCw = std::make_unique<PhoneCwApplet>(m_window->radioModel());
+        }
+        return m_phoneCw.get();
+    }
+
+    Rf2ksApplet* rfKit()
+    {
+        if (window() == nullptr) { return nullptr; }
+        if (auto* applet = m_window->findChild<Rf2ksApplet*>()) { return applet; }
+        if (!m_rfKit) {
+            m_rfKit = std::make_unique<Rf2ksApplet>(m_window->radioModel());
+        }
+        return m_rfKit.get();
+    }
+
+    // A slice flag on a shown panadapter, positioned once so its floating
+    // buttons exist.
+    VfoWidget* flag()
+    {
+        if (!m_flagHost) {
+            m_flagHost = std::make_unique<SpectrumWidget>();
+            m_flagHost->resize(1200, 500);
+            m_flagHost->setSampleRate(192000.0);
+            m_flagHost->setDdcCenterFrequency(14200000.0);
+            m_flagHost->setFrequencyRange(14200000.0, 192000.0);
+            m_flag = m_flagHost->addVfoWidget(0);
+            m_flag->setFrequency(14200000.0);
+            m_flagHost->show();
+            QCoreApplication::processEvents();
+            m_flagHost->updateVfoPositions();
+        }
+        return m_flag;
+    }
+
+    // A container holding a Voice Rec/Play control, and its settings
+    // dialog with the Add menu opened once.
+    ContainerSettingsDialog* containerDialog()
+    {
+        if (!m_containerDialog) {
+            m_container = std::make_unique<ContainerWidget>();
+            m_meter = new MeterWidget();
+            m_meter->addItem(new TextItem());
+            m_meter->addItem(new VoiceRecordPlayItem());
+            m_container->setContent(m_meter);
+            m_containerDialog = std::make_unique<ContainerSettingsDialog>(m_container.get());
+            for (QPushButton* button : m_containerDialog->findChildren<QPushButton*>()) {
+                if (button->text() == QStringLiteral("+")) { button->click(); }
+            }
+        }
+        return m_containerDialog.get();
+    }
+
+    MeterWidget* containerMeter()
+    {
+        containerDialog();
+        return m_meter;
+    }
+
+private:
+    GuiSessionCoordinator& m_sessions;
+    bool m_remote{false};
+    MainWindow* m_window{nullptr};
+    SetupDialog* m_setup{nullptr};
+    SpotHubDialog* m_spotHub{nullptr};
+    NetworkDiagnosticsDialog* m_netDiag{nullptr};
+    std::unique_ptr<PhoneCwApplet> m_phoneCw;
+    std::unique_ptr<Rf2ksApplet> m_rfKit;
+    std::unique_ptr<SpectrumWidget> m_flagHost;
+    VfoWidget* m_flag{nullptr};
+    std::unique_ptr<ContainerWidget> m_container;
+    MeterWidget* m_meter{nullptr};
+    std::unique_ptr<ContainerSettingsDialog> m_containerDialog;
+};
+
+// The hosts a surface lives on. The per-feature pass builds only the hosts
+// its feature's surfaces need, and checks every surface on those hosts.
+enum class Host { Window, Setup, SpotHub, NetDiag, Applets, Flag, Container };
+
+struct Surface {
+    QString name;
+    Host host;
+    std::function<bool(Hosts&)> shown;
+};
+
+// One entry per feature on the list: every surface that fronts it.
+QMap<F, QList<Surface>> surfaces()
+{
+    const auto menu = [](const QString& text) {
+        return Surface{QStringLiteral("menu ") + text, Host::Window,
+                       [text](Hosts& h) { return h.window() && actionShown(h.window(), text); }};
+    };
+    const auto status = [](const QString& name) {
+        return Surface{QStringLiteral("status bar ") + name, Host::Window, [name](Hosts& h) {
+                           return h.window() && namedShown<QWidget>(h.window(), name);
+                       }};
+    };
+    const auto setupPage = [](const QString& label) {
+        return Surface{QStringLiteral("Setup page ") + label, Host::Setup,
+                       [label](Hosts& h) { return h.pageRegistered(label); }};
+    };
+    const auto onPage = [](const QString& label, const QString& what,
+                           std::function<bool(QWidget*)> check) {
+        return Surface{QStringLiteral("Setup ") + label + QStringLiteral(": ") + what, Host::Setup,
+                       [label, check](Hosts& h) {
+                           QWidget* page = h.page(label);
+                           return page != nullptr && check(page);
+                       }};
+    };
+    const auto named = [](const QString& name) {
+        return [name](QWidget* root) { return namedShown<QWidget>(root, name); };
+    };
+    const auto text = [](const QString& t) {
+        return [t](QWidget* root) { return textShown(root, t); };
+    };
+    const auto tab = [](const QString& t) {
+        return [t](QWidget* root) { return tabShown(root, t); };
+    };
+    const auto spot = [](const QString& name) {
+        return Surface{QStringLiteral("Spot Hub ") + name, Host::SpotHub, [name](Hosts& h) {
+                           return namedShown<QWidget>(h.spotHub(), name);
+                       }};
+    };
+    const auto applet = [](const QString& what, std::function<bool(Hosts&)> check) {
+        return Surface{what, Host::Applets, std::move(check)};
+    };
+    const auto phoneButton = [](const QString& t) {
+        return [t](Hosts& h) { return textShown(h.phoneCw(), t); };
+    };
+    // showPage() lands on the page only when it is built.
+    const auto phonePage = [](int index) {
+        return [index](Hosts& h) {
+            PhoneCwApplet* applet = h.phoneCw();
+            auto* stack = applet ? applet->findChild<QStackedWidget*>() : nullptr;
+            if (stack == nullptr) { return false; }
+            applet->showPage(index);
+            const bool landed = stack->currentIndex() == index;
+            applet->showPage(0);
+            return landed;
+        };
+    };
+
+    QMap<F, QList<Surface>> map;
+    map[F::DisplayMode] = {menu(QStringLiteral("&Display Mode"))};
+    map[F::UiScale] = {menu(QStringLiteral("&UI Scale")), setupPage(QStringLiteral("UI Scale & Theme"))};
+    map[F::MinimalMode] = {menu(QStringLiteral("&Minimal Mode")),
+                           setupPage(QStringLiteral("Collapsible Display"))};
+    map[F::Keyboard] = {
+        menu(QStringLiteral("&Keyboard Shortcuts...")), setupPage(QStringLiteral("Shortcuts")),
+        Surface{QStringLiteral("Setup category Keyboard"), Host::Setup,
+                [](Hosts& h) { return h.categoryShown(QStringLiteral("Keyboard")); }}};
+    map[F::Equalizer] = {menu(QStringLiteral("&Equalizer..."))};
+    map[F::Transverters] = {
+        menu(QStringLiteral("Trans&verters…")), menu(QStringLiteral("&VHF")),
+        onPage(QStringLiteral("Hardware Config"), QStringLiteral("XVTR tab"), tab(QStringLiteral("XVTR"))),
+        onPage(QStringLiteral("Hardware Config"), QStringLiteral("OC VHF tab"), tab(QStringLiteral("VHF")))};
+    map[F::BandStack] = {menu(QStringLiteral("Band &Stacking...")),
+                         status(QStringLiteral("statusBandStackDots"))};
+    map[F::Cwx] = {
+        menu(QStringLiteral("C&WX...")), status(QStringLiteral("statusCwxLabel")),
+        applet(QStringLiteral("Phone/CW CW tab"), phoneButton(QStringLiteral("CW"))),
+        applet(QStringLiteral("Phone/CW CW page"), phonePage(1)),
+        onPage(QStringLiteral("CW"), QStringLiteral("keyer group"), named(QStringLiteral("cwKeyerGroup"))),
+        onPage(QStringLiteral("CW"), QStringLiteral("timing group"), named(QStringLiteral("cwTimingGroup")))};
+    map[F::Memories] = {menu(QStringLiteral("&Memory Manager...")),
+                        spot(QStringLiteral("displayMemoriesToggle"))};
+    map[F::Cat] = {menu(QStringLiteral("&CAT Control...")), setupPage(QStringLiteral("Serial Ports")),
+                   setupPage(QStringLiteral("TCP/IP CAT")), status(QStringLiteral("statusCatIndicator"))};
+    map[F::Midi] = {menu(QStringLiteral("&MIDI Mapping...")), setupPage(QStringLiteral("MIDI Control"))};
+    map[F::Help] = {menu(QStringLiteral("&Getting Started")), menu(QStringLiteral("&NereusSDR Help")),
+                    menu(QStringLiteral("Understanding &Data Modes"))};
+    map[F::Acc] = {
+        applet(QStringLiteral("Phone/CW +ACC"), phoneButton(QStringLiteral("+ACC"))),
+        applet(QStringLiteral("Phone/CW microphone source ACC"), [](Hosts& h) {
+            PhoneCwApplet* applet = h.phoneCw();
+            for (QComboBox* combo : applet ? applet->findChildren<QComboBox*>() : QList<QComboBox*>{}) {
+                if (combo->accessibleName() != QStringLiteral("Microphone source")) { continue; }
+                auto* list = qobject_cast<QListView*>(combo->view());
+                return list != nullptr
+                    && !list->isRowHidden(static_cast<int>(PhoneCwApplet::MicInput::Accessory));
+            }
+            return false;
+        })};
+    map[F::PhoneMon] = {applet(QStringLiteral("Phone/CW MON"), phoneButton(QStringLiteral("MON"))),
+                        applet(QStringLiteral("Phone/CW monitor level"), [](Hosts& h) {
+                            for (QSlider* s : h.phoneCw()->findChildren<QSlider*>()) {
+                                if (s->accessibleName() == QStringLiteral("Monitor level")) {
+                                    return shownWithin(s, h.phoneCw());
+                                }
+                            }
+                            return false;
+                        })};
+    map[F::FmPage] = {applet(QStringLiteral("Phone/CW FM page"), phonePage(2))};
+    map[F::RfkitTune] = {
+        applet(QStringLiteral("RF-Kit TUNE"),
+               [](Hosts& h) { return textShown(h.rfKit(), QStringLiteral("TUNE")); }),
+        applet(QStringLiteral("RF-Kit BYPASS"),
+               [](Hosts& h) { return textShown(h.rfKit(), QStringLiteral("BYPASS")); })};
+    map[F::Voice] = {
+        status(QStringLiteral("statusDvkLabel")),
+        Surface{QStringLiteral("slice flag record"), Host::Flag, [](Hosts& h) {
+                    QPushButton* b = h.flag()->recordButtonForTest();
+                    return b != nullptr && !b->isHidden();
+                }},
+        Surface{QStringLiteral("slice flag play"), Host::Flag, [](Hosts& h) {
+                    QPushButton* b = h.flag()->playButtonForTest();
+                    return b != nullptr && !b->isHidden();
+                }},
+        Surface{QStringLiteral("container Add > Voice Rec/Play"), Host::Container, [](Hosts& h) {
+                    return actionShown(h.containerDialog(), QStringLiteral("Voice Rec/Play"));
+                }},
+        Surface{QStringLiteral("container item list Voice Rec/Play"), Host::Container, [](Hosts& h) {
+                    for (QListWidget* list : h.containerDialog()->findChildren<QListWidget*>()) {
+                        for (int i = 0; i < list->count(); ++i) {
+                            if (list->item(i)->text().startsWith(QStringLiteral("Voice Rec/Play"))
+                                && !list->item(i)->isHidden()) {
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                }},
+        Surface{QStringLiteral("container draws Voice Rec/Play"), Host::Container, [](Hosts& h) {
+                    MeterWidget* meter = h.containerMeter();
+                    for (MeterItem* item : meter->items()) {
+                        if (qobject_cast<VoiceRecordPlayItem*>(item) && meter->shouldRender(item)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }}};
+    map[F::Fdx] = {status(QStringLiteral("statusFdxLabel"))};
+    map[F::Navigation] = {setupPage(QStringLiteral("Navigation"))};
+    map[F::Sam] = {onPage(QStringLiteral("AM/SAM"), QStringLiteral("SAM group"), named(QStringLiteral("samGroup")))};
+    map[F::Skins] = {setupPage(QStringLiteral("Skins"))};
+    map[F::TxProfilesLeaf] = {setupPage(QStringLiteral("TX Profiles"))};
+    map[F::BandwidthMonitor] = {onPage(QStringLiteral("Hardware Config"), QStringLiteral("Bandwidth Monitor tab"),
+                                       tab(QStringLiteral("Bandwidth Monitor")))};
+    map[F::Hl2SecondI2cBus] = {onPage(QStringLiteral("Hardware Config"), QStringLiteral("I2C bus 0"),
+                                      named(QStringLiteral("hl2I2cBus0")))};
+    map[F::ConnectionHistory] = {onPage(QStringLiteral("Connection Quality"), QStringLiteral("60 s history"),
+                                        named(QStringLiteral("connectionHistoryGroup")))};
+    map[F::Logging] = {
+        onPage(QStringLiteral("Logging & Performance"), QStringLiteral("log group"), named(QStringLiteral("diagLogGroup"))),
+        onPage(QStringLiteral("Logging & Performance"), QStringLiteral("categories"),
+               named(QStringLiteral("diagCategoriesGroup")))};
+    map[F::SignalGenerator] = {setupPage(QStringLiteral("Signal Generator")),
+                               setupPage(QStringLiteral("Hardware Tests"))};
+    map[F::LocalNetworkStats] = {
+        Surface{QStringLiteral("Network Diagnostics Jitter"), Host::NetDiag,
+                [](Hosts& h) { return textShown(h.networkDiagnostics(), QStringLiteral("Jitter")); }},
+        Surface{QStringLiteral("Network Diagnostics Packet loss"), Host::NetDiag,
+                [](Hosts& h) { return textShown(h.networkDiagnostics(), QStringLiteral("Packet loss")); }},
+        Surface{QStringLiteral("Network Diagnostics Packet gap"), Host::NetDiag,
+                [](Hosts& h) { return textShown(h.networkDiagnostics(), QStringLiteral("Packet gap")); }}};
+    map[F::DspRate] = {onPage(QStringLiteral("Advanced"), QStringLiteral("DSP group"),
+                              named(QStringLiteral("audioAdvancedDspGroup")))};
+    map[F::IqToVax] = {onPage(QStringLiteral("Advanced"), QStringLiteral("Send IQ to VAX"), text(QStringLiteral("Send IQ to VAX"))),
+                       onPage(QStringLiteral("Advanced"), QStringLiteral("TX Monitor to VAX"),
+                              text(QStringLiteral("TX Monitor to VAX")))};
+    map[F::MuteVaxDuringTx] = {onPage(QStringLiteral("Advanced"), QStringLiteral("Mute VAX during TX"),
+                                      text(QStringLiteral("Mute VAX during TX on other slice")))};
+    map[F::AntennaConflict] = {onPage(QStringLiteral("Hardware Config"), QStringLiteral("conflict policy"),
+                                      named(QStringLiteral("antennaConflictPolicyGroup")))};
+    map[F::OcExtras] = {
+        onPage(QStringLiteral("Hardware Config"), QStringLiteral("hot switching"), named(QStringLiteral("ocAllowHotSwitching"))),
+        onPage(QStringLiteral("Hardware Config"), QStringLiteral("USB BCD"), named(QStringLiteral("ocUsbBcdGroup"))),
+        onPage(QStringLiteral("Hardware Config"), QStringLiteral("external PA"), named(QStringLiteral("ocExternalPaGroup")))};
+    map[F::MultimeterHolds] = {
+        onPage(QStringLiteral("Multimeter"), QStringLiteral("peak hold"), text(QStringLiteral("Peak hold time:"))),
+        onPage(QStringLiteral("Multimeter"), QStringLiteral("text hold"), text(QStringLiteral("Text hold time:"))),
+        onPage(QStringLiteral("Multimeter"), QStringLiteral("digital delay"), text(QStringLiteral("Digital delay:"))),
+        onPage(QStringLiteral("Multimeter"), QStringLiteral("history enable"),
+               text(QStringLiteral("Enable signal history graph")))};
+    map[F::WsjtxFilters] = {spot(QStringLiteral("wsjtxFilterCQ")), spot(QStringLiteral("wsjtxFilterPOTA")),
+                            spot(QStringLiteral("wsjtxFilterCallingMe"))};
+    map[F::RbnRateLimit] = {spot(QStringLiteral("rbnRateSpin")),
+                            Surface{QStringLiteral("Spot Hub RBN Rate Limit label"), Host::SpotHub,
+                                    [](Hosts& h) { return textShown(h.spotHub(), QStringLiteral("Rate Limit:")); }}};
+    map[F::FreeDvToPsk] = {spot(QStringLiteral("freedvReportToPskChk"))};
+    map[F::TciExtras] = {
+        onPage(QStringLiteral("TCI Server"), QStringLiteral("rate limit"), text(QStringLiteral("Rate limit:"))),
+        onPage(QStringLiteral("TCI Server"), QStringLiteral("CW to CWU"),
+               text(QStringLiteral("CW becomes CWU above 10 MHz"))),
+        onPage(QStringLiteral("TCI Server"), QStringLiteral("TX channel"), text(QStringLiteral("TX channel:"))),
+        onPage(QStringLiteral("TCI Server"), QStringLiteral("sensor intervals"),
+               [](QWidget* p) { return groupShown(p, QStringLiteral("Sensors")); }),
+        onPage(QStringLiteral("TCI Server"), QStringLiteral("RX2 VFO options"),
+               [](QWidget* p) { return groupShown(p, QStringLiteral("VFO Quirks")); }),
+        onPage(QStringLiteral("TCI"), QStringLiteral("stream channels"), text(QStringLiteral("Channels:"))),
+        onPage(QStringLiteral("TCI"), QStringLiteral("TX channel"), text(QStringLiteral("TX channel:")))};
+    map[F::SmallFilter] = {onPage(QStringLiteral("Meter Styles"), QStringLiteral("small filter display"),
+                                  named(QStringLiteral("appearanceVfoFlagGroup")))};
+    map[F::ApfParams] = {onPage(QStringLiteral("CW"), QStringLiteral("APF bandwidth"), text(QStringLiteral("Bandwidth"))),
+                         onPage(QStringLiteral("CW"), QStringLiteral("APF gain"), text(QStringLiteral("Gain")))};
+    map[F::AmSquelchTail] = {onPage(QStringLiteral("AM/SAM"), QStringLiteral("max tail"), text(QStringLiteral("Max Tail")))};
+    map[F::FmDeviation] = {onPage(QStringLiteral("FM"), QStringLiteral("deviation"),
+                                  named(QStringLiteral("fmRxDeviationCombo"))),
+                           onPage(QStringLiteral("FM"), QStringLiteral("de-emphasis"),
+                                  named(QStringLiteral("fmDeEmphasisButton")))};
+    return map;
+}
+
+// "surface: shown" lines for every surface of `feature` that is shown.
+QStringList shownSurfaces(const QList<Surface>& list, Hosts& hosts,
+                          const QSet<Host>* onlyHosts = nullptr)
+{
+    QStringList shown;
+    for (const Surface& s : list) {
+        if (onlyHosts != nullptr && !onlyHosts->contains(s.host)) { continue; }
+        if (s.shown(hosts)) { shown << s.name; }
+    }
+    return shown;
+}
+
+} // namespace
+
+class TstUnbuiltFeatures : public QObject {
+    Q_OBJECT
+
+private slots:
+    void initTestCase()
+    {
+        // Windows save their settings; this run keeps a file of its own.
+        AppSettings::setProfileOverride(QStringLiteral("unbuilt-features-%1")
+                                            .arg(QCoreApplication::applicationPid()));
+    }
+
+    void init()
+    {
+        UnbuiltFeatures::resetForTest();
+        QVERIFY(!AppSettings::instance().remoteBackend());
+        AppSettings::instance().clear();
+        // No VAX first-run dialog and no discovery broadcast onto the LAN
+        // from the local windows.
+        AppSettings::instance().setValue(QStringLiteral("audio/FirstRunComplete"),
+                                         QStringLiteral("True"));
+        AppSettings::instance().ensureSettingsAtVersion(6);
+        RadioDiscovery::clearHoldOffForTest();
+        RadioDiscovery discovery;
+        discovery.holdOffScans(std::chrono::minutes{5});
+        BuildIdentity::setBuildTag(QString());
+    }
+
+    void cleanup()
+    {
+        UnbuiltFeatures::resetForTest();
+        RadioDiscovery::clearHoldOffForTest();
+    }
+
+    void cleanupTestCase()
+    {
+        const QString path = AppSettings::instance().filePath();
+        QFile::remove(path);
+        QFile::remove(path + QStringLiteral(".bak"));
+    }
+
+    // The list: named entries, none built, every one with surface checks
+    // here. A feature added to the list without its surfaces fails this.
+    void everyListedFeatureHasItsSurfacesChecked()
+    {
+        const QList<UnbuiltFeatures::Entry>& list = UnbuiltFeatures::all();
+        QVERIFY(!list.isEmpty());
+        const QMap<F, QList<Surface>> map = surfaces();
+        QSet<QString> keys;
+        for (const UnbuiltFeatures::Entry& entry : list) {
+            QVERIFY2(!entry.key.isEmpty(), qPrintable(entry.description));
+            QVERIFY2(!keys.contains(entry.key), qPrintable(entry.key));
+            keys.insert(entry.key);
+            QCOMPARE(UnbuiltFeatures::key(entry.feature), entry.key);
+            QVERIFY2(!UnbuiltFeatures::isBuilt(entry.feature), qPrintable(entry.key));
+            QVERIFY2(map.contains(entry.feature) && !map.value(entry.feature).isEmpty(),
+                     qPrintable(QStringLiteral("%1 has no surface checks").arg(entry.key)));
+        }
+        QCOMPARE(map.size(), list.size());
+    }
+
+    // Nothing on the list shows, in a local window or a remote one.
+    void noUnbuiltSurfaceShowsInLocalOrRemoteWindows()
+    {
+        const QMap<F, QList<Surface>> map = surfaces();
+        GuiSessionCoordinator sessions;
+        for (bool remote : {false, true}) {
+            Hosts hosts(sessions, remote);
+            QVERIFY(hosts.window() != nullptr);
+            QCOMPARE(hosts.window()->radioModel()->ownsLocalDsp(), !remote);
+            QStringList shown;
+            for (const UnbuiltFeatures::Entry& entry : UnbuiltFeatures::all()) {
+                for (const QString& s : shownSurfaces(map.value(entry.feature), hosts)) {
+                    shown << entry.key + QStringLiteral(": ") + s;
+                }
+            }
+            QVERIFY2(shown.isEmpty(),
+                     qPrintable((remote ? QStringLiteral("remote: ") : QStringLiteral("local: "))
+                                + shown.join(QStringLiteral("; "))));
+        }
+        QVERIFY(sessions.replace({}, false));
+    }
+
+    // Marking one feature built brings every one of its surfaces back and
+    // no other feature's.
+    void markingOneFeatureBuiltShowsItsSurfacesOnly()
+    {
+        const QMap<F, QList<Surface>> map = surfaces();
+        GuiSessionCoordinator sessions;
+        for (const UnbuiltFeatures::Entry& entry : UnbuiltFeatures::all()) {
+            UnbuiltFeatures::resetForTest();
+            UnbuiltFeatures::setBuiltForTest(entry.feature, true);
+            Hosts hosts(sessions, false);
+            QSet<Host> used;
+            for (const Surface& s : map.value(entry.feature)) { used.insert(s.host); }
+
+            QStringList missing;
+            for (const Surface& s : map.value(entry.feature)) {
+                if (!s.shown(hosts)) { missing << s.name; }
+            }
+            QVERIFY2(missing.isEmpty(),
+                     qPrintable(entry.key + QStringLiteral(" built, not shown: ")
+                                + missing.join(QStringLiteral("; "))));
+
+            QStringList others;
+            for (auto it = map.constBegin(); it != map.constEnd(); ++it) {
+                if (it.key() == entry.feature) { continue; }
+                for (const QString& s : shownSurfaces(it.value(), hosts, &used)) {
+                    others << UnbuiltFeatures::key(it.key()) + QStringLiteral(": ") + s;
+                }
+            }
+            QVERIFY2(others.isEmpty(),
+                     qPrintable(entry.key + QStringLiteral(" built, also shown: ")
+                                + others.join(QStringLiteral("; "))));
+        }
+        UnbuiltFeatures::resetForTest();
+        QVERIFY(sessions.replace({}, false));
+    }
+
+    // Hidden is not removed: the values saved for hidden controls come back
+    // unchanged after a start (every Setup page and the Spot Hub built) and
+    // a save.
+    void savedValuesOfHiddenControlsSurviveAStartAndASave()
+    {
+        const QMap<QString, QString> seeded = {
+            {QStringLiteral("TciRateLimitMsgsPerSec"), QStringLiteral("25")},
+            {QStringLiteral("TciCwBecomesCwuAbove10mhz"), QStringLiteral("True")},
+            {QStringLiteral("TciTxChannel"), QStringLiteral("Left")},
+            {QStringLiteral("TciRxSensorIntervalMs"), QStringLiteral("450")},
+            {QStringLiteral("TciTxSensorIntervalMs"), QStringLiteral("550")},
+            {QStringLiteral("TciForgetRx2VfoBOnDisconnect"), QStringLiteral("True")},
+            {QStringLiteral("TciUseRx1VfoaForRx2Vfoa"), QStringLiteral("True")},
+            {QStringLiteral("TciCopyRx2VfobToVfoa"), QStringLiteral("True")},
+            {QStringLiteral("TciAudioStreamChannels"), QStringLiteral("1")},
+            {QStringLiteral("audio/DspRate"), QStringLiteral("96000")},
+            {QStringLiteral("audio/DspBlockSize"), QStringLiteral("256")},
+            {QStringLiteral("audio/SendIqToVax"), QStringLiteral("True")},
+            {QStringLiteral("audio/TxMonitorToVax"), QStringLiteral("True")},
+            {QStringLiteral("audio/MuteVaxDuringTxOnOtherSlice"), QStringLiteral("True")},
+            {QStringLiteral("MultimeterPeakHoldMs"), QStringLiteral("900")},
+            {QStringLiteral("MultimeterTextHoldMs"), QStringLiteral("800")},
+            {QStringLiteral("MultimeterDigitalDelayMs"), QStringLiteral("300")},
+            {QStringLiteral("MultimeterSignalHistoryEnabled"), QStringLiteral("True")},
+            {QStringLiteral("Antenna_ConflictPolicy"), QStringLiteral("2")},
+            {QStringLiteral("AppearanceSmallModeFilterOnVfos"), QStringLiteral("True")},
+            {QStringLiteral("IsMemorySpotsEnabled"), QStringLiteral("True")},
+            {QStringLiteral("WsjtxFilterCQ"), QStringLiteral("False")},
+            {QStringLiteral("WsjtxFilterPOTA"), QStringLiteral("False")},
+            {QStringLiteral("WsjtxFilterCallingMe"), QStringLiteral("False")},
+            {QStringLiteral("RbnRateLimit"), QStringLiteral("33")},
+            {QStringLiteral("FreeDvReporter/ReportToPsk"), QStringLiteral("True")},
+        };
+        auto& settings = AppSettings::instance();
+        for (auto it = seeded.constBegin(); it != seeded.constEnd(); ++it) {
+            settings.setValue(it.key(), it.value());
+        }
+        QVERIFY(settings.save());
+
+        {
+            GuiSessionCoordinator sessions;
+            Hosts hosts(sessions, false);
+            QVERIFY(hosts.window() != nullptr);
+            SetupDialog* setup = hosts.setup();
+            QVERIFY(setup != nullptr);
+            setup->realizeAllPagesForTest();
+            QVERIFY(hosts.spotHub() != nullptr);
+            QCoreApplication::processEvents();
+            QVERIFY(settings.save());
+            QVERIFY(sessions.replace({}, false));
+        }
+        QVERIFY(settings.save());
+
+        AppSettings reread(settings.filePath());
+        reread.load();
+        for (auto it = seeded.constBegin(); it != seeded.constEnd(); ++it) {
+            QCOMPARE(reread.value(it.key()).toString(), it.value());
+        }
+    }
+
+    // A saved container holding a Voice Rec/Play control loads, keeps it
+    // without drawing or listing it, offers no new one, and saves it back.
+    void savedVoiceControlLoadsHiddenAndSavesBack()
+    {
+        const auto clearContainers = [] {
+            auto& s = AppSettings::instance();
+            for (const QString& k : s.allKeys()) {
+                if (k.startsWith(QStringLiteral("Container"))) { s.remove(k); }
+            }
+        };
+        clearContainers();
+        const auto cleanupKeys = qScopeGuard(clearContainers);
+
+        const auto voiceCount = [](MeterWidget* meter) {
+            int n = 0;
+            for (MeterItem* item : meter->items()) {
+                if (qobject_cast<VoiceRecordPlayItem*>(item)) { ++n; }
+            }
+            return n;
+        };
+
+        QWidget dockParent;
+        QSplitter splitter;
+        QString savedId;
+        {
+            ContainerManager mgr(&dockParent, &splitter);
+            ContainerWidget* c = mgr.createContainer(1, DockMode::Floating);
+            QVERIFY(c);
+            savedId = c->id();
+            auto* meter = new MeterWidget();
+            c->setContent(meter);
+            meter->addItem(new TextItem());
+            meter->addItem(new VoiceRecordPlayItem());
+            mgr.saveState();
+        }
+
+        for (int pass = 0; pass < 2; ++pass) {
+            ContainerManager mgr(&dockParent, &splitter);
+            mgr.restoreState();
+            ContainerWidget* c = mgr.container(savedId);
+            QVERIFY(c != nullptr);
+            auto* meter = qobject_cast<MeterWidget*>(c->content());
+            QVERIFY(meter != nullptr);
+            QCOMPARE(meter->items().size(), 2);
+            QCOMPARE(voiceCount(meter), 1);
+            for (MeterItem* item : meter->items()) {
+                QCOMPARE(meter->shouldRender(item), !qobject_cast<VoiceRecordPlayItem*>(item));
+            }
+
+            {
+                // The settings dialog lists only the text item, and its
+                // Add menu offers no Voice Rec/Play. Applying keeps it.
+                ContainerSettingsDialog dialog(c, nullptr, &mgr);
+                int listed = 0;
+                for (QListWidget* list : dialog.findChildren<QListWidget*>()) {
+                    for (int i = 0; i < list->count(); ++i) {
+                        if (list->item(i)->text().startsWith(QStringLiteral("Voice Rec/Play"))) {
+                            QVERIFY(list->item(i)->isHidden());
+                            ++listed;
+                        }
+                    }
+                }
+                QCOMPARE(listed, 1);
+                for (QPushButton* button : dialog.findChildren<QPushButton*>()) {
+                    if (button->text() == QStringLiteral("+")) { button->click(); }
+                }
+                QVERIFY(!actionShown(&dialog, QStringLiteral("Voice Rec/Play")));
+                for (QPushButton* button : dialog.findChildren<QPushButton*>()) {
+                    if (button->text() == QStringLiteral("Apply")) { button->click(); }
+                }
+            }
+            meter = qobject_cast<MeterWidget*>(c->content());
+            QVERIFY(meter != nullptr);
+            QCOMPARE(voiceCount(meter), 1);
+            QVERIFY(meter->serializeItems().contains(QStringLiteral("VOICERECPLAY")));
+            mgr.saveState();
+        }
+    }
+};
+
+QTEST_MAIN(TstUnbuiltFeatures)
+#include "tst_unbuilt_features.moc"

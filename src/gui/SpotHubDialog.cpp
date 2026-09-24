@@ -106,6 +106,14 @@
 //                                    reads and saves WsjtxSpotLifetimeSec,
 //                                    the name RadioModel reads. AI
 //                                    tooling: Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49: the Memories option, the
+//                                    WSJT-X filters, the RBN rate limit
+//                                    and Report decodes to PSK Reporter
+//                                    are hidden (UnbuiltFeatures) until
+//                                    they are applied; the WSJT-X colour
+//                                    swatches keep their names as labels
+//                                    meanwhile. AI tooling: Anthropic
+//                                    Claude Code.
 
 #include "SpotHubDialog.h"
 
@@ -118,6 +126,7 @@
 #include "core/PskReporterClient.h"
 #include "core/SpotCollectorClient.h"
 #include "core/WsjtxClient.h"
+#include "gui/UnbuiltFeatures.h"
 #include "gui/widgets/GuardedSlider.h"
 #include "models/BandFilterProxy.h"
 #include "models/SpotModel.h"
@@ -937,6 +946,9 @@ void SpotHubDialog::buildRbnTab(QTabWidget* tabs)
     rateRow->addStretch();
     grid->addLayout(rateRow, row, 1);
     row++;
+    // R-R3-49: nothing applies the rate limit yet; the row is hidden until
+    // something does.
+    UnbuiltFeatures::hideRowUnlessBuilt(rateSpin, UnbuiltFeature::RbnRateLimit, grid);
 
     connLayout->addLayout(grid);
 
@@ -1343,6 +1355,20 @@ void SpotHubDialog::buildWsjtxTab(QTabWidget* tabs)
     auto* defaultLabel = new QLabel("Default");
     defaultLabel->setStyleSheet("QLabel { color: #a0b0c0; font-size: 14px; }");
     filterRow->addWidget(defaultLabel);
+
+    // R-R3-49: nothing applies the three filters yet; they are hidden until
+    // something does. Their colours are applied, so each swatch keeps its
+    // name beside it, as Default does.
+    if (!UnbuiltFeatures::isBuilt(UnbuiltFeature::WsjtxFilters)) {
+        for (QCheckBox* box : {m_wsjtxFilterCQ, m_wsjtxFilterPOTA, m_wsjtxFilterCallingMe}) {
+            box->setVisible(false);
+            auto* caption = new QLabel(box->text());
+            caption->setObjectName(box->objectName() + QStringLiteral("Caption"));
+            caption->setStyleSheet(defaultLabel->styleSheet());
+            filterRow->insertWidget(filterRow->indexOf(box), caption, 1);
+        }
+        filterLabel->setText(QStringLiteral("Spot Colors:"));
+    }
 
     layout->addLayout(filterRow);
 
@@ -1896,6 +1922,9 @@ void SpotHubDialog::buildFreeDvTab(QTabWidget* tabs)
             settings.save();
         });
         prefsLayout->addWidget(pskChk);
+        // R-R3-49: nothing sends FreeDV decodes to PSK Reporter yet; hidden
+        // until something does.
+        UnbuiltFeatures::hideUnlessBuilt(pskChk, UnbuiltFeature::FreeDvToPsk);
 
         // Direction display 3-way combo, mirroring freedv-gui's
         // reportingDirectionAsCardinal toggle. NereusSDR exposes a
@@ -2635,6 +2664,8 @@ void SpotHubDialog::buildDisplayTab(QTabWidget* tabs)
         save("IsMemorySpotsEnabled", on ? "True" : "False");
     });
     grid->addWidget(memoriesToggle, row++, 1, Qt::AlignLeft);
+    // R-R3-49: memories are not built yet; the row is hidden until they are.
+    UnbuiltFeatures::hideRowUnlessBuilt(memoriesToggle, UnbuiltFeature::Memories, grid);
 
     // Levels slider. Upstream :91-106 [@0cd4559].
     grid->addWidget(new QLabel("Levels:"), row, 0);

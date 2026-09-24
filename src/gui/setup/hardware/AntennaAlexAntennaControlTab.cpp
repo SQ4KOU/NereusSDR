@@ -20,6 +20,9 @@
 //   2026-09-23 - R-R3-46 fix wave: re-reads the Core's antennas when a band
 //                 edit does not take. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Conflict policy group is hidden until the
+//                 policy is read (UnbuiltFeatures).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -89,6 +92,7 @@
 
 #include "AntennaAlexAntennaControlTab.h"
 #include "HardwareTransmitGate.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include "core/accessories/AlexController.h"
 #include "core/accessories/AlexAntennaFacade.h"
@@ -622,6 +626,10 @@ void AntennaAlexAntennaControlTab::buildTxBypassStrip(QVBoxLayout* outerLayout)
 void AntennaAlexAntennaControlTab::buildConflictPolicyGroup(QVBoxLayout* outerLayout)
 {
     auto* group = new QGroupBox(tr("Conflict policy"), this);
+    group->setObjectName(QStringLiteral("antennaConflictPolicyGroup"));
+    // R-R3-49: nothing reads the policy yet; hidden until something does.
+    // The saved Antenna_ConflictPolicy value stays as it is.
+    UnbuiltFeatures::hideUnlessBuilt(group, UnbuiltFeature::AntennaConflict);
     auto* layout = new QVBoxLayout(group);
     layout->setContentsMargins(8, 4, 8, 4);
     layout->setSpacing(4);

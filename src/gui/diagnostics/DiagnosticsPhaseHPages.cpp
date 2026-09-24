@@ -23,6 +23,9 @@
 //                 shows the EP6 sequence error count, not the throttle
 //                 event count. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: Connection Quality's 60 s history group is
+//                 hidden until the history graph is built. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "DiagnosticsPhaseHPages.h"
@@ -33,6 +36,7 @@
 #include "core/SettingsHygiene.h"
 #include "models/RadioModel.h"
 #include "gui/SupportDialog.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include <QFile>
 #include <QFileDialog>
@@ -93,6 +97,8 @@ void ConnectionQualityPage::buildUI()
     m_historyPlaceholder->setStyleSheet(QStringLiteral("color: #888;"));
     histLayout->addWidget(m_historyPlaceholder);
     SetupPage::markNyi(m_historyPlaceholder, QStringLiteral("3P-H follow-up"));
+    histGroup->setObjectName(QStringLiteral("connectionHistoryGroup"));
+    UnbuiltFeatures::hideUnlessBuilt(histGroup, UnbuiltFeature::ConnectionHistory);
 
     contentLayout()->addStretch();
 }

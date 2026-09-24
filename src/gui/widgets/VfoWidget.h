@@ -506,6 +506,10 @@ public:
     // flag's close button" without this. Exposed read-only, same pattern as
     // the SNR-row seams below.
     QPushButton* closeButtonForTest() const { return m_closeBtn; }
+    // R-R3-49: the floating record and play buttons, for the unbuilt
+    // feature sweep.
+    QPushButton* recordButtonForTest() const { return m_recBtn; }
+    QPushButton* playButtonForTest() const { return m_playBtn; }
     // Fix wave I3: the last refused noise-reducer choice this flag showed.
     QString nrRefusalForTest() const { return m_nrRefusal; }
 

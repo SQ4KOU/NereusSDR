@@ -10,6 +10,7 @@
 
 #include <QtTest/QtTest>
 #include "gui/setup/HardwarePage.h"
+#include "gui/UnbuiltFeatures.h"
 #include "core/HpsdrModel.h"
 #include "core/BoardCapabilities.h"
 #include "core/RadioDiscovery.h"
@@ -22,6 +23,7 @@
 
 #include <QCheckBox>
 #include <QRadioButton>
+#include <QScopeGuard>
 
 using namespace NereusSDR;
 
@@ -66,10 +68,31 @@ private slots:
         // hasPaProfile gate at the parent-tab level was dropped.
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Calibration));
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Hl2IoBoard));
-        QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::BandwidthMonitor));
+        // R-R3-49: the Bandwidth Monitor tab is hidden until it is built,
+        // even on a board that has the monitor (next case).
+        QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::BandwidthMonitor));
         // HL2 Options tab is a new Phase 3L surface — also gated on
         // caps.hasIoBoardHl2 like the existing HL2 I/O Board tab.
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Hl2Options));
+    }
+
+    // R-R3-49: once the Bandwidth Monitor is built, HL2 shows its tab again
+    // (the board gate still applies; Angelia below does not show it).
+    void hl2_shows_bandwidth_monitor_once_built()
+    {
+        UnbuiltFeatures::setBuiltForTest(UnbuiltFeature::BandwidthMonitor, true);
+        const auto reset = qScopeGuard([] { UnbuiltFeatures::resetForTest(); });
+        RadioModel model;
+        model.setBoardForTest(HPSDRHW::HermesLite);
+        HardwarePage page(&model);
+
+        RadioInfo info;
+        info.boardType  = HPSDRHW::HermesLite;
+        info.protocol   = ProtocolVersion::Protocol1;
+        info.macAddress = QStringLiteral("aa:bb:cc:11:22:33");
+        page.onCurrentRadioChanged(info);
+
+        QVERIFY(page.isTabVisibleForTest(HardwarePage::Tab::BandwidthMonitor));
     }
 
     // Hermes Lite Control relabel — mi0bot setup.cs:20232 [v2.10.3.13-beta2]

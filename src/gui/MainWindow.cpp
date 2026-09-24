@@ -11,6 +11,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-49 / R-R3-21: menu items and
+//                 status bar items whose feature is not built yet are
+//                 hidden through UnbuiltFeatures (local and remote
+//                 windows). AI-assisted via Anthropic Claude Code.
 //   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-47 / R-R3-22: the Power Genius
 //                 gauge conversion moved to the Core side
 //                 (PgxlStatusGauges); AmpApplet and Rf2ksApplet read
@@ -437,6 +441,7 @@ warren@wpratt.com
 #endif
 #include "SpectrumOverlayPanel.h"
 #include "SetupDialog.h"
+#include "UnbuiltFeatures.h"
 // Remote-daemon R2 Task 20: the wss client and the settings backend it
 // writes through. Both are used only on the m_station.isRemote() path.
 #include "core/session/StationClient.h"
@@ -7012,6 +7017,8 @@ void MainWindow::buildMenuBar()
         QAction* transvertersAction = radioMenu->addAction(QStringLiteral("Trans&verters…"));
         transvertersAction->setEnabled(false);
         transvertersAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until transverters are built.
+        UnbuiltFeatures::hideUnlessBuilt(transvertersAction, UnbuiltFeature::Transverters);
     }
 
     radioMenu->addSeparator();
@@ -7176,6 +7183,9 @@ void MainWindow::buildMenuBar()
         QAction* placeholder = displayModeMenu->addAction(QStringLiteral("(NYI placeholder)"));
         placeholder->setEnabled(false);
         placeholder->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until display modes are built.
+        UnbuiltFeatures::hideUnlessBuilt(displayModeMenu->menuAction(),
+                                         UnbuiltFeature::DisplayMode);
     }
 
     {
@@ -7198,6 +7208,8 @@ void MainWindow::buildMenuBar()
             if (s.isDefault) { a->setChecked(true); }
             scaleGroup->addAction(a);
         }
+        // R-R3-49: hidden until UI scaling is built.
+        UnbuiltFeatures::hideUnlessBuilt(uiScaleMenu->menuAction(), UnbuiltFeature::UiScale);
     }
 
     // Phase 23 "View > Network Applets" submenu removed: TCI Server and
@@ -7223,6 +7235,8 @@ void MainWindow::buildMenuBar()
         minimalAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
         minimalAction->setEnabled(false);
         minimalAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until minimal mode is built.
+        UnbuiltFeatures::hideUnlessBuilt(minimalAction, UnbuiltFeature::MinimalMode);
     }
 
     // 2026-05-26 KG4VCF perf instrumentation: toggle the in-spectrum
@@ -7252,6 +7266,8 @@ void MainWindow::buildMenuBar()
         QAction* kbAction = viewMenu->addAction(QStringLiteral("&Keyboard Shortcuts..."));
         kbAction->setEnabled(false);
         kbAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until keyboard shortcut editing is built.
+        UnbuiltFeatures::hideUnlessBuilt(kbAction, UnbuiltFeature::Keyboard);
     }
 
     // =========================================================================
@@ -7536,6 +7552,8 @@ void MainWindow::buildMenuBar()
         QAction* eqAction = dspMenu->addAction(QStringLiteral("&Equalizer..."));
         eqAction->setEnabled(false);
         eqAction->setToolTip(QStringLiteral("NYI — Phase 3I-3"));
+        // R-R3-49: hidden until the receive equalizer is built.
+        UnbuiltFeatures::hideUnlessBuilt(eqAction, UnbuiltFeature::Equalizer);
     }
     {
         // Phase 3M-4 Task 8: wire DSP > PureSignal... to the modeless dialog.
@@ -7595,6 +7613,8 @@ void MainWindow::buildMenuBar()
         QAction* placeholder = vhfMenu->addAction(QStringLiteral("(NYI — Phase X)"));
         placeholder->setEnabled(false);
         placeholder->setToolTip(QStringLiteral("VHF bands NYI — Phase X"));
+        // R-R3-49: hidden until transverters are built.
+        UnbuiltFeatures::hideUnlessBuilt(vhfMenu->menuAction(), UnbuiltFeature::Transverters);
     }
 
     // R-R3-21: GEN and WWV go through the band buttons' path, like the HF
@@ -7619,6 +7639,8 @@ void MainWindow::buildMenuBar()
         QAction* bandStackAction = bandMenu->addAction(QStringLiteral("Band &Stacking..."));
         bandStackAction->setEnabled(false);
         bandStackAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until band stacking is built.
+        UnbuiltFeatures::hideUnlessBuilt(bandStackAction, UnbuiltFeature::BandStack);
     }
 
     // =========================================================================
@@ -7885,16 +7907,22 @@ void MainWindow::buildMenuBar()
         cwxAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_X));
         cwxAction->setEnabled(false);
         cwxAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until CWX is built.
+        UnbuiltFeatures::hideUnlessBuilt(cwxAction, UnbuiltFeature::Cwx);
     }
     {
         QAction* memAction = toolsMenu->addAction(QStringLiteral("&Memory Manager..."));
         memAction->setEnabled(false);
         memAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until memories are built.
+        UnbuiltFeatures::hideUnlessBuilt(memAction, UnbuiltFeature::Memories);
     }
     {
         QAction* catAction = toolsMenu->addAction(QStringLiteral("&CAT Control..."));
         catAction->setEnabled(false);
         catAction->setToolTip(QStringLiteral("NYI — Phase 3K"));
+        // R-R3-49: hidden until CAT is built.
+        UnbuiltFeatures::hideUnlessBuilt(catAction, UnbuiltFeature::Cat);
     }
     {
         // Phase 23: TCI Server action — enabled, opens Setup → TCI Server.
@@ -7913,6 +7941,8 @@ void MainWindow::buildMenuBar()
         QAction* midiAction = toolsMenu->addAction(QStringLiteral("&MIDI Mapping..."));
         midiAction->setEnabled(false);
         midiAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until MIDI control is built.
+        UnbuiltFeatures::hideUnlessBuilt(midiAction, UnbuiltFeature::Midi);
     }
     {
         QAction* macroAction = toolsMenu->addAction(QStringLiteral("Macro &Buttons..."));
@@ -7985,16 +8015,20 @@ void MainWindow::buildMenuBar()
         QAction* gettingStartedAction = helpMenu->addAction(QStringLiteral("&Getting Started"));
         gettingStartedAction->setEnabled(false);
         gettingStartedAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        // R-R3-49: hidden until the help pages are built.
+        UnbuiltFeatures::hideUnlessBuilt(gettingStartedAction, UnbuiltFeature::Help);
     }
     {
         QAction* helpAction = helpMenu->addAction(QStringLiteral("&NereusSDR Help"));
         helpAction->setEnabled(false);
         helpAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        UnbuiltFeatures::hideUnlessBuilt(helpAction, UnbuiltFeature::Help);
     }
     {
         QAction* dataModesAction = helpMenu->addAction(QStringLiteral("Understanding &Data Modes"));
         dataModesAction->setEnabled(false);
         dataModesAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        UnbuiltFeatures::hideUnlessBuilt(dataModesAction, UnbuiltFeature::Help);
     }
 
     helpMenu->addSeparator();
@@ -8217,6 +8251,7 @@ void MainWindow::buildStatusBar()
     }
     bandStackLabel->setToolTip(QStringLiteral("Band Stack (NYI)"));
     bandStackLabel->setCursor(Qt::PointingHandCursor);
+    bandStackLabel->setObjectName(QStringLiteral("statusBandStackDots"));
 
     // +PAN icon. From AetherSDR MainWindow.cpp:4368-4396 [@c6481cb]: a jagged
     // spectrum polyline with a plus in the upper right. An icon reads as a
@@ -8362,6 +8397,7 @@ void MainWindow::buildStatusBar()
         "QLabel { color: #404858; font-weight: bold; font-size: 11px; }"));
     cwxLabel->setToolTip(QStringLiteral("CW Keyer (NYI)"));
     cwxLabel->setCursor(Qt::PointingHandCursor);
+    cwxLabel->setObjectName(QStringLiteral("statusCwxLabel"));
 
     // DVK
     auto* dvkLabel = new QLabel(QStringLiteral("DVK"), barWidget);
@@ -8369,6 +8405,7 @@ void MainWindow::buildStatusBar()
         "QLabel { color: #404858; font-weight: bold; font-size: 11px; }"));
     dvkLabel->setToolTip(QStringLiteral("Digital Voice Keyer (NYI)"));
     dvkLabel->setCursor(Qt::PointingHandCursor);
+    dvkLabel->setObjectName(QStringLiteral("statusDvkLabel"));
 
     // FDX
     auto* fdxLabel = new QLabel(QStringLiteral("FDX"), barWidget);
@@ -8376,6 +8413,12 @@ void MainWindow::buildStatusBar()
         "QLabel { color: #404858; font-weight: bold; font-size: 11px; }"));
     fdxLabel->setToolTip(QStringLiteral("Full Duplex (NYI)"));
     fdxLabel->setCursor(Qt::PointingHandCursor);
+    fdxLabel->setObjectName(QStringLiteral("statusFdxLabel"));
+    // R-R3-49: each of the three is hidden until its feature is built. The
+    // group folds as one; it is taken off the bar below when none is left.
+    UnbuiltFeatures::hideUnlessBuilt(cwxLabel, UnbuiltFeature::Cwx);
+    UnbuiltFeatures::hideUnlessBuilt(dvkLabel, UnbuiltFeature::Voice);
+    UnbuiltFeatures::hideUnlessBuilt(fdxLabel, UnbuiltFeature::Fdx);
 
     // Rung 10, last resort (design §6). Grouped so the ladder folds them as
     // one unit rather than dribbling them out one label at a time. Each
@@ -8580,6 +8623,7 @@ void MainWindow::buildStatusBar()
 
     // CAT Serial — NYI until Phase 3K; kept as static indicator, no live signal
     m_catIndicator = makeIndicator(QStringLiteral("CAT"), QStringLiteral("Off"));
+    m_catIndicator->setObjectName(QStringLiteral("statusCatIndicator"));
     hbox->addWidget(m_catIndicator);
     m_catSep = makeSep();
     hbox->addWidget(m_catSep);
@@ -9114,6 +9158,17 @@ void MainWindow::buildStatusBar()
     m_chromeBar->setItemAvailable(m_tgxlChip, false);
     m_chromeBar->setItemAvailable(m_chain1IndicatorWidget, false);
     m_chromeBar->setItemAvailable(m_overflowChip, false);
+    // R-R3-49: items whose feature is not built yet never show. Reported as
+    // availability, the controller's one side channel, so the fold ladder
+    // neither shows them nor charges their width.
+    m_chromeBar->setItemAvailable(m_bandStackLabel,
+                                  UnbuiltFeatures::isBuilt(UnbuiltFeature::BandStack));
+    m_chromeBar->setItemAvailable(m_placeholderGroup,
+                                  UnbuiltFeatures::isBuilt(UnbuiltFeature::Cwx)
+                                      || UnbuiltFeatures::isBuilt(UnbuiltFeature::Voice)
+                                      || UnbuiltFeatures::isBuilt(UnbuiltFeature::Fdx));
+    m_chromeBar->setItemAvailable(m_catIndicator,
+                                  UnbuiltFeatures::isBuilt(UnbuiltFeature::Cat));
     for (int rung = 5; rung <= 8; ++rung) {  // SQL, APF, NB, NR
         m_chromeBar->setItemAvailable(m_rxDashboard->badgeForRung(rung), false);
     }

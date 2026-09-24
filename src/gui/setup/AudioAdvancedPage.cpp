@@ -19,6 +19,11 @@
 // engine comes from RadioModel::localAudioDevices() (the VAX groups are
 // this computer's), the DSP group follows the Core's settings
 // availability, and Send IQ to VAX is refused there with a plain reason.
+//
+// 2026-09-24: R-R3-49 by J.J. Boyd (KG4VCF), with AI-assisted
+// implementation via Anthropic Claude Code. The DSP group, Send IQ to VAX,
+// TX Monitor to VAX and Mute VAX during TX on other slice are hidden
+// (UnbuiltFeatures) until they are applied; their saved values stay.
 // =================================================================
 
 #include "AudioAdvancedPage.h"
@@ -28,6 +33,7 @@
 #include "core/LogCategories.h"
 #include "core/settings/SettingsScope.h"
 #include "core/audio/VirtualCableDetector.h"
+#include "gui/UnbuiltFeatures.h"
 #include "gui/VaxFirstRunDialog.h"
 #include "models/RadioModel.h"
 
@@ -117,6 +123,10 @@ void AudioAdvancedPage::buildDspSection()
 {
     auto* box = new QGroupBox(QStringLiteral("DSP"), this);
     box->setStyleSheet(QLatin1String(kGroupStyle));
+    box->setObjectName(QStringLiteral("audioAdvancedDspGroup"));
+    // R-R3-49: nothing applies the DSP rate or block size yet; the group is
+    // hidden until something does.
+    UnbuiltFeatures::hideUnlessBuilt(box, UnbuiltFeature::DspRate);
     auto* form = new QFormLayout(box);
     form->setSpacing(6);
     form->setContentsMargins(8, 16, 8, 8);
@@ -336,6 +346,7 @@ void AudioAdvancedPage::buildFeatureFlagsSection()
 {
     auto* box = new QGroupBox(QStringLiteral("Feature Flags"), this);
     box->setStyleSheet(QLatin1String(kGroupStyle));
+    box->setObjectName(QStringLiteral("audioAdvancedFeatureFlagsGroup"));
     auto* layout = new QVBoxLayout(box);
     layout->setContentsMargins(8, 16, 8, 8);
     layout->setSpacing(8);
@@ -431,6 +442,17 @@ void AudioAdvancedPage::buildFeatureFlagsSection()
     }
 
     contentLayout()->addWidget(box);
+
+    // R-R3-49: none of the three is applied yet; each is hidden until it is,
+    // and the group goes with them while all three are.
+    UnbuiltFeatures::hideRowUnlessBuilt(m_sendIqToVaxCheck, UnbuiltFeature::IqToVax);
+    UnbuiltFeatures::hideRowUnlessBuilt(m_txMonitorToVaxCheck, UnbuiltFeature::IqToVax);
+    UnbuiltFeatures::hideRowUnlessBuilt(m_muteVaxDuringTxOtherCheck,
+                                        UnbuiltFeature::MuteVaxDuringTx);
+    if (!UnbuiltFeatures::isBuilt(UnbuiltFeature::IqToVax)
+        && !UnbuiltFeatures::isBuilt(UnbuiltFeature::MuteVaxDuringTx)) {
+        box->setVisible(false);
+    }
 }
 
 // ---------------------------------------------------------------------------

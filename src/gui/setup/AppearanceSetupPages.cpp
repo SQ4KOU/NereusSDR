@@ -3,6 +3,7 @@
 #include "gui/SMeterWidget.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/StyleConstants.h"
+#include "gui/UnbuiltFeatures.h"
 #include "core/AppSettings.h"
 #include "models/RadioModel.h"
 
@@ -334,6 +335,7 @@ void MeterStylesPage::buildUI()
 
     // --- Section: VFO Flag ---
     auto* vfoGroup = new QGroupBox(QStringLiteral("VFO Flag"), this);
+    vfoGroup->setObjectName(QStringLiteral("appearanceVfoFlagGroup"));
     auto* vfoLayout = new QVBoxLayout(vfoGroup);
 
     m_smallModeFilterToggle = new QCheckBox(
@@ -358,6 +360,9 @@ void MeterStylesPage::buildUI()
         });
 
     contentLayout()->addWidget(vfoGroup);
+    // R-R3-49: the flag stores this setting but draws nothing with it yet,
+    // so the group (its only control) is hidden until that is built.
+    UnbuiltFeatures::hideUnlessBuilt(vfoGroup, UnbuiltFeature::SmallFilter);
     contentLayout()->addStretch();
 }
 

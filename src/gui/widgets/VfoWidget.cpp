@@ -37,6 +37,9 @@
 //                 plain notice says why it is silent when the headphones
 //                 are chosen and none are set up. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the floating record and play buttons are hidden
+//                 (UnbuiltFeatures) until the voice recorder is built.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -287,6 +290,7 @@ warren@wpratt.com
 #include "NnrControls.h"
 #include "VaxChannelSelector.h"
 #include "gui/AntennaPopupBuilder.h"
+#include "gui/UnbuiltFeatures.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/applets/NyiOverlay.h"
 #include "core/BoardCapabilities.h"
@@ -2853,6 +2857,11 @@ void VfoWidget::buildFloatingButtons()
         }
     });
     NyiOverlay::markNyi(m_playBtn, QStringLiteral("phase3g10-stage2"));
+
+    // R-R3-49: record and play are hidden until the voice recorder is
+    // built; positionFloatingButtons() keeps them out of the strip.
+    UnbuiltFeatures::hideUnlessBuilt(m_recBtn, UnbuiltFeature::Voice);
+    UnbuiltFeatures::hideUnlessBuilt(m_playBtn, UnbuiltFeature::Voice);
 }
 
 // ---- Lock state: applyLockedState + setLocked (S1.8a review — I3) ----
@@ -2937,8 +2946,16 @@ void VfoWidget::positionFloatingButtons()
     // strip has no empty slot at the top.
     const bool closeShown = (m_sliceIndex != 0);
 
+    // R-R3-49: record and play take no slot while the voice recorder is
+    // not built.
+    const bool voiceBuilt = UnbuiltFeatures::isBuilt(UnbuiltFeature::Voice);
+
     QPushButton* btns[] = {m_closeBtn, m_lockBtn, m_recBtn, m_playBtn};
     for (QPushButton* btn : btns) {
+        if (!voiceBuilt && (btn == m_recBtn || btn == m_playBtn)) {
+            btn->hide();
+            continue;
+        }
         const bool isCloseBtn = (btn == m_closeBtn);
         const bool show = isVisible() && (closeShown || !isCloseBtn);
         if (isCloseBtn && !closeShown) {

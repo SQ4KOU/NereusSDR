@@ -101,6 +101,10 @@
 //                 reaches local DSP any more, so the gate's cases use a
 //                 probe page that does. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-24 -- R-R3-49: the page-sweep floors drop by the leaves not
+//                 registered while their features are not built. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1940,8 +1944,13 @@ private slots:
             }
             }
         }
-        QVERIFY(thisComputer >= 20);
-        QVERIFY(core >= 25);
+        // R-R3-49: eight This Computer leaves (UI Scale & Theme, Navigation,
+        // Skins, Collapsible Display, Serial Ports, TCP/IP CAT, MIDI Control,
+        // Shortcuts) and three Core leaves (TX Profiles, Signal Generator,
+        // Hardware Tests) are not registered while their features are not
+        // built, so each floor drops by that many.
+        QVERIFY(thisComputer >= 12);
+        QVERIFY(core >= 22);
         QVERIFY(mixed >= 8);
 
         // Nothing towards the Core: nothing sent, and nothing held as an
@@ -2140,7 +2149,10 @@ private slots:
             QCOMPARE(notice->text(), kCoreSettingsMissingReason);
             QVERIFY2(!notice->isHidden(), qPrintable(labels.at(i)));
         }
-        QVERIFY(core >= 25);
+        // R-R3-49: three Core leaves are not registered while their
+        // features are not built (TX Profiles, Signal Generator, Hardware
+        // Tests).
+        QVERIFY(core >= 22);
         QCOMPARE(probeBuilds, 0);
         QVERIFY(dialog.realizePageAtForTest(probe) != nullptr);
         QCOMPARE(probeBuilds, 0);

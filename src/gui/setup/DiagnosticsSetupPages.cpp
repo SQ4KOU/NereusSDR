@@ -1,5 +1,6 @@
 #include "DiagnosticsSetupPages.h"
 #include "gui/StyleConstants.h"
+#include "gui/UnbuiltFeatures.h"
 #include "core/AppSettings.h"
 
 #include <QVBoxLayout>
@@ -185,6 +186,9 @@ void DiagLoggingPage::buildUI()
     {
         auto* group = new QGroupBox(QStringLiteral("Log"), this);
         group->setStyleSheet(QString::fromLatin1(Style::kGroupBoxStyle));
+        group->setObjectName(QStringLiteral("diagLogGroup"));
+        // R-R3-49: log level, open and clear are hidden until logging is built.
+        UnbuiltFeatures::hideUnlessBuilt(group, UnbuiltFeature::Logging);
 
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
@@ -231,6 +235,8 @@ void DiagLoggingPage::buildUI()
     {
         auto* group = new QGroupBox(QStringLiteral("Categories"), this);
         group->setStyleSheet(QString::fromLatin1(Style::kGroupBoxStyle));
+        group->setObjectName(QStringLiteral("diagCategoriesGroup"));
+        UnbuiltFeatures::hideUnlessBuilt(group, UnbuiltFeature::Logging);
 
         auto* vLayout = new QVBoxLayout(group);
 
