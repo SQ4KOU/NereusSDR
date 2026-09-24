@@ -21,6 +21,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 : R-R3-45 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. Headphones output beside the speakers (VAX
+//                 design 5.3, 6.2, 6.3): opened at start() when Setup,
+//                 Audio, Devices has it enabled, fed the headphones mix
+//                 (the slices routed there), master volume and mute left on
+//                 the speakers; headphonesAvailable() for the flags.
 //   2026-09-23 : R-R3-43 Task 2 by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. Per-slice receiver audio taps
 //                 beside the VAX tee (SliceAudioTap, four slots); the VAX
@@ -385,7 +391,20 @@ public:
     std::optional<IAudioBus::OutputPacing> remotePlaybackPacing();
     bool writeRemotePlayback(const QVector<float>& pcm);
 
+    // R-R3-45: stores the headphones device and, when the headphones are
+    // enabled, reopens the output on it. Emits headphonesConfigChanged.
     void setHeadphonesConfig(const AudioDeviceConfig& cfg);
+
+    // R-R3-45: the headphones card's Enabled box. On opens the headphones
+    // output on the stored device, off closes it. The card persists
+    // audio/Headphones/Enabled; start() reads it.
+    void setHeadphonesEnabled(bool enabled);
+    bool headphonesEnabled() const { return m_headphonesEnabled; }
+
+    // R-R3-45: true while a headphones output is open, so a receiver routed
+    // to the headphones is heard. Owner thread.
+    bool headphonesAvailable() const { return m_headphonesAvailable; }
+
     // R-R3-36: stores the TX input selection and hands it to the capture
     // supervisor. Never opens a device and never waits; capture opens only
     // while someone holds a demand (acquireCaptureDemand).
@@ -872,6 +891,8 @@ signals:
     // DeviceCard's "Negotiated" pill subscribes to these.
     void speakersConfigChanged(NereusSDR::AudioDeviceConfig cfg);
     void headphonesConfigChanged(NereusSDR::AudioDeviceConfig cfg);
+    // R-R3-45: the headphones output opened or closed.
+    void headphonesAvailableChanged(bool available);
     void txInputConfigChanged(NereusSDR::AudioDeviceConfig cfg);
     // R-R3-36: re-emits CaptureSupervisor::statusChanged on the owner thread.
     void captureStatusChanged(const NereusSDR::CaptureSupervisor::Status& status);
@@ -948,7 +969,14 @@ private:
     std::unique_ptr<IAudioBus> m_speakersBus;
     bool m_remotePlayback{false}; // protected by m_speakersBusMutex
     AudioFormat m_remotePlaybackFormat; // protected by m_speakersBusMutex
+    // R-R3-45: the headphones output. Replaced only on the owner thread
+    // under m_headphonesBusMutex; the DSP thread's push takes it with
+    // try_lock and drops the block rather than wait, like the speakers.
+    std::mutex m_headphonesBusMutex;
     std::unique_ptr<IAudioBus> m_headphonesBus;
+    AudioDeviceConfig m_headphonesConfig;  // owner thread
+    bool m_headphonesEnabled{false};       // owner thread
+    bool m_headphonesAvailable{false};     // owner thread
     // Test-injected TX input only (setTxInputBusForTest); production reads
     // the capture supervisor's reader. R-R3-36.
     std::unique_ptr<IAudioBus> m_txInputBus;
@@ -1016,6 +1044,15 @@ private:
     // thread's push also holds.
     SpeakerFormatConverter m_speakersConverter;
     void configureSpeakersConverter();
+
+    // R-R3-45: the same conversion for the headphones device, configured
+    // under m_headphonesBusMutex wherever the headphones bus is replaced.
+    SpeakerFormatConverter m_headphonesConverter;
+    void configureHeadphonesConverter();
+    // Owner thread: (re)open or close the headphones output from
+    // m_headphonesConfig and m_headphonesEnabled, then publish.
+    void reopenHeadphones();
+    void publishHeadphonesAvailable();
 
     // Control-to-audio withdrawal handshake. The audio thread never waits:
     // it either enters a region or drops a block while admission is closed.

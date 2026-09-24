@@ -29,6 +29,9 @@
 //                 small DSP block size. No prefill or barrier-policy change.
 //                 Authored by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via OpenAI Codex.
+//   2026-09-23 -- R-R3-45: speakers and headphones sums from one drain.
+//                 NereusSDR-original. Authored by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 // --- From aamix.c ---
@@ -210,7 +213,7 @@ void MasterMixer::ensureRing(SliceState& st, int frames) {
 }
 
 void MasterMixer::accumulate(int sliceId, const float* samples, int frames,
-                             bool muted) {
+                             bool muted, bool headphones) {
     // Audio-thread hot path. No lock; rely on startup/connect-time
     // invariant that the map is stable while audio is streaming.
     auto it = m_slices.find(sliceId);
@@ -247,6 +250,7 @@ void MasterMixer::accumulate(int sliceId, const float* samples, int frames,
     // Audio-thread write to the same atomic the UI-side setSliceMuted()
     // writes; the store is lock-free either way.
     st.muted.store(muted, std::memory_order_release);
+    st.headphones.store(headphones, std::memory_order_release);
     ensureRing(st, frames);
     if (st.capFrames <= 0) { return; }
 
@@ -288,7 +292,13 @@ void MasterMixer::accumulate(int sliceId, const float* samples, int frames,
 }
 
 int MasterMixer::tryDrain(float* out, int maxFrames) {
-    if (out == nullptr || maxFrames <= 0) { return 0; }
+    if (out == nullptr) { return 0; }
+    return tryDrain(out, nullptr, maxFrames);
+}
+
+int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames) {
+    // `out` is the speakers sum, `hpOut` the headphones sum (R-R3-45).
+    if ((out == nullptr && hpOut == nullptr) || maxFrames <= 0) { return 0; }
     const std::uint64_t admittedEpoch =
         m_membershipEpoch.load(std::memory_order_acquire);
 
@@ -356,7 +366,12 @@ int MasterMixer::tryDrain(float* out, int maxFrames) {
     }
 
     // ── Sum ──────────────────────────────────────────────────────────
-    std::fill(out, out + static_cast<size_t>(n) * 2, 0.0f);
+    if (out != nullptr) {
+        std::fill(out, out + static_cast<size_t>(n) * 2, 0.0f);
+    }
+    if (hpOut != nullptr) {
+        std::fill(hpOut, hpOut + static_cast<size_t>(n) * 2, 0.0f);
+    }
 
     const float step = 1.0f / static_cast<float>(std::max(1, m_rampFrames));
 
@@ -386,25 +401,48 @@ int MasterMixer::tryDrain(float* out, int maxFrames) {
         const float tgtL = g * (pan <= 0.0f ? 1.0f : 1.0f - pan);
         const float tgtR = g * (pan >= 0.0f ? 1.0f : 1.0f + pan);
 
+        // R-R3-45: the route picks which sum gets the targets; the other
+        // ramps to silence, so a route change crossfades over the ramp
+        // instead of stepping from one output to the other.
+        const bool toHeadphones =
+            st.headphones.load(std::memory_order_acquire);
+        const float spkTgtL = toHeadphones ? 0.0f : tgtL;
+        const float spkTgtR = toHeadphones ? 0.0f : tgtR;
+        const float hpTgtL  = toHeadphones ? tgtL : 0.0f;
+        const float hpTgtR  = toHeadphones ? tgtR : 0.0f;
+
         int stagedRd = st.rd;
         float stagedCurL = st.curL;
         float stagedCurR = st.curR;
+        float stagedHpCurL = st.hpCurL;
+        float stagedHpCurR = st.hpCurR;
         for (int i = 0; i < take; ++i) {
             stagedCurL +=
-                std::clamp(tgtL - stagedCurL, -step, step);
+                std::clamp(spkTgtL - stagedCurL, -step, step);
             stagedCurR +=
-                std::clamp(tgtR - stagedCurR, -step, step);
+                std::clamp(spkTgtR - stagedCurR, -step, step);
+            stagedHpCurL +=
+                std::clamp(hpTgtL - stagedHpCurL, -step, step);
+            stagedHpCurR +=
+                std::clamp(hpTgtR - stagedHpCurR, -step, step);
             const size_t r = static_cast<size_t>(stagedRd) * 2;
-            out[static_cast<size_t>(i) * 2 + 0] +=
-                st.ring[r + 0] * stagedCurL;
-            out[static_cast<size_t>(i) * 2 + 1] +=
-                st.ring[r + 1] * stagedCurR;
+            const size_t o = static_cast<size_t>(i) * 2;
+            if (out != nullptr) {
+                out[o + 0] += st.ring[r + 0] * stagedCurL;
+                out[o + 1] += st.ring[r + 1] * stagedCurR;
+            }
+            if (hpOut != nullptr) {
+                hpOut[o + 0] += st.ring[r + 0] * stagedHpCurL;
+                hpOut[o + 1] += st.ring[r + 1] * stagedHpCurR;
+            }
             stagedRd = (stagedRd + 1) % st.capFrames;
         }
         st.stagedRd = stagedRd;
         st.stagedAvail = st.avail - take;
         st.stagedCurL = stagedCurL;
         st.stagedCurR = stagedCurR;
+        st.stagedHpCurL = stagedHpCurL;
+        st.stagedHpCurR = stagedHpCurR;
         st.drainStaged = true;
     }
 
@@ -430,8 +468,16 @@ int MasterMixer::tryDrain(float* out, int maxFrames) {
         const float* w = upSlewWindow();
         for (int i = 0; i < n && pos < slewLen; ++i, ++pos) {
             const float g = w[pos];
-            out[static_cast<size_t>(i) * 2 + 0] *= g;
-            out[static_cast<size_t>(i) * 2 + 1] *= g;
+            const size_t o = static_cast<size_t>(i) * 2;
+            if (out != nullptr) {
+                out[o + 0] *= g;
+                out[o + 1] *= g;
+            }
+            // The headphones sum resumes with the speakers (R-R3-45).
+            if (hpOut != nullptr) {
+                hpOut[o + 0] *= g;
+                hpOut[o + 1] *= g;
+            }
         }
     }
 
@@ -466,6 +512,8 @@ int MasterMixer::tryDrain(float* out, int maxFrames) {
         st.avail = st.stagedAvail;
         st.curL = st.stagedCurL;
         st.curR = st.stagedCurR;
+        st.hpCurL = st.stagedHpCurL;
+        st.hpCurR = st.stagedHpCurR;
     }
     if (slewLen > 0) {
         m_slewPos.store(pos, std::memory_order_release);

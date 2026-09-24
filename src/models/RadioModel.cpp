@@ -66,6 +66,10 @@
 //                 channel through setRemoteVaxChannelStore(), never the
 //                 Core's Slice<N>/VaxChannel. NereusSDR-original; no Thetis
 //                 logic.
+//   2026-09-23 : R-R3-45 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. A local slice restores its speakers or
+//                 headphones choice (Slice<N>/OutputRoute) when it is added.
+//                 NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -6147,6 +6151,9 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         // slice ID owns its NR selection even when another slice has focus.
         slice->restoreNnrSettings();
         wireNnrSettings(slice);
+        // R-R3-45: speakers or headphones, restored before the first block
+        // reaches AudioEngine so the receiver starts on its own output.
+        slice->restoreOutputRoute();
     } else {
         // R-R3-44: a remote window's VAX channels are this computer's. The
         // slice keeps its channel through the window's store (set by

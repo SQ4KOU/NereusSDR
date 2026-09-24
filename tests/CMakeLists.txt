@@ -5541,6 +5541,10 @@ nereus_add_test(tst_dspmode_rade)
 #   snrVisibleInRadeLower     - RADE_L also shows the row.
 nereus_add_test(tst_vfo_widget_snr)
 
+# R-R3-45: the flag's Speakers / Headphones buttons and the plain notice
+# when the headphones are chosen and none are set up (VAX design 6.2).
+nereus_add_test(tst_vfo_widget_output_route)
+
 # ── Phase 3R Task L2: RadeApplet ────────────────────────────────────────────
 # Pins the RadeApplet UI contract:
 #   constructsWithRadioModel              - builds against a primed

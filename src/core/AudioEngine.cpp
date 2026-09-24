@@ -19,6 +19,14 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 : R-R3-45 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. Speakers or headphones per receiver (VAX
+//                 design 6.2): the master mixer builds both sums, the
+//                 headphones output opens at start() when enabled and gets
+//                 its own format converter, master volume and mute stay on
+//                 the speakers (design 6.3), the remote program tap carries
+//                 both sums, and the anti-VOX reference leaves out receivers
+//                 on the headphones (their audio is not in the room).
 //   2026-09-23 : R3 receiver audio fix wave follow-up by J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //                 setDeviceBusFactoryForTest(); in a test run with no
@@ -265,6 +273,13 @@ AudioEngine::AudioEngine(QObject* parent)
     // supervisor applies the persisted selection without opening anything.
     m_txInputConfig =
         AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/TxInput"));
+
+    // R-R3-45: the headphones selection, opened by start() when enabled.
+    m_headphonesConfig =
+        AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/Headphones"));
+    m_headphonesEnabled = AppSettings::instance()
+        .value(QStringLiteral("audio/Headphones/Enabled"), QStringLiteral("False"))
+        .toString() == QStringLiteral("True");
     // The supervisor needs an application object: its I/O thread runs an
     // event loop and its status reaches this thread through queued calls.
     // Every process that captures has one; an engine built without one
@@ -450,6 +465,13 @@ void AudioEngine::start()
     preregisterSlices(m_radio ? m_radio->boardCapabilities().maxSlices : 1);
 
     ensureSpeakersOpen();
+    // R-R3-45: the headphones output opens at startup too, when Setup,
+    // Audio, Devices has it enabled (audio/Headphones/Enabled). Before this
+    // it opened only on a Devices card change and nothing ever fed it.
+    if (m_headphonesEnabled
+        && !(m_headphonesBus && m_headphonesBus->isOpen())) {
+        reopenHeadphones();
+    }
     // R-R3-36: no TX input is opened here. PC microphone capture starts only
     // when RadioModel (local session with PC mic selected) or Test Mic
     // acquires a capture demand, and it never blocks this call.
@@ -519,7 +541,12 @@ void AudioEngine::stop()
         m_remotePlayback = false;
         m_speakersBus.reset();
     }
-    m_headphonesBus.reset();
+    {
+        std::lock_guard<std::mutex> lock(m_headphonesBusMutex);
+        m_headphonesBus.reset();
+        configureHeadphonesConverter();
+    }
+    publishHeadphonesAvailable();
     // Drops only a test-injected TX input. The capture supervisor and its
     // reader outlive stop(): the TX worker may still be reading it until
     // RadioModel has stopped the worker and released its demand (R-R3-36).
@@ -1110,16 +1137,67 @@ void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
 
 void AudioEngine::setHeadphonesConfig(const AudioDeviceConfig& cfg)
 {
-    m_headphonesBus.reset();
+    m_headphonesConfig = cfg;
     if (!m_paInitialized) {
         return;
     }
-    m_headphonesBus = makeBus(cfg, /*capture=*/false);
+    // R-R3-45: the device opens only while the headphones are enabled.
+    reopenHeadphones();
+    emit headphonesConfigChanged(cfg);
+}
+
+void AudioEngine::setHeadphonesEnabled(bool enabled)
+{
+    if (m_headphonesEnabled == enabled
+        && (m_headphonesBus != nullptr) == enabled) {
+        return;
+    }
+    m_headphonesEnabled = enabled;
+    reopenHeadphones();
+}
+
+void AudioEngine::reopenHeadphones()
+{
+    {
+        // Held across tear-down and rebuild; the DSP thread's push uses
+        // try_lock and drops a block rather than wait (as the speakers do).
+        std::lock_guard<std::mutex> lk(m_headphonesBusMutex);
+        m_headphonesBus.reset();
+        if (m_headphonesEnabled) {
+            m_headphonesBus = makeBus(m_headphonesConfig, /*capture=*/false);
+        }
+        configureHeadphonesConverter();
+    }
     if (m_headphonesBus) {
         qCInfo(lcAudio) << "Headphones bus opened"
                         << "[" << m_headphonesBus->backendName() << "]";
+    } else if (m_headphonesEnabled) {
+        qCWarning(lcAudio) << "Headphones bus open failed for device"
+                           << m_headphonesConfig.deviceName
+                           << "- receivers on the headphones are silent";
     }
-    emit headphonesConfigChanged(cfg);
+    publishHeadphonesAvailable();
+}
+
+void AudioEngine::publishHeadphonesAvailable()
+{
+    const bool available = m_headphonesBus && m_headphonesBus->isOpen();
+    if (available == m_headphonesAvailable) {
+        return;
+    }
+    m_headphonesAvailable = available;
+    emit headphonesAvailableChanged(available);
+}
+
+void AudioEngine::configureHeadphonesConverter()
+{
+    // Caller holds m_headphonesBusMutex.
+    if (m_headphonesBus) {
+        const AudioFormat format = m_headphonesBus->negotiatedFormat();
+        m_headphonesConverter.configure(format.sampleRate, format.channels);
+    } else {
+        m_headphonesConverter.configure(0, 0);
+    }
 }
 
 void AudioEngine::setTxInputConfig(const AudioDeviceConfig& cfg)
@@ -1363,7 +1441,12 @@ void AudioEngine::configureSpeakersConverter()
 
 void AudioEngine::setHeadphonesBusForTest(std::unique_ptr<IAudioBus> bus)
 {
-    m_headphonesBus = std::move(bus);
+    {
+        std::lock_guard<std::mutex> lk(m_headphonesBusMutex);
+        m_headphonesBus = std::move(bus);
+        configureHeadphonesConverter();
+    }
+    publishHeadphonesAvailable();
 }
 
 void AudioEngine::setTxInputBusForTest(std::unique_ptr<IAudioBus> bus)
@@ -1659,7 +1742,13 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // Mute rides in as an argument rather than through setSliceMuted(),
     // which takes the slice-map mutex: this is the audio thread, and
     // CLAUDE.md's rule is that it never holds a lock.
-    m_masterMix.accumulate(sliceId, samples, frames, slice->muted());
+    //
+    // R-R3-45: the route rides in the same way (VAX design 6.2): the mixer
+    // builds this slice into the speakers sum or the headphones sum.
+    const bool toHeadphones =
+        slice->outputRoute() == SliceModel::OutputRoute::Headphones;
+    m_masterMix.accumulate(sliceId, samples, frames, slice->muted(),
+                           toHeadphones);
 
     // Anti-VOX hears exactly what the speakers hear. From Thetis
     // cmaster.c:370-372 [v2.10.3.15], every sub-receiver's audio is handed
@@ -1678,7 +1767,13 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // in the room for the microphone to pick up, and counting it would have
     // DEXP subtract audio that was never there. Following the stated intent
     // rather than the mask.
-    m_antiVoxMix.accumulate(sliceId, samples, frames, slice->muted());
+    //
+    // R-R3-45: a slice on the headphones is left out by the same reasoning:
+    // the reference is drained speakers-only (tryDrain(out, n)), so a
+    // headphones slice is queued, keeps its barrier place, and adds
+    // nothing, since its audio is not in the room either.
+    m_antiVoxMix.accumulate(sliceId, samples, frames, slice->muted(),
+                            toHeadphones);
 
     // VAX tap receives raw demodulated audio — pre-MasterMixer gain/pan,
     // pre-master-volume — matching Thetis VAC behavior and the spec §3.4
@@ -1788,7 +1883,14 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // With a single slice the barrier is satisfied by this very call, so
     // the push happens in the same call stack at the same instant it
     // always did: no added latency on the common path.
-    const int mixed = m_masterMix.tryDrain(mix.data(), frames);
+    //
+    // R-R3-45: the same drain builds the headphones sum, the slices routed
+    // there, so both outputs are paced by one barrier.
+    static thread_local std::vector<float> hpMix;
+    if (static_cast<int>(hpMix.size()) < frames * 2) {
+        hpMix.resize(static_cast<size_t>(frames) * 2);
+    }
+    const int mixed = m_masterMix.tryDrain(mix.data(), hpMix.data(), frames);
 
     // Drain the anti-VOX reference in the same call stack, so both mixes are
     // paced by their own barrier over the same period.
@@ -1848,11 +1950,47 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
             MasterMixAudioTap* tap =
                 m_masterMixAudioTap.load(std::memory_order_seq_cst);
             if (tap != nullptr) {
-                tap->consume(mix.data(), mixed, kMasterMixSampleRateHz);
+                // R-R3-45: the station's program is every receiver, on
+                // whichever local output it plays, so the local speakers or
+                // headphones choice cannot change it either.
+                static thread_local std::vector<float> program;
+                if (static_cast<int>(program.size()) < stereoFloats) {
+                    program.resize(static_cast<size_t>(stereoFloats));
+                }
+                for (int i = 0; i < stereoFloats; ++i) {
+                    program[static_cast<size_t>(i)] = mix[static_cast<size_t>(i)]
+                        + hpMix[static_cast<size_t>(i)];
+                }
+                tap->consume(program.data(), mixed, kMasterMixSampleRateHz);
             }
         }
         if (m_masterMixTapCallsInFlight.fetch_sub(1, std::memory_order_seq_cst) == 1) {
             m_masterMixTapCallsInFlight.notify_all();
+        }
+    }
+
+    // R-R3-45: the headphones output. No master volume or mute: design 6.3
+    // puts both on the speakers. Same try_lock idiom as the speakers push
+    // below, so a contending reopen drops this block instead of waiting.
+    {
+        std::unique_lock<std::mutex> hpLk(m_headphonesBusMutex, std::try_to_lock);
+        if (hpLk.owns_lock()) {
+            IAudioBus* headphonesBus = m_headphonesBus.get();
+            if (headphonesBus != nullptr && headphonesBus->isOpen()) {
+                if (m_headphonesConverter.passthrough()) {
+                    headphonesBus->push(
+                        reinterpret_cast<const char*>(hpMix.data()),
+                        static_cast<qint64>(stereoFloats) * sizeof(float));
+                } else {
+                    const int hpSamples =
+                        m_headphonesConverter.convert(hpMix.data(), mixed);
+                    if (hpSamples > 0) {
+                        headphonesBus->push(
+                            reinterpret_cast<const char*>(m_headphonesConverter.output()),
+                            static_cast<qint64>(hpSamples) * sizeof(float));
+                    }
+                }
+            }
         }
     }
 
@@ -2462,6 +2600,12 @@ void AudioEngine::resetAudioSettings()
     // refresh.  Empty deviceName → makeBus opens PortAudio's platform
     // default, matching addendum §2.5 "rebuild buses from seeded defaults".
     setSpeakersConfig(AudioDeviceConfig{});
+
+    // R-R3-45: audio/Headphones/Enabled is gone with the rest, so the
+    // headphones close (the default is off) and forget their device.
+    m_headphonesConfig = AudioDeviceConfig{};
+    setHeadphonesEnabled(false);
+    emit headphonesConfigChanged(AudioDeviceConfig{});
 
     // Rebuild each VAX bus as well — previously we only emitted the config-
     // changed signal, but rxBlockReady kept pushing audio to whatever bus

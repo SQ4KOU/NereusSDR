@@ -32,6 +32,11 @@
 //                 Core's slice (kept on this computer, not the Core).
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-45: Speakers and Headphones buttons in the audio
+//                 block pick the receiver's output (VAX design 6.2); a
+//                 plain notice says why it is silent when the headphones
+//                 are chosen and none are set up. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1246,6 +1251,54 @@ void VfoWidget::buildAudioTab()
             }
         });
         audioLayout->addLayout(row);
+    }
+
+    // 4b. R-R3-45: Speakers / Headphones, exclusive (VAX design 6.2). The
+    // receiver plays on one of them. NereusSDR-native; Thetis has no
+    // per-receiver output choice.
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        m_speakersBtn = new QPushButton(QStringLiteral("Speakers"), audioWidget);
+        m_speakersBtn->setObjectName(QStringLiteral("outputSpeakersButton"));
+        m_speakersBtn->setCheckable(true);
+        m_speakersBtn->setChecked(true);
+        m_speakersBtn->setStyleSheet(vfoDspToggleStyle());
+        m_speakersBtn->setToolTip(QStringLiteral("Play this receiver on the speakers"));
+        row->addWidget(m_speakersBtn);
+
+        m_headphonesBtn = new QPushButton(QStringLiteral("Headphones"), audioWidget);
+        m_headphonesBtn->setObjectName(QStringLiteral("outputHeadphonesButton"));
+        m_headphonesBtn->setCheckable(true);
+        m_headphonesBtn->setStyleSheet(vfoDspToggleStyle());
+        m_headphonesBtn->setToolTip(QStringLiteral("Play this receiver on the headphones"));
+        row->addWidget(m_headphonesBtn);
+
+        row->addStretch();
+
+        // Exclusive like the AGC row: clicking the checked one keeps it.
+        auto pick = [this](SliceModel::OutputRoute route) {
+            setOutputRoute(route);
+            if (!m_updatingFromModel && m_slice) {
+                m_slice->setOutputRoute(route);
+            }
+        };
+        connect(m_speakersBtn, &QPushButton::clicked, this, [pick](bool) {
+            pick(SliceModel::OutputRoute::Speakers);
+        });
+        connect(m_headphonesBtn, &QPushButton::clicked, this, [pick](bool) {
+            pick(SliceModel::OutputRoute::Headphones);
+        });
+        audioLayout->addLayout(row);
+
+        m_outputNotice = new QLabel(headphonesMissingText(), audioWidget);
+        m_outputNotice->setObjectName(QStringLiteral("outputRouteNotice"));
+        m_outputNotice->setWordWrap(true);
+        m_outputNotice->setStyleSheet(
+            QStringLiteral("color: %1; font-size: 10px;").arg(NereusSDR::Style::kAmberText));
+        m_outputNotice->setVisible(false);
+        audioLayout->addWidget(m_outputNotice);
     }
 
     // 5. Squelch row — SQL toggle + SQL threshold slider (NYI)
@@ -2577,6 +2630,44 @@ void VfoWidget::setBinauralEnabled(bool v)
     }
 }
 
+// ---- R-R3-45: speakers or headphones ----
+
+QString VfoWidget::headphonesMissingText()
+{
+    return QStringLiteral("Silent: no headphones are set up. "
+                          "Turn them on in Setup, Audio, Devices.");
+}
+
+void VfoWidget::setOutputRoute(SliceModel::OutputRoute route)
+{
+    const bool headphones = route == SliceModel::OutputRoute::Headphones;
+    const bool wasUpdating = m_updatingFromModel;
+    m_updatingFromModel = true;
+    if (m_speakersBtn) {
+        m_speakersBtn->setChecked(!headphones);
+    }
+    if (m_headphonesBtn) {
+        m_headphonesBtn->setChecked(headphones);
+    }
+    m_updatingFromModel = wasUpdating;
+    updateOutputNotice();
+}
+
+void VfoWidget::setHeadphonesAvailable(bool available)
+{
+    m_headphonesAvailable = available;
+    updateOutputNotice();
+}
+
+void VfoWidget::updateOutputNotice()
+{
+    if (!m_outputNotice) {
+        return;
+    }
+    const bool headphones = m_headphonesBtn && m_headphonesBtn->isChecked();
+    m_outputNotice->setVisible(headphones && !m_headphonesAvailable);
+}
+
 // ---- Slice coupling (for mode container binding only) ----
 
 void VfoWidget::setSlice(SliceModel* slice)
@@ -2595,6 +2686,8 @@ void VfoWidget::setSlice(SliceModel* slice)
     }
 
     if (m_slice) {
+        disconnect(m_slice, &SliceModel::outputRouteChanged,
+                   this, &VfoWidget::setOutputRoute);
         disconnect(m_slice, &SliceModel::nnrLimitChanged,
                    this, &VfoWidget::onNnrLimitChanged);
         disconnect(m_slice, &SliceModel::nrSelectionRefused, this, nullptr);
@@ -2609,6 +2702,15 @@ void VfoWidget::setSlice(SliceModel* slice)
     if (m_rttyContainer) {
         m_rttyContainer->setSlice(slice);
     }
+
+    // R-R3-45: speakers or headphones. The buttons write m_slice directly;
+    // the slice's change signal brings the flag back in step.
+    if (slice) {
+        connect(slice, &SliceModel::outputRouteChanged,
+                this, &VfoWidget::setOutputRoute);
+    }
+    setOutputRoute(slice ? slice->outputRoute()
+                         : SliceModel::OutputRoute::Speakers);
 
     // Sub-epic C-1: NR bank — sync from slice activeNr and initial state.
     if (slice) {

@@ -11,6 +11,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-45: every slice flag learns
+//                 whether a headphones output is open, so a receiver on
+//                 the headphones with none set up says why it is silent.
+//                 AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-23 - J.J. Boyd (KG4VCF). R3 receiver audio fix wave (R-R3-42,
 //                 R-R3-44): a receiver's audio stopping raises one plain
 //                 toast (ReceiverStopNotices), not one from TCI and another
@@ -1682,6 +1686,15 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     connect(newFlag, &VfoWidget::autoAgcToggled,
             slice, &SliceModel::setAutoAgcEnabled);
     wireAutoAgcVisuals(m_radioModel, slice, newFlag, m_rxApplet);
+
+    // R-R3-45: speakers or headphones. The route itself is wired in
+    // VfoWidget::setSlice; the flag also needs to know whether this
+    // computer has a headphones output open.
+    if (AudioEngine* engine = m_radioModel->audioEngine()) {
+        newFlag->setHeadphonesAvailable(engine->headphonesAvailable());
+        connect(engine, &AudioEngine::headphonesAvailableChanged,
+                newFlag, &VfoWidget::setHeadphonesAvailable);
+    }
 
     // Remote Daemon R2 Task 12: per-slice S-meter. SliceMeterPump
     // (src/core/meters/, owned by RadioModel) writes this slice's own
