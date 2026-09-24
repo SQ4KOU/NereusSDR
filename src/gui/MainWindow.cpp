@@ -7337,8 +7337,11 @@ void MainWindow::buildMenuBar()
         QAction* addSliceAct = viewMenu->addAction(
             QStringLiteral("&Add slice on active pan"));
         addSliceAct->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
+        // Fix wave 1 follow-up: no count here. The limit is known only once
+        // a radio sizes the stream pool (and, in a remote window, it is the
+        // Core's), and a refused add already names it (sliceCapReason).
         addSliceAct->setToolTip(QStringLiteral(
-            "Create a new slice on the active panadapter (up to maxSlices())"));
+            "Create a new slice on the active panadapter"));
         connect(addSliceAct, &QAction::triggered, this, [this]() {
             if (m_panStack && m_radioModel) {
                 m_radioModel->addSliceOnPan(m_panStack->activePanId());
