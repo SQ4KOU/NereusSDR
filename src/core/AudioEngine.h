@@ -461,6 +461,19 @@ public:
     {
         m_vaxBusFactoryForTest = std::move(factory);
     }
+
+    // R3 receiver audio fix wave follow-up: speakers, headphones and the
+    // TX input (every PortAudio device the engine opens through makeBus)
+    // come from this factory instead, given the device config and whether
+    // it is a capture device; the engine opens what it returns. In a test
+    // run (QStandardPaths test mode) without a factory the engine opens no
+    // real device of either kind, PortAudio or platform VAX.
+    using DeviceBusFactory =
+        std::function<std::unique_ptr<IAudioBus>(const AudioDeviceConfig& cfg, bool capture)>;
+    void setDeviceBusFactoryForTest(DeviceBusFactory factory)
+    {
+        m_deviceBusFactoryForTest = std::move(factory);
+    }
 #endif
 
 #ifdef NEREUS_BUILD_TESTS
@@ -966,6 +979,7 @@ private:
     bool m_vaxOutputsAllowed{true};
 #ifdef NEREUS_BUILD_TESTS
     std::function<std::unique_ptr<IAudioBus>(int)> m_vaxBusFactoryForTest;
+    DeviceBusFactory m_deviceBusFactoryForTest;
 #endif
     MasterMixer m_masterMix;
 

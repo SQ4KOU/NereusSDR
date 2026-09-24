@@ -19,6 +19,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 : R3 receiver audio fix wave follow-up by J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                 setDeviceBusFactoryForTest(); in a test run with no
+//                 test device the engine opens no real PortAudio or VAX
+//                 device.
 //   2026-09-23 : R-R3-43 Task 2 by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. Per-slice receiver audio taps
 //                 beside the VAX tee; the VAX tee undoes the feeding
@@ -594,6 +599,20 @@ std::unique_ptr<IAudioBus> AudioEngine::makeBus(const AudioDeviceConfig& cfg,
     // PortAudio path — used for speakers / mic / Windows-BYO VAX devices.
     // Platform-native VAX RX/TX virtual buses use makeVaxBus() /
     // makeVaxTxBus() (Sub-Phase 8.5).
+#ifdef NEREUS_BUILD_TESTS
+    // Fix wave follow-up: a test never opens this computer's real devices.
+    if (m_deviceBusFactoryForTest) {
+        std::unique_ptr<IAudioBus> fake = m_deviceBusFactoryForTest(cfg, capture);
+        if (!fake || !fake->open(toAudioFormat(cfg))) {
+            return nullptr;
+        }
+        return fake;
+    }
+    if (QStandardPaths::isTestModeEnabled()) {
+        qCInfo(lcAudio) << "Audio device not opened: test run with no test devices";
+        return nullptr;
+    }
+#endif
     auto bus = std::make_unique<PortAudioBus>();
     PortAudioConfig pcfg;
     pcfg.direction     = capture ? AudioDirection::Input
@@ -624,6 +643,12 @@ std::unique_ptr<IAudioBus> AudioEngine::makeVaxBus(int channel)
 #ifdef NEREUS_BUILD_TESTS
     if (m_vaxBusFactoryForTest) {
         return m_vaxBusFactoryForTest(channel);
+    }
+    // Fix wave follow-up: a test run never attaches to this computer's
+    // real VAX devices (the macOS ring is shared with any NereusSDR here).
+    if (QStandardPaths::isTestModeEnabled()) {
+        qCInfo(lcAudio) << "VAX device not opened: test run with no test VAX devices";
+        return nullptr;
     }
 #endif
 
@@ -709,6 +734,10 @@ std::unique_ptr<IAudioBus> AudioEngine::makeVaxTxBus()
 #ifdef NEREUS_BUILD_TESTS
     if (m_vaxBusFactoryForTest) {
         return m_vaxBusFactoryForTest(0);
+    }
+    if (QStandardPaths::isTestModeEnabled()) {
+        qCInfo(lcAudio) << "VAX TX device not opened: test run with no test VAX devices";
+        return nullptr;
     }
 #endif
     AudioFormat fmt;
