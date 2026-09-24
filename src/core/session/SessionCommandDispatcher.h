@@ -103,6 +103,13 @@
 //                                    (see dispatch()). AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 1 (R-IOS-01):
+//                                    verbSpecs(), the declared table of
+//                                    every verb dispatch() routes, its
+//                                    arguments and the capability that
+//                                    advertises it. Routing is unchanged.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -118,6 +125,27 @@
 namespace NereusSDR {
 
 class RadioModel;
+
+/// One named argument of a command verb, as dispatch() reads it: the name,
+/// the wire kind it must carry, and whether it may be left out.
+struct CommandArgumentSpec {
+    QByteArray name;
+    MirrorWireKind kind = MirrorWireKind::Unsupported;
+    bool optional = false;
+};
+
+/// One verb dispatch() accepts. `capability` names the StationCapabilities
+/// entry (its toUpdates() name) that advertises the verb and
+/// `capabilityVersion` the lowest value of it that does; an empty
+/// capability means the verb predates capability gating. `minMinor` is the
+/// lowest agreed session minor a client must hold before sending it.
+struct CommandVerbSpec {
+    QByteArray verb;
+    QList<CommandArgumentSpec> arguments;
+    QByteArray capability;
+    int capabilityVersion = 0;
+    quint16 minMinor = 0;
+};
 
 class SessionCommandDispatcher : public QObject {
     Q_OBJECT
@@ -147,6 +175,13 @@ public:
     /// fired by the time dispatch() itself returns.
     void dispatch(const NereusSDR::SessionMessage& invoke);
     void setSessionOwner(const QString& owner);
+
+    /// R-IOS-01: every verb dispatch() routes, declared beside the routing
+    /// rather than derived from it. A family routed by prefix ("ps3.",
+    /// "dspAssets.", "notch.") lists each concrete verb it accepts.
+    /// tst_link_surface_manifest scans this file's routing and each
+    /// family's handler and fails when the two disagree.
+    static const QList<CommandVerbSpec>& verbSpecs();
 
 signals:
     /// Every CommandResult this dispatcher produces, in answer to some

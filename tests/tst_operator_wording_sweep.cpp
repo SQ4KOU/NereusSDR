@@ -321,6 +321,21 @@ private slots:
         }
     }
 
+    void everyTranslationNamesTheDevicesInWords()
+    {
+        // The operator knows the Tuner Genius and the Power Genius by
+        // those names, not by their model codes.
+        static const QRegularExpression code(QStringLiteral("\\b[TP]GXL\\b"));
+        for (const QString& reason : OperatorReasonText::knownReasons()) {
+            const QString sentence = OperatorReasonText::forDisplay(reason);
+            QVERIFY2(!code.match(sentence).hasMatch(),
+                     qPrintable(reason + QStringLiteral(" -> ") + sentence));
+        }
+        QCOMPARE(OperatorReasonText::forDisplay(QStringLiteral(
+                     "Update this app to set up the Tuner Genius XL on this Core.")),
+                 QStringLiteral("Update this app to set up the Tuner Genius on this Core."));
+    }
+
     void anUnknownReasonInUserWordsIsShownAsSent()
     {
         const QString plain = QStringLiteral("Connection refused");
@@ -410,12 +425,16 @@ private slots:
     void wireReasonsAreUnchanged()
     {
         // The Core sends these and this app compares them as text; they are
-        // translated only when shown.
+        // translated only when shown. The source retune is in operator words
+        // since R-IOS-01; an older Core's words still show as before.
         QCOMPARE(QString::fromLatin1(kRetireReasonSliceRemoved), QStringLiteral("slice removed"));
         QCOMPARE(QString::fromLatin1(kRetireReasonStreamBindingChanged),
                  QStringLiteral("slice stream binding changed"));
         QCOMPARE(QString::fromLatin1(kRetireReasonSourceRetune),
-                 QStringLiteral("source retune no longer covers requested crop"));
+                 QStringLiteral("The receiver was retuned away from this view."));
+        QCOMPARE(OperatorReasonText::forDisplay(
+                     QStringLiteral("source retune no longer covers requested crop")),
+                 OperatorReasonText::forDisplay(QString::fromLatin1(kRetireReasonSourceRetune)));
         QVERIFY(OperatorReasonText::knownReasons().contains(QStringLiteral("heartbeat timeout")));
         QVERIFY(OperatorReasonText::knownReasons().contains(
             QStringLiteral("Remote 4O3A control requires a newer station protocol.")));
@@ -702,7 +721,8 @@ private slots:
         }
         QVERIFY2(files >= 500, qPrintable(QString::number(files)));
         const QStringList keys = OperatorReasonText::tableKeys();
-        QVERIFY2(keys.size() >= 140, qPrintable(QString::number(keys.size())));
+        // R-IOS-01 moved the Core's retired words to olderCoreKeys().
+        QVERIFY2(keys.size() >= 110, qPrintable(QString::number(keys.size())));
         const QString mediaStartPrefix = keys.constLast();
         QVERIFY(mediaStartPrefix.startsWith(QLatin1String("Station media could not start")));
         QStringList missing;
@@ -715,11 +735,28 @@ private slots:
             }
         }
         QVERIFY2(missing.isEmpty(), qPrintable(missing.join(QStringLiteral(" | "))));
+
+        // R-IOS-01: the reasons only an older Core sends are gone from the
+        // sources (the Core words them in operator words now), and each
+        // still shows in user words.
+        const QStringList older = OperatorReasonText::olderCoreKeys();
+        QVERIFY2(older.size() >= 80, qPrintable(QString::number(older.size())));
+        QStringList stillWritten;
+        for (const QString& key : older) {
+            QVERIFY2(!keys.contains(key), qPrintable(key));
+            if (sources.contains(QLatin1Char('"') + key + QLatin1Char('"'))) {
+                stillWritten.append(key);
+            }
+            const QString shown = OperatorReasonText::forDisplay(key);
+            QVERIFY2(shown != key && OperatorWording::isPlain(shown), qPrintable(key));
+        }
+        QVERIFY2(stillWritten.isEmpty(), qPrintable(stillWritten.join(QStringLiteral(" | "))));
     }
 
     // R3 post-merge follow-ups (R-R3-17, R-R3-21): this app's own "does not
-    // support" refusals, the NNR adapter's reasons and the Core's Tuner
-    // Genius XL checks are read from their sources and each is shown in user
+    // support" refusals and the NNR adapter's reasons are read from their
+    // sources (the Core's Tuner Genius checks are worded at the source now:
+    // accessoryChecksAreInUserWordsAtTheSource) and each is shown in user
     // words that name the Core, never the station or PS3. A new or reworded
     // one there fails here until the table has it.
     void refusalsAndTunerChecksReadInUserWordsAtTheSource()
@@ -750,9 +787,6 @@ private slots:
             {"src/core/session/StationClient.cpp",
              "^(The station does not support |This station cannot )", 7},
             {"src/core/dsp/NnrAdapter.cpp", ".", 8},
-            {"src/core/TgxlConnection.cpp", "^TGXL [a-z]+ .* ", 6},
-            {"src/core/StationTgxlController.cpp",
-             "^(Expected TunerGenius|No matching TGXL)", 2},
         };
         for (const auto& site : sites) {
             const QStringList reasons =
@@ -770,6 +804,37 @@ private slots:
                 QVERIFY2(!stationWord.match(shown).hasMatch(), qPrintable(reason + QStringLiteral(" -> ") + shown));
             }
         }
+    }
+
+    // iPhone app Part A fix wave (R-IOS-01): the Core's Tuner Genius and
+    // Power Genius checks are written in operator words where they are
+    // decided, because an app shows the connection error as the Core sends
+    // it. This app shows each as sent; an older Core's words are the table's
+    // olderCoreKeys and patterns.
+    void accessoryChecksAreInUserWordsAtTheSource()
+    {
+        static const QRegularExpression literal(
+            QStringLiteral("QStringLiteral\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*\\)"));
+        static const QRegularExpression device(QStringLiteral("(Tuner|Power) Genius"));
+        static const QRegularExpression placeholder(QStringLiteral("%[0-9]"));
+        int checked = 0;
+        for (const char* file : {"src/core/TgxlConnection.cpp", "src/core/PgxlConnection.cpp",
+                                 "src/core/StationTgxlController.cpp",
+                                 "src/core/StationPgxlController.cpp"}) {
+            const QString code = codeWithoutComments(sourcePath(file));
+            QRegularExpressionMatchIterator it = literal.globalMatch(code);
+            while (it.hasNext()) {
+                QString reason = it.next().captured(1);
+                if (!device.match(reason).hasMatch() || !reason.startsWith(QLatin1String("The "))) {
+                    continue;
+                }
+                ++checked;
+                reason.replace(placeholder, QStringLiteral("SPE Expert"));
+                QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+                QCOMPARE(OperatorReasonText::forDisplay(reason), reason);
+            }
+        }
+        QVERIFY2(checked >= 12, qPrintable(QString::number(checked)));
     }
 
     // R3 controls that work, Task 3 (R-R3-17, R-R3-21): the developer

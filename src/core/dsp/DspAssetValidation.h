@@ -76,6 +76,12 @@ public:
     // capacityBytes includes the fixed WDSP C buffer's terminating NUL.
     static bool validateEncodedPath(const QString& path, qsizetype capacityBytes,
                                     QString* error = nullptr);
+
+    // R-IOS-01: true for the validation and store messages written for the
+    // operator (the NR3 checks), which the Core sends to an app as they
+    // are. Every other message from this class and DspAssetStore is detail
+    // for the log; DspAssetService sends a plain sentence in its place.
+    static bool isOperatorMessage(const QString& message);
 };
 
 } // namespace NereusSDR

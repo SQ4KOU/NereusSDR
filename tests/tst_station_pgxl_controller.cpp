@@ -12,6 +12,9 @@
 // settings reach the (fake) amp as the local page's own commands, with the
 // amp's answers and values published on AccessorySettingsModel. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: Lane B takes integration (R-IOS-01, R-R3-21): another amp off
+// the network leaves this one's plain not-found reason. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include "OperatorWording.h"
 #include <QPointer>
@@ -209,7 +212,7 @@ private slots:
         QVERIFY(!model.configurePgxlForStation(QStringLiteral("127.0.0.1"), 0, &reason));
         model.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("False"));
         QVERIFY(!model.configurePgxlForStation(QStringLiteral("127.0.0.1"), 9008, &reason));
-        QCOMPARE(reason, QStringLiteral("Enable 4O3A on Core before connecting the PGXL."));
+        QCOMPARE(reason, QStringLiteral("Turn on 4O3A on the Core before connecting the Power Genius."));
         model.setConnectionStateForTest(ConnectionState::Disconnected);
         QVERIFY(!model.configurePgxlForStation(QStringLiteral("127.0.0.1"), 9008, &reason));
         QVERIFY(model.disconnectPgxlForStation(&reason));
@@ -217,7 +220,7 @@ private slots:
         // A window with no Core controller has nothing to configure.
         RadioModel local;
         QVERIFY(!local.configurePgxlForStation(QStringLiteral("127.0.0.1"), 9008, &reason));
-        QCOMPARE(reason, QStringLiteral("Station accessory configuration is unavailable."));
+        QCOMPARE(reason, QStringLiteral("This Core cannot change its amplifier and tuner settings."));
     }
 
     // A real Power Genius (captured discovery plus the same serial in its own
@@ -595,8 +598,9 @@ private slots:
         announce(model, amp.serverPort(), QStringLiteral("PowerGeniusXL"),
                  QStringLiteral("10-200/24-0047"));
         QTRY_COMPARE(model.amplifierModel()->connectionPhase(), Phase::Error);
-        QVERIFY(model.amplifierModel()->connectionError().startsWith(
-            QStringLiteral("PGXL identity serial mismatch")));
+        QCOMPARE(model.amplifierModel()->connectionError(),
+                 QStringLiteral("The Power Genius at this address is not the one the Core found "
+                                "on its network. Check the amplifier's address and port."));
         QVERIFY(!pgxl->isConnected());
         QCOMPARE(commandsOf(frames), QStringList{QStringLiteral("info")});
     }
@@ -686,7 +690,9 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(model.amplifierModel()->connectionPhase(), Phase::Error, 6000);
         const QString error = model.amplifierModel()->connectionError();
         QVERIFY2(!error.contains(QStringLiteral("different network")), qPrintable(error));
-        QVERIFY(error.startsWith(QStringLiteral("No matching PGXL discovery announcement")));
+        QVERIFY2(error.startsWith(QStringLiteral("The Core did not find a Power Genius at this "
+                                                  "address")),
+                 qPrintable(error));
         QString reason;
         QVERIFY(model.disconnectPgxlForStation(&reason));
     }
@@ -710,7 +716,8 @@ private slots:
         peer->flush();
         QTRY_COMPARE(model.amplifierModel()->connectionPhase(), Phase::Error);
         QCOMPARE(model.amplifierModel()->connectionError(),
-                 QStringLiteral("PGXL native identity timed out"));
+                 QStringLiteral("The device at this address did not answer as a Power Genius "
+                                "in time."));
         QVERIFY(!pgxl->isConnected());
         QCOMPARE(commandsOf(frames), QStringList{QStringLiteral("info")});
     }

@@ -130,6 +130,10 @@ private:
     void setNr3Status(const QString& status);
     void setNr3Runnable(bool runnable);
     DspAssetServiceResult reject(const QString& reason) const;
+    // R-IOS-01: a store or validation message is sent as it is only when
+    // it is written for the operator (DspAssetValidation::
+    // isOperatorMessage); otherwise it goes to the log and `plain` is sent.
+    DspAssetServiceResult rejectDetail(const QString& detail, const QString& plain) const;
 
     AppSettings& m_settings;
     bool m_local{false};

@@ -21,6 +21,9 @@
 //                NereusSDR-original: it calls the public rnnoise API
 //                (rnnoise_model_from_buffer, rnnoise_create) and ports no
 //                upstream logic.
+//   2026-09-24 - isOperatorMessage() added by J.J. Boyd (KG4VCF), with
+//                AI-assisted implementation via Anthropic Claude Code
+//                (R-IOS-01): which messages the Core sends as they are.
 // =================================================================
 
 /*  nnio.c
@@ -110,6 +113,7 @@ warren@pratt.one
 #include "rnnoise.h"
 #endif
 #include <QSet>
+#include <QStringList>
 #include <QVector>
 
 #include <algorithm>
@@ -435,6 +439,21 @@ qint64 DspAssetValidation::sizeLimit(DspAssetKind kind)
         return kMaxNr3ModelBytes;
     }
     return 0;
+}
+
+bool DspAssetValidation::isOperatorMessage(const QString& message)
+{
+    // The NR3 validator's own sentences below, and DspAssetStore's two
+    // that repeat them.
+    static const QStringList kOperatorMessages{
+        QStringLiteral("The NR3 model is larger than 16 MiB."),
+        QStringLiteral("This file is not an NR3 model."),
+        QStringLiteral("There was not enough memory to check the NR3 model."),
+        QStringLiteral("This file is not an NR3 model this Core can use."),
+        QStringLiteral("This Core was built without NR3."),
+        QStringLiteral("NR3 models belong to the Core, not to one radio."),
+    };
+    return kOperatorMessages.contains(message);
 }
 
 DspAssetValidationResult DspAssetValidation::validate(DspAssetKind kind,

@@ -51,16 +51,36 @@
 //                                    setPgxlConnectionSettings for the
 //                                    Core's Power Genius XL. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 1 (R-IOS-01):
+//                                    verbSpecs(), the declared verb table.
+//                                    Routing unchanged. AI-assisted via
+//                                    Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-48: configureRfKit,
 //                                    disconnectRfKit and setRfKitEnabled
 //                                    for the Core's RF-Kit RF2K-S, and
 //                                    setStationTci for the station's TCI
 //                                    server. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 2 (R-IOS-01): the
+//                                    RF-Kit and station TCI verbs in
+//                                    verbSpecs(). AI-assisted via
+//                                    Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: setTxInterlockPolicy,
 //                                    setPgxlPowerCap and clearAccessoryFaults
 //                                    (accessoryDataVersion 1). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): the
+//                                    accessory record verbs in
+//                                    verbSpecs(). AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4b (R-IOS-01,
+//                                    R-R3-21): every refusal reason in
+//                                    operator words. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
+//                                    a PureSignal request's arguments are
+//                                    read before the transmit gate.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the amp's and
 //                                    tuner's own settings (setPgxlName,
 //                                    setPgxlHardware, setPgxlNetwork,
@@ -71,6 +91,11 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47: resetRfKitError (the RF-Kit
 //                                    page's Reset amp error). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Lane B takes integration (R-IOS-01,
+//                                    R-R3-21): the filter policy request's
+//                                    unreadable-request reason in plain
+//                                    words.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -143,8 +168,9 @@ bool hasWireKind(const QList<MirrorUpdate>& arguments, const QByteArray& name,
 
 // What findIntArgument() found. Three states rather than a bool, because
 // "you did not send sliceId" and "the sliceId you sent is not a number
-// this station can act on" are different things to tell a peer, and the
-// pre-existing "missing ..." reasons are worth keeping distinct.
+// this station can act on" are different things: the peer is told the
+// Core could not read the request, or could not use one of its values.
+// Both are in operator words (R-IOS-01).
 enum class ArgumentStatus {
     Ok,
     Missing,
@@ -236,13 +262,189 @@ bool findFiniteDoubleArgument(const QList<MirrorUpdate>& arguments,
     return true;
 }
 
-QString notRepresentableReason(const QByteArray& name)
+QString notRepresentableReason()
 {
-    return QStringLiteral("%1 argument is not a whole number this station can represent")
-        .arg(QString::fromUtf8(name));
+    return QStringLiteral("The Core could not use one of the values in this request.");
 }
 
 } // namespace
+
+// ── The declared verb table (R-IOS-01) ───────────────────────────────────
+//
+// Each row is what dispatch() and the handler behind it accept: argument
+// names and wire kinds as the handler checks them (every handler requires
+// every argument it names, so none is optional today), and the gate a
+// client applies before sending the verb, as StationClient applies it:
+//
+//   slice verbs            none: they predate capability gating
+//   requestStreamCtun*     remoteCtunAvailable()          (StationClient.cpp)
+//   configure/disconnectTgxl remoteTgxlConfigAvailable()
+//   setFourO3AEnabled      remoteFourO3AControlAvailable()
+//   *Pgxl*                 remotePgxlControlAvailable() (version 2)
+//   *RfKit*                remoteRfKitControlAvailable() (version 2)
+//   setStationTci          stationTciAvailable() (version 1)
+//   setTxInterlockPolicy, setPgxlPowerCap, clearAccessoryFaults
+//                          accessoryDataAvailable() (version 1)
+//   requestIoBoardProbe    remoteHardwareConfigAvailable() (version 2)
+//   setAlexRxAntenna       radioHardwareVersion 3 (requestAlexRxAntenna)
+//   nnr.*                  nnrControlAvailable(); nnr.tryAgain adds
+//                          kNnrLimitSessionProtocolMinor
+//   nnr.applyModelSelection dspAssetVersion 1 (requestApplyNnrModels)
+//   dspAssets.*            dspAssetVersion 1; selectNr3Model version 2
+//   ps3.subscribeDisplay   psDisplayVersion 1 with media
+//   ps3.<action>           psAlgorithmVersion 3
+//   notch.*                remoteNotchControlAvailable()
+//
+// tst_link_surface_manifest keeps this table and the routing in step: a
+// source scan of dispatch() and of each prefix family's handler, and a
+// dispatch of every row on a live RadioModel.
+const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
+{
+    constexpr MirrorWireKind kInt = MirrorWireKind::Int64;
+    constexpr MirrorWireKind kUtf8 = MirrorWireKind::Utf8;
+    constexpr MirrorWireKind kBool = MirrorWireKind::Bool;
+    constexpr MirrorWireKind kDouble = MirrorWireKind::Float64;
+    const auto arg = [](const char* name, MirrorWireKind kind) {
+        return CommandArgumentSpec{QByteArray(name), kind, false};
+    };
+    const auto optionalArg = [](const char* name, MirrorWireKind kind) {
+        return CommandArgumentSpec{QByteArray(name), kind, true};
+    };
+    static const QList<CommandVerbSpec> specs{
+        // Slices (R2 Task 11).
+        {"addSlice", {arg("initialPanId", kUtf8)}, {}, 0, 0},
+        {"removeSlice", {arg("sliceId", kInt)}, {}, 0, 0},
+        {"requestSliceSampleRate", {arg("sliceId", kInt), arg("rateHz", kInt)}, {}, 0, 0},
+        {"addSliceOnPan", {arg("panId", kUtf8)}, {}, 0, 0},
+        {"setActiveSliceById", {arg("sliceId", kInt)}, {}, 0, 0},
+        // C-Tune.
+        {"requestStreamCtunPinned", {arg("sliceId", kInt), arg("pinned", kBool)},
+         "remoteCtunVersion", 1, kRemoteCtunSessionProtocolMinor},
+        {"requestStreamCentre", {arg("sliceId", kInt), arg("centreHz", kDouble)},
+         "remoteCtunVersion", 1, kRemoteCtunSessionProtocolMinor},
+        // 4O3A accessories.
+        {"configureTgxl", {arg("host", kUtf8), arg("port", kInt)},
+         "remoteTgxlConfigVersion", 1, kRemoteTgxlConfigSessionProtocolMinor},
+        {"disconnectTgxl", {}, "remoteTgxlConfigVersion", 1,
+         kRemoteTgxlConfigSessionProtocolMinor},
+        {"setFourO3AEnabled", {arg("enabled", kBool)}, "remoteFourO3AControlVersion", 1,
+         kRemoteFourO3AControlSessionProtocolMinor},
+        {"configurePgxl", {arg("host", kUtf8), arg("port", kInt)},
+         "remotePgxlControlVersion", 2, kRadioIdentitySessionProtocolMinor},
+        {"disconnectPgxl", {}, "remotePgxlControlVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
+        {"setPgxlConnectionSettings",
+         {arg("autoReconnect", kBool), arg("keepaliveSec", kInt), arg("pingSec", kInt)},
+         "remotePgxlControlVersion", 2, kRadioIdentitySessionProtocolMinor},
+        // The amp's and the tuner's own settings (R-R3-47, R-R3-22).
+        // setPgxlHardware takes exactly one of its three arguments.
+        {"setPgxlName", {arg("name", kUtf8)}, "remotePgxlControlVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
+        {"setPgxlHardware",
+         {optionalArg("biasMode", kUtf8), optionalArg("fanMode", kUtf8),
+          optionalArg("ledIntensity", kInt)},
+         "remotePgxlControlVersion", 3, kRadioIdentitySessionProtocolMinor},
+        {"setPgxlNetwork",
+         {arg("dhcp", kBool), arg("address", kUtf8), arg("netmask", kUtf8),
+          arg("gateway", kUtf8)},
+         "remotePgxlControlVersion", 3, kRadioIdentitySessionProtocolMinor},
+        {"savePgxlSettings", {}, "remotePgxlControlVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
+        {"readPgxlSettings", {}, "remotePgxlControlVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
+        {"setTgxlName", {arg("name", kUtf8)}, "remoteTgxlControlVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"setTgxlNetwork",
+         {arg("dhcp", kBool), arg("address", kUtf8), arg("netmask", kUtf8),
+          arg("gateway", kUtf8)},
+         "remoteTgxlControlVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"saveTgxlSettings", {}, "remoteTgxlControlVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"readTgxlSettings", {}, "remoteTgxlControlVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        // The Core's RF-Kit RF2K-S and the station TCI server (R-R3-47,
+        // R-R3-48).
+        {"configureRfKit", {arg("host", kUtf8), arg("port", kInt)},
+         "remoteRfKitControlVersion", 2, kRadioIdentitySessionProtocolMinor},
+        {"disconnectRfKit", {}, "remoteRfKitControlVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
+        {"setRfKitEnabled", {arg("enabled", kBool)}, "remoteRfKitControlVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
+        {"resetRfKitError", {}, "remoteRfKitControlVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
+        {"setStationTci", {arg("enabled", kBool), arg("port", kInt)}, "stationTciVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        // The Core's accessory records and settings (R-R3-47, R-R3-22).
+        {"setTxInterlockPolicy",
+         {arg("mode", kInt), arg("graceMs", kInt), arg("swrGateEnabled", kBool),
+          arg("swrGateMax", kDouble)},
+         "accessoryDataVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"setPgxlPowerCap", {arg("enabled", kBool), arg("watts", kInt)},
+         "accessoryDataVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"clearAccessoryFaults", {arg("device", kUtf8)}, "accessoryDataVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        // The Core's radio hardware (R-R3-46).
+        {"requestIoBoardProbe", {}, "radioHardwareVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
+        {"setAlexRxAntenna", {arg("band", kInt), arg("antenna", kInt), arg("rxOnly", kBool)},
+         "radioHardwareVersion", 3, kRadioIdentitySessionProtocolMinor},
+        {"setAlexBpfMode", {arg("chain", kInt), arg("mode", kInt)}, "radioHardwareVersion", 4,
+         kRadioIdentitySessionProtocolMinor},
+        // Neural noise reduction.
+        {"nnr.setDiagnostics",
+         {arg("sliceId", kInt), arg("testMode", kInt), arg("outputMode", kInt)},
+         "nnrVersion", 1, kDspControlSessionProtocolMinor},
+        {"nnr.resetTuning", {arg("sliceId", kInt)}, "nnrVersion", 1,
+         kDspControlSessionProtocolMinor},
+        {"nnr.tryAgain", {arg("sliceId", kInt)}, "nnrVersion", 1,
+         kNnrLimitSessionProtocolMinor},
+        {"nnr.applyModelSelection", {arg("revision", kInt)}, "dspAssetVersion", 1,
+         kDspControlSessionProtocolMinor},
+        // DSP assets (DspAssetService::execute).
+        {"dspAssets.list", {}, "dspAssetVersion", 1, kDspControlSessionProtocolMinor},
+        {"dspAssets.beginImport",
+         {arg("kind", kInt), arg("label", kUtf8), arg("size", kInt), arg("hash", kUtf8),
+          arg("radioIdentity", kUtf8)},
+         "dspAssetVersion", 1, kDspControlSessionProtocolMinor},
+        {"dspAssets.chunk",
+         {arg("transferId", kUtf8), arg("offset", kInt), arg("data", kUtf8)},
+         "dspAssetVersion", 1, kDspControlSessionProtocolMinor},
+        {"dspAssets.finishImport", {arg("transferId", kUtf8)}, "dspAssetVersion", 1,
+         kDspControlSessionProtocolMinor},
+        {"dspAssets.cancelImport", {arg("transferId", kUtf8)}, "dspAssetVersion", 1,
+         kDspControlSessionProtocolMinor},
+        {"dspAssets.export", {arg("id", kUtf8), arg("offset", kInt)}, "dspAssetVersion", 1,
+         kDspControlSessionProtocolMinor},
+        {"dspAssets.selectNnrModel", {arg("slot", kInt), arg("id", kUtf8)},
+         "dspAssetVersion", 1, kDspControlSessionProtocolMinor},
+        {"dspAssets.selectNr3Model", {arg("id", kUtf8)}, "dspAssetVersion", 2,
+         kDspControlSessionProtocolMinor},
+        // PureSignal (PureSignalSessionFacade::actionVerb and the display
+        // subscription handled here).
+        {"ps3.subscribeDisplay", {arg("enabled", kBool)}, "psDisplayVersion", 1,
+         kMediaSessionProtocolMinor},
+        {"ps3.off", {}, "psAlgorithmVersion", 3, kDspControlSessionProtocolMinor},
+        {"ps3.single", {}, "psAlgorithmVersion", 3, kDspControlSessionProtocolMinor},
+        {"ps3.automatic", {}, "psAlgorithmVersion", 3, kDspControlSessionProtocolMinor},
+        {"ps3.applyCurrent", {}, "psAlgorithmVersion", 3, kDspControlSessionProtocolMinor},
+        {"ps3.twoTone", {arg("enabled", kBool)}, "psAlgorithmVersion", 3,
+         kDspControlSessionProtocolMinor},
+        {"ps3.saveCorrection", {arg("label", kUtf8)}, "psAlgorithmVersion", 3,
+         kDspControlSessionProtocolMinor},
+        {"ps3.restoreCorrection", {arg("assetId", kUtf8)}, "psAlgorithmVersion", 3,
+         kDspControlSessionProtocolMinor},
+        // Notches (R-R3-21 / R-R3-09).
+        {"notch.add", {arg("sliceId", kInt), arg("centreHz", kDouble), arg("widthHz", kDouble)},
+         "notchControlVersion", 1, kDspControlSessionProtocolMinor},
+        {"notch.move", {arg("id", kInt), arg("centreHz", kDouble), arg("widthHz", kDouble)},
+         "notchControlVersion", 1, kDspControlSessionProtocolMinor},
+        {"notch.setActive", {arg("id", kInt), arg("active", kBool)}, "notchControlVersion", 1,
+         kDspControlSessionProtocolMinor},
+        {"notch.delete", {arg("id", kInt)}, "notchControlVersion", 1,
+         kDspControlSessionProtocolMinor},
+    };
+    return specs;
+}
 
 SessionCommandDispatcher::SessionCommandDispatcher(RadioModel* radioModel, QObject* parent)
     : QObject(parent)
@@ -298,7 +500,7 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     }
     if (m_radioModel.isNull()) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("no radio model attached"), {});
+                   QStringLiteral("The Core has no radio ready."), {});
         return;
     }
 
@@ -311,7 +513,7 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         const auto arguments = dspCommandValues(invoke.arguments);
         const auto result = arguments && !m_sessionOwner.isEmpty()
             ? m_radioModel->dspAssets()->execute(invoke.commandVerb, *arguments, m_sessionOwner)
-            : DspAssetServiceResult{false, QStringLiteral("Malformed DSP asset request."), {}};
+            : DspAssetServiceResult{false, QStringLiteral("The Core could not read this request."), {}};
         const auto values = dspCommandValues(result.values);
         emit commandResultReady(SessionMessages::commandResult(invoke.commandVerb,
             invoke.commandId, result.accepted, result.reason, {}, values.value_or(QList<MirrorUpdate>{})));
@@ -334,7 +536,7 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         }
         const bool accepted = valid && m_radioModel->applyNnrModelSelection(revision, &reason);
         if (!valid) {
-            reason = QStringLiteral("Model application requires the current selection revision.");
+            reason = QStringLiteral("The model choice changed on the Core before this request arrived. Try again.");
         }
         emitResult(invoke.commandVerb, invoke.commandId, accepted, reason, {"dspAssets"});
         return;
@@ -406,7 +608,7 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleNnrAction(invoke);
     } else {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("unrecognised command verb"), {});
+                   QStringLiteral("The Core does not know this request. Updating the Core may help."), {});
     }
 }
 
@@ -416,14 +618,14 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
     const auto arguments = dspCommandValues(invoke.arguments);
     if (m_sessionOwner.isEmpty() || invoke.commandId == 0 || !arguments) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("Malformed PureSignal request or retired session."), {});
+                   QStringLiteral("The Core could not use this PureSignal request."), {});
         return;
     }
     if (invoke.commandVerb == "ps3.subscribeDisplay") {
         if (arguments->size() != 1 || !arguments->contains("enabled")
             || arguments->value("enabled").typeId() != QMetaType::Bool) {
             emitResult(invoke.commandVerb, invoke.commandId, false,
-                       QStringLiteral("A display subscription requires one boolean enabled value."), {});
+                       QStringLiteral("The Core could not read the PureSignal display request."), {});
             return;
         }
         const bool enabled = arguments->value("enabled").toBool();
@@ -447,7 +649,15 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
     const auto action = PureSignalSessionFacade::actionForVerb(invoke.commandVerb);
     if (!action) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("Unknown PureSignal action."), {});
+                   QStringLiteral("The Core does not know this PureSignal action."), {});
+        return;
+    }
+    // Read the request before deciding on it: a request that is not one
+    // this action takes is refused as unreadable, not with the transmit
+    // gate's reason below, so the app learns what it sent was wrong.
+    if (!PureSignalSessionFacade::argumentsFit(*action, *arguments)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this PureSignal request."), {});
         return;
     }
     const bool stop = *action == Ps3Action::OffReset
@@ -459,13 +669,13 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
     // replacing this gate with negotiated, station-authorized transmit.
     if (!stop && *action != Ps3Action::SaveCorrection) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("Remote PureSignal actuation requires R4 transmit support."), {});
+                   QStringLiteral("PureSignal cannot be run from a remote window yet."), {});
         return;
     }
     for (const PendingPureSignalCommand& command : std::as_const(m_pureSignalCommands)) {
         if (command.commandId == invoke.commandId) {
             emitResult(invoke.commandVerb, invoke.commandId, false,
-                       QStringLiteral("This PureSignal command identity is already pending."), {});
+                       QStringLiteral("This PureSignal request is already in progress."), {});
             return;
         }
     }
@@ -499,7 +709,7 @@ void SessionCommandDispatcher::handleNnrAction(const SessionMessage& invoke)
     SliceModel* slice = typesValid ? m_radioModel->sliceById(sliceId) : nullptr;
     if (!slice) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("Unknown receiver or invalid NNR action arguments."), {});
+                   QStringLiteral("The Core could not apply this NNR change to that receiver."), {});
         return;
     }
     QString reason;
@@ -569,7 +779,7 @@ void SessionCommandDispatcher::handleNotchAction(const SessionMessage& invoke)
             && findIntArgument(invoke.arguments, "id", &id) == ArgumentStatus::Ok;
     } else {
         emitResult(verb, invoke.commandId, false,
-                   QStringLiteral("unrecognised command verb"), {});
+                   QStringLiteral("The Core does not know this request. Updating the Core may help."), {});
         return;
     }
     if (!valid) {
@@ -621,7 +831,7 @@ void SessionCommandDispatcher::handleAddSlice(const SessionMessage& invoke)
     QVariant panIdArg;
     if (!findArgument(invoke.arguments, "initialPanId", &panIdArg)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("missing initialPanId argument"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
 
@@ -647,7 +857,7 @@ void SessionCommandDispatcher::handleAddSlice(const SessionMessage& invoke)
     if (id < 0) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    rejectionReason.isEmpty()
-                       ? QStringLiteral("rejected by the slice allocator")
+                       ? QStringLiteral("The Core could not add another receiver.")
                        : rejectionReason,
                    {});
         return;
@@ -664,11 +874,11 @@ void SessionCommandDispatcher::handleRemoveSlice(const SessionMessage& invoke)
     switch (findIntArgument(invoke.arguments, "sliceId", &sliceId)) {
     case ArgumentStatus::Missing:
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("missing sliceId argument"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     case ArgumentStatus::NotRepresentable:
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   notRepresentableReason("sliceId"), {});
+                   notRepresentableReason(), {});
         return;
     case ArgumentStatus::Ok:
         break;
@@ -676,7 +886,7 @@ void SessionCommandDispatcher::handleRemoveSlice(const SessionMessage& invoke)
 
     if (m_radioModel->sliceById(sliceId) == nullptr) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("no such slice"), {});
+                   QStringLiteral("That receiver is no longer on the Core."), {});
         return;
     }
     if (m_radioModel->slices().size() <= 1) {
@@ -686,7 +896,7 @@ void SessionCommandDispatcher::handleRemoveSlice(const SessionMessage& invoke)
         // with the station's state), so it has to be caught here, before
         // the call, or the result would wrongly claim success.
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("cannot remove the last remaining slice"), {});
+                   QStringLiteral("The last receiver cannot be removed."), {});
         return;
     }
 
@@ -702,7 +912,7 @@ void SessionCommandDispatcher::handleAddSliceOnPan(const SessionMessage& invoke)
     QVariant panIdArg;
     if (!findArgument(invoke.arguments, "panId", &panIdArg)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("missing panId argument"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
 
@@ -732,7 +942,7 @@ void SessionCommandDispatcher::handleAddSliceOnPan(const SessionMessage& invoke)
     if (newId < 0) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    rejectionReason.isEmpty()
-                       ? QStringLiteral("rejected by the slice allocator")
+                       ? QStringLiteral("The Core could not add another receiver.")
                        : rejectionReason,
                    {});
         return;
@@ -756,23 +966,23 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
     // peer sent something and needs to know WHICH one was refused.
     if (sliceIdStatus == ArgumentStatus::Missing || rateHzStatus == ArgumentStatus::Missing) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("missing sliceId or rateHz argument"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
     if (sliceIdStatus == ArgumentStatus::NotRepresentable) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   notRepresentableReason("sliceId"), {});
+                   notRepresentableReason(), {});
         return;
     }
     if (rateHzStatus == ArgumentStatus::NotRepresentable) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   notRepresentableReason("rateHz"), {});
+                   notRepresentableReason(), {});
         return;
     }
 
     if (m_radioModel->sliceById(sliceId) == nullptr) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("no such slice"), {});
+                   QStringLiteral("That receiver is no longer on the Core."), {});
         return;
     }
 
@@ -876,11 +1086,11 @@ void SessionCommandDispatcher::handleSetActiveSliceById(const SessionMessage& in
     switch (findIntArgument(invoke.arguments, "sliceId", &sliceId)) {
     case ArgumentStatus::Missing:
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("missing sliceId argument"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     case ArgumentStatus::NotRepresentable:
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   notRepresentableReason("sliceId"), {});
+                   notRepresentableReason(), {});
         return;
     case ArgumentStatus::Ok:
         break;
@@ -896,7 +1106,7 @@ void SessionCommandDispatcher::handleSetActiveSliceById(const SessionMessage& in
 
     if (!m_radioModel->setActiveSliceById(sliceId)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("no such slice"), {});
+                   QStringLiteral("That receiver is no longer on the Core."), {});
         return;
     }
 
@@ -921,12 +1131,12 @@ void SessionCommandDispatcher::handleRequestStreamCtunPinned(const SessionMessag
         || !findArgument(invoke.arguments, "pinned", &pinned)
         || pinned.typeId() != QMetaType::Bool) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("invalid sliceId or pinned argument"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
     if (!m_radioModel->requestStreamCtunPinned(sliceId, pinned.toBool())) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("slice is not bound to an active stream"), {});
+                   QStringLiteral("That receiver is not running on the Core."), {});
         return;
     }
     QList<QByteArray> affected;
@@ -946,14 +1156,14 @@ void SessionCommandDispatcher::handleRequestStreamCentre(const SessionMessage& i
         || findIntArgument(invoke.arguments, "sliceId", &sliceId) != ArgumentStatus::Ok
         || !findFiniteDoubleArgument(invoke.arguments, "centreHz", &centreHz)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("invalid sliceId or centreHz argument"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
     SliceModel* const slice = m_radioModel->sliceById(sliceId);
     const int stream = slice ? slice->streamIndex() : -1;
     if (!m_radioModel->requestStreamCentre(sliceId, centreHz)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("C-Tune centre is invalid for this stream's cohosts"), {});
+                   QStringLiteral("C-Tune cannot centre there while other receivers share this spectrum."), {});
         return;
     }
     QList<QByteArray> affected;
@@ -973,14 +1183,14 @@ void SessionCommandDispatcher::handleConfigureTgxl(const SessionMessage& invoke)
         || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok
         || port < 1 || port > 65535) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("invalid host or port argument"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
 
     QString reason;
     if (!m_radioModel->configureTgxlForStation(host, static_cast<quint16>(port), &reason)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   reason.isEmpty() ? QStringLiteral("TGXL configuration was refused") : reason,
+                   reason.isEmpty() ? QStringLiteral("The Core did not set up the Tuner Genius XL.") : reason,
                    {});
         return;
     }
@@ -991,14 +1201,14 @@ void SessionCommandDispatcher::handleDisconnectTgxl(const SessionMessage& invoke
 {
     if (!hasExactlyArguments(invoke.arguments, {})) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("disconnectTgxl takes no arguments"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
 
     QString reason;
     if (!m_radioModel->disconnectTgxlForStation(&reason)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   reason.isEmpty() ? QStringLiteral("TGXL disconnect was refused") : reason,
+                   reason.isEmpty() ? QStringLiteral("The Core did not disconnect the Tuner Genius XL.") : reason,
                    {});
         return;
     }
@@ -1018,13 +1228,13 @@ void SessionCommandDispatcher::handleConfigurePgxl(const SessionMessage& invoke)
         || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok
         || port < 1 || port > 65535) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("invalid host or port argument"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
     QString reason;
     if (!m_radioModel->configurePgxlForStation(host, static_cast<quint16>(port), &reason)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   reason.isEmpty() ? QStringLiteral("PGXL configuration was refused") : reason,
+                   reason.isEmpty() ? QStringLiteral("The Core did not set up the Power Genius.") : reason,
                    {});
         return;
     }
@@ -1042,7 +1252,7 @@ void SessionCommandDispatcher::handleConfigureRfKit(const SessionMessage& invoke
         || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok
         || port < 1 || port > 65535) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("invalid host or port argument"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
     QString reason;
@@ -1323,13 +1533,13 @@ void SessionCommandDispatcher::handleDisconnectPgxl(const SessionMessage& invoke
 {
     if (!hasExactlyArguments(invoke.arguments, {})) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("disconnectPgxl takes no arguments"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
     QString reason;
     if (!m_radioModel->disconnectPgxlForStation(&reason)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   reason.isEmpty() ? QStringLiteral("PGXL disconnect was refused") : reason,
+                   reason.isEmpty() ? QStringLiteral("The Core did not disconnect the Power Genius.") : reason,
                    {});
         return;
     }
@@ -1351,15 +1561,14 @@ void SessionCommandDispatcher::handleSetPgxlConnectionSettings(const SessionMess
         || findIntArgument(invoke.arguments, "keepaliveSec", &keepaliveSec) != ArgumentStatus::Ok
         || findIntArgument(invoke.arguments, "pingSec", &pingSec) != ArgumentStatus::Ok) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("setPgxlConnectionSettings requires an autoReconnect boolean "
-                                  "and keepaliveSec and pingSec whole numbers"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
     QString reason;
     if (!m_radioModel->setPgxlConnectionSettingsForStation(autoReconnect.toBool(), keepaliveSec,
                                                            pingSec, &reason)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   reason.isEmpty() ? QStringLiteral("PGXL settings change was refused") : reason,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change the Power Genius connection settings.") : reason,
                    {});
         return;
     }
@@ -1373,7 +1582,7 @@ void SessionCommandDispatcher::handleRequestIoBoardProbe(const SessionMessage& i
 {
     if (!invoke.arguments.isEmpty()) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("requestIoBoardProbe takes no arguments"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
     const RadioModel::IoBoardProbeOutcome outcome = m_radioModel->requestIoBoardProbe();
@@ -1397,8 +1606,7 @@ void SessionCommandDispatcher::handleSetAlexRxAntenna(const SessionMessage& invo
         || !findArgument(invoke.arguments, "rxOnly", &rxOnly)
         || rxOnly.typeId() != QMetaType::Bool) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("setAlexRxAntenna requires band and antenna whole numbers "
-                                  "and an rxOnly boolean"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
     AlexAntennaFacade* const alex = m_radioModel->alexAntennaFacade();
@@ -1432,7 +1640,7 @@ void SessionCommandDispatcher::handleSetAlexBpfMode(const SessionMessage& invoke
         || findIntArgument(invoke.arguments, "chain", &chain) != ArgumentStatus::Ok
         || findIntArgument(invoke.arguments, "mode", &mode) != ArgumentStatus::Ok) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("setAlexBpfMode requires chain and mode whole numbers"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
     AlexAntennaFacade* const alex = m_radioModel->alexAntennaFacade();
@@ -1452,14 +1660,14 @@ void SessionCommandDispatcher::handleSetFourO3AEnabled(const SessionMessage& inv
         || !findArgument(invoke.arguments, "enabled", &enabled)
         || enabled.typeId() != QMetaType::Bool) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("setFourO3AEnabled requires exactly one enabled boolean argument"), {});
+                   QStringLiteral("The Core could not read this request."), {});
         return;
     }
 
     QString reason;
     if (!m_radioModel->setFourO3AEnabledForStation(enabled.toBool(), &reason)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   reason.isEmpty() ? QStringLiteral("4O3A master change was refused") : reason, {});
+                   reason.isEmpty() ? QStringLiteral("The Core did not turn 4O3A on or off.") : reason, {});
         return;
     }
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});

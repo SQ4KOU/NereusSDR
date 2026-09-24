@@ -10,6 +10,7 @@
 #include "core/StationPgxlController.h"
 #include "core/AppSettings.h"
 #include "core/LanDiscovery.h"
+#include "core/LogCategories.h"
 #include "core/StationNetwork.h"
 #include <QHostAddress>
 
@@ -243,9 +244,14 @@ void StationPgxlController::identify(quint64 attempt, const QString& peer, quint
             // A Tuner Genius (or anything else) at the amp's address: never
             // admitted, so it is never paired and gets no command but `info`.
             m_state.deviceSerial = serial;
+            // In operator words: the station sends this to an app as the
+            // connection error (iPhone app Part A fix wave, R-IOS-01).
+            qCInfo(lcConnection) << "Expected PowerGeniusXL at" << m_peer << "; observed"
+                                    << product << "serial" << serial;
             m_connection->rejectIdentity(attempt,
-                QStringLiteral("Expected PowerGeniusXL at the connected endpoint; observed %1 (serial %2).")
-                    .arg(product, serial));
+                QStringLiteral("The device at this address reports itself as %1, not a Power Genius. "
+                               "Check the amplifier's address and port.")
+                    .arg(product));
             return;
         }
         m_state.deviceNickname = nickname;
@@ -254,6 +260,8 @@ void StationPgxlController::identify(quint64 attempt, const QString& peer, quint
     connect(discovery, &LanDiscovery::scanFinished, this, [this, discovery, attempt] {
         if (!current(attempt) || m_discovery != discovery) { return; }
         if (m_discoveredSerial.isEmpty()) {
+            qCInfo(lcConnection) << "No matching PGXL discovery announcement for"
+                                    << m_peer << m_peerPort;
             // M7 (R-R3-47): heard, or configured, on another network than
             // the radio's: say so, and which Core setting allows it.
             QString offNetwork;
@@ -278,8 +286,8 @@ void StationPgxlController::identify(quint64 attempt, const QString& peer, quint
                 return;
             }
             m_connection->rejectIdentity(attempt,
-                QStringLiteral("No matching PGXL discovery announcement for %1:%2. Check the amplifier address, port and station LAN discovery.")
-                    .arg(m_peer).arg(m_peerPort));
+                QStringLiteral("The Core did not find a Power Genius at this address on its network. "
+                               "Check the amplifier's address and port."));
         }
         // A matching announcement with the info reply still pending is
         // bounded by PgxlConnection's own identity timer.

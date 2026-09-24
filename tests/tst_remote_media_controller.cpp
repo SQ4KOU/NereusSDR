@@ -4086,7 +4086,7 @@ private slots:
                      : controlsFor(inbound, QStringLiteral("allocation-result"))) {
                     if (!result.value(QStringLiteral("accepted")).toBool()) {
                         QCOMPARE(result.value(QStringLiteral("reason")).toString(),
-                                 QStringLiteral("session display budget exceeded"));
+                                 QStringLiteral("The Core's display limit has no room left."));
                     }
                 }
                 // The pan keeps painting what Core already granted.

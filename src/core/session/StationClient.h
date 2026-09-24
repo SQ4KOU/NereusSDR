@@ -223,6 +223,12 @@
 //                                    invokeCommand() had zero callers.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): the
+//                                    client picks the highest link major
+//                                    it shares with the station, or leaves
+//                                    without retrying; stationDeclares().
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the amp's and
 //                                    tuner's own settings (requests,
 //                                    `accessorySettings`, refusals routed
@@ -240,6 +246,7 @@
 #include <QUrl>
 
 #include "core/session/IStationLink.h"
+#include "core/session/LinkVersion.h"
 #include "models/Band.h"
 #include "core/session/MirrorSchema.h"
 #include "core/session/SessionMessages.h"
@@ -333,8 +340,14 @@ public:
     /// is the backend a remote-mode GUI installs via
     /// AppSettings::setRemoteBackend(); also not owned. Both must live on
     /// this object's thread.
+    ///
+    /// `supportedMajors` (iPhone app Task 4) is the link majors this client
+    /// supports, oldest first. The default is the build's own
+    /// (kSupportedSessionMajors); tests inject theirs.
     explicit StationClient(RadioModel* radioModel, SettingsProxy* settingsProxy,
-                           QObject* parent = nullptr);
+                           QObject* parent = nullptr,
+                           const QList<quint16>& supportedMajors =
+                               LinkVersion::supportedMajors());
     ~StationClient() override;
 
     StationClient(const StationClient&) = delete;
@@ -418,6 +431,17 @@ public:
     /// The minor version both ends agreed on (section 7.0: negotiate down
     /// to the lower). Meaningful once the station's Hello has arrived.
     quint16 agreedMinor() const { return m_agreedMinor; }
+
+    /// iPhone app Task 4 (R-IOS-01): the link major this client chose, the
+    /// highest it shares with the station's hello. 0 before that hello, and
+    /// again from each new attach until the next one.
+    quint16 agreedMajor() const { return m_agreedMajor; }
+
+    /// True when the station's hello declared `feature` at `minVersion` or
+    /// later. What this client must know before capabilities arrive is
+    /// asked here. An older station declares nothing, and a new attach
+    /// forgets the previous station's declarations.
+    bool stationDeclares(const QByteArray& feature, int minVersion) const;
 
     bool mediaAvailable() const;
     bool remoteWidebandAvailable() const;
@@ -823,6 +847,13 @@ private:
     bool m_handshakeComplete = false;
     bool m_authenticated = false;
     quint16 m_agreedMinor = 0;
+
+    /// iPhone app Task 4: this client's link majors (oldest first) and
+    /// features, and what the current station's hello declared.
+    QList<quint16> m_supportedMajors;
+    QHash<QByteArray, int> m_declaredFeatures;
+    quint16 m_agreedMajor = 0;
+    QHash<QByteArray, int> m_stationFeatures;
 
     StationCapabilities m_capabilities;
 

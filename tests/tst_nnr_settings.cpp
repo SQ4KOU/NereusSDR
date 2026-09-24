@@ -1,4 +1,5 @@
 // no-port-check: NereusSDR-original acceptance tests for NNR configuration.
+#include <QRegularExpression>
 #include <QtTest>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -169,10 +170,16 @@ private slots:
         auto& settings = AppSettings::instance();
         settings.setValue(slice.nnrSettingsPrefix() + "NnrAlpha", "not-a-number");
         settings.setValue(slice.nnrSettingsPrefix() + "NnrReleaseMs", 47.25);
+        // Which settings fell back goes to the log; the notice an app may
+        // show as sent is plain words (iPhone app Part A fix wave).
+        QTest::ignoreMessage(QtInfoMsg,
+                             QRegularExpression(QStringLiteral("Saved NNR settings not used.*NnrAlpha")));
         slice.restoreNnrSettings();
         QCOMPARE(slice.nnrAlpha(), 1.0);
         QCOMPARE(slice.nnrReleaseMs(), 47.25);
-        QVERIFY(slice.nnrLastError().contains("NnrAlpha"));
+        QCOMPARE(slice.nnrLastError(),
+                 QStringLiteral("Some saved noise reduction settings could not be used, so "
+                                "their defaults are in use."));
     }
 
     void migrationUsesLoadedLastOwnerAndPreservesLegacy()

@@ -16,6 +16,9 @@
 // remoteTgxlControlVersion 1 (last), the read-only `accessorySettings`
 // object and its fixture. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 // Claude Code.
+// 2026-09-24: Lane B takes integration (R-IOS-01, R-R3-21): the plain
+// refusals of a Core that does not own its accessories. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QFile>
 #include <QJsonArray>
@@ -777,9 +780,12 @@ private slots:
                      QStringLiteral("Update this app to reset the RF-Kit amplifier's error on "
                                     "this Core.")}));
         QCOMPARE(results(false, kRadioIdentitySessionProtocolMinor, invokes),
-                 (QStringList{QStringLiteral("Station accessory configuration is unavailable."),
-                              QStringLiteral("Station accessory configuration is unavailable."),
-                              QStringLiteral("Station accessory configuration is unavailable.")}));
+                 (QStringList{QStringLiteral("This Core cannot change its amplifier and tuner "
+                                             "settings."),
+                              QStringLiteral("This Core cannot change its amplifier and tuner "
+                                             "settings."),
+                              QStringLiteral("This Core cannot reset its RF-Kit amplifier's "
+                                             "error.")}));
         // I4: Reset amp error with no amp admitted, or with arguments.
         const QStringList rfkit = results(true, kRadioIdentitySessionProtocolMinor, {
             SessionMessages::commandInvoke("resetRfKitError", 26, {}),

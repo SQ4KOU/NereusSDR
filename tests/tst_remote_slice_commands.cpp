@@ -590,7 +590,7 @@ void TstRemoteSliceCommands::
 
     QTRY_COMPARE(rejected.count(), 1);
     QVERIFY2(rejected.first().first().toString().contains(
-                 QStringLiteral("last remaining slice")),
+                 QStringLiteral("The last receiver cannot be removed.")),
              qPrintable(QStringLiteral("the station's own reason did not reach "
                                        "the operator; got: ")
                         + rejected.first().first().toString()));
@@ -638,7 +638,7 @@ void TstRemoteSliceCommands::stationRefusedSampleRateReachesSliceRetuneRejected(
     QCOMPARE(retuneRejected.count(), 1);
     QCOMPARE(retuneRejected.first().at(0).toInt(), 4242);
     QVERIFY2(retuneRejected.first().at(1).toString().contains(
-                 QStringLiteral("no such slice")),
+                 QStringLiteral("That receiver is no longer on the Core.")),
              qPrintable(QStringLiteral("the station's own reason did not reach "
                                        "the operator; got: ")
                         + retuneRejected.first().at(1).toString()));

@@ -717,7 +717,7 @@ private slots:
             coreRefuses = true;
             transport->failConnection(QStringLiteral("media peer connection failed"));
             QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 4, 15000);
-            reason = QStringLiteral("media peer start failed");
+            reason = QStringLiteral("The Core could not start audio and display.");
         } else if (ending == kErrorDuringStart) {
             errorOnStart = true;
             transport->failConnection(QStringLiteral("media peer connection failed"));

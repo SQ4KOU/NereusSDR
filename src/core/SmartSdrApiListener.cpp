@@ -85,7 +85,10 @@ bool SmartSdrApiListener::startOn(const QList<QHostAddress>& addresses, quint16 
     }
     if (!ok) {
         closeServers();
-        m_lastListenError = error;
+        // fourO3AListenerError reaches a remote app as sent: plain words
+        // here, the socket's own reason in the log line below.
+        m_lastListenError = QStringLiteral("The 4O3A connection port could not be opened. "
+                                           "Check that no other program is using it.");
         emit statusChanged();
         qCWarning(lcSmartSdr) << "failed to bind"
                                << failedAddress << ":" << port

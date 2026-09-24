@@ -256,11 +256,18 @@ private slots:
         for (const QByteArray& verb : {QByteArray("ps3.single"), QByteArray("ps3.automatic"),
                                       QByteArray("ps3.applyCurrent"), QByteArray("ps3.restoreCorrection")}) {
             const int previous = replies.size();
-            QVERIFY(client.invokeCommand(verb, {}) != 0);
+            // Each with the arguments it takes (restoreCorrection names a
+            // correction): the refusal is the transmit gate's, not an
+            // unreadable request's.
+            const QList<MirrorUpdate> arguments = verb == QByteArray("ps3.restoreCorrection")
+                ? QList<MirrorUpdate>{{0, "assetId", MirrorWireKind::Utf8,
+                                       QStringLiteral("correction")}}
+                : QList<MirrorUpdate>{};
+            QVERIFY(client.invokeCommand(verb, arguments) != 0);
             QTRY_COMPARE(replies.size(), previous + 1);
             const SessionMessage reply = qvariant_cast<SessionMessage>(replies.last()[0]);
             QVERIFY(!reply.accepted);
-            QVERIFY(reply.reason.contains("R4"));
+            QVERIFY2(reply.reason.contains("remote window"), qPrintable(reply.reason));
         }
         QCOMPARE(started.size(), 0);
         QVERIFY(!coordinator->isPsEnabled());

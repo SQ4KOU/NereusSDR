@@ -437,11 +437,11 @@ server (a new `setStationTci` tries at once). `listening` is true while
 any address serves, `stationAddress` names the station address only
 while it serves, and `error` names the blocked one: "Another program on
 the Core's computer is using port <port>, so apps there cannot reach the
-station's TCI server. The Core keeps trying." or "Another program is
-using port <port> at the station address <address>, so devices at the
-station cannot reach the station's TCI server. The Core keeps trying."
-(both: "... on the Core's computer and at the station address <address>,
-so the station's TCI server cannot start. ..."). The RF-Kit keeps band
+Core's TCI server. The Core keeps trying." or "Another program is
+using port <port> at the Core's address <address>, so devices on the
+radio's network cannot reach the Core's TCI server. The Core keeps
+trying." (both: "... on the Core's computer and at the Core's address
+<address>, so the Core's TCI server cannot start. ..."). The RF-Kit keeps band
 follow while the station address serves. The Core logs one line when an
 address is first blocked and one when every address serves again, not
 one per try. Nor does it let an app change the Core's
@@ -495,9 +495,9 @@ of this and binds as it always has.
   count), or the configured address itself is off the station network,
   the refusal in `connectionError` says so and how to
   allow it: "The Power Genius at <address> is on a different network from
-  the radio, and the Core accepts station devices only on the radio's
-  network. To allow it, set station_bind in the Core's nereusd.conf to the
-  Core's address on that network (or 0.0.0.0 for every network), then
+  the radio, and the Core accepts amplifiers and tuners only on the
+  radio's network. To allow it, set station_bind in the Core's
+  configuration file to the Core's address on that network (or 0.0.0.0 for every network), then
   restart the Core." (or the Tuner Genius).
 
 The FlexRadio discovery beacon (UDP 4992, which lets a Power Genius or Tuner
@@ -750,21 +750,21 @@ Commands:
 | `configurePgxl` with other arguments | "invalid host or port argument" |
 | `disconnectPgxl` with arguments | "disconnectPgxl takes no arguments" |
 | `setPgxlConnectionSettings` with other arguments | "setPgxlConnectionSettings requires an autoReconnect boolean and keepaliveSec and pingSec whole numbers" |
-| `configurePgxl`, `disconnectPgxl`, `setPgxlConnectionSettings` on a Core that does not own its accessories | "Station accessory configuration is unavailable." |
+| `configurePgxl`, `disconnectPgxl`, `setPgxlConnectionSettings` on a Core that does not own its accessories | "This Core cannot change its amplifier and tuner settings." |
 | `configurePgxl` with no radio | "Connect Core to a radio before configuring its PGXL." |
 | `configurePgxl` with 4O3A off | "Enable 4O3A on Core before connecting the PGXL." |
 | `configurePgxl` with a bad address | "Enter a valid PGXL IP address or hostname and TCP port 1 to 65535." |
 | `setPgxlConnectionSettings` out of range | "Enter a keepalive of 1 to 3600 seconds and a ping of 0 to 3600 seconds." |
 | `configureRfKit`, `disconnectRfKit`, `setRfKitEnabled` below minor 11 | "Update this app to set up the RF-Kit amplifier on this Core." |
 | `resetRfKitError` below minor 11 | "Update this app to reset the RF-Kit amplifier's error on this Core." |
-| `resetRfKitError` on a Core that does not own its accessories | "Station accessory configuration is unavailable." |
+| `resetRfKitError` on a Core that does not own its accessories | "This Core cannot reset its RF-Kit amplifier's error." |
 | `resetRfKitError` with arguments | "The request to reset the RF-Kit amplifier's error was not understood." |
 | `resetRfKitError` with no amp admitted | "The Core is not connected to the RF-Kit amplifier." |
 | `resetRfKitError` from an app whose Core lacks `remoteRfKitControlVersion` 3 (the app's own words, nothing sent) | "This Core does not let this app reset the RF-Kit amplifier's error. Updating the Core may help." |
 | `configureRfKit` with other arguments | "invalid host or port argument" |
 | `disconnectRfKit` with arguments | "The disconnect request for the RF-Kit amplifier was not understood." |
 | `setRfKitEnabled` with other arguments | "The request to turn the RF-Kit amplifier on or off was not understood." |
-| `configureRfKit`, `disconnectRfKit`, `setRfKitEnabled` on a Core that does not own its accessories | "Station accessory configuration is unavailable." |
+| `configureRfKit`, `disconnectRfKit`, `setRfKitEnabled` on a Core that does not own its accessories | "This Core cannot change its amplifier and tuner settings." |
 | `configureRfKit` with no radio | "Connect the Core to a radio before setting up its RF-Kit amplifier." |
 | `setRfKitEnabled` with no radio | "Connect the Core to a radio before turning its RF-Kit amplifier on or off." |
 | `configureRfKit` with the RF-Kit switch off | "Turn on the RF-Kit amplifier on the Core before connecting it." |
@@ -774,7 +774,7 @@ Commands:
 | `setStationTci` with other arguments | "The request to turn the station's TCI server on or off was not understood." |
 | `setStationTci` with a port outside 1024 to 65535 | "Choose a TCI port from 1024 to 65535." |
 | `setTxInterlockPolicy`, `setPgxlPowerCap`, `clearAccessoryFaults` below minor 11 | "Update this app to change the station's amplifier and tuner settings on this Core." |
-| `setTxInterlockPolicy`, `setPgxlPowerCap`, `clearAccessoryFaults` on a Core that does not own its accessories | "Station accessory configuration is unavailable." |
+| `setTxInterlockPolicy`, `setPgxlPowerCap`, `clearAccessoryFaults` on a Core that does not own its accessories | "This Core cannot change its amplifier and tuner settings." |
 | `setTxInterlockPolicy` with other arguments | "The request to change the transmit interlock was not understood." |
 | `setTxInterlockPolicy` out of range | "Choose an interlock mode, a grace period of 0 to 30000 ms and an SWR limit from 1.0 to 10.0." |
 | `setPgxlPowerCap` with other arguments | "The request to change the Power Genius output limit was not understood." |
@@ -782,7 +782,7 @@ Commands:
 | `clearAccessoryFaults` with other arguments, or another device | "The request to clear the fault history was not understood." |
 | `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings`, `readPgxlSettings` below minor 11 | "Update this app to change the Power Genius's own settings on this Core." |
 | `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings`, `readTgxlSettings` below minor 11 | "Update this app to change the Tuner Genius's own settings on this Core." |
-| Any of the nine on a Core that does not own its accessories | "Station accessory configuration is unavailable." |
+| Any of the nine on a Core that does not own its accessories | "This Core cannot change its amplifier and tuner settings." |
 | Any of the nine while the Core is not connected to the device (or has not admitted it) | "The Core is not connected to the Power Genius." / "The Core is not connected to the Tuner Genius." |
 | `setPgxlName`, `setTgxlName` with other arguments | "The request to rename the Power Genius was not understood." (or Tuner Genius) |
 | `setPgxlName`, `setTgxlName` with a line break or tab | "Enter a name without line breaks or tabs." |
@@ -800,7 +800,7 @@ Commands:
 | `configureTgxl` with other arguments | "invalid host or port argument" |
 | `disconnectTgxl` with arguments | "disconnectTgxl takes no arguments" |
 | `setFourO3AEnabled` with other arguments | "setFourO3AEnabled requires exactly one enabled boolean argument" |
-| `configureTgxl`, `disconnectTgxl` on a Core that does not own its accessories | "Station accessory configuration is unavailable." |
+| `configureTgxl`, `disconnectTgxl` on a Core that does not own its accessories | "This Core cannot change its amplifier and tuner settings." |
 | `configureTgxl` with no radio | "Connect Core to a radio before configuring its TGXL." |
 | `configureTgxl` with 4O3A off | "Enable 4O3A on Core before connecting the TGXL." |
 | `configureTgxl` with a bad address | "Enter a valid TGXL IP address or hostname and TCP port 1–65535." |

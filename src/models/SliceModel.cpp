@@ -40,6 +40,17 @@
 //                                    so a remote window leaves the route to
 //                                    the Core. AI-assisted implementation via
 //                                    Anthropic Claude Code. NereusSDR-original.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-IOS-01: activeWriteReason(), the
+//                                    refusal of a write to `active` in plain
+//                                    operator words. AI-assisted via
+//                                    Anthropic Claude Code. NereusSDR-original.
+//   2026-09-24 - iPhone app Task 4b (R-IOS-01, R-R3-21): the reasons this
+//                file sends an app are in operator words. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Part A fix wave (R-IOS-01): the saved-settings
+//                notice (nnrLastError) is in operator words; the setting
+//                names go to the log. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -709,6 +720,11 @@ void SliceModel::setStationAutoAgcNoiseFloor(double dbm, bool valid, quint64 gen
 // owner to go through instead. signalStrengthDbm (Task 12) is the one
 // exception: there is no other owner to name, because on a Role::Remote
 // model the mirror's inbound apply IS the value's sole legitimate writer.
+QString SliceModel::activeWriteReason()
+{
+    return QStringLiteral("To make a slice active, select it; this cannot be set directly.");
+}
+
 QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVariant& value)
 {
     if (propertyName == "signalStrengthDbm") {
@@ -730,7 +746,7 @@ QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVa
     }
     if (propertyName == "stationAutoAgcNoiseFloorDbm") {
         const double dbm = value.toDouble();
-        if (!std::isfinite(dbm)) { return QStringLiteral("noise floor must be finite"); }
+        if (!std::isfinite(dbm)) { return QStringLiteral("The noise floor reading must be a number."); }
         setStationAutoAgcNoiseFloor(dbm, m_stationAutoAgcNoiseFloorValid,
                                    m_stationAutoAgcNoiseFloorGeneration);
         return {};
@@ -761,22 +777,19 @@ QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVa
         // SessionCommandDispatcher's setActiveSliceById verb is the real,
         // reachable path; name that instead, the same way StateMirror.cpp's
         // kVerbHints table names requestSliceSampleRate for sampleRateHz.
-        return QStringLiteral(
-            "active is exclusive across a pan's slices and arbitrated by "
-            "RadioModel::setActiveSliceById(); use the setActiveSliceById "
-            "command verb instead of writing this property directly");
+        // R-IOS-01: in operator words; the way in is the setActiveSliceById
+        // command, which is what selecting a slice sends.
+        return activeWriteReason();
     }
     if (propertyName == "txSlice") {
         return QStringLiteral(
-            "txSlice is arbitrated across slices by TxSliceArbiter; there is "
-            "no per-slice remote-write path");
+            "Choose the transmit slice with its own control; it cannot be set directly.");
     }
     if (propertyName == "band") {
-        return QStringLiteral("band is derived from frequency; write frequency instead");
+        return QStringLiteral("The band follows the frequency; change the frequency instead.");
     }
 
-    return QStringLiteral("SliceModel::%1 has no inbound mirror translation")
-        .arg(QString::fromUtf8(propertyName));
+    return QStringLiteral("The Core sets this itself; it cannot be changed from here.");
 }
 
 // ── Phase 3F Sub-Epic A: multi-panadapter / multi-slice identity ────────────
@@ -1465,8 +1478,13 @@ void SliceModel::restoreNnrSettings()
         else rejected.append(QStringLiteral("NrActive"));
     }
     setActiveNr(active);
-    if (!rejected.isEmpty())
-        setNnrLastError(QStringLiteral("Invalid saved NNR settings used defaults: %1").arg(rejected.join(QStringLiteral(", "))));
+    if (!rejected.isEmpty()) {
+        // nnrLastError reaches a remote app as sent: operator words there,
+        // the setting names in the log (iPhone app Part A fix wave, R-IOS-01).
+        qCInfo(lcDsp) << "Saved NNR settings not used, defaults applied:" << rejected;
+        setNnrLastError(QStringLiteral("Some saved noise reduction settings could not be used, "
+                                       "so their defaults are in use."));
+    }
 }
 
 // NR1

@@ -35,9 +35,11 @@ inline constexpr double kMaxDbmLimit = 100.0;
 /// removed, its stream binding changed, or the slice retuned so the source no
 /// longer covers the requested crop. DaemonMediaController sends these and the
 /// window's refusal filter matches them, so one wording serves both ends.
+/// The first two are compared as they are by windows already in use, so they
+/// keep their wording; the third is in operator words (R-IOS-01).
 inline constexpr char kRetireReasonSliceRemoved[] = "slice removed";
 inline constexpr char kRetireReasonStreamBindingChanged[] = "slice stream binding changed";
-inline constexpr char kRetireReasonSourceRetune[] = "source retune no longer covers requested crop";
+inline constexpr char kRetireReasonSourceRetune[] = "The receiver was retuned away from this view.";
 
 /// Why Core granted less than a spectrum subscription asked for.
 enum class SpectrumLimitReason {

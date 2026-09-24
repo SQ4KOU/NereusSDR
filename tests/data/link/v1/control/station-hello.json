@@ -1,0 +1,13 @@
+{
+  "from": "station",
+  "wire": {
+    "type": "hello",
+    "major": 1,
+    "minor": 11,
+    "settingsSchema": 0,
+    "peer": "nereusd",
+    "majors": [1, 2],
+    "features": {}
+  },
+  "decodes": true
+}

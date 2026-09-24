@@ -65,6 +65,9 @@
 //                                    Core's own (isModelOwnedDspSettingsKey).
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 4b (R-IOS-01, R-R3-21): the reasons this
+//                file sends an app are in operator words. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsProxyServer.h"
@@ -200,7 +203,7 @@ SettingsApplyResult SettingsProxyServer::applyInboundWrite(const QString& key, c
     if (classifySettingsKey(key) != SettingsScope::Station) {
         SettingsApplyResult result;
         result.accepted = false;
-        result.reason = QStringLiteral("key is not Station-scoped");
+        result.reason = QStringLiteral("Each app keeps this setting itself; the Core does not store it.");
         result.restoredValue = m_appSettings.value(key);
         return result;
     }
@@ -227,9 +230,9 @@ SettingsApplyResult SettingsProxyServer::applyInboundWrite(const QString& key, c
         if (!ok || limit < kSwrProtectionLimitMin || limit > kSwrProtectionLimitMax) {
             SettingsApplyResult result;
             result.accepted = false;
-            result.reason = QStringLiteral("SWR protection limit out of range [%1, %2]")
-                                .arg(kSwrProtectionLimitMin)
-                                .arg(kSwrProtectionLimitMax);
+            result.reason = QStringLiteral("Choose an SWR protection limit from %1 to %2.")
+                                .arg(kSwrProtectionLimitMin, 0, 'f', 1)
+                                .arg(kSwrProtectionLimitMax, 0, 'f', 1);
             result.restoredValue = m_appSettings.value(key);
             return result;
         }

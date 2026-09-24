@@ -28,6 +28,9 @@
 //   2026-08-03 -- New test file for remote-daemon R2 Task 2. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-24 -- iPhone app Part A fix wave (R-IOS-01): PureSignal's
+//                 readiness follows the receive-only policy at once.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -37,9 +40,11 @@
 #include <memory>
 
 #include "core/AppSettings.h"
+#include "core/PureSignal.h"
 #include "core/RxChannel.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/WdspEngine.h"
+#include "core/session/PureSignalSessionFacade.h"
 #include "models/SliceModel.h"
 #include "fakes/ConnectableRadioModel.h"
 
@@ -120,6 +125,39 @@ private slots:
     // model was already gone when the Core started or went missing between
     // the start and the connect (the connect's own model load is what finds
     // it gone).
+    void pureSignalReadinessFollowsTheReceiveOnlyPolicyAtOnce()
+    {
+        // iPhone app Part A fix wave (Task 4b finding, R-IOS-01): the
+        // station's pureSignal object says whether PureSignal can run
+        // (canActuate). It learned of a receive-only change only on the
+        // coordinator's next 100 ms status poll, so a client attaching in
+        // that window read true. Both directions now follow the policy on
+        // the call that changes it, before any event is processed.
+        auto harness = ConnectableRadioModel::create();
+        QVERIFY(harness);
+        RadioModel& model = harness->model();
+        PureSignal* const coordinator = model.pureSignal();
+        PureSignalSessionFacade* const facade = model.pureSignalFacade();
+        QVERIFY(coordinator != nullptr && facade != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(facade->canActuate(), 5000);
+
+        QSignalSpy changed(facade, &PureSignalSessionFacade::statusChanged);
+        model.setReceiveOnlyStationPolicy(true);
+        QVERIFY(!coordinator->canActuate());
+        QVERIFY(!facade->canActuate());
+        QVERIFY(!changed.isEmpty());
+
+        changed.clear();
+        model.setReceiveOnlyStationPolicy(false);
+        QVERIFY(facade->canActuate());
+        QVERIFY(!changed.isEmpty());
+
+        // Setting the policy it already has changes nothing.
+        changed.clear();
+        model.setReceiveOnlyStationPolicy(false);
+        QVERIFY(changed.isEmpty());
+    }
+
     void savedNr3OnACoreWithNoModelComesUpOff_data()
     {
         QTest::addColumn<bool>("goneBeforeStart");

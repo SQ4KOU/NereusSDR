@@ -106,6 +106,9 @@
 //   2026-09-23: place signal processing threads on the fastest cores
 //               before any other thread starts (R-R3-41). J.J. Boyd
 //               (KG4VCF), with AI assistance via Anthropic Claude Code.
+//   2026-09-24: --test-link-majors, debug builds only (iPhone app Task 4,
+//               R-IOS-01). J.J. Boyd (KG4VCF), with AI assistance via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/AppSettings.h"
@@ -116,6 +119,7 @@
 #include "core/daemon/DaemonApp.h"
 #include "core/daemon/DaemonConfig.h"
 #include "core/platform/ThreadPlacement.h"
+#include "core/session/LinkVersion.h"
 
 #include <QCommandLineOption>
 #include <QCommandLineParser>
@@ -177,7 +181,28 @@ int main(int argc, char* argv[])
             "match [A-Za-z0-9_-]+."),
         QStringLiteral("name"));
     parser.addOption(profileOpt);
+    // iPhone app Task 4 (R-IOS-01): replaces the link majors the station
+    // advertises and accepts, so the app's version screens can be tried
+    // against a real station. Accepted by a debug build only; a release
+    // build refuses to start with it (LinkVersion::resolveTestLinkMajors).
+    QCommandLineOption testLinkMajorsOpt(QStringLiteral("test-link-majors"),
+        QStringLiteral("Debug builds only: the link versions this station offers, "
+                       "for example 1,2."),
+        QStringLiteral("list"));
+    parser.addOption(testLinkMajorsOpt);
     parser.process(app);
+
+    QString linkMajorsErr;
+    const QList<quint16> linkMajors = NereusSDR::LinkVersion::resolveTestLinkMajors(
+        parser.isSet(testLinkMajorsOpt), parser.value(testLinkMajorsOpt),
+        NereusSDR::LinkVersion::testLinkMajorsAllowed(), &linkMajorsErr);
+    if (linkMajors.isEmpty()) {
+        qCCritical(NereusSDR::lcApp).noquote() << linkMajorsErr;
+        return 3;
+    }
+    if (parser.isSet(testLinkMajorsOpt)) {
+        qCWarning(NereusSDR::lcApp) << "Test link versions in force:" << linkMajors;
+    }
 
     // Resolve and validate --profile BEFORE CoreInit::initialize(), which
     // is where AppSettings::instance() is first touched in this process
@@ -278,6 +303,7 @@ int main(int argc, char* argv[])
     // the quit path below runs that same teardown earlier, and visibly,
     // rather than relying solely on the implicit destructor call.
     NereusSDR::DaemonApp daemon;
+    daemon.setLinkMajors(linkMajors);
 
     // R1 Task 10: connects to a radio (or runs discovery when
     // cfg.radioMac is empty) and creates min(cfg.sliceCount,

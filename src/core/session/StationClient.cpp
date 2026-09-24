@@ -80,6 +80,11 @@
 //                 `accessoryData` object and the setTxInterlockPolicy,
 //                 setPgxlPowerCap and clearAccessoryFaults requests). J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 4 (R-IOS-01): the highest link major
+//                 shared with the station's hello, or a plain-words
+//                 departure without retrying; the station's declared
+//                 features. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-09-24 - R-R3-47 / R-R3-22: remotePgxlControlVersion 3 and
 //                 remoteTgxlControlVersion 1 (the `accessorySettings` object
 //                 and the amp's and tuner's own settings requests); their
@@ -99,6 +104,9 @@
 //   2026-09-24 - R-R3-46 / R-R3-21: radioHardwareVersion 4, the filter
 //                 policy request (setAlexBpfMode) and its plain reason.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Lane B takes integration (R-IOS-01, R-R3-21): a refusal
+//                with no reason says the Core refused it. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -290,11 +298,17 @@ QString StationClient::connectionFailureReason(QAbstractSocket::SocketError erro
 }
 
 StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProxy,
-                             QObject* parent)
+                             QObject* parent, const QList<quint16>& supportedMajors)
     : QObject(parent)
     , m_radioModel(radioModel)
     , m_settingsProxy(settingsProxy)
+    , m_supportedMajors(supportedMajors.isEmpty() ? LinkVersion::supportedMajors()
+                                                  : supportedMajors)
 {
+    // Oldest first and each once, as the hello sends them.
+    std::sort(m_supportedMajors.begin(), m_supportedMajors.end());
+    m_supportedMajors.erase(std::unique(m_supportedMajors.begin(), m_supportedMajors.end()),
+                            m_supportedMajors.end());
     m_localSettingsSchema = readLocalSettingsSchemaVersion();
     if (m_localSettingsSchema == 0) {
         // The observable trace of CoreInit::initialize() not having run
@@ -789,6 +803,10 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     m_pingsAwaitingPong = 0;
     m_linkUp = false;
     m_sessionActive = true;
+    // iPhone app Task 4: nothing the previous station declared carries
+    // over; the new station's hello says it again.
+    m_agreedMajor = 0;
+    m_stationFeatures.clear();
 
     // These are optional, remote-only fields.  A fresh peer may predate
     // them, in which case its snapshot cannot overwrite a status received
@@ -1424,19 +1442,24 @@ void StationClient::handleHello(const SessionMessage& message)
     // Parent design section 7.0's version policy, applied from this side
     // too rather than trusting the station to have applied it: a station
     // several majors ahead may not even recognise this client's Hello.
-    if (message.protocolMajor != kSessionProtocolMajor) {
-        m_lastError = QStringLiteral(
-                          "Protocol major version mismatch: this client speaks %1.%2, "
-                          "the station speaks %3.%4. A differing major means an "
-                          "incompatible wire contract.")
-                          .arg(kSessionProtocolMajor)
-                          .arg(kSessionProtocolMinor)
-                          .arg(message.protocolMajor)
-                          .arg(message.protocolMinor);
-        qCWarning(lcStationClient) << m_lastError;
+    //
+    // iPhone app spec D23 and D39 (R-IOS-01): the highest major both ends
+    // support. An older station's hello has no `majors`, which decodes as
+    // [its major]. Sharing none (two or more apart), this client leaves
+    // without sending its hello or its token, without retrying, and with
+    // the station's own wording.
+    const std::optional<quint16> agreed =
+        LinkVersion::agreeMajor(m_supportedMajors, message.supportedMajors);
+    if (!agreed) {
+        m_lastError = LinkVersion::refusalText(message.supportedMajors, m_supportedMajors);
+        qCWarning(lcStationClient) << "No link major shared with the station (it supports"
+                                   << message.supportedMajors << "; this client supports"
+                                   << m_supportedMajors << "):" << m_lastError;
         disconnectFromStation(m_lastError);
         return;
     }
+    m_agreedMajor = *agreed;
+    m_stationFeatures = message.features;
 
     m_agreedMinor = std::min(kSessionProtocolMinor, message.protocolMinor);
 
@@ -1465,9 +1488,18 @@ void StationClient::handleHello(const SessionMessage& message)
         return;
     }
 
-    send(SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor,
-                                m_localSettingsSchema, peerNameForThisProcess()));
+    send(SessionMessages::hello(m_agreedMajor, kSessionProtocolMinor, m_localSettingsSchema,
+                                peerNameForThisProcess(), m_supportedMajors,
+                                m_declaredFeatures));
     send(SessionMessages::authRequest(m_token));
+}
+
+bool StationClient::stationDeclares(const QByteArray& feature, int minVersion) const
+{
+    if (!m_stationFeatures.contains(feature)) {
+        return false;
+    }
+    return m_stationFeatures.value(feature) >= minVersion;
 }
 
 void StationClient::handleAuthResult(const SessionMessage& message)
@@ -3242,7 +3274,7 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         // is indistinguishable from the click having silently done
         // nothing, which is the shape of the defect this round closes.
         const QString reason = message.reason.isEmpty()
-            ? QStringLiteral("The station refused the request without giving a reason.")
+            ? QStringLiteral("The Core refused the request without giving a reason.")
             : message.reason;
         // requestSliceSampleRate is the one verb whose refusal already has
         // a slice-scoped signal locally (sliceRetuneRejected, which
@@ -3332,7 +3364,7 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         const QPointer<StationClient> self(this);
         const QString finishedReason = message.accepted ? QString()
             : message.reason.isEmpty()
-                ? QStringLiteral("The station refused the request without giving a reason.")
+                ? QStringLiteral("The Core refused the request without giving a reason.")
                 : message.reason;
         m_radioModel->reportStationCommandFinished(message.commandId, message.accepted,
                                                    finishedReason);

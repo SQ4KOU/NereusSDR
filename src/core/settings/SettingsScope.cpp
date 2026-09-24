@@ -136,8 +136,15 @@
 //                                    and slice, is OperatorLocal.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 1 (R-IOS-01):
+//                                    settingsScopeRules(). AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 //   2026-09-24 - R-R3-48: StationTci_ is Station scope. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 4b (R-IOS-01, R-R3-21): the reasons this
+//                file sends an app are in operator words. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-49: NetworkWatchdogEnabled is Station scope. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
@@ -611,6 +618,21 @@ bool isModelOwnedDspSettingsKey(QStringView rawKey)
             && parts[4] == QStringLiteral("nnr"));
 }
 
+QList<SettingsScopeRule> settingsScopeRules()
+{
+    QList<SettingsScopeRule> rules;
+    for (const Rule& r : kExceptions) {
+        rules.append({SettingsScopeRuleKind::Exception, QString::fromLatin1(r.text), r.scope});
+    }
+    for (const Rule& r : kPrefixes) {
+        rules.append({SettingsScopeRuleKind::Prefix, QString::fromLatin1(r.text), r.scope});
+    }
+    for (const Rule& r : kWholeKeys) {
+        rules.append({SettingsScopeRuleKind::WholeKey, QString::fromLatin1(r.text), r.scope});
+    }
+    return rules;
+}
+
 QString modelOwnedSettingsRefusal(QStringView rawKey)
 {
     if (rawKey.compare(QLatin1String("Nr3ModelPath"), Qt::CaseInsensitive) == 0) {
@@ -627,7 +649,7 @@ QString modelOwnedSettingsRefusal(QStringView rawKey)
         return QStringLiteral("This Core keeps its own antenna settings. "
                               "Update this app to change them.");
     }
-    return QStringLiteral("Use the station DSP controls; raw settings writes cannot bypass model validation.");
+    return QStringLiteral("The Core changes these settings only through their own controls.");
 }
 
 SettingsScope classifySettingsKey(QStringView rawKey)

@@ -1,6 +1,9 @@
 // no-port-check: NereusSDR-original. R-R3-48 station network address choice;
 // R-R3-22 / R-R3-47 one bind rule for every station listener (StationBind).
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
+// 2026-09-24: Lane B takes integration (R-IOS-01, R-R3-21): the off-network reason
+// names amplifiers and tuners and the Core's configuration file. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/StationNetwork.h"
 
 #include <QNetworkInterface>
@@ -126,8 +129,8 @@ bool StationBind::acceptsPeer(const QHostAddress& peer) const
 QString offNetworkReason(const QString& deviceName, const QString& address)
 {
     return QStringLiteral("The %1 at %2 is on a different network from the radio, and the "
-                          "Core accepts station devices only on the radio's network. To allow "
-                          "it, set station_bind in the Core's nereusd.conf to the Core's "
+                          "Core accepts amplifiers and tuners only on the radio's network. To allow "
+                          "it, set station_bind in the Core's configuration file to the Core's "
                           "address on that network (or 0.0.0.0 for every network), then "
                           "restart the Core.").arg(deviceName, address);
 }

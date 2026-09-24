@@ -165,6 +165,11 @@ public:
     // draining its non-interruptible WDSP wisdom job. See the recovery design.
     bool start(const DaemonConfig& cfg);
 
+    // iPhone app Task 4 (R-IOS-01): the link majors the station advertises
+    // and accepts. Call before start(); empty (the default) keeps the
+    // build's own list. Only a debug build's --test-link-majors sets it.
+    void setLinkMajors(const QList<quint16>& majors) { m_linkMajors = majors; }
+
     // Tears down in reverse: drops every FFT-topology subscription this
     // run created (via clearFftTopology(), which pushes the removal to
     // RadioModel's live FFTRouter BEFORE destroying anything -- see that
@@ -433,6 +438,7 @@ private:
     // live peer sockets that must be told the station is going away while
     // there is still a station to speak for.
     std::unique_ptr<StationServer> m_stationServer;
+    QList<quint16> m_linkMajors;
     std::unique_ptr<StationLanAnnouncer> m_stationAnnouncer;
     QTimer* m_stationListenRetryTimer {nullptr};
     int m_stationListenRetryInitialMs {1000};

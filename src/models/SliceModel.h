@@ -32,6 +32,9 @@
 //   2026-09-23 : R-R3-45 Task 2 setOutputRoutePersisted(): a remote
 //                 window's slice leaves its route to the Core. By J.J. Boyd
 //                 (KG4VCF), with Anthropic Claude Code assistance.
+//   2026-09-24 : R-IOS-01 activeWriteReason(): the refusal of a client's
+//                 write to `active`, in plain operator words. By J.J. Boyd
+//                 (KG4VCF), with Anthropic Claude Code assistance.
 // =================================================================
 
 //=================================================================
@@ -660,6 +663,12 @@ public:
     // see RadioModel's constructor).
     Q_INVOKABLE QString applyMirroredValue(const QByteArray& propertyName,
                                            const QVariant& value);
+
+    // R-IOS-01: why a client's write to `active` is refused, in words an
+    // operator reads. The station gives it for a property.write (its
+    // outbound gate, StationServer::handlePropertyWrite) and the hook above
+    // gives the same text.
+    static QString activeWriteReason();
 
     // Panadapter assignment (-1 = unassigned).
     // Legacy int handle. Retained for any pre-3F callers; the authoritative
