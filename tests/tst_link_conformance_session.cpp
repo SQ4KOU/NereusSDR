@@ -390,14 +390,10 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
             continue;
         }
         if (type == QStringLiteral("hello")) {
-            const QJsonValue majors = message.value(QStringLiteral("majors"));
-            const int major = message.value(QStringLiteral("major")).toInt(-1);
-            bool listed = false;
-            for (const QJsonValue& m : majors.toArray()) {
-                listed = listed || m.toInt() == major;
-            }
-            if (!majors.isArray() || !listed) {
-                fail(index, QStringLiteral("hello must carry majors, naming its major"));
+            // An app lists every major it supports (its own and the one
+            // before, section 6.1), so a fixture cannot pin the list.
+            if (message.value(QStringLiteral("majors")) != QJsonValue(QStringLiteral("$majors"))) {
+                fail(index, QStringLiteral("hello must carry majors as \"$majors\""));
             }
             if (!message.contains(QStringLiteral("features"))) {
                 fail(index, QStringLiteral("hello must carry features"));
@@ -872,6 +868,13 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
         }
     }, &at), surface);
     QVERIFY2(p.join(QLatin1Char('|')).contains(QStringLiteral("majors")), qPrintable(p.join('|')));
+    // A pinned list of majors.
+    p = appConformanceProblems(QStringLiteral("x"), altered([](QJsonObject& m) {
+        if (m.value(QStringLiteral("type")).toString() == QStringLiteral("hello")) {
+            m.insert(QStringLiteral("majors"), QJsonArray{1});
+        }
+    }, &at), surface);
+    QVERIFY2(p.join(QLatin1Char('|')).contains(QStringLiteral("$majors")), qPrintable(p.join('|')));
     // A pinned peer name.
     p = appConformanceProblems(QStringLiteral("x"), altered([](QJsonObject& m) {
         if (m.value(QStringLiteral("type")).toString() == QStringLiteral("hello")) {
@@ -961,6 +964,18 @@ void TstLinkConformanceSession::alteredFixturesFailReadably()
         QVERIFY2(refused.contains(QStringLiteral("is not $within")), bad);
     }
     QVERIFY(LinkFixtures::match(QStringLiteral("$within:1e-1:5.05"), 5.0, &none).isEmpty());
+    // "$majors": an app supporting [1, 2] and choosing 1 passes; a list out
+    // of order, or one without the chosen major, does not.
+    const QJsonObject hello{{QStringLiteral("major"), 1},
+                            {QStringLiteral("majors"), QStringLiteral("$majors")}};
+    const auto withMajors = [](const QJsonArray& majors) {
+        return QJsonObject{{QStringLiteral("major"), 1}, {QStringLiteral("majors"), majors}};
+    };
+    QVERIFY(LinkFixtures::match(hello, withMajors({1, 2}), &none).isEmpty());
+    QVERIFY(LinkFixtures::match(hello, withMajors({1}), &none).isEmpty());
+    QVERIFY(!LinkFixtures::match(hello, withMajors({2, 1}), &none).isEmpty());
+    QVERIFY(!LinkFixtures::match(hello, withMajors({2, 3}), &none).isEmpty());
+    QVERIFY(!LinkFixtures::match(hello, withMajors({}), &none).isEmpty());
     // connect-connectable's signal readings never admit the meter pump's
     // no-reading value: a reading of -400 fails the fixture.
     int readings = 0;

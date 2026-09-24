@@ -107,6 +107,8 @@ QString placeholderArgument(const QString& text, const QString& prefix)
 //   $capture:<name>      any value, recorded
 //   $ref:<name>          equal to the value recorded under <name>
 //   $within:<t>:<v>      a number no further than <t> from <v>
+//   $majors              only as a hello's "majors": whole numbers from 0 to
+//                        65535, ascending, no repeats, naming its "major"
 bool isPlaceholder(const QJsonValue& value)
 {
     if (!value.isString()) {
@@ -115,11 +117,37 @@ bool isPlaceholder(const QJsonValue& value)
     const QString text = value.toString();
     return text == QStringLiteral("$any") || text == QStringLiteral("$string")
         || text == QStringLiteral("$int") || text == QStringLiteral("$object")
+        || text == QStringLiteral("$majors")
         || (text.startsWith(QStringLiteral("$string:")) && text.size() > 8)
         || (text.startsWith(QStringLiteral("$int:")) && text.size() > 5)
         || (text.startsWith(QStringLiteral("$capture:")) && text.size() > 9)
         || (text.startsWith(QStringLiteral("$ref:")) && text.size() > 5)
         || text.startsWith(QStringLiteral("$within:"));
+}
+
+// Why `actual` is not a list of majors naming `major`, or an empty
+// string ("$majors", section 16.1).
+QString majorsProblem(const QJsonValue& actual, const QJsonValue& major, const QString& path)
+{
+    if (!actual.isArray() || actual.toArray().isEmpty()) {
+        return QStringLiteral("%1: expected a list of majors, got %2").arg(path, shown(actual));
+    }
+    double previous = -1.0;
+    bool named = false;
+    for (const QJsonValue& value : actual.toArray()) {
+        const double m = value.toDouble(-1.0);
+        if (!value.isDouble() || m < 0.0 || m > 65535.0 || m <= previous
+            || m != static_cast<double>(static_cast<qint64>(m))) {
+            return QStringLiteral("%1: majors must be whole numbers from 0 to 65535, ascending, "
+                                  "without repeats; got %2")
+                .arg(path, shown(actual));
+        }
+        named = named || (major.isDouble() && m == major.toDouble());
+        previous = m;
+    }
+    return named ? QString()
+                 : QStringLiteral("%1: majors %2 do not name the hello's major %3")
+                       .arg(path, shown(actual), shown(major));
 }
 
 bool isWholeNumber(const QJsonValue& value)
@@ -448,6 +476,9 @@ QString LinkFixtures::match(const QJsonValue& expected, const QJsonValue& actual
         if (text == QStringLiteral("$any")) {
             return QString();
         }
+        if (text == QStringLiteral("$majors")) {
+            return QStringLiteral("%1: $majors stands only as a hello's majors").arg(path);
+        }
         if (text == QStringLiteral("$object")) {
             return actual.isObject()
                        ? QString()
@@ -510,6 +541,17 @@ QString LinkFixtures::match(const QJsonValue& expected, const QJsonValue& actual
             if (!a.contains(it.key())) {
                 return QStringLiteral("%1: expected %2, the key is absent")
                     .arg(child, shown(it.value()));
+            }
+            if (it.value() == QJsonValue(QStringLiteral("$majors"))) {
+                if (it.key() != QStringLiteral("majors")) {
+                    return QStringLiteral("%1: $majors stands only as a hello's majors").arg(child);
+                }
+                const QString problem =
+                    majorsProblem(a.value(it.key()), a.value(QStringLiteral("major")), child);
+                if (!problem.isEmpty()) {
+                    return problem;
+                }
+                continue;
             }
             const QString difference = match(it.value(), a.value(it.key()), captures, child);
             if (!difference.isEmpty()) {
@@ -601,10 +643,24 @@ QJsonValue LinkFixtures::substitute(const QJsonValue& value, Captures* captures,
         QJsonObject out;
         const QJsonObject in = value.toObject();
         for (auto it = in.constBegin(); it != in.constEnd(); ++it) {
+            if (it.value() == QJsonValue(QStringLiteral("$majors"))) {
+                continue;  // Filled below, from the filled major.
+            }
             out.insert(it.key(), substitute(it.value(), captures, counter, error));
             if (!error->isEmpty()) {
                 return {};
             }
+        }
+        for (auto it = in.constBegin(); it != in.constEnd(); ++it) {
+            if (it.value() != QJsonValue(QStringLiteral("$majors"))) {
+                continue;
+            }
+            if (it.key() != QStringLiteral("majors") || !isWholeNumber(out.value(QStringLiteral("major")))) {
+                *error = QStringLiteral("$majors stands only as a hello's majors");
+                return {};
+            }
+            // The sender's own list: the major it chose, alone.
+            out.insert(it.key(), QJsonArray{out.value(QStringLiteral("major"))});
         }
         return out;
     }

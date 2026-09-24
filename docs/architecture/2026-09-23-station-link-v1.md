@@ -1555,6 +1555,7 @@ a JSON string:
 | `"$int"` | any whole number | yes | yes, filled with `0` |
 | `"$int:<name>"` | any whole number, recorded under `<name>` | yes | yes, filled with the next number of the fixture's counter (1 first, then 2, ...) and recorded |
 | `"$object"` | any JSON object | no | yes, filled with `{}` |
+| `"$majors"` | only as the `majors` of a `hello`: a non-empty array of whole numbers from 0 to 65535, ascending, without repeats, that holds the same message's `major` | yes | yes, filled with `[major]`, the message's own (filled) `major` alone |
 | `"$capture:<name>"` | any value, recorded under `<name>` | yes | no |
 | `"$ref:<name>"` | the value recorded under `<name>`, compared the same way | yes | yes, filled with the recorded value |
 | `"$within:<t>:<v>"` | a number no further than `<t>` from `<v>`; `<t>` and `<v>` are each exactly a JSON number (RFC 8259 section 6: no `+`, no leading `.`, no `inf` or `nan`, no spaces), `<t>` at least 0; any other text is a malformed fixture | yes | no |
@@ -1644,7 +1645,8 @@ marked for the app holds nothing a conformant client could not send, and
 nothing an app's runner could not send its client:
 
 - its `hello` and `auth.request` are behaviour: the `hello` has `majors`
-  (naming its `major`) and `features`, with `peer`
+  `"$majors"` (an app supporting its own major and the one before sends
+  both, section 6.1) and `features` `"$object"`, with `peer`
   `"$string"` and `settingsSchema` `"$int"`; the token is `"$ref:token"`
   or, for a refused token, `"$string"`;
 - a behaviour `command.invoke` has `id` `"$int:<name>"`, a verb from
