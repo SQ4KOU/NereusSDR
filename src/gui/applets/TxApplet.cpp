@@ -588,8 +588,12 @@ void TxApplet::buildUI()
         m_monitorVolumeSlider->setValue(50);
         m_monitorVolumeSlider->setFixedHeight(18);
         m_monitorVolumeSlider->setAccessibleName(QStringLiteral("Monitor volume"));
+        // R-R3-21: sets the TX monitor's gain (TransmitModel::monitorVolume
+        // -> AudioEngine::setTxMonitorVolume), the transmitted audio MON
+        // plays in the output chosen beside it (R-R3-45).
         m_monitorVolumeSlider->setToolTip(QStringLiteral(
-            "Monitor receive audio volume during TX (0–100 %)"));
+            "How loud you hear your own transmitted audio while MON is on, "
+            "on the output chosen next to MON (SPEAKERS or PHONES). 0 to 100."));
         volRow->addWidget(m_monitorVolumeSlider, 1);
 
         m_monitorVolumeValue = new QLabel(QStringLiteral("50"), this);
