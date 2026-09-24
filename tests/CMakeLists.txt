@@ -1349,6 +1349,12 @@ if(UNIX AND NOT APPLE)
     nereus_add_test(tst_pipewire_stream_config)
 endif()
 
+# ── R3 receiver audio fix wave (R-R3-44): PipeWire output frames per cycle ───
+# Pure helper (no PipeWire headers): an output stream fills and counts the
+# frames the graph asked for (pw_buffer::requested), not the whole buffer.
+# Runs on every platform.
+nereus_add_test(tst_pipewire_output_frames)
+
 # ── Phase 3O Task 24: env-gated PipeWire stream integration test ─────────────
 # Real round-trip: PipeWireThreadLoop.connect() → PipeWireStream(Audio/Source)
 # → open() → wait for "streaming" signal → push 500 ms silence → close().

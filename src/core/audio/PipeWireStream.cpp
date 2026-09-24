@@ -4,6 +4,10 @@
 //   2026-04-23 — created. AI-assisted via Claude Code.
 //   2026-09-23: R-R3-44: output counters and isStreaming(). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23: R-R3-44 fix wave: an output cycle fills and counts the
+//                 frames the graph asked for (pw_buffer::requested), not
+//                 the whole buffer. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 #ifdef NEREUS_HAVE_PIPEWIRE
 #include "core/audio/PipeWireStream.h"
@@ -17,6 +21,7 @@
 #include <sched.h>
 #include <time.h>
 
+#include "core/audio/PipeWireOutputFrames.h"
 #include "core/audio/PipeWireThreadLoop.h"
 
 Q_DECLARE_LOGGING_CATEGORY(lcPw)
@@ -394,22 +399,26 @@ void PipeWireStream::onProcessOutput()
         return;
     }
 
-    const qint64 popped = m_ring.popInto(dst, qint64(dstCapacity));
-    if (popped < qint64(dstCapacity)) {
-        std::memset(dst + popped, 0, dstCapacity - size_t(popped));
+    // R-R3-44 fix wave: fill what the graph asked for this cycle
+    // (pw_buffer::requested, PipeWire >= 0.3.49; the build requires 0.3.50),
+    // clamped to the buffer. Filling and counting the whole buffer
+    // (maxsize) ran this clock several times fast whenever the quantum was
+    // smaller than the buffer, and a VAX feeder paces against it.
+    const uint32_t frameBytes = uint32_t(sizeof(float) * m_cfg.channels);
+    const uint32_t frames = pipeWireOutputFrames(b->requested, dstCapacity, frameBytes);
+    const uint32_t fillBytes = frames * frameBytes;
+    const qint64 popped = m_ring.popInto(dst, qint64(fillBytes));
+    if (popped < qint64(fillBytes)) {
+        std::memset(dst + popped, 0, fillBytes - size_t(popped));
     }
-    // R-R3-44: the graph takes the whole buffer each cycle, audio or
-    // silence, so this is the output clock a VAX feeder paces against.
-    {
-        const uint32_t frameBytes = uint32_t(sizeof(float) * m_cfg.channels);
-        const uint32_t frames = frameBytes > 0 ? dstCapacity / frameBytes : 0;
-        m_outputConsumedFrames.fetch_add(frames, std::memory_order_relaxed);
-        m_outputCallbackFrames.store(int(frames), std::memory_order_relaxed);
-    }
+    // R-R3-44: the graph takes these frames each cycle, audio or silence,
+    // so this is the output clock a VAX feeder paces against.
+    m_outputConsumedFrames.fetch_add(frames, std::memory_order_relaxed);
+    m_outputCallbackFrames.store(int(frames), std::memory_order_relaxed);
 
     sb->datas[0].chunk->offset = 0;
-    sb->datas[0].chunk->stride = sizeof(float) * m_cfg.channels;
-    sb->datas[0].chunk->size   = dstCapacity;
+    sb->datas[0].chunk->stride = int32_t(frameBytes);
+    sb->datas[0].chunk->size   = fillBytes;
     pw_stream_queue_buffer(m_stream, b);
 
     clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t1);
