@@ -77,6 +77,12 @@ audio_device =
 # the Core has no paired device yet: allow (default) or deny. With deny,
 # every device pairs with the code the Core shows instead. Any other value
 # is ignored with a warning.
+# "This Core's own network" means every network this computer is on: its
+# LAN, and also any VPN or overlay it has joined (ZeroTier, Tailscale,
+# WireGuard, a Docker bridge), and this computer itself, so a local proxy
+# or SSH tunnel counts too. Anyone on any of those can claim an unclaimed
+# Core with one tap. If this computer shares such a network with people you
+# do not trust, set deny.
 pairing_lan_click = allow
 
 # The Core's status page: a small read-only web page on this port showing

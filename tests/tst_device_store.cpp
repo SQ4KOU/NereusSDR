@@ -25,6 +25,11 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QtTest>
@@ -319,6 +324,31 @@ private slots:
             DeviceStore damaged(dir.path());
             QVERIFY(!damaged.isValid());
         }
+    }
+
+    void aListRestoredAtWiderPermissionsIsMadeOwnerOnlyOnLoad()
+    {
+        // Part C fix wave (R1-M5).
+#ifdef Q_OS_WIN
+        QSKIP("Windows files carry no Unix mode; the profile directory's ACL protects them.");
+#else
+        QTemporaryDir dir;
+        TestDevice phone;
+        {
+            DeviceStore store(dir.path());
+            QVERIFY(store.add(phone.record()));
+        }
+        const QString path = dir.filePath(QString::fromLatin1(DeviceStore::kFileName));
+        QVERIFY(QFile(path).setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                           | QFileDevice::ReadGroup | QFileDevice::ReadOther));
+        DeviceStore reloaded(dir.path());
+        QVERIFY2(reloaded.isValid(), qPrintable(reloaded.lastError()));
+        QVERIFY(reloaded.find(phone.key.fingerprint()).has_value());
+        const QFileDevice::Permissions others =
+            QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+            | QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther;
+        QCOMPARE(QFile(path).permissions() & others, QFileDevice::Permissions());
+#endif
     }
 
     void theListSurvivesARestartInAnOwnerOnlyFile()

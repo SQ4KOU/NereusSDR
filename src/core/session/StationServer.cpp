@@ -206,6 +206,11 @@
 //               to standard output (the journal on a packaged Core). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1148,6 +1153,24 @@ void StationServer::printToConsole(const QString& text)
     writePairingBanner(text);
 }
 
+QString StationServer::addressKey(const QString& address)
+{
+    if (address.isEmpty()) {
+        return {};
+    }
+    QHostAddress host(address);
+    if (host.isNull()) {
+        return address;
+    }
+    bool mapped = false;
+    const quint32 ipv4 = host.toIPv4Address(&mapped);
+    if (mapped) {
+        host = QHostAddress(ipv4);
+    }
+    host.setScopeId(QString());
+    return host.toString();
+}
+
 bool StationServer::isOnDirectNetwork(const QString& address)
 {
     if (address.isEmpty()) {
@@ -1293,6 +1316,33 @@ void StationServer::acceptTransport(SessionTransport* transport)
         transport->closeLink(QStringLiteral("The Core already has as many connections as it allows. Try again shortly."));
         transport->deleteLater();
         return;
+    }
+
+    // Part C fix wave (R1-M4): one address holds at most
+    // kMaxHandshakesPerAddress of the slots while it is still connecting,
+    // so a host on the internet cannot keep the phone out by holding every
+    // one of them. The same retryable refusal as the cap above.
+    const QString address = addressKey(transport->peerAddress());
+    if (!address.isEmpty()) {
+        int connecting = 0;
+        for (const Peer& other : std::as_const(m_peers)) {
+            if (!other.snapshotComplete && other.transport != nullptr
+                && addressKey(other.transport->peerAddress()) == address) {
+                ++connecting;
+            }
+        }
+        if (connecting >= kMaxHandshakesPerAddress) {
+            qCWarning(lcStation) << "Refusing connection from" << transport->peerDescription()
+                                 << ": that address already has" << connecting
+                                 << "connections still connecting";
+            const QString reason = QStringLiteral(
+                "The Core already has as many connections as it allows. Try again shortly.");
+            transport->sendText(SessionMessages::encode(
+                SessionMessages::sessionEnd(reason, /*retryable=*/true)));
+            transport->closeLink(reason);
+            transport->deleteLater();
+            return;
+        }
     }
 
     Peer peer;
@@ -2345,6 +2395,14 @@ void StationServer::handlePairConfirm(SessionTransport* transport, const Session
         m_pairingWindow->pairingFailed();
         sendPairFail(transport, reason, m_pairingWindow->retryAfterMs());
     };
+    // Part C fix wave (R1-M1): a window that closed (the operator's close,
+    // its ten minutes, or a close and reopen) since this exchange took the
+    // code pairs nothing; the code is burned.
+    if (!m_pairingWindow->holdsCode(attempt->codeSerial)) {
+        refuse(QStringLiteral("This Core is not taking new devices. Open pairing on the Core or "
+                              "on a paired device first."));
+        return;
+    }
     bool ok = false;
     const QByteArray box = StationIdentity::fromBase64Url(message.pairBox, &ok);
     const std::optional<QByteArray> plain =

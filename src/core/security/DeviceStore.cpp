@@ -11,6 +11,11 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/security/DeviceStore.h"
@@ -135,6 +140,9 @@ bool DeviceStore::load()
     if (!file.exists()) {
         return true;
     }
+    // Part C fix wave (R1-M5): a list restored at wider permissions is
+    // made owner-only again, or a warning says it could not be.
+    StationIdentity::keepOwnerOnly(m_path);
     if (!file.open(QIODevice::ReadOnly)) {
         m_lastError = QStringLiteral("%1 could not be read: %2").arg(m_path, file.errorString());
         return false;

@@ -11,6 +11,11 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/security/SpakeExchange.h"
@@ -136,6 +141,19 @@ QByteArray SpakeExchange::stationStep2(const QByteArray& stored, const QByteArra
     }
     // Taken whatever the outcome: one share per exchange.
     m_secrets->step2Taken = true;
+    // Part C fix wave (R1-M2): step 1 must be a valid point before
+    // spake2-ee sees it. crypto_spake_step2 (spake2-ee crypto_spake.c:345
+    // [@fd3ea61f]) ignores crypto_core_ed25519_sub's return value, so a
+    // step 1 that is not a curve point would leave its `gx` unset;
+    // libsodium's scalar multiplication then refuses it, but the check
+    // belongs here. crypto_core_ed25519_is_valid_point (libsodium 1.0.22
+    // core_ed25519.c:10-23, crypto_core_ed25519.h:31-33) returns 1 only for
+    // a canonical encoding of a point on the curve, on the main subgroup
+    // and not of small order, which an honest step 1 (g^x plus spake2-ee's
+    // M) always is.
+    if (crypto_core_ed25519_is_valid_point(uchars(response1)) != 1) {
+        return {};
+    }
     QByteArray response2(kResponse2Bytes, '\0');
     if (crypto_spake_step2(&m_secrets->server, uchars(response2), kClientId,
                            idLength(kClientId), kServerId, idLength(kServerId),

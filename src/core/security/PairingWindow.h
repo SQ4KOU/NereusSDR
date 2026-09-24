@@ -71,6 +71,11 @@
 //               to standard output (the journal on a packaged Core). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QObject>
@@ -148,6 +153,14 @@ public:
     void pairingFailed();
     /// True between takeCode() and the exchange's outcome.
     bool codeInUse() const { return m_codeInUse; }
+    /// Part C fix wave (R1-M1): the exchange that took the code of `serial`
+    /// may still pair with it: the window is open, the code is taken, and
+    /// the window has not closed since (closing moves the serial). The
+    /// exchange asks again at its confirm step.
+    bool holdsCode(quint64 serial) const
+    {
+        return isOpen() && m_codeInUse && serial == m_serial;
+    }
     /// Milliseconds until the next code appears: 0 when one is shown or
     /// the window is closed; kFirstRetryMs while another exchange holds
     /// the code.

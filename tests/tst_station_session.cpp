@@ -418,6 +418,7 @@ private slots:
     void remoteTgxlStateClearsOnSessionLossRetainingConfiguredEndpoint();
     void handshakeDeadlineDropsASilentPeer();
     void peerLimitRefusesFurtherConnections();
+    void oneAddressHoldsAtMostTwoConnectingSlots();
     void listenIsIdempotent();
 
     // ---- Security fix round ----
@@ -4510,6 +4511,63 @@ void TstStationSession::peerLimitRefusesFurtherConnections()
     QCOMPARE(server.peerCount(), StationServer::kMaxConcurrentPeers);
     // Refused with a reason on the wire, not an unexplained close.
     QTRY_VERIFY(overflowClient->receivedKinds().contains(QByteArrayLiteral("session.end")));
+}
+
+// Part C fix wave (R1-M4): one host cannot hold every one of the
+// kMaxConcurrentPeers slots by redialling within the handshake deadline.
+void TstStationSession::oneAddressHoldsAtMostTwoConnectingSlots()
+{
+    QCOMPARE(StationServer::kMaxHandshakesPerAddress, 2);
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings,
+                         NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
+    server.setAuthDeadlineMs(0);
+
+    const auto dial = [this, &server](const QString& address) {
+        auto* stationEnd = new LoopbackTransport(QStringLiteral("station"), this);
+        auto* clientEnd = new LoopbackTransport(QStringLiteral("client"), this);
+        stationEnd->setPeerAddress(address);
+        stationEnd->linkTo(clientEnd);
+        server.acceptTransport(stationEnd);
+        return std::make_pair(stationEnd, clientEnd);
+    };
+    const QString attacker = QStringLiteral("203.0.113.9");
+    auto first = dial(attacker);
+    auto second = dial(attacker);
+    QCOMPARE(server.peerCount(), 2);
+    // The third from that address, however it is written, is refused,
+    // retryable, with the cap's own words.
+    for (const QString& same : {attacker, QStringLiteral("::ffff:203.0.113.9")}) {
+        auto third = dial(same);
+        QCOMPARE(server.peerCount(), 2);
+        QTRY_VERIFY(third.second->receivedKinds().contains(QByteArrayLiteral("session.end")));
+        SessionMessage end;
+        for (const QByteArray& wire : third.second->received()) {
+            const SessionMessage m = decodeOrFail(wire);
+            if (m.kind == SessionMessageKind::SessionEnd) {
+                end = m;
+            }
+        }
+        QVERIFY(end.retryable);
+        QCOMPARE(end.reason, QStringLiteral("The Core already has as many connections as it "
+                                            "allows. Try again shortly."));
+    }
+    // Another address still gets in, and so does a connection with no
+    // address of its own (the relay's, later), which is not counted here.
+    dial(QStringLiteral("198.51.100.4"));
+    dial(QString());
+    dial(QString());
+    dial(QString());
+    QCOMPARE(server.peerCount(), 6);
+    // Once one of the two ends, the address may connect again.
+    first.second->closeLink(QStringLiteral("gone"));
+    QTRY_COMPARE(server.peerCount(), 5);
+    dial(attacker);
+    QCOMPARE(server.peerCount(), 6);
+    Q_UNUSED(second);
 }
 
 void TstStationSession::listenIsIdempotent()

@@ -39,6 +39,11 @@
 //   2026-09-24: iPhone app Task 18 (R-IOS-08): loadOrCreateKeyFile(), so
 //               the desktop's device key shares this handling. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QByteArray>
@@ -75,6 +80,14 @@ public:
     static StationIdentity loadOrCreateKeyFile(const QString& profileDir,
                                                const QString& fileName,
                                                const QString& whose);
+
+    /// Part C fix wave (R1-M5): an existing secret file (a key, the paired
+    /// devices) that other users can read or write, restored from a backup
+    /// at 0644 say, is set back to mode 0600 when it is loaded; a warning
+    /// is logged when that fails. True when the file is owner-only
+    /// afterwards (or absent). Not on Windows, whose files carry no such
+    /// mode (the profile directory's ACL protects them).
+    static bool keepOwnerOnly(const QString& path);
 
     bool isValid() const { return m_key != nullptr; }
     QString lastError() const { return m_lastError; }

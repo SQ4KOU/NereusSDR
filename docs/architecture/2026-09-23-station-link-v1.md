@@ -353,6 +353,14 @@ subnet of an address of a running interface). A relayed connection has no
 address of its own, so it never qualifies. The station then sends
 `pair.accept` and ends the connection.
 
+One tap trusts every network the Core's computer is on, not only its LAN:
+a VPN or overlay it has joined (ZeroTier, Tailscale, WireGuard, a Docker
+bridge) is a running interface too, and a loopback address counts, so a
+local reverse proxy or SSH tunnel qualifies. Anyone on any of them can
+claim an unclaimed Core with one tap. `pairing_lan_click = deny` is the
+remedy: every device then pairs with the code (the sample configuration,
+`packaging/nereusd.conf.sample`, says so).
+
 **The code** (`mode` `"code"`), SPAKE2+EE over libsodium
 (`SpakeExchange`). Its fixed values are the client identity
 `"nereussdr-device-v1"` and the server identity `"nereussdr-station-v1"`.
@@ -368,14 +376,19 @@ Password hashing uses libsodium's default algorithm (Argon2id) with
 2. Device: checks that step 0 names exactly those parameters
    (`crypto_spake_validate_public_data`) before it hashes the code, then
    sends step 1, 32 bytes. The station takes the code here.
-3. Station: step 2, 64 bytes.
+3. Station: step 2, 64 bytes, once step 1 is a valid point
+   (`crypto_core_ed25519_is_valid_point`: canonical, on the curve, on the
+   main subgroup, not of small order); one that is not is a malformed
+   step 1 and burns the code.
 4. Device: step 3, 32 bytes. When the codes differ, the device's step 3
    fails; it sends `pair.fail` instead, and the station burns the code and
    answers with its own `pair.fail`. Otherwise the device sends step 3 and
    then its `pair.confirm`, whose box is sealed with the shared key
    `client_sk` around the compact JSON `{"publicKey", "name", "kind"}`.
 5. Station: checks step 3 (spake2-ee's step 4). A mismatch burns the code
-   and sends `pair.fail`. It opens the device's box. The box's
+   and sends `pair.fail`. When the window has closed since step 1 (closed,
+   its ten minutes over, or closed and reopened), it burns the code and
+   sends `pair.fail` as for a closed window. It opens the device's box. The box's
    `publicKey` must be the one `pair.start` named, and the box's `name`
    and `kind` win over the plain ones. The station adds the device and
    answers with its own `pair.confirm`: a box sealed with `server_sk`
@@ -391,7 +404,7 @@ after it.
 | No pairing on this Core (no identity key or cryptography) | "This Core cannot pair new devices." | 0 |
 | A key that is not a P-256 key, or an unusable name or kind (in `pair.start` or the box), or a box that does not open or names another key | "The Core could not read this device's details. Update this app." | 0 (the wait, from the box on) |
 | The key is paired already | "This device is already paired with this Core. Connect to it instead." | 0 |
-| The window is closed | "This Core is not taking new devices. Open pairing on the Core or on a paired device first." | 0 |
+| The window is closed (at `pair.start`, or at the confirm step when it closed after the exchange took the code, which burns it) | "This Core is not taking new devices. Open pairing on the Core or on a paired device first." | 0 |
 | One tap on a claimed Core | "One tap pairs only a Core with no paired devices. Use the pairing code the Core shows." | 0 |
 | One tap with `pairing_lan_click = deny` | "This Core pairs only with its code. Use the pairing code the Core shows." | 0 |
 | One tap from off the Core's networks | "One tap works only on the Core's own network. Use the pairing code the Core shows." | 0 |
@@ -1879,6 +1892,12 @@ runs the same deadline on its side.
   allows. Try again shortly.",
   `retryable` true, because a reconnecting client meets it while its own
   dead sockets drain.
+- Of those, one address may hold at most 2 that are still connecting
+  (their snapshot not yet sent; `kMaxHandshakesPerAddress`), so one host
+  cannot hold every slot by redialling within the connect deadline. An
+  IPv4-mapped IPv6 address counts as its IPv4 address. The next one from
+  that address gets the same `session.end`, `retryable` true. A connection
+  with no address of its own (the relay's) is not counted by address.
 
 ### 12.4 Ending, preemption and retryable
 
@@ -2143,6 +2162,7 @@ maximum also equals `kMaximumSpectrumDisplayFramesPerSecond` in
 | `endpointPixels` | 1 to 4096 | pixels | DaemonMediaController.cpp handleSubscribe literal 1; SpectrumEndpoint::kMaxPixels |
 | `heartbeatIntervalMs` | 20000 | ms | StationServer::kDefaultHeartbeatIntervalMs |
 | `maxDisplayEndpoints` | 8 | count | DaemonMediaController.cpp kMaxEndpoints |
+| `maxHandshakesPerAddress` | 2 | count | StationServer::kMaxHandshakesPerAddress |
 | `maxPeers` | 8 | count | StationServer::kMaxConcurrentPeers |
 | `mediaControlBytes` | 131072 | bytes | kMaxMediaControlBytes |
 | `missedPongs` | 2 | count | StationServer::kDefaultMaxMissedPongs |

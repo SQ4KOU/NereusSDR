@@ -21,6 +21,11 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QtTest>
@@ -173,6 +178,38 @@ private slots:
         QVERIFY(wrongStation.deviceStep1(step0, code).isEmpty());
 
         QVERIFY(SpakeExchange::storedData(QString()).isEmpty());
+    }
+
+    void aStepOneThatIsNotAValidPointIsRefused()
+    {
+        // Part C fix wave (R1-M2): the Core checks the device's step 1 is a
+        // valid point (canonical, on the curve, on the main subgroup, not
+        // of small order) before spake2-ee uses it, and the exchange's one
+        // step 2 is spent either way.
+        const QString code = freshCode();
+        const QByteArray stored = SpakeExchange::storedData(code);
+        QByteArray identity(SpakeExchange::kResponse1Bytes, '\0');
+        identity[0] = 1;                                            // the neutral point
+        QByteArray nonCanonical(SpakeExchange::kResponse1Bytes, static_cast<char>(0xFF));
+        nonCanonical[SpakeExchange::kResponse1Bytes - 1] = 0x7F;   // y >= p
+        const QList<QByteArray> invalid{
+            QByteArray(SpakeExchange::kResponse1Bytes, '\0'),     // small order
+            identity,
+            nonCanonical,
+        };
+        for (const QByteArray& step1 : invalid) {
+            SpakeExchange station(SpakeExchange::Role::Station);
+            QVERIFY(!station.stationStep0(stored).isEmpty());
+            QVERIFY(station.stationStep2(stored, step1).isEmpty());
+            // Spent: the real step 1 is not tried after a refused one.
+            SpakeExchange device(SpakeExchange::Role::Device);
+            SpakeExchange fresh(SpakeExchange::Role::Station);
+            const QByteArray realStep1 = device.deviceStep1(fresh.stationStep0(stored), code);
+            QVERIFY(!realStep1.isEmpty());
+            QVERIFY(station.stationStep2(stored, realStep1).isEmpty());
+            // An honest one is a valid point and is answered.
+            QCOMPARE(fresh.stationStep2(stored, realStep1).size(), SpakeExchange::kResponse2Bytes);
+        }
     }
 
     void aBoxOpensOnlyUntouchedAndUnderTheOtherSidesKey()

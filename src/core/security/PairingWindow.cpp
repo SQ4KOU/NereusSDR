@@ -14,6 +14,11 @@
 //               lasts 10 minutes, five burned codes in a row close any window,
 //               and reopening starts afresh. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/security/PairingWindow.h"
@@ -116,6 +121,10 @@ void PairingWindow::commit(State state, const QString& code)
     if (isOpenState(m_state) && !isOpenState(state)) {
         m_expiry->stop();
         m_openUntil = 0;
+        // Part C fix wave (R1-M1): an exchange that took a code of this
+        // window cannot pair with it once the window has closed, even if it
+        // is reopened before that exchange's confirm step (holdsCode()).
+        ++m_serial;
     }
     m_state = state;
     m_code = code;

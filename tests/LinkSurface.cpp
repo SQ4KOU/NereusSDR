@@ -45,6 +45,11 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -1068,6 +1073,10 @@ QJsonObject captureLimits()
     limits.insert(QStringLiteral("maxPeers"),
                   limit(StationServer::kMaxConcurrentPeers, QStringLiteral("count"),
                         QStringLiteral("StationServer::kMaxConcurrentPeers")));
+    // Part C fix wave (R1-M4): connecting peers one address may hold.
+    limits.insert(QStringLiteral("maxHandshakesPerAddress"),
+                  limit(StationServer::kMaxHandshakesPerAddress, QStringLiteral("count"),
+                        QStringLiteral("StationServer::kMaxHandshakesPerAddress")));
     // Part C fix wave: auth.request's optional device `shortName`.
     limits.insert(QStringLiteral("shortNameMaxBytes"),
                   limit(DeviceStore::kMaxShortNameBytes, QStringLiteral("bytes"),

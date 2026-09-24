@@ -8,9 +8,16 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/security/StationIdentity.h"
+
+#include "core/LogCategories.h"
 
 #include <openssl/bio.h>
 #include <openssl/bn.h>
@@ -144,6 +151,36 @@ StationIdentity StationIdentity::loadOrCreate(const QString& profileDir)
                                QStringLiteral("The Core's"));
 }
 
+bool StationIdentity::keepOwnerOnly(const QString& path)
+{
+#ifdef Q_OS_WIN
+    Q_UNUSED(path);
+    return true;
+#else
+    QFile file(path);
+    if (!file.exists()) {
+        return true;
+    }
+    const QFileDevice::Permissions others =
+        QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+        | QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther;
+    if ((file.permissions() & others) == QFileDevice::Permissions()) {
+        return true;
+    }
+    if (file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
+        qCWarning(lcConnection) << path
+                                << "could be read by other users; it is owner-only again "
+                                   "(mode 0600)";
+        return true;
+    }
+    qCWarning(lcConnection) << path
+                            << "can be read by other users and could not be made owner-only "
+                               "(mode 0600):"
+                            << file.errorString();
+    return false;
+#endif
+}
+
 StationIdentity StationIdentity::loadOrCreateKeyFile(const QString& profileDir,
                                                      const QString& fileName,
                                                      const QString& whose)
@@ -161,6 +198,7 @@ StationIdentity StationIdentity::loadOrCreateKeyFile(const QString& profileDir,
 
     QFile file(identity.m_keyPath);
     if (file.exists()) {
+        keepOwnerOnly(identity.m_keyPath);
         if (!file.open(QIODevice::ReadOnly)) {
             identity.m_lastError = QStringLiteral("%1 identity key %2 could not be read: %3")
                                        .arg(whose, identity.m_keyPath, file.errorString());

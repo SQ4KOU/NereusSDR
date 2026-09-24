@@ -204,6 +204,11 @@
 //               to standard output (the journal on a packaged Core). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QHash>
@@ -284,6 +289,12 @@ public:
     /// reconnecting client. Beyond this a new connection is refused
     /// immediately rather than being allowed to displace a live session.
     static constexpr int kMaxConcurrentPeers = 8;
+    /// Part C fix wave (R1-M4): connections from one address that are
+    /// still connecting (their snapshot not yet sent), so one host cannot
+    /// hold every kMaxConcurrentPeers slot by redialling within the
+    /// handshake deadline. A connection with no address of its own (the
+    /// relay, later) is not counted here.
+    static constexpr int kMaxHandshakesPerAddress = 2;
 
     /// Largest inbound WebSocket message, and frame, on an ACCEPTED
     /// socket. Applied by WebSocketTransport's constructor.
@@ -467,6 +478,10 @@ public:
     /// Writes `text` to standard output and flushes it: the Core's console,
     /// as the first-run banner is written.
     static void printToConsole(const QString& text);
+    /// Part C fix wave (R1-M4): `address` as the per-address handshake
+    /// count keys it: an IPv4-mapped IPv6 address as its IPv4 form, no
+    /// scope id. "" for "".
+    static QString addressKey(const QString& address);
     /// Whether `address` (a connection's peer address) is on one of this
     /// machine's directly connected networks: a loopback address, or one
     /// inside the subnet of an address of a running interface. Empty (a

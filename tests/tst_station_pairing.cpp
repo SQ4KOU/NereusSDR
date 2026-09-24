@@ -50,6 +50,11 @@
 //               to standard output (the journal on a packaged Core). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QtTest>
@@ -66,6 +71,7 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -258,6 +264,8 @@ struct DeviceSide {
     QString boxKind;
     QString boxKey;           // empty: the device's own key
     QJsonObject hello;
+    // Runs just before the device sends its box (the confirm step).
+    std::function<void()> beforeConfirm;
 
     explicit DeviceSide(const Device& d) : device(d), boxName(d.name), boxKind(d.kind) {}
 
@@ -334,6 +342,9 @@ struct DeviceSide {
             }
         }
         link.send(SessionMessages::pairSpake(3, StationIdentity::toBase64Url(response3)));
+        if (!lie && beforeConfirm) {
+            beforeConfirm();
+        }
         if (!lie) {
             const QJsonObject box{
                 {QStringLiteral("publicKey"),
@@ -469,6 +480,17 @@ struct Core {
         LoopbackLink link(open(address));
         DeviceSide side(device);
         const Outcome outcome = side.code(link, typed, lie);
+        link.ended();
+        return outcome;
+    }
+
+    // pairByCode, with `beforeConfirm` run just before the device's box.
+    Outcome pairByCodeClosingFirst(const Device& device, const std::function<void()>& beforeConfirm)
+    {
+        LoopbackLink link(open());
+        DeviceSide side(device);
+        side.beforeConfirm = beforeConfirm;
+        const Outcome outcome = side.code(link, window().currentCode());
         link.ended();
         return outcome;
     }
@@ -626,6 +648,60 @@ private slots:
         verifyPlainRefusal(outcome);
         QCOMPARE(outcome.retryAfterMs, qint64(0));
         QVERIFY(!core.store().find(second.id()));
+    }
+
+    void anExchangeInFlightDoesNotPairOnceTheWindowHasClosed()
+    {
+        // Part C fix wave (R1-M1): the operator closes pairing after reading
+        // the code to the wrong person; the exchange that already took the
+        // code is refused at its confirm step, and the code is burned.
+        const QString closedReason = QStringLiteral(
+            "This Core is not taking new devices. Open pairing on the Core or on a paired "
+            "device first.");
+        {
+            Core core;
+            Device first;
+            QVERIFY(core.store().add(first.record()));
+            core.window().reopen();
+            Device second;
+            const Outcome outcome =
+                core.pairByCodeClosingFirst(second, [&core] { core.window().close(); });
+            QCOMPARE(outcome.type, QStringLiteral("pair.fail"));
+            QCOMPARE(outcome.reason, closedReason);
+            QCOMPARE(outcome.retryAfterMs, qint64(0));
+            QVERIFY(!core.store().find(second.id()));
+            QVERIFY(!core.window().codeInUse());
+            QCOMPARE(core.window().consecutiveFailures(), 1);
+            QCOMPARE(core.window().state(), PairingWindow::State::ClosedClaimed);
+        }
+        {
+            // Closed and reopened in between: the new window's code is not
+            // the one that exchange took.
+            Core core;
+            Device first;
+            QVERIFY(core.store().add(first.record()));
+            core.window().reopen();
+            Device second;
+            const Outcome outcome = core.pairByCodeClosingFirst(second, [&core] {
+                core.window().close();
+                core.window().reopen();
+            });
+            QCOMPARE(outcome.type, QStringLiteral("pair.fail"));
+            QVERIFY(!core.store().find(second.id()));
+        }
+        {
+            // The reopened window's ten minutes ran out mid-exchange.
+            Core core;
+            Device first;
+            QVERIFY(core.store().add(first.record()));
+            core.window().reopen();
+            Device second;
+            const Outcome outcome = core.pairByCodeClosingFirst(
+                second, [&core] { core.advance(PairingWindow::kReopenedLifetimeMs); });
+            QCOMPARE(outcome.type, QStringLiteral("pair.fail"));
+            QCOMPARE(outcome.reason, closedReason);
+            QVERIFY(!core.store().find(second.id()));
+        }
     }
 
     void aWrongCodeFailsOnTheDevicesSideAndBurns()

@@ -21,6 +21,11 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QtTest>
@@ -254,6 +259,31 @@ private slots:
     }
 
     // ── The admit path ───────────────────────────────────────────────────
+
+    void aKeyRestoredAtWiderPermissionsIsMadeOwnerOnlyOnLoad()
+    {
+        // Part C fix wave (R1-M5): a key file restored from a backup at
+        // 0644 is set back to 0600 when it is loaded, and still loads.
+#ifdef Q_OS_WIN
+        QSKIP("Windows files carry no Unix mode; the profile directory's ACL protects them.");
+#else
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const StationIdentity first = StationIdentity::loadOrCreate(dir.path());
+        QVERIFY(first.isValid());
+        QFile file(first.keyPath());
+        QVERIFY(file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                    | QFileDevice::ReadGroup | QFileDevice::ReadOther));
+        const StationIdentity again = StationIdentity::loadOrCreate(dir.path());
+        QVERIFY2(again.isValid(), qPrintable(again.lastError()));
+        QCOMPARE(again.fingerprint(), first.fingerprint());
+        const QFileDevice::Permissions others =
+            QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+            | QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther;
+        QCOMPARE(QFile(first.keyPath()).permissions() & others, QFileDevice::Permissions());
+        QVERIFY(QFile(first.keyPath()).permissions().testFlag(QFileDevice::ReadOwner));
+#endif
+    }
 
     void theFirstStartCreatesAnOwnerOnlyPkcs8Key()
     {
