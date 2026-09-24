@@ -1430,17 +1430,11 @@ void MainWindow::ensureRemoteSession()
         });
         const auto explainReceiveLayout = [this] {
             if (!m_stationClient->isHandshakeComplete()) { return; }
-            const QString state = m_radioModel->receiveLayoutRestoreState();
-            const QString message = m_radioModel->receiveLayoutRestoreMessage();
-            if (state == QLatin1String("accepted")) {
-                m_lastReceiveLayoutWarning.clear();
-            } else if ((state == QLatin1String("invalid")
-                        || state == QLatin1String("degraded")
-                        || state == QLatin1String("fallback"))
-                       && !message.isEmpty() && message != m_lastReceiveLayoutWarning) {
-                m_lastReceiveLayoutWarning = message;
-                showToast(tr("%1 Details remain in Core connection.").arg(message),
-                          ToastSeverity::Warning, 10000);
+            const QString toast = m_receiveLayoutNotices.toastFor(
+                m_radioModel->receiveLayoutRestoreState(),
+                m_radioModel->receiveLayoutRestoreMessage(), /*viaCore*/ true);
+            if (!toast.isEmpty()) {
+                showToast(toast, ToastSeverity::Warning, 10000);
             }
         };
         // State/detail arrive as a property bag. Queue evaluation so a paired
@@ -1467,7 +1461,7 @@ void MainWindow::ensureRemoteSession()
             // at every backoff step, up to once a minute for as long as the
             // Core stays away. The reason is already shown persistently
             // (Connections window, Core panel, title bar), so toast it once
-            // per distinct reason, the same way m_lastReceiveLayoutWarning
+            // per distinct reason, the same way m_receiveLayoutNotices
             // holds the receive layout notice to once.
             if (m_stationLinkLostSeen && reason == m_lastStationLinkLostReason) {
                 return;
@@ -5566,6 +5560,22 @@ void MainWindow::buildUI()
         // A remote window's refusal is the Core's text; shown in user words.
         showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
     });
+    // R-R3-34: a local window (no Core) closes slices a smaller board cannot
+    // host when it connects (RadioModel::closeSlicesPastChannelLimit) and
+    // says so on the receive-layout restore status. A remote window toasts
+    // that status from its station wiring; this is the same notice through
+    // the same toast for a window with no Core, so a closure is never silent.
+    if (!m_station.isRemote()) {
+        connect(m_radioModel, &RadioModel::receiveLayoutRestoreStatusChanged, this,
+                [this] {
+            const QString toast = m_receiveLayoutNotices.toastFor(
+                m_radioModel->receiveLayoutRestoreState(),
+                m_radioModel->receiveLayoutRestoreMessage(), /*viaCore*/ false);
+            if (!toast.isEmpty()) {
+                showToast(toast, ToastSeverity::Warning, 10000);
+            }
+        }, Qt::QueuedConnection);
+    }
     // L1 (R-R3-47, R-R3-22, R-R3-48): the Core refused an accessory request
     // (amp, tuner, RF-Kit, interlock, fault history, station TCI). Its own
     // route, so a slice-only listener never hears it; the same toast.

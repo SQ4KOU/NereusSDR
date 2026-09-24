@@ -861,6 +861,13 @@ public:
     bool isActive() const { return m_active.load(); }
     void setActive(bool active);
 
+    // Switch the channel off without waiting for WDSP to drain it
+    // (SetChannelState dmode 0). For a sequence that stops several channels
+    // and drains only the last one, as RadioModel::setSampleRateLive does:
+    // the slew-down still runs on the channel's next exchange. setActive(false)
+    // is the draining form.
+    void deactivateWithoutDrain();
+
     // --- Audio processing (called from audio thread) ---
 
     // Process I/Q samples through the WDSP RX chain.
@@ -985,6 +992,9 @@ signals:
                          int n, int srcRate);
 
 private:
+    // Shared body of setActive / deactivateWithoutDrain.
+    void applyActive(bool active, bool drainOnStop);
+
     const int m_channelId;
     // m_bufferSize and m_sampleRate are mutated by setSampleRate() — they
     // were const in the original construction-time-immutable design, but

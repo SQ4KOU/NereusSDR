@@ -1803,6 +1803,16 @@ bool RxChannel::notchAt(int index, Notch& out) const
 
 void RxChannel::setActive(bool active)
 {
+    applyActive(active, /*drainOnStop=*/true);
+}
+
+void RxChannel::deactivateWithoutDrain()
+{
+    applyActive(false, /*drainOnStop=*/false);
+}
+
+void RxChannel::applyActive(bool active, bool drainOnStop)
+{
     if (active == m_active.load()) {
         return;
     }
@@ -1811,7 +1821,8 @@ void RxChannel::setActive(bool active)
 
 #ifdef HAVE_WDSP
     // state=1 on, state=0 off; dmode=0 for no drain, dmode=1 for drain
-    SetChannelState(m_channelId, active ? 1 : 0, active ? 0 : 1);
+    SetChannelState(m_channelId, active ? 1 : 0,
+                    (!active && drainOnStop) ? 1 : 0);
 
     // R-R3-41: nereusd gives an active receive worker a fast core of its own
     // and returns it when the channel stops (no-op in the GUI).
