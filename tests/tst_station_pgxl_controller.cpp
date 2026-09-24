@@ -633,9 +633,12 @@ private slots:
         model.setStationBind(QStringLiteral("127.0.0.1"));
         auto* pgxl = model.pgxlConnection();
         QSignalSpy frames(pgxl, &PgxlConnection::testFrameWrittenForTesting);
-        QVERIFY(answerUpToInfo(model, amp, frames, "V3.8.9", kInfoReply));
-        const QString line = QStringLiteral("PowerGeniusXL ip=192.168.1.43 v=3.8.9 serial=%1 nickname=PowerGeniusXL")
-                                 .arg(QString::fromLatin1(kSerial));
+        // A serial no real amp has, so a Power Genius on the bench LAN
+        // (heard by broadcast) is never taken for this one.
+        QVERIFY(answerUpToInfo(model, amp, frames, "V3.8.9",
+                               "serial=77-777/77-7777  version=3.8.9 protocol=1.0 mains=240"));
+        const QString line = QStringLiteral(
+            "PowerGeniusXL ip=192.168.1.43 v=3.8.9 serial=77-777/77-7777 nickname=PowerGeniusXL");
         discoveryOf(model)->injectDatagramForTesting(line, amp.serverPort(),
                                                      QHostAddress(QStringLiteral("192.168.1.43")));
         QTRY_COMPARE_WITH_TIMEOUT(model.amplifierModel()->connectionPhase(), Phase::Error, 6000);
@@ -646,6 +649,35 @@ private slots:
         QVERIFY(OperatorWording::isPlain(error));
         QCOMPARE(OperatorReasonText::forDisplay(error), error);   // a window shows it as sent
         QVERIFY(!pgxl->isConnected());
+        QString reason;
+        QVERIFY(model.disconnectPgxlForStation(&reason));
+    }
+
+    // Follow-up 8: another Power Genius announcing from another network
+    // (not this amp's serial, not its address) is not a reason to say this
+    // amp is on another network.
+    void anotherAmpOffTheNetworkIsNotThisAmp()
+    {
+        AppSettings::instance().setValue(QStringLiteral("PGXL_AutoReconnect"), QStringLiteral("False"));
+        QTcpServer amp;
+        QVERIFY(amp.listen(QHostAddress::LocalHost, 0));
+        RadioModel model;
+        prepare(model);
+        model.setStationBind(QStringLiteral("127.0.0.1"));
+        auto* pgxl = model.pgxlConnection();
+        QSignalSpy frames(pgxl, &PgxlConnection::testFrameWrittenForTesting);
+        // This amp's serial is one no real amp has: a Power Genius on the
+        // bench LAN announcing by broadcast (the discovery sockets hear every
+        // network) is then not this amp either.
+        QVERIFY(answerUpToInfo(model, amp, frames, "V3.8.9",
+                               "serial=77-777/77-7777  version=3.8.9 protocol=1.0 mains=240"));
+        discoveryOf(model)->injectDatagramForTesting(
+            QStringLiteral("PowerGeniusXL ip=192.168.1.77 v=3.8.9 serial=99-999/99-9999 nickname=Other"),
+            amp.serverPort(), QHostAddress(QStringLiteral("192.168.1.77")));
+        QTRY_COMPARE_WITH_TIMEOUT(model.amplifierModel()->connectionPhase(), Phase::Error, 6000);
+        const QString error = model.amplifierModel()->connectionError();
+        QVERIFY2(!error.contains(QStringLiteral("different network")), qPrintable(error));
+        QVERIFY(error.startsWith(QStringLiteral("No matching PGXL discovery announcement")));
         QString reason;
         QVERIFY(model.disconnectPgxlForStation(&reason));
     }

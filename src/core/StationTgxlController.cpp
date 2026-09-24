@@ -257,9 +257,16 @@ void StationTgxlController::identify(quint64 attempt, const QString& peer, quint
                 && !m_stationBind->acceptsPeer(QHostAddress(m_peer))) {
                 offNetwork = m_peer;
             }
-            for (const auto& [product, ip] : discovery->ignoredOffNetwork()) {
-                if (offNetwork.isEmpty() && (product == QStringLiteral("TunerGenius") || product == QStringLiteral("TunerGeniusXL"))) {
-                    offNetwork = ip;
+            // Follow-up 8: only this device: its configured address, or
+            // the serial it gave in its own info reply.
+            for (const auto& heard : discovery->ignoredOffNetwork()) {
+                const QString& product = heard.product;
+                const bool thisDevice = QHostAddress(heard.address) == QHostAddress(m_peer)
+                    || (!heard.serial.isEmpty() && heard.serial == m_nativeInfo.serial);
+                if (offNetwork.isEmpty() && thisDevice
+                    && (product == QStringLiteral("TunerGenius")
+                        || product == QStringLiteral("TunerGeniusXL"))) {
+                    offNetwork = heard.address;
                 }
             }
             if (!offNetwork.isEmpty()) {

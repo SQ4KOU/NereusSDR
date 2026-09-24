@@ -5,7 +5,8 @@
 // 2026-09-24: R-R3-47 / R-R3-22: deviceSettings, the amp's own settings for
 // a window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-24: R-R3-47: an amp on another network is refused saying how to
-// allow it. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// allow it (only this amp: its address or serial). J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include "core/StationPgxlController.h"
 #include "core/AppSettings.h"
 #include "core/LanDiscovery.h"
@@ -260,9 +261,15 @@ void StationPgxlController::identify(quint64 attempt, const QString& peer, quint
                 && !m_stationBind->acceptsPeer(QHostAddress(m_peer))) {
                 offNetwork = m_peer;
             }
-            for (const auto& [product, ip] : discovery->ignoredOffNetwork()) {
-                if (offNetwork.isEmpty() && (product == expectedProduct())) {
-                    offNetwork = ip;
+            // Follow-up 8: only this device: its configured address, or
+            // the serial it gave in its own info reply.
+            for (const auto& heard : discovery->ignoredOffNetwork()) {
+                const QString& product = heard.product;
+                const bool thisDevice = QHostAddress(heard.address) == QHostAddress(m_peer)
+                    || (!heard.serial.isEmpty() && heard.serial == m_nativeInfo.serial);
+                if (offNetwork.isEmpty() && thisDevice
+                    && product == expectedProduct()) {
+                    offNetwork = heard.address;
                 }
             }
             if (!offNetwork.isEmpty()) {

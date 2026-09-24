@@ -480,9 +480,11 @@ of this and binds as it always has.
   address hears no broadcast. The Core ignores any announcement whose
   sender, or whose announced address, is not on the station network or the
   Core's own computer, so a device on another network is never identified
-  or admitted. When the only Power Genius (Tuner Genius) announcement heard
-  came from another network, or the configured address itself is off the
-  station network, the refusal in `connectionError` says so and how to
+  or admitted. When this Power Genius (Tuner Genius) was heard only from
+  another network (an announcement from its configured address or with the
+  serial its own `info` reply gave; another amp's announcement does not
+  count), or the configured address itself is off the station network,
+  the refusal in `connectionError` says so and how to
   allow it: "The Power Genius at <address> is on a different network from
   the radio, and the Core accepts station devices only on the radio's
   network. To allow it, set station_bind in the Core's nereusd.conf to the
