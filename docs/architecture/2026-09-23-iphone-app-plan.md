@@ -1516,7 +1516,7 @@ station-key backup prompt), spec §5.2 item 8.
     declares nothing (today's desktop) and an older peer see today's wire, and no
     existing fixture changes but for the new capability entry. The phone receives the
     object from its Task 15 on; the desktop once Task 18 declares `deviceAuth: 1`
-    (JJ's ruling, 2026-09-24).
+    (station-side ruling, 2026-09-24).
   - Verbs (all in `verbSpecs()`, capability `deviceAdminVersion = 1`):
     `devices.revoke {id}`, `station.rename {label}`, `station.acknowledgeKeyBackup {}`,
     `station.retireToken {}`.
