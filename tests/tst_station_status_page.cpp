@@ -44,6 +44,9 @@
 //               lasts 10 minutes, five burned codes in a row close any window,
 //               and reopening starts afresh. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R2-I1): the Host check accepts
+//               only this computer's own names, whole. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -486,10 +489,41 @@ private slots:
         reply = core.get("/", "[::1]:47911");
         QCOMPARE(statusOf(reply), 200);
         QVERIFY(StationStatusPage::isAcceptedHost(QHostInfo::localHostName()));
-        QVERIFY(StationStatusPage::isAcceptedHost(
-            QHostInfo::localHostName().section(QLatin1Char('.'), 0, 0)
-            + QStringLiteral(".local:47911")));
+        QVERIFY(StationStatusPage::isAcceptedHost(QHostInfo::localHostName()
+                                                  + QStringLiteral(".local:47911")));
         QVERIFY(!StationStatusPage::isAcceptedHost(QStringLiteral("nereus.attacker.example")));
+    }
+
+    void aNameThatOnlyStartsWithThisComputersNameGetsNotFound()
+    {
+        // Fix wave R2-I1: a rebinding page on <own name>.attacker.example
+        // would otherwise pass as this computer and read the code.
+        const QString full = QHostInfo::localHostName();
+        const QString first = full.section(QLatin1Char('.'), 0, 0);
+        QVERIFY(!first.isEmpty());
+        for (const QString& own : {full, first}) {
+            QVERIFY2(!StationStatusPage::isAcceptedHost(own + QStringLiteral(".attacker.example")),
+                     qPrintable(own));
+            QVERIFY(!StationStatusPage::isAcceptedHost(own + QStringLiteral(".attacker.example:47911")));
+            QVERIFY(!StationStatusPage::isAcceptedHost(own + QStringLiteral(".lan.attacker.example")));
+            QVERIFY(!StationStatusPage::isAcceptedHost(QStringLiteral("x") + own));
+        }
+        // These three names are this computer's own.
+        QVERIFY(StationStatusPage::isAcceptedHost(full));
+        QVERIFY(StationStatusPage::isAcceptedHost(full.toUpper() + QStringLiteral(":47911")));
+        QVERIFY(StationStatusPage::isAcceptedHost(full + QStringLiteral(".local")));
+        const QString domain = QHostInfo::localDomainName();
+        if (!domain.isEmpty()) {
+            QVERIFY(StationStatusPage::isAcceptedHost(full + QLatin1Char('.') + domain));
+        }
+
+        Core core;
+        QVERIFY(core.listen());
+        const QString code = core.window().currentCode();
+        const QByteArray reply =
+            core.get("/", (first + QStringLiteral(".attacker.example:47911")).toUtf8());
+        QCOMPARE(statusOf(reply), 404);
+        QVERIFY(!reply.contains(code.toUtf8()));
     }
 
     void theCodeNeverReachesALogLine()

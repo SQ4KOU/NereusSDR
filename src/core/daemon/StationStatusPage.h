@@ -40,6 +40,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (R2-I1): the Host check accepts
+//               only this computer's own names, whole. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QHostAddress>
@@ -115,8 +118,9 @@ public:
     static QString formatFirstStartNotice(const QString& label, const QString& pageAddress);
 
     /// True when `host` (a Host header, with or without a port) is an IP
-    /// address or names this computer (its host name, alone or with a
-    /// domain such as .local).
+    /// address or one of this computer's own names, whole: exactly
+    /// QHostInfo::localHostName(), that name with ".local", or that name
+    /// with QHostInfo::localDomainName(). Case does not matter.
     static bool isAcceptedHost(const QString& host);
 
 private:

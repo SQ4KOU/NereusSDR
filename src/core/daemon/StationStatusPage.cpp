@@ -12,6 +12,9 @@
 //               lasts 10 minutes, five burned codes in a row close any window,
 //               and reopening starts afresh. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R2-I1): the Host check accepts
+//               only this computer's own names, whole. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/StationStatusPage.h"
@@ -321,11 +324,25 @@ bool StationStatusPage::isAcceptedHost(const QString& header)
     if (!QHostAddress(host).isNull()) {
         return true;
     }
-    // This computer's own name, alone or with a domain (name.local,
-    // name.lan): its first label is the host name.
-    const QString own = QHostInfo::localHostName().section(QLatin1Char('.'), 0, 0);
-    return !own.isEmpty()
-           && host.section(QLatin1Char('.'), 0, 0).compare(own, Qt::CaseInsensitive) == 0;
+    // Fix wave R2-I1: only this computer's own names, whole. A name that
+    // merely starts with it (<own>.attacker.example) is what a DNS
+    // rebinding page would use to read the code, since this check is the
+    // page's only defence against one.
+    const QString own = QHostInfo::localHostName();
+    if (own.isEmpty()) {
+        return false;
+    }
+    QStringList names{own, own + QStringLiteral(".local")};
+    const QString domain = QHostInfo::localDomainName();
+    if (!domain.isEmpty()) {
+        names << own + QLatin1Char('.') + domain;
+    }
+    for (const QString& name : std::as_const(names)) {
+        if (host.compare(name, Qt::CaseInsensitive) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace NereusSDR
