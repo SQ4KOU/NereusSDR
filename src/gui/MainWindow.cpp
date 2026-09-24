@@ -9344,11 +9344,35 @@ void MainWindow::wireContainerControls(ContainerWidget* c)
             this, &MainWindow::onContainerTuneStepSelected);
     connect(c, &ContainerWidget::frequencyChangeRequested,
             this, &MainWindow::onContainerFrequencyStep);
-    // An item added later (Container settings > Add) shows the slice's
-    // state from the next refresh; one now covers restored containers.
+    // An item added later (a preset, Container settings > Apply) gets the
+    // saved meter settings and the slice's state as it arrives; one refresh
+    // now covers restored containers.
     connect(c, &ContainerWidget::contentChanged, this,
-            [this](QWidget*) { refreshContainerControls(); });
+            [this](QWidget* content) {
+        watchContainerItems(content);
+        refreshContainerControls();
+    });
+    watchContainerItems(c->content());
     refreshContainerControls();
+}
+
+void MainWindow::watchContainerItems(QWidget* content)
+{
+    auto* meter = qobject_cast<MeterWidget*>(content);
+    if (!meter) { return; }
+    connect(meter, &MeterWidget::itemAdded, this,
+            &MainWindow::onContainerItemAdded, Qt::UniqueConnection);
+}
+
+void MainWindow::onContainerItemAdded(MeterItem* item)
+{
+    if (!item) { return; }
+    // R-R3-21: Setup > Multimeter's unit, decimal and history duration and
+    // DSP > Options' high-resolution filter graph, which otherwise reached
+    // a new item only when those Setup pages next opened.
+    MultimeterPage::applyPersistedSettingsTo(item);
+    DspOptionsPage::applyPersistedHighResFilterTo(m_radioModel, item);
+    refreshContainerControls(item);
 }
 
 void MainWindow::followActiveSliceForContainers()
@@ -9360,8 +9384,11 @@ void MainWindow::followActiveSliceForContainers()
     SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
     if (slice) {
         const auto refresh = [this]() { refreshContainerControls(); };
+        // Tuning changes only what the VFO displays show; the buttons are
+        // left alone on every tuning step.
         m_containerSliceConnections
-            << connect(slice, &SliceModel::frequencyChanged, this, refresh)
+            << connect(slice, &SliceModel::frequencyChanged, this,
+                       [this]() { refreshContainerFrequency(); })
             << connect(slice, &SliceModel::dspModeChanged, this, refresh)
             << connect(slice, &SliceModel::filterChanged, this, refresh)
             << connect(slice, &SliceModel::stepHzChanged, this, refresh)
@@ -9371,7 +9398,7 @@ void MainWindow::followActiveSliceForContainers()
     refreshContainerControls();
 }
 
-void MainWindow::refreshContainerControls()
+void MainWindow::refreshContainerControls(MeterItem* only)
 {
     if (!m_containerManager || !m_radioModel) { return; }
     SliceModel* slice = m_radioModel->activeSlice();
@@ -9417,12 +9444,20 @@ void MainWindow::refreshContainerControls()
         : QString::number(widthHz);
     const Band band = bandFromFrequency(slice->frequency());
 
-    m_containerManager->forEachMeterItem([&](MeterItem* item) {
+    const auto applyTo = [&](MeterItem* item) {
         if (auto* mode = qobject_cast<ModeButtonItem*>(item)) {
             mode->setActiveMode(modeIndex);
         } else if (auto* filter = qobject_cast<FilterButtonItem*>(item)) {
-            for (int i = 0; i < presets.size() && i < 10; ++i) {
-                if (!presets[i].name.isEmpty()) { filter->setFilterLabel(i, presets[i].name); }
+            // F1..F10 show the mode's presets. A mode with fewer presets
+            // leaves the rest blank (a click there does nothing,
+            // onContainerFilterClicked), not the last mode's names.
+            for (int i = 0; i < 10; ++i) {
+                QString label;
+                if (i < presets.size()) {
+                    label = presets[i].name.isEmpty()
+                        ? QStringLiteral("F%1").arg(i + 1) : presets[i].name;
+                }
+                filter->setFilterLabel(i, label);
             }
             filter->setActiveFilter(filterIndex);
         } else if (auto* step = qobject_cast<TuneStepButtonItem*>(item)) {
@@ -9436,7 +9471,32 @@ void MainWindow::refreshContainerControls()
             vfo->setFilterLabel(filterText);
             vfo->setBandLabel(bandLabel(band));
         }
+    };
+    if (only) {
+        applyTo(only);  // the added item's container repaints on its own
+        return;
+    }
+    m_containerManager->forEachMeterItem(applyTo);
+    for (ContainerWidget* c : m_containerManager->allContainers()) {
+        if (c) { c->update(); }
+    }
+}
+
+void MainWindow::refreshContainerFrequency()
+{
+    if (!m_containerManager || !m_radioModel) { return; }
+    SliceModel* slice = m_radioModel->activeSlice();
+    if (!slice) { return; }
+    const Band band = bandFromFrequency(slice->frequency());
+    bool any = false;
+    m_containerManager->forEachMeterItem([&](MeterItem* item) {
+        if (auto* vfo = qobject_cast<VfoDisplayItem*>(item)) {
+            vfo->setFrequency(static_cast<int64_t>(std::llround(slice->frequency())));
+            vfo->setBandLabel(bandLabel(band));
+            any = true;
+        }
     });
+    if (!any) { return; }
     for (ContainerWidget* c : m_containerManager->allContainers()) {
         if (c) { c->update(); }
     }

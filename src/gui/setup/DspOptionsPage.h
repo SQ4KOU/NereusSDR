@@ -78,6 +78,8 @@ class QGroupBox;
 
 namespace NereusSDR {
 
+class MeterItem;
+
 // Setup → DSP → Options page.
 //
 // Mirrors Thetis tpDSPOptions tab layout (design Section 4A).
@@ -125,6 +127,8 @@ public:
     // without opening Setup.
     static void applyHighResFilter(RadioModel* model, bool highRes);
     static void applyPersistedHighResFilter(RadioModel* model);
+    // The same for one meter item added while the window runs.
+    static void applyPersistedHighResFilterTo(RadioModel* model, MeterItem* item);
 
     QCheckBox* highResolutionFilterCharacteristicsCheckBox() const noexcept
     {

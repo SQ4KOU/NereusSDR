@@ -224,15 +224,36 @@ void MultimeterPage::applyPersistedSettings(RadioModel* model)
     // From Thetis udDisplayMeterAvg [v2.10.3.13]
     if (auto* p = model->meterPoller()) {
         p->setAverageWindow(s.value(QStringLiteral("MultimeterAverageWindow"), 1).toInt());
-        // From Thetis udDisplayMeterDelay [v2.10.3.13]: the meter update
-        // interval (R-R3-21: it too applied only when this page opened).
-        p->setIntervalMs(s.value(QStringLiteral("MultimeterDelayMs"), 100).toInt());
     }
+    applyPersistedMeterInterval(model);
 
     auto* cm = model->containerManager();
     if (cm == nullptr) {
         return;
     }
+    cm->forEachMeterItem([](MeterItem* item) { applyPersistedSettingsTo(item); });
+}
+
+void MultimeterPage::applyPersistedMeterInterval(RadioModel* model)
+{
+    auto* p = model ? model->meterPoller() : nullptr;
+    if (p == nullptr) {
+        return;
+    }
+    // From Thetis udDisplayMeterDelay [v2.10.3.13]: the meter update
+    // interval (R-R3-21: it too applied only when this page opened). The key
+    // is the Core's in a remote window, so MainWindow calls this again once
+    // the Core's settings arrive.
+    p->setIntervalMs(AppSettings::instance()
+                         .value(QStringLiteral("MultimeterDelayMs"), 100).toInt());
+}
+
+void MultimeterPage::applyPersistedSettingsTo(MeterItem* item)
+{
+    if (item == nullptr) {
+        return;
+    }
+    const auto& s = AppSettings::instance();
     // From Thetis radSReading/radDBM/radUV + chkDisplayMeterShowDecimal [v2.10.3.13]
     const QString unitStr =
         s.value(QStringLiteral("MultimeterUnitMode"), QStringLiteral("dBm")).toString();
@@ -247,13 +268,11 @@ void MultimeterPage::applyPersistedSettings(RadioModel* model)
     // From Thetis udSignalHistoryDuration [v2.10.3.13]
     const int historyMs =
         s.value(QStringLiteral("MultimeterSignalHistoryDurationMs"), 60000).toInt();
-    cm->forEachMeterItem([unit, dec, historyMs](MeterItem* item) {
-        item->setUnitMode(unit);
-        item->setShowDecimal(dec);
-        if (auto* h = qobject_cast<HistoryGraphItem*>(item)) {
-            h->setDurationMs(historyMs);
-        }
-    });
+    item->setUnitMode(unit);
+    item->setShowDecimal(dec);
+    if (auto* h = qobject_cast<HistoryGraphItem*>(item)) {
+        h->setDurationMs(historyMs);
+    }
 }
 
 void MultimeterPage::loadSettings()

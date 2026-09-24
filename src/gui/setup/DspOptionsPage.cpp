@@ -206,6 +206,13 @@ void wireCheckPersist(QCheckBox* check, const QString& key)
 // operator's toggle does; building the page (in a remote window, from the
 // Core's settings, possibly offline) must not write the value it has just
 // read back to the Core.
+// The receive channel the filter graphs draw the high-resolution curve
+// from: channel 0 (see applyHighResFilter below).
+static RxChannel* filterGraphChannel(RadioModel* rm)
+{
+    return rm->rxChannelForSlice(0);
+}
+
 void DspOptionsPage::applyHighResFilter(RadioModel* rm, bool highRes)
 {
     ContainerManager* cm = rm ? rm->containerManager() : nullptr;
@@ -222,7 +229,7 @@ void DspOptionsPage::applyHighResFilter(RadioModel* rm, bool highRes)
     // Whether this fan-out should instead follow the active slice
     // (Task 4 gave the container S-meter that treatment) is a separate,
     // larger question left for a follow-up, not a mechanical routing fix.
-    RxChannel* rxCh = rm->rxChannelForSlice(0);
+    RxChannel* rxCh = filterGraphChannel(rm);
 
     cm->forEachMeterItem([highRes, rxCh](MeterItem* item) {
         if (auto* fdi = qobject_cast<FilterDisplayItem*>(item)) {
@@ -230,6 +237,19 @@ void DspOptionsPage::applyHighResFilter(RadioModel* rm, bool highRes)
             fdi->setHighResolution(highRes);
         }
     });
+}
+
+void DspOptionsPage::applyPersistedHighResFilterTo(RadioModel* rm, MeterItem* item)
+{
+    auto* fdi = qobject_cast<FilterDisplayItem*>(item);
+    if (!rm || !fdi) {
+        return;
+    }
+    fdi->bindRxChannel(filterGraphChannel(rm));
+    fdi->setHighResolution(
+        AppSettings::instance().value(
+            QStringLiteral("DspOptionsHighResFilterCharacteristics"),
+            QStringLiteral("False")).toString() == QLatin1String("True"));
 }
 
 void DspOptionsPage::applyPersistedHighResFilter(RadioModel* rm)

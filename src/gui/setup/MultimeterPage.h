@@ -125,6 +125,12 @@ public:
     // poller and meter items, as opening this page does. MainWindow calls
     // it at startup so the values survive a restart without opening Setup.
     static void applyPersistedSettings(RadioModel* model);
+    // The same for one meter item (unit, decimal, history duration), for an
+    // item added while the window runs.
+    static void applyPersistedSettingsTo(MeterItem* item);
+    // The saved meter update interval to the meter poller (the Core's value
+    // in a remote window, applied again when its settings arrive).
+    static void applyPersistedMeterInterval(RadioModel* model);
 
 signals:
     /// Emitted when the user clicks the "← Spectrum defaults" cross-link.

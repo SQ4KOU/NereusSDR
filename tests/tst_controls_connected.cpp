@@ -57,6 +57,8 @@
 #include "gui/containers/ContainerWidget.h"
 #include "gui/meters/AntennaButtonItem.h"
 #include "gui/meters/FilterButtonItem.h"
+#include "gui/meters/FilterDisplayItem.h"
+#include "gui/meters/HistoryGraphItem.h"
 #include "gui/meters/MeterPoller.h"
 #include "gui/meters/MeterWidget.h"
 #include "gui/meters/ModeButtonItem.h"
@@ -507,6 +509,84 @@ private slots:
         emit container->modeClicked(0);
         QCOMPARE(slice->dspMode(), DSPMode::USB);
         slice->setLocked(false);
+
+        // Tuning moves the VFO display only; it does not relabel or
+        // re-highlight the buttons.
+        filter->setFilterLabel(0, QStringLiteral("mark"));
+        mode->setActiveMode(5);
+        slice->setFrequency(7074000.0);
+        QCOMPARE(vfo->frequency(), int64_t{7074000});
+        QCOMPARE(filter->filterLabel(0), QStringLiteral("mark"));
+        QCOMPARE(mode->activeMode(), 5);
+        slice->setDspMode(DSPMode::LSB);  // a full refresh puts them right
+        QCOMPARE(filter->filterLabel(0),
+                 model->filterPresetStore()->presetsForMode(DSPMode::LSB)[0].name);
+
+        // A mode with fewer presets (FM has 3) leaves the rest blank, and
+        // a click there changes nothing.
+        QCOMPARE(filter->filterLabel(9), presets[9].name);
+        slice->setDspMode(DSPMode::FM);
+        const QList<FilterPreset> fm =
+            model->filterPresetStore()->presetsForMode(DSPMode::FM);
+        QCOMPARE(fm.size(), 3);
+        QCOMPARE(filter->filterLabel(2), fm[2].name);
+        for (int i = 3; i < 10; ++i) {
+            QVERIFY2(filter->filterLabel(i).isEmpty(),
+                     qPrintable(QStringLiteral("F%1 still shows %2")
+                                    .arg(i + 1).arg(filter->filterLabel(i))));
+        }
+        const int low = slice->filterLow();
+        const int high = slice->filterHigh();
+        emit container->filterClicked(5);
+        QCOMPARE(slice->filterLow(), low);
+        QCOMPARE(slice->filterHigh(), high);
+        QVERIFY(sessions.replace({}, false));
+    }
+
+    // A meter item added while the window runs gets the saved Multimeter
+    // unit, decimal and history duration, the saved high-resolution filter
+    // graph, and the active slice's state, without opening Setup.
+    void addedMeterItemsGetTheSavedSettings()
+    {
+        auto& s = AppSettings::instance();
+        const QStringList keys = {QStringLiteral("MultimeterUnitMode"),
+                                  QStringLiteral("MultimeterShowDecimal"),
+                                  QStringLiteral("MultimeterSignalHistoryDurationMs"),
+                                  QStringLiteral("DspOptionsHighResFilterCharacteristics")};
+        const auto restore = qScopeGuard([&s, keys] {
+            for (const QString& k : keys) { s.remove(k); }
+        });
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.replace({}, false));
+        MainWindow* window = sessions.window();
+        RadioModel* model = window->radioModel();
+        SliceModel* slice = ensureSlice(model);
+        QVERIFY(slice != nullptr);
+        slice->setDspMode(DSPMode::USB);
+
+        ContainerManager* cm = model->containerManager();
+        ContainerWidget* container = cm->createContainer(1, DockMode::OverlayDocked);
+        QVERIFY(container != nullptr);
+        auto* meter = new MeterWidget();
+        container->setContent(meter);
+
+        s.setValue(QStringLiteral("MultimeterUnitMode"), QStringLiteral("S"));
+        s.setValue(QStringLiteral("MultimeterShowDecimal"), QStringLiteral("False"));
+        s.setValue(QStringLiteral("MultimeterSignalHistoryDurationMs"), 30000);
+        s.setValue(QStringLiteral("DspOptionsHighResFilterCharacteristics"), QStringLiteral("True"));
+
+        auto* bar = new BarItem();
+        auto* history = new HistoryGraphItem();
+        auto* graph = new FilterDisplayItem();
+        auto* mode = new ModeButtonItem();
+        for (MeterItem* item : std::initializer_list<MeterItem*>{bar, history, graph, mode}) {
+            meter->addItem(item);
+        }
+        QCOMPARE(bar->unitMode(), MeterItem::MeterUnit::S);
+        QVERIFY(!bar->showDecimal());
+        QCOMPARE(history->durationMs(), 30000);
+        QVERIFY(graph->highResolution());
+        QCOMPARE(mode->activeMode(), 1);  // USB
         QVERIFY(sessions.replace({}, false));
     }
 

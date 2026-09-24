@@ -150,6 +150,7 @@ void MeterWidget::addItem(MeterItem* item)
     m_bgDirty = true;
 #endif
     update();
+    emit itemAdded(item);
 }
 
 void MeterWidget::removeItem(MeterItem* item)

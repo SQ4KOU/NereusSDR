@@ -101,6 +101,7 @@ namespace NereusSDR {
 enum class ToastSeverity : int;
 
 class RadioModel;
+class MeterItem;
 class ConnectionPanel;
 class SupportDialog;
 class WdspEngine;
@@ -689,7 +690,12 @@ private slots:
     // its VFO display act on the active slice (the band buttons already
     // did); refreshContainerControls() shows that slice's state on them.
     void wireContainerControls(class ContainerWidget* container);
-    void refreshContainerControls();
+    // `only`: just that item (one added while the window runs).
+    void refreshContainerControls(MeterItem* only = nullptr);
+    // Tuning: only the VFO display items (frequency and band).
+    void refreshContainerFrequency();
+    void watchContainerItems(QWidget* content);
+    void onContainerItemAdded(MeterItem* item);
     void followActiveSliceForContainers();
     void onContainerModeClicked(int index);
     void onContainerFilterClicked(int index);
