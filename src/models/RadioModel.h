@@ -88,6 +88,10 @@
 //                2), refused while the radio is on the air. NereusSDR-
 //                original. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-24 - R-R3-49 fix wave: `transmitting`, the Core's real MOX
+//                (MoxController, any source, through the TX to RX
+//                handover), Core to window. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -362,6 +366,10 @@ class RadioModel : public QObject {
     Q_PROPERTY(int rxFilter1Effective READ rxFilter1Effective NOTIFY filterStateChanged)
     Q_PROPERTY(int rxFilter1Band READ rxFilter1Band NOTIFY filterStateChanged)
     Q_PROPERTY(QString rxFilter1Reason READ rxFilter1Reason NOTIFY filterStateChanged)
+    // R-R3-49: the Core's radio is keyed, Core to window only. True from
+    // the moment MoxController starts a key (its MOX button, a hardware
+    // PTT, CAT, TCI, TUNE or two-tone) until its TX to RX handover ends.
+    Q_PROPERTY(bool transmitting READ isTransmitting NOTIFY transmittingChanged)
 
 
 public:
@@ -1618,6 +1626,11 @@ public:
     // both objects exist.  Non-owning; lifetime is RadioModel's lifetime.
     // Master design §5.1.1; pre-code review §1.6.
     MoxController* moxController() const { return m_moxController; }
+
+    // R-R3-49: the radio is keyed or still handing back to receive
+    // (MoxController::isMox(), or its state is not Rx). A remote window
+    // holds the Core's value as it last heard it.
+    bool isTransmitting() const;
 
     // Phase 3F Sub-Epic C: TX-slice arbiter (single-TX invariant + RF-safe
     // handoff). Owned by RadioModel (Qt parent), wired to slice list +
@@ -3288,6 +3301,8 @@ signals:
     // RF-Kit -> General). Consumers (e.g. MainWindow applet visibility)
     // react to show/hide the RF2K-S applet.
     void rfKitEnabledChanged(bool enabled);
+    // R-R3-49: isTransmitting() changed.
+    void transmittingChanged(bool transmitting);
     // Fires on each transition to Connected with the RadioInfo of the live
     // connection. HardwarePage (Phase 3I) listens to this to repopulate
     // sub-tabs with per-radio fields.
@@ -5364,6 +5379,10 @@ private:
     bool m_remoteFourO3AEnabled{false};
     // R-R3-47: the Core's RF-Kit switch as a remote window last heard it.
     bool m_remoteRfKitEnabled{false};
+    // R-R3-49: the last isTransmitting() announced (the Core's), and the
+    // Core's value as a remote window last heard it.
+    bool m_transmitting{false};
+    bool m_remoteTransmitting{false};
     bool m_remoteFourO3AListening{false};
     QString m_remoteFourO3AListenerError;
     QTimer* m_accessoryBandTimer{nullptr};

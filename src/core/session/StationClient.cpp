@@ -115,6 +115,9 @@
 //   2026-09-24 - R-R3-49 / R-R3-47: remoteTgxlControlVersion 2 (the
 //                Tuner Genius's antenna, operate and bypass requests). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 fix wave: the radio's `transmitting` applied as
+//                plain state. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2421,6 +2424,8 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("RadioModel.fourO3AListenerError"),
         // R-R3-47: likewise the Core's RF-Kit switch.
         QByteArrayLiteral("RadioModel.rfKitEnabled"),
+        // R-R3-49: likewise the Core's transmit state; it never keys here.
+        QByteArrayLiteral("RadioModel.transmitting"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),
         QByteArrayLiteral("SliceModel.signalAverageDbm"),

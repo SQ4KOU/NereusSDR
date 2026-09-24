@@ -32,6 +32,9 @@
 //                 In a remote window, ANT 1/2/3 and OPERATE ask the Core
 //                 (remoteTgxlControlVersion 2) and wait while the radio
 //                 is on the air; TUNE and the relay bars are unchanged.
+//   2026-09-24  R-R3-49 fix wave by J.J. Boyd (KG4VCF), with AI-assisted
+//                 transformation via Anthropic Claude Code. "On the air"
+//                 reads the Core's real MOX (the radio's `transmitting`).
 // =================================================================
 
 #include "TunerApplet.h"
@@ -93,11 +96,12 @@ TunerApplet::TunerApplet(RadioModel* model, TunerModel* tunerModel, QWidget* par
     }
     // R-R3-49 / R-R3-47: in a remote window ANT and OPERATE follow the
     // Core's offer (the link's capabilities) and its transmit state (the
-    // mirrored transmit model's MOX and TUNE, and PureSignal's two-tone).
+    // radio's `transmitting`, the Core's real MOX; the mirrored transmit
+    // model's TUNE; and PureSignal's two-tone).
     if (model && model->role() == RadioModel::Role::Remote) {
         connect(model, &RadioModel::stationLinkStateChanged,
                 this, &TunerApplet::updateActuatingControls);
-        connect(&model->transmitModel(), &TransmitModel::moxChanged,
+        connect(model, &RadioModel::transmittingChanged,
                 this, &TunerApplet::updateActuatingControls);
         connect(&model->transmitModel(), &TransmitModel::tuneChanged,
                 this, &TunerApplet::updateActuatingControls);
@@ -431,9 +435,12 @@ bool TunerApplet::remoteTunerControl() const
 bool TunerApplet::coreOnAir() const
 {
     if (!m_model) { return false; }
+    // R-R3-49: the Core's own MoxController state, which it publishes as
+    // the radio's `transmitting`. The mirrored transmit model's mox latch
+    // is not read: the Core never writes it while its controller exists.
     const TransmitModel& tx = m_model->transmitModel();
     const PureSignalSessionFacade* facade = m_model->pureSignalFacade();
-    return tx.isMox() || tx.isTune() || (facade && facade->twoToneOn());
+    return m_model->isTransmitting() || tx.isTune() || (facade && facade->twoToneOn());
 }
 
 // R-R3-49 / R-R3-47: a remote window asks the Core, which switches its own

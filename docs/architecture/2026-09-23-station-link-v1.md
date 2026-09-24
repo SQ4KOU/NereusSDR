@@ -691,7 +691,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (19 properties)
+**RadioModel** (20 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -714,6 +714,7 @@ An enum property lists the values its domain allows.
 | 16 | `rxFilter1Effective` | `i64` | outbound |  |
 | 17 | `rxFilter1Band` | `i64` | outbound |  |
 | 18 | `rxFilter1Reason` | `utf8` | outbound |  |
+| 19 | `transmitting` | `bool` | outbound |  |
 
 **RfKitModel** (30 properties)
 

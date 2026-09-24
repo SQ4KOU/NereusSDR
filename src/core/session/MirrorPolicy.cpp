@@ -40,6 +40,8 @@
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-47 / R-R3-22: AccessorySettingsModel, all Outbound.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 fix wave: RadioModel transmitting Outbound. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -553,7 +555,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (19 entries) ----
+    // ---- RadioModel (20 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
@@ -578,6 +580,9 @@ const MirrorPolicy::Entry kEntries[] = {
     { "RadioModel", "fourO3AEnabled", MirrorDirection::Outbound },
     { "RadioModel", "fourO3AListening", MirrorDirection::Outbound },
     { "RadioModel", "fourO3AListenerError", MirrorDirection::Outbound },
+    // R-R3-49: the Core's real transmit state (MoxController), so a window
+    // can grey what waits while the radio is on the air. Never writable.
+    { "RadioModel", "transmitting", MirrorDirection::Outbound },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },

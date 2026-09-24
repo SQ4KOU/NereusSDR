@@ -44,6 +44,10 @@
 // (remoteTgxlControlVersion 2), follows the Core's report and its transmit
 // state, keeps TUNE with remote transmit, and stays greyed on an older
 // Core. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-49 fix wave: the Core keys through its MoxController (a
+// MOX click and the radio's PTT input) and the window greys ANT and OPERATE
+// from the radio's `transmitting`; a raw write of it is refused. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include <QtTest>
 
@@ -81,6 +85,7 @@
 #include "core/StationPgxlController.h"
 #include "core/StationTgxlController.h"
 #include "core/LanDiscovery.h"
+#include "core/MoxController.h"
 #include "core/AppSettings.h"
 #include "core/Rf2ksConnection.h"
 #include "core/session/IStationLink.h"
@@ -1655,6 +1660,27 @@ void RemotePeripheralsTest::rawRfKitSwitchWriteIsRefused()
              QStringLiteral("Update this app to turn the RF-Kit amplifier on or off on this Core."));
     QVERIFY(OperatorWording::isPlain(result.reason));
     QVERIFY(!station.rfKitEnabled());
+
+    // R-R3-49: the Core's transmit state is its own report; a raw write
+    // never keys and is refused like any other Core reading.
+    peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+        "radio", {MirrorUpdate{0, "transmitting", MirrorWireKind::Bool, QVariant(true)}}, 22)));
+    SessionPropertyResult transmitResult;
+    QTRY_VERIFY([&] {
+        for (const SessionMessage& m : messages()) {
+            if (m.kind == SessionMessageKind::PropertyResult && m.writeId == 22
+                && !m.propertyResults.isEmpty()) {
+                transmitResult = m.propertyResults.first();
+                return true;
+            }
+        }
+        return false;
+    }());
+    QVERIFY(!transmitResult.accepted);
+    QCOMPARE(transmitResult.reason,
+             QStringLiteral("The Core sets this itself; it cannot be changed from here."));
+    QVERIFY(!station.isTransmitting());
+    QVERIFY(!station.moxController()->isMox());
 
     // The command is what changes it.
     peer->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
@@ -3300,30 +3326,58 @@ void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
     QVERIFY(refused.isEmpty());
 
     // On the air: disabled, with the reason; a request sent anyway is
-    // refused with it and nothing reaches the tuner.
-    station.transmitModel().setMox(true);
-    QTRY_VERIFY(window.transmitModel().isMox());
-    for (int port = 1; port <= 3; ++port) {
-        QVERIFY(!applet.antennaButtonForTesting(port)->isEnabled());
-        QCOMPARE(applet.antennaButtonForTesting(port)->toolTip(), TunerApplet::onAirReason());
+    // refused with it and nothing reaches the tuner. The Core keys through
+    // its MoxController, as its MOX button and a hardware PTT do: first a
+    // MOX click, then the radio's own PTT input.
+    MoxController* const mox = station.moxController();
+    QVERIFY(mox);
+    // Today's Core is receive-only, so its MOX pre-check refuses every key,
+    // a hardware PTT included. Lifting the pre-check stands in for a Core
+    // that can transmit (remote transmit, R4); the keying itself goes
+    // through the same MoxController path.
+    QVERIFY(!mox->isMox());
+    mox->setMoxCheck({});
+    const auto expectOnAir = [&] {
+        for (int port = 1; port <= 3; ++port) {
+            QTRY_VERIFY(!applet.antennaButtonForTesting(port)->isEnabled());
+            QCOMPARE(applet.antennaButtonForTesting(port)->toolTip(), TunerApplet::onAirReason());
+        }
+        QVERIFY(!applet.operateButtonForTesting()->isEnabled());
+        QCOMPARE(applet.operateButtonForTesting()->toolTip(), TunerApplet::onAirReason());
+    };
+    const auto expectOffAir = [&] {
+        QTRY_VERIFY(applet.antennaButtonForTesting(2)->isEnabled());
+        QVERIFY(applet.antennaButtonForTesting(2)->toolTip().isEmpty());
+        QVERIFY(applet.operateButtonForTesting()->isEnabled());
+        QVERIFY(!applet.tuneButtonForTesting()->isEnabled());
+    };
+    for (int keying = 0; keying < 2; ++keying) {
+        if (keying == 0) { mox->setMox(true); } else { mox->onMicPttFromRadio(true); }
+        QVERIFY(mox->isMox());
+        // The Core never writes its transmit model's MOX latch from here.
+        QVERIFY(!station.transmitModel().isMox());
+        QVERIFY(station.isTransmitting());
+        QTRY_VERIFY(window.isTransmitting());
+        expectOnAir();
+        if (QTest::currentTestFailed()) { return; }
+        QVERIFY(OperatorWording::isPlain(TunerApplet::onAirReason()));
+        const int airMark = tuner.commands.size();
+        const int refusedBefore = refused.count();
+        QVERIFY(cw.client.requestTgxlAntenna(2).sent);
+        QTRY_COMPARE(refused.count(), refusedBefore + 1);
+        QCOMPARE(refused.last().at(0).toString(), QStringLiteral("tgxl"));
+        QCOMPARE(refused.last().at(1).toString(), TunerApplet::onAirReason());
+        QTest::qWait(100);
+        for (int i = airMark; i < tuner.commands.size(); ++i) {
+            QVERIFY2(!tuner.commands.at(i).startsWith(QStringLiteral("activate")),
+                     qPrintable(tuner.commands.at(i)));
+        }
+        if (keying == 0) { mox->setMox(false); } else { mox->onMicPttFromRadio(false); }
+        QTRY_VERIFY(!station.isTransmitting());
+        QTRY_VERIFY(!window.isTransmitting());
+        expectOffAir();
+        if (QTest::currentTestFailed()) { return; }
     }
-    QVERIFY(!applet.operateButtonForTesting()->isEnabled());
-    QCOMPARE(applet.operateButtonForTesting()->toolTip(), TunerApplet::onAirReason());
-    QVERIFY(OperatorWording::isPlain(TunerApplet::onAirReason()));
-    const int airMark = tuner.commands.size();
-    QVERIFY(cw.client.requestTgxlAntenna(2).sent);
-    QTRY_COMPARE(refused.count(), 1);
-    QCOMPARE(refused.first().at(0).toString(), QStringLiteral("tgxl"));
-    QCOMPARE(refused.first().at(1).toString(), TunerApplet::onAirReason());
-    QTest::qWait(100);
-    for (int i = airMark; i < tuner.commands.size(); ++i) {
-        QVERIFY2(!tuner.commands.at(i).startsWith(QStringLiteral("activate")),
-                 qPrintable(tuner.commands.at(i)));
-    }
-    station.transmitModel().setMox(false);
-    QTRY_VERIFY(applet.antennaButtonForTesting(2)->isEnabled());
-    QVERIFY(applet.operateButtonForTesting()->isEnabled());
-    QVERIFY(!applet.tuneButtonForTesting()->isEnabled());
 
     // The link gone: back to the transmit gate, with its reason.
     stationEnd->closeLink(QStringLiteral("test: Core lost"));

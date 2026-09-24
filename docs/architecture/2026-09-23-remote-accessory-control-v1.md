@@ -234,8 +234,9 @@ follow the tuner's report on this object (`antennaA`, `isOperate`,
 tune, so a receive-only Core takes them (operator ruling of 2026-09-24).
 Each waits while the radio is on the air (operator decision D60): the Core
 refuses it while its MOX, TUNE or two-tone test is on, and a window
-disables its buttons with the reason while the Core reports MOX or TUNE
-on the `transmit` object or the two-tone test on `pureSignal`. TUNE (the
+disables its buttons with the reason while the Core reports the radio
+keyed (`transmitting` on the `radio` object, below), TUNE on the
+`transmit` object or the two-tone test on `pureSignal`. TUNE (the
 autotune) and the relay nudges still wait for remote transmit, because
 they put a carrier on the air.
 
@@ -697,7 +698,7 @@ page's section keeps its own warning, which names Scan LAN (not offered in
 a remote window). The iPhone app asks the same question. Before asking, either window checks the
 setting as the Core does (see Refusals) and shows the reason instead.
 
-## The 4O3A and RF-Kit fields on the `radio` object
+## The 4O3A, RF-Kit and transmit fields on the `radio` object
 
 Class `RadioModel`, key `radio`, sent to every app.
 
@@ -707,6 +708,14 @@ Class `RadioModel`, key `radio`, sent to every app.
 | `fourO3AListening` | bool | Core to window | The Core's SmartSDR listener (TCP 4992) is accepting connections |
 | `fourO3AListenerError` | utf8 | Core to window | Why the listener could not start; empty otherwise |
 | `rfKitEnabled` | bool | Core to window | The station's RF-Kit switch for its radio. Changed by `setRfKitEnabled`; a raw write is refused (see Refusals) |
+| `transmitting` | bool | Core to window | The Core's radio is keyed: true from the moment the Core's MOX controller starts a key from any source (its MOX button, a hardware PTT, CAT, TCI, TUNE or two-tone) until its hand-back to receive ends. A raw write is refused |
+
+`transmitting` is what a window reads for "on the air". The `transmit`
+object's `mox` is not: the Core writes that only while it has no MOX
+controller. An older Core does not send `transmitting`, so a window reads
+it as false there and the Core's own refusal still holds. Today's Core is
+receive-only and refuses every key, so it stays false until remote
+transmit.
 
 ## Commands
 
@@ -777,6 +786,7 @@ Property writes:
 | Any property of `rfkit` | "The Core reports the RF-Kit amplifier's readings. They cannot be changed from this app." |
 | `fourO3AEnabled`, `fourO3AListening`, `fourO3AListenerError` on `radio` | Refused with a diagnostic reason; use `setFourO3AEnabled` |
 | `rfKitEnabled` on `radio` (what every app before this contract sent) | "Update this app to turn the RF-Kit amplifier on or off on this Core." The Core's switch stays |
+| `transmitting` on `radio` | "The Core sets this itself; it cannot be changed from here." Nothing keys |
 | Any property of `stationTci` | "The Core reports its TCI server here. Turn it on or off with this app's TCI switch." |
 | Any property of `accessoryData` | "The Core keeps the amplifier and tuner records and settings. Change them from this app's Setup pages." |
 | Any property of `accessorySettings` | "The Core reports the amplifier's and tuner's own settings. Change them from this app's Setup pages." |
@@ -1173,8 +1183,9 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   OPERATE, BYPASS, STANDBY from the Core's reported state, as a local
   click does, sending `setTgxlBypass` and `setTgxlOperate`. The highlighted
   antenna and the button's label follow the `tuner` object. While the Core
-  reports MOX or TUNE (`transmit`) or the two-tone test (`pureSignal`
-  `twoToneOn`) the buttons are disabled with "The radio is on the air. Try
+  reports the radio keyed (`radio` `transmitting`), TUNE (`transmit`) or
+  the two-tone test (`pureSignal` `twoToneOn`) the buttons are disabled
+  with "The radio is on the air. Try
   again when it stops." A refusal shows as a notice. TUNE and the relay
   bars keep the transmit-permission reason. With the link down, or below
   2, ANT and OPERATE are greyed with that reason too. A local window is
@@ -1379,7 +1390,10 @@ rewrite the fixtures, and update this document in the same commit.
 - `tst_remote_peripherals` (R-R3-49): a remote window's Tuner Genius applet
   over the loopback switches the Core's tuner antenna and OPERATE (the fake
   tuner records the lines), follows the tuner's report and not the click,
-  disables ANT and OPERATE with the reason while the Core's MOX is on
+  disables ANT and OPERATE with the reason while the Core's MOX is on,
+  keyed through its MOX controller by a MOX click and by the radio's PTT
+  input, and read from `transmitting` (the Core's MOX pre-check is lifted
+  to stand in for a Core that can transmit)
   (a request sent anyway refused with it on the accessory route, nothing
   reaching the tuner), keeps TUNE greyed, and falls back to the transmit
   reason with the link down; an older Core leaves them greyed and sends

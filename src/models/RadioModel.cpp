@@ -175,6 +175,10 @@
 //                2), refused while the radio is on the air. NereusSDR-
 //                original. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-24 - R-R3-49 fix wave: `transmitting`, the Core's real MOX
+//                from MoxController (moxChanging, stateChanged,
+//                moxStateChanged), Core to window. NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1069,6 +1073,32 @@ RadioModel::RadioModel(Role role, QObject* parent)
             [this](int, bool, bool newMox) {
                 m_generatedKeyLive = newMox && generatedKeyInFlight();
             });
+
+    // R-R3-49: publish the Core's real transmit state to windows
+    // (`transmitting`). TransmitModel's mox latch is written only when no
+    // MoxController exists, so it cannot carry this. moxChanging marks a
+    // key the moment it commits (isMox() still holds the old value while
+    // it is emitted); stateChanged follows the walk, so the value stays
+    // true through the TX to RX handover and clears when the controller is
+    // back in Rx; moxStateChanged is the walk's end. A remote window's own
+    // controller never keys (its pre-check refuses), so it keeps the Core's
+    // value instead.
+    if (m_role != Role::Remote) {
+        const auto publishTransmitting = [this](bool keying) {
+            const bool now = keying || m_moxController->isMox()
+                || m_moxController->state() != MoxState::Rx;
+            if (now != m_transmitting) {
+                m_transmitting = now;
+                emit transmittingChanged(now);
+            }
+        };
+        connect(m_moxController, &MoxController::moxChanging, this,
+                [publishTransmitting](int, bool, bool newMox) { publishTransmitting(newMox); });
+        connect(m_moxController, &MoxController::stateChanged, this,
+                [publishTransmitting](MoxState) { publishTransmitting(false); });
+        connect(m_moxController, &MoxController::moxStateChanged, this,
+                [publishTransmitting](bool) { publishTransmitting(false); });
+    }
 
     // ── Remote-daemon R2 Task 20: arm the MOX refusal for Role::Remote ──
     //
@@ -2682,6 +2712,15 @@ QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVa
             }
             return {};
         }
+        if (propertyName == "transmitting") {
+            // R-R3-49: the Core's real transmit state, observed; never a key.
+            if (value.typeId() != QMetaType::Bool) { return QStringLiteral("Expected a boolean transmit observation."); }
+            if (m_remoteTransmitting != value.toBool()) {
+                m_remoteTransmitting = value.toBool();
+                emit transmittingChanged(m_remoteTransmitting);
+            }
+            return {};
+        }
         if (propertyName == "fourO3AListenerError") {
             if (value.typeId() != QMetaType::QString) { return QStringLiteral("Expected a text 4O3A error."); }
             if (m_remoteFourO3AListenerError != value.toString()) {
@@ -3868,6 +3907,13 @@ bool RadioModel::setPgxlConnectionSettingsForStation(bool autoReconnect, int kee
     m_stationPgxl->applyConnectionSettings();
     if (reason) { reason->clear(); }
     return true;
+}
+
+bool RadioModel::isTransmitting() const
+{
+    // R-R3-49: a remote window holds the Core's value as it last heard it.
+    if (m_role == Role::Remote) { return m_remoteTransmitting; }
+    return m_transmitting;
 }
 
 bool RadioModel::rfKitEnabled() const

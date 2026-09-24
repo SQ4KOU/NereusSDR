@@ -2927,6 +2927,12 @@
                     "kind": "utf8",
                     "name": "rxFilter1Reason",
                     "ordinal": 18
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "transmitting",
+                    "ordinal": 19
                 }
             ]
         },
