@@ -23,10 +23,12 @@
 # Default: (unset -- first discovered)
 radio_mac =
 
-# Hardware I/Q sample rate in Hz. Must be a rate the connected board
-# actually supports; see docs/protocols/openhpsdr-protocol2.md.
-# Default: 192000
-sample_rate_hz = 192000
+# Hardware I/Q sample rate in Hz. Leave it unset and nereusd comes back at
+# the rate last chosen for this radio (192000 until one is chosen). Setting
+# it forces that rate on every start, over the operator's choice. It must
+# be a rate the connected board actually supports; see
+# docs/protocols/openhpsdr-protocol2.md.
+# sample_rate_hz = <rate in Hz, e.g. 192000>
 
 # Number of receive slices to bring up. Must be at least 1; further
 # clamped to the connected board's own maximum (2 to 5 depending on SKU)
@@ -58,9 +60,12 @@ remote_port = 0
 
 # Address the remote-control listener binds. Defaults to loopback, so out
 # of the box the listener is reachable only from this machine even once
-# remote_port is set. Use 0.0.0.0 (or a specific interface address) to
-# accept connections from other machines, and note that doing so is the
-# moment to think about who can reach this port.
+# remote_port is set. To accept connections from other machines use ::
+# (every IPv4 and IPv6 address), 0.0.0.0 (every IPv4 address only) or one
+# specific interface address, and note that doing so is the moment to
+# think about who can reach this port. On a host with a global IPv6
+# address, :: also makes it reachable from the internet unless a firewall
+# says otherwise.
 # Default: 127.0.0.1
 remote_bind = 127.0.0.1
 

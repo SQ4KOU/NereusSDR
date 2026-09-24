@@ -51,6 +51,9 @@
 //   2026-09-23: nereusd publishes no VAX device (R-R3-44), by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-23: cover remote_bind "::" taking IPv4 and IPv6, by J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -58,6 +61,7 @@
 #include <QScopeGuard>
 #include <QSslSocket>
 #include <QTcpServer>
+#include <QTcpSocket>
 #include <QTimer>
 
 #include <utility>
@@ -805,6 +809,57 @@ private slots:
         QCOMPARE(server->displayBudgetReason(), DisplayBudgetReason::CoreBusy);
         QCOMPARE(app.m_displayGovernor->steps(), 1);
         QCOMPARE(app.m_displayGovernor->limits(), *server->displayBudgetLimits());
+        app.stop();
+    }
+
+    void anyAddressBindTakesIpv4AndIpv6()
+    {
+        // remote_bind = "::" is how an operator asks for every address. Qt
+        // binds a parsed "::" IPv6-only, which left a LAN's IPv4 clients
+        // refused (seen on the Pi 4 bench, 2026-09-23). One listener must
+        // take both families.
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend, so a wss listener cannot bind. "
+                  "The listener is wss-only by design (parent design section 10.5).");
+        }
+        QTcpServer ipv6Probe;
+        const bool haveIpv6 = ipv6Probe.listen(QHostAddress::LocalHostIPv6, 0);
+        ipv6Probe.close();
+
+        QTcpServer probe;
+        QVERIFY(probe.listen(QHostAddress::Any, 0));
+        const quint16 freePort = probe.serverPort();
+        probe.close();
+
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.remotePort = static_cast<int>(freePort);
+        cfg.remoteBind = QStringLiteral("::");
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(cfg));
+        StationServer* server = app.stationServer();
+        QVERIFY2(server != nullptr, "remote_port was set but no StationServer exists");
+        QVERIFY2(server->isListening(), qPrintable(server->lastError()));
+
+        QTcpSocket ipv4;
+        ipv4.connectToHost(QHostAddress::LocalHost, freePort);
+        QVERIFY2(ipv4.waitForConnected(5000),
+                 qPrintable(QStringLiteral("IPv4 client refused by the \"::\" listener: %1")
+                                .arg(ipv4.errorString())));
+        ipv4.abort();
+
+        if (!haveIpv6) {
+            app.stop();
+            QSKIP("This host has no IPv6 loopback; the IPv4 half passed.");
+        }
+        QCOMPARE(server->serverAddress(), QHostAddress(QHostAddress::Any));
+        QTcpSocket ipv6;
+        ipv6.connectToHost(QHostAddress::LocalHostIPv6, freePort);
+        QVERIFY2(ipv6.waitForConnected(5000),
+                 qPrintable(QStringLiteral("IPv6 client refused by the \"::\" listener: %1")
+                                .arg(ipv6.errorString())));
+        ipv6.abort();
         app.stop();
     }
 
