@@ -167,8 +167,9 @@ class DaemonApp : public QObject {
 
 public:
     /// iPhone app Task 12: the address remote_bind names; empty is every
-    /// interface, IPv4 and IPv6 (QHostAddress::Any, dual stack). A null
-    /// address for text that is not one.
+    /// interface, IPv4 and IPv6 (QHostAddress::Any, dual stack), and so is
+    /// "::" (DaemonConfig::listenAddressFor, R-R3-26). A null address for
+    /// text that is not one.
     static QHostAddress listenerAddressFor(const QString& bind);
 
     explicit DaemonApp(QObject* parent = nullptr);

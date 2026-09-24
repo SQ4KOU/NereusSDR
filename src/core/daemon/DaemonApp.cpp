@@ -468,7 +468,11 @@ void DaemonApp::applyStepAttenuatorConnection(const QString& mac)
 // more useful than one that refuses to boot.
 QHostAddress DaemonApp::listenerAddressFor(const QString& bind)
 {
-    return bind.isEmpty() ? QHostAddress(QHostAddress::Any) : QHostAddress(bind);
+    // Empty is every interface (iPhone app Task 12); anything else is
+    // DaemonConfig::listenAddressFor's rule: "::" is dual stack too, and a
+    // specific address binds as given (R-R3-26).
+    return bind.isEmpty() ? QHostAddress(QHostAddress::Any)
+                          : DaemonConfig::listenAddressFor(bind);
 }
 
 void DaemonApp::startStationServer(const DaemonConfig& cfg)
@@ -487,7 +491,8 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     }
 
     // iPhone app Task 12: an empty remote_bind (the default) is every
-    // interface, IPv4 and IPv6 (QHostAddress::Any is dual stack).
+    // interface, IPv4 and IPv6 (QHostAddress::Any is dual stack); so is "::"
+    // (R-R3-26, DaemonConfig::listenAddressFor).
     const QHostAddress bind = listenerAddressFor(cfg.remoteBind);
     if (bind.isNull()) {
         qCWarning(lcApp) << "DaemonApp: remote_bind is not a valid address:"
