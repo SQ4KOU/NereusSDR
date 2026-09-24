@@ -400,6 +400,7 @@ private slots:
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the filter policy dialog.
     void windowFilterPolicyReachesTheCore();
     void windowFilterPolicyWaitsForACoreThatOffersIt();
+    void windowFilterPolicyApplySendsWhatIsShown();
 
     // ---- Fix round 1 ----
     void reconnectSurvivesTheOldTransportClosing();
@@ -6214,6 +6215,39 @@ void TstStationSession::windowFilterPolicyReachesTheCore()
     QVERIFY2(OperatorWording::isPlain(toast.last().at(0).toString()),
              qPrintable(toast.last().at(0).toString()));
     QCOMPARE(s.core->alexController().bpfMode(0), AlexController::BpfMode::ForceBypass);
+}
+
+void TstStationSession::windowFilterPolicyApplySendsWhatIsShown()
+{
+    // R-R3-46 / R-R3-21. The dialog opens on the Core's Auto; before Apply,
+    // the Core's policy is changed elsewhere (its own window, another
+    // remote window). Apply with Auto still shown puts the Core back on
+    // Auto: the dialog sends what it shows, not only what differs from
+    // what it saw when it opened.
+    AppSettings& coreStore = AppSettings::instance();
+    coreStore.clearHardwareValues(kHardwareMac);
+    const auto cleanStore = qScopeGuard([&coreStore] { coreStore.clearHardwareValues(kHardwareMac); });
+    HardwareSession s;
+    joinHardwareWindow(s, coreStore, this, m_securityDir.path());
+    const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
+    if (QTest::currentTestFailed()) { return; }
+    s.core->alexControllerMutable().setMacAddress(kHardwareMac);
+    QTRY_VERIFY(s.window->filterChainStateAvailable(0));
+    QCOMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::Auto);
+
+    FilterPolicyDialog dialog(0, s.window.get());
+    auto* autoBtn = dialog.findChild<QRadioButton*>(QStringLiteral("filterPolicyAuto"));
+    auto* apply = dialog.findChild<QPushButton*>(QStringLiteral("filterPolicyApply"));
+    QVERIFY(autoBtn && apply);
+    QVERIFY(autoBtn->isChecked());
+
+    s.core->alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBypass);
+    QTRY_COMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::ForceBypass);
+
+    apply->click();
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QTRY_COMPARE(s.core->alexController().bpfMode(0), AlexController::BpfMode::Auto);
+    QTRY_COMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::Auto);
 }
 
 void TstStationSession::windowFilterPolicyWaitsForACoreThatOffersIt()

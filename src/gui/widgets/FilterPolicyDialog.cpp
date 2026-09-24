@@ -165,14 +165,16 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWi
     applyBtn->setObjectName(QStringLiteral("filterPolicyApply"));
     applyBtn->setStyleSheet(Style::buttonBaseStyle() + Style::blueCheckedStyle());
     connect(applyBtn, &QPushButton::clicked, this,
-            [this, alex, chainIndex, btnGroup, remote, remoteEditable, station, note,
-             shownMode = int(state.mode)]() {
+            [this, alex, chainIndex, btnGroup, remote, remoteEditable, station, note]() {
         if (remote) {
             // R-R3-46 / R-R3-21: the Core applies the policy and every
             // window follows its published chain state; nothing is changed
-            // here on the way out.
+            // here on the way out. The choice shown is always sent, even
+            // when it is the policy the dialog opened on: the Core's policy
+            // may have changed since, and the Core takes an unchanged
+            // policy as done.
             const int wanted = btnGroup->checkedId();
-            if (!remoteEditable || wanted == shownMode) { accept(); return; }
+            if (!remoteEditable) { accept(); return; }
             const IStationLink::CommandOutcome outcome =
                 station->requestFilterPolicy(chainIndex, wanted);
             if (!outcome.sent) {
