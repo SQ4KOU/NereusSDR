@@ -555,10 +555,14 @@ struct PsDdcConfig {
     //   nddc=2 (HermesII / ANAN-10E / ANAN-100B):
     //       psFbDdc=0, txMonDdc=1 — networkproto1.c:984 bank-2/3 freq override
     //       forces DDC0+DDC1 to TX freq during PS-MOX
-    //   nddc=4 (Hermes / HL2 / ANAN-10 / ANAN-100):
+    //   nddc=4 (Hermes / G2E / HL2 / ANAN-10 / ANAN-100):
     //       psFbDdc=2, txMonDdc=3 — networkproto1.c MetisRead case 4
-    //       `twist(spr, 2, 3, 1)` pairs DDC2+DDC3 (and console.cs
-    //       GetDDC():8757-8762 confirms `psrx=2, pstx=3` for HL2 PS-MOX)
+    //       `twist(spr, 2, 3, 1)` pairs DDC2+DDC3. GetDDC() confirms
+    //       `psrx=2, pstx=3` for PS-MOX on both: Thetis console.cs:8728-8733
+    //       for Hermes / G2E, mi0bot console.cs:8757-8762 for the HL2.
+    //       DdcAssignment::psFwdDdc / psRevDdc from P1CodecStandard and
+    //       P1CodecHl2 applyDdcAssignment carry the same pair (the HL2 one
+    //       said 0/1 until 2026-09-24; tst_codec_ps_ddc_config pins both).
     //   nddc=5 (Orion / Saturn / Andromeda / etc.):
     //       psFbDdc=0, txMonDdc=1 — P2 network.c:936-945 unconditional
     //       freq override; P1 case 5 in MetisRead twists DDC0+DDC1
@@ -572,7 +576,7 @@ struct PsDdcConfig {
     // RadioConnection::iqDataReceived(ddcIndex, samples) so it needs the
     // actual DDC indices, which depend on the per-board read-loop dispatch.
     //
-    // From Thetis console.cs:8579 GetDDC() [v2.10.3.13]:
+    // GetDDC(), mi0bot console.cs:8579 (HL2) and Thetis console.cs:8550:
     //   HL2 P1 PS-MOX (case 5):  rx1=0, rx2=1, psrx=2, pstx=3
     //   HermesII P1 PS-MOX:      psrx=0, pstx=1
     //   Saturn-class P2 PS-MOX:  rx1=2, rx2=3 (DDC0+DDC1 implicit PS pair)
