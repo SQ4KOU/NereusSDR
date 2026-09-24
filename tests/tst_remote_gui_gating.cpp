@@ -185,6 +185,7 @@
 #include "gui/meters/VfoDisplayItem.h"
 #include "gui/widgets/StatusToast.h"
 #include "gui/MainWindow.h"
+#include "gui/RemoteMediaController.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/SetupDialog.h"
 #include "gui/StationStartupSelection.h"
@@ -1710,6 +1711,61 @@ private slots:
         auto* const localNote = localPage->findChild<QLabel*>(QStringLiteral("vaxCompressedAudioNote"));
         QVERIFY(localNote != nullptr);
         QVERIFY(localNote->isHidden());
+    }
+
+    // R-R3-43 / R-R3-44 fix wave (M3): MainWindow's push of the VAX note,
+    // through the same seams MainWindow's constructor and createSetupDialog
+    // use (MainWindow itself cannot be built here). The note is pushed on
+    // an audio status change, on a station link change (how a capability
+    // change arrives, which need not change the audio status), and into a
+    // Setup dialog when it opens.
+    void mainWindowPushesTheReceiverAudioNote()
+    {
+        // As in a real window, CoreInit's migrations ran before a
+        // StationClient exists (the file's other sessions use 6 too).
+        AppSettings::instance().ensureSettingsAtVersion(6);
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        RemoteMediaController media(&client, &remote, nullptr);
+        QWidget root;
+        RemoteReceiverAudioNote current = RemoteReceiverAudioNote::None;
+        const auto source = [&current] { return current; };
+        MainWindow::wireReceiverAudioNotePush(&root, &media, &remote, source);
+
+        // Setup opens: seeded with the value at that moment.
+        current = RemoteReceiverAudioNote::OpusChosen;
+        auto* dialog = new SetupDialog(&remote, &root);
+        MainWindow::seedReceiverAudioNote(dialog, source);
+        dialog->selectPage(QStringLiteral("VAX"));
+        QWidget* const page = dialog->realizedPageForTest(QStringLiteral("VAX"));
+        QVERIFY(page != nullptr);
+        auto* const note = page->findChild<QLabel*>(QStringLiteral("vaxCompressedAudioNote"));
+        QVERIFY(note != nullptr);
+        QVERIFY(!note->isHidden());
+        QVERIFY(note->text().contains(QLatin1String("Set Audio quality")));
+
+        // An audio status change.
+        current = RemoteReceiverAudioNote::LosslessUnavailable;
+        emit media.audioStatusChanged();
+        QVERIFY(!note->isHidden());
+        QVERIFY(!note->text().contains(QLatin1String("Set Audio quality")));
+
+        // A capability change with no audio status change: the Core stops
+        // sending receiver streams, so VAX is not fed from it.
+        current = RemoteReceiverAudioNote::None;
+        remote.reportStationLinkStateChanged();
+        QVERIFY(note->isHidden());
+
+        // And back.
+        current = RemoteReceiverAudioNote::OpusChosen;
+        remote.reportStationLinkStateChanged();
+        QVERIFY(!note->isHidden());
+
+        // Without media (a local window) the note is None.
+        QCOMPARE(MainWindow::receiverAudioNoteFor(nullptr), RemoteReceiverAudioNote::None);
+        // An unconnected Core sends no receiver streams.
+        QCOMPARE(MainWindow::receiverAudioNoteFor(&media), RemoteReceiverAudioNote::None);
     }
 
     // R-R3-23: Audio > Devices in a remote window picks this computer's

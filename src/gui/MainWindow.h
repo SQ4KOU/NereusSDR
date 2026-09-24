@@ -72,6 +72,7 @@
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 
+#include <functional>
 #include <memory>
 #include <QMainWindow>
 #include <QLabel>
@@ -141,6 +142,7 @@ class DiversityDialog;
 // Whether moc would accept the elaborated form in a return position was
 // not tested; the forward declaration is the form that is known to work.
 class SetupDialog;
+class RemoteMediaController;
 // Phase 3J-2 H1: Tools menu modeless singletons.
 class SpotHubDialog;
 class FreeDVReporterDialog;
@@ -259,6 +261,20 @@ public:
     // (empty when accepted). The menu is the one place a menu refusal is
     // shown; a VFO flag click shows its own.
     static QString applyNrMenuChoice(SliceModel* slice, NereusSDR::NrSlot slot);
+    // R-R3-43 / R-R3-44: the VAX page's note about the Core's receiver
+    // streams. receiverAudioNoteFor reads it from the audio status and
+    // whether the Core sends receiver streams (None without media).
+    // wireReceiverAudioNotePush pushes `source` to every SetupDialog under
+    // `dialogRoot` on an audio status change and on a station link change,
+    // which is how a capability change arrives (it need not change the
+    // audio status). seedReceiverAudioNote gives a dialog the value when
+    // Setup opens. Static seams: the constructor and createSetupDialog use
+    // them, and a test can reach them without booting a window.
+    using ReceiverAudioNoteSource = std::function<RemoteReceiverAudioNote()>;
+    static RemoteReceiverAudioNote receiverAudioNoteFor(const RemoteMediaController* media);
+    static void wireReceiverAudioNotePush(QObject* dialogRoot, RemoteMediaController* media,
+                                          RadioModel* model, ReceiverAudioNoteSource source);
+    static void seedReceiverAudioNote(SetupDialog* dialog, const ReceiverAudioNoteSource& source);
     static void applyAntennaChangeForTest(RadioModel* model, int sliceId,
                                           const QString& antennaName);
     // Production composition seam: flags remain per-slice while the RX
@@ -579,10 +595,6 @@ private slots:
     void showRemoteConnectionPanel();
     void refreshRemoteConnectionUi();
     bool transmitControlsPermitted() const;
-    // R-R3-43 / R-R3-44: the VAX page's note for a remote window whose Core
-    // sends receiver streams and runs them as Opus (the choice, or Lossless
-    // chosen but not running). None in a local window.
-    RemoteReceiverAudioNote remoteReceiverAudioNoteNow() const;
     /// R-R3-21 / R-R3-10: whether the Core's settings can be changed from
     /// this window (always in local direct mode; in a remote window only
     /// while connected and holding the Core's settings snapshot), and the

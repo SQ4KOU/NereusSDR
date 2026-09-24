@@ -1296,13 +1296,10 @@ void MainWindow::ensureRemoteSession()
                       ToastSeverity::Warning, 5000);
         });
         // R-R3-43 / R-R3-44: the VAX page's compressed-audio note follows
-        // the quality choice and its fallback while Setup is open.
-        connect(m_remoteMedia, &RemoteMediaController::audioStatusChanged, this, [this] {
-            const RemoteReceiverAudioNote note = remoteReceiverAudioNoteNow();
-            for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
-                dialog->setReceiverAudioNote(note);
-            }
-        });
+        // the quality choice, its fallback and the Core's capabilities while
+        // Setup is open.
+        wireReceiverAudioNotePush(this, m_remoteMedia, m_radioModel,
+                                  [this] { return receiverAudioNoteFor(m_remoteMedia); });
         connect(m_remoteMedia, &RemoteMediaController::recoveryRequested,
                 m_remoteConnection, &RemoteConnectionController::recoverMediaSession,
                 Qt::QueuedConnection);
@@ -11165,7 +11162,7 @@ SetupDialog* MainWindow::createSetupDialog()
     dialog->setTransmitPermitted(transmitControlsPermitted(),
         tr("Remote transmit controls are not available from this Core yet."));
     dialog->setStationSettingsAvailable(stationSettingsAvailable(), stationSettingsReason());
-    dialog->setReceiverAudioNote(remoteReceiverAudioNoteNow());
+    seedReceiverAudioNote(dialog, [this] { return receiverAudioNoteFor(m_remoteMedia); });
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     wireSetupDialog(dialog);
     return dialog;
@@ -11191,15 +11188,47 @@ QString MainWindow::stationSettingsReason() const
     return tr("Connect to the Core to change these.");
 }
 
-RemoteReceiverAudioNote MainWindow::remoteReceiverAudioNoteNow() const
+RemoteReceiverAudioNote MainWindow::receiverAudioNoteFor(const RemoteMediaController* media)
 {
-    // Only a remote window has m_remoteMedia, and only a Core that sends
+    // Only a remote window has remote media, and only a Core that sends
     // receiver streams feeds VAX from it.
-    if (m_remoteMedia == nullptr) {
+    if (media == nullptr) {
         return RemoteReceiverAudioNote::None;
     }
-    return remoteReceiverAudioNote(m_remoteMedia->audioStatus(),
-                                   m_remoteMedia->receiverAudioNegotiated());
+    return remoteReceiverAudioNote(media->audioStatus(), media->receiverAudioNegotiated());
+}
+
+void MainWindow::wireReceiverAudioNotePush(QObject* dialogRoot, RemoteMediaController* media,
+                                           RadioModel* model, ReceiverAudioNoteSource source)
+{
+    if (dialogRoot == nullptr || !source) {
+        return;
+    }
+    auto push = [root = QPointer<QObject>(dialogRoot), source] {
+        if (!root) {
+            return;
+        }
+        const RemoteReceiverAudioNote note = source();
+        for (SetupDialog* dialog : root->findChildren<SetupDialog*>()) {
+            dialog->setReceiverAudioNote(note);
+        }
+    };
+    if (media != nullptr) {
+        QObject::connect(media, &RemoteMediaController::audioStatusChanged, dialogRoot, push);
+    }
+    // receiverAudioNegotiated() is not part of the audio status: a
+    // capability change (or the session ending) reaches the window as a
+    // station link change, which need not change the status.
+    if (model != nullptr) {
+        QObject::connect(model, &RadioModel::stationLinkStateChanged, dialogRoot, push);
+    }
+}
+
+void MainWindow::seedReceiverAudioNote(SetupDialog* dialog, const ReceiverAudioNoteSource& source)
+{
+    if (dialog != nullptr && source) {
+        dialog->setReceiverAudioNote(source());
+    }
 }
 
 bool MainWindow::transmitControlsPermitted() const
