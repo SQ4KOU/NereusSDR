@@ -1,7 +1,8 @@
 # NereusSDR for iPhone and iPad: Design Spec
 
-Status: **Draft for JJ's review** (written 2026-09-23 at his call; every
-decision in §3 is JJ's, KG4VCF)
+Status: **Approved** by JJ (KG4VCF) on 2026-09-23 ("onward"); D35 to D42
+were added while planning, each his call. Every decision in §3 is JJ's.
+Plan: [2026-09-23-iphone-app-plan.md](2026-09-23-iphone-app-plan.md)
 Branch: `claude/nereussdr-iphone-app-5fb988`
 
 This app is a client of the remote station, `nereusd`. That work is not on
@@ -55,6 +56,7 @@ operator who knows the desktop knows the phone.
     by revoking it from any paired device, which drops its session at once.
   * Offered and not taken up: alerts while the app is closed, an Apple Watch
     app, Siri and Shortcuts and widgets, sending CW from the phone.
+  * Dropped for now while planning (D42): MIDI Mapping and Macro Buttons.
 
 ---
 
@@ -132,6 +134,23 @@ Every row is a call JJ made, one question at a time, on a rendered mockup.
 | --- | --- |
 | D34 | On 2026-09-23 JJ reviewed every drawn detail he had not ruled on, in six steps, and kept all of them as drawn. They are listed per screen in §5. |
 
+### 3.8 Decided while planning
+
+Choices the code could not settle, put to JJ on 2026-09-23 with a
+recommendation each. He kept D35 to D40 as recommended; D41 and D42 are his
+answers in his own words.
+
+| # | Decision | Why | Rejected |
+| --- | --- | --- | --- |
+| D35 | **The desktop's station switch hands over.** While NereusSDR is open it runs the station itself and serves the phone; when it closes, a background station (`nereusd`) takes over the radio and keeps serving; when it opens again it takes the radio back. While the app is open, the operator at the desktop and a phone can both operate, as when standing at the radio with the phone in hand. | The desktop keeps working exactly as it does today, which remote design §5 requires; the loopback end state needs every control mirrored first. | The desktop as a client of a background station whenever the switch is on. |
+| D36 | **The station also advertises itself over Bonjour (DNS-SD)**, alongside its existing announcement, and the phone finds stations that way. | iOS only lets an app receive custom multicast with a special permission Apple grants on request, and a refusal would block the release. Amends pairing design §6. | Asking Apple for the multicast permission. |
+| D37 | **The pairing code's key exchange uses a published library on both ends:** SPAKE2+EE (BSD-2-Clause) on libsodium (ISC). | Homemade cryptography is how security bugs get in. | Writing the exchange on the cryptography already shipped (OpenSSL, Mbed TLS). |
+| D38 | **The rendezvous and relay run on a second small server** with its own address. | Relay traffic on port 443 never collides with the website on the shared server. | Sharing the website's server and splitting port 443. |
+| D39 | **The station also accepts the app one major version back**, just as the app accepts the station one back. | Neither update order can lock the operator out while an App Store update waits in review. Amends §4.4 and remote design §7.0. | Changing only the app's side. |
+| D40 | **Filter presets live on the station**, and every device shows the same ones. | One station, one set of presets, like the radio's own memories. A desktop connected remotely starts sharing the station's presets; a desktop running the radio locally is unchanged. | Each device keeping its own. |
+| D41 | **An item the desktop has not built appears on the phone once it exists.** The phone keeps the desktop's order and names for tools, Radio tab items and Setup pages, and leaves out any the station does not offer yet; each appears by itself, in its place, when it is built. VAX and antenna selection are built and working, so VAX Audio and Antenna Setup are on the phone from the start even though their desktop menu entries are not finished. | App Review rejects apps that show placeholder or "coming soon" items. JJ: "show each once it exists however vax, antenna selection are there and working". | Greyed items as on the desktop; building every missing desktop feature in this plan. |
+| D42 | **MIDI Mapping and Macro Buttons are dropped for now.** | Neither exists on the desktop and nothing defined what they would do. JJ: "drop these for now". | Building a first version now; drawing them on the board first. |
+
 ---
 
 ## 4. Architecture
@@ -197,8 +216,11 @@ This spec amends it for the phone:
 * Within a major, the capability descriptor gates each feature; the phone greys
   what the station does not advertise.
 
-The station's own rule does not change. Keeping two majors alive is the app's
-job, and the conformance suite runs at both (R-IOS-01, R-IOS-16).
+The station follows the same rule the other way (D39): it serves a client one
+major behind as well as its own, and refuses only a client two or more majors
+apart, naming both versions. Both ends advertise the majors they support and
+agree on the highest they share. The conformance suite runs at every major
+either end supports (R-IOS-01, R-IOS-16).
 
 ### 4.5 Sessions and takeover (D21, D22)
 
@@ -397,18 +419,17 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
    transmit (TX filter, mic gain, PROC, LEV, EQ, CFC, VOX, MON).
 2. While transmitting, every tab's title bar shows a red TX pill with the clock
    and Stop; one tap unkeys.
-3. **Tools** lists the desktop's fourteen tools in its order, each marked
-   Station, This phone or Both. On the phone, PureSignal is on, off and status
-   only; calibration stays at the station.
-4. MIDI Mapping means Bluetooth MIDI controllers paired with the phone, and
-   Macro Buttons live on the phone. Network Diagnostics and Support Bundle cover
-   both ends.
+3. **Tools** lists the desktop's tools in its order, each marked Station, This
+   phone or Both, showing each once the station offers it (D41). On the phone,
+   PureSignal is on, off and status only; calibration stays at the station.
+4. MIDI Mapping and Macro Buttons are dropped for now (D42). Network Diagnostics
+   and Support Bundle cover both ends.
 5. **Radio** opens with the station and link (name, direct or relay, round-trip
    time) and Disconnect; then the radio at a glance (model, firmware, protocol,
    sample rate, slices in use, PA volts, ADC overload, the station computer's
    CPU); then the accessories, each with a one-line status that opens its page;
    then the rest of the desktop's Radio menu: Antenna Setup, Transverters,
-   Manage Radios, Protocol Info.
+   Manage Radios, Protocol Info, each shown once the station offers it (D41).
 6. **Setup** puts Devices first, then the desktop's categories:
 
    | Category | Pages | Marked |
@@ -427,11 +448,12 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
    | Diagnostics | Radio Status, Connection Quality, Settings Validation, Logs, Export / Import | Both |
 
    Station settings are shared by every device paired with the station;
-   settings marked This phone stay on the phone.
+   settings marked This phone stay on the phone. A page the desktop has not
+   built yet appears once it exists (D41).
 7. Left off the phone: the Keyboard page on the iPhone (an iPad with a keyboard
-   gets it); Appearance's Skins and Collapsible Display, which are about the
-   desktop's window; the desktop's Remote Station page, whose job Devices does
-   on the phone.
+   gets it once the desktop builds it, D41); Appearance's Skins and Collapsible
+   Display, which are about the desktop's window; the desktop's Remote Station
+   page, whose job Devices does on the phone.
 8. **Devices**: Rename for the station; a reminder to back up the station key;
    each paired device with when it was paired and last seen; one-tap Revoke,
    which drops that device at once, even mid-session; Add a device, which shows
@@ -694,7 +716,12 @@ Hardware evidence stays **pending** until a device or the bench shows it.
 | R-IOS-28 | Store readiness (§4.13): the TestFlight round, the App Review video on a real station, the export-compliance and privacy answers, the Push to Talk capability. | The App Store Connect record, checked by JJ. |
 | R-IOS-29 | Licence (§4.11): no Thetis, WDSP or AetherSDR code in the app; the App Store permission clause in its licence; shared code cleared with its copyright holders. | Software: the repository's provenance check extended to the app's sources, run in CI. |
 
-### 6.3 How this becomes plans
+### 6.3 How this becomes a plan
+
+One plan builds all of it, station and app together, ordered by dependency:
+[2026-09-23-iphone-app-plan.md](2026-09-23-iphone-app-plan.md). What follows was
+the first proposal, which JJ turned down on 2026-09-23 ("i hate us splitting
+plans"); it is kept for the record.
 
 This spec is larger than one plan. The station-side requirements (§6.1) go
 into the remote-station phase plans that own them: R-IOS-06, R-IOS-09 and
