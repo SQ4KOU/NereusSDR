@@ -20,7 +20,9 @@ std::optional<StationStartupSelection> resolveStationStartup(
         || request.allowUnpinnedSpecified;
     if (request.local) {
         if (request.stationSpecified || hasCredentials) {
-            return fail(QStringLiteral("--local cannot be combined with station options."));
+            return fail(QStringLiteral("--local cannot be combined with --station, "
+                                       "--station-fingerprint, --station-allow-unpinned "
+                                       "or --token."));
         }
         return StationStartupSelection{};
     }
@@ -29,7 +31,7 @@ std::optional<StationStartupSelection> resolveStationStartup(
     const std::optional<SavedCoreTarget> saved = store.target(store.selectedId());
     if (request.stationSpecified) {
         if (!RemoteStationOptions::isValidStationUrl(request.connection.url)) {
-            return fail(QStringLiteral("Station address must be a valid ws:// or wss:// URL."));
+            return fail(QStringLiteral("Core address must be a valid ws:// or wss:// URL."));
         }
         // Only the selected record may supply credentials. Do not search all
         // records by host: two identities can deliberately share an endpoint.
@@ -47,7 +49,7 @@ std::optional<StationStartupSelection> resolveStationStartup(
     }
 
     if (hasCredentials && !result.connection.isRemote()) {
-        return fail(QStringLiteral("Station credentials require a remote Core target."));
+        return fail(QStringLiteral("Core credentials require a remote Core target."));
     }
     if (request.tokenSpecified) { result.connection.token = request.connection.token; }
     if (request.fingerprintSpecified) {

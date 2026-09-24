@@ -424,7 +424,7 @@ constexpr const char* kRfKitSwitchWriteReason =
 // configuration write it refuses: direct TransmitModel property writes and
 // the DSP > Options TX settings keys alike (R-R3-21).
 constexpr const char* kReceiveOnlyTransmitReason =
-    "Transmit configuration is unavailable on this receive-only station.";
+    "Transmit configuration is unavailable on this receive-only Core.";
 
 // R-IOS-01: the one reason for a write to a property MirrorPolicy marks
 // outbound (the station's own readings and derived values, and properties
@@ -432,7 +432,7 @@ constexpr const char* kReceiveOnlyTransmitReason =
 // model's inbound hook, which exists to apply the station's reports on a
 // client, never runs on the station for a client's write.
 constexpr const char* kOutboundWriteReason =
-    "The station sets this itself; it cannot be changed from here.";
+    "The Core sets this itself; it cannot be changed from here.";
 
 // The tuner properties whose remote write reaches the tuner itself
 // (TunerModel::applyMirroredValue sends operate, bypass or antenna
@@ -925,7 +925,7 @@ QString StationServer::formatPairingBanner(const QString& token,
     return QStringLiteral(
                "\n"
                "  ============================================================\n"
-               "  NereusSDR station: first run, pairing details\n"
+               "  NereusSDR Core: first run, pairing details\n"
                "  ------------------------------------------------------------\n"
                "  Token:       %1\n"
                "  TLS SHA-256: %2\n"
@@ -1292,8 +1292,8 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
-                    ? QStringLiteral("Update this app to turn the station's TCI server on or off.")
-                    : QStringLiteral("This Core has no TCI server for the station."), {}));
+                    ? QStringLiteral("Update this app to turn the Core's TCI server on or off.")
+                    : QStringLiteral("This Core has no TCI server."), {}));
             break;
         }
         // R-R3-47 / R-R3-22: the accessory record verbs came with

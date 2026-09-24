@@ -14,6 +14,11 @@
 //                                    and parsed in one place, worded with
 //                                    "Core". AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Final review M1 (R-R3-38, R-IOS-01):
+//                                    parse also reads an older Core's
+//                                    takeover and version wordings.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionEndReasons.h"
@@ -86,10 +91,35 @@ Parsed parse(const QString& reason)
         return parsed;
     }
 
+    // Older-Core wording (StationServer::promoteToSession before the
+    // wording moved here). The bench Cores still send it until they are
+    // upgraded.
+    static const QRegularExpression olderTakenOverPattern(
+        QStringLiteral("^Displaced by a newer authenticated connection from (\\S+)$"));
+    if (const QRegularExpressionMatch match = olderTakenOverPattern.match(reason);
+        match.hasMatch()) {
+        parsed.kind = Parsed::Kind::TakenOver;
+        parsed.otherAppAddress = addressOf(match.captured(1));
+        return parsed;
+    }
+
     static const QRegularExpression versionPattern(
         QStringLiteral("^This Core runs link version ([0-9]+) and this app runs version "
                        "([0-9]+)\\. Update (the Core|this app)\\.$"));
     if (const QRegularExpressionMatch match = versionPattern.match(reason); match.hasMatch()) {
+        parsed.kind = Parsed::Kind::VersionRefused;
+        parsed.coreMajor = match.captured(1).toInt();
+        parsed.appMajor = match.captured(2).toInt();
+        return parsed;
+    }
+
+    // Older-Core wording (StationServer::handleHello before the wording
+    // moved here): "station speaks major.minor, client speaks major.minor".
+    static const QRegularExpression olderVersionPattern(QStringLiteral(
+        "^Protocol major version mismatch: station speaks ([0-9]+)\\.[0-9]+, client speaks "
+        "([0-9]+)\\.[0-9]+\\. A differing major means an incompatible wire contract\\.$"));
+    if (const QRegularExpressionMatch match = olderVersionPattern.match(reason);
+        match.hasMatch()) {
         parsed.kind = Parsed::Kind::VersionRefused;
         parsed.coreMajor = match.captured(1).toInt();
         parsed.appMajor = match.captured(2).toInt();

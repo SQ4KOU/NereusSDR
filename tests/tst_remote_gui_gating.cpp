@@ -1030,11 +1030,11 @@ private slots:
         SetupDialog dialog(&model);
 
         QVERIFY2(dialog.pageLabelsForTest().contains(
-                     QStringLiteral("Remote Station")),
+                     QStringLiteral("Remote Access")),
                  "the Setup field group carrying --station / --token is not "
                  "registered under any leaf");
 
-        QWidget* page = dialog.realizePageForTest(QStringLiteral("Remote Station"));
+        QWidget* page = dialog.realizePageForTest(QStringLiteral("Remote Access"));
         QVERIFY(page != nullptr);
         QSignalSpy requests(&dialog, &SetupDialog::connectionsRequested);
         auto* button = page->findChild<QPushButton*>(QStringLiteral("remoteStationConnections"));
@@ -1042,7 +1042,7 @@ private slots:
         button->click();
         QCOMPARE(requests.count(), 1);
         QVERIFY2(page->isEnabled(),
-                 "the Remote Station page was disabled by the local-DSP gate; "
+                 "the Remote Access page was disabled by the local-DSP gate; "
                  "it must not touch this process's DSP at all");
     }
 
@@ -1385,7 +1385,7 @@ private slots:
         QVERIFY(!tune->isEnabled());
         QVERIFY(!mox->isEnabled());
         QCOMPARE(mox->toolTip(),
-                 QStringLiteral("Transmit controls are unavailable until the station "
+                 QStringLiteral("Transmit controls are unavailable until the Core "
                                 "confirms transmit permission."));
         QVERIFY2(OperatorWording::isPlain(mox->toolTip()), qPrintable(mox->toolTip()));
 
@@ -3633,7 +3633,7 @@ private slots:
         QVERIFY(combo->toolTip() != reason);
         QVERIFY(!reset->isEnabled());
         const QString coreVocoder = QStringLiteral(
-            "The RADE vocoder runs on the station computer and cannot be reset "
+            "The RADE vocoder runs on the Core's computer and cannot be reset "
             "from a remote window.");
         QCOMPARE(reset->toolTip(), coreVocoder);
         QCOMPARE(reset->accessibleDescription(), coreVocoder);
@@ -3791,7 +3791,7 @@ private slots:
     void defaultTransmitReasonsArePlainEnglish()
     {
         const QString expected = QStringLiteral(
-            "Transmit controls are unavailable until the station confirms "
+            "Transmit controls are unavailable until the Core confirms "
             "transmit permission.");
         const auto reasonsOn = [](QWidget* root) {
             QStringList reasons;

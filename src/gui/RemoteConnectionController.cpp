@@ -290,7 +290,7 @@ RemoteConnectionPanel::RemoteConnectionPanel(RemoteConnectionController* control
         qualityChoice->addItem(tr("Opus"), QVariant::fromValue(int(RemoteAudioProfile::Opus)));
         qualityChoice->addItem(tr("Lossless"), QVariant::fromValue(int(RemoteAudioProfile::Lossless)));
         qualityChoice->setToolTip(tr("Opus is compressed and needs 24 to 48 kbit/s. Lossless "
-                                     "plays the station's audio unchanged, for digital modes, "
+                                     "plays the Core's audio unchanged, for digital modes, "
                                      "and needs about 1.6 Mbit/s. If the network cannot carry "
                                      "it, audio stays on Opus. Saved on this computer."));
         qualityLabel->setBuddy(qualityChoice);

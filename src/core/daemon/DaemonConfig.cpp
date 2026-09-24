@@ -264,6 +264,15 @@ std::optional<DisplayBudgetLimits> DaemonConfig::displayBudgetLimits() const
     return limits.isValid() ? std::optional{limits} : std::nullopt;
 }
 
+QHostAddress DaemonConfig::listenAddressFor(const QString& bind)
+{
+    const QHostAddress parsed(bind);
+    if (parsed == QHostAddress::AnyIPv6) {
+        return QHostAddress(QHostAddress::Any);
+    }
+    return parsed;
+}
+
 QString resolveDaemonProfileArgument(const QString& requested, bool wasSet, QString* errorOut)
 {
     if (errorOut) {

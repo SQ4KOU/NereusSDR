@@ -526,9 +526,12 @@ void TxApplet::buildUI()
                              " color: #ffffff;"
                              "}"));
         m_monBtn->setAccessibleName(QStringLiteral("Monitor enable"));
+        // R-R3-21: MON plays your own transmitted audio as it sounds on the
+        // air, in the output chosen beside it (R-R3-45).
         m_monBtn->setToolTip(QStringLiteral(
-            "Monitor: mix received audio into headphones during TX.\n"
-            "Does NOT persist across restarts (safety)."));
+            "Monitor: hear your own transmitted audio as it sounds on the air, "
+            "on the output chosen next to MON (SPEAKERS or PHONES).\n"
+            "MON is off each time NereusSDR starts, for safety."));
         monRow->addWidget(m_monBtn, 1);
 
         // R-R3-45: where MON plays, beside MON. An exclusive pair in the
@@ -585,8 +588,12 @@ void TxApplet::buildUI()
         m_monitorVolumeSlider->setValue(50);
         m_monitorVolumeSlider->setFixedHeight(18);
         m_monitorVolumeSlider->setAccessibleName(QStringLiteral("Monitor volume"));
+        // R-R3-21: sets the TX monitor's gain (TransmitModel::monitorVolume
+        // -> AudioEngine::setTxMonitorVolume), the transmitted audio MON
+        // plays in the output chosen beside it (R-R3-45).
         m_monitorVolumeSlider->setToolTip(QStringLiteral(
-            "Monitor receive audio volume during TX (0–100 %)"));
+            "How loud you hear your own transmitted audio while MON is on, "
+            "on the output chosen next to MON (SPEAKERS or PHONES). 0 to 100."));
         volRow->addWidget(m_monitorVolumeSlider, 1);
 
         m_monitorVolumeValue = new QLabel(QStringLiteral("50"), this);
@@ -2120,14 +2127,6 @@ void TxApplet::requestOpenCfcDialog()
     m_cfcDialog->activateWindow();
 }
 
-// ---------------------------------------------------------------------------
-// Remote-station transmit-permission presentation
-//
-// The Core remains the authority for transmit refusal and unwind. This gate
-// exists so a remote operator never receives a live-looking TX control before
-// the completed handshake explicitly grants that capability. Do not clear or
-// write any model state here: model-to-view updates must remain authoritative.
-// ---------------------------------------------------------------------------
 // R-R3-45: the MON output pair shows the choice; clicking the checked one
 // keeps it, as on the receiver flag.
 void TxApplet::showMonitorOutput(bool headphones)
@@ -2156,11 +2155,19 @@ void TxApplet::updateMonitorOutputNotice()
     m_monOutputNotice->setVisible(headphones && !m_headphonesAvailable);
 }
 
+// ---------------------------------------------------------------------------
+// Remote-station transmit-permission presentation
+//
+// The Core remains the authority for transmit refusal and unwind. This gate
+// exists so a remote operator never receives a live-looking TX control before
+// the completed handshake explicitly grants that capability. Do not clear or
+// write any model state here: model-to-view updates must remain authoritative.
+// ---------------------------------------------------------------------------
 void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableReason)
 {
     m_transmitPermitted = permitted;
     const QString reason = unavailableReason.isEmpty()
-        ? tr("Transmit controls are unavailable until the station confirms "
+        ? tr("Transmit controls are unavailable until the Core confirms "
              "transmit permission.")
         : unavailableReason;
 

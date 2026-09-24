@@ -350,9 +350,6 @@ void HardwarePage::setTransmitPermitted(bool permitted, const QString& reason)
     m_hl2IoTab->setTransmitPermitted(permitted, reason);
 }
 
-// ── Test helper ───────────────────────────────────────────────────────────────
-
-#ifdef NEREUS_BUILD_TESTS
 bool HardwarePage::showAntennaTab()
 {
     if (m_antennaAlexIdx < 0 || !m_tabs->isTabVisible(m_antennaAlexIdx)) {
@@ -362,6 +359,9 @@ bool HardwarePage::showAntennaTab()
     return true;
 }
 
+// ── Test helper ───────────────────────────────────────────────────────────────
+
+#ifdef NEREUS_BUILD_TESTS
 QString HardwarePage::currentTabText() const
 {
     return m_tabs->tabText(m_tabs->currentIndex());

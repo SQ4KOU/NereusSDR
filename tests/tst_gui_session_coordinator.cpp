@@ -309,7 +309,7 @@ private slots:
         QVERIFY(client);
         QTRY_VERIFY(client->isHandshakeComplete());
         const QString lost = QStringLiteral("Link to the Core lost: ");
-        const QString retry = QStringLiteral("Reconnecting to station");
+        const QString retry = QStringLiteral("Reconnecting to the Core");
         const auto failure = [&](const QString& reason, int attempt) {
             dismissToasts(window);
             emit client->sessionEnded(reason);
@@ -397,7 +397,7 @@ private slots:
         QVERIFY(controller);
         QTRY_VERIFY(client->isHandshakeComplete());
         const QString lost = QStringLiteral("Link to the Core lost: ");
-        const QString retry = QStringLiteral("Reconnecting to station");
+        const QString retry = QStringLiteral("Reconnecting to the Core");
 
         // The link drops and a retry is pending: announced once.
         dismissToasts(window);

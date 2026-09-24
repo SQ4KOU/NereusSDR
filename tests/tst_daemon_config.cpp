@@ -32,6 +32,10 @@
 // change (constants, the settings/log directory move, the first-run seed
 // marker); the slots here stay focused on resolveDaemonProfileArgument()'s
 // own argument-resolution contract.
+//
+// 2026-09-23: listenAddressFor() pins remote_bind "::" as dual stack, and
+// the shipped sample may no longer pin sample_rate_hz, by J.J. Boyd
+// (KG4VCF), with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -626,6 +630,43 @@ private slots:
         QVERIFY(err.contains(QStringLiteral("station_bind")));
         c.stationBind = QStringLiteral("192.168.1.20");
         QVERIFY(c.validate(&err));
+    }
+
+    // A Core installed from the shipped sample must come back at the rate
+    // the operator last chose for the radio. An active sample_rate_hz line
+    // is written over that saved rate at every start
+    // (DaemonApp::applyConfigToSettings), so the sample may only document it.
+    void shippedSampleLeavesTheSampleRateToTheOperator()
+    {
+        QString err;
+        const DaemonConfig c = DaemonConfig::fromFile(
+            QStringLiteral(NEREUS_SOURCE_DIR "/packaging/nereusd.conf.sample"), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QVERIFY2(!c.sampleRateExplicit,
+                 "packaging/nereusd.conf.sample sets sample_rate_hz, which pins that "
+                 "rate over the operator's saved choice on every start");
+        QVERIFY(c.validate(&err));
+    }
+
+    // "::" is every address of both families; Qt alone would make it
+    // IPv6-only. Everything else binds exactly what it names.
+    void listenAddressForMapsTheIpv6AnyAddressToDualStack()
+    {
+        const QHostAddress anyAddress = DaemonConfig::listenAddressFor(QStringLiteral("::"));
+        QCOMPARE(anyAddress.protocol(), QAbstractSocket::AnyIPProtocol);
+        QVERIFY(anyAddress == QHostAddress::Any);
+
+        const QHostAddress ipv4Any = DaemonConfig::listenAddressFor(QStringLiteral("0.0.0.0"));
+        QCOMPARE(ipv4Any.protocol(), QAbstractSocket::IPv4Protocol);
+        QVERIFY(ipv4Any == QHostAddress::AnyIPv4);
+
+        QCOMPARE(DaemonConfig::listenAddressFor(QStringLiteral("127.0.0.1")),
+                 QHostAddress(QHostAddress::LocalHost));
+        QCOMPARE(DaemonConfig::listenAddressFor(QStringLiteral("::1")),
+                 QHostAddress(QHostAddress::LocalHostIPv6));
+        QCOMPARE(DaemonConfig::listenAddressFor(QStringLiteral("2602:ff8f:0:2::47")),
+                 QHostAddress(QStringLiteral("2602:ff8f:0:2::47")));
+        QVERIFY(DaemonConfig::listenAddressFor(QStringLiteral("not-an-address")).isNull());
     }
 
     void rejectsSliceCountBelowOne()

@@ -27,11 +27,11 @@ bool GuiSessionCoordinator::canReplace(const StationStartupSelection& selection,
         return false;
     };
     if (m_replacing) {
-        return fail(tr("A station switch is already in progress."));
+        return fail(tr("A Core switch is already in progress."));
     }
     if (selection.connection.isRemote()
         && !RemoteStationOptions::isValidStationUrl(selection.connection.url)) {
-        return fail(tr("The selected Core has an invalid station address."));
+        return fail(tr("The selected Core has an invalid address."));
     }
     if (m_window) {
         RadioModel* model = m_window->radioModel();
@@ -42,7 +42,7 @@ bool GuiSessionCoordinator::canReplace(const StationStartupSelection& selection,
         // MoxController intentionally never keys this computer's hardware.
         if (model->mox() || model->isTune() || model->transmitModel().isMox()
             || model->transmitModel().isTune()) {
-            return fail(tr("End transmit or Tune before switching stations."));
+            return fail(tr("End transmit or Tune before switching Cores."));
         }
     }
 

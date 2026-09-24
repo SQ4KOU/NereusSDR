@@ -353,7 +353,7 @@ void TstStationHandshakeDeadline::productionDeadlineIsSharedAndThirtySeconds()
     StationClient client(&clientModel, &proxy);
     QCOMPARE(client.handshakeDeadlineMs(), kStationHandshakeDeadlineMs);
     QCOMPARE(StationClient::handshakeDeadlineReason(),
-             QStringLiteral("The station did not finish connecting."));
+             QStringLiteral("The Core did not finish connecting."));
 }
 
 void TstStationHandshakeDeadline::clientWaitingForTheFirstFrameIsBoundedOnlyByTheDeadline()
@@ -463,7 +463,7 @@ void TstStationHandshakeDeadline::persistentStatusShowsTheReasonAndCancelStopsTh
 
     QTRY_COMPARE_WITH_TIMEOUT(controller.state(), ConnectionState::LinkLost, 5000);
     QVERIFY2(controller.detailText().contains(
-                 QStringLiteral("Last failure: The station did not finish connecting.")),
+                 QStringLiteral("Last failure: The Core did not finish connecting.")),
              qPrintable(controller.detailText()));
     QCOMPARE(scheduled.count(), 1);
 

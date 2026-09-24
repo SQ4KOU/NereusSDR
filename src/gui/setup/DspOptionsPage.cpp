@@ -594,7 +594,7 @@ void DspOptionsPage::buildUI()
         m_highResFilterChars->setEnabled(false);
         m_highResFilterChars->setToolTip(
             tr("Actual FIR filter-curve rendering is available only in local "
-               "direct mode. Remote stations show the simplified passband."));
+               "direct mode. Windows connected to a remote Core show the simplified passband."));
     }
 
     loadCheck(m_highResFilterChars, "DspOptionsHighResFilterCharacteristics", false);

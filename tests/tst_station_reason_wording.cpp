@@ -75,6 +75,10 @@
 //                                    takeover and version reasons scanned in
 //                                    SessionEndReasons.cpp.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 completion Task 8 (R-R3-21): a
+//                                    reason that calls the Core "the
+//                                    station" fails; the ham sense stays.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -481,14 +485,24 @@ QString developerWordingIn(const QString& text)
     return {};
 }
 
-// Why `text` is not plain operator words, or an empty string.
+// Why `text` is not plain operator words, or an empty string. A reason
+// calls the Core "the Core", never "the station" (R-R3-21): only the ham
+// sense of "station" (the station's amplifier, your station) is kept.
 QString wordingProblemIn(const QString& text)
 {
     if (text.trimmed().isEmpty()) {
         return QStringLiteral("empty");
     }
     const QString term = OperatorWording::internalTermIn(text);
-    return term.isEmpty() ? developerWordingIn(text) : term;
+    if (!term.isEmpty()) {
+        return term;
+    }
+    const QString developer = developerWordingIn(text);
+    if (!developer.isEmpty()) {
+        return developer;
+    }
+    const QString station = OperatorWording::coreCalledStationIn(text);
+    return station.isEmpty() ? QString() : station + QStringLiteral(" (say the Core)");
 }
 
 // Why the words .arg() inserts into a reason are not plain, or an empty
@@ -1115,14 +1129,21 @@ private slots:
               "SliceModel::%1 has no inbound mirror translation",
               "C-Tune centre is invalid for this stream's cohosts",
               "session display budget exceeded", "handshake deadline expired",
-              "key is not Station-scoped"}) {
+              "key is not Station-scoped",
+              // R-R3-21: the Core is the Core, not the station.
+              "The station sets this itself; it cannot be changed from here.",
+              "This Core has no TCI server for the station.",
+              "Transmit configuration is unavailable on this receive-only station."}) {
             QVERIFY2(!wordingProblemIn(QString::fromUtf8(old)).isEmpty(), old);
         }
         for (const char* plain :
              {"PureSignal cannot be run from a remote window yet.",
               "The Core could not read this request.",
               "Update this app to set up the Power Genius on this Core.",
-              "Choose an SWR protection limit from %1 to %2."}) {
+              "Choose an SWR protection limit from %1 to %2.",
+              // The ham sense of "station" stays.
+              "Operating the station's amplifier or tuner waits for remote transmit. "
+              "This Core is receive-only."}) {
             QVERIFY2(wordingProblemIn(QString::fromUtf8(plain)).isEmpty(), plain);
         }
     }

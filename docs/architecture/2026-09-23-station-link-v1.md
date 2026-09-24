@@ -1045,7 +1045,7 @@ property in one write, an unknown property or a wrong wire kind, an
 configuration on a receive-only station, and DSP settings from a peer that
 did not negotiate them (`StationServer::handlePropertyWrite`).
 A write to an `outbound` property is refused before anything is applied,
-with the reason "The station sets this itself; it cannot be changed from
+with the reason "The Core sets this itself; it cannot be changed from
 here.", unless one of the earlier, more specific refusals above applies
 first; this covers the station's own readings, such as a slice's signal
 strength, as well as properties changed through a command.

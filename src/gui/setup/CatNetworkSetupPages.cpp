@@ -1034,7 +1034,7 @@ void CatMidiControlPage::buildUI()
 // RemoteStationPage — R-R3-38 unified connection entry point.
 // ---------------------------------------------------------------------------
 RemoteStationPage::RemoteStationPage(QWidget* parent)
-    : SetupPage(QStringLiteral("Remote Station"), parent)
+    : SetupPage(QStringLiteral("Remote Access"), parent)
 {
     NereusSDR::Style::applyDarkPageStyle(this);
     auto* description = new QLabel(
@@ -1389,7 +1389,7 @@ void PeripheralsPage::refreshRemoteTgxlRow()
     }
     const bool available = link && link->remoteTgxlConfigAvailable();
     scanButton->setEnabled(false);
-    scanButton->setToolTip(tr("LAN scanning runs at the station and is unavailable from this remote GUI."));
+    scanButton->setToolTip(tr("LAN scanning runs at the Core and is unavailable from this remote GUI."));
     const QString coreHost = tuner->configuredHost();
     const quint16 corePort = static_cast<quint16>(tuner->configuredPort());
     if (coreHost != m_lastDisplayedCoreTgxlHost
@@ -1422,15 +1422,15 @@ void PeripheralsPage::refreshRemoteTgxlRow()
         ? QString() : OperatorReasonText::forDisplay(tuner->connectionError());
     QString text;
     switch (phase) {
-    case TunerModel::ConnectionPhase::Disabled: text = tr("Disabled at station"); break;
+    case TunerModel::ConnectionPhase::Disabled: text = tr("Disabled at the Core"); break;
     case TunerModel::ConnectionPhase::Disconnected: text = tr("Disconnected"); break;
-    case TunerModel::ConnectionPhase::Discovering: text = tr("Discovering at station"); break;
-    case TunerModel::ConnectionPhase::Connecting: text = tr("Connecting at station"); break;
+    case TunerModel::ConnectionPhase::Discovering: text = tr("Discovering at the Core"); break;
+    case TunerModel::ConnectionPhase::Connecting: text = tr("Connecting at the Core"); break;
     case TunerModel::ConnectionPhase::Identifying: text = tr("Identifying device"); break;
     case TunerModel::ConnectionPhase::Retrying:
         text = error.isEmpty()
-            ? tr("Retrying at station")
-            : tr("Retrying at station: %1").arg(error);
+            ? tr("Retrying at the Core")
+            : tr("Retrying at the Core: %1").arg(error);
         break;
     case TunerModel::ConnectionPhase::Connected:
         text = tr("Connected: %1 %2").arg(tuner->deviceModel(), tuner->deviceSerial()); break;
@@ -1459,7 +1459,7 @@ void PeripheralsPage::refreshRemotePgxlRow()
     }
     const bool available = link && link->remotePgxlControlAvailable();
     scanButton->setEnabled(false);
-    scanButton->setToolTip(tr("LAN scanning runs at the station and is unavailable from this remote GUI."));
+    scanButton->setToolTip(tr("LAN scanning runs at the Core and is unavailable from this remote GUI."));
     // The Core's address fills the fields only when it changes, so an
     // unsent draft survives a phase or error update.
     const QString coreHost = amp->configuredHost();
@@ -1492,14 +1492,14 @@ void PeripheralsPage::refreshRemotePgxlRow()
         ? QString() : OperatorReasonText::forDisplay(amp->connectionError());
     QString text;
     switch (phase) {
-    case Phase::Disabled: text = tr("Disabled at station"); break;
+    case Phase::Disabled: text = tr("Disabled at the Core"); break;
     case Phase::Disconnected: text = tr("Disconnected"); break;
-    case Phase::Discovering: text = tr("Discovering at station"); break;
-    case Phase::Connecting: text = tr("Connecting at station"); break;
+    case Phase::Discovering: text = tr("Discovering at the Core"); break;
+    case Phase::Connecting: text = tr("Connecting at the Core"); break;
     case Phase::Identifying: text = tr("Identifying device"); break;
     case Phase::Retrying:
-        text = error.isEmpty() ? tr("Retrying at station")
-                               : tr("Retrying at station: %1").arg(error);
+        text = error.isEmpty() ? tr("Retrying at the Core")
+                               : tr("Retrying at the Core: %1").arg(error);
         break;
     case Phase::Connected:
         text = tr("Connected: %1 %2").arg(amp->deviceModel(), amp->deviceSerial()); break;

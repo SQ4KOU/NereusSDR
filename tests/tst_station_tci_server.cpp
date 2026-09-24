@@ -733,12 +733,12 @@ private slots:
         state.port = 50001;
         window.stationTciModel()->setState(state);
         QCOMPARE(TciSwitch::stationLine(&window),
-                 QStringLiteral("The station's TCI server is not running."));
+                 QStringLiteral("The Core's TCI server is not running."));
         state.listening = true;
         state.stationAddress = QStringLiteral("192.168.1.20");
         window.stationTciModel()->setState(state);
         QCOMPARE(TciSwitch::stationLine(&window),
-                 QStringLiteral("Also at the station: 192.168.1.20, port 50001"));
+                 QStringLiteral("Also at the Core: 192.168.1.20, port 50001"));
         link.coreHere = true;
         QCOMPARE(TciSwitch::stationLine(&window),
                  QStringLiteral("The Core on this computer serves TCI apps here, port 50001."));

@@ -490,7 +490,7 @@ private slots:
     {
         QString reason;
         QVERIFY(!m_engine->setNnrModelPaths({}, &reason));
-        QVERIFY(reason.contains("reconnect"));
+        QVERIFY(reason.contains("disconnected and connected again"));
     }
 
     void cleanupTestCase()

@@ -44,6 +44,7 @@
 //               Claude Code.
 // =================================================================
 
+#include <QHostAddress>
 #include <QString>
 #include <optional>
 
@@ -180,6 +181,14 @@ struct DaemonConfig {
     // *errorOut with a human-readable reason on the first check that
     // fails; *errorOut is cleared on success.
     bool validate(QString* errorOut) const;
+
+    // The address DaemonApp gives StationServer::listen() for `bind`, the
+    // remote_bind text. "::" means every address of both families: Qt binds
+    // a parsed "::" IPv6-only (it sets IPV6_V6ONLY for an IPv6 address),
+    // which refuses a LAN's IPv4 clients, so "::" maps to QHostAddress::Any,
+    // Qt's dual-stack any-address. "0.0.0.0" stays IPv4-only and a specific
+    // address stays that address. Null when `bind` is not an address.
+    static QHostAddress listenAddressFor(const QString& bind);
 };
 
 // Resolves nereusd's --profile command-line argument (R1 Task 9 fix round

@@ -1272,6 +1272,7 @@ void MainWindow::ensureRemoteSession()
                 this, &MainWindow::placeCoreStopBanner);
         // R-R3-38: place it again when the content area changes size or
         // moves without the window resizing (a dock); see eventFilter.
+        // A later setCentralWidget would need this filter moved to the new one.
         if (QWidget* content = centralWidget()) {
             content->installEventFilter(this);
         }
@@ -1424,7 +1425,7 @@ void MainWindow::ensureRemoteSession()
         connect(m_stationClient, &StationClient::handshakeComplete, this, [this]() {
             qCInfo(lcConnection) << "Station handshake complete:" << m_remoteConnection->endpointText();
             clearStationLinkToastMemory();
-            showToast(tr("Connected to station %1").arg(m_remoteConnection->endpointText()),
+            showToast(tr("Connected to the Core at %1").arg(m_remoteConnection->endpointText()),
                       ToastSeverity::Info, 3000);
         });
         const auto explainReceiveLayout = [this] {
@@ -1486,7 +1487,7 @@ void MainWindow::ensureRemoteSession()
             }
             m_reconnectToastSeen = true;
             m_lastReconnectToastReason = m_lastStationLinkLostReason;
-            showToast(tr("Reconnecting to station (attempt %1) in %2 s")
+            showToast(tr("Reconnecting to the Core (attempt %1) in %2 s")
                           .arg(attempt).arg((delayMs + 999) / 1000),
                       ToastSeverity::Info, 3000);
         });
@@ -1512,7 +1513,7 @@ void MainWindow::ensureRemoteSession()
         // noise the operator will learn to dismiss unread.
         connect(proxy, &SettingsProxy::offlineEditsSuperseded, this,
                 [this](const QStringList& keys) {
-            showToast(tr("%n station setting(s) you changed while the link was down "
+            showToast(tr("%n Core setting(s) you changed while the link was down "
                          "did not stick. See the log for which.", "", keys.size()),
                       ToastSeverity::Warning, 8000);
         });
@@ -1538,7 +1539,7 @@ void MainWindow::disconnectFromStation()
     m_remoteConnection->disconnectFromStation();
     m_stationDisconnectRequested = false;
     clearStationLinkToastMemory();
-    showToast(tr("Disconnected from Core station"), ToastSeverity::Info, 3000);
+    showToast(tr("Disconnected from the Core"), ToastSeverity::Info, 3000);
 }
 
 void MainWindow::clearStationLinkToastMemory()
@@ -11403,7 +11404,7 @@ void MainWindow::applyRemoteRoleGating()
         action->setEnabled(ps3Supported);
         action->setToolTip(ps3Supported
             ? tr("PureSignal 3 settings, saved corrections and diagnostics. Remote transmit controls are not available from this Core yet.")
-            : tr("The connected station has not advertised PureSignal 3."));
+            : tr("The connected Core has not advertised PureSignal 3."));
     }
     if (m_pureSignalApplet) {
         const bool ps3Supported = m_stationClient && m_stationClient->isHandshakeComplete()
@@ -11415,7 +11416,7 @@ void MainWindow::applyRemoteRoleGating()
         m_actConnect->setEnabled(m_connectionPickerManaged || (m_station.isRemote() && !active));
         m_actConnect->setToolTip(m_connectionPickerManaged
             ? tr("Choose a Core/radio pair or a radio for this computer")
-            : tr("Connect to the configured Core station"));
+            : tr("Connect to the configured Core"));
     }
     if (m_actDisconnect != nullptr) {
         m_actDisconnect->setEnabled(active);
@@ -11521,8 +11522,8 @@ void MainWindow::showSegmentContextMenu(const QPoint& globalPos)
     if (m_radioModel != nullptr && !m_radioModel->ownsLocalDsp()) {
         disconnectAction->setEnabled(false);
         disconnectAction->setToolTip(
-            tr("Unavailable: this window is driving a remote station. "
-               "The station owns the radio connection."));
+            tr("Unavailable: this window is driving a remote Core. "
+               "The Core owns the radio connection."));
     }
     menu.addAction(tr("Connect to other radio…"), this, [this]() {
         showConnectionPanel();
@@ -11579,8 +11580,8 @@ void MainWindow::showStationContextMenu(const QPoint& globalPos)
     const bool localDsp =
         (m_radioModel != nullptr) && m_radioModel->ownsLocalDsp();
     const QString remoteWhy =
-        tr("Unavailable: this window is driving a remote station. "
-           "The station owns the radio connection.");
+        tr("Unavailable: this window is driving a remote Core. "
+           "The Core owns the radio connection.");
 
     QAction* disconnectAction = menu.addAction(tr("Disconnect"), this, [this]() {
         m_radioModel->disconnectFromRadio();

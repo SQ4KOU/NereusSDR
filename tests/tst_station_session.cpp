@@ -4250,7 +4250,7 @@ void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsWrite
     QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("1024"));
     QCOMPARE(toast.count(), 1);
     QCOMPARE(toast.first().at(0).toString(),
-             QStringLiteral("Transmit configuration is unavailable on this receive-only station."));
+             QStringLiteral("Transmit configuration is unavailable on this receive-only Core."));
 
     proxy.setValue(rxKey, QStringLiteral("2048"));
     QTRY_COMPARE(stationSettings.value(rxKey).toString(), QStringLiteral("2048"));
@@ -4305,7 +4305,7 @@ void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsRemov
     QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("1024"));
     QCOMPARE(toast.count(), 1);
     QCOMPARE(toast.first().at(0).toString(),
-             QStringLiteral("Transmit configuration is unavailable on this receive-only station."));
+             QStringLiteral("Transmit configuration is unavailable on this receive-only Core."));
 
     proxy.remove(rxKey);
     QTRY_VERIFY(!stationSettings.contains(rxKey));
@@ -5962,7 +5962,7 @@ void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
     QSignalSpy rejected(s.proxy.get(), &SettingsProxy::valueRejected);
     QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
     const QString reason =
-        QStringLiteral("Transmit configuration is unavailable on this receive-only station.");
+        QStringLiteral("Transmit configuration is unavailable on this receive-only Core.");
 
     const QString mac = kHardwareMac;
     const auto hw = [&mac](const QString& rest) {

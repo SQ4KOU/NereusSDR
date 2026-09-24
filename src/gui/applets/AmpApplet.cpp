@@ -246,17 +246,17 @@ QString AmpApplet::stationConnectionText(TunerModel::ConnectionPhase phase,
     using Phase = TunerModel::ConnectionPhase;
     const QString reason = error.isEmpty() ? QString() : OperatorReasonText::forDisplay(error);
     switch (phase) {
-    case Phase::Disabled:     return tr("Disabled at station");
+    case Phase::Disabled:     return tr("Disabled at the Core");
     case Phase::Disconnected: return tr("Disconnected");
-    case Phase::Discovering:  return tr("Discovering at station");
-    case Phase::Connecting:   return tr("Connecting at station");
+    case Phase::Discovering:  return tr("Discovering at the Core");
+    case Phase::Connecting:   return tr("Connecting at the Core");
     case Phase::Identifying:  return tr("Identifying device");
     case Phase::Retrying:
-        return reason.isEmpty() ? tr("Retrying at station")
-                                : tr("Retrying at station: %1").arg(reason);
+        return reason.isEmpty() ? tr("Retrying at the Core")
+                                : tr("Retrying at the Core: %1").arg(reason);
     case Phase::Connected:    return tr("Connected");
     case Phase::Error:
-        return reason.isEmpty() ? tr("Stopped at station")
+        return reason.isEmpty() ? tr("Stopped at the Core")
                                 : tr("Error: %1").arg(reason);
     }
     return QString();

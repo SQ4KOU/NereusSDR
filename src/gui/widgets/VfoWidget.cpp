@@ -1141,8 +1141,14 @@ void VfoWidget::buildAudioTab()
         m_afGainSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
                             "QSlider::handle:horizontal { background: #00b4d8; width: 12px; margin: -3px 0; border-radius: 6px; }"));
-        // From Thetis console.resx:8433 — ptbAF.ToolTip
-        m_afGainSlider->setToolTip(QStringLiteral("AF Gain - Monitor Volume for RX/TX"));
+        // From Thetis console.resx:8433 [v2.10.3.15]: ptbAF.ToolTip ("AF Gain -
+        // Monitor Volume for RX/TX"). R-R3-21: reworded, since here the slider sets
+        // only this slice's received audio (SliceModel::afGain ->
+        // RxChannel::setAfGain -> WDSP SetRXAPanelGain1). Your own
+        // transmitted audio is set by Mon Vol on the TX applet.
+        m_afGainSlider->setToolTip(QStringLiteral(
+            "How loud you hear this slice's received audio. 0 to 100. "
+            "Your own transmitted audio has its own slider, Mon Vol, on the TX applet."));
         row->addWidget(m_afGainSlider);
 
         m_afGainLabel = new QLabel(QStringLiteral("50"), audioWidget);
@@ -3476,7 +3482,7 @@ void VfoWidget::setTransmitPermitted(bool permitted, const QString& reason)
 {
     m_transmitPermitted = permitted;
     m_transmitPermissionReason = reason.isEmpty()
-        ? tr("Transmit controls are unavailable until the station confirms transmit permission.")
+        ? tr("Transmit controls are unavailable until the Core confirms transmit permission.")
         : reason;
     updateTransmitControlAvailability();
 }

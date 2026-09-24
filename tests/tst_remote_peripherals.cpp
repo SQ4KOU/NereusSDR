@@ -1012,7 +1012,7 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     model.rfKitModel()->setStationConnectionState(
         state(TunerModel::ConnectionPhase::Connecting, QStringLiteral("192.0.2.41"), 8080));
     QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Identifying device"));
-    QCOMPARE(rfKit.connectionLineTextForTesting(), QStringLiteral("Connecting at station"));
+    QCOMPARE(rfKit.connectionLineTextForTesting(), QStringLiteral("Connecting at the Core"));
     model.reportStationAccessoryRefusal(QStringLiteral("pgxl"),
                                         QStringLiteral("Choose an output limit from 100 to 2000 W."));
     QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Identifying device"));
@@ -1040,7 +1040,7 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     model.reportStationAccessoryRefusal(QStringLiteral("rfkit"), otherRefusal);
     model.reportStationCommandFinished(link.nextCommandId + 51, false, otherRefusal);
     QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Identifying device"));
-    QCOMPARE(rfKit.connectionLineTextForTesting(), QStringLiteral("Connecting at station"));
+    QCOMPARE(rfKit.connectionLineTextForTesting(), QStringLiteral("Connecting at the Core"));
 
     // Connected, then a drop the Core retries, in user words.
     model.amplifierModel()->setStationConnectionState(
@@ -1049,7 +1049,7 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     model.rfKitModel()->setStationConnectionState(
         state(TunerModel::ConnectionPhase::Retrying, QStringLiteral("192.0.2.41"), 8080,
               QStringLiteral("Connection refused")));
-    QVERIFY(rfKit.connectionLineTextForTesting().startsWith(QStringLiteral("Retrying at station")));
+    QVERIFY(rfKit.connectionLineTextForTesting().startsWith(QStringLiteral("Retrying at the Core")));
     QVERIFY2(OperatorWording::isPlain(rfKit.connectionLineTextForTesting()),
              qPrintable(rfKit.connectionLineTextForTesting()));
     {

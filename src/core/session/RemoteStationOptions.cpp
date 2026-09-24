@@ -26,7 +26,7 @@ bool RemoteStationOptions::isValidStationUrl(const QString& candidate, QString* 
 {
     if (candidate.isEmpty()) {
         if (whyNot != nullptr) {
-            *whyNot = QStringLiteral("Station address is empty.");
+            *whyNot = QStringLiteral("Core address is empty.");
         }
         return false;
     }
@@ -34,7 +34,7 @@ bool RemoteStationOptions::isValidStationUrl(const QString& candidate, QString* 
     const QUrl url(candidate, QUrl::StrictMode);
     if (!url.isValid()) {
         if (whyNot != nullptr) {
-            *whyNot = QStringLiteral("Station address is not a valid URL: %1")
+            *whyNot = QStringLiteral("Core address is not a valid URL: %1")
                           .arg(url.errorString());
         }
         return false;
@@ -47,7 +47,7 @@ bool RemoteStationOptions::isValidStationUrl(const QString& candidate, QString* 
             // https:// gets told which two words the field wants, rather
             // than a QWebSocket connect failure several seconds later.
             *whyNot = QStringLiteral(
-                          "Station address must start with wss:// or ws:// "
+                          "Core address must start with wss:// or ws:// "
                           "(got \"%1\").")
                           .arg(scheme.isEmpty() ? QStringLiteral("no scheme")
                                                 : scheme);
@@ -57,7 +57,7 @@ bool RemoteStationOptions::isValidStationUrl(const QString& candidate, QString* 
 
     if (url.host().isEmpty()) {
         if (whyNot != nullptr) {
-            *whyNot = QStringLiteral("Station address has no host.");
+            *whyNot = QStringLiteral("Core address has no host.");
         }
         return false;
     }

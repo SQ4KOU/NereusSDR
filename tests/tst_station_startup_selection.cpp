@@ -120,6 +120,10 @@ private slots:
         request.tokenSpecified = true;
         QVERIFY(!resolveStationStartup(request, store, &error));
         QCOMPARE(store.selectedId(), QStringLiteral("local"));
+        // --token alone with --local names --token in the refusal.
+        request.local = true;
+        QVERIFY(!resolveStationStartup(request, store, &error));
+        QVERIFY2(error.contains(QStringLiteral("--token")), qPrintable(error));
     }
 };
 

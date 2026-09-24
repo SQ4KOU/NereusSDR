@@ -26,6 +26,10 @@
 //                                    and parsed in one place, worded with
 //                                    "Core". AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Final review M1 (R-R3-38, R-IOS-01):
+//                                    parse also reads an older Core's
+//                                    wordings. AI-assisted transformation
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QList>
@@ -60,7 +64,11 @@ struct Parsed {
     int appMajor = -1;
 };
 
-/// Reads a reason formatted by takenOver() or versionRefused().
+/// Reads a reason formatted by takenOver() or versionRefused(), or an
+/// older Core's wording of the same two: "Displaced by a newer
+/// authenticated connection from address:port" and "Protocol major version
+/// mismatch: station speaks M.m, client speaks M.m. A differing major means
+/// an incompatible wire contract."
 Parsed parse(const QString& reason);
 
 } // namespace NereusSDR::SessionEndReasons

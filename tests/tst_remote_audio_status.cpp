@@ -298,7 +298,7 @@ private slots:
              QStringLiteral("Audio waiting")},
             {State::MutedHere, QStringLiteral("Muted on this computer"),
              QStringLiteral("Audio muted")},
-            {State::RadioOffline, QStringLiteral("Radio offline at the station"),
+            {State::RadioOffline, QStringLiteral("Radio offline at the Core"),
              QStringLiteral("Radio offline")},
             {State::CoreCouldNotStart, QStringLiteral("Core could not start audio"),
              QStringLiteral("Audio unavailable")},

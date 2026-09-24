@@ -233,7 +233,10 @@ void RxDspWorker::setExternalDiversityRoute(
 
 void RxDspWorker::clearExternalDiversityRoute()
 {
+#ifdef NEREUS_BUILD_TESTS
+    // Only the test hook below reads the route being cleared.
     const ExternalDiversityRoute oldRoute = m_externalDiversityRoute;
+#endif
     m_externalDiversityPrimary.i.clear();
     m_externalDiversityPrimary.q.clear();
     m_externalDiversitySecondary.i.clear();
