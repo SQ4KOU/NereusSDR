@@ -18,6 +18,7 @@
 #include <QPushButton>
 
 #include "core/AppSettings.h"
+#include "core/BoardCapabilities.h"
 #include "gui/SpectrumOverlayPanel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -158,6 +159,60 @@ private slots:
             QVERIFY2(!b->toolTip().contains(QStringLiteral("RF gain"), Qt::CaseInsensitive),
                      "a button still offers RF gain");
         }
+    }
+
+    // ── 5b. No ANT button over an empty flyout (R-R3-49, R-R3-21) ──────
+    // On a board with no antenna choices (Hermes Lite 2, Atlas) both ANT
+    // rows hide, so the ANT button is not shown either, as an empty Setup
+    // page is not offered. A board with antenna choices keeps it, and the
+    // strip keeps its other buttons in both cases.
+    void antButtonHiddenWhenItsFlyoutWouldBeEmpty() {
+        const auto antButton = [](PanelHarness& h) -> QPushButton* {
+            for (QPushButton* b : h.host.findChildren<QPushButton*>()) {
+                if (b->text() == QStringLiteral("ANT")) { return b; }
+            }
+            return nullptr;
+        };
+        const auto shownButtons = [](PanelHarness& h) {
+            int n = 0;
+            for (QPushButton* b : h.panel->findChildren<QPushButton*>(
+                     QString(), Qt::FindDirectChildrenOnly)) {
+                if (!b->isHidden()) { ++n; }
+            }
+            return n;
+        };
+        struct Case { HPSDRHW board; bool antennas; const char* name; };
+        const Case cases[] = {
+            {HPSDRHW::HermesLite, false, "Hermes Lite 2"},
+            {HPSDRHW::Atlas, false, "Atlas"},
+            {HPSDRHW::OrionMKII, true, "ANAN-7000DLE"},
+            {HPSDRHW::Saturn, true, "ANAN-G2"},
+        };
+        for (const Case& c : cases) {
+            PanelHarness h;
+            QPushButton* ant = antButton(h);
+            QVERIFY(ant != nullptr);
+            QVERIFY2(!ant->isHidden(), c.name);  // before any radio's caps
+            const int before = shownButtons(h);
+            const int heightBefore = h.panel->height();
+
+            h.panel->setBoardCapabilities(BoardCapsTable::forBoard(c.board));
+            QCOMPARE(!ant->isHidden(), c.antennas);
+            QCOMPARE(shownButtons(h), c.antennas ? before : before - 1);
+            QCOMPARE(h.panel->height() < heightBefore, !c.antennas);
+            if (c.antennas) {
+                QVERIFY2(rxAntennaCombo(h)->count() > 0, c.name);
+            } else {
+                QCOMPARE(rxAntennaCombo(h)->count(), 0);
+            }
+        }
+
+        // A board change back to one with antennas brings the button back.
+        PanelHarness h;
+        h.panel->setBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::HermesLite));
+        QVERIFY(antButton(h)->isHidden());
+        h.panel->setBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::Saturn));
+        QVERIFY(!antButton(h)->isHidden());
     }
 
     // ── 6. Removing slice 0 disables the combo; replacing it rebinds ───

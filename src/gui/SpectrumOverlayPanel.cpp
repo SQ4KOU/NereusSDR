@@ -50,6 +50,10 @@
 //                 and the IQ Ch combo (VAX flyout) are removed. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-49, R-R3-21: the ANT button is not shown on a board
+//                 with no antenna choices, where its flyout would be empty.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "SpectrumOverlayPanel.h"
@@ -349,17 +353,24 @@ void SpectrumOverlayPanel::updateLayout()
                                       : QStringLiteral("\u25b6")); // ▶
     m_collapseBtn->move(kPad, kPad);
 
+    // R-R3-49: a button whose flyout would be empty is not shown (the ANT
+    // button on a board with no antenna choices), as an empty Setup page
+    // is not offered.
     int y = kPad + kBtnH + kGap;
-    for (auto* btn : m_menuBtns) {
-        btn->setVisible(m_expanded);
-        if (m_expanded) {
+    int shownCount = 0;
+    for (int i = 0; i < m_menuBtns.size(); ++i) {
+        QPushButton* btn = m_menuBtns[i];
+        const bool offered = i != 3 || m_antAvailable;  // index 3 is ANT
+        btn->setVisible(m_expanded && offered);
+        if (m_expanded && offered) {
             btn->move(kPad, y);
             y += kBtnH + kGap;
+            ++shownCount;
         }
     }
 
     int totalH = m_expanded
-        ? (kPad + kBtnH + kGap + static_cast<int>(m_menuBtns.size()) * (kBtnH + kGap))
+        ? (kPad + kBtnH + kGap + shownCount * (kBtnH + kGap))
         : (kPad + kBtnH + kPad);
     setFixedSize(kPad + kBtnW + kPad, totalH);
 }
@@ -1101,6 +1112,14 @@ void SpectrumOverlayPanel::setBoardCapabilities(const BoardCapabilities& caps)
 
     if (m_rxAntRow) { m_rxAntRow->setVisible(show); }
     if (m_txAntRow) { m_txAntRow->setVisible(show); }
+
+    // R-R3-49: with both rows hidden the ANT flyout would open empty, so
+    // the ANT button is not shown on such a board (Hermes Lite 2, Atlas).
+    if (m_antAvailable != show) {
+        m_antAvailable = show;
+        if (!show && m_activeFlyout == m_antFlyout) { hideFlyout(); }
+        updateLayout();
+    }
 
     // Reseed from the resolved slice so the combo label matches persisted state.
     if (show && m_radioModel) {

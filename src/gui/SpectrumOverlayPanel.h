@@ -39,6 +39,10 @@
 //                 and the IQ Ch combo (VAX flyout) are removed. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-49, R-R3-21: the ANT button is not shown on a board
+//                 with no antenna choices, where its flyout would be empty.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -180,6 +184,9 @@ private:
     // ── Main button strip ────────────────────────────────────────────────
     QPushButton*         m_collapseBtn{nullptr};
     QVector<QPushButton*> m_menuBtns;   // indices 0-6 (buttons 2-8)
+    // False on a board with no antenna choices: the ANT flyout would be
+    // empty, so its button is not shown (R-R3-49).
+    bool                 m_antAvailable{true};
     bool                 m_expanded{true};
 
     // ── Active flyout tracking (one visible at a time) ───────────────────
