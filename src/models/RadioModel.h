@@ -1840,6 +1840,9 @@ public:
     // there; the amp is admitted once its /info names an RF2K-S.
     bool configureRfKitForStation(const QString& host, quint16 port, QString* reason);
     bool disconnectRfKitForStation(QString* reason);
+    /// I4 (R-R3-47, remoteRfKitControlVersion 3): a window's Reset amp
+    /// error, sent to the admitted amp as the local page sends it.
+    bool resetRfKitErrorForStation(QString* reason);
     /// The station's RF-Kit switch, from a window's command.
     bool setRfKitEnabledForStation(bool enabled, QString* reason);
 
@@ -1988,7 +1991,8 @@ public:
     bool clearAccessoryFaultsForStation(const QString& device, QString* reason);
     /// A window changed a station setting (StationServer, after the write
     /// is stored): the Core's interlock policy, output limit, tune memory,
-    /// antenna names and fault logs follow it at once. Other keys ignored.
+    /// antenna names, fault logs and RF-Kit auto-reconnect and poll
+    /// interval follow it at once. Other keys ignored.
     void applyRemoteAccessorySetting(const QString& key);
 
     // R-R3-47 / R-R3-22: the Power Genius's and Tuner Genius's own settings

@@ -679,7 +679,7 @@ private slots:
         // R-R3-47: the Tuner Genius's own settings (Task 6).
         QCOMPARE(caps.remoteTgxlControlVersion, 1);
         // R-R3-47: 2 once the Core's RF-Kit commands are offered (Task 3).
-        QCOMPARE(caps.remoteRfKitControlVersion, 2);
+        QCOMPARE(caps.remoteRfKitControlVersion, 3);   // I4: Reset amp error
         // R-R3-47: the accessory records and settings (Task 4).
         QCOMPARE(caps.accessoryDataVersion, 1);
         QVERIFY(sawAmplifier);
@@ -765,6 +765,7 @@ private slots:
         const QList<SessionMessage> invokes{
             SessionMessages::commandInvoke("setPgxlName", 21, {name}),
             SessionMessages::commandInvoke("saveTgxlSettings", 22, {}),
+            SessionMessages::commandInvoke("resetRfKitError", 25, {}),
         };
 
         QCOMPARE(results(true, quint16(kRadioIdentitySessionProtocolMinor - 1), invokes),
@@ -772,10 +773,22 @@ private slots:
                      QStringLiteral("Update this app to change the Power Genius's own "
                                     "settings on this Core."),
                      QStringLiteral("Update this app to change the Tuner Genius's own "
-                                    "settings on this Core.")}));
+                                    "settings on this Core."),
+                     QStringLiteral("Update this app to reset the RF-Kit amplifier's error on "
+                                    "this Core.")}));
         QCOMPARE(results(false, kRadioIdentitySessionProtocolMinor, invokes),
                  (QStringList{QStringLiteral("Station accessory configuration is unavailable."),
+                              QStringLiteral("Station accessory configuration is unavailable."),
                               QStringLiteral("Station accessory configuration is unavailable.")}));
+        // I4: Reset amp error with no amp admitted, or with arguments.
+        const QStringList rfkit = results(true, kRadioIdentitySessionProtocolMinor, {
+            SessionMessages::commandInvoke("resetRfKitError", 26, {}),
+            SessionMessages::commandInvoke("resetRfKitError", 27, {name}),
+        });
+        QCOMPARE(rfkit, (QStringList{
+            QStringLiteral("The Core is not connected to the RF-Kit amplifier."),
+            QStringLiteral("The request to reset the RF-Kit amplifier's error was not "
+                           "understood.")}));
         const QStringList current = results(true, kRadioIdentitySessionProtocolMinor, {
             SessionMessages::commandInvoke("setPgxlName", 21, {name}),
             SessionMessages::commandInvoke("readTgxlSettings", 22, {}),

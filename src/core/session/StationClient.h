@@ -563,6 +563,8 @@ public:
                                                  int pingSec) override;
     CommandOutcome requestConfigureRfKit(const QString& host, quint16 port) override;
     CommandOutcome requestDisconnectRfKit() override;
+    bool rfKitSettingsAvailable() const override;
+    CommandOutcome requestResetRfKitError() override;
     CommandOutcome requestRfKitEnabled(bool enabled) override;
     CommandOutcome requestStationTci(bool enabled, quint16 port) override;
     CommandOutcome requestTxInterlockPolicy(int mode, int graceMs, bool swrGateEnabled,

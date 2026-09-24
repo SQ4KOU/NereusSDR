@@ -238,6 +238,7 @@ public:
                     const int sp = req.indexOf(' ') + 1;
                     const QByteArray path = req.mid(sp, req.indexOf(' ', sp) - sp);
                     ++requests;
+                    lines.append(QString::fromLatin1(req.left(sp) + path));
                     QByteArray body = "{}";
                     if (path == "/info") {
                         body = R"({"device":"RF2K-S","software_version":{"GUI":200,"controller":267},"custom_device_name":"KG4VCF"})";
@@ -253,6 +254,7 @@ public:
         });
     }
     int requests{0};
+    QStringList lines;   // "GET /info", "POST /error/reset": what reached the amp
 };
 
 // A loopback stand-in for the Power Genius or Tuner Genius: records every
@@ -384,6 +386,8 @@ private slots:
     void remoteWindowChangesTheTunersOwnSettingsThroughTheCore();
     void olderCoreLeavesTheDeviceSettingsSayingWhy();
     void accessoryRefusalsNeverReachTheSliceToast();
+    void remoteRfKitPageWorksEveryControl();
+    void olderCoreLeavesTheRfKitSettingsSayingWhy();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -2185,6 +2189,135 @@ void RemotePeripheralsTest::accessoryRefusalsNeverReachTheSliceToast()
     QTest::qWait(50);
     QCOMPARE(sliceToast.count(), 0);
     stationEnd->closeLink(QStringLiteral("test done"));
+    AppSettings::instance().clear();
+}
+
+// I4 (R-R3-47): every control on a remote window's RF-Kit page works
+// through the Core. Auto-reconnect, poll interval and the antenna names
+// are the station's settings (the Core applies them at once); Reset amp
+// error reaches the Core's amp as the request the local page's button
+// sends to its own amp (the fakes record both).
+void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
+{
+    AppSettings::instance().clear();
+    AppSettings::instance().setValue(QStringLiteral("RfKit_PollIntervalMs"),
+                                     QStringLiteral("5000"));
+    CoreAndWindow cw;
+    RadioModel& station = cw.station;
+    RadioModel& window = cw.window;
+    FakeRfKit amp;
+    RfKitPage page(&window);
+    LoopbackTransport* stationEnd = cw.connect(this);
+    QTRY_VERIFY(cw.client.rfKitSettingsAvailable());
+    window.reportStationLinkStateChanged();
+    QString reason;
+    QVERIFY(station.setRfKitEnabledForStation(true, &reason));
+    QTRY_VERIFY(page.detailTabIsEnabledForTesting());
+    for (QWidget* w : std::initializer_list<QWidget*>{
+             page.autoReconnectForTesting(), page.pollIntervalForTesting(),
+             page.saveButtonForTesting(), page.resetErrorButtonForTesting(),
+             page.antennaLabelEditForTesting(1), page.antennaLabelEditForTesting(4)}) {
+        QVERIFY(w->isEnabled());
+    }
+    QCOMPARE(page.pollIntervalForTesting()->value(), 5000);
+
+    // Reset amp error with no amp at the Core: the Core's words, nothing sent.
+    QSignalSpy sliceToast(&window, &RadioModel::sliceAddRejected);
+    page.resetErrorButtonForTesting()->click();
+    QTRY_VERIFY(page.liveStatusTextForTesting().contains(
+        QStringLiteral("The Core is not connected to the RF-Kit amplifier.")));
+    QVERIFY(OperatorWording::isPlain(page.liveStatusTextForTesting()));
+    QCOMPARE(sliceToast.count(), 0);
+
+    // The Core admits its amp; the window's Reset reaches it.
+    QVERIFY(station.configureRfKitForStation(QStringLiteral("127.0.0.1"), amp.serverPort(),
+                                             &reason));
+    QTRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
+                              RfKitModel::ConnectionPhase::Connected, 5000);
+    const int remoteMark = amp.lines.size();
+    page.resetErrorButtonForTesting()->click();
+    QTRY_VERIFY(amp.lines.mid(remoteMark).contains(QStringLiteral("POST /error/reset")));
+
+    // A local window's page on its own amp: the same request.
+    FakeRfKit localAmp;
+    RadioModel local;
+    RadioInfo radio;
+    radio.macAddress = QStringLiteral("aa:bb:cc:dd:ee:48");
+    local.setLastRadioInfoForTest(radio);
+    local.setConnectionStateForTest(ConnectionState::Connected);
+    local.setRfKitEnabled(true);
+    RfKitPage localPage(&local);
+    QVERIFY(localPage.detailTabIsEnabledForTesting());
+    local.rfKitConnection()->connectToAmp(QStringLiteral("127.0.0.1"), localAmp.serverPort());
+    QTRY_VERIFY_WITH_TIMEOUT(local.rfKitConnection()->isConnected(), 5000);
+    const int localMark = localAmp.lines.size();
+    localPage.resetErrorButtonForTesting()->click();
+    QTRY_VERIFY(localAmp.lines.mid(localMark).contains(QStringLiteral("POST /error/reset")));
+    local.rfKitConnection()->disconnect();
+
+    // Save: the station's settings, then applied by the Core at once.
+    page.autoReconnectForTesting()->setChecked(false);
+    page.pollIntervalForTesting()->setValue(2500);
+    page.antennaLabelEditForTesting(1)->setText(QStringLiteral("Beam"));
+    page.antennaLabelEditForTesting(4)->setText(QStringLiteral("Loop"));
+    page.saveButtonForTesting()->click();
+    auto& s = AppSettings::instance();
+    QCOMPARE(s.value(QStringLiteral("RfKit_AutoReconnect")).toString(), QStringLiteral("False"));
+    QCOMPARE(s.value(QStringLiteral("RfKit_PollIntervalMs")).toString(), QStringLiteral("2500"));
+    QCOMPARE(s.value(QStringLiteral("RfKit_Ant1_Label")).toString(), QStringLiteral("Beam"));
+    QCOMPARE(s.value(QStringLiteral("RfKit_Ant4_Label")).toString(), QStringLiteral("Loop"));
+    // The station settings write reaches the Core's live objects (as
+    // StationServer does after storing it).
+    for (const char* key : {"RfKit_AutoReconnect", "RfKit_PollIntervalMs", "RfKit_Ant1_Label",
+                            "RfKit_Ant4_Label"}) {
+        station.applyRemoteAccessorySetting(QString::fromLatin1(key));
+    }
+    QVERIFY(!station.rfKitConnection()->autoReconnect());
+    QCOMPARE(station.rfKitConnection()->pollIntervalMs(), 2500);
+    QTRY_COMPARE(window.accessoryDataModel()->rfkitAntennaLabels().value(0),
+                 QStringLiteral("Beam"));
+    QCOMPARE(window.accessoryDataModel()->rfkitAntennaLabels().value(3), QStringLiteral("Loop"));
+
+    // Nothing but reads and the reset reached the Core's amp; the window
+    // opened no connection of its own.
+    for (const QString& line : amp.lines) {
+        QVERIFY2(line.startsWith(QStringLiteral("GET "))
+                     || line == QStringLiteral("POST /error/reset"), qPrintable(line));
+    }
+    QVERIFY(!window.rfKitConnection()->isConnected());
+    QVERIFY(window.rfKitConnection()->peerAddress().isEmpty());
+    stationEnd->closeLink(QStringLiteral("test done"));
+    AppSettings::instance().clear();
+}
+
+// I4: a Core without remoteRfKitControlVersion 3 leaves the page's settings,
+// names and Reset amp error unchangeable, and says why in plain words.
+void RemotePeripheralsTest::olderCoreLeavesTheRfKitSettingsSayingWhy()
+{
+    AppSettings::instance().clear();
+    struct OlderCore final : IStationLink {
+        CommandOutcome requestAddSlice(const QString&) override { return {}; }
+        CommandOutcome requestAddSliceOnPan(const QString&) override { return {}; }
+        CommandOutcome requestRemoveSlice(int) override { return {}; }
+        CommandOutcome requestActiveSlice(int) override { return {}; }
+        CommandOutcome requestSliceSampleRate(int, int) override { return {}; }
+        bool stationLinkReady() const override { return true; }
+        bool remoteRfKitControlAvailable() const override { return true; }
+    } link;
+    RadioModel model(RadioModel::Role::Remote);
+    model.attachStation(&link);
+    RfKitPage page(&model);
+    model.reportStationLinkStateChanged();
+    for (QWidget* w : std::initializer_list<QWidget*>{
+             page.autoReconnectForTesting(), page.pollIntervalForTesting(),
+             page.saveButtonForTesting(), page.resetErrorButtonForTesting(),
+             page.antennaLabelEditForTesting(2)}) {
+        QVERIFY(!w->isEnabled());
+        QVERIFY(OperatorWording::isPlain(w->toolTip()));
+    }
+    const IStationLink::CommandOutcome outcome = link.requestResetRfKitError();
+    QVERIFY(!outcome.sent);
+    QVERIFY(OperatorWording::isPlain(outcome.reason));
     AppSettings::instance().clear();
 }
 

@@ -90,6 +90,9 @@
 //                 fault history, station TCI, 4O3A switch) goes to
 //                 accessoryRequestRefused, never the slice toast. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47: remoteRfKitControlVersion 3 (the resetRfKitError
+//                 request, the RF-Kit page's settings from a remote window).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2658,7 +2661,7 @@ QString accessoryRefusalDevice(const QByteArray& verb, const QString& faultsDevi
         return QStringLiteral("tgxl");
     }
     if (verb == "configureRfKit" || verb == "disconnectRfKit" || verb == "setRfKitEnabled"
-) {
+        || verb == "resetRfKitError") {
         return QStringLiteral("rfkit");
     }
     if (verb == "setTxInterlockPolicy") {
@@ -2945,6 +2948,21 @@ StationClient::CommandOutcome StationClient::requestConfigureRfKit(const QString
     return sendCommand("configureRfKit", -1,
                        { stringArgument("host", host), intArgument("port", port) },
                        QStringLiteral("the RF-Kit amplifier address"));
+}
+
+bool StationClient::rfKitSettingsAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remoteRfKitControlVersion >= 3;
+}
+
+StationClient::CommandOutcome StationClient::requestResetRfKitError()
+{
+    if (!rfKitSettingsAvailable()) {
+        return IStationLink::requestResetRfKitError();
+    }
+    return sendCommand("resetRfKitError", -1, {},
+                       QStringLiteral("the RF-Kit amplifier's error reset"));
 }
 
 StationClient::CommandOutcome StationClient::requestDisconnectRfKit()

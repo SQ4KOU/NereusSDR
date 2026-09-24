@@ -3542,7 +3542,17 @@ bool RadioModel::clearAccessoryFaultsForStation(const QString& device, QString* 
 
 void RadioModel::applyRemoteAccessorySetting(const QString& key)
 {
-    if (m_role == Role::Local && m_stationAccessoryData) {
+    if (m_role != Role::Local) {
+        return;
+    }
+    // I4 (R-R3-47): a window's RF-Kit Save reaches the Core's connection now,
+    // as the local page's Save does (applyRfKitOperatorSettings).
+    if (key == QLatin1String("RfKit_AutoReconnect")
+        || key == QLatin1String("RfKit_PollIntervalMs")) {
+        applyRfKitOperatorSettings();
+        return;
+    }
+    if (m_stationAccessoryData) {
         m_stationAccessoryData->applySetting(key);
     }
 }
@@ -3907,6 +3917,15 @@ bool RadioModel::disconnectRfKitForStation(QString* reason)
     m_stationRfKit->cancel(!rfKitEnabled());
     if (reason) { reason->clear(); }
     return true;
+}
+
+bool RadioModel::resetRfKitErrorForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationRfKit) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    return m_stationRfKit->resetError(reason);
 }
 
 // ── Per-radio peripherals helpers ──────────────────────────────────────────

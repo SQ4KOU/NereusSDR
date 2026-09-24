@@ -437,10 +437,12 @@ public:
     // setTgxlName, setTgxlNetwork, saveTgxlSettings and readTgxlSettings
     // verbs); 0 otherwise.
     int tgxlControlVersion() const;
-    // R-R3-47: remoteRfKitControlVersion. 2 on a Core that owns its
+    // R-R3-47: remoteRfKitControlVersion. 3 on a Core that owns its
     // accessories (the `rfkit` object with its interface, antenna, tuner
-    // and band-follow rows, and the configureRfKit, disconnectRfKit and
-    // setRfKitEnabled verbs); 0 otherwise.
+    // and band-follow rows, the configureRfKit, disconnectRfKit and
+    // setRfKitEnabled verbs, and from 3 the resetRfKitError verb and a
+    // window's auto-reconnect and poll interval applied at once); 0
+    // otherwise.
     int rfKitControlVersion() const;
     // R-R3-48: stationTciVersion. 1 on a Core that runs its own station
     // TCI server (the `stationTci` object and the setStationTci verb).

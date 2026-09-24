@@ -74,19 +74,22 @@ contract; each feature has its own version.
 | `remotePgxlControlVersion` | 11 | 2 | Also: `configurePgxl`, `disconnectPgxl` and `setPgxlConnectionSettings` work, and the Core identifies and pairs the PGXL itself |
 | `remoteRfKitControlVersion` | 11 | 1 | The Core mirrors its RF2K-S as the read-only `rfkit` object |
 | `remoteRfKitControlVersion` | 11 | 2 | Also: the interface, antenna, tuner and band-follow rows of `rfkit`; `configureRfKit`, `disconnectRfKit` and `setRfKitEnabled` work, and the Core identifies the RF2K-S itself |
+| `remoteRfKitControlVersion` | 11 | 3 | Also: `resetRfKitError` works, and the Core applies a window's `RfKit_AutoReconnect` and `RfKit_PollIntervalMs` station settings to its amp's connection at once, so the RF-Kit page's settings, antenna names and Reset amp error work from a remote window |
 | `stationTciVersion` | 11 | 1 | The Core runs its own TCI server on the station network: the read-only `stationTci` object, and `setStationTci` works |
 | `accessoryDataVersion` | 11 | 1 | The Core mirrors its accessory records and settings as the read-only `accessoryData` object, and `setTxInterlockPolicy`, `setPgxlPowerCap` and `clearAccessoryFaults` work |
 | `remotePgxlControlVersion` | 11 | 3 | Also: the amp's own settings. The `pgxl*` properties of the read-only `accessorySettings` object, and `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings` and `readPgxlSettings` work |
 | `remoteTgxlControlVersion` | 11 | 1 | The tuner's own settings: the `tgxl*` properties of `accessorySettings`, and `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings` and `readTgxlSettings` work |
 
 - The Core advertises `remotePgxlControlVersion` as 3,
-  `remoteRfKitControlVersion` as 2 and the TGXL and 4O3A versions
+  `remoteRfKitControlVersion` as 3 and the TGXL and 4O3A versions
   (`remoteTgxlConfigVersion`, `remoteFourO3AControlVersion`,
   `remoteTgxlControlVersion`) as 1 when it owns its accessories (the
   headless Core, `nereusd`, always does), and all of them as 0 otherwise. A
   Core built between Tasks 2 and 5 says 2 for the PGXL and sends no
   `remoteTgxlControlVersion`: the amp's and tuner's own settings are not
-  offered there. A Core built between Tasks 1 and 3 says 1 for the
+  offered there. A Core built before the fix wave says 2 for the RF2K-S:
+  no `resetRfKitError`, and the RF-Kit page's settings and names stay
+  unchangeable in a remote window. A Core built between Tasks 1 and 3 says 1 for the
   RF2K-S (and, before Task 2, for the PGXL): the object, no commands. An app
   treats 1 as "readings only" and 2 or more as "readings and commands".
 - `stationTciVersion` is 1 on a Core that runs its station TCI server
@@ -645,6 +648,7 @@ the Core took the request (see "Accepted is not connected").
 | `setRfKitEnabled` | `enabled` (bool) | minor 11, `remoteRfKitControlVersion` 2 | Turns the station's RF-Kit switch on or off for its radio. On with a saved address dials it through the identity check; off stops everything (`disabled`) |
 | `configureRfKit` | `host` (utf8), `port` (i64, 1 to 65535) | minor 11, `remoteRfKitControlVersion` 2 | Saves the RF2K-S address for the Core's radio and starts connecting and identifying (see "How the Core identifies the RF2K-S") |
 | `disconnectRfKit` | none | minor 11, `remoteRfKitControlVersion` 2 | Cancels an attempt or closes the connection in any phase; nothing is redialled; the address and the switch stay |
+| `resetRfKitError` | none | minor 11, `remoteRfKitControlVersion` 3 | Sends the admitted amp the request the local RF-Kit page's "Reset amp error state" button sends: `POST /error/reset` on its REST interface (`Rf2ksConnection::resetError`). It clears the amp's error; it does not operate the amp, change its antenna or key anything |
 | `setStationTci` | `enabled` (bool), `port` (i64, 1024 to 65535) | minor 11, `stationTciVersion` 1 | Saves the station's TCI switch and port on the Core and starts or stops its station TCI server. The Core keeps them across window sessions, other apps connecting and restarts |
 | `setTxInterlockPolicy` | `mode` (i64, the `interlockMode` value 0 to 2), `graceMs` (i64, 0 to 30000), `swrGateEnabled` (bool), `swrGateMax` (f64, 1.0 to 10.0) | minor 11, `accessoryDataVersion` 1 | Sets the whole transmit interlock policy on the Core, which saves it and enforces it from the next transmit request. Keys nothing |
 | `setPgxlPowerCap` | `enabled` (bool), `watts` (i64, 100 to 2000) | minor 11, `accessoryDataVersion` 1 | Sets the Power Genius output limit on the Core, which saves it and raises the alert from then on |
@@ -708,6 +712,11 @@ Commands:
 | `configurePgxl` with a bad address | "Enter a valid PGXL IP address or hostname and TCP port 1 to 65535." |
 | `setPgxlConnectionSettings` out of range | "Enter a keepalive of 1 to 3600 seconds and a ping of 0 to 3600 seconds." |
 | `configureRfKit`, `disconnectRfKit`, `setRfKitEnabled` below minor 11 | "Update this app to set up the RF-Kit amplifier on this Core." |
+| `resetRfKitError` below minor 11 | "Update this app to reset the RF-Kit amplifier's error on this Core." |
+| `resetRfKitError` on a Core that does not own its accessories | "Station accessory configuration is unavailable." |
+| `resetRfKitError` with arguments | "The request to reset the RF-Kit amplifier's error was not understood." |
+| `resetRfKitError` with no amp admitted | "The Core is not connected to the RF-Kit amplifier." |
+| `resetRfKitError` from an app whose Core lacks `remoteRfKitControlVersion` 3 (the app's own words, nothing sent) | "This Core does not let this app reset the RF-Kit amplifier's error. Updating the Core may help." |
 | `configureRfKit` with other arguments | "invalid host or port argument" |
 | `disconnectRfKit` with arguments | "The disconnect request for the RF-Kit amplifier was not understood." |
 | `setRfKitEnabled` with other arguments | "The request to turn the RF-Kit amplifier on or off was not understood." |
@@ -848,7 +857,15 @@ connection.
 Station-wide, not yet behind a command: `PGXL_BroadcastDiscovery`,
 `PGXL_BroadcastNickname`, `PGXL_FlexRadioSerial`, `PGXL_AntMap`,
 `PGXL_PairModel`, `PGXL_DiscoveryModel`, `TGXL_AutoReconnect`,
-`TGXL_KeepaliveSec`, `RfKit_AutoReconnect`, `RfKit_PollIntervalMs`.
+`TGXL_KeepaliveSec`.
+
+Station-wide, the RF-Kit page's connection settings (with
+`remoteRfKitControlVersion` 3): `RfKit_AutoReconnect` (`True` / `False`)
+and `RfKit_PollIntervalMs` (250 to 5000; the connection clamps it). The
+desktop app's Save writes them, with the four antenna names, as station
+settings, and the Core applies them to its amp's connection at once, as
+the local page's Save does. The amp's address goes with Connect
+(`configureRfKit`).
 
 ## The fault record
 
@@ -926,8 +943,11 @@ A remote window shows these controls disabled: the Power Genius tab's
 Operate button with the receive-only reason, the applets' OPERATE and
 antenna buttons with "Amplifier control is not available from a remote
 window yet." (Power Genius and RF-Kit) or their transmit-permission reason
-(Tuner Genius), and the RF-Kit page's "Set amp to TCI mode" and "Reset amp
-error state" buttons.
+(Tuner Genius), and the RF-Kit page's "Set amp to TCI mode" button (the
+Core sets TCI mode itself while the station's TCI server is on). The
+RF-Kit page's "Reset amp error state" works from a remote window with
+`remoteRfKitControlVersion` 3 (`resetRfKitError`, by operator ruling in
+the fix wave): it clears the amp's error and operates nothing.
 
 ## Window behaviour
 
@@ -960,9 +980,13 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   `disconnectRfKit`; the status line is the Core's `rfkit` phase and
   identity. The RF-Kit applet's Disconnect or Reconnect asks the Core the
   same way. Below 2 the page says "This Core does not offer RF-Kit
-  amplifier setup to this app." and changes nothing. The RF-Kit settings the
-  Core keeps (automatic retry, poll interval, antenna labels) are shown and
-  not changed from a remote window.
+  amplifier setup to this app." and changes nothing. With
+  `remoteRfKitControlVersion` 3 the page's automatic retry, poll interval
+  and four antenna names show the Core's values and Save writes them as
+  station settings; Reset amp error state sends `resetRfKitError`, and a
+  refusal shows in the status line. Below 3 those controls are shown,
+  unchangeable, with "This Core does not let this app change these
+  settings. Updating the Core may help."
 - The amp page and applet show the band-follow line (see "Band follow"):
   the RF-Kit page and applet from `rfkit`, the Power Genius applet and the
   4O3A page's General tab from `amplifier`, in local and remote windows.
@@ -1180,6 +1204,17 @@ rewrite the fixtures, and update this document in the same commit.
   band-follow line local and remote, and the one TCI switch turning the
   Core's station server on and off, which keeps running when the window
   goes and another connects.
+- `tst_remote_peripherals` (fix wave): a remote window's RF-Kit page
+  works every control: its Reset amp error reaches the Core's amp as
+  `POST /error/reset`, the same request a local page's button sends to its
+  own amp (both fakes record it); refused with no amp admitted, on the
+  accessory route; Save writes automatic retry, poll interval and the four
+  names as station settings, which the Core applies to its connection;
+  below `remoteRfKitControlVersion` 3 the controls stay unchangeable with
+  a plain reason. `tst_station_rfkit_controller`: the Core's reset reaches
+  only an admitted amp. `tst_station_accessory_state`: `resetRfKitError`
+  refused below minor 11, on a non-owning Core, with arguments and with no
+  amp, in user words.
 
 Hardware evidence is pending for the operator checkpoint: readings from the
 real PGXL and RF2K-S reaching a remote window and the iPhone app; identity
@@ -1192,6 +1227,8 @@ RF2K-S pointed at the Rock); the station server, the 4992 listener and the
 accessory discovery bound on the Rock's station network and not its other
 network, and the FlexRadio beacon announcing the station address there; a real Power Genius fault, a Tuner Genius drop and an RF-Kit
 interface error reaching a remote window and the iPhone app from the Rock,
+a Reset amp error from the Rock's remote window clearing a real RF2K-S
+error,
 and the Rock's fault history after a restart; the power-cap alert from a
 real transmit through the Power Genius (with remote transmit); and, only
 with the operator's go-ahead because it changes the devices' own settings,

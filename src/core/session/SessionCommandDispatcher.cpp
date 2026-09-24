@@ -64,6 +64,9 @@
 //                                    the four setTgxl* / *TgxlSettings
 //                                    verbs). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47: resetRfKitError (the RF-Kit
+//                                    page's Reset amp error). AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -370,6 +373,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleDisconnectRfKit(invoke);
     } else if (invoke.commandVerb == "setRfKitEnabled") {
         handleSetRfKitEnabled(invoke);
+    } else if (invoke.commandVerb == "resetRfKitError") {
+        handleResetRfKitError(invoke);
     } else if (invoke.commandVerb == "setStationTci") {
         handleSetStationTci(invoke);
     } else if (invoke.commandVerb == "setTxInterlockPolicy") {
@@ -1058,6 +1063,28 @@ void SessionCommandDispatcher::handleDisconnectRfKit(const SessionMessage& invok
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    reason.isEmpty() ? QStringLiteral("The Core did not disconnect the RF-Kit "
                                                      "amplifier.")
+                                    : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// I4 (R-R3-47, remoteRfKitControlVersion 3): the local page's Reset amp
+// error, sent by the Core to its admitted amp.
+void SessionCommandDispatcher::handleResetRfKitError(const SessionMessage& invoke)
+{
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to reset the RF-Kit amplifier's error was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->resetRfKitErrorForStation(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not reset the RF-Kit "
+                                                     "amplifier's error.")
                                     : reason,
                    {});
         return;

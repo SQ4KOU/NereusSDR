@@ -120,6 +120,9 @@
 //                                    and the amp's and tuner's own settings
 //                                    verbs. AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47: remoteRfKitControlVersion 3
+//                                    with the resetRfKitError verb.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1147,6 +1150,18 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 QStringLiteral("Update this app to set up the RF-Kit amplifier on this Core."), {}));
             break;
         }
+        // I4 (R-R3-47): Reset amp error came with remoteRfKitControlVersion 3.
+        if (message.commandVerb == "resetRfKitError"
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || rfKitControlVersion() < 3)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to reset the RF-Kit amplifier's error on "
+                                     "this Core.")
+                    : QStringLiteral("Station accessory configuration is unavailable."), {}));
+            break;
+        }
         if (message.commandVerb == "setStationTci"
             && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
                 || stationTciVersion() < 1)) {
@@ -2076,7 +2091,9 @@ int StationServer::tgxlControlVersion() const
 
 int StationServer::rfKitControlVersion() const
 {
-    return accessoryStatusVersion() >= 1 ? 2 : 0;
+    // 3: Reset amp error (resetRfKitError), and the Core applies a window's
+    // RF-Kit auto-reconnect and poll interval at once (R-R3-47 fix wave).
+    return accessoryStatusVersion() >= 1 ? 3 : 0;
 }
 
 int StationServer::stationTciVersion() const

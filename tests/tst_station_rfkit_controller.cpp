@@ -282,6 +282,32 @@ private slots:
         QCOMPARE(amp.count(put), 1);
     }
 
+    // I4 (R-R3-47): a window's Reset amp error reaches the admitted amp as
+    // the request the local page's button sends (POST /error/reset);
+    // refused, with nothing sent, while no amp is admitted.
+    void resetErrorReachesTheAdmittedAmp()
+    {
+        FakeAmp amp;
+        RadioModel model;
+        prepare(model);
+        QString reason;
+        QVERIFY(model.setRfKitEnabledForStation(true, &reason));
+        QVERIFY(!model.resetRfKitErrorForStation(&reason));
+        QCOMPARE(reason, QStringLiteral("The Core is not connected to the RF-Kit amplifier."));
+        QVERIFY(model.configureRfKitForStation(QStringLiteral("127.0.0.1"), amp.serverPort(),
+                                               &reason));
+        QTRY_COMPARE_WITH_TIMEOUT(model.rfKitModel()->connectionPhase(), Phase::Connected, 3000);
+        QCOMPARE(amp.count(QStringLiteral("POST /error/reset")), 0);
+        QVERIFY(model.resetRfKitErrorForStation(&reason));
+        QTRY_COMPARE_WITH_TIMEOUT(amp.count(QStringLiteral("POST /error/reset")), 1, 3000);
+        // Nothing else changed the amp's state.
+        for (const QString& request : amp.requests) {
+            QVERIFY2(request.startsWith(QStringLiteral("GET "))
+                         || request == QStringLiteral("POST /error/reset"),
+                     qPrintable(request));
+        }
+    }
+
     // The amp's own interface errors and a lost link are faults.
     void faultsAreEmitted()
     {

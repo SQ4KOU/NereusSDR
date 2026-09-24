@@ -307,6 +307,7 @@ struct SessionMessage {
     ///   configureRfKit         -- {"host": Utf8, "port": Int64}
     ///   disconnectRfKit        -- {}
     ///   setRfKitEnabled        -- {"enabled": Bool}
+    ///   resetRfKitError        -- {}
     ///   setStationTci          -- {"enabled": Bool, "port": Int64}
     ///   setTxInterlockPolicy   -- {"mode": Int64, "graceMs": Int64,
     ///                               "swrGateEnabled": Bool, "swrGateMax": Double}

@@ -175,6 +175,13 @@ public:
     { return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") }; }
     virtual CommandOutcome requestRfKitEnabled(bool)
     { return { false, QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app.") }; }
+    /// I4 (R-R3-47, remoteRfKitControlVersion 3): the RF-Kit page's
+    /// connection settings, antenna names and Reset amp error work from a
+    /// remote window. The settings and names travel as station settings,
+    /// which the Core applies at once; Reset amp error is its own request.
+    virtual bool rfKitSettingsAvailable() const { return false; }
+    virtual CommandOutcome requestResetRfKitError()
+    { return { false, QStringLiteral("This Core does not let this app reset the RF-Kit amplifier's error. Updating the Core may help.") }; }
 
     /// R-R3-48 (stationTciVersion 1): the Core runs its own TCI server on
     /// the station network, switched by this app's one TCI switch and port.

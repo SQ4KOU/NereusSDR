@@ -1,6 +1,8 @@
 // no-port-check: NereusSDR-original. R-R3-47 / R-R3-48 / R-R3-22 station-owned RF2K-S.
 // Structure from StationPgxlController.cpp. J.J. Boyd (KG4VCF), September
 // 2026; AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-47: a window's Reset amp error (resetError). J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/StationRfKitController.h"
 
 namespace NereusSDR {
@@ -115,6 +117,22 @@ void StationRfKitController::cancel(bool disabled)
         next.phase = disabled ? Phase::Disabled : Phase::Disconnected;
         m_model->setStationConnectionState(next);
     }
+}
+
+bool StationRfKitController::resetError(QString* reason)
+{
+    if (!m_running || !m_connection || !m_connection->isConnected()) {
+        if (reason) {
+            *reason = QStringLiteral("The Core is not connected to the RF-Kit amplifier.");
+        }
+        return false;
+    }
+    // The local page's "Reset amp error state" (RfKitPage::buildRf2ksTab).
+    m_connection->resetError();
+    if (reason) {
+        reason->clear();
+    }
+    return true;
 }
 
 void StationRfKitController::setBandFollowWanted(bool wanted)

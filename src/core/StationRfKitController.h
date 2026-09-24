@@ -48,6 +48,10 @@ public:
     /// TCI mode) or off.
     void setBandFollowWanted(bool wanted);
     bool bandFollowWanted() const { return m_bandFollowWanted; }
+    /// I4 (R-R3-47): a window's Reset amp error. The admitted amp gets the
+    /// request the local page's button sends (Rf2ksConnection::resetError,
+    /// POST /error/reset). Refused, in plain words, with no amp admitted.
+    bool resetError(QString* reason);
     /// Whether this connection already asked the amp for TCI mode.
     bool tciModeRequestedForTesting() const { return m_tciModeRequested; }
 

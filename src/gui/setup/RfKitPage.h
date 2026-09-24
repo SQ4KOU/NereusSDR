@@ -66,6 +66,12 @@ public:
     QPushButton* disconnectButtonForTesting() const { return m_disconnectBtn; }
     QString      bandFollowTextForTesting() const;
     QString      liveStatusTextForTesting() const;
+    QCheckBox*   autoReconnectForTesting() const { return m_autoReconnect; }
+    QSpinBox*    pollIntervalForTesting() const { return m_pollIntervalSpin; }
+    QLineEdit*   antennaLabelEditForTesting(int n) const
+    { return n >= 1 && n <= 4 ? m_antLabelEdits[n - 1] : nullptr; }
+    QPushButton* saveButtonForTesting() const { return m_saveBtn; }
+    QPushButton* resetErrorButtonForTesting() const { return m_resetErrBtn; }
 
 private slots:
     // Master toggle handler.  Persists the new state via
@@ -103,6 +109,11 @@ private:
     // R-R3-47: a remote window (the amp is the Core's).
     bool isRemote() const;
     bool remoteControlAvailable() const;
+    // I4 (R-R3-47): the Core takes this page's settings, names and Reset amp
+    // error from a remote window (remoteRfKitControlVersion 3).
+    bool remoteSettingsAvailable() const;
+    void refreshRemoteSettings();
+    void onResetErrorClicked();
     void refreshBandFollow();
     void onConnectClicked();
     void onDisconnectClicked();
