@@ -191,6 +191,134 @@ private slots:
         }
     }
 
+    // ── PureSignal with MOX: which DDC each user stream keeps ─────────────
+    //
+    // Phase 3F design section 16.3.2, table row "P1 Hermes / HermesC10
+    // (G2E)": no collapse on Protocol 1. From Thetis console.cs:8704-8743
+    // [v2.10.3.15] GetDDC(), P1 branch:
+    //   case HPSDRHW.Hermes: // ANAN-10 ANAN-100 Heremes (4 adc)
+    //   case HPSDRHW.HermesC10: // ANAN-G2E //N1GP G2E added (HermesC10)
+    //   ...
+    //   case 5: // on off on    rx1 = 0; rx2 = 1; psrx = 2; pstx = 3;
+    //   case 7: // on on on     rx1 = 0; rx2 = 1; psrx = 2; pstx = 3;
+    // The PureSignal pair sits on DDC2 + DDC3, so neither user stream
+    // loses its DDC while PureSignal transmits. This is the opposite of
+    // Protocol 2 Hermes, whose tot=5 body is empty.
+    void ps_mox_keeps_stream0_on_ddc0_and_stream1_on_ddc1() {
+        P1CodecStandard codec;
+        CodecContext ctx{};
+        ctx.mox = true;
+        ctx.puresignalRun = true;
+
+        std::array<SliceConfig, 5> slices{};
+        slices[0].live = true;
+        slices[0].sampleRateHz = 96000;
+        slices[1].live = true;
+        slices[1].sampleRateHz = 48000;
+
+        const DdcAssignment a = codec.applyDdcAssignment(ctx, slices);
+
+        QCOMPARE(a.streamDdc[0], 0);
+        QCOMPARE(a.streamDdc[1], 1);
+        QCOMPARE(a.psFwdDdc, 2);
+        QCOMPARE(a.psRevDdc, 3);
+
+        // From Thetis console.cs:8449-8456 [v2.10.3.15] (UpdateDDCs,
+        // "transmitting and PS is ON"): P1_DDCConfig = 6; DDCEnable = DDC0;
+        // SyncEnable = DDC1; Rate[0] = Rate[1] = ps_rate; cntrl1 = 4.
+        QCOMPARE(a.p1DdcConfig, 6);
+        QCOMPARE(a.ddcEnable, 1);
+        QCOMPARE(a.syncEnable, 2);
+        QCOMPARE(a.rate[0], 192000);
+        QCOMPARE(a.rate[1], 192000);
+        QCOMPARE(a.adcCtrl1, 4);
+        QCOMPARE(a.p1RxCount, 4);
+        QCOMPARE(a.nDdc, 4);
+    }
+
+    // The stream-0 mapping is decided inside the branch, so a dormant
+    // stream 0 stays -1 under PureSignal as well.
+    void ps_mox_leaves_a_dormant_stream0_unassigned() {
+        P1CodecStandard codec;
+        CodecContext ctx{};
+        ctx.mox = true;
+        ctx.puresignalRun = true;
+
+        std::array<SliceConfig, 5> slices{};
+        slices[1].live = true;
+        slices[1].sampleRateHz = 192000;
+
+        const DdcAssignment a = codec.applyDdcAssignment(ctx, slices);
+
+        QCOMPARE(a.streamDdc[0], -1);
+        QCOMPARE(a.streamDdc[1], 1);
+    }
+
+    // DDC2 and DDC3 are the PureSignal pair (psrx = 2, pstx = 3), so the
+    // streams that would sit on them in plain receive get nothing.
+    void ps_mox_gives_streams_2_and_3_no_ddc() {
+        P1CodecStandard codec;
+        CodecContext ctx{};
+        ctx.mox = true;
+        ctx.puresignalRun = true;
+
+        std::array<SliceConfig, 5> slices{};
+        for (int i = 0; i < 4; ++i) {
+            slices[i].live = true;
+            slices[i].sampleRateHz = 192000;
+        }
+
+        const DdcAssignment a = codec.applyDdcAssignment(ctx, slices);
+
+        QCOMPARE(a.streamDdc[2], -1);
+        QCOMPARE(a.streamDdc[3], -1);
+        QCOMPARE(a.streamDdc[4], -1);
+        QCOMPARE(a.ddcEnable & 0x0c, 0);
+    }
+
+    // Diversity plus PureSignal while transmitting is GetDDC case 7, which
+    // carries the same mapping as case 5; UpdateDDCs sends it down the
+    // same "transmitting and PS is ON" arm.
+    void ps_mox_with_diversity_matches_case_7() {
+        P1CodecStandard codec;
+        CodecContext ctx{};
+        ctx.mox = true;
+        ctx.puresignalRun = true;
+        ctx.diversity = true;
+
+        std::array<SliceConfig, 5> slices{};
+        slices[0].live = true;
+        slices[0].sampleRateHz = 192000;
+        slices[1].live = true;
+        slices[1].sampleRateHz = 192000;
+
+        const DdcAssignment a = codec.applyDdcAssignment(ctx, slices);
+
+        QCOMPARE(a.p1DdcConfig, 6);
+        QCOMPARE(a.streamDdc[0], 0);
+        QCOMPARE(a.streamDdc[1], 1);
+        QCOMPARE(a.psFwdDdc, 2);
+        QCOMPARE(a.psRevDdc, 3);
+    }
+
+    // PureSignal armed but not transmitting is plain receive: no pair.
+    void ps_without_mox_carries_no_pair() {
+        P1CodecStandard codec;
+        CodecContext ctx{};
+        ctx.puresignalRun = true;
+
+        std::array<SliceConfig, 5> slices{};
+        slices[0].live = true;
+        slices[0].sampleRateHz = 192000;
+
+        const DdcAssignment a = codec.applyDdcAssignment(ctx, slices);
+
+        QCOMPARE(a.streamDdc[0], 0);
+        QCOMPARE(a.psFwdDdc, -1);
+        QCOMPARE(a.psRevDdc, -1);
+        QCOMPARE(a.p1DdcConfig, 4);
+    }
+
 private:
     // Tiny JSON helper — keeps the data table compact. Only handles the
     // fields used by the tests above; expand as new rows are added.

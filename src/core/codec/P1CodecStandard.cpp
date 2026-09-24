@@ -861,8 +861,9 @@ PsDdcConfig P1CodecStandard::psDdcConfigHermesIIClass(
 // Phase 3F multi-slice extension: Thetis's Hermes branch maps Slice A →
 // DDC0 and Slice B → DDC1 (rx2_enabled). Slices C+D (indices 2,3) extend
 // to DDC2+DDC3 additively in the plain-RX path. Slices C/D are suppressed
-// during PS-active or diversity-active because those modes reclaim DDC0+DDC1
-// as a sync pair; the firmware has no room for extra receivers in those states.
+// while PureSignal transmits, because DDC2+DDC3 carry the PureSignal pair
+// (GetDDC psrx = 2, pstx = 3), and while diversity is on, because that mode
+// reclaims DDC0+DDC1 as a sync pair.
 // Slice E (index 4) is always ignored on Hermes-class (maxSlices=4 cap,
 // from BoardCapabilities based on Thetis P1_rxcount=4 for this family).
 //
@@ -898,11 +899,12 @@ DdcAssignment P1CodecStandard::applyDdcAssignment(
     const int rx2Rate = slices[1].live ? slices[1].sampleRateHz : 0;
     const bool rx2Live = slices[1].live;
 
-    // Phase 3F Sub-Epic I Task 7b: stream 0 always demodulates from DDC0 on
-    // this Hermes-class codec, in every branch below (PS/diversity/plain
-    // all set DDCEnable = kDDC0); only DDC1's role changes. Set once here
-    // rather than duplicated per branch.
-    if (slices[0].live) { a.streamDdc[0] = 0; }
+    // Each branch below sets the user streams' DDCs itself. A mapping made
+    // here, before the branch runs, is the shape section 16.3.2 (PS4) of the
+    // Phase 3F design removed from P2CodecHermes: there the PureSignal branch
+    // takes DDC0 away from stream 0, and an early mapping survived into it.
+    // On Protocol 1 every branch happens to keep stream 0 on DDC0, but that
+    // is now stated where each branch decides it, with its own citation.
 
     if (ctx.puresignalRun && ctx.mox) {
         // From Thetis console.cs:8440-8449 [v2.10.3.15]:
@@ -920,9 +922,36 @@ DdcAssignment P1CodecStandard::applyDdcAssignment(
         a.rate[1]     = kPsRate;
         a.adcCtrl1    = 4;
         a.adcCtrl2    = 0;
-        a.psFwdDdc    = 2;  // mi0bot: twist(spr,2,3,1) → DDC2 = PS feedback
-        a.psRevDdc    = 3;  // mi0bot: DDC3 = TX monitor (same as psDdcConfigHermesClass)
-        // PS reclaims DDC0+1; no room for extra user slices.
+
+        // Which DDC each receiver reads while PureSignal transmits.
+        // From Thetis console.cs:8704-8743 [v2.10.3.15] GetDDC(), P1 branch:
+        //   case HPSDRHW.Hermes: // ANAN-10 ANAN-100 Heremes (4 adc)
+        //   case HPSDRHW.HermesC10: // ANAN-G2E //N1GP G2E added (HermesC10)
+        //   ...
+        //   case 5: // on off on
+        //       rx1 = 0; rx2 = 1; psrx = 2; pstx = 3;
+        //   ...
+        //   case 7: // on on on
+        //       rx1 = 0; rx2 = 1; psrx = 2; pstx = 3;
+        // Protocol 1 Hermes does not collapse under PureSignal (Phase 3F
+        // design section 16.3.2): the pair rides DDC2 + DDC3, so both user
+        // streams keep their DDCs. DDC1 still carries RX2's frequency here,
+        // because the bank 3 PureSignal override applies to nddc == 2 only
+        // (composeCcForBank, frequency banks, above).
+        if (slices[0].live) { a.streamDdc[0] = 0; }
+        if (slices[1].live) { a.streamDdc[1] = 1; }
+
+        // The read loop pairs the same two slots for nddc == 4.
+        // From Thetis ChannelMaster/networkproto1.c:380-384 [v2.10.3.15]:
+        //   case 4:
+        //       xrouter(0, 0, 0, spr, prn->RxBuff[0]);
+        //       twist(spr, 2, 3, 1);
+        //       xrouter(0, 0, 2, spr, prn->RxBuff[1]);
+        // Same pair psDdcConfigHermesClass emits as psFbDdc / txMonDdc.
+        a.psFwdDdc    = 2;  // psrx = 2, PS feedback
+        a.psRevDdc    = 3;  // pstx = 3, TX monitor
+        // DDC2 and DDC3 are the PureSignal pair, so streams 2 and 3 get no
+        // DDC in this branch.
         a.nDdc = 4;
     } else if (ctx.diversity) {
         // From Thetis console.cs:8428-8437 [v2.10.3.15]:
@@ -939,6 +968,9 @@ DdcAssignment P1CodecStandard::applyDdcAssignment(
         a.adcCtrl2    = 0;
         a.p1Diversity = 1;
         a.nDdc = 4;
+        // From Thetis console.cs:8716-8719 / 8734-8737 [v2.10.3.15] GetDDC()
+        // cases 2 and 6 (diversity, no PureSignal): rx1 = 0.
+        if (slices[0].live) { a.streamDdc[0] = 0; }
     } else {
         // From Thetis console.cs:8393-8407 [v2.10.3.15]:
         //   case HPSDRModel.ANAN_G2E: //N1GP G2E added  [original from console.cs:8388]
@@ -953,15 +985,17 @@ DdcAssignment P1CodecStandard::applyDdcAssignment(
         a.adcCtrl1    = 0;
         a.adcCtrl2    = 0;
         a.nDdc        = 1;
+        // From Thetis console.cs:8708-8711 / 8724-8727 [v2.10.3.15] GetDDC()
+        // cases 0 and 4: rx1 = 0.
+        if (slices[0].live) { a.streamDdc[0] = 0; }
 
         if (rx2Live) {
             a.ddcEnable += kDDC1;
             a.rate[1]    = rx2Rate;
             a.nDdc       = 2;
-            // Phase 3F Sub-Epic I Task 7b: stream 1 -> DDC1, plain-RX path
-            // only (PS/diversity branches reclaim DDC1 as a sync partner
-            // with no independent stream 1 rate, so streamDdc[1] stays -1
-            // there).
+            // Phase 3F Sub-Epic I Task 7b: stream 1 -> DDC1. The diversity
+            // branch leaves streamDdc[1] at -1 (DDC1 is its sync partner);
+            // the PureSignal branch maps it itself.
             a.streamDdc[1] = 1;
         }
 
