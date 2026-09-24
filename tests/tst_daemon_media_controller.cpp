@@ -61,6 +61,12 @@ using namespace NereusSDR;
 namespace {
 
 constexpr char kConnectionId[] = "11111111-2222-4333-8444-555555555555";
+// R-R3-21: the waits on the real libdatachannel transport (ICE over
+// loopback, then the first display frame) wait for the condition itself,
+// with room for a heavily loaded machine: ten seconds fell short once
+// under a full parallel build. Only the timeout is generous; nothing
+// measured depends on it.
+constexpr int kRealTransportWaitMs = 60'000;
 
 // Messages the controller wrote to its own log category while installed.
 QStringList g_daemonMediaMessages;
@@ -1501,6 +1507,7 @@ void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
     // The far end answers Core's offer over the session, as a GUI does.
     LibDataChannelMediaTransport far;
     QSignalSpy farDisplays(&far, &IMediaTransport::displayReceived);
+    QSignalSpy farFailed(&far, &IMediaTransport::connectionFailed);
     QVERIFY(far.start({IMediaTransport::Role::Answerer, 0x4e523302U}));
     QSignalSpy controls(&harness.client, &StationClient::mediaControlReceived);
     connect(&harness.client, &StationClient::mediaControlReceived, &far,
@@ -1534,22 +1541,25 @@ void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
         {QStringLiteral("op"), QStringLiteral("start")},
         {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}},
         harness.client.sessionEpoch()));
-    QTRY_VERIFY_WITH_TIMEOUT(core && core->isReady() && far.isReady(), 10'000);
+    QTRY_VERIFY2_WITH_TIMEOUT(core && core->isReady() && far.isReady(),
+                              farFailed.isEmpty() ? "the media link did not come up in time"
+                                                  : "the far end's media link failed",
+                              kRealTransportWaitMs);
 
     QVERIFY(harness.client.sendMediaControl(
         subscription(62, 1, harness.sliceId,
                      harness.radio.streamCentreHz(harness.streamIndex)),
         harness.client.sessionEpoch()));
-    QTRY_VERIFY(([&] {
+    QTRY_VERIFY_WITH_TIMEOUT(([&] {
         harness.feedRadio();
         return !messageFor(controls, QStringLiteral("context"), 62).isEmpty();
-    })());
+    })(), kRealTransportWaitMs);
     int cycle = 0;
     QTRY_VERIFY_WITH_TIMEOUT(([&] {
         harness.feedRadio(0.125 + 0.0078125 * (++cycle % 16));
         harness.sendDisplayTick();
         return !farDisplays.isEmpty();
-    })(), 10'000);
+    })(), kRealTransportWaitMs);
     // Every frame Core has sent so far was produced before this point.
     QElapsedTimer sinceLastSend;
     sinceLastSend.start();
@@ -1571,7 +1581,7 @@ void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
     //    emitted on this thread and Core takes the source's latest frame
     //    inside the emit, so an emit after a newer frame was published
     //    hands Core a due frame. No display tick runs until the one below.
-    QTRY_VERIFY_WITH_TIMEOUT(!core->displayBusy(), 10'000);
+    QTRY_VERIFY_WITH_TIMEOUT(!core->displayBusy(), kRealTransportWaitMs);
     constexpr qint64 kOutputPeriodMs = 1000 / 60 + 1;
     QTRY_VERIFY(sinceLastSend.elapsed() > 2 * kOutputPeriodMs);
     auto* source = harness.controller.findChild<DaemonSpectrumSource*>();
@@ -1594,7 +1604,7 @@ void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
         }
         harness.feedRadio(0.3125);
         return false;
-    })(), 10'000);
+    })(), kRealTransportWaitMs);
     far.stop();
     std::this_thread::sleep_for(std::chrono::seconds(2));
     harness.sendDisplayTick();
