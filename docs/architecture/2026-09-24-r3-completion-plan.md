@@ -260,3 +260,69 @@ words, their tests, `tests/tst_operator_wording_sweep.cpp`.
 **Execution note (advisory):** opus (small; strings and their tests).
 
 - [ ] **Step 1:** The wording, the tests; commit.
+
+## Task 7: Receiver streams use Opus at 48 kbit/s whenever they are compressed
+
+**Requirements:** R-R3-43, R-R3-44, R-R3-23.
+
+Operator decision of 2026-09-24: receiver streams (VAX and TCI audio to apps) that are
+compressed use Opus at 48 kbit/s, not 24. The confirming FT8 run (fresh seed 20260924,
+5 signals per step, 225 files) decoded untouched 177, lossless 177, opus48 175, opus24
+164 (crowded band 58/58/57/49), with the first run (seed 20260923) showing the same
+order. The controller's reading, told to the operator: this applies whenever those
+streams are compressed (Opus chosen, or lossless fallen back to Opus); the speaker mix
+keeps its own Opus rate.
+
+**Files:** the receiver-stream profile choice (`src/core/session/media/DaemonMediaController.*`
+and wherever the receiver streams pick their Opus profile; `OpusAudioCodec` already has
+the 48 kbit/s fullband profile), the window's side if it assumes the stream's rate, the
+receiver audio tests, `docs/architecture/2026-09-20-remote-daemon-r3-verification/digital-modes-over-opus.md`
+(add the confirming run: the table above, the seed, the output directory
+`/Users/j.j.boyd/.config/nereus/work/ft8-opus48-confirm-2026-09-24`, and the decision).
+
+**Acceptance:**
+- A receiver stream sent compressed uses the 48 kbit/s fullband Opus profile, whether
+  the operator chose Opus or lossless fell back; the speaker mix's rate is unchanged.
+- The Core's accepted settings and the window's audio status report the stream's real
+  rate; older windows keep working (the Opus decoder takes either rate; check the SDP
+  and the receiver's expectations).
+- The VAX page's compressed-audio note stays accurate (the wording may say the cost is
+  small; plain words).
+- Tests: the profile chosen in both cases, the speaker mix untouched, an older window.
+
+**Verification:** the receiver audio and session tests by exact name, offscreen.
+
+**Execution note (advisory):** opus (small).
+
+- [ ] **Step 1:** Profile choice, reporting, tests, measurement record; commit.
+
+## Task 8: "Core" in every user-visible text that means the Core
+
+**Requirements:** R-R3-21 (operator wording).
+
+Operator decision of 2026-09-24: user-visible text calls the NereusSDR computer you
+connect to "the Core", in the desktop and the iPhone app; "station" stays only in its
+ham sense (your station, the station callsign, the station's network). Code
+identifiers, wire names and the link document's prose do not change. Runs after lane
+B's Part A reaches integration (it reworded the reasons the Core sends).
+
+**Files:** every desktop string and every reason or notice text the Core sends that says
+"station" for the Core (grep the GUI and the Core's reason writers); the desktop's
+"Remote Station" Setup page name (the operator names it; the controller asks);
+`tests/tst_operator_wording_sweep.cpp` and the Core's reason-wording test (a rule that
+fails on "station" meaning the Core in user text, with an allow-list for the ham-sense
+uses); fixtures and goldens that pin a reworded reason (conformance fixtures on
+integration, if the Core's reason text changes).
+
+**Acceptance:**
+- No user-visible text says "station" for the Core; ham-sense uses remain.
+- The Core's reason texts follow (wording only; codes and fields unchanged), with the
+  link's conformance fixtures updated and `render-link-tables.py --check` clean.
+- The tests hold the rule.
+
+**Verification:** the wording sweeps and the conformance runners by exact name,
+offscreen.
+
+**Execution note (advisory):** opus (mechanical but wide).
+
+- [ ] **Step 1:** Reword, tests, fixtures; commit.
