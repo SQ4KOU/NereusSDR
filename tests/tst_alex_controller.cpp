@@ -403,29 +403,33 @@ private slots:
 
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the Core applies a remote
     // window's filter policy through the controller's setBpfMode, the call
-    // the local filter policy dialog makes, and lands on the same filter
-    // selection a local Apply produces.
+    // the local filter policy dialog makes. A slice on 40 m sits on ADC0, so
+    // the forced filter is that band's.
     void facade_bound_applies_the_filter_policy_as_the_local_dialog_does() {
         AlexController core;
-        AlexController local;
-        const std::array<Band, 5> slices{Band::Band20m, Band::Count, Band::Count,
-                                         Band::Count, Band::Count};
-        core.notifySlicesOnAdc(0, slices);
-        local.notifySlicesOnAdc(0, slices);
+        core.notifySlicesOnAdc(0, {Band::Band40m, Band::Count, Band::Count, Band::Count,
+                                   Band::Count});
+        QCOMPARE(core.adcState(0).effective, AlexController::BpfEffective::Filtered);
+        QCOMPARE(core.adcState(0).reasonText, QStringLiteral("40m"));
         AlexAntennaFacade f;
         f.bindController(&core);
         QSignalSpy applied(&core, &AlexController::bpfModeChanged);
 
-        for (const auto mode : {AlexController::BpfMode::ForceBypass,
-                                AlexController::BpfMode::ForceBand,
-                                AlexController::BpfMode::Auto}) {
-            QCOMPARE(f.setBpfModeForChain(0, int(mode)), QString());
-            local.setBpfMode(0, mode);  // the local dialog's Apply
-            QCOMPARE(core.bpfMode(0), mode);
-            QCOMPARE(core.adcState(0).effective, local.adcState(0).effective);
-            QCOMPARE(core.adcState(0).reasonText, local.adcState(0).reasonText);
-            QCOMPARE(core.adcState(0).currentBpfBand, local.adcState(0).currentBpfBand);
-        }
+        QCOMPARE(f.setBpfModeForChain(0, int(AlexController::BpfMode::ForceBand)), QString());
+        QCOMPARE(core.bpfMode(0), AlexController::BpfMode::ForceBand);
+        QCOMPARE(core.adcState(0).effective, AlexController::BpfEffective::Filtered);
+        QCOMPARE(core.adcState(0).currentBpfBand, Band::Band40m);
+        QCOMPARE(core.adcState(0).reasonText, QStringLiteral("40m (forced)"));
+
+        QCOMPARE(f.setBpfModeForChain(0, int(AlexController::BpfMode::ForceBypass)), QString());
+        QCOMPARE(core.bpfMode(0), AlexController::BpfMode::ForceBypass);
+        QCOMPARE(core.adcState(0).effective, AlexController::BpfEffective::Bypass);
+        QCOMPARE(core.adcState(0).reasonText, QStringLiteral("BYPASS (operator override)"));
+
+        QCOMPARE(f.setBpfModeForChain(0, int(AlexController::BpfMode::Auto)), QString());
+        QCOMPARE(core.bpfMode(0), AlexController::BpfMode::Auto);
+        QCOMPARE(core.adcState(0).effective, AlexController::BpfEffective::Filtered);
+        QCOMPARE(core.adcState(0).reasonText, QStringLiteral("40m"));
         QCOMPARE(applied.count(), 3);
         QCOMPARE(applied.last().at(0).toInt(), 0);
 

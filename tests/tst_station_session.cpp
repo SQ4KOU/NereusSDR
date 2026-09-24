@@ -6149,7 +6149,15 @@ void TstStationSession::windowFilterPolicyReachesTheCore()
     QVERIFY(s.client->filterPolicyEditAvailable());
     QVERIFY(s.client->filterPolicyUnavailableReason().isEmpty());
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
+    // A slice on 40 m on the Core's ADC0 sets the chain's band, so a forced
+    // filter is that band's. (This Core's slice has no receiver behind it,
+    // so the Core's own republish then reports the chain idle; its band
+    // stays 40 m.)
+    s.core->alexControllerMutable().notifySlicesOnAdc(
+        0, {Band::Band40m, Band::Count, Band::Count, Band::Count, Band::Count});
+    QCOMPARE(s.core->alexController().adcState(0).currentBpfBand, Band::Band40m);
     QTRY_VERIFY(s.window->filterChainStateAvailable(0));
+    QTRY_COMPARE(s.window->filterChainState(0).currentBpfBand, Band::Band40m);
     QCOMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::Auto);
 
     const QString savedKey =
@@ -6158,35 +6166,36 @@ void TstStationSession::windowFilterPolicyReachesTheCore()
         FilterPolicyDialog dialog(0, s.window.get());
         auto* group = dialog.findChild<QGroupBox*>(QStringLiteral("filterPolicyModeGroup"));
         auto* autoBtn = dialog.findChild<QRadioButton*>(QStringLiteral("filterPolicyAuto"));
-        auto* bypass = dialog.findChild<QRadioButton*>(QStringLiteral("filterPolicyForceBypass"));
+        auto* force = dialog.findChild<QRadioButton*>(QStringLiteral("filterPolicyForceFilter"));
         auto* apply = dialog.findChild<QPushButton*>(QStringLiteral("filterPolicyApply"));
         auto* note = dialog.findChild<QLabel*>(QStringLiteral("filterPolicyNote"));
-        QVERIFY(group && autoBtn && bypass && apply && note);
+        QVERIFY(group && autoBtn && force && apply && note);
         QVERIFY(group->isEnabled());
         QVERIFY(autoBtn->isChecked());  // the Core's policy
         QVERIFY(OperatorWording::isPlain(note->text()));
         QVERIFY2(!note->text().contains(QStringLiteral("not available")), qPrintable(note->text()));
-        bypass->setChecked(true);
+        force->setChecked(true);
         apply->click();
         QCOMPARE(dialog.result(), int(QDialog::Accepted));
     }
-    // Applied by the Core's controller, as a local Apply is.
-    QTRY_COMPARE(s.core->alexController().bpfMode(0), AlexController::BpfMode::ForceBypass);
-    AlexController local;
-    local.setBpfMode(0, AlexController::BpfMode::ForceBypass);  // the local dialog's call
-    QCOMPARE(s.core->alexController().adcState(0).effective, local.adcState(0).effective);
-    QCOMPARE(s.core->alexController().adcState(0).reasonText, local.adcState(0).reasonText);
+    // Applied by the Core's controller: the 40 m filter, forced.
+    QTRY_COMPARE(s.core->alexController().bpfMode(0), AlexController::BpfMode::ForceBand);
+    QCOMPARE(s.core->alexController().adcState(0).effective,
+             AlexController::BpfEffective::Filtered);
+    QCOMPARE(s.core->alexController().adcState(0).currentBpfBand, Band::Band40m);
+    QCOMPARE(s.core->alexController().adcState(0).reasonText, QStringLiteral("40m (forced)"));
     QCOMPARE(s.core->alexController().bpfMode(1), AlexController::BpfMode::Auto);
     // Saved on the Core for its radio, under the key the Core's controller
     // loads.
-    QTRY_COMPARE(coreStore.value(savedKey).toString(), QStringLiteral("2"));
+    QTRY_COMPARE(coreStore.value(savedKey).toString(), QStringLiteral("1"));
     // Every window shows it.
-    QTRY_COMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::ForceBypass);
-    QTRY_COMPARE(s.window->filterChainState(0).effective, AlexController::BpfEffective::Bypass);
+    QTRY_COMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::ForceBand);
+    QTRY_COMPARE(s.window->filterChainState(0).effective, AlexController::BpfEffective::Filtered);
+    QTRY_COMPARE(s.window->filterChainState(0).reasonText, QStringLiteral("40m (forced)"));
     {
         FilterPolicyDialog again(0, s.window.get());
-        auto* bypass = again.findChild<QRadioButton*>(QStringLiteral("filterPolicyForceBypass"));
-        QVERIFY(bypass && bypass->isChecked());
+        auto* force = again.findChild<QRadioButton*>(QStringLiteral("filterPolicyForceFilter"));
+        QVERIFY(force && force->isChecked());
     }
 
     // A wideband chain stays bypassed, but its new policy still reaches the
@@ -6215,7 +6224,7 @@ void TstStationSession::windowFilterPolicyReachesTheCore()
     QTRY_COMPARE(toast.count(), 1);
     QVERIFY2(OperatorWording::isPlain(toast.last().at(0).toString()),
              qPrintable(toast.last().at(0).toString()));
-    QCOMPARE(s.core->alexController().bpfMode(0), AlexController::BpfMode::ForceBypass);
+    QCOMPARE(s.core->alexController().bpfMode(0), AlexController::BpfMode::ForceBand);
 }
 
 void TstStationSession::windowFilterPolicyApplySendsWhatIsShown()
