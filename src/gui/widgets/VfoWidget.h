@@ -438,6 +438,11 @@ public:
     // RemoteMediaController::headphonesProblem()); empty when nothing is.
     // Shown in the same notice while the headphones are chosen.
     void setHeadphonesProblem(const QString& problem);
+    // R-R3-45 fix wave: whether the headphones are turned on in Setup,
+    // Audio, Devices. Turned on but not open, the flag says they could not
+    // be opened rather than asking to turn them on.
+    void setHeadphonesEnabled(bool enabled);
+    static QString headphonesNotOpenedText();
 
     // --- Auto AGC-T visual update (Task 6) ---
     void updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double offset,
@@ -810,6 +815,7 @@ private:
     QLabel*             m_outputNotice{nullptr};
     bool                m_headphonesAvailable{false};
     QString             m_headphonesProblem;  // R-R3-45
+    bool                m_headphonesEnabled{false};  // R-R3-45 fix wave
     void updateOutputNotice();
     QPushButton*        m_sqlBtn{nullptr};
     QSlider*            m_sqlSlider{nullptr};

@@ -1139,8 +1139,9 @@ void RemoteMediaController::setAudioProfileChoice(RemoteAudioProfile profile)
         const QPointer<RemoteMediaController> self(this);
         requestWantedReceiverAudio();
         if (!self) { return; }
-        // R-R3-45: the headphones mix too, muted speakers or not.
-        d->headphonesFaulted = false;
+        // R-R3-45: the headphones mix too, muted speakers or not. A failed
+        // headphones device stays failed until it or its configuration
+        // changes (fix wave); the quality choice does not touch it.
         requestHeadphonesAudio();
         if (!self) { return; }
     }
@@ -1508,14 +1509,15 @@ void RemoteMediaController::stop()
     d->receiverRevisions.clear();
     d->receiverSsrcs.clear();
     // R-R3-45: the headphones mix stops with the media connection and is
-    // asked for again on the next one.
+    // asked for again on the next one. A headphones device that failed
+    // stays failed (fix wave): it is asked for again only when the device
+    // or its configuration changes, not on every reconnect.
     d->headphones->stop();
     d->headphonesSsrc = 0;
     d->headphonesContext.reset();
     d->headphonesRevision = 0;
     d->headphonesGeneration = 0;
     d->headphonesRequested = false;
-    d->headphonesFaulted = false;
     d->headphonesRetryPending = false;
     QList<int> interrupted;
     for (auto& [sliceId, stream] : d->receiverStreams) {
@@ -1554,8 +1556,11 @@ void RemoteMediaController::stop()
     d->ctunStreams.clear();
     const QPointer<RemoteMediaController> self(this);
     if (!d->destroying) {
-        setHeadphonesProblem(QString());
-        if (!self) { return; }
+        // The Core's reasons end with the session; a failed device's stays.
+        if (!d->headphonesFaulted) {
+            setHeadphonesProblem(QString());
+            if (!self) { return; }
+        }
         for (int sliceId : interrupted) {
             notifyReceiverStopped(sliceId, remoteAudioOffReasonToWire(
                 RemoteAudioOffReason::MediaNotReady));
@@ -1788,9 +1793,11 @@ void RemoteMediaController::start()
     if (!self) { return; }
     // R-R3-45: a Core that cannot send the headphones mix says so on every
     // flag routed to the headphones.
-    setHeadphonesProblem(headphonesMixNegotiated()
-                             ? QString()
-                             : QString::fromLatin1(kHeadphonesMixUnavailableReason));
+    if (!headphonesMixNegotiated()) {
+        setHeadphonesProblem(QString::fromLatin1(kHeadphonesMixUnavailableReason));
+    } else if (!d->headphonesFaulted) {
+        setHeadphonesProblem(QString());
+    }
     if (!self) { return; }
     if (!receiverAudioNegotiated()) {
         // An older Core: no request goes out, and each consumer is told why.

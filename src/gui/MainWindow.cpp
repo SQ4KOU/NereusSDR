@@ -11,6 +11,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-45 fix wave: each slice flag
+//                 also learns whether the headphones are turned on.
+//                 AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-45 Task 2: a remote window opens
 //                 this computer's headphones when they are enabled, and each
 //                 slice flag learns why a receiver on the headphones is
@@ -1705,6 +1708,10 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         newFlag->setHeadphonesAvailable(engine->headphonesAvailable());
         connect(engine, &AudioEngine::headphonesAvailableChanged,
                 newFlag, &VfoWidget::setHeadphonesAvailable);
+        // Turned on but not open: "could not be opened", not "turn on".
+        newFlag->setHeadphonesEnabled(engine->headphonesEnabled());
+        connect(engine, &AudioEngine::headphonesEnabledChanged,
+                newFlag, &VfoWidget::setHeadphonesEnabled);
     }
     // R-R3-45: in a remote window, the Core's side too: a Core that cannot
     // send the headphones mix, or headphones that failed here.

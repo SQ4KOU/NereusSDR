@@ -37,6 +37,10 @@
 //                 plain notice says why it is silent when the headphones
 //                 are chosen and none are set up. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-45 fix wave: headphones turned on that did not open
+//                 say so (setHeadphonesEnabled); a remote window's reason
+//                 comes first. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 //   2026-09-24 - R-R3-45 Task 2: setHeadphonesProblem(), a remote window's
 //                 reason a receiver on the headphones is silent. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
@@ -2663,6 +2667,17 @@ void VfoWidget::setHeadphonesAvailable(bool available)
     updateOutputNotice();
 }
 
+QString VfoWidget::headphonesNotOpenedText()
+{
+    return QStringLiteral("Silent: the headphones could not be opened.");
+}
+
+void VfoWidget::setHeadphonesEnabled(bool enabled)
+{
+    m_headphonesEnabled = enabled;
+    updateOutputNotice();
+}
+
 void VfoWidget::setHeadphonesProblem(const QString& problem)
 {
     m_headphonesProblem = problem;
@@ -2675,13 +2690,15 @@ void VfoWidget::updateOutputNotice()
         return;
     }
     const bool headphones = m_headphonesBtn && m_headphonesBtn->isChecked();
-    // R-R3-45: with no headphones on this computer that is the reason; past
-    // that, a remote window's own reason (a Core that cannot send the
-    // headphones mix, a headphones device that failed).
-    if (!m_headphonesAvailable) {
-        m_outputNotice->setText(headphonesMissingText());
-    } else if (!m_headphonesProblem.isEmpty()) {
+    // R-R3-45: a remote window's own reason comes first (a Core that
+    // cannot send the headphones mix plays the receiver on the speakers, so
+    // "silent" would be wrong; a headphones device that failed). Then this
+    // computer's: headphones turned on that did not open, or none set up.
+    if (!m_headphonesProblem.isEmpty()) {
         m_outputNotice->setText(m_headphonesProblem);
+    } else if (!m_headphonesAvailable) {
+        m_outputNotice->setText(m_headphonesEnabled ? headphonesNotOpenedText()
+                                                    : headphonesMissingText());
     }
     m_outputNotice->setVisible(headphones
                                && (!m_headphonesAvailable || !m_headphonesProblem.isEmpty()));

@@ -315,7 +315,9 @@ The Core ignores a request with any other key, a wrong or retired
 accepted one. The headphones mix runs while the GUI asked for it, some slice
 is routed to the headphones, the radio is connected and media is ready.
 Each accepted request, and each change of those that starts or stops the
-mix, is answered with one `headphones-audio-context`: the audio-profile
+mix, is answered with one `headphones-audio-context` (a radio drop only when
+the mix was sending, so an app told `no-headphones-receiver` keeps that
+reason): the audio-profile
 shape of `audio-context` with op `headphones-audio-context`:
 
 | Field | Meaning |
@@ -341,10 +343,12 @@ The GUI plays the headphones mix on this computer's headphones output with
 its own receiver and rate matcher, paced by that device's clock. A
 headphones device failure stops only that receiver: the GUI asks the Core
 to stop the mix, says what happened in plain words, and the speakers play
-on. It asks again when the headphones device is opened or changed, or the
-operator chooses the audio quality again. With a Core that did not
-advertise the capability, a slice flag routed to the headphones says in
-plain words that this Core cannot send audio for the headphones.
+on. It asks again only when the headphones device is opened, closed or
+changed; a media reconnect or a new audio quality choice keeps the failure.
+With a Core that did not advertise the capability, a slice flag routed to
+the headphones says in plain words that this Core cannot send audio for the
+headphones, so the receiver plays on the speakers (such a Core sums every
+receiver into the main stream).
 
 The new reason string `no-headphones-receiver` occurs only in
 `headphones-audio-context`; an `audio-context` or `receiver-audio-context`

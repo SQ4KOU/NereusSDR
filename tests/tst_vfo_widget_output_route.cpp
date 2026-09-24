@@ -14,6 +14,7 @@
 
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
+#include "gui/RemoteMediaController.h"
 #include "gui/widgets/VfoWidget.h"
 #include "models/SliceModel.h"
 
@@ -106,16 +107,44 @@ private slots:
         QVERIFY(p.notice->isHidden());
     }
 
-    // R-R3-45 Task 2: a remote window's own reason (the Core cannot send
-    // the headphones mix, or the headphones failed) shows the same way,
-    // once this computer has headphones.
+    // R-R3-45 fix wave: headphones turned on in Setup that did not open
+    // (unplugged, or refusing the format) say so, instead of asking the
+    // operator to turn them on.
+    void saysTheHeadphonesCouldNotBeOpened()
+    {
+        SliceModel slice;
+        VfoWidget flag;
+        flag.setSlice(&slice);
+        const Parts p = partsOf(flag);
+        slice.setOutputRoute(SliceModel::OutputRoute::Headphones);
+
+        flag.setHeadphonesAvailable(false);
+        flag.setHeadphonesEnabled(false);
+        QVERIFY(!p.notice->isHidden());
+        QCOMPARE(p.notice->text(), VfoWidget::headphonesMissingText());
+
+        flag.setHeadphonesEnabled(true);
+        QVERIFY(!p.notice->isHidden());
+        QCOMPARE(p.notice->text(), VfoWidget::headphonesNotOpenedText());
+        QCOMPARE(p.notice->text(),
+                 QStringLiteral("Silent: the headphones could not be opened."));
+
+        flag.setHeadphonesAvailable(true);
+        QVERIFY(p.notice->isHidden());
+        slice.setOutputRoute(SliceModel::OutputRoute::Speakers);
+    }
+
+    // R-R3-45: a remote window's own reason (the Core cannot send the
+    // headphones mix, so the receiver plays on the speakers; or the
+    // headphones failed) comes first, whatever this computer's headphones.
     void saysARemoteWindowsReason()
     {
         SliceModel slice;
         VfoWidget flag;
         flag.setSlice(&slice);
         const Parts p = partsOf(flag);
-        const QString reason = QStringLiteral("This Core cannot send audio for the headphones.");
+        const QString reason = QString::fromLatin1(
+            RemoteMediaController::kHeadphonesMixUnavailableReason);
         flag.setHeadphonesAvailable(true);
         flag.setHeadphonesProblem(reason);
         QVERIFY(p.notice->isHidden());          // on the speakers: nothing to say
@@ -124,13 +153,17 @@ private slots:
         QVERIFY(!p.notice->isHidden());
         QCOMPARE(p.notice->text(), reason);
 
-        // No headphones here comes first.
+        // An older Core plays the receiver on the speakers: not "Silent",
+        // even with no headphones set up here.
         flag.setHeadphonesAvailable(false);
-        QCOMPARE(p.notice->text(), VfoWidget::headphonesMissingText());
-        flag.setHeadphonesAvailable(true);
+        QCOMPARE(p.notice->text(), reason);
+        QVERIFY(!p.notice->text().startsWith(QStringLiteral("Silent")));
+        flag.setHeadphonesEnabled(true);
         QCOMPARE(p.notice->text(), reason);
 
         flag.setHeadphonesProblem(QString());
+        QCOMPARE(p.notice->text(), VfoWidget::headphonesNotOpenedText());
+        flag.setHeadphonesAvailable(true);
         QVERIFY(p.notice->isHidden());
     }
 
@@ -140,7 +173,10 @@ private slots:
         const Parts p = partsOf(flag);
         for (const QString& text : {p.speakers->text(), p.speakers->toolTip(),
                                     p.headphones->text(), p.headphones->toolTip(),
-                                    VfoWidget::headphonesMissingText()}) {
+                                    VfoWidget::headphonesMissingText(),
+                                    VfoWidget::headphonesNotOpenedText(),
+                                    QString::fromLatin1(
+                                        RemoteMediaController::kHeadphonesMixUnavailableReason)}) {
             QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
         }
     }

@@ -19,6 +19,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-24 : R-R3-45 fix wave by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The mix, headphones and program
+//                 scratch are engine members sized off the DSP thread
+//                 (ensureMixScratchFrames); headphonesEnabledChanged.
 //   2026-09-23 : R-R3-45 Task 2 by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. The master tap can take the
 //                 speakers' mix alone, a headphones-mix tap beside it feeds
@@ -196,6 +200,12 @@ AudioFormat toAudioFormat(const AudioDeviceConfig& cfg)
 AudioEngine::AudioEngine(QObject* parent)
     : QObject(parent)
 {
+    // R-R3-45 fix wave: the mix scratch rxBlockReady uses, sized here and
+    // grown only by ensureMixScratchFrames(), never on the DSP thread.
+    m_mixScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
+    m_hpMixScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
+    m_programScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
+    m_mixScratchFrames.store(kMixScratchMinFrames, std::memory_order_release);
 #if defined(Q_OS_LINUX)
     // Cache the Linux audio backend detection result up front so Task 14's
     // dispatch (PipeWireBus vs. LinuxPipeBus pactl path) has a stable
@@ -468,6 +478,10 @@ void AudioEngine::start()
     // of 1. Same reason the WDSP RX channel pool is sized off caps directly
     // (RadioModel.cpp §"open the WDSP channel pool").
     preregisterSlices(m_radio ? m_radio->boardCapabilities().maxSlices : 1);
+    // R-R3-45 fix wave: the mix scratch covers the configured DSP block.
+    ensureMixScratchFrames(AppSettings::instance()
+                               .value(QStringLiteral("audio/DspBlockSize"), QStringLiteral("0"))
+                               .toString().toInt());
 
     ensureSpeakersOpen();
     // R-R3-45: the headphones output opens at startup too, when Setup,
@@ -1241,8 +1255,12 @@ void AudioEngine::setHeadphonesEnabled(bool enabled)
         && (m_headphonesBus != nullptr) == enabled) {
         return;
     }
+    const bool changed = m_headphonesEnabled != enabled;
     m_headphonesEnabled = enabled;
     reopenHeadphones();
+    if (changed) {
+        emit headphonesEnabledChanged(enabled);
+    }
 }
 
 void AudioEngine::reopenHeadphones()
@@ -1993,10 +2011,14 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // per-block vector reuse costs zero allocation after the first block
     // per thread. Channel count = 2 is intentionally hard-coded here:
     // the MasterMixer contract and the DSP pipeline both emit stereo.
-    static thread_local std::vector<float> mix;
-    if (static_cast<int>(mix.size()) < frames * 2) {
-        mix.resize(static_cast<size_t>(frames) * 2);
-    }
+    //
+    // R-R3-45 fix wave: the scratch is owned by the engine and sized off
+    // this thread (constructor, setDspBlockSize, start), so nothing here
+    // allocates. A block larger than it (never seen: the ring floor is the
+    // same 4096 frames) drains in parts over the following calls.
+    std::vector<float>& mix = m_mixScratch;
+    const int drainFrames =
+        std::min(frames, m_mixScratchFrames.load(std::memory_order_acquire));
 
     // Phase 3F: the mixer decides whether a block leaves, not us. It
     // returns 0 until every slice feeding the mix this period has
@@ -2010,11 +2032,8 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     //
     // R-R3-45: the same drain builds the headphones sum, the slices routed
     // there, so both outputs are paced by one barrier.
-    static thread_local std::vector<float> hpMix;
-    if (static_cast<int>(hpMix.size()) < frames * 2) {
-        hpMix.resize(static_cast<size_t>(frames) * 2);
-    }
-    const int mixed = m_masterMix.tryDrain(mix.data(), hpMix.data(), frames);
+    std::vector<float>& hpMix = m_hpMixScratch;
+    const int mixed = m_masterMix.tryDrain(mix.data(), hpMix.data(), drainFrames);
 
     // Drain the anti-VOX reference in the same call stack, so both mixes are
     // paced by their own barrier over the same period.
@@ -2082,10 +2101,7 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
                 // R-R3-45: the station's program is every receiver, on
                 // whichever local output it plays, so the local speakers or
                 // headphones choice cannot change it either.
-                static thread_local std::vector<float> program;
-                if (static_cast<int>(program.size()) < stereoFloats) {
-                    program.resize(static_cast<size_t>(stereoFloats));
-                }
+                std::vector<float>& program = m_programScratch;
                 for (int i = 0; i < stereoFloats; ++i) {
                     program[static_cast<size_t>(i)] = mix[static_cast<size_t>(i)]
                         + hpMix[static_cast<size_t>(i)];
@@ -2675,8 +2691,32 @@ void AudioEngine::setDspSampleRate(int rate)
     emit dspSampleRateChanged(rate);
 }
 
+void AudioEngine::ensureMixScratchFrames(int frames)
+{
+    // R-R3-45 fix wave: owner thread. Grows the DSP thread's mix scratch
+    // while no block is being mixed: the same close-then-drain gate
+    // setSliceStreaming uses, so rxBlockReady never sees a vector being
+    // replaced and never allocates itself.
+    if (frames <= m_mixScratchFrames.load(std::memory_order_acquire)) {
+        return;
+    }
+    m_mixAdmissionClosed.store(true, std::memory_order_release);
+    unsigned inFlight = m_mixRegionsInFlight.load(std::memory_order_acquire);
+    while (inFlight != 0) {
+        m_mixRegionsInFlight.wait(inFlight, std::memory_order_acquire);
+        inFlight = m_mixRegionsInFlight.load(std::memory_order_acquire);
+    }
+    const auto floats = static_cast<size_t>(frames) * 2;
+    m_mixScratch.assign(floats, 0.0f);
+    m_hpMixScratch.assign(floats, 0.0f);
+    m_programScratch.assign(floats, 0.0f);
+    m_mixScratchFrames.store(frames, std::memory_order_release);
+    m_mixAdmissionClosed.store(false, std::memory_order_release);
+}
+
 void AudioEngine::setDspBlockSize(int blockSize)
 {
+    ensureMixScratchFrames(blockSize);
     AppSettings::instance().setValue(QStringLiteral("audio/DspBlockSize"),
                                      QString::number(blockSize));
     // TODO(sub-phase-12-dsp-live-apply): delegate to WdspEngine once

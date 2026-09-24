@@ -292,6 +292,9 @@ private:
     quint32 nextReceiverContextGeneration();
     // R-R3-45: the headphones mix.
     void reconcileHeadphonesAudio();
+    /// Why the headphones mix cannot run now, in reconcile order; empty
+    /// when it can.
+    std::optional<RemoteAudioOffReason> headphonesBlockedBy() const;
     void stopHeadphonesAudioCapture();
     void sendHeadphonesAudioContext(bool enabled, RemoteAudioOffReason reason);
     void onHeadphonesAudioPacket(DaemonAudioSender* sender, const QByteArray& packet);

@@ -642,6 +642,7 @@ private slots:
     void olderAppGetsTheWholeProgramAndNoHeadphonesMix();
     void headphonesMixRunsWhileAReceiverIsOnTheHeadphones();
     void headphonesMixFollowsTheProfileAndTheRadio();
+    void radioDropKeepsTheHeadphonesReasonWhenNothingIsRouted();
 };
 
 void TstDaemonMediaController::configuredBudgetReturnsExactAllocationResultsAndRejectsOvercommit()
@@ -5193,4 +5194,40 @@ void TstDaemonMediaController::headphonesMixFollowsTheProfileAndTheRadio()
     QTRY_VERIFY(!h.controller.headphonesMixSending());
     QTest::qWait(20);
     QCOMPARE(headphonesContextsIn(controls).size(), 5);
+}
+
+// R-R3-45 fix wave: a radio drop sends a disabled headphones context only
+// when the mix was sending. With no receiver on the headphones the app was
+// told no-headphones-receiver, and that stays the reason: nothing is sent,
+// and radio-offline never replaces it. A route made while the radio is
+// away is answered in reconcileHeadphonesAudio's order (radio-offline).
+void TstDaemonMediaController::radioDropKeepsTheHeadphonesReasonWhenNothingIsRouted()
+{
+    Harness h;
+    const auto routes = qScopeGuard([&h] { resetOutputRoutes(h); });
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(headphonesStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    h.mediaTransport->becomeReady();
+    QVERIFY(h.client.sendMediaControl(headphonesAudioControl(1, true),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 1);
+    QCOMPARE(headphonesContextsIn(controls).constLast().value(QStringLiteral("reason")).toString(),
+             QStringLiteral("no-headphones-receiver"));
+
+    h.radio.setConnectionStateForTest(ConnectionState::Disconnected);
+    QTest::qWait(50);
+    QCOMPARE(headphonesContextsIn(controls).size(), 1);
+
+    h.radio.sliceById(h.spareSliceId)->setOutputRoute(SliceModel::OutputRoute::Headphones);
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 2);
+    QCOMPARE(headphonesContextsIn(controls).constLast().value(QStringLiteral("reason")).toString(),
+             QStringLiteral("radio-offline"));
+    QVERIFY(!h.controller.headphonesMixSending());
+
+    h.radio.setConnectionStateForTest(ConnectionState::Connected);
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 3);
+    QVERIFY(headphonesContextsIn(controls).constLast().value(QStringLiteral("enabled")).toBool());
+    h.finish();
 }

@@ -4723,6 +4723,20 @@ private slots:
                  requestsAfter);
         QCOMPARE(errors.count(), 1);
 
+        // R-R3-45 fix wave: a media reconnect keeps the fault. The failed
+        // device is not asked for again, and there is no second notice.
+        h.client.disconnectFromStation(QStringLiteral("test reconnect"));
+        QTRY_VERIFY_WITH_TIMEOUT(!h.client.mediaAvailable(), 5000);
+        h.connectSession();
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
+                                  RemoteAudioStatus::State::Playing, 15000);
+        QTest::qWait(1000);
+        QCOMPARE(controlsFor(coreControls, QStringLiteral("headphones-audio")).size(),
+                 requestsAfter);
+        QVERIFY(!daemonMedia.headphonesMixSending());
+        QCOMPARE(remoteMedia.headphonesProblem(), problem);
+        QCOMPARE(errors.count(), 1);
+
         // The headphones are closed and opened again (the Enabled box, or
         // another device): asked for again, and they play.
         h.remote.audioEngine()->setHeadphonesBusForTest(nullptr);
@@ -4762,7 +4776,8 @@ private slots:
         const QString reason =
             QString::fromLatin1(RemoteMediaController::kHeadphonesMixUnavailableReason);
         QCOMPARE(remoteMedia.headphonesProblem(), reason);
-        QCOMPARE(reason, QStringLiteral("This Core cannot send audio for the headphones."));
+        QCOMPARE(reason, QStringLiteral("This Core cannot send audio for the headphones, so "
+                                        "this receiver plays on the speakers."));
         QVERIFY(OperatorWording::isPlain(reason));
 
         h.remote.sliceById(h.sliceB)->setOutputRoute(SliceModel::OutputRoute::Headphones);

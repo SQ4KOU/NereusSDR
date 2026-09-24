@@ -24,6 +24,7 @@
 
 #include <QtTest/QtTest>
 
+#include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/IAudioBus.h"
 #include "models/RadioModel.h"
@@ -146,6 +147,90 @@ private slots:
                          && std::abs(high - kRightAmp / 2.0) < 0.005,
                      qPrintable(QStringLiteral("mono: %1 Hz %2, %3 Hz %4")
                                     .arg(kLeftHz).arg(low).arg(kRightHz).arg(high)));
+        }
+    }
+
+    // R-R3-45 fix wave: the headphones output converts too. A receiver on
+    // the headphones plays at the headphones device's own rate and channel
+    // count (its own converter), and nothing of it reaches the speakers.
+    void headphonesPlayAtTheirOwnFormat_data()
+    {
+        QTest::addColumn<int>("rate");
+        QTest::addColumn<int>("channels");
+        QTest::newRow("44.1k-stereo") << 44100 << 2;
+        QTest::newRow("48k-mono") << 48000 << 1;
+    }
+
+    void headphonesPlayAtTheirOwnFormat()
+    {
+        QFETCH(int, rate);
+        QFETCH(int, channels);
+
+        auto radio = std::make_unique<RadioModel>();
+        AudioEngine* engine = radio->audioEngine();
+        auto speakers = std::make_unique<FakeAudioBus>(QStringLiteral("FakeSpeakers"));
+        AudioFormat speakerFormat;
+        speakerFormat.sampleRate = 48000;
+        speakerFormat.channels = 2;
+        speakerFormat.sample = AudioFormat::Sample::Float32;
+        QVERIFY(speakers->open(speakerFormat));
+        FakeAudioBus* speakerDevice = speakers.get();
+        engine->setSpeakersBusForTest(std::move(speakers));
+        auto headphones = std::make_unique<FakeAudioBus>(QStringLiteral("FakeHeadphones"));
+        AudioFormat format;
+        format.sampleRate = rate;
+        format.channels = channels;
+        format.sample = AudioFormat::Sample::Float32;
+        QVERIFY(headphones->open(format));
+        FakeAudioBus* device = headphones.get();
+        engine->setHeadphonesBusForTest(std::move(headphones));
+        engine->setVolume(1.0f);
+        radio->configureStreamPool(/*userDdcCount=*/5, /*maxSlices=*/5,
+                                   /*defaultRateHz=*/192000);
+        const int slice = radio->addSlice();
+        QVERIFY(slice >= 0);
+        const auto restore = qScopeGuard([&] {
+            radio->sliceById(slice)->setOutputRoute(SliceModel::OutputRoute::Speakers);
+            AppSettings::instance().remove(QStringLiteral("Slice%1/OutputRoute").arg(slice));
+        });
+        radio->sliceById(slice)->setOutputRoute(SliceModel::OutputRoute::Headphones);
+
+        std::vector<float> block(kBlockFrames * 2);
+        const int totalFrames = kSeconds * 48000;
+        for (int sent = 0; sent < totalFrames; sent += kBlockFrames) {
+            for (int i = 0; i < kBlockFrames; ++i) {
+                const double t = double(sent + i) / 48000.0;
+                block[size_t(2 * i)] = float(kLeftAmp * std::sin(2.0 * kPi * kLeftHz * t));
+                block[size_t(2 * i + 1)] = float(kRightAmp * std::sin(2.0 * kPi * kRightHz * t));
+            }
+            engine->rxBlockReady(slice, block.data(), kBlockFrames);
+        }
+
+        const auto* played = reinterpret_cast<const float*>(device->buffer().constData());
+        const qsizetype count = device->buffer().size() / qsizetype(sizeof(float));
+        QCOMPARE(count % channels, qsizetype(0));
+        const qsizetype frames = count / channels;
+        QVERIFY2(frames <= qsizetype(kSeconds) * rate
+                     && frames >= qsizetype(kSeconds) * rate - rate / 20,
+                 qPrintable(QStringLiteral("%1 frames at %2 Hz").arg(frames).arg(rate)));
+        const qsizetype skip = rate / 4;
+        if (channels == 2) {
+            const double left = toneAmplitude(played, count, 2, 0, kLeftHz, rate, skip);
+            const double right = toneAmplitude(played, count, 2, 1, kRightHz, rate, skip);
+            QVERIFY2(std::abs(left - kLeftAmp) < 0.005 && std::abs(right - kRightAmp) < 0.005,
+                     qPrintable(QStringLiteral("headphones: %1, %2").arg(left).arg(right)));
+        } else {
+            const double low = toneAmplitude(played, count, 1, 0, kLeftHz, rate, skip);
+            const double high = toneAmplitude(played, count, 1, 0, kRightHz, rate, skip);
+            QVERIFY2(std::abs(low - kLeftAmp / 2.0) < 0.005
+                         && std::abs(high - kRightAmp / 2.0) < 0.005,
+                     qPrintable(QStringLiteral("headphones mono: %1, %2").arg(low).arg(high)));
+        }
+        // The speakers heard none of it.
+        const auto* spk = reinterpret_cast<const float*>(speakerDevice->buffer().constData());
+        const qsizetype spkCount = speakerDevice->buffer().size() / qsizetype(sizeof(float));
+        for (qsizetype i = 0; i < spkCount; ++i) {
+            QVERIFY(std::abs(spk[i]) < 1.0e-6f);
         }
     }
 };

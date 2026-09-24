@@ -157,7 +157,8 @@ public:
     /// R-R3-45: headphonesProblem() from a Core that cannot send the
     /// headphones mix.
     static constexpr const char* kHeadphonesMixUnavailableReason =
-        "This Core cannot send audio for the headphones.";
+        "This Core cannot send audio for the headphones, so this receiver plays on "
+        "the speakers.";
     /// R-R3-45: headphonesProblem() when the Core could not start the mix.
     static constexpr const char* kHeadphonesCoreCouldNotStart =
         "The Core could not start the audio for the headphones.";

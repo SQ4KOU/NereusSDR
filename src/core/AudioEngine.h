@@ -169,6 +169,7 @@ namespace NereusSDR { class PipeWireThreadLoop; }
 
 #include <array>
 #include <atomic>
+#include <vector>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -801,6 +802,15 @@ public:
     void setDspSampleRate(int rate);
     void setDspBlockSize(int blockSize);
 
+    // R-R3-45 fix wave: owner thread. Grows the DSP thread's mix scratch
+    // (speakers, headphones and program sums) to hold `frames` frames,
+    // while no block is being mixed; never shrinks. The constructor sizes
+    // it to kMixScratchMinFrames, setDspBlockSize and start() to the DSP
+    // block size.
+    static constexpr int kMixScratchMinFrames = 4096;
+    void ensureMixScratchFrames(int frames);
+    int mixScratchFrames() const { return m_mixScratchFrames.load(std::memory_order_acquire); }
+
     // Sub-Phase 12 Task 12.4 — VAC feedback-loop tuning (per addendum §2.4).
     // The four fields map to Thetis IVAC feedback tuning knobs. Persists to
     // audio/VacFeedback/<channel>/{Gain,SlewTimeMs,PropRing,FfRing}.
@@ -928,6 +938,8 @@ signals:
     void headphonesConfigChanged(NereusSDR::AudioDeviceConfig cfg);
     // R-R3-45: the headphones output opened or closed.
     void headphonesAvailableChanged(bool available);
+    // R-R3-45 fix wave: the headphones card's Enabled box changed.
+    void headphonesEnabledChanged(bool enabled);
     void txInputConfigChanged(NereusSDR::AudioDeviceConfig cfg);
     // R-R3-36: re-emits CaptureSupervisor::statusChanged on the owner thread.
     void captureStatusChanged(const NereusSDR::CaptureSupervisor::Status& status);
@@ -1100,6 +1112,12 @@ private:
     // admitted regions to finish before withdrawal returns.
     std::atomic<bool> m_mixAdmissionClosed{false};
     std::atomic<unsigned> m_mixRegionsInFlight{0};
+    // R-R3-45 fix wave: rxBlockReady's mix scratch; see
+    // ensureMixScratchFrames(). Replaced only behind the gate above.
+    std::vector<float> m_mixScratch;
+    std::vector<float> m_hpMixScratch;
+    std::vector<float> m_programScratch;
+    std::atomic<int> m_mixScratchFrames{0};
 
     // One receive-only remote-media observer.  Its lifetime is owned by the
     // caller; set/clear establish the quiescent boundary before the raw

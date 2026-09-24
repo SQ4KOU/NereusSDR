@@ -871,11 +871,15 @@ void DaemonMediaController::onRadioConnectionStateChanged(ConnectionState state)
             }
         }
         // R-R3-45: the headphones mix keeps its intent, as receivers do.
+        // Only a mix that was sending stops here; one already off keeps the
+        // reason the app was given (no-headphones-receiver, say).
         if (m_headphones.revision != 0) {
+            const bool wasSending = m_headphones.sending;
             stopHeadphonesAudioCapture();
-            sendHeadphonesAudioContext(false, m_headphones.desiredEnabled
-                                                  ? RemoteAudioOffReason::RadioOffline
-                                                  : RemoteAudioOffReason::ClientDisabled);
+            if (wasSending) {
+                sendHeadphonesAudioContext(
+                    false, headphonesBlockedBy().value_or(RemoteAudioOffReason::RadioOffline));
+            }
         }
         clearProduction();
         return;
@@ -886,8 +890,8 @@ void DaemonMediaController::onRadioConnectionStateChanged(ConnectionState state)
             reconcileReceiverAudio(sliceId);
         }
     }
-    // R-R3-45: the headphones mix resumes with the radio.
-    if (m_headphones.revision != 0) {
+    // R-R3-45: the headphones mix resumes with the radio, when it can run.
+    if (m_headphones.revision != 0 && m_headphones.desiredEnabled && anySliceOnHeadphones()) {
         reconcileHeadphonesAudio();
     }
 }
@@ -1780,18 +1784,7 @@ void DaemonMediaController::reconcileHeadphonesAudio()
     // receiver stream carry on untouched.
     stopHeadphonesAudioCapture();
     m_headphonesRouted = anySliceOnHeadphones();
-    // Why it is off, first cause wins: the client's own choice, no receiver
-    // on the headphones, then the station radio, then media readiness.
-    std::optional<RemoteAudioOffReason> blockedBy;
-    if (!m_headphones.desiredEnabled) {
-        blockedBy = RemoteAudioOffReason::ClientDisabled;
-    } else if (!m_headphonesRouted) {
-        blockedBy = RemoteAudioOffReason::NoHeadphonesReceiver;
-    } else if (!m_radioModel || !m_radioModel->isConnected()) {
-        blockedBy = RemoteAudioOffReason::RadioOffline;
-    } else if (!m_peer || !m_peer->isReady()) {
-        blockedBy = RemoteAudioOffReason::MediaNotReady;
-    }
+    const std::optional<RemoteAudioOffReason> blockedBy = headphonesBlockedBy();
     const AdmittedAudioProfile admitted = admitProfile(m_headphones.requestedProfile);
     m_headphones.activeProfile = admitted.active;
     m_headphones.profileRefusal = admitted.refusal;
@@ -1828,6 +1821,26 @@ void DaemonMediaController::reconcileHeadphonesAudio()
     }
     sendHeadphonesAudioContext(actualEnabled,
                                blockedBy.value_or(RemoteAudioOffReason::EncoderUnavailable));
+}
+
+std::optional<RemoteAudioOffReason> DaemonMediaController::headphonesBlockedBy() const
+{
+    // Why the headphones mix is off, first cause wins: the client's own
+    // choice, no receiver on the headphones, then the station radio, then
+    // media readiness. Empty when it can run.
+    if (!m_headphones.desiredEnabled) {
+        return RemoteAudioOffReason::ClientDisabled;
+    }
+    if (!anySliceOnHeadphones()) {
+        return RemoteAudioOffReason::NoHeadphonesReceiver;
+    }
+    if (!m_radioModel || !m_radioModel->isConnected()) {
+        return RemoteAudioOffReason::RadioOffline;
+    }
+    if (!m_peer || !m_peer->isReady()) {
+        return RemoteAudioOffReason::MediaNotReady;
+    }
+    return std::nullopt;
 }
 
 void DaemonMediaController::stopHeadphonesAudioCapture()
