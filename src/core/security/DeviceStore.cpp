@@ -307,7 +307,11 @@ bool DeviceStore::isClaimed() const
     if (!m_valid) {
         return true;
     }
-    return !m_devices.isEmpty() || (m_tokens != nullptr && m_tokens->isActive());
+    // A token file that exists but cannot be read counts too: the Core may
+    // well be claimed through it, and failing open would let a stranger
+    // claim it.
+    return !m_devices.isEmpty()
+           || (m_tokens != nullptr && (m_tokens->isActive() || !m_tokens->isValid()));
 }
 
 } // namespace NereusSDR

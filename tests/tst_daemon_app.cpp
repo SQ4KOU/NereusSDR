@@ -74,6 +74,7 @@
 #include "core/daemon/DisplayLoadInputs.h"
 #include "core/session/media/DisplayLoadGovernor.h"
 #include "core/session/StationServer.h"
+#include "core/security/StationIdentity.h"
 #include "core/session/StationLanAnnouncer.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -81,12 +82,24 @@
 using namespace NereusSDR;
 
 namespace {
+// iPhone app Task 12 put the Core's listener on by default (TCP 47910 on
+// every interface). A test Core opens no listener unless the test asks for
+// one on a port of its own.
+NereusSDR::DaemonConfig testCoreConfig()
+{
+    NereusSDR::DaemonConfig config = NereusSDR::DaemonConfig::defaults();
+    config.remotePort = 0;
+    return config;
+}
+} // namespace
+
+namespace {
 
 // A loopback listener on a port the OS just said was free, so a parallel
 // ctest shard cannot collide with it.
 DaemonConfig listenerConfig()
 {
-    DaemonConfig cfg = DaemonConfig::defaults();
+    DaemonConfig cfg = testCoreConfig();
     QTcpServer probe;
     if (probe.listen(QHostAddress::LocalHost, 0)) {
         cfg.remotePort = static_cast<int>(probe.serverPort());
@@ -109,7 +122,7 @@ private slots:
     {
         DaemonApp app;
         app.primeBoardForTest(HPSDRHW::HermesLite);
-        QVERIFY(app.start(DaemonConfig::defaults()));
+        QVERIFY(app.start(testCoreConfig()));
         AudioEngine* const engine = app.m_radioModel->audioEngine();
         QVERIFY(!engine->vaxOutputsAllowed());
         // Even with devices on offer, none is made.
@@ -132,10 +145,10 @@ private slots:
     {
         DaemonApp app;
         app.primeBoardForTest(HPSDRHW::HermesLite);
-        QVERIFY(app.start(DaemonConfig::defaults()));
+        QVERIFY(app.start(testCoreConfig()));
         RadioModel* const running = app.m_radioModel.get();
         QVERIFY(running);
-        DaemonConfig invalid = DaemonConfig::defaults();
+        DaemonConfig invalid = testCoreConfig();
         invalid.displayApplicationBytesPerSecond = 1000;
         QVERIFY(!app.start(invalid));
         QCOMPARE(app.m_radioModel.get(), running);
@@ -144,7 +157,7 @@ private slots:
 
     void installsReceiveOnlyPolicyBeforeStationStartup()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
 
         DaemonApp app;
@@ -164,7 +177,7 @@ private slots:
     // must come back exactly, not clamped.
     void createsConfiguredSliceCount()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 3;
 
         DaemonApp app;
@@ -190,7 +203,7 @@ private slots:
     // with no existing occupant to share with).
     void fftRouterReflectsSubscriptions()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
 
         DaemonApp app;
@@ -233,7 +246,7 @@ private slots:
     // board's real capability, not silently create 99 slices.
     void clampsSliceCountToBoardCapability()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 99;
 
         DaemonApp app;
@@ -261,7 +274,7 @@ private slots:
     // the state argument, which is already the authoritative value.
     void connectionStateRelayDoesNotDereferenceReleasedModel()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
 
         DaemonApp app;
         app.primeBoardForTest(HPSDRHW::HermesLite);
@@ -281,7 +294,7 @@ private slots:
 
     void restartIsClean()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 2;
 
         DaemonApp app;
@@ -303,7 +316,7 @@ private slots:
 
     void headlessControllerUsesSaturnDefaultsAndCalibration()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
 
         DaemonApp app;
@@ -340,7 +353,7 @@ private slots:
 
     void headlessControllerTracksTxBandModeAndMox()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
 
         DaemonApp app;
@@ -391,7 +404,7 @@ private slots:
     // follows the Core's controller, and the Core saves an edit soon after.
     void anan100dReachesSixtyOneDbAndTheObjectFollowsTheController()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
 
         DaemonApp app;
@@ -432,7 +445,7 @@ private slots:
     // citation) and has no Adaptive auto-attenuate.
     void hermesLite2KeepsItsSignedRangeAndClassicAutoAttenuate()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
 
         DaemonApp app;
@@ -464,7 +477,7 @@ private slots:
     // and the mirrored object follows it.
     void coreBandChangeRestoresTheBandsAttenuation()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
 
         DaemonApp app;
@@ -493,7 +506,7 @@ private slots:
     // listening on slice A at 40 m keeps 40 m's attenuator.
     void coreAttenuatorFollowsSliceAInACrossBandSplit()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 2;
 
         DaemonApp app;
@@ -529,7 +542,7 @@ private slots:
 
     void replacementSliceUsesStableIdForControllerWiring()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 2;
 
         DaemonApp app;
@@ -576,16 +589,26 @@ private slots:
 
     void remoteListenerIsNotStartedByDefault()
     {
-        // remote_port defaults to 0, which means "do not listen". A
-        // default nereusd must therefore open no port at all.
-        DaemonConfig cfg = DaemonConfig::defaults();
+        // iPhone app Task 12: a Core with no remote_port line listens on
+        // 47910 on every interface, IPv4 and IPv6 (tst_daemon_config holds
+        // the parsing); that is the one listener a test does not open for
+        // real, so the address mapping is checked here instead.
+        QCOMPARE(DaemonConfig::defaults().remotePort, 47910);
+        QVERIFY(DaemonConfig::defaults().remoteBind.isEmpty());
+        QCOMPARE(DaemonApp::listenerAddressFor(QString()), QHostAddress(QHostAddress::Any));
+        QCOMPARE(DaemonApp::listenerAddressFor(QStringLiteral("127.0.0.1")),
+                 QHostAddress(QHostAddress::LocalHost));
+        QVERIFY(DaemonApp::listenerAddressFor(QStringLiteral("not-an-address")).isNull());
+
+        // remote_port = 0 still opens no port at all.
+        DaemonConfig cfg = testCoreConfig();
         QCOMPARE(cfg.remotePort, 0);
 
         DaemonApp app;
         app.primeBoardForTest(HPSDRHW::HermesLite);
         QVERIFY(app.start(cfg));
         QVERIFY2(app.stationServer() == nullptr,
-                 "a default config must not bring up a network listener");
+                 "remote_port = 0 must not bring up a network listener");
         app.stop();
     }
 
@@ -596,7 +619,7 @@ private slots:
                   "The listener is wss-only by design (parent design section 10.5).");
         }
 
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.remotePort = 0;
         // Port 0 means "disabled" in the config, so an ephemeral port has
         // to be requested explicitly. Bind loopback and let the OS pick by
@@ -640,9 +663,11 @@ private slots:
         QCOMPARE(server->displayBudgetLimits()->spectrumSampleUnitsPerSecond, quint64{1000000});
         QVERIFY(server->buildCapabilities().displayBudget);
 
-        // Step 4's other half: the pairing material an operator has to
-        // carry to the client by hand exists and is non-empty.
-        QVERIFY(!server->token().isEmpty());
+        // Step 4's other half, as of iPhone app Task 12: the Core has its
+        // identity key and its certificate pin. (That a new Core creates no
+        // pairing token is tst_station_session's: this sandbox profile is
+        // kept between runs, so it may hold one from an earlier run.)
+        QVERIFY(server->stationIdentity().isValid());
         QVERIFY(!server->certificateFingerprint().isEmpty());
 
         // And it is torn down with the daemon rather than outliving the
@@ -818,7 +843,7 @@ private slots:
         QVERIFY(blocker.listen(QHostAddress::LocalHost, 0));
         const quint16 port = blocker.serverPort();
 
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.remoteBind = QStringLiteral("127.0.0.1");
         cfg.remotePort = static_cast<int>(port);
         cfg.sliceCount = 2;
@@ -838,7 +863,8 @@ private slots:
         QVERIFY(app.stationListenerRetryPending());
         QCOMPARE(app.stationListenAttemptCountForTest(), 1);
 
-        const auto token = server->token();
+        const QByteArray identity = server->stationIdentity().fingerprint();
+        QVERIFY(!identity.isEmpty());
         const QList<SliceModel*> slices = model->slices();
 
         // Keep the port occupied through several retries. The compressed
@@ -853,7 +879,7 @@ private slots:
         QCOMPARE(app.stationServer(), server);
         QCOMPARE(app.m_radioModel.get(), model);
         QCOMPARE(app.m_mediaController.get(), media);
-        QCOMPARE(server->token(), token);
+        QCOMPARE(server->stationIdentity().fingerprint(), identity);
         QVERIFY(model->slices() == slices);
         QCOMPARE(server->serverPort(), port);
         QVERIFY(!app.stationListenerRetryPending());
@@ -872,7 +898,7 @@ private slots:
         QVERIFY(blocker.listen(QHostAddress::LocalHost, 0));
         const quint16 port = blocker.serverPort();
 
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.remoteBind = QStringLiteral("127.0.0.1");
         cfg.remotePort = static_cast<int>(port);
 
@@ -910,7 +936,7 @@ private slots:
         const quint16 newPort = newBlocker.serverPort();
         QVERIFY(oldPort != newPort);
 
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.remoteBind = QStringLiteral("127.0.0.1");
         cfg.remotePort = static_cast<int>(oldPort);
 
@@ -941,7 +967,7 @@ private slots:
         app.setStationListenRetryIntervalsForTest(10, 30);
         app.primeBoardForTest(HPSDRHW::HermesLite);
 
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.remotePort = 0;
         QVERIFY(app.start(cfg));
         QVERIFY(app.stationServer() == nullptr);
@@ -977,7 +1003,7 @@ private slots:
 
     void invalidRemoteBindIsLoggedRatherThanFatal()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.remotePort = 4711;
         cfg.remoteBind = QStringLiteral("not-an-address");
 

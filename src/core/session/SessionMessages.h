@@ -119,6 +119,14 @@
 //                                    hello's `majors` and `features`.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08,
+//                                    R-IOS-01): the Core hello's
+//                                    `identity` and `challenge`,
+//                                    auth.request's `device`, and the end
+//                                    `code` on auth.result and
+//                                    session.end. AI-assisted
+//                                    implementation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QByteArray>
@@ -126,6 +134,8 @@
 #include <QList>
 #include <QMetaType>
 #include <QJsonObject>
+
+#include <optional>
 
 #include "core/session/MirrorSchema.h"
 #include "core/session/StationTelemetry.h"
@@ -237,6 +247,56 @@ inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 // session the other has already given up on for long.
 inline constexpr int kStationHandshakeDeadlineMs = 30000;
 inline constexpr qsizetype kMaxStationTelemetryBytes = 16 * 1024;
+
+// iPhone app Task 12 (R-IOS-08): the machine-readable end codes an
+// auth.result refusal or a session.end may carry in `code` (the link
+// document, section 12.4). A client reads the code where it is present and
+// falls back to the reason text for an older Core, which sends none. A
+// code is a stable token, never shown; the reason beside it is what the
+// operator reads.
+namespace SessionEndCode {
+/// Another app signed in and took the session.
+inline constexpr const char* kTakenOver = "takenOver";
+/// The two ends share no link major.
+inline constexpr const char* kLinkVersion = "linkVersion";
+/// A sign-in with the pairing token on a Core that has none (a new Core,
+/// or one whose token was retired): "This Core uses paired devices. Pair
+/// this device first."
+inline constexpr const char* kPairingRequired = "pairingRequired";
+/// The pairing token was wrong.
+inline constexpr const char* kWrongToken = "wrongToken";
+/// A well-formed device sign-in from a key the Core has not paired.
+inline constexpr const char* kDeviceNotPaired = "deviceNotPaired";
+/// A device sign-in that did not prove itself: a bad signature, one over
+/// another connection's challenge or another certificate, or a malformed
+/// device block.
+inline constexpr const char* kDeviceProofFailed = "deviceProofFailed";
+/// The device was removed from the Core (Task 13's revoke).
+inline constexpr const char* kDeviceRemoved = "deviceRemoved";
+/// The client's own reason, never sent by a Core: the Core's certificate
+/// or identity key is not the one this device paired with.
+inline constexpr const char* kIdentityChanged = "identityChanged";
+/// The app broke the connect sequence or sent a message the Core cannot
+/// read.
+inline constexpr const char* kProtocolError = "protocolError";
+} // namespace SessionEndCode
+
+/// iPhone app Task 12: the Core hello's `identity`, base64url text as on
+/// the wire (the link document, section 3.4).
+struct SessionStationIdentity {
+    QString publicKey;    // the Core's identity key, SPKI DER
+    QString certBinding;  // raw r || s over "NereusSDR cert-binding v1\n" || SHA-256(cert)
+};
+
+/// iPhone app Task 12: auth.request's `device`, base64url text as on the
+/// wire (the link document, section 3.5).
+struct SessionDeviceBlock {
+    QString id;         // SHA-256 of the device key's SPKI DER
+    QString publicKey;  // the device key, SPKI DER
+    QString name;
+    QString kind;       // "phone", "tablet", "computer"
+    QString signature;  // raw r || s over the device-auth transcript
+};
 
 /// One property's WIRE DECLARATION: name, ordinal and kind, carrying no
 /// live value. This is what a Schema message announces once per class per
@@ -423,11 +483,32 @@ struct SessionMessage {
     bool majorsOnWire = false;
     bool featuresOnWire = false;
 
+    // ── iPhone app Task 12 (R-IOS-08): the Core's Hello only ────────────
+
+    /// The Core's identity key and its binding to the TLS certificate. On
+    /// the wire as `identity`; a hello without it (a client's, or an
+    /// older Core's) decodes as nullopt.
+    std::optional<SessionStationIdentity> stationIdentity;
+    /// This connection's device sign-in challenge, base64url of 32 bytes.
+    /// On the wire as `challenge` when not empty.
+    QString challenge;
+
     // ── Task 18: AuthRequest only ───────────────────────────────────────
 
     /// The pre-shared token (TokenStore). NEVER logged: StationServer logs
-    /// the OUTCOME of a verify, never the candidate.
+    /// the OUTCOME of a verify, never the candidate. Empty in a device
+    /// sign-in.
     QString token;
+
+    /// iPhone app Task 12: the device sign-in block. On the wire as
+    /// `device`; absent decodes as nullopt.
+    std::optional<SessionDeviceBlock> device;
+
+    // ── iPhone app Task 12: AuthResult and SessionEnd only ──────────────
+
+    /// A SessionEndCode token, on the wire as `code` when not empty. A
+    /// client that does not know the code reads `reason`.
+    QString endCode;
 
     // ── Task 18: SettingsWrite / SettingsValue only ─────────────────────
 
@@ -496,6 +577,11 @@ public:
     /// Client to daemon, once the daemon's Hello has been accepted.
     static SessionMessage authRequest(const QString& token);
 
+    /// iPhone app Task 12: a device sign-in (`token` empty), or a window
+    /// signing in with the pairing token and enrolling its device key in
+    /// the same step (`token` set).
+    static SessionMessage authRequest(const QString& token, const SessionDeviceBlock& device);
+
     /// Daemon to client. A false `accepted` is always followed by the
     /// daemon closing the socket; `reason` is what the operator sees and
     /// `retryable` is what the client's reconnect policy reads. Both are
@@ -504,6 +590,9 @@ public:
     /// SessionMessage::retryable.
     static SessionMessage authResult(bool accepted, const QString& reason,
                                      bool retryable);
+    /// iPhone app Task 12: a refusal with its SessionEndCode.
+    static SessionMessage authResult(bool accepted, const QString& reason, bool retryable,
+                                     const QString& endCode);
 
     /// Daemon to client, after a successful AuthResult. `descriptor` is
     /// StationCapabilities::toUpdates() -- MirrorUpdate reused as a generic
@@ -518,6 +607,9 @@ public:
     /// session is told why"). `retryable` is required for the same reason
     /// it is on authResult(); see SessionMessage::retryable.
     static SessionMessage sessionEnd(const QString& reason, bool retryable);
+    /// iPhone app Task 12: an end with its SessionEndCode.
+    static SessionMessage sessionEnd(const QString& reason, bool retryable,
+                                     const QString& endCode);
 
     /// Client to daemon: apply these property values to this object. The
     /// mirror-image of a Delta, deliberately a DISTINCT kind rather than a

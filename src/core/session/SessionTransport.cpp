@@ -12,10 +12,14 @@
 //                                    implementation. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08):
+//                                    peerAddress(). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionTransport.h"
 
+#include <QHostAddress>
 #include <QWebSocket>
 
 namespace NereusSDR {
@@ -126,6 +130,23 @@ QString WebSocketTransport::peerDescription() const
     return QStringLiteral("%1:%2")
         .arg(m_socket->peerAddress().toString())
         .arg(m_socket->peerPort());
+}
+
+QString WebSocketTransport::peerAddress() const
+{
+    if (m_socket == nullptr) {
+        return {};
+    }
+    QHostAddress address = m_socket->peerAddress();
+    // A dual-stack listener sees an IPv4 peer as ::ffff:a.b.c.d; it is one
+    // address, recorded one way.
+    bool isV4 = false;
+    const quint32 v4 = address.toIPv4Address(&isV4);
+    if (isV4) {
+        address = QHostAddress(v4);
+    }
+    address.setScopeId(QString());
+    return address.isNull() ? QString() : address.toString();
 }
 
 std::optional<SessionTransportTelemetry> WebSocketTransport::telemetry() const

@@ -40,6 +40,7 @@
 #include "fakes/ConnectableRadioModel.h"
 #include "fakes/LoopbackTransport.h"
 #include "OperatorWording.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::ConnectableRadioModel;
@@ -172,7 +173,7 @@ private slots:
         core.injectConnectionForTest(&coreRadio);
         const auto detach = qScopeGuard([&core] { core.injectConnectionForTest(nullptr); });
         {
-            StationServer server(&core, coreSettings, m_securityDir.path());
+            StationServer server(&core, coreSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
             RadioModel window(RadioModel::Role::Remote);
             SettingsProxy proxy;
             StationClient client(&window, &proxy);
@@ -213,7 +214,7 @@ private slots:
         core.injectConnectionForTest(&coreRadio);
         const auto detach = qScopeGuard([&core] { core.injectConnectionForTest(nullptr); });
         {
-            StationServer server(&core, coreSettings, m_securityDir.path());
+            StationServer server(&core, coreSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
             coreSettings.setValue(kKey, QStringLiteral("False"));
             QTRY_VERIFY(!coreRadio.watchdog.isEmpty());

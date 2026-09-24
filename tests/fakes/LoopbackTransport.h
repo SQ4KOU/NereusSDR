@@ -58,8 +58,13 @@ public:
     void closeLink(const QString& reason) override;
     bool isOpen() const override;
     QString peerDescription() const override;
+    QString peerAddress() const override { return m_peerAddress; }
 
     // ---- Test controls ----
+
+    /// What peerAddress() reports (the far end's address, as the station
+    /// sees it). Default empty, as a relayed connection reports.
+    void setPeerAddress(const QString& address) { m_peerAddress = address; }
 
     /// While false, a ping arriving at this end produces no pong, so the
     /// SENDER sees a peer that has gone silent without closing. Default
@@ -88,6 +93,7 @@ private:
     bool m_answersPings = true;
     int m_pingsSeen = 0;
     QString m_closeReason;
+    QString m_peerAddress;
     QList<QByteArray> m_received;
 };
 

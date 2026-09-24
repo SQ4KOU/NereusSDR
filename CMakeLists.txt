@@ -1202,6 +1202,7 @@ list(APPEND CORE_SOURCES
     src/core/security/StationIdentity.cpp
     src/core/security/StationLabel.cpp
     src/core/security/DeviceStore.cpp
+    src/core/security/DeviceAuthenticator.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the

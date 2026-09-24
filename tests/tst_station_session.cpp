@@ -83,6 +83,7 @@
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/security/StationIdentity.h"
 #include "core/settings/SettingsProxy.h"
 #include "core/meters/SliceMeterPump.h"
 #include "core/StepAttenuatorController.h"
@@ -106,6 +107,7 @@
 
 #include "fakes/LoopbackTransport.h"
 #include "OperatorWording.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::LoopbackTransport;
@@ -481,7 +483,7 @@ void TstStationSession::mediaRejectsPreAuthenticationAndOldProtocol()
     QTemporaryDir settingsDir;
     AppSettings settings(settingsDir.filePath(QStringLiteral("media.settings")));
     auto model = makeStationRadioModel(0);
-    StationServer server(model.get(), settings, m_securityDir.path());
+    StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setMediaEnabled(true);
     QSignalSpy inbound(&server, &StationServer::mediaControlReceived);
     SessionMessage media;
@@ -517,7 +519,7 @@ void TstStationSession::mediaRequiresReadySessionAndRejectsPriorEpoch()
     QTemporaryDir settingsDir;
     AppSettings settings(settingsDir.filePath(QStringLiteral("media.settings")));
     auto model = makeStationRadioModel(0);
-    StationServer server(model.get(), settings, m_securityDir.path());
+    StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setMediaEnabled(true);
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -568,7 +570,7 @@ void TstStationSession::telemetryRequiresReadySessionAndRejectsPriorEpoch()
     QTemporaryDir settingsDir;
     AppSettings settings(settingsDir.filePath(QStringLiteral("telemetry.settings")));
     auto model = makeStationRadioModel(0);
-    StationServer server(model.get(), settings, m_securityDir.path());
+    StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setTelemetryEnabled(true);
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -624,7 +626,7 @@ void TstStationSession::telemetryDoesNotRequireMediaAndRejectsOldProtocol()
     QTemporaryDir settingsDir;
     AppSettings settings(settingsDir.filePath(QStringLiteral("telemetry-old.settings")));
     auto model = makeStationRadioModel(0);
-    StationServer server(model.get(), settings, m_securityDir.path());
+    StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setTelemetryEnabled(true);
     QVERIFY(!server.mediaAvailable());
     auto* station = new LoopbackTransport(QStringLiteral("old-metrics-station"), this);
@@ -727,7 +729,7 @@ void TstStationSession::hostTelemetryReachesVersionTwoPeer()
     QTemporaryDir settingsDir;
     AppSettings settings(settingsDir.filePath(QStringLiteral("host-telemetry.settings")));
     auto model = makeStationRadioModel(0);
-    StationServer server(model.get(), settings, m_securityDir.path());
+    StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setTelemetryEnabled(true);
     QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 3);
     RadioModel remote(RadioModel::Role::Remote);
@@ -765,7 +767,7 @@ void TstStationSession::hostTelemetryIsOmittedForMinorNinePeer()
     QTemporaryDir settingsDir;
     AppSettings settings(settingsDir.filePath(QStringLiteral("host-telemetry-old.settings")));
     auto model = makeStationRadioModel(0);
-    StationServer server(model.get(), settings, m_securityDir.path());
+    StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setTelemetryEnabled(true);
     auto* station = new LoopbackTransport(QStringLiteral("minor9-metrics-station"), this);
     auto* peer = new LoopbackTransport(QStringLiteral("minor9-metrics-client"), this);
@@ -865,7 +867,7 @@ void TstStationSession::receiverLoadReachesVersionThreePeer()
     QTemporaryDir settingsDir;
     AppSettings settings(settingsDir.filePath(QStringLiteral("receiver-load.settings")));
     auto model = makeStationRadioModel(0);
-    StationServer server(model.get(), settings, m_securityDir.path());
+    StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setTelemetryEnabled(true);
     QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 3);
     RadioModel remote(RadioModel::Role::Remote);
@@ -916,7 +918,7 @@ void TstStationSession::receiverLoadIsOmittedForMinorTenPeer()
     QTemporaryDir settingsDir;
     AppSettings settings(settingsDir.filePath(QStringLiteral("receiver-load-old.settings")));
     auto model = makeStationRadioModel(0);
-    StationServer server(model.get(), settings, m_securityDir.path());
+    StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setTelemetryEnabled(true);
     auto* station = new LoopbackTransport(QStringLiteral("minor10-metrics-station"), this);
     auto* peer = new LoopbackTransport(QStringLiteral("minor10-metrics-client"), this);
@@ -1024,7 +1026,7 @@ void TstStationSession::nnrLimitReachesMinorElevenPeerAndTryAgainClearsIt()
     QVERIFY(!model->slices().isEmpty());
     SliceModel* coreSlice = model->slices().first();
     const int sliceId = coreSlice->sliceIndex();
-    StationServer server(model.get(), settings, m_securityDir.path());
+    StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&remote, &proxy);
@@ -1078,7 +1080,7 @@ void TstStationSession::nnrLimitIsOmittedForMinorTenPeer()
     AppSettings settings(settingsDir.filePath(QStringLiteral("nnr-limit-old.settings")));
     auto model = makeStationRadioModel(0);
     SliceModel* coreSlice = model->slices().first();
-    StationServer server(model.get(), settings, m_securityDir.path());
+    StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     auto* station = new LoopbackTransport(QStringLiteral("minor10-nnr-station"), this);
     auto* peer = new LoopbackTransport(QStringLiteral("minor10-nnr-client"), this);
     station->linkTo(peer);
@@ -1152,7 +1154,7 @@ void TstStationSession::minorTenWriteThatClearsTheLimitCarriesNoNnrLimit()
     SliceModel* coreSlice = model->slices().first();
     coreSlice->setActiveNr(NrSlot::NNR);
     QCOMPARE(coreSlice->activeNr(), NrSlot::NNR);
-    StationServer server(model.get(), settings, m_securityDir.path());
+    StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     auto* station = new LoopbackTransport(QStringLiteral("minor10-nnr-write-station"), this);
     auto* peer = new LoopbackTransport(QStringLiteral("minor10-nnr-write-client"), this);
     station->linkTo(peer);
@@ -1211,7 +1213,7 @@ void TstStationSession::minorTenPeerReadsWhyInNnrStatus()
     AppSettings settings(settingsDir.filePath(QStringLiteral("nnr-limit-status.settings")));
     auto model = makeStationRadioModel(0);
     SliceModel* coreSlice = model->slices().first();
-    StationServer server(model.get(), settings, m_securityDir.path());
+    StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     auto* station = new LoopbackTransport(QStringLiteral("minor10-nnr-status-station"), this);
     auto* peer = new LoopbackTransport(QStringLiteral("minor10-nnr-status-client"), this);
     station->linkTo(peer);
@@ -1437,7 +1439,7 @@ void TstStationSession::remoteFourO3AServerRejectsPreAuthAndOldMinor()
     QVERIFY(settingsDir.isValid());
     AppSettings stationSettings(settingsDir.filePath(QStringLiteral("four-o3a.settings")));
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     const SessionMessage request = SessionMessages::commandInvoke(
         "setFourO3AEnabled", 41,
@@ -1486,7 +1488,7 @@ void TstStationSession::remoteFourO3AAuthenticatedRoundTripMirrorsActualListener
     auto stationModel = makeStationRadioModel(0);
     stationModel->enableStationAccessoryIdentity();
     stationModel->smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -1610,7 +1612,7 @@ void TstStationSession::remoteTgxlCommandIsGatedAtAuthenticatedServerBoundary()
     QVERIFY(settingsDir.isValid());
     AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     auto* station = new LoopbackTransport(QStringLiteral("tgxl-server"), this);
     auto* peer = new LoopbackTransport(QStringLiteral("tgxl-peer"), this);
@@ -1693,7 +1695,7 @@ void TstStationSession::remoteTgxlConfigureAcceptanceStartsIdentityOnly()
     TunerModel* const tuner = stationModel->tunerModel();
     QVERIFY(tuner != nullptr);
     AppSettings::instance().save(); // Establish the pre-command on-disk state.
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     auto* station = new LoopbackTransport(QStringLiteral("tgxl-accepted-server"), this);
     auto* peer = new LoopbackTransport(QStringLiteral("tgxl-accepted-peer"), this);
@@ -1744,12 +1746,24 @@ void TstStationSession::remoteTgxlConfigureAcceptanceStartsIdentityOnly()
 
 void TstStationSession::tokenIsGeneratedNotChosenAndPersists()
 {
+    // iPhone app Task 12: a new Core creates NO token (its devices pair
+    // with it instead); a Core upgraded from before paired devices keeps
+    // the token it has, unchanged, across starts, and can retire it.
+    QTemporaryDir fresh;
+    QVERIFY(fresh.isValid());
+    TokenStore newCore(fresh.path());
+    QVERIFY2(newCore.isValid(), qPrintable(newCore.lastError()));
+    QVERIFY(!newCore.isActive());
+    QVERIFY(newCore.token().isEmpty());
+    QVERIFY(!QFile::exists(fresh.filePath(QStringLiteral("station-token"))));
+    QCOMPARE(newCore.verify(QString()), TokenStore::VerifyResult::Rejected);
+
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
-
+    NereusSDR::Test::seedUpgradedCoreToken(dir.path());
     TokenStore first(dir.path());
     QVERIFY2(first.isValid(), qPrintable(first.lastError()));
-    QVERIFY(first.wasGeneratedThisRun());
+    QVERIFY(first.isActive());
 
     // 256 bits, base64url, no padding.
     QCOMPARE(first.token().size(), 43);
@@ -1757,30 +1771,28 @@ void TstStationSession::tokenIsGeneratedNotChosenAndPersists()
     QVERIFY(!first.token().contains(QLatin1Char('+')));
     QVERIFY(!first.token().contains(QLatin1Char('/')));
 
-    // There is no setter, by design: the token is generated, never
-    // user-chosen (parent design section 7.1). The observable form of that
-    // is that a second construction against the same directory returns the
-    // SAME token rather than a new one, and does not report itself as a
-    // first run.
+    // There is no setter, by design: a second construction against the
+    // same directory returns the SAME token.
     TokenStore second(dir.path());
-    QVERIFY(second.isValid());
-    QVERIFY(!second.wasGeneratedThisRun());
+    QVERIFY(second.isActive());
     QCOMPARE(second.token(), first.token());
 
-    // Two independent stores must not collide.
-    QTemporaryDir other;
-    QVERIFY(other.isValid());
-    TokenStore elsewhere(other.path());
-    QVERIFY(elsewhere.isValid());
-    QVERIFY(elsewhere.token() != first.token());
+    // Retired for good: the file goes and nothing is accepted after.
+    const QString token = second.token();
+    QVERIFY(second.retire());
+    QVERIFY(!second.isActive());
+    QVERIFY(!QFile::exists(dir.filePath(QStringLiteral("station-token"))));
+    QCOMPARE(second.verify(token), TokenStore::VerifyResult::Rejected);
+    TokenStore afterRetire(dir.path());
+    QVERIFY(!afterRetire.isActive());
 }
 
 void TstStationSession::tokenVerifyIsRateLimitedAfterRepeatedFailures()
 {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
-    TokenStore store(dir.path());
-    QVERIFY(store.isValid());
+    TokenStore store(NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+    QVERIFY(store.isActive());
 
     // Short lockout so the slot does not cost a minute.
     store.setRateLimit(3, 200);
@@ -1814,7 +1826,7 @@ void TstStationSession::handshakeCompletesInSectionSevenZeroOrder()
     stationSettings.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50001"));
 
     auto stationModel = makeStationRadioModel(1);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QVERIFY2(!server.token().isEmpty(), "TokenStore did not provision");
 
     auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
@@ -1882,7 +1894,7 @@ void TstStationSession::capabilitiesAdvertiseEffectiveNotBoardLimits()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     const StationCapabilities wide = server.buildCapabilities();
     QVERIFY(wide.boardMaxSlices > 1);
@@ -1939,7 +1951,7 @@ void TstStationSession::clientAppliesCapabilitiesAndDrivesConnected()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(2);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setSustainableSliceLimit(3);
 
     RadioModel clientModel(RadioModel::Role::Remote);
@@ -1999,7 +2011,7 @@ void TstStationSession::lateRadioRefreshUpdatesAuthenticatedClientWithoutReplayi
     stationSettings.setHardwareValue(
         mac, QStringLiteral("radioInfo/sampleRate"), QStringLiteral("192000"));
 
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setSustainableSliceLimit(2);
     server.setMediaEnabled(true);
 
@@ -2072,7 +2084,7 @@ void TstStationSession::queuedLateRadioRefreshDoesNotReachReplacementSession()
 
     auto stationModel = makeStationRadioModel(0);
     stationModel->setConnectionStateForTest(ConnectionState::Disconnected);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     RadioModel oldClientModel(RadioModel::Role::Remote);
     SettingsProxy oldProxy;
@@ -2127,7 +2139,7 @@ void TstStationSession::majorVersionMismatchRefusesNamingBothVersions()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
     auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
@@ -2218,7 +2230,7 @@ void TstStationSession::minorVersionMismatchNegotiatesDown()
     AppSettings stationSettings(
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
     auto* rawClient = new LoopbackTransport(QStringLiteral("raw-client"), this);
@@ -2245,7 +2257,7 @@ void TstStationSession::badTokenIsRefusedAndThenRateLimited()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setAuthRateLimit(2, 60000);
 
     QStringList reasons;
@@ -2309,7 +2321,7 @@ void TstStationSession::secondAuthenticatedConnectionPreemptsAndSaysWhy()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QSignalSpy preempted(&server, &StationServer::sessionPreempted);
 
     // The description the station records for a peer is the STATION-side
@@ -2371,7 +2383,7 @@ void TstStationSession::heartbeatDetectsAPeerThatWentSilentWithoutClosing()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     // The production defaults are 20 s and 2 misses (StationServer.h has
     // the reasoning for both numbers). Driven down here so the slot costs
@@ -2424,7 +2436,7 @@ void TstStationSession::heartbeatLeavesAnAnsweringPeerAlone()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setHeartbeatIntervalMs(20);
     server.setMaxMissedPongs(2);
 
@@ -2459,7 +2471,7 @@ void TstStationSession::mirrorRoundTripsSliceStateAndDoesNotEcho()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -2555,7 +2567,7 @@ void TstStationSession::autoAgcTelemetryFollowsCoreAcrossReconnect()
     auto station = makeStationRadioModel(1);
     auto* first = station->slices().at(0);
     auto* second = station->slices().at(1);
-    StationServer server(station.get(), settings, m_securityDir.path());
+    StationServer server(station.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&remote, &proxy);
@@ -2623,7 +2635,7 @@ void TstStationSession::filterTelemetryFollowsCoreAcrossReconnect()
     slice1->setStreamIndex(1);
     slice1->setChainIndex(1);
     station->alexControllerMutable().setBpfMode(1, AlexController::BpfMode::ForceBypass);
-    StationServer server(station.get(), settings, m_securityDir.path());
+    StationServer server(station.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&remote, &proxy);
@@ -2705,7 +2717,7 @@ void TstStationSession::settingsProxyIsNotReadyBeforeTheSnapshot()
     stationSettings.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50123"));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -2788,7 +2800,7 @@ void TstStationSession::aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmpt
     stationSettings.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50123"));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -2925,7 +2937,7 @@ void TstStationSession::reconnectSurvivesTheOldTransportClosing()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -2994,7 +3006,7 @@ void TstStationSession::heartbeatTimeoutReportsTheSessionAsEnded()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     // Keep the station's own heartbeat out of the way; this slot is about
     // the CLIENT's.
     server.setHeartbeatIntervalMs(0);
@@ -3062,7 +3074,7 @@ void TstStationSession::tunerPropertiesHydrateWithoutClientCommands()
         {QStringLiteral("fwd"), QStringLiteral("12.5")},
         {QStringLiteral("swr"), QStringLiteral("1.4")},
     });
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -3185,7 +3197,7 @@ void TstStationSession::remoteTgxlStateClearsOnSessionLossRetainingConfiguredEnd
         {QStringLiteral("fwd"), QStringLiteral("12.5")},
         {QStringLiteral("swr"), QStringLiteral("1.4")},
     });
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -3257,7 +3269,7 @@ void TstStationSession::receiveOnlyStationBlocksRemoteBandRecall()
     QSignalSpy tgxlFrames(stationModel->tgxlConnection(),
                          &TgxlConnection::testFrameWrittenForTesting);
 
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QVERIFY2(stationModel->receiveOnlyStationPolicy(),
              "a receive-only StationServer must protect a standalone local-role model");
 
@@ -3329,7 +3341,7 @@ void TstStationSession::receiveOnlyStationRefusesTransmitPropertyWrites()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QVERIFY(stationModel->receiveOnlyStationPolicy());
 
     RadioModel clientModel(RadioModel::Role::Remote);
@@ -3405,7 +3417,7 @@ void TstStationSession::nr3CannotRunIsRefusedOnTheCoreAndInTheWindow()
     QCOMPARE(coreRefused.constFirst().at(0).toString(), none);
     QCOMPARE(coreSlice->nnrLastError(), none);
 
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&clientModel, &proxy);
@@ -3476,7 +3488,7 @@ void TstStationSession::savedNr3OnACoreWithNoModelShowsOffInTheWindow()
     QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
     QCOMPARE(coreSlice->nnrLastError(), none);
 
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&clientModel, &proxy);
@@ -3509,7 +3521,7 @@ void TstStationSession::nr3CannotRunEndsWithTheSession()
     QVERIFY(settingsDir.isValid());
     AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&clientModel, &proxy);
@@ -3557,7 +3569,7 @@ void TstStationSession::nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors()
     QStringList loaded;
     stationModel->dspAssets()->setNr3ModelLoader(
         [&loaded](const QString& path) { loaded.append(path); });
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QCOMPARE(server.buildCapabilities().dspAssetVersion, 2);
 
     RadioModel clientModel(RadioModel::Role::Remote);
@@ -3645,7 +3657,7 @@ void TstStationSession::olderAppNr3ModelPathWriteIsRefused()
     QVERIFY(settingsDir.isValid());
     AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -3730,7 +3742,7 @@ struct NotchSession {
 // Build the Core first (so a test can seed its list), then join a window.
 void joinNotchWindow(NotchSession& s, QObject* owner, const QString& securityDir)
 {
-    s.server = std::make_unique<StationServer>(s.core.get(), *s.stationSettings, securityDir);
+    s.server = std::make_unique<StationServer>(s.core.get(), *s.stationSettings, NereusSDR::Test::seedUpgradedCoreToken(securityDir));
     s.window = std::make_unique<RadioModel>(RadioModel::Role::Remote);
     s.proxy = std::make_unique<SettingsProxy>();
     s.client = std::make_unique<StationClient>(s.window.get(), s.proxy.get());
@@ -3805,7 +3817,7 @@ void TstStationSession::remoteNotchEditKeepsTheCoresWholeList()
     writeCoreNotchList(stationSettings, core->notches());
     removeLocalNotchKeys();
 
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&clientModel, &proxy);
@@ -4093,7 +4105,7 @@ void TstStationSession::olderAppIgnoresTheNotchesObjectGolden()
     auto core = makeStationRadioModel(0);
     QVERIFY(core->notchModel()->addNotch(7040000.0, 200.0) > 0);
     removeLocalNotchKeys();
-    StationServer server(core.get(), stationSettings, m_securityDir.path());
+    StationServer server(core.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     auto* station = new LoopbackTransport(QStringLiteral("golden-station"), this);
     auto* peer = new LoopbackTransport(QStringLiteral("golden-peer"), this);
     station->linkTo(peer);
@@ -4220,7 +4232,7 @@ void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsWrite
     stationSettings.setValue(rxKey, QStringLiteral("1024"));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QVERIFY(stationModel->receiveOnlyStationPolicy());
 
     RadioModel clientModel(RadioModel::Role::Remote);
@@ -4273,7 +4285,7 @@ void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsRemov
     stationSettings.setValue(rxKey, QStringLiteral("1024"));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QVERIFY(stationModel->receiveOnlyStationPolicy());
 
     RadioModel clientModel(RadioModel::Role::Remote);
@@ -4341,7 +4353,7 @@ void TstStationSession::acceptedReceiveDspOptionsWriteAppliesToMatchingSlices()
     stationModel->setDspOptionsApplyObserverForTest([&applied](int index, DSPMode mode) {
         applied.append(qMakePair(index, mode));
     });
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QVERIFY(stationModel->receiveOnlyStationPolicy());
 
     RadioModel clientModel(RadioModel::Role::Remote);
@@ -4413,7 +4425,7 @@ void TstStationSession::handshakeDeadlineDropsASilentPeer()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setAuthDeadlineMs(60);
     QCOMPARE(server.authDeadlineMs(), 60);
 
@@ -4455,7 +4467,7 @@ void TstStationSession::peerLimitRefusesFurtherConnections()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     // Out of the way: this slot is about the cap, not the deadline.
     server.setAuthDeadlineMs(0);
 
@@ -4493,7 +4505,7 @@ void TstStationSession::listenIsIdempotent()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
     const quint16 port = server.serverPort();
@@ -4522,9 +4534,9 @@ void TstStationSession::firstRunPairingBannerNeverReachesTheLoggingHandler()
     // TokenStore.h refuses to use for exactly that reason.
     //
     // A FRESH security directory, not the class-wide m_securityDir: this
-    // slot needs TokenStore::wasGeneratedThisRun() to be true, and
-    // m_securityDir already holds a token from an earlier slot. The price
-    // is one extra RSA-3072 key generation for the run.
+    // slot needs the Core's identity key to be created on this start
+    // (iPhone app Task 12: that is the first run now, and a new Core has
+    // no token to print). The price is one extra RSA-3072 key generation.
     QTemporaryDir freshSecurity;
     QVERIFY(freshSecurity.isValid());
     QTemporaryDir settingsDir;
@@ -4542,18 +4554,15 @@ void TstStationSession::firstRunPairingBannerNeverReachesTheLoggingHandler()
                                                  freshSecurity.path());
     }
 
-    const QString token = server->token();
     const QString fingerprint = server->certificateFingerprint();
-    QVERIFY2(!token.isEmpty(), "no token was provisioned, so this slot proves nothing");
+    const QString keyPath = server->stationIdentity().keyPath();
+    QVERIFY2(server->stationIdentity().wasCreatedThisRun(),
+             "no identity key was created, so this slot proves nothing");
+    QVERIFY2(server->token().isEmpty(), "a new Core created a pairing token");
     QVERIFY2(!fingerprint.isEmpty(),
              "no certificate was provisioned, so this slot proves nothing");
 
     for (const QString& line : captured) {
-        QVERIFY2(!line.contains(token),
-                 qPrintable(QStringLiteral(
-                                "the pairing token reached the Qt logging handler, "
-                                "which writes it verbatim into the daemon's "
-                                "persistent log file. Line: %1").arg(line)));
         QVERIFY2(!line.contains(fingerprint),
                  qPrintable(QStringLiteral(
                                 "the TLS fingerprint reached the Qt logging handler, "
@@ -4573,14 +4582,15 @@ void TstStationSession::firstRunPairingBannerNeverReachesTheLoggingHandler()
     QVERIFY2(mentionsFirstRun,
              "nothing in the log says a first run provisioned anything");
 
-    // And what the operator IS shown carries both values intact. Asserted
-    // against the formatter rather than by capturing stdout, so the check
-    // is the same on every platform; writePairingBanner() is a single
-    // fwrite of exactly this string.
-    const QString banner = StationServer::formatPairingBanner(token, fingerprint,
-                                                              freshSecurity.path());
-    QVERIFY(banner.contains(token));
+    // And what the operator IS shown carries the pin intact and where the
+    // identity key is, with the prompt to back it up. Asserted against the
+    // formatter rather than by capturing stdout, so the check is the same
+    // on every platform; writePairingBanner() is a single fwrite of exactly
+    // this string.
+    const QString banner = StationServer::formatFirstRunBanner(fingerprint, keyPath);
     QVERIFY(banner.contains(fingerprint));
+    QVERIFY(banner.contains(keyPath));
+    QVERIFY(banner.contains(QStringLiteral("Back up")));
 
     // The other half of the same defect, pinned here because this is where
     // the two meet: even a fingerprint logged from somewhere else now
@@ -4611,7 +4621,7 @@ void TstStationSession::oversizedMessageIsRefusedBeforeAnyAuthentication()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
 
     // A RAW QWebSocket, not a StationClient: this peer is deliberately
@@ -4658,7 +4668,7 @@ void TstStationSession::clientCapsWhatAStationCanMakeItAllocate()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
 
     RadioModel clientModel(RadioModel::Role::Remote);
@@ -4762,7 +4772,7 @@ void TstStationSession::tokenIsNeverSentOnALinkWhosePinWasNeverChecked()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     auto* stationEnd = new LoopbackTransport(QStringLiteral("station"), this);
     auto* clientEnd = new LoopbackTransport(QStringLiteral("client"), this);
@@ -4830,7 +4840,7 @@ void TstStationSession::transientRefusalsStayRetryableAndABadTokenDoesNot()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setAuthDeadlineMs(0);  // out of the way; this slot is about refusals
 
     // ---- Peer-limit refusal ----
@@ -4863,7 +4873,7 @@ void TstStationSession::transientRefusalsStayRetryableAndABadTokenDoesNot()
              "reconnecting client that hits it gives up forever");
 
     // ---- Bad token, then the rate limit it produces ----
-    StationServer authServer(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer authServer(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     authServer.setAuthDeadlineMs(0);
     authServer.setAuthRateLimit(2, 60000);
 
@@ -4948,7 +4958,7 @@ void TstStationSession::lockedOutOperatorRetriesButABadTokenDoesNot()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     // One failure trips the lockout, so the sequence below is two dials
     // rather than six.
     server.setAuthRateLimit(1, 60000);
@@ -5005,7 +5015,7 @@ void TstStationSession::wssListenerComesUpAndCompletesAHandshake()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(1);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
     QVERIFY(server.isListening());
     QVERIFY(server.serverPort() != 0);
@@ -5040,7 +5050,7 @@ void TstStationSession::wssRefusesAMismatchedCertificateFingerprint()
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
 
     RadioModel clientModel(RadioModel::Role::Remote);
@@ -5160,7 +5170,8 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     // radioHardwareVersion (R-R3-46, Task 2) follows in the same block, then
     // remotePgxlControlVersion and remoteRfKitControlVersion (R-R3-47), then
     // stationTciVersion (R-R3-48), then accessoryDataVersion (R-R3-47), then
-    // remoteTgxlControlVersion (R-R3-47, the Tuner Genius's own settings).
+    // remoteTgxlControlVersion (R-R3-47, the Tuner Genius's own settings),
+    // then stationIdentityVersion (iPhone app Task 12).
     StationCapabilities sent = g21kCaps();
     sent.radioHardwareVersion = 1;
     sent.remotePgxlControlVersion = 1;
@@ -5168,9 +5179,10 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     sent.stationTciVersion = 1;
     sent.accessoryDataVersion = 1;
     sent.remoteTgxlControlVersion = 1;
+    sent.stationIdentityVersion = 1;
     const QList<MirrorUpdate> updates = sent.toUpdates();
     const int model = updateIndexOf(updates, "hpsdrModel");
-    QCOMPARE(model, int(updates.size()) - 9);
+    QCOMPARE(model, int(updates.size()) - 10);
     QCOMPARE(updateIndexOf(updates, "radioProtocol"), model + 1);
     QCOMPARE(updateIndexOf(updates, "radioAddress"), model + 2);
     QCOMPARE(updateIndexOf(updates, "radioHardwareVersion"), model + 3);
@@ -5179,6 +5191,7 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     QCOMPARE(updateIndexOf(updates, "stationTciVersion"), model + 6);
     QCOMPARE(updateIndexOf(updates, "accessoryDataVersion"), model + 7);
     QCOMPARE(updateIndexOf(updates, "remoteTgxlControlVersion"), model + 8);
+    QCOMPARE(updateIndexOf(updates, "stationIdentityVersion"), model + 9);
     const StationCapabilities received = StationCapabilities::fromUpdates(updates);
     QVERIFY(received.radioIdentityEntries);
     QCOMPARE(received.radioHardwareVersion, 1);
@@ -5187,6 +5200,7 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     QCOMPARE(received.stationTciVersion, 1);
     QCOMPARE(received.accessoryDataVersion, 1);
     QCOMPARE(received.remoteTgxlControlVersion, 1);
+    QCOMPARE(received.stationIdentityVersion, 1);
     QCOMPARE(received.hpsdrModel, HPSDRModel::ANAN_G2_1K);
     QCOMPARE(received.radioProtocol, 2);
     QCOMPARE(received.radioAddress, QStringLiteral("192.168.1.50"));
@@ -5240,7 +5254,7 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
         info.address = QHostAddress(QStringLiteral("192.168.1.50"));
         model->setLastRadioInfoForTest(info);
         model->setConnectionStateForTest(ConnectionState::Connected);
-        StationServer server(model.get(), settings, m_securityDir.path());
+        StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
         auto* station = new LoopbackTransport(QStringLiteral("identity-station"), this);
         auto* peer = new LoopbackTransport(QStringLiteral("identity-peer"), this);
         station->linkTo(peer);
@@ -5277,16 +5291,18 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
     for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
                              "radioHardwareVersion", "remotePgxlControlVersion",
                              "remoteRfKitControlVersion", "stationTciVersion",
-                             "accessoryDataVersion", "remoteTgxlControlVersion"}) {
+                             "accessoryDataVersion", "remoteTgxlControlVersion",
+                             "stationIdentityVersion"}) {
         QCOMPARE(updateIndexOf(older, name), -1);
     }
-    // Byte for byte: the minor-11 descriptor without the nine (and the
+    // Byte for byte: the minor-11 descriptor without the ten (and the
     // display budget reason, which is not sent here) is the minor-10 one.
     QList<MirrorUpdate> stripped = current;
     for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
                              "radioHardwareVersion", "remotePgxlControlVersion",
                              "remoteRfKitControlVersion", "stationTciVersion",
-                             "accessoryDataVersion", "remoteTgxlControlVersion"}) {
+                             "accessoryDataVersion", "remoteTgxlControlVersion",
+                             "stationIdentityVersion"}) {
         stripped.removeAt(updateIndexOf(stripped, name));
     }
     QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)),
@@ -5296,7 +5312,7 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
     QTemporaryDir dir;
     AppSettings settings(dir.filePath(QStringLiteral("no-radio.settings")));
     RadioModel noRadio;
-    StationServer server(&noRadio, settings, m_securityDir.path());
+    StationServer server(&noRadio, settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     const StationCapabilities none = server.buildCapabilities();
     QCOMPARE(none.board, HPSDRHW::Unknown);
     QCOMPARE(none.hpsdrModel, HPSDRModel::FIRST);
@@ -5461,7 +5477,7 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
         StepAttenuatorController controller;
         controller.setTickTimerEnabled(false);
         core->setStepAttController(&controller);
-        StationServer server(core.get(), settings, m_securityDir.path());
+        StationServer server(core.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
         auto* station = new LoopbackTransport(QStringLiteral("step-att-station"), this);
         auto* peer = new LoopbackTransport(QStringLiteral("step-att-peer"), this);
         station->linkTo(peer);
@@ -5649,7 +5665,7 @@ void joinHardwareWindow(HardwareSession& s, AppSettings& serverSettings, QObject
     s.stepAtt = std::make_unique<StepAttenuatorController>();
     s.stepAtt->setTickTimerEnabled(false);
     s.core->setStepAttController(s.stepAtt.get());
-    s.server = std::make_unique<StationServer>(s.core.get(), serverSettings, securityDir);
+    s.server = std::make_unique<StationServer>(s.core.get(), serverSettings, NereusSDR::Test::seedUpgradedCoreToken(securityDir));
     s.window = std::make_unique<RadioModel>(RadioModel::Role::Remote);
     s.proxy = std::make_unique<SettingsProxy>();
     s.client = std::make_unique<StationClient>(s.window.get(), s.proxy.get());
@@ -6286,7 +6302,7 @@ void TstStationSession::coreTakesTheFilterPolicyOnlyFromMinorElevenAtVersionFour
             core->setStepAttController(&controller);
         }
         const auto unbind = qScopeGuard([&core] { core->setStepAttController(nullptr); });
-        StationServer server(core.get(), settings, m_securityDir.path());
+        StationServer server(core.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
         auto* station = new LoopbackTransport(QStringLiteral("bpf-core"), this);
         auto* peer = new LoopbackTransport(QStringLiteral("bpf-peer"), this);
         station->linkTo(peer);

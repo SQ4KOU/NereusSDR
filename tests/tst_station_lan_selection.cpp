@@ -20,6 +20,7 @@
 #include "gui/StationLanSelection.h"
 #include "models/RadioModel.h"
 #include "fakes/MainWindowTestSettings.h"
+#include "fakes/UpgradedCoreToken.h"
 using namespace NereusSDR;
 
 namespace {
@@ -94,7 +95,7 @@ private slots:
         QTemporaryDir directory;
         AppSettings stationSettings(directory.filePath(QStringLiteral("station.settings")));
         RadioModel radio;
-        StationServer server(&radio, stationSettings, directory.path());
+        StationServer server(&radio, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(directory.path()));
         QVERIFY(server.listen(QHostAddress::LocalHost, 0));
         const auto saved = savedCore(server.certificateFingerprint(), server.token());
         CoreTargetStore store(AppSettings::instance());
@@ -143,7 +144,7 @@ private slots:
         QTemporaryDir directory;
         AppSettings stationSettings(directory.filePath(QStringLiteral("station.settings")));
         RadioModel radio;
-        StationServer server(&radio, stationSettings, directory.path());
+        StationServer server(&radio, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(directory.path()));
         QVERIFY(server.listen(QHostAddress::LocalHost, 0));
         GuiConnectionController controller;
         controller.start({});
@@ -184,7 +185,7 @@ private slots:
         QTemporaryDir directory;
         AppSettings stationSettings(directory.filePath(QStringLiteral("station.settings")));
         RadioModel radio;
-        StationServer server(&radio, stationSettings, directory.path());
+        StationServer server(&radio, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(directory.path()));
         QVERIFY(server.listen(QHostAddress::LocalHost, 0));
         auto packet = advertisement(server);
         packet.fingerprint[0] = packet.fingerprint[0] == QLatin1Char('A') ? QLatin1Char('B') : QLatin1Char('A');

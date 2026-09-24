@@ -101,8 +101,9 @@ public:
     /// `address` (empty over the relay). Nothing for an unknown id.
     void touch(const QByteArray& id, const QString& address);
 
-    /// Any paired device, or a pairing token not yet retired, or a store
-    /// that could not be read (see the header comment).
+    /// Any paired device, or a pairing token not yet retired (or a token
+    /// file that could not be read), or a store that could not be read
+    /// (see the header comment).
     bool isClaimed() const;
 
     /// Injected clock for pairedAt and lastSeen. Default: the system's

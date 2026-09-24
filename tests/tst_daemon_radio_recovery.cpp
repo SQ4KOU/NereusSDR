@@ -33,6 +33,18 @@
 #include "fakes/P2FakeRadio.h"
 
 using namespace NereusSDR;
+
+namespace {
+// iPhone app Task 12 put the Core's listener on by default (TCP 47910 on
+// every interface). A test Core opens no listener unless the test asks for
+// one on a port of its own.
+NereusSDR::DaemonConfig testCoreConfig()
+{
+    NereusSDR::DaemonConfig config = NereusSDR::DaemonConfig::defaults();
+    config.remotePort = 0;
+    return config;
+}
+} // namespace
 using NereusSDR::Test::P1FakeRadio;
 
 namespace {
@@ -136,7 +148,7 @@ private slots:
         app.m_discoveryProviderForTest = [&]() {
             return available.load() ? QList<RadioInfo>{info} : QList<RadioInfo>{};
         };
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.radioMac = info.macAddress;
         cfg.sliceCount = 2;
         cfg.sampleRateHz = 48000;
@@ -399,7 +411,7 @@ private slots:
             ++scans;
             return available.load() ? QList<RadioInfo>{wrong, info} : QList<RadioInfo>{wrong};
         };
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.radioMac = info.macAddress.toUpper();
         cfg.sliceCount = 2;
         QVERIFY(app.start(cfg));
@@ -435,7 +447,7 @@ private slots:
         };
         RadioDiscovery guard;
         guard.holdOffScans(std::chrono::seconds(10));
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.radioMac = busy.macAddress;
         QVERIFY(app.start(cfg));
         QTRY_VERIFY(app.m_radioRetryTimer->interval() > 1000);
@@ -471,7 +483,7 @@ private slots:
         pulse.setInterval(1);
         connect(&pulse, &QTimer::timeout, &app, [&]() { ++ticks; });
         pulse.start();
-        QVERIFY(app.start(DaemonConfig::defaults()));
+        QVERIFY(app.start(testCoreConfig()));
         QTRY_VERIFY(entered.load() && ticks > 2);
         QVERIFY(workerThread.load());
         app.stop();
@@ -481,7 +493,7 @@ private slots:
         QVERIFY(!app.m_radioRetryTimer->isActive());
 
         app.primeBoardForTest(HPSDRHW::HermesLite);
-        QVERIFY(app.start(DaemonConfig::defaults()));
+        QVERIFY(app.start(testCoreConfig()));
         QCoreApplication::processEvents();
         QVERIFY(!app.m_radioModel->connection());
         QVERIFY(!app.m_radioDiscoveryThread);
@@ -496,7 +508,7 @@ private slots:
         DaemonApp app;
         prepare(app);
         app.m_discoveryProviderForTest = [info]() { return QList<RadioInfo>{info}; };
-        QVERIFY(app.start(DaemonConfig::defaults()));
+        QVERIFY(app.start(testCoreConfig()));
         bool stopReached = false;
         connect(app.m_radioModel->wdspEngine(), &WdspEngine::initializedChanged,
                 &app, [&](bool ready) {
@@ -533,7 +545,7 @@ private slots:
             }
             return QList<RadioInfo>{candidate};
         };
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 2;
         QVERIFY(app.start(cfg));
         QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 10000);
@@ -598,7 +610,7 @@ private slots:
         RadioInfo info = fake.radioInfo();
         info.name = QStringLiteral("Fake P2 ANAN-G2");
         info.boardType = HPSDRHW::Saturn; // ANAN-G2 capability row: five receivers
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.radioMac = info.macAddress;
         cfg.sliceCount = 1;
         cfg.sampleRateHz = 48000;

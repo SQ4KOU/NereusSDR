@@ -106,6 +106,7 @@
 #include "models/TunerModel.h"
 
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::LoopbackTransport;
@@ -733,7 +734,7 @@ void RemotePeripheralsTest::remoteAmpAndRfKitAppletsFollowTheCore()
     station.rfKitModel()->setStationConnectionState(up);
     station.rfKitModel()->applyPower(rfKitPower(850, 1.4f, 27.0f, 52.7f, 0.0f));
     AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
-    StationServer server(&station, stationSettings, dir.path());
+    StationServer server(&station, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
 
     RadioModel window(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -1251,7 +1252,7 @@ void RemotePeripheralsTest::remoteWindowSetsUpThePgxlThroughTheCore()
     station.smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
     station.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
     AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
-    StationServer server(&station, stationSettings, dir.path());
+    StationServer server(&station, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
     QSignalSpy stationFrames(station.pgxlConnection(), &PgxlConnection::testFrameWrittenForTesting);
 
     RadioModel window(RadioModel::Role::Remote);
@@ -1385,7 +1386,7 @@ void RemotePeripheralsTest::receiveOnlyCoreRefusesTunerAndAmpOperation()
     const bool bypassBefore = station.tunerModel()->isBypass();
     const int antennaBefore = station.tunerModel()->antennaA();
     AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
-    StationServer server(&station, stationSettings, dir.path());
+    StationServer server(&station, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
 
     auto* core = new LoopbackTransport(QStringLiteral("core"), this);
     auto* peer = new LoopbackTransport(QStringLiteral("raw-gui"), this);
@@ -1467,7 +1468,7 @@ void RemotePeripheralsTest::remoteWindowSetsUpTheRfKitThroughTheCore()
     station.setLastRadioInfoForTest(radio);
     station.setConnectionStateForTest(ConnectionState::Connected);
     AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
-    StationServer server(&station, stationSettings, dir.path());
+    StationServer server(&station, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
 
     RadioModel window(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -1606,7 +1607,7 @@ void RemotePeripheralsTest::rawRfKitSwitchWriteIsRefused()
     station.setConnectionStateForTest(ConnectionState::Connected);
     QVERIFY(!station.rfKitEnabled());
     AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
-    StationServer server(&station, stationSettings, dir.path());
+    StationServer server(&station, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
 
     auto* core = new LoopbackTransport(QStringLiteral("core"), this);
     auto* peer = new LoopbackTransport(QStringLiteral("raw-gui"), this);
@@ -1700,7 +1701,7 @@ void RemotePeripheralsTest::pgxlBandFollowLineLocalAndRemote()
     RadioModel station;
     station.enableStationAccessoryIdentity();
     AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
-    StationServer server(&station, stationSettings, dir.path());
+    StationServer server(&station, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
     RadioModel window(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&window, &proxy);
@@ -1741,7 +1742,7 @@ void RemotePeripheralsTest::oneTciSwitchDrivesTheCoresStationServer()
     AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
     // The Core's own settings store: where its station TCI switch is kept
     // (StationTciController) and what the window's settings snapshot reads.
-    StationServer server(&station, AppSettings::instance(), dir.path());
+    StationServer server(&station, AppSettings::instance(), NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
     QCOMPARE(server.stationTciVersion(), 1);
 
     auto window = std::make_unique<RadioModel>(RadioModel::Role::Remote);
@@ -1853,7 +1854,7 @@ void RemotePeripheralsTest::coreHereServesThisComputersApps()
     AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
     // The Core's own settings store: where its station TCI switch is kept
     // (StationTciController) and what the window's settings snapshot reads.
-    StationServer server(&station, AppSettings::instance(), dir.path());
+    StationServer server(&station, AppSettings::instance(), NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
 
     RadioModel window(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -1937,7 +1938,7 @@ struct TciCoreAndWindow {
     void start()
     {
         station.enableStationTci(QStringLiteral("127.0.0.1"));   // reads the Core's switch
-        server = std::make_unique<StationServer>(&station, AppSettings::instance(), dir.path());
+        server = std::make_unique<StationServer>(&station, AppSettings::instance(), NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
     }
     bool connect(QObject* owner)
     {
@@ -2026,10 +2027,10 @@ void RemotePeripheralsTest::connectRuleReadsTheCurrentCore()
     QVERIFY(dir.isValid());
     AppSettings::instance().setValue(QStringLiteral("StationTci_Enabled"), QStringLiteral("False"));
     RadioModel coreA;   // keeps a switch (the process's settings are its store)
-    StationServer serverA(&coreA, AppSettings::instance(), dir.path());
+    StationServer serverA(&coreA, AppSettings::instance(), NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
     RadioModel coreB;   // keeps none
     AppSettings storeB(dir.filePath(QStringLiteral("b.settings")));
-    StationServer serverB(&coreB, storeB, dir.path());
+    StationServer serverB(&coreB, storeB, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
 
     RadioModel window(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -2069,7 +2070,8 @@ struct CoreAndWindow {
     StationClient client{&window, &proxy};
     CoreAndWindow()
         : stationSettings(dir.filePath(QStringLiteral("station.settings")))
-        , server((prepareStation(station), &station), stationSettings, dir.path())
+        , server((prepareStation(station), &station), stationSettings,
+                 NereusSDR::Test::seedUpgradedCoreToken(dir.path()))
     {
         window.attachStation(&client);
     }

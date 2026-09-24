@@ -60,6 +60,7 @@
 #include "core/settings/SettingsProxy.h"
 #include "fakes/LoopbackTransport.h"
 #include "models/RadioModel.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::LoopbackTransport;
@@ -382,7 +383,7 @@ void TstLinkVersion::stationHelloDeclaresItsMajorsAndFeatures()
     RadioModel model;
 
     {
-        StationServer server(&model, settings, m_securityDir.path());
+        StationServer server(&model, settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
         QCOMPARE(server.supportedMajors(), (MajorList{1}));
         auto* station = new LoopbackTransport(QStringLiteral("station"), this);
         auto* app = new LoopbackTransport(QStringLiteral("app"), this);
@@ -394,12 +395,15 @@ void TstLinkVersion::stationHelloDeclaresItsMajorsAndFeatures()
         QCOMPARE(hello.value(QStringLiteral("minor")).toInt(), int(kSessionProtocolMinor));
         QCOMPARE(majorsOf(hello), (MajorList{1}));
         QVERIFY(hello.value(QStringLiteral("features")).isObject());
-        QVERIFY(hello.value(QStringLiteral("features")).toObject().isEmpty());
+        // iPhone app Task 12: device sign-in, the one feature declared so
+        // far.
+        QCOMPARE(hello.value(QStringLiteral("features")).toObject(),
+                 (QJsonObject{{QStringLiteral("deviceAuth"), 1}}));
     }
     {
         // Injected: the station's hello names its oldest major, which a
         // client built before `majors` existed reads, and the list.
-        StationServer server(&model, settings, m_securityDir.path(), nullptr, MajorList{1, 2});
+        StationServer server(&model, settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()), nullptr, MajorList{1, 2});
         auto* station = new LoopbackTransport(QStringLiteral("station"), this);
         auto* app = new LoopbackTransport(QStringLiteral("app"), this);
         station->linkTo(app);
@@ -438,7 +442,7 @@ void TstLinkVersion::stationNegotiation()
     QTemporaryDir settingsDir;
     AppSettings settings(settingsDir.filePath(QStringLiteral("station.settings")));
     RadioModel model;
-    StationServer server(&model, settings, m_securityDir.path(), nullptr, stationMajors);
+    StationServer server(&model, settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()), nullptr, stationMajors);
     auto* station = new LoopbackTransport(QStringLiteral("station"), this);
     auto* app = new LoopbackTransport(QStringLiteral("app"), this);
     station->linkTo(app);
@@ -479,7 +483,7 @@ void TstLinkVersion::peerDeclaresWhatItsHelloDeclared()
     QTemporaryDir settingsDir;
     AppSettings settings(settingsDir.filePath(QStringLiteral("station.settings")));
     RadioModel model;
-    StationServer server(&model, settings, m_securityDir.path());
+    StationServer server(&model, settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
     auto* station = new LoopbackTransport(QStringLiteral("station"), this);
     auto* app = new LoopbackTransport(QStringLiteral("app"), this);
@@ -528,7 +532,7 @@ void TstLinkVersion::aClientBuiltBeforeMajorsIsServedByATwoMajorStation()
     QTemporaryDir settingsDir;
     AppSettings settings(settingsDir.filePath(QStringLiteral("station.settings")));
     RadioModel model;
-    StationServer server(&model, settings, m_securityDir.path(), nullptr, stationMajors);
+    StationServer server(&model, settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()), nullptr, stationMajors);
     auto* station = new LoopbackTransport(QStringLiteral("station"), this);
     auto* app = new LoopbackTransport(QStringLiteral("app"), this);
     station->linkTo(app);
@@ -699,7 +703,7 @@ void TstLinkVersion::stationTlsMinimumIsTls12OrLater()
     QTemporaryDir settingsDir;
     AppSettings settings(settingsDir.filePath(QStringLiteral("station.settings")));
     RadioModel model;
-    StationServer server(&model, settings, m_securityDir.path());
+    StationServer server(&model, settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
     // Read back from the listener itself, not from the code that built it.
     QCOMPARE(server.tlsConfiguration().protocol(), QSsl::TlsV1_2OrLater);
@@ -750,7 +754,7 @@ void TstLinkVersion::stationRefusesATls11Handshake()
     QTemporaryDir settingsDir;
     AppSettings settings(settingsDir.filePath(QStringLiteral("station.settings")));
     RadioModel model;
-    StationServer server(&model, settings, m_securityDir.path());
+    StationServer server(&model, settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
 
     // The control: a listener of this test's own, with the station's

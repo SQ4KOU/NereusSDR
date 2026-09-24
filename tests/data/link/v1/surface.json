@@ -234,6 +234,11 @@
             "kind": "i64",
             "name": "remoteTgxlControlVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "stationIdentityVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -1622,18 +1627,21 @@
     "messageKinds": {
         "auth.request": {
             "optional": [
+                "device"
             ],
             "required": [
                 "token",
                 "type"
             ],
             "types": {
+                "device": "object",
                 "token": "string",
                 "type": "string"
             }
         },
         "auth.result": {
             "optional": [
+                "code",
                 "retryable"
             ],
             "required": [
@@ -1643,6 +1651,7 @@
             ],
             "types": {
                 "accepted": "boolean",
+                "code": "string",
                 "reason": "string",
                 "retryable": "boolean",
                 "type": "string"
@@ -1714,7 +1723,9 @@
         },
         "hello": {
             "optional": [
+                "challenge",
                 "features",
+                "identity",
                 "majors"
             ],
             "required": [
@@ -1725,7 +1736,9 @@
                 "type"
             ],
             "types": {
+                "challenge": "string",
                 "features": "object",
+                "identity": "object",
                 "major": "number",
                 "majors": "array",
                 "minor": "number",
@@ -1824,6 +1837,7 @@
         },
         "session.end": {
             "optional": [
+                "code",
                 "retryable"
             ],
             "required": [
@@ -1831,6 +1845,7 @@
                 "type"
             ],
             "types": {
+                "code": "string",
                 "reason": "string",
                 "retryable": "boolean",
                 "type": "string"

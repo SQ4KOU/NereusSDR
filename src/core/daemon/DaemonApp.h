@@ -107,6 +107,7 @@
 #include "core/spectrum/FftTopology.h"
 
 #include <QElapsedTimer>
+#include <QHostAddress>
 #include <QObject>
 #include "core/ConnectionState.h"
 
@@ -155,6 +156,11 @@ class DaemonApp : public QObject {
     Q_OBJECT
 
 public:
+    /// iPhone app Task 12: the address remote_bind names; empty is every
+    /// interface, IPv4 and IPv6 (QHostAddress::Any, dual stack). A null
+    /// address for text that is not one.
+    static QHostAddress listenerAddressFor(const QString& bind);
+
     explicit DaemonApp(QObject* parent = nullptr);
     ~DaemonApp() override;
 
@@ -445,7 +451,8 @@ private:
     int m_stationListenRetryMaximumMs {30000};
     int m_stationListenNextDelayMs {1000};
     int m_stationListenAttemptCount {0};
-    QString m_stationListenBind;
+    QString m_stationListenBind;  // empty: every interface (iPhone app Task 12)
+    bool m_stationListenArmed {false};
     quint16 m_stationListenPort {0};
     /// Must be destroyed before StationServer/RadioModel: it owns queued
     /// source, peer and endpoint work referring to both.

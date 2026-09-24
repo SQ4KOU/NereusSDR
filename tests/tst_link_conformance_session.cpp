@@ -29,7 +29,12 @@
 //                    peer's
 //   otherConnections other clients connected and still connecting, which
 //                    send nothing (0); with 8 the station is at its limit
-//   clientAnswersPings, preemptingClient   read by the player itself
+//   token            "active": a Core upgraded from before paired devices,
+//                    with its pairing token; "none": a new Core, without one
+//                    ("active")
+//   clientAnswersPings, preemptingClient, pairedDevice   read by the
+//                    player itself (pairedDevice: the runner's own device,
+//                    made at run time, is paired before the client connects)
 //
 // NEREUS_LINK_TRACE_DIR, when set, receives every message the station sent
 // in each fixture (<id>.jsonl), for writing a fixture to what the code does.
@@ -68,6 +73,11 @@
 //                                    arguments may be left out of either
 //                                    leg's check (setPgxlHardware).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08):
+//                                    stationSetup "token" and
+//                                    "pairedDevice" for the device sign-in
+//                                    fixtures. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -90,7 +100,6 @@
 #include "core/StepAttenuatorController.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/meters/SliceMeterPump.h"
-#include "core/security/TokenStore.h"
 #include "core/session/LinkVersion.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/session/SessionCommandDispatcher.h"
@@ -104,6 +113,7 @@
 #include "OperatorWording.h"
 #include "fakes/ConnectableRadioModel.h"
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::ConnectableRadioModel;
@@ -118,7 +128,8 @@ const QStringList kSetupKeys{
     QStringLiteral("stationTci"),      QStringLiteral("stepAttenuator"),
     QStringLiteral("media"),           QStringLiteral("priorFailedAuthentications"),
     QStringLiteral("clientAnswersPings"), QStringLiteral("preemptingClient"),
-    QStringLiteral("otherConnections"),
+    QStringLiteral("otherConnections"), QStringLiteral("token"),
+    QStringLiteral("pairedDevice"),
 };
 
 // The station a fixture's stationSetup describes. Members are declared in
@@ -215,12 +226,19 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         }
     }
 
-    // Provision the throwaway token first, so the server loads it rather
-    // than generating one and printing its first-run pairing banner.
-    { TokenStore provision(station->dir.path()); }
     // A station that offers exactly the link major this pass covers.
+    // iPhone app Task 12: "token": "active" (the default) stands up a Core
+    // upgraded from before paired devices, which still has its token;
+    // "none" a new Core, which has none.
+    const QString token = setup.value(QStringLiteral("token")).toString(QStringLiteral("active"));
+    if (token != QStringLiteral("active") && token != QStringLiteral("none")) {
+        return QStringLiteral("stationSetup.token must be \"active\" or \"none\"");
+    }
+    const QString securityDir = token == QStringLiteral("active")
+                                    ? NereusSDR::Test::seedUpgradedCoreToken(station->dir.path())
+                                    : NereusSDR::Test::seedCoreIdentity(station->dir.path());
     station->server = std::make_unique<StationServer>(station->model, *station->settings,
-                                                      station->dir.path(), nullptr,
+                                                      securityDir, nullptr,
                                                       QList<quint16>{major});
     if (setup.value(QStringLiteral("media")).toBool(false)) {
         station->server->setMediaEnabled(true);

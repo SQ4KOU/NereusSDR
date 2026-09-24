@@ -7198,6 +7198,12 @@ nereus_add_test(tst_certificate_store)
 nereus_add_test(tst_station_identity)
 nereus_add_test(tst_station_label)
 nereus_add_test(tst_device_store)
+# The device sign-in itself: the authenticator's refusals and rate limits
+# (injected clock), and the link's refusals, token enrolment and admission
+# over the in-process loopback.
+nereus_add_test(tst_device_auth
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 
 # Remote Daemon R2, Task 18: the wss session. Everything tasks 7 through 17
 # built converges here -- StateMirror, ObjectRegistry,

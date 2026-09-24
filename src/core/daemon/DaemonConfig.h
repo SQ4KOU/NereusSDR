@@ -42,6 +42,10 @@
 //   2026-09-23: display_adaptive key (R-R3-08, R-R3-37, R-R3-40). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: iPhone app Task 12 (R-IOS-08): the listener is on by
+//               default (TCP 47910, every interface, IPv4 and IPv6) unless
+//               the file sets remote_port or remote_bind; pairing_lan_click.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -84,27 +88,44 @@ struct DaemonConfig {
                                                 // applied later, by R1 Task 10
     QString audioDevice;                       // empty = platform default
 
-    // ── Remote Daemon R2 Task 18: the wss control plane ──────────────────
+    // ── The wss control plane (R2 Task 18; defaults since iPhone app Task 12) ──
     //
-    // remotePort 0 means DO NOT LISTEN, and that is the default on
-    // purpose. A daemon that binds a listener on first install, with a
-    // pairing token printed to a log the operator may not have read, is a
-    // worse default than one line of config: R2's own demo is two
-    // processes on one host (design addendum section 2), so nothing needs
-    // a listener until somebody asks for one. Turning it on is
-    // `remote_port = <port>`.
+    // The listener is ON by default: TCP 47910 on every interface, IPv4 and
+    // IPv6 (remoteBind empty; DaemonApp binds QHostAddress::Any, which is
+    // dual stack). Pairing is what makes that safe to expose: since iPhone
+    // app Task 12 a Core admits only paired devices (and, on a Core
+    // upgraded from before pairing, windows holding its token), and the
+    // pairing design's first-run workflow (section 11) needs the Core
+    // reachable with no configuration at all.
     //
-    // remoteBind defaults to loopback for the same reason. An operator who
-    // wants the daemon reachable from another machine sets it explicitly,
-    // which is also the moment they are thinking about who can reach it.
+    // A file that sets remote_port or remote_bind keeps exactly what it
+    // meant before this default changed: the key it leaves out takes the
+    // earlier default (port 0, off; bind 127.0.0.1, this machine only).
+    // So a Core configured by hand, like the Rock with its explicit
+    // remote_port, listens where it always did. remote_port = 0 still turns
+    // the listener (and with it the LAN announcement) off.
     //
     // Both feed StationServer::listen() from DaemonApp::start(); see
     // packaging/nereusd.conf.sample, and note that a key reaching this
     // struct must reach behaviour AND the sample, which
     // tst_daemon_config's sampleFileKeysAndParserKeysAgree pins.
+    static constexpr int kDefaultRemotePort = 47910;
+    /// What a file that sets one of remote_port / remote_bind gets for the
+    /// other: the defaults from before iPhone app Task 12.
+    static constexpr int kExplicitConfigRemotePort = 0;
+    static constexpr const char* kExplicitConfigRemoteBind = "127.0.0.1";
     QString coreName;                         // empty = machine hostname for LAN discovery
-    int     remotePort {0};
-    QString remoteBind {QStringLiteral("127.0.0.1")};
+    int     remotePort {kDefaultRemotePort};
+    QString remoteBind;                       // empty = every interface, IPv4 and IPv6
+
+    // iPhone app Task 12 (R-IOS-08; pairing design section 4.2): whether a
+    // device on this Core's own network may pair with one tap while the
+    // Core is unclaimed. nereusd.conf `pairing_lan_click = allow|deny`,
+    // default allow; deny makes every pairing use the code. Any other value
+    // logs one warning and keeps allow. Feeds
+    // StationServer::setPairingLanClickAllowed() from
+    // DaemonApp::startStationServer(); the pairing window (Task 14) reads it.
+    bool    pairingLanClickAllowed {true};
 
     // R-R3-22 / R-R3-47 / R-R3-48: the station network, where every station
     // listener accepts connections: the SmartSDR API listener on TCP 4992,

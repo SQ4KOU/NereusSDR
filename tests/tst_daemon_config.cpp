@@ -21,6 +21,10 @@
 // R-R3-22 / R-R3-47 (2026-09-24): station_bind, and the older
 // station_tci_bind still read beneath it.
 //
+// iPhone app Task 12 (2026-09-24): the listener is on by default (47910,
+// every interface), a file that sets remote_port or remote_bind keeps its
+// meaning, and pairing_lan_click.
+//
 // Remote Daemon R2, Task 1: resolveDaemonProfileArgument() gained a
 // `wasSet` parameter and inverted its absent-flag default (nereusd's
 // own reserved profile instead of silently sharing the GUI's directory).
@@ -202,6 +206,9 @@ private slots:
             // too but no longer documented as a key of its own; see
             // stationBindReadsTheOlderTciName.)
             QStringLiteral("station_bind"),
+            // iPhone app Task 12: reaches StationServer::
+            // setPairingLanClickAllowed() from DaemonApp::startStationServer().
+            QStringLiteral("pairing_lan_click"),
         };
 
         // Each documented key parses without an "unknown key" complaint.
@@ -223,7 +230,8 @@ private slots:
                 "thread_placement = off\n"
                 "display_adaptive = off\n"
                 "audio_lossless = deny\n"
-                "station_bind = 192.168.1.20\n");
+                "station_bind = 192.168.1.20\n"
+                "pairing_lan_click = deny\n");
         f.flush();
         QString err;
         const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
@@ -240,6 +248,7 @@ private slots:
         QCOMPARE(c.displayAdaptive, false);
         QCOMPARE(c.audioLosslessAllowed, false);
         QCOMPARE(c.stationBind, QStringLiteral("192.168.1.20"));
+        QCOMPARE(c.pairingLanClickAllowed, false);
         const std::optional<DisplayBudgetLimits> limits = c.displayBudgetLimits();
         QVERIFY(limits.has_value());
         QCOMPARE(limits->applicationBytesPerSecond, quint64(2400000));
@@ -550,13 +559,118 @@ private slots:
     // constructed config must not bind anything, and must bind loopback
     // when it does. Pinned because flipping either default silently turns
     // every existing nereusd install into a network service.
-    void remoteListenerIsOptInAndLoopbackByDefault()
+    // iPhone app Task 12 (R-IOS-08): with no remote_port line the Core
+    // listens on 47910 on every interface, IPv4 and IPv6 (remote_bind empty;
+    // DaemonApp binds QHostAddress::Any), and announces.
+    void listenerIsOnEveryInterfaceByDefault()
     {
         const DaemonConfig d = DaemonConfig::defaults();
-        QCOMPARE(d.remotePort, 0);
-        QCOMPARE(d.remoteBind, QStringLiteral("127.0.0.1"));
+        QCOMPARE(d.remotePort, 47910);
+        QVERIFY(d.remoteBind.isEmpty());
+        QVERIFY(d.pairingLanClickAllowed);
         QString err;
         QVERIFY(d.validate(&err));
+
+        QTemporaryFile f;
+        QVERIFY(f.open());
+        f.write("slice_count = 2\n");
+        f.flush();
+        const DaemonConfig noListenerLines = DaemonConfig::fromFile(f.fileName(), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QCOMPARE(noListenerLines.remotePort, 47910);
+        QVERIFY(noListenerLines.remoteBind.isEmpty());
+
+        // The shipped sample leaves both keys commented out, so a Core
+        // installed from it listens by default too.
+        const DaemonConfig sample = DaemonConfig::fromFile(
+            QStringLiteral(NEREUS_SOURCE_DIR "/packaging/nereusd.conf.sample"), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QCOMPARE(sample.remotePort, 47910);
+        QVERIFY(sample.remoteBind.isEmpty());
+        QVERIFY(sample.pairingLanClickAllowed);
+        QVERIFY(sample.validate(&err));
+    }
+
+    // A Core whose file sets the port or the bind keeps what the file meant
+    // before the default changed: the Rock, with remote_port set and no
+    // remote_bind, still listens on its port on this machine only; a file
+    // with only remote_bind stays off; remote_port = 0 is off.
+    void aFileThatSetsTheListenerKeepsItsMeaning_data()
+    {
+        QTest::addColumn<QByteArray>("contents");
+        QTest::addColumn<int>("port");
+        QTest::addColumn<QString>("bind");
+        QTest::newRow("port only (the Rock)")
+            << QByteArray("remote_port = 50055\n") << 50055 << QStringLiteral("127.0.0.1");
+        QTest::newRow("port and bind")
+            << QByteArray("remote_port = 50055\nremote_bind = 0.0.0.0\n") << 50055
+            << QStringLiteral("0.0.0.0");
+        QTest::newRow("bind only") << QByteArray("remote_bind = 0.0.0.0\n") << 0
+                                   << QStringLiteral("0.0.0.0");
+        QTest::newRow("off") << QByteArray("remote_port = 0\n") << 0 << QStringLiteral("127.0.0.1");
+        QTest::newRow("unparseable port still counts as set")
+            << QByteArray("remote_port = many\n") << 0 << QStringLiteral("127.0.0.1");
+    }
+
+    void aFileThatSetsTheListenerKeepsItsMeaning()
+    {
+        QFETCH(QByteArray, contents);
+        QFETCH(int, port);
+        QFETCH(QString, bind);
+        QTemporaryFile f;
+        QVERIFY(f.open());
+        f.write(contents);
+        f.flush();
+        QString err;
+        if (contents.contains("many")) {
+            QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("remote_port")));
+        }
+        const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QCOMPARE(c.remotePort, port);
+        QCOMPARE(c.remoteBind, bind);
+    }
+
+    void remoteBindMustBeEmptyOrAnAddress()
+    {
+        DaemonConfig c = DaemonConfig::defaults();
+        QString err;
+        c.remoteBind = QStringLiteral("not-an-address");
+        QVERIFY(!c.validate(&err));
+        QVERIFY(err.contains(QStringLiteral("remote_bind")));
+        c.remoteBind = QStringLiteral("::1");
+        QVERIFY(c.validate(&err));
+    }
+
+    void pairingLanClickIsAllowOrDeny_data()
+    {
+        QTest::addColumn<QByteArray>("contents");
+        QTest::addColumn<bool>("allowed");
+        QTest::addColumn<bool>("warns");
+        QTest::newRow("absent") << QByteArray("slice_count = 1\n") << true << false;
+        QTest::newRow("allow") << QByteArray("pairing_lan_click = allow\n") << true << false;
+        QTest::newRow("deny") << QByteArray("pairing_lan_click = deny\n") << false << false;
+        QTest::newRow("Deny") << QByteArray("pairing_lan_click = Deny\n") << false << false;
+        QTest::newRow("garbage") << QByteArray("pairing_lan_click = sometimes\n") << true << true;
+    }
+
+    void pairingLanClickIsAllowOrDeny()
+    {
+        QFETCH(QByteArray, contents);
+        QFETCH(bool, allowed);
+        QFETCH(bool, warns);
+        QTemporaryFile f;
+        QVERIFY(f.open());
+        f.write(contents);
+        f.flush();
+        if (warns) {
+            QTest::ignoreMessage(QtWarningMsg,
+                                 QRegularExpression(QStringLiteral("pairing_lan_click must be")));
+        }
+        QString err;
+        const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QCOMPARE(c.pairingLanClickAllowed, allowed);
     }
 
     void rejectsRemotePortOutOfRange()
@@ -643,6 +757,9 @@ private slots:
         DaemonConfig c = DaemonConfig::fromFile("/nonexistent/nereusd.conf", &err);
         QVERIFY(!err.isEmpty());
         QCOMPARE(c.sliceCount, DaemonConfig::defaults().sliceCount);
+        // No file at all is no remote_port line either: the Core listens.
+        QCOMPARE(c.remotePort, DaemonConfig::kDefaultRemotePort);
+        QVERIFY(c.remoteBind.isEmpty());
     }
 
     // Remote Daemon R2, Task 1: absent (wasSet == false) now reserves

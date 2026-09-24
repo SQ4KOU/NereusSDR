@@ -178,6 +178,12 @@
 //                                    3 and tgxlControlVersion 1, the amp's
 //                                    and tuner's own settings. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08,
+//                                    R-IOS-02): the Core's identity key,
+//                                    paired devices and device sign-in;
+//                                    token enrolment; the first-run banner
+//                                    names the identity key. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -203,6 +209,9 @@ namespace NereusSDR {
 
 class AppSettings;
 class CertificateStore;
+class DeviceAuthenticator;
+class DeviceStore;
+class StationIdentity;
 class ObjectRegistry;
 class RadioModel;
 class SessionCommandDispatcher;
@@ -345,22 +354,30 @@ public:
     /// descriptions) is asked here. An older app declares nothing.
     bool peerDeclares(SessionTransport* peer, const QByteArray& feature, int minVersion) const;
 
-    /// The generated pre-shared token and the TLS fingerprint a client has
-    /// to be given out of band. Empty when provisioning failed.
+    /// The pairing token of a Core upgraded from before paired devices,
+    /// until it is retired; empty on a new Core (iPhone app Task 12: none
+    /// is generated any more). And the TLS fingerprint a client pins.
     QString token() const;
     QString certificateFingerprint() const;
 
-    /// The first-run pairing block, exactly as the operator is shown it.
+    /// iPhone app Task 12 (R-IOS-08): the Core's paired devices and its
+    /// identity key. Never null / always present; the identity may be
+    /// invalid (StationIdentity::isValid()) when its file is damaged, and
+    /// then listen() refuses.
+    DeviceStore* deviceStore() const;
+    const StationIdentity& stationIdentity() const;
+
+    /// The first-run block, exactly as the operator is shown it: the TLS
+    /// pin and the identity key's path with the prompt to back it up.
     ///
-    /// Pure and public for two reasons. It keeps the one place the token
+    /// Pure and public for two reasons. It keeps the one place the block
     /// is FORMATTED separate from the one place it is WRITTEN, so the
     /// write side can be a single stdout call with no formatting logic in
     /// it; and it lets a test assert on the exact text without capturing a
     /// stream. See writePairingBanner() in the .cpp for why the banner
     /// does not go through qCInfo() like every other line in this class.
-    static QString formatPairingBanner(const QString& token,
-                                       const QString& fingerprint,
-                                       const QString& storedIn);
+    static QString formatFirstRunBanner(const QString& fingerprint,
+                                        const QString& identityKeyPath);
 
     /// Adopt an already-connected transport as a new peer. This is what
     /// the QWebSocketServer's newConnection handler calls, and it is also
@@ -393,6 +410,13 @@ public:
     /// header for the semantics and for why RateLimited is a distinct
     /// outcome from Rejected. Defaults are TokenStore's own.
     void setAuthRateLimit(int maxFailures, int lockoutMs);
+
+    /// iPhone app Task 12: nereusd.conf's `pairing_lan_click = allow|deny`
+    /// (default allow). Whether a device on this Core's own network may
+    /// pair with one tap while the Core is unclaimed; the pairing window
+    /// (Task 14) reads it. Deny forces the code for every pairing.
+    void setPairingLanClickAllowed(bool allowed) { m_pairingLanClickAllowed = allowed; }
+    bool pairingLanClickAllowed() const { return m_pairingLanClickAllowed; }
 
     /// See kDefaultAuthDeadlineMs. Values below 1 disable the deadline,
     /// which is logged as a warning rather than silently accepted.
@@ -537,6 +561,12 @@ private:
         quint16 agreedMajor = 0;
         QHash<QByteArray, int> features;
         bool snapshotComplete = false;
+        /// iPhone app Task 12: this connection's device sign-in challenge
+        /// (32 bytes, sent in the hello) and, once authenticated, the
+        /// paired device it signed in as (empty for a token sign-in that
+        /// enrolled nothing).
+        QByteArray challenge;
+        QByteArray deviceId;
 
         /// Pings sent since the last pong. Reset to 0 by every pong; the
         /// heartbeat tick declares death when it reaches maxMissedPongs().
@@ -588,8 +618,11 @@ private:
     /// be added without someone deciding which kind it is. See
     /// SessionMessage::retryable; the classification for each call site is
     /// argued at the site.
+    /// `endCode` (iPhone app Task 12) is the SessionEndCode the
+    /// session.end carries; empty for an end that has none.
     void dropPeer(SessionTransport* transport, const QString& reason,
-                  bool sendSessionEnd, bool retryable);
+                  bool sendSessionEnd, bool retryable,
+                  const QString& endCode = QString());
     void send(SessionTransport* transport, const SessionMessage& message);
     void sendToSession(const SessionMessage& message);
 
@@ -602,15 +635,24 @@ private:
     QString m_securityDirectory;
     QString m_lastError;
 
-    /// iPhone app Task 4: what this station's hello advertises. The
-    /// station declares no features yet; the tasks that add device
-    /// authentication, pairing, the takeover question and Setup
-    /// descriptions add theirs here.
+    /// iPhone app Task 4: what this station's hello advertises. Task 12
+    /// declares deviceAuth 1 (when the identity key is usable); the tasks
+    /// that add pairing, the takeover question and Setup descriptions add
+    /// theirs here.
     QList<quint16> m_supportedMajors;
     QHash<QByteArray, int> m_declaredFeatures;
 
     std::unique_ptr<CertificateStore> m_certificates;
     std::unique_ptr<TokenStore> m_tokens;
+    // iPhone app Task 12 (R-IOS-08): the Core's identity key, its paired
+    // devices, device sign-in, the certificate's SHA-256 (what a device
+    // signs) and the identity's signature over it (sent in every hello).
+    std::unique_ptr<StationIdentity> m_identity;
+    std::unique_ptr<DeviceStore> m_devices;
+    std::unique_ptr<DeviceAuthenticator> m_deviceAuth;
+    QByteArray m_certSha256;
+    QByteArray m_certBinding;
+    bool m_pairingLanClickAllowed = true;
 
     QWebSocketServer* m_wsServer = nullptr;
 

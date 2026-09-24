@@ -61,10 +61,19 @@ and the [R3 plan](2026-09-20-remote-daemon-r3-plan.md).
   1.1 whatever the protocol setting says, so on such a build either the
   explicit minimum or the library's default would refuse this client. The
   station does not ask for
-  a client certificate (`setPeerVerifyMode(QSslSocket::VerifyNone)`); the
-  client's proof of identity is the token (section 3.3).
+  a client certificate (`setPeerVerifyMode(QSslSocket::VerifyNone)`); a
+  client proves who it is with its own device key (section 3.5) or, on a
+  Core upgraded from before paired devices, the token (section 3.3).
 - The control port is set by `remote_port` in `nereusd.conf`
-  (`DaemonConfig.h`). Its default, 0, means the station does not listen.
+  (`DaemonConfig.h`). With neither `remote_port` nor `remote_bind` in the
+  file (or no file), the station listens on TCP 47910
+  (`DaemonConfig::kDefaultRemotePort`) on every interface, IPv4 and IPv6
+  (`remote_bind` empty: `QHostAddress::Any`, `DaemonApp::listenerAddressFor`),
+  and announces itself (section 14). A file that sets either key keeps the
+  meaning it had before this default: the key it leaves out is 0 (off) or
+  `127.0.0.1` (`kExplicitConfigRemotePort`, `kExplicitConfigRemoteBind`), and
+  a `remote_port` that is not a number leaves the listener off.
+  `remote_port = 0` turns the listener and the announcement off.
 - Messages travel as WebSocket text frames. Each text message is one JSON
   object, encoded compactly, with a string `type` key naming its kind
   (`SessionMessages::encode`). The station ignores binary frames: only
@@ -114,13 +123,116 @@ token at first run; the LAN announcement carries it too (section 14).
 
 ### 3.3 The token
 
-- 32 random bytes (256 bits), written as base64url without padding: 43
-  characters (`TokenStore.cpp`, `kTokenBytes`).
-- One token per station, kept in the station's profile directory.
+- A station no longer creates a token. A Core upgraded from before paired
+  devices keeps the one it has in `station-token` in its profile directory:
+  32 random bytes (256 bits), written as base64url without padding, 43
+  characters (`TokenStore.cpp`). The token is loaded, never generated.
+- While it is active the Core counts as claimed (`DeviceStore::isClaimed`),
+  so no stranger can pair with it, and windows that sign in with it keep
+  working. A window that sends its `device` block with the token enrols its
+  key in the same step (section 3.5) and signs in by key from then on.
+- Retiring the token (`TokenStore::retire`: the file is deleted) ends it for
+  good. On a Core with no token (a new one, or one whose token was retired)
+  a sign-in with a token, empty or not, is refused with `auth.result`
+  accepted false, "This Core uses paired devices. Pair this device first.",
+  `retryable` false, `code` `pairingRequired`, and the token's limiter is
+  not consulted.
 - After 5 consecutive failed checks (`kDefaultMaxFailuresPerLockout`) the
-  station refuses every check, including a correct token, for 60 s
-  (`kDefaultLockoutMs` 60000). The lockout is global, not per peer.
+  station refuses every token check, including a correct token, for 60 s
+  (`kDefaultLockoutMs` 60000). That lockout is global for the token, not per
+  peer; it never refuses a device key (section 3.5).
 - The station never logs a candidate token.
+
+### 3.4 The identity key
+
+The Core has its own identity key, separate from the TLS key
+(`StationIdentity`, R-IOS-08; the pairing design, section 3.1):
+
+- ECDSA P-256, created on the first start and kept in
+  `station-identity.pem` (PKCS#8, PEM) in the Core's profile directory, mode
+  0600, written atomically; reused on every later start. A file that exists
+  but does not hold a P-256 private key is refused and never replaced, and
+  the Core then does not listen. The first start prints the key file's path
+  and the TLS pin to standard output (not the log), with the prompt to back
+  the file up: losing it means every paired device pairs again
+  (`StationServer::formatFirstRunBanner`).
+- A public key travels as base64url, without padding, of its
+  SubjectPublicKeyInfo DER: 91 bytes for a P-256 key with its point
+  uncompressed. A key's fingerprint is SHA-256 of that DER. A signature is
+  ECDSA P-256 over SHA-256, raw `r || s`, 64 bytes, base64url. The station
+  accepts only a canonical 91-byte P-256 key (`StationIdentity::isP256Spki`)
+  and strict base64url (no padding, only `A-Z a-z 0-9 - _`, the unused bits
+  of the last character zero).
+- The certificate binding is the identity key's signature over
+  `"NereusSDR cert-binding v1\n" || SHA-256(TLS certificate DER)`
+  (`StationIdentity::certBinding`). The SHA-256 is the pin's 32 bytes
+  (section 3.2).
+- The station's `hello` carries `identity`
+  `{"publicKey": <key>, "certBinding": <binding>}` and `challenge`, 32
+  random bytes from the operating system's generator, base64url, new for
+  every connection (`DeviceAuthenticator::newChallenge`), and declares
+  `features.deviceAuth` 1. A device that holds the Core's key checks the
+  binding against the certificate its connection presents before it signs
+  anything; a mismatch is the client's own `identityChanged` (section
+  12.4).
+
+### 3.5 Device sign-in
+
+Each paired device holds its own P-256 key. The Core keeps the paired
+devices in `paired-devices.json` in its profile directory, mode 0600,
+written atomically (`DeviceStore`): each device's `id` (the fingerprint of
+its key), key, name, kind (`phone`, `tablet` or `computer`), when it was
+paired and last seen, its last address, and whether it was enrolled through
+the token. A file that cannot be read fails closed: no device signs in, the
+file is never overwritten, and the Core counts as claimed.
+
+A device signs in with `auth.request`, `token` `""`, and `device`
+`{"id", "publicKey", "name", "kind", "signature"}` (all strings;
+`SessionDeviceBlock`), where `signature` is its key's signature over the
+transcript (`DeviceAuthenticator::transcript`):
+
+```
+"NereusSDR device-auth v1\n" || challenge (32 bytes)
+  || SHA-256(TLS certificate DER) || SHA-256(Core identity SPKI DER)
+  || SHA-256(device SPKI DER)
+```
+
+The station admits it (`DeviceAuthenticator::verify`) only when the block
+is well formed, the `id` is the fingerprint of `publicKey`, the signature
+verifies over this connection's challenge and this Core's certificate and
+key, and the device is in the paired devices with that key. A client sends
+`device` only to a station whose `hello` declares `deviceAuth` 1.
+
+| Case | `auth.result` reason | `retryable` | `code` |
+| --- | --- | --- | --- |
+| Admitted | `""`, accepted true | false | none |
+| A well-formed proof from a key the Core has not paired | "This device is not paired with this Core. Pair it first." | false | `deviceNotPaired` |
+| A bad signature, one over another connection's challenge, one binding another certificate or another Core's key, an `id` that is not its key's fingerprint, a malformed block | "This device could not prove it is paired with this Core." | false | `deviceProofFailed` |
+| Rate limited (below) | "The Core is refusing sign-ins from this device for a while after too many failed ones. Try again later." | true | none |
+
+Each refusal is followed by the close, as for a token (section 12.4).
+
+**Rate limits.** Failed device sign-ins are counted per source address and
+per device id: 10 within 60 s (`kMaxFailures`, `kWindowMs`) refuse that
+address, or that id, for 60 s (`kLockoutMs`). A sign-in refused while
+limited is not counted again. A connection through the relay has no
+address of its own (`SessionTransport::peerAddress` is empty there), so the
+limit applies per device id and per relay introduction. The device limiter
+never consults the token's (or, later, the pairing code's), and they never
+consult it: wrong tokens do not lock out a device's key, and failed device
+sign-ins do not lock out the token.
+
+**Enrolment through the token.** On a Core upgraded with a token, a window
+that sends its `device` block together with the right `token` is admitted
+by the token; its block must still prove its key over this connection's
+transcript (`DeviceAuthenticator::verifyPossession`), or the sign-in is
+refused `deviceProofFailed` and nothing is enrolled. A key not yet paired is
+added as kind `computer`, `enrolledThroughToken` true, named by its block
+(or "Computer" when the name is not usable). From then on the window signs
+in with its key alone, nothing typed.
+
+**Last seen.** Every authenticated connection of a paired device records
+the time and the peer's address (empty over the relay, never the relay's).
 
 ## 4. Messages
 
@@ -138,20 +250,20 @@ writes.
 
 | Kind (`type`) | Required keys (JSON type) | Optional keys (JSON type) |
 | --- | --- | --- |
-| `auth.request` | `token` (string), `type` (string) | none |
-| `auth.result` | `accepted` (boolean), `reason` (string), `type` (string) | `retryable` (boolean) |
+| `auth.request` | `token` (string), `type` (string) | `device` (object) |
+| `auth.result` | `accepted` (boolean), `reason` (string), `type` (string) | `code` (string), `retryable` (boolean) |
 | `capabilities` | `properties` (array), `type` (string) | none |
 | `command.invoke` | `args` (array), `id` (number), `type` (string), `verb` (string) | none |
 | `command.result` | `accepted` (boolean), `affected` (array), `id` (number), `reason` (string), `type` (string), `verb` (string) | `values` (array) |
 | `delta` | `key` (string), `properties` (array), `type` (string) | none |
-| `hello` | `major` (number), `minor` (number), `peer` (string), `settingsSchema` (number), `type` (string) | `features` (object), `majors` (array) |
+| `hello` | `major` (number), `minor` (number), `peer` (string), `settingsSchema` (number), `type` (string) | `challenge` (string), `features` (object), `identity` (object), `majors` (array) |
 | `media.control` | `payload` (object), `type` (string) | none |
 | `object.create` | `class` (string), `key` (string), `properties` (array), `type` (string) | none |
 | `object.destroy` | `class` (string), `key` (string), `type` (string) | none |
 | `property.result` | `key` (string), `results` (array), `type` (string), `writeId` (number) | none |
 | `property.write` | `key` (string), `properties` (array), `type` (string) | `writeId` (number) |
 | `schema` | `class` (string), `fields` (array), `type` (string) | none |
-| `session.end` | `reason` (string), `type` (string) | `retryable` (boolean) |
+| `session.end` | `reason` (string), `type` (string) | `code` (string), `retryable` (boolean) |
 | `settings.reject` | `key` (string), `properties` (array), `type` (string) | `reason` (string) |
 | `settings.remove` | `key` (string), `properties` (array), `type` (string) | none |
 | `settings.snapshot` | `properties` (array), `type` (string) | none |
@@ -205,8 +317,10 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
    place of the `hello` as it would any other (fixture
    `connection-limit`).
 3. The client answers with its own `hello`, naming the major it chose,
-   then `auth.request` carrying the token (`StationClient.cpp`, after its
-   pin check).
+   then `auth.request`: a paired device's `device` block with `token` `""`
+   (section 3.5), or the token of a Core upgraded from before paired
+   devices, with or without the window's `device` block to enrol
+   (`StationClient.cpp` sends the token after its pin check).
 4. The station sends `auth.result`. On success, in this order
    (`StationServer::promoteToSession`):
    - `capabilities` (section 6);
@@ -224,14 +338,15 @@ A `hello` carries `major`, `minor`, `settingsSchema` (the sender's settings
 schema version) and `peer` (a name for the sending program). A difference
 in `settingsSchema` is logged by both ends and is not a refusal. It may
 also carry `majors` and `features` (sections 6.1 and 6.2); the station's
-`hello` always carries both.
+`hello` always carries both, and `identity` and `challenge` (section 3.4)
+when its identity key is usable.
 
-The station refuses, with `session.end` and `retryable` false: a second
-`hello` ("This app started connecting twice on one connection."),
-`auth.request` before `hello` or a second `auth.request` ("This app sent its
-pairing token out of order."), and any other message before authentication
-("This app sent a request before the Core had accepted its pairing
-token.").
+The station refuses, with `session.end`, `retryable` false and `code`
+`protocolError`: a second `hello` ("This app started connecting twice on one
+connection."), `auth.request` before `hello` or a second `auth.request`
+("This app sent its pairing token out of order."), and any other message
+before authentication ("This app sent a request before the Core had
+accepted its pairing token.").
 
 ### 5.2 Resends during a session
 
@@ -314,8 +429,9 @@ know. What the station must know about the app before capabilities are
 sent (device authentication, pairing, the takeover question, Setup
 descriptions) is declared here, and asked with
 `StationServer::peerDeclares(peer, feature, minVersion)`; the desktop
-client asks `StationClient::stationDeclares(feature, minVersion)`. Neither
-end declares a feature yet, so each sends `{}`. A client never sends a
+client asks `StationClient::stationDeclares(feature, minVersion)`. The station
+declares `deviceAuth` 1 (section 3.5) when its identity key is usable; the
+desktop client declares none yet and sends `{}`. A client never sends a
 message kind or verb the station has not advertised, in `features` or in
 its capabilities.
 
@@ -387,6 +503,7 @@ change shows as surface drift and as a change to this table.
 | `stationTciVersion` | 1 |
 | `accessoryDataVersion` | 1 |
 | `remoteTgxlControlVersion` | 1 |
+| `stationIdentityVersion` | 1 |
 
 <!-- /surface -->
 
@@ -419,7 +536,7 @@ When a feature is off, its version is 0:
   Genius's (the `accessorySettings` object and the device settings
   commands, section 9.1); `remoteRfKitControlVersion` 3 adds
   `resetRfKitError`, the RF-Kit amplifier's Reset amp error.
-  `remoteTgxlControlVersion` is the last capabilities entry.
+  `remoteTgxlControlVersion` is followed by `stationIdentityVersion`.
 - `stationTciVersion`: sent only at agreed minor 11, and 0 unless the Core
   runs a station TCI server.
 - `accessoryDataVersion`: sent only at agreed minor 11, and 0 unless the
@@ -427,6 +544,11 @@ When a feature is off, its version is 0:
   `accessoryData` object (fault histories, connection counters, the
   transmit interlock and the Power Genius output limit) and accepts
   `setTxInterlockPolicy`, `setPgxlPowerCap` and `clearAccessoryFaults`.
+
+- `stationIdentityVersion`: sent only at agreed minor 11, last. 1 when the
+  Core has its identity key and signs devices in by key (section 3.5);
+  0 when that key is unusable. A client learns the same before
+  capabilities from the hello's `features.deviceAuth`.
 
 `txPermitted` is always false today: remote transmit is R4.
 
@@ -493,6 +615,7 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 | 45 | `stationTciVersion` | `i64` |
 | 46 | `accessoryDataVersion` | `i64` |
 | 47 | `remoteTgxlControlVersion` | `i64` |
+| 48 | `stationIdentityVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1456,18 +1579,35 @@ runs the same deadline on its side.
 `retryable` too. A client redials only after a retryable end; after one
 that is not retryable it stops and tells the operator.
 
-| Cause | Message | `retryable` |
-| --- | --- | --- |
-| Wrong token | `auth.result` accepted false, "The Core did not accept this app's pairing token. Check the token saved for this Core.", then the station closes | false |
-| Token checks locked out (section 3.3) | `auth.result` accepted false, "The Core is refusing pairing tokens for a while after too many wrong ones. Try again later." | true |
-| No shared major (section 6.1) | `session.end` naming both sides' versions and the side to update | false |
-| Message the station cannot decode (section 13) | `session.end` "The Core could not read a message from this app." | false |
-| Out-of-order handshake (section 5.1) | `session.end` | false |
-| Preempted by a newer authenticated connection | `session.end` "Another app at ... connected to the Core and took over. Connect again to take it back." | false |
-| Connection limit reached | `session.end` | true |
-| Connect deadline expired | `session.end` | true |
-| Heartbeat timeout | `session.end` | true |
-| Station shutting down | `session.end` "The Core is shutting down." | true |
+Both may carry `code`, a stable token for the end (`SessionEndCode` in
+`SessionMessages.h`): every permanent end the station sends has one. A
+client reads the code where it is present and falls back to the reason text
+for an older station, which sends none; an older client ignores the key.
+The reason stays what the operator reads. A `code` on the wire is a
+non-empty string; an empty one is refused like any mistyped key.
+
+| Cause | Message | `retryable` | `code` |
+| --- | --- | --- | --- |
+| Wrong token | `auth.result` accepted false, "The Core did not accept this app's pairing token. Check the token saved for this Core.", then the station closes | false | `wrongToken` |
+| Token checks locked out (section 3.3) | `auth.result` accepted false, "The Core is refusing pairing tokens for a while after too many wrong ones. Try again later." | true | none |
+| A token on a Core without one (section 3.3) | `auth.result` accepted false, "This Core uses paired devices. Pair this device first." | false | `pairingRequired` |
+| A device the Core has not paired (section 3.5) | `auth.result` accepted false, "This device is not paired with this Core. Pair it first." | false | `deviceNotPaired` |
+| A device sign-in that does not prove itself (section 3.5) | `auth.result` accepted false, "This device could not prove it is paired with this Core." | false | `deviceProofFailed` |
+| Device sign-ins limited (section 3.5) | `auth.result` accepted false, "The Core is refusing sign-ins from this device for a while after too many failed ones. Try again later." | true | none |
+| No shared major (section 6.1) | `session.end` naming both sides' versions and the side to update | false | `linkVersion` |
+| Message the station cannot decode (section 13) | `session.end` "The Core could not read a message from this app." | false | `protocolError` |
+| Out-of-order handshake (section 5.1) | `session.end` | false | `protocolError` |
+| Preempted by a newer authenticated connection | `session.end` "Another app at ... connected to the Core and took over. Connect again to take it back." | false | `takenOver` |
+| Connection limit reached | `session.end` | true | none |
+| Connect deadline expired | `session.end` | true | none |
+| Heartbeat timeout | `session.end` | true | none |
+| Station shutting down | `session.end` "The Core is shutting down." | true | none |
+
+Two codes are defined for ends this revision does not send yet:
+`deviceRemoved`, for a device removed from the Core while connected (the
+device list's revoke), and `identityChanged`, which a client uses for its
+own end when the Core's certificate binding or identity key is not the one
+it paired with; a station never sends it.
 
 Only one session is authenticated at a time. A second connection that
 authenticates takes the session: the station ends the first with
@@ -1642,6 +1782,7 @@ a JSON string:
 | `"$capture:<name>"` | any value, recorded under `<name>` | yes | no |
 | `"$ref:<name>"` | the value recorded under `<name>`, compared the same way | yes | yes, filled with the recorded value |
 | `"$within:<t>:<v>"` | a number no further than `<t>` from `<v>`; `<t>` and `<v>` are each exactly a JSON number (RFC 8259 section 6: no `+`, no leading `.`, no `inf` or `nan`, no spaces), `<t>` at least 0; any other text is a malformed fixture | yes | no |
+| `"$device:<case>"` | only as `auth.request`'s `device`, in a fixture for the station only | no | yes, by the station's runner: the device block (section 3.5) of the runner's own device, whose key it makes at run time, signing the transcript of the challenge recorded as `challenge`; `<case>` is `signed` (that transcript), `otherChallenge` (a challenge of the runner's own in its place) or `otherCertificate` (another certificate's SHA-256 in place of the station's) |
 
 A number the station's DSP measures is written `"$within:<t>:<v>"`, with
 the tolerance stated, never `"$any"`; a counter whose value depends on
@@ -1675,16 +1816,21 @@ travels: seven from the client (`hello`, `auth.request`, `command.invoke`,
 `media.control`, `property.write`, `settings.write`, `settings.remove`)
 and sixteen from the station, with a `delta` carrying `"nan"` and `"-inf"`
 (section 4.2). The client's `hello` has two fixtures: an older app's,
-without `majors` or `features`, and one declaring both. The station's
-`hello` carries both, from a station supporting `[1, 2]`, so `major` is 1,
-the oldest (section 6.1). The refusals are: a
+without `majors` or `features`, and one declaring both; `auth.request` has
+two: a token, and a device sign-in with its `device` block (section 3.5).
+The station's `hello` carries `majors`, `features` (`deviceAuth` 1),
+`identity` and `challenge`, from a station supporting `[1, 2]`, so `major`
+is 1, the oldest (section 6.1). `auth.result` and `session.end` each have a
+second fixture carrying a `code` (section 12.4). The refusals are: a
 `media.control` over its 128 KiB cap and a `station.metrics.v1` over its
 16 KiB cap (each an otherwise valid message padded past the cap), a
 missing required key (`command.invoke` without `id`), a wrong type (an
 `f64` entry holding `true`), an `f64` string other than the three of
 section 4.2, a `hello` major above 65535, a `hello` with an empty `majors`,
-a `hello` declaring a feature version that is not a whole number, and an
-unknown `type`.
+a `hello` declaring a feature version that is not a whole number, a
+`hello` whose `identity` is not an object, an `auth.request` whose `device`
+lacks `signature`, a `session.end` with an empty `code`, and an unknown
+`type`.
 
 The two transport caps (1 MiB into the station, 8 MiB into the desktop
 client, section 12.3) are enforced by the WebSocket layer before any
@@ -1746,8 +1892,10 @@ app can adopt runs on the station only (`"runs": ["station"]`): an older
 app's `hello` (`major-refused`, `lower-minor`), made-up majors or features
 (`version-*`), a client that answers no ping (`heartbeat-missed`) or never
 sends its token (`connect-deadline`), and the lockout and preemption,
-which need other clients (`lockout`, `preempted`). Their client steps are
-all `scripted`. `tst_link_conformance_session` checks that a fixture
+which need other clients (`lockout`, `preempted`), and the device sign-in
+and token refusals of a Core that has paired devices (`device-*`,
+`pairing-required`), whose device keys are the station runner's own.
+Their client steps are all `scripted`. `tst_link_conformance_session` checks that a fixture
 marked for the app holds nothing a conformant client could not send, and
 nothing an app's runner could not send its client:
 
@@ -1781,7 +1929,10 @@ nothing an app's runner could not send its client:
   below.
 
 **Filling a station message (an app's runner).** An app's runner sends
-its client each station message with `"$string"` as `""`, `"$int"` as `0`,
+its client each station message with `"$string"` as `""` (so the station
+`hello`'s `identity` and `challenge` reach an app's client as empty
+strings: the fixtures for the app sign in with the token, which does not
+read them), `"$int"` as `0`,
 `"$ref:<name>"` as the recorded value and `"$within:<t>:<v>"` as `<v>`.
 
 - **The token.** `"$ref:token"` in a client message is the station's
@@ -1838,6 +1989,8 @@ its client each station message with `"$string"` as `""`, `"$int"` as `0`,
 | `clientAnswersPings` | the client's transport answers the station's pings | true |
 | `preemptingClient` | `{"afterStep": i}`: a second client authenticates once step `i` is done | none |
 | `otherConnections` | other clients connected before this one, still connecting and sending nothing; 8 puts the station at its connection limit | 0 |
+| `token` | `"active"`: a Core upgraded from before paired devices, with a pairing token (made at run time) that `"$ref:token"` names; `"none"`: a new Core, without one (section 3.3) | `"active"` |
+| `pairedDevice` | the runner's own device (its key made at run time, the one `"$device:<case>"` signs with) is paired with the station before the client connects | false |
 
 The station runner starts every fixture from an empty settings profile,
 and the bundled NR3 model files count as absent, so a fixture reads the
@@ -1846,21 +1999,25 @@ same on every machine.
 | Fixture | What it holds the station to |
 | --- | --- |
 | `connect-connectable` | The whole connect sequence to `snapshot.complete` on a connected radio with one slice, every message in full, except: PureSignal's `statusJson` (`"$string"`, it carries a capture time) and `displayGeneration` (`"$int"`, a counter whose value depends on timing), and the slice's `signalStrengthDbm`, `signalPeakDbm` and `signalAverageDbm`, which the receiver measures: `"$within:0.5:-399.02"`, within 0.5 dB, which leaves out the meter's no-reading value of -400 |
-| `wrong-token` | `auth.result` refused, `retryable` false, then the close |
+| `wrong-token` | `auth.result` refused, `retryable` false, `code` `wrongToken`, then the close |
+| `pairing-required` | On a new Core (no token), a token sign-in is refused "This Core uses paired devices. Pair this device first.", `retryable` false, `code` `pairingRequired` |
+| `device-sign-in` | On a new Core, the paired device signs this connection's transcript (`"$capture:challenge"` from the `hello`, then `"$device:signed"`) and is admitted: the whole connect sequence to `snapshot.complete`, summarised |
+| `device-not-paired` | A well-formed device sign-in from a key the Core has not paired: `code` `deviceNotPaired`, then the close |
+| `device-other-challenge`, `device-other-certificate` | The paired device signs another challenge, or another certificate: `code` `deviceProofFailed`, then the close |
 | `connection-limit` | With eight other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
-| `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This station runs link version 1 and this app runs version 2. Update the station.", `retryable` false |
+| `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This station runs link version 1 and this app runs version 2. Update the station.", `retryable` false, `code` `linkVersion` |
 | `version-declares` | A `hello` with `majors` `[1]` and a declared feature is accepted, and authentication follows |
 | `version-app-one-ahead` | An app supporting `[1, 2]` chooses 1, the highest it shares with the station, and is accepted |
 | `version-app-two-ahead` | An app supporting `[2, 3]` that sends major 3 gets `session.end` "This station runs link version 1 and this app runs version 3. Update the station.", `retryable` false |
 | `lower-minor` | A `hello` with minor 4 agrees minor 4: the capabilities without the minor-11 entries, and a minor-11 verb refused with a plain reason |
-| `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false |
+| `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false, `code` `takenOver` |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
 | `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound |
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
-| `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false |
+| `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |
 | `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot |
 
 `tst_link_conformance_session` also checks that every verb in the

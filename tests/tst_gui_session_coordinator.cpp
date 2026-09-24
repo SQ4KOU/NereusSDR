@@ -25,6 +25,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "fakes/MainWindowTestSettings.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 
@@ -237,8 +238,8 @@ private slots:
         secondSettings.setValue(QStringLiteral("DisplayFftSize"), QStringLiteral("4096"));
         RadioModel firstStation;
         RadioModel secondStation;
-        StationServer firstServer(&firstStation, firstSettings, firstDir.path());
-        StationServer secondServer(&secondStation, secondSettings, secondDir.path());
+        StationServer firstServer(&firstStation, firstSettings, NereusSDR::Test::seedUpgradedCoreToken(firstDir.path()));
+        StationServer secondServer(&secondStation, secondSettings, NereusSDR::Test::seedUpgradedCoreToken(secondDir.path()));
         QWebSocketServer firstListener(QStringLiteral("A"), QWebSocketServer::NonSecureMode);
         QWebSocketServer secondListener(QStringLiteral("B"), QWebSocketServer::NonSecureMode);
         QVERIFY(firstListener.listen(QHostAddress::LocalHost, 0));
@@ -293,7 +294,7 @@ private slots:
         QTemporaryDir stationDir;
         AppSettings stationSettings(stationDir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, stationSettings, stationDir.path());
+        StationServer server(&station, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(stationDir.path()));
         QWebSocketServer listener(QStringLiteral("A"), QWebSocketServer::NonSecureMode);
         QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
         connect(&listener, &QWebSocketServer::newConnection, &server, [&] {
@@ -379,7 +380,7 @@ private slots:
         QTemporaryDir stationDir;
         AppSettings stationSettings(stationDir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, stationSettings, stationDir.path());
+        StationServer server(&station, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(stationDir.path()));
         QWebSocketServer listener(QStringLiteral("A"), QWebSocketServer::NonSecureMode);
         QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
         connect(&listener, &QWebSocketServer::newConnection, &server, [&] {
@@ -431,7 +432,7 @@ private slots:
         QTemporaryDir stationDir;
         AppSettings stationSettings(stationDir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, stationSettings, stationDir.path());
+        StationServer server(&station, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(stationDir.path()));
         server.setHeartbeatIntervalMs(0);
         QWebSocketServer listener(QStringLiteral("A"), QWebSocketServer::NonSecureMode);
         QVERIFY(listener.listen(QHostAddress::LocalHost, 0));

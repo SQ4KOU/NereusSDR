@@ -42,6 +42,11 @@
 //               link majors setLinkMajors() names (a debug build's
 //               --test-link-majors), by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 12 (R-IOS-08): an empty remote_bind
+//               listens on every interface, IPv4 and IPv6; the pairing
+//               token is no longer created; pairing_lan_click reaches the
+//               station server. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -440,6 +445,11 @@ void DaemonApp::applyStepAttenuatorConnection(const QString& mac)
 // failure is NOT a startup failure, matching this class's existing treatment
 // of a radio that cannot be found: a daemon that still demodulates locally is
 // more useful than one that refuses to boot.
+QHostAddress DaemonApp::listenerAddressFor(const QString& bind)
+{
+    return bind.isEmpty() ? QHostAddress(QHostAddress::Any) : QHostAddress(bind);
+}
+
 void DaemonApp::startStationServer(const DaemonConfig& cfg)
 {
     cancelStationServerListenRetry();
@@ -455,17 +465,20 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
         return;
     }
 
-    const QHostAddress bind(cfg.remoteBind);
+    // iPhone app Task 12: an empty remote_bind (the default) is every
+    // interface, IPv4 and IPv6 (QHostAddress::Any is dual stack).
+    const QHostAddress bind = listenerAddressFor(cfg.remoteBind);
     if (bind.isNull()) {
         qCWarning(lcApp) << "DaemonApp: remote_bind is not a valid address:"
                           << cfg.remoteBind << "- remote control not started";
         return;
     }
 
-    // Constructing it is what provisions the TLS certificate and the
-    // pairing token, and what prints the first-run pairing banner to stdout
-    // on the run that generates them (StationServer's constructor). Secrets
-    // are deliberately kept out of the normal log. AppSettings::instance()
+    // Constructing it is what provisions the TLS certificate and the Core's
+    // identity key (iPhone app Task 12: never a pairing token any more; an
+    // upgraded Core's existing token is loaded), and what prints the
+    // first-run banner to stdout on the run that creates the key
+    // (StationServer's constructor), deliberately not into the log. AppSettings::instance()
     // is the daemon's OWN store here -- server_main.cpp resolved the profile
     // before this point.
     m_stationServer = std::make_unique<StationServer>(m_radioModel.get(),
@@ -474,6 +487,9 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     // Set before listen() so the first authenticated client sees the media
     // capability, never a control-only session that cannot be upgraded.
     m_stationServer->setMediaEnabled(true);
+    // iPhone app Task 12: nereusd.conf's pairing_lan_click, read by the
+    // pairing window (Task 14) for the one-click pairing on this network.
+    m_stationServer->setPairingLanClickAllowed(cfg.pairingLanClickAllowed);
     // R-R3-08/37/40: with display_adaptive on, the Core always advertises a
     // display budget, so apps plan in budget mode from the start and follow
     // it down when the Core is busy: the configured pair when there is one,
@@ -529,6 +545,7 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     connect(m_radioModel.get(), &RadioModel::infoChanged,
             this, &DaemonApp::updateStationAnnouncement);
     m_stationListenBind = cfg.remoteBind;
+    m_stationListenArmed = true;
     m_stationListenPort = static_cast<quint16>(cfg.remotePort);
     attemptStationServerListen();
 }
@@ -663,7 +680,7 @@ void DaemonApp::updateStationAnnouncement()
 
 void DaemonApp::attemptStationServerListen()
 {
-    if (!m_stationServer || m_stationListenPort == 0 || m_stationListenBind.isEmpty()) {
+    if (!m_stationServer || m_stationListenPort == 0 || !m_stationListenArmed) {
         return;
     }
     if (m_stationServer->isListening()) {
@@ -671,7 +688,7 @@ void DaemonApp::attemptStationServerListen()
         return;
     }
 
-    const QHostAddress bind(m_stationListenBind);
+    const QHostAddress bind = listenerAddressFor(m_stationListenBind);
     if (bind.isNull()) {
         // startStationServer validates before latching, so this is only a
         // defensive guard against future mutation. Invalid config never
@@ -700,7 +717,7 @@ void DaemonApp::attemptStationServerListen()
 
 void DaemonApp::scheduleStationServerListenRetry()
 {
-    if (!m_stationServer || m_stationListenPort == 0 || m_stationListenBind.isEmpty()) {
+    if (!m_stationServer || m_stationListenPort == 0 || !m_stationListenArmed) {
         return;
     }
 
@@ -722,6 +739,7 @@ void DaemonApp::cancelStationServerListenRetry()
         m_stationListenRetryTimer->stop();
     }
     m_stationListenBind.clear();
+    m_stationListenArmed = false;
     m_stationListenPort = 0;
     m_stationListenNextDelayMs = m_stationListenRetryInitialMs;
 }

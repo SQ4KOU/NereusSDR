@@ -23,6 +23,10 @@
 //                                    each client step's role; placeholders
 //                                    in client messages.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08):
+//                                    "$device:<case>" and the runner's own
+//                                    device key, made at run time.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -39,9 +43,11 @@
 #include <QJsonDocument>
 #include <QMetaObject>
 #include <QPointer>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSet>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QTimer>
 
 #include <algorithm>
@@ -50,6 +56,9 @@
 #include <vector>
 
 #include "core/dsp/Ps3Snapshot.h"
+#include "core/security/DeviceAuthenticator.h"
+#include "core/security/DeviceStore.h"
+#include "core/security/StationIdentity.h"
 #include "core/session/LinkVersion.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationLanAnnouncement.h"
@@ -862,6 +871,97 @@ QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
     return QString();
 }
 
+namespace {
+
+// iPhone app Task 12: the runner's own device for "$device:<case>" (the
+// link document, section 16.1). Its key is made at run time in a scratch
+// directory; stationSetup's "pairedDevice" puts it in the Core's paired
+// devices before the client connects.
+struct ConformanceDevice {
+    QTemporaryDir dir;
+    StationIdentity key = StationIdentity::loadOrCreate(dir.path());
+};
+
+bool mentionsDevice(const QJsonValue& value)
+{
+    if (value.isString()) {
+        return value.toString().startsWith(QStringLiteral("$device:"));
+    }
+    if (value.isObject()) {
+        const QJsonObject object = value.toObject();
+        return std::any_of(object.begin(), object.end(),
+                           [](const QJsonValue& v) { return mentionsDevice(v); });
+    }
+    if (value.isArray()) {
+        const QJsonArray array = value.toArray();
+        return std::any_of(array.begin(), array.end(),
+                           [](const QJsonValue& v) { return mentionsDevice(v); });
+    }
+    return false;
+}
+
+// Fills every "$device:<case>" with the device block the runner's device
+// sends: "signed" signs this connection's transcript (the challenge the
+// station's hello gave, recorded as "challenge"); "otherChallenge" signs one
+// with a challenge of the runner's own; "otherCertificate" signs one that
+// binds a certificate other than the station's.
+QJsonValue fillDevice(const QJsonValue& value, const ConformanceDevice& device,
+                      const StationServer& server, const LinkFixtures::Captures& captures,
+                      QString* error)
+{
+    if (value.isString() && value.toString().startsWith(QStringLiteral("$device:"))) {
+        const QString which = value.toString().mid(8);
+        if (!captures.contains(QStringLiteral("challenge"))) {
+            *error = QStringLiteral("$device needs the station's challenge recorded as "
+                                    "\"challenge\"");
+            return {};
+        }
+        bool ok = false;
+        QByteArray challenge = StationIdentity::fromBase64Url(
+            captures.value(QStringLiteral("challenge")).toString(), &ok);
+        QString pin = server.certificateFingerprint();
+        pin.remove(QLatin1Char(':'));
+        QByteArray certSha256 = QByteArray::fromHex(pin.toLatin1());
+        if (which == QStringLiteral("otherChallenge")) {
+            quint32 words[DeviceAuthenticator::kChallengeBytes / sizeof(quint32)]{};
+            QRandomGenerator::system()->fillRange(words);
+            challenge = QByteArray(reinterpret_cast<const char*>(words), sizeof(words));
+        } else if (which == QStringLiteral("otherCertificate")) {
+            certSha256 = StationIdentity::fingerprintOf(QByteArrayLiteral("another certificate"));
+        } else if (which != QStringLiteral("signed")) {
+            *error = QStringLiteral("%1 is not $device:signed, $device:otherChallenge or "
+                                    "$device:otherCertificate").arg(value.toString());
+            return {};
+        }
+        if (!ok || !device.key.isValid()) {
+            *error = QStringLiteral("$device: no usable challenge or device key");
+            return {};
+        }
+        const QByteArray transcript = DeviceAuthenticator::transcript(
+            challenge, certSha256, server.stationIdentity().publicKeySpki(),
+            device.key.publicKeySpki());
+        return QJsonObject{
+            {QStringLiteral("id"), StationIdentity::toBase64Url(device.key.fingerprint())},
+            {QStringLiteral("publicKey"), StationIdentity::toBase64Url(device.key.publicKeySpki())},
+            {QStringLiteral("name"), QStringLiteral("Conformance device")},
+            {QStringLiteral("kind"), QStringLiteral("phone")},
+            {QStringLiteral("signature"),
+             StationIdentity::toBase64Url(device.key.sign(transcript))},
+        };
+    }
+    if (value.isObject()) {
+        QJsonObject out;
+        const QJsonObject in = value.toObject();
+        for (auto it = in.constBegin(); it != in.constEnd(); ++it) {
+            out.insert(it.key(), fillDevice(it.value(), device, server, captures, error));
+        }
+        return out;
+    }
+    return value;
+}
+
+} // namespace
+
 QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& server,
                                  LoopbackTransport& transport)
 {
@@ -893,6 +993,26 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
     Captures captures;
     captures.insert(QStringLiteral("token"), server.token());
     int counter = 0;
+
+    // iPhone app Task 12: the runner's device, when the fixture uses one.
+    std::unique_ptr<ConformanceDevice> device;
+    const bool paired = setup.value(QStringLiteral("pairedDevice")).toBool(false);
+    if (paired || mentionsDevice(QJsonValue(steps))) {
+        device = std::make_unique<ConformanceDevice>();
+        if (!device->key.isValid()) {
+            return QStringLiteral("the runner's device key could not be made");
+        }
+    }
+    if (paired) {
+        PairedDevice record;
+        record.id = device->key.fingerprint();
+        record.publicKeySpki = device->key.publicKeySpki();
+        record.name = QStringLiteral("Conformance device");
+        record.kind = QStringLiteral("phone");
+        if (server.deviceStore() == nullptr || !server.deviceStore()->add(record)) {
+            return QStringLiteral("stationSetup.pairedDevice: the device could not be paired");
+        }
+    }
     VirtualClock clock(&server);
     int consumed = 0;
     bool lastRetryable = false;
@@ -945,7 +1065,14 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
                 QString error;
                 // Behaviour or scripted, the station's runner sends the
                 // message itself, placeholders filled (section 16.3).
-                const QJsonValue sent = substitute(message, &captures, &counter, &error);
+                QJsonValue outgoing = message;
+                if (device) {
+                    outgoing = fillDevice(message, *device, server, captures, &error);
+                    if (!error.isEmpty()) {
+                        return QStringLiteral("%1: %2").arg(describe(index), error);
+                    }
+                }
+                const QJsonValue sent = substitute(outgoing, &captures, &counter, &error);
                 if (!error.isEmpty()) {
                     return QStringLiteral("%1: %2").arg(describe(index), error);
                 }

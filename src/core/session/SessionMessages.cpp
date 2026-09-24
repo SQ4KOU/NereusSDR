@@ -41,6 +41,12 @@
 //                                    the hello builder never sends an
 //                                    empty `majors`. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08,
+//                                    R-IOS-01): hello `identity` and
+//                                    `challenge`, auth.request `device`,
+//                                    the end `code`. AI-assisted
+//                                    implementation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -184,6 +190,30 @@ SessionMessage SessionMessages::authRequest(const QString& token)
     SessionMessage m;
     m.kind = SessionMessageKind::AuthRequest;
     m.token = token;
+    return m;
+}
+
+SessionMessage SessionMessages::authRequest(const QString& token,
+                                            const SessionDeviceBlock& device)
+{
+    SessionMessage m = authRequest(token);
+    m.device = device;
+    return m;
+}
+
+SessionMessage SessionMessages::authResult(bool accepted, const QString& reason, bool retryable,
+                                           const QString& endCode)
+{
+    SessionMessage m = authResult(accepted, reason, retryable);
+    m.endCode = endCode;
+    return m;
+}
+
+SessionMessage SessionMessages::sessionEnd(const QString& reason, bool retryable,
+                                           const QString& endCode)
+{
+    SessionMessage m = sessionEnd(reason, retryable);
+    m.endCode = endCode;
     return m;
 }
 
@@ -769,14 +799,41 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
             }
             o.insert(QStringLiteral("features"), features);
         }
+        // iPhone app Task 12: the Core's identity and this connection's
+        // challenge, only when the sender set them.
+        if (message.stationIdentity) {
+            o.insert(QStringLiteral("identity"),
+                     QJsonObject{
+                         {QStringLiteral("publicKey"), message.stationIdentity->publicKey},
+                         {QStringLiteral("certBinding"), message.stationIdentity->certBinding},
+                     });
+        }
+        if (!message.challenge.isEmpty()) {
+            o.insert(QStringLiteral("challenge"), message.challenge);
+        }
         break;
     case SessionMessageKind::AuthRequest:
         o.insert(QStringLiteral("token"), message.token);
+        // iPhone app Task 12: the device sign-in block.
+        if (message.device) {
+            o.insert(QStringLiteral("device"),
+                     QJsonObject{
+                         {QStringLiteral("id"), message.device->id},
+                         {QStringLiteral("publicKey"), message.device->publicKey},
+                         {QStringLiteral("name"), message.device->name},
+                         {QStringLiteral("kind"), message.device->kind},
+                         {QStringLiteral("signature"), message.device->signature},
+                     });
+        }
         break;
     case SessionMessageKind::AuthResult:
         o.insert(QStringLiteral("accepted"), message.accepted);
         o.insert(QStringLiteral("reason"), message.reason);
         o.insert(QStringLiteral("retryable"), message.retryable);
+        // iPhone app Task 12: the end code, only when there is one.
+        if (!message.endCode.isEmpty()) {
+            o.insert(QStringLiteral("code"), message.endCode);
+        }
         break;
     case SessionMessageKind::Capabilities:
     case SessionMessageKind::SettingsSnapshot: {
@@ -790,6 +847,9 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
     case SessionMessageKind::SessionEnd:
         o.insert(QStringLiteral("reason"), message.reason);
         o.insert(QStringLiteral("retryable"), message.retryable);
+        if (!message.endCode.isEmpty()) {
+            o.insert(QStringLiteral("code"), message.endCode);
+        }
         break;
     case SessionMessageKind::PropertyWrite: {
         o.insert(QStringLiteral("key"), QString::fromUtf8(message.objectKey));
@@ -984,9 +1044,39 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
             }
         }
     }
+    // iPhone app Task 12: the Core hello's `identity` (an object of two
+    // strings) and `challenge` (a string), both optional; when present,
+    // checked like every field here. Their contents are the sign-in's to
+    // judge, not the decoder's.
+    if (kind == SessionMessageKind::Hello) {
+        if (o.contains(QStringLiteral("identity"))) {
+            const QJsonValue identity = o.value(QStringLiteral("identity"));
+            if (!identity.isObject()
+                || !identity.toObject().value(QStringLiteral("publicKey")).isString()
+                || !identity.toObject().value(QStringLiteral("certBinding")).isString()) {
+                return false;
+            }
+        }
+        if (o.contains(QStringLiteral("challenge"))
+            && (!o.value(QStringLiteral("challenge")).isString()
+                || o.value(QStringLiteral("challenge")).toString().isEmpty())) {
+            return false;
+        }
+    }
     if (kind == SessionMessageKind::AuthRequest
         && !o.value(QStringLiteral("token")).isString()) {
         return false;
+    }
+    if (kind == SessionMessageKind::AuthRequest && o.contains(QStringLiteral("device"))) {
+        const QJsonValue device = o.value(QStringLiteral("device"));
+        if (!device.isObject()) {
+            return false;
+        }
+        for (const char* field : {"id", "publicKey", "name", "kind", "signature"}) {
+            if (!device.toObject().value(QLatin1String(field)).isString()) {
+                return false;
+            }
+        }
     }
     if (kind == SessionMessageKind::AuthResult) {
         if (!o.value(QStringLiteral("accepted")).isBool()
@@ -996,6 +1086,13 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
     }
     if (kind == SessionMessageKind::SessionEnd
         && !o.value(QStringLiteral("reason")).isString()) {
+        return false;
+    }
+    // iPhone app Task 12: `code`, when present, is a non-empty string.
+    if ((kind == SessionMessageKind::AuthResult || kind == SessionMessageKind::SessionEnd)
+        && o.contains(QStringLiteral("code"))
+        && (!o.value(QStringLiteral("code")).isString()
+            || o.value(QStringLiteral("code")).toString().isEmpty())) {
         return false;
     }
     if ((kind == SessionMessageKind::SettingsWrite
@@ -1191,9 +1288,29 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
                                         static_cast<int>(it.value().toDouble()));
             }
         }
+        message.stationIdentity.reset();
+        if (o.contains(QStringLiteral("identity"))) {
+            const QJsonObject identity = o.value(QStringLiteral("identity")).toObject();
+            message.stationIdentity = SessionStationIdentity{
+                identity.value(QStringLiteral("publicKey")).toString(),
+                identity.value(QStringLiteral("certBinding")).toString(),
+            };
+        }
+        message.challenge = o.value(QStringLiteral("challenge")).toString();
         break;
     case SessionMessageKind::AuthRequest:
         message.token = o.value(QStringLiteral("token")).toString();
+        message.device.reset();
+        if (o.contains(QStringLiteral("device"))) {
+            const QJsonObject device = o.value(QStringLiteral("device")).toObject();
+            message.device = SessionDeviceBlock{
+                device.value(QStringLiteral("id")).toString(),
+                device.value(QStringLiteral("publicKey")).toString(),
+                device.value(QStringLiteral("name")).toString(),
+                device.value(QStringLiteral("kind")).toString(),
+                device.value(QStringLiteral("signature")).toString(),
+            };
+        }
         break;
     case SessionMessageKind::AuthResult:
         message.accepted = o.value(QStringLiteral("accepted")).toBool();
@@ -1204,10 +1321,12 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         // mean "assume permanent" -- the safe direction, and exactly what
         // that peer's own client half did.
         message.retryable = o.value(QStringLiteral("retryable")).toBool();
+        message.endCode = o.value(QStringLiteral("code")).toString();
         break;
     case SessionMessageKind::SessionEnd:
         message.reason = o.value(QStringLiteral("reason")).toString();
         message.retryable = o.value(QStringLiteral("retryable")).toBool();
+        message.endCode = o.value(QStringLiteral("code")).toString();
         break;
     case SessionMessageKind::PropertyResult: {
         message.objectKey = o.value(QStringLiteral("key")).toString().toUtf8();

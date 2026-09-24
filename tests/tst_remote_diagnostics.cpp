@@ -25,6 +25,7 @@
 #include "gui/RemoteTelemetryController.h"
 #include "gui/TimeSeriesGraphWidget.h"
 #include "models/RadioModel.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 
@@ -82,7 +83,7 @@ private slots:
         QTemporaryDir directory;
         AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, directory.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(directory.path()));
         server.setTelemetryEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
@@ -290,7 +291,7 @@ private slots:
         QTemporaryDir directory;
         AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, directory.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(directory.path()));
         server.setTelemetryEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
@@ -451,7 +452,7 @@ private slots:
         QTemporaryDir directory;
         AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, directory.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(directory.path()));
         server.setTelemetryEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
@@ -570,7 +571,7 @@ private slots:
         QTemporaryDir directory;
         AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, directory.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(directory.path()));
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);

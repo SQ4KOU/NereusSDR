@@ -39,6 +39,9 @@
 //                                    implementation. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08):
+//                                    peerAddress(). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -92,6 +95,13 @@ public:
     /// Never used as an identity for authorisation.
     virtual QString peerDescription() const = 0;
 
+    /// iPhone app Task 12: the peer's address alone ("192.0.2.7",
+    /// "2001:db8::7"), what device sign-in rate-limits by and records as a
+    /// device's last address. Never an identity. Empty where there is no
+    /// address of the peer's own to give: a relayed connection shares the
+    /// relay's address, so a relay transport (Part E) returns empty.
+    virtual QString peerAddress() const { return {}; }
+
     /// Read only on the transport's owner thread. Unsupported test/custom
     /// transports return absent rather than a fabricated zero measurement.
     virtual std::optional<SessionTransportTelemetry> telemetry() const { return std::nullopt; }
@@ -142,6 +152,7 @@ public:
     void closeLink(const QString& reason) override;
     bool isOpen() const override;
     QString peerDescription() const override;
+    QString peerAddress() const override;
     std::optional<SessionTransportTelemetry> telemetry() const override;
 
     QWebSocket* socket() const { return m_socket; }

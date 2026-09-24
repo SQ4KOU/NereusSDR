@@ -64,7 +64,6 @@
 #include "core/StepAttenuatorController.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
-#include "core/security/TokenStore.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/session/MirrorEnumDomain.h"
 #include "core/session/MirrorPolicy.h"
@@ -97,6 +96,7 @@
 #include "models/TunerModel.h"
 
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 
 namespace NereusSDR::Test {
 
@@ -146,21 +146,36 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
     case SessionMessageKind::CommandResult:
         return SessionMessages::commandResult("removeSlice", 1, true, QString(), {"slice:0"},
                                               {sampleUpdate("revision")});
-    case SessionMessageKind::Hello:
+    case SessionMessageKind::Hello: {
         // With the Task 4 declarations, so `majors` and `features` are
-        // recorded (as optional: an older peer sends neither).
-        return SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 1,
-                                      QStringLiteral("link-surface"), {kSessionProtocolMajor},
-                                      {{"linkSurface", 1}});
+        // recorded (as optional: an older peer sends neither), and the
+        // Core's Task 12 `identity` and `challenge` (optional: a client's
+        // hello, and an older Core's, carry neither). Placeholders, not keys.
+        SessionMessage m =
+            SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 1,
+                                   QStringLiteral("link-surface"), {kSessionProtocolMajor},
+                                   {{"linkSurface", 1}});
+        m.stationIdentity = SessionStationIdentity{QStringLiteral("key"),
+                                                   QStringLiteral("binding")};
+        m.challenge = QStringLiteral("challenge");
+        return m;
+    }
     case SessionMessageKind::AuthRequest:
-        // A placeholder, never a real token.
-        return SessionMessages::authRequest(QStringLiteral("placeholder"));
+        // Placeholders, never a real token, key or signature. With Task 12's
+        // `device` (optional: a token sign-in carries none).
+        return SessionMessages::authRequest(
+            QStringLiteral("placeholder"),
+            SessionDeviceBlock{QStringLiteral("id"), QStringLiteral("key"),
+                               QStringLiteral("name"), QStringLiteral("phone"),
+                               QStringLiteral("signature")});
     case SessionMessageKind::AuthResult:
-        return SessionMessages::authResult(false, QStringLiteral("refused"), true);
+        // With Task 12's end `code` (optional).
+        return SessionMessages::authResult(false, QStringLiteral("refused"), true,
+                                           QStringLiteral("code"));
     case SessionMessageKind::Capabilities:
         return SessionMessages::capabilities({sampleUpdate("remoteMediaVersion")});
     case SessionMessageKind::SessionEnd:
-        return SessionMessages::sessionEnd(QStringLiteral("ended"), true);
+        return SessionMessages::sessionEnd(QStringLiteral("ended"), true, QStringLiteral("code"));
     case SessionMessageKind::PropertyWrite:
         return SessionMessages::propertyWrite("slice:0", {sampleUpdate("frequency")}, 7);
     case SessionMessageKind::PropertyResult: {
@@ -297,14 +312,11 @@ std::optional<QList<QByteArray>> liveSessionWire(
     model->addSlice(QStringLiteral("pan-0"));
     model->addPanadapter();
 
-    // Provision the throwaway token first, so the server loads it rather
-    // than generating one and printing its first-run pairing banner.
-    { TokenStore provision(dir.path()); }
 
     // Declared before the server so it outlives it; the server owns the
     // station end once it accepts it.
     auto clientEnd = std::make_unique<LoopbackTransport>(QStringLiteral("link-surface-client"));
-    StationServer server(model.get(), stationSettings, dir.path());
+    StationServer server(model.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
     if (configure) {
         configure(server);
     }

@@ -158,6 +158,20 @@
 //                                    R-R3-21): the accessory settings and
 //                                    RF-Kit reset refusals in plain words.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08,
+//                                    R-IOS-02, R-IOS-01): the Core's own
+//                                    identity key and paired devices; the
+//                                    hello carries the identity, its
+//                                    certificate binding and a per-
+//                                    connection challenge and declares
+//                                    deviceAuth 1; device sign-in with its
+//                                    own rate limits; a window signing in
+//                                    with the token enrols its device key;
+//                                    a Core without a token refuses token
+//                                    sign-in; an end code on every
+//                                    permanent end; stationIdentityVersion
+//                                    1. AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -167,6 +181,9 @@
 #include "core/HardwareProfile.h"
 #include "core/dsp/NnrSettings.h"
 #include "core/security/CertificateStore.h"
+#include "core/security/DeviceAuthenticator.h"
+#include "core/security/DeviceStore.h"
+#include "core/security/StationIdentity.h"
 #include "core/security/TokenStore.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
@@ -627,31 +644,45 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     }
 
     m_certificates = std::make_unique<CertificateStore>(m_securityDirectory);
+    // iPhone app Task 12: loaded when an earlier Core left one, never
+    // created (TokenStore.h).
     m_tokens = std::make_unique<TokenStore>(m_securityDirectory);
+    m_identity = std::make_unique<StationIdentity>(
+        StationIdentity::loadOrCreate(m_securityDirectory));
+    m_devices = std::make_unique<DeviceStore>(m_securityDirectory, m_tokens.get());
+    m_deviceAuth = std::make_unique<DeviceAuthenticator>(*m_devices, *m_identity);
+    if (m_certificates->isValid()) {
+        // The pin is the certificate's SHA-256 (CertificateStore), which is
+        // exactly the hash a device signs and the binding covers.
+        QString hex = m_certificates->fingerprintSha256();
+        hex.remove(QLatin1Char(':'));
+        m_certSha256 = QByteArray::fromHex(hex.toLatin1());
+    }
+    if (m_identity->isValid() && m_certSha256.size() == 32) {
+        m_certBinding = m_identity->certBinding(m_certSha256);
+        m_declaredFeatures.insert(QByteArrayLiteral("deviceAuth"), 1);
+    }
 
-    // Step 4: the token distribution mechanism parent section 7.1 requires
-    // be specified before R2. Printed ONCE, on the run that generates it,
-    // beside the certificate fingerprint the client pins (section 10.5) --
-    // the two things an operator has to carry to the client by hand, in
-    // one place, at the one moment they are new. Deliberately not repeated
-    // on later starts: a secret echoed into every log file forever is a
-    // different problem from a secret nobody can find.
-    if (m_tokens->wasGeneratedThisRun()) {
-        writePairingBanner(formatPairingBanner(m_tokens->token(),
-                                               m_certificates->fingerprintSha256(),
-                                               m_securityDirectory));
-        // The LOG gets a pointer, never either secret. Without this line a
-        // first run leaves no trace at all in the file an operator goes
-        // looking in, which is its own support problem; with it, the log
-        // says what happened and where the values went without carrying
-        // them. See writePairingBanner() for why they went to stdout.
+    // The first start of a Core: the TLS pin a window checks and where the
+    // identity key lives, with the prompt to back it up (pairing design
+    // section 3.2: losing it means every paired device pairs again).
+    // Printed ONCE, on the run that creates the key. There is no secret in
+    // it any more (a new Core has no token), but it still goes to stdout
+    // rather than the log: see writePairingBanner() for what the logging
+    // handler used to do to the fingerprint.
+    if (m_identity->wasCreatedThisRun()) {
+        writePairingBanner(formatFirstRunBanner(m_certificates->fingerprintSha256(),
+                                                m_identity->keyPath()));
         qCInfo(lcStation)
-            << "First run for this profile: a pairing token and a TLS certificate "
-               "fingerprint were generated and printed to stdout. Both are "
-               "deliberately kept out of this log file.";
+            << "First run for this profile: the Core's identity key was created and "
+               "its location and TLS certificate fingerprint were printed to stdout.";
+    }
+    if (!m_identity->isValid()) {
+        qCWarning(lcStation) << "The Core's identity key is unavailable:"
+                             << m_identity->lastError();
     }
     if (!m_tokens->isValid()) {
-        qCWarning(lcStation) << "Auth token unavailable:" << m_tokens->lastError();
+        qCWarning(lcStation) << "Pairing token unavailable:" << m_tokens->lastError();
     }
 
     m_mirror = new StateMirror(this);
@@ -800,12 +831,13 @@ bool StationServer::listen(const QHostAddress& address, quint16 port)
         qCWarning(lcStation) << "Refusing to listen:" << m_lastError;
         return false;
     }
-    if (!m_tokens->isValid()) {
-        // Listening with no token would accept nobody, forever, while
-        // looking healthy. Refuse loudly instead.
-        m_lastError = m_tokens->lastError().isEmpty()
-                          ? QStringLiteral("No authentication token available")
-                          : m_tokens->lastError();
+    if (!m_identity->isValid()) {
+        // iPhone app Task 12: listening without the Core's identity would
+        // accept no device, forever, while looking healthy (and a new Core
+        // has no token either). Refuse loudly instead.
+        m_lastError = m_identity->lastError().isEmpty()
+                          ? QStringLiteral("The Core's own key is unavailable")
+                          : m_identity->lastError();
         qCWarning(lcStation) << "Refusing to listen:" << m_lastError;
         return false;
     }
@@ -910,23 +942,31 @@ QString StationServer::certificateFingerprint() const
     return m_certificates != nullptr ? m_certificates->fingerprintSha256() : QString();
 }
 
-QString StationServer::formatPairingBanner(const QString& token,
-                                           const QString& fingerprint,
-                                           const QString& storedIn)
+DeviceStore* StationServer::deviceStore() const
+{
+    return m_devices.get();
+}
+
+const StationIdentity& StationServer::stationIdentity() const
+{
+    return *m_identity;
+}
+
+QString StationServer::formatFirstRunBanner(const QString& fingerprint,
+                                            const QString& identityKeyPath)
 {
     return QStringLiteral(
                "\n"
                "  ============================================================\n"
-               "  NereusSDR station: first run, pairing details\n"
+               "  NereusSDR Core: first run\n"
                "  ------------------------------------------------------------\n"
-               "  Token:       %1\n"
-               "  TLS SHA-256: %2\n"
-               "  Stored in:   %3\n"
+               "  TLS SHA-256:  %1\n"
+               "  Identity key: %2\n"
                "  ------------------------------------------------------------\n"
-               "  Give both to the client. They are printed once, here, on\n"
-               "  stdout, and are deliberately kept out of the log file.\n"
+               "  Back up the identity key file. It is this Core's identity:\n"
+               "  if it is lost, every paired device has to pair again.\n"
                "  ============================================================\n")
-        .arg(token, fingerprint, storedIn);
+        .arg(fingerprint, identityKeyPath);
 }
 
 bool StationServer::hasAuthenticatedSession() const
@@ -986,6 +1026,9 @@ void StationServer::acceptTransport(SessionTransport* transport)
     Peer peer;
     peer.transport = transport;
     peer.description = transport->peerDescription();
+    // iPhone app Task 12: this connection's own challenge, so a signature
+    // made for another connection never verifies on this one.
+    peer.challenge = m_deviceAuth->newChallenge();
 
     // Finish-the-handshake-or-drop. Parented to the transport so it cannot
     // outlive the peer it is about, and stopped once this peer's snapshot
@@ -1043,11 +1086,21 @@ void StationServer::acceptTransport(SessionTransport* transport)
     // leaves unless it is the one major it speaks, so the newest there would
     // turn away every such client this station could still serve (spec D39).
     // A client that reads `majors` ignores `major`.
-    send(transport,
-         SessionMessages::hello(m_supportedMajors.first(), kSessionProtocolMinor,
-                                settingsSchemaVersionOf(m_settings),
-                                peerNameForThisProcess(), m_supportedMajors,
-                                m_declaredFeatures));
+    SessionMessage hello =
+        SessionMessages::hello(m_supportedMajors.first(), kSessionProtocolMinor,
+                               settingsSchemaVersionOf(m_settings), peerNameForThisProcess(),
+                               m_supportedMajors, m_declaredFeatures);
+    // iPhone app Task 12 (R-IOS-08): the Core's identity key, its binding
+    // to the certificate this connection presents, and the challenge a
+    // paired device signs. An older app ignores all three.
+    if (!m_certBinding.isEmpty()) {
+        hello.stationIdentity = SessionStationIdentity{
+            StationIdentity::toBase64Url(m_identity->publicKeySpki()),
+            StationIdentity::toBase64Url(m_certBinding),
+        };
+        hello.challenge = StationIdentity::toBase64Url(peer.challenge);
+    }
+    send(transport, hello);
 
     qCDebug(lcStation) << "Peer attached:" << peer.description;
 }
@@ -1059,7 +1112,7 @@ void StationServer::onTransportClosed(SessionTransport* transport)
 }
 
 void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
-                             bool sendSessionEnd, bool retryable)
+                             bool sendSessionEnd, bool retryable, const QString& endCode)
 {
     auto it = m_peers.find(transport);
     if (it == m_peers.end()) {
@@ -1068,7 +1121,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     const QString description = it->description;
 
     if (sendSessionEnd) {
-        send(transport, SessionMessages::sessionEnd(reason, retryable));
+        send(transport, SessionMessages::sessionEnd(reason, retryable, endCode));
     }
     m_peers.erase(it);
 
@@ -1179,7 +1232,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
     SessionMessage message;
     if (!SessionMessages::decode(wire, &message)) {
         dropPeer(transport, QStringLiteral("The Core could not read a message from this app."), true,
-                 /*retryable=*/false);
+                 /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
         return;
     }
 
@@ -1198,7 +1251,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
         // Everything below this line moves radio or settings state. A peer
         // that has not proved it holds the token gets exactly one answer.
         dropPeer(transport, QStringLiteral("This app sent a request before the Core had accepted its pairing token."), true,
-                 /*retryable=*/false);
+                 /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
         return;
     }
 
@@ -1376,7 +1429,8 @@ void StationServer::handleHello(SessionTransport* transport, const SessionMessag
         return;
     }
     if (it->helloReceived) {
-        dropPeer(transport, QStringLiteral("This app started connecting twice on one connection."), true, /*retryable=*/false);
+        dropPeer(transport, QStringLiteral("This app started connecting twice on one connection."), true, /*retryable=*/false,
+                 QString::fromLatin1(SessionEndCode::kProtocolError));
         return;
     }
     it->helloReceived = true;
@@ -1397,7 +1451,8 @@ void StationServer::handleHello(SessionTransport* transport, const SessionMessag
         // NOT retryable: an incompatible wire contract does not become
         // compatible by being dialed again. The operator has to upgrade
         // one end.
-        dropPeer(transport, reason, true, /*retryable=*/false);
+        dropPeer(transport, reason, true, /*retryable=*/false,
+                 QString::fromLatin1(SessionEndCode::kLinkVersion));
         return;
     }
     it->agreedMajor = message.protocolMajor;
@@ -1433,48 +1488,160 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
         return;
     }
     if (!it->helloReceived) {
-        dropPeer(transport, QStringLiteral("This app sent its pairing token out of order."), true, /*retryable=*/false);
+        dropPeer(transport, QStringLiteral("This app sent its pairing token out of order."), true, /*retryable=*/false,
+                 QString::fromLatin1(SessionEndCode::kProtocolError));
         return;
     }
     if (it->authenticated) {
-        dropPeer(transport, QStringLiteral("This app sent its pairing token out of order."), true, /*retryable=*/false);
+        dropPeer(transport, QStringLiteral("This app sent its pairing token out of order."), true, /*retryable=*/false,
+                 QString::fromLatin1(SessionEndCode::kProtocolError));
         return;
     }
 
     const QString description = it->description;
+    const QByteArray challenge = it->challenge;
+    const QString address = transport->peerAddress();
 
-    // The candidate token is never logged, at any level, on any path.
-    const TokenStore::VerifyResult result = m_tokens->verify(message.token);
-    if (result != TokenStore::VerifyResult::Accepted) {
-        // THE distinction TokenStore.h says the two results exist to
-        // preserve, carried through to the client's retry policy.
-        //
-        // RateLimited is retryable: it is transient BY CONSTRUCTION -- the
-        // lockout expires on TokenStore's own timer, and the refusal text
-        // literally says "try again later". Crucially, the rate limiter is
-        // global rather than per-peer (TokenStore.h:44-48 says so outright:
-        // a lockout refuses a connection "including one carrying the
-        // correct token"), so five bad guesses from anyone who can reach
-        // the port refuse the OPERATOR too. Marked permanent, that turned
-        // somebody else's failed guesses into the operator being locked
-        // out of their own station with no automatic recovery.
-        //
-        // Rejected is NOT retryable: the token is simply wrong, redialing
-        // cannot make it right, and a client that retried forever would
-        // feed the very rate limiter above and keep the station locked out
-        // on the operator's own behalf.
-        const bool rateLimited = result == TokenStore::VerifyResult::RateLimited;
-        const QString reason =
-            rateLimited
-                ? QStringLiteral("The Core is refusing pairing tokens for a while after too many wrong ones. Try again later.")
-                : QStringLiteral("The Core did not accept this app's pairing token. Check the token saved for this Core.");
-        send(transport, SessionMessages::authResult(false, reason, rateLimited));
+    // One refusal shape for every path below: auth.result carrying the
+    // reason, the retry advice and the end code, then the close. Nothing
+    // here ever logs a candidate token, a signature or a key.
+    const auto refuse = [this, transport, &description](const QString& reason, bool retryable,
+                                                        const char* code) {
+        const QString endCode = code != nullptr ? QString::fromLatin1(code) : QString();
+        send(transport, SessionMessages::authResult(false, reason, retryable, endCode));
         qCWarning(lcStation) << "Authentication refused for" << description << ":" << reason;
-        dropPeer(transport, reason, false, rateLimited);
-        return;
+        dropPeer(transport, reason, false, retryable);
+    };
+
+    // iPhone app Task 12 (R-IOS-08): what a device sends, as the
+    // authenticator reads it. The address is the peer's own; over the
+    // relay (Part E) it is empty and the limits key on the introduction.
+    DeviceAuthRequest request;
+    if (message.device) {
+        request.id = message.device->id;
+        request.publicKey = message.device->publicKey;
+        request.name = message.device->name;
+        request.kind = message.device->kind;
+        request.signature = message.device->signature;
+        request.sourceAddress = address;
     }
 
+    QByteArray deviceId;
+    if (message.device && message.token.isEmpty()) {
+        // ── A paired device signing in with its own key ──
+        //
+        // The device limiter only: the token's limiter is never consulted,
+        // so wrong tokens from anyone cannot lock out a device's key, and
+        // this path's failures never count against the token.
+        const AuthOutcome outcome = m_deviceAuth->verify(request, challenge, m_certSha256);
+        switch (outcome.result) {
+        case AuthOutcome::Result::Admitted:
+            deviceId = outcome.deviceId;
+            break;
+        case AuthOutcome::Result::RateLimited:
+            // Retryable: it clears by itself after the lockout.
+            refuse(QStringLiteral("The Core is refusing sign-ins from this device for a while after too many failed ones. Try again later."),
+                   /*retryable=*/true, nullptr);
+            return;
+        case AuthOutcome::Result::NotPaired:
+            refuse(QStringLiteral("This device is not paired with this Core. Pair it first."),
+                   /*retryable=*/false, SessionEndCode::kDeviceNotPaired);
+            return;
+        case AuthOutcome::Result::Proved:
+        case AuthOutcome::Result::ProofFailed:
+            refuse(QStringLiteral("This device could not prove it is paired with this Core."),
+                   /*retryable=*/false, SessionEndCode::kDeviceProofFailed);
+            return;
+        }
+    } else {
+        // ── The pairing token (a window from before paired devices) ──
+        //
+        // A Core with no token (a new one, or one whose token was retired)
+        // has nothing to check it against: the window has to pair. Refused
+        // before the token's limiter, which a token that cannot succeed
+        // must not feed.
+        if (!m_tokens->isActive()) {
+            refuse(QStringLiteral("This Core uses paired devices. Pair this device first."),
+                   /*retryable=*/false, SessionEndCode::kPairingRequired);
+            return;
+        }
+        const TokenStore::VerifyResult result = m_tokens->verify(message.token);
+        if (result != TokenStore::VerifyResult::Accepted) {
+            // THE distinction TokenStore.h says the two results exist to
+            // preserve, carried through to the client's retry policy.
+            //
+            // RateLimited is retryable: it is transient BY CONSTRUCTION --
+            // the lockout expires on TokenStore's own timer, and the
+            // refusal text literally says "try again later". Crucially, the
+            // rate limiter is global rather than per-peer (TokenStore.h:44-
+            // 48 says so outright: a lockout refuses a connection
+            // "including one carrying the correct token"), so five bad
+            // guesses from anyone who can reach the port refuse the
+            // OPERATOR's token too. Marked permanent, that turned somebody
+            // else's failed guesses into the operator being locked out of
+            // their own station with no automatic recovery. (A paired
+            // device's key is not refused by it: see above.)
+            //
+            // Rejected is NOT retryable: the token is simply wrong,
+            // redialing cannot make it right, and a client that retried
+            // forever would feed the very rate limiter above and keep the
+            // station locked out on the operator's own behalf.
+            if (result == TokenStore::VerifyResult::RateLimited) {
+                refuse(QStringLiteral("The Core is refusing pairing tokens for a while after too many wrong ones. Try again later."),
+                       /*retryable=*/true, nullptr);
+            } else {
+                refuse(QStringLiteral("The Core did not accept this app's pairing token. Check the token saved for this Core."),
+                       /*retryable=*/false, SessionEndCode::kWrongToken);
+            }
+            return;
+        }
+        if (message.device) {
+            // The token vouched for the connection; the device block has
+            // to prove its key signed THIS connection's transcript before
+            // the key is enrolled, so a token holder cannot enrol a key it
+            // does not hold. Enrolled once, as a computer, and from then on
+            // the window signs in with its key, typing nothing.
+            const AuthOutcome proof =
+                m_deviceAuth->verifyPossession(request, challenge, m_certSha256);
+            if (proof.result != AuthOutcome::Result::Proved) {
+                refuse(QStringLiteral("This device could not prove it is paired with this Core."),
+                       /*retryable=*/false, SessionEndCode::kDeviceProofFailed);
+                return;
+            }
+            deviceId = proof.deviceId;
+            if (!m_devices->find(deviceId)) {
+                PairedDevice device;
+                device.id = proof.deviceId;
+                device.publicKeySpki = proof.publicKeySpki;
+                device.name = DeviceStore::isValidName(message.device->name)
+                                  ? message.device->name
+                                  : QStringLiteral("Computer");
+                device.kind = QStringLiteral("computer");
+                device.enrolledThroughToken = true;
+                if (m_devices->add(device)) {
+                    qCInfo(lcStation) << "Enrolled the device key of" << description
+                                      << "signing in with the pairing token";
+                } else {
+                    // The token already admitted the window; not being able
+                    // to write the list must not lock it out. It enrols on
+                    // a later sign-in.
+                    qCWarning(lcStation) << "Could not enrol the device key of" << description;
+                    deviceId.clear();
+                }
+            }
+        }
+    }
+
+    it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
     it->authenticated = true;
+    it->deviceId = deviceId;
+    if (!deviceId.isEmpty()) {
+        // lastSeen and lastAddress, on every authenticated connection.
+        m_devices->touch(deviceId, address);
+    }
     send(transport, SessionMessages::authResult(true, QString(), /*retryable=*/false));
     promoteToSession(transport);
 }
@@ -1505,7 +1672,8 @@ void StationServer::promoteToSession(SessionTransport* transport)
         // radio between them indefinitely. Section 7.1 makes the token the
         // authority, so the most recent authenticated connection wins and
         // the displaced operator reconnects by hand.
-        dropPeer(m_session, reason, true, /*retryable=*/false);
+        dropPeer(m_session, reason, true, /*retryable=*/false,
+                 QString::fromLatin1(SessionEndCode::kTakenOver));
         emit sessionPreempted(displaced);
     }
 
@@ -2305,8 +2473,10 @@ StationCapabilities StationServer::buildCapabilities() const
             caps.stationTciVersion = stationTciVersion();
             // R-R3-47 / R-R3-22: the Core's accessory records and settings.
             caps.accessoryDataVersion = accessoryDataVersion();
-            // R-R3-47 / R-R3-22: the Tuner Genius's own settings, last.
+            // R-R3-47 / R-R3-22: the Tuner Genius's own settings.
             caps.remoteTgxlControlVersion = tgxlControlVersion();
+            // iPhone app Task 12 (R-IOS-08): device sign-in by key, last.
+            caps.stationIdentityVersion = m_certBinding.isEmpty() ? 0 : 1;
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();
