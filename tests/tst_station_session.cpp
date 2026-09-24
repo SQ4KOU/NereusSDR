@@ -84,6 +84,9 @@
 #include "core/StepAttenuatorFacade.h"
 #include "core/CalibrationController.h"
 #include "core/OcMatrix.h"
+#include "core/IoBoardHl2.h"
+#include "core/IoBoardHl2Facade.h"
+#include "core/session/MirrorPolicy.h"
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/accessories/AlexController.h"
 #include "gui/setup/HardwarePage.h"
@@ -382,7 +385,12 @@ private slots:
     void appRawAntennaSettingsWritesAreRefused();
     void hardwareWritesForAnotherRadioAreRefused();
     void coreAppliesHardwareConfigWritesLive();
+    void receiveOnlyCoreRefusesTransmitHardwareKeys();
     void ioBoardProbeIsAskedOfTheCore();
+    void windowBandAntennaEditKeepsTheCoresNewerBands();
+    void windowShowsTheCoresIoBoard();
+    void windowForgetsTheIoBoardOfACoreThatDoesNotOfferIt();
+    void windowOcMatrixFollowsTheCore();
     void hardwareConfigRx1RateGoesToTheCoresFirstReceiver();
 
     // ---- Fix round 1 ----
@@ -1790,7 +1798,7 @@ void TstStationSession::handshakeCompletesInSectionSevenZeroOrder()
     QVERIFY(settingsDir.isValid());
     AppSettings stationSettings(
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
-    stationSettings.setValue(QStringLiteral("TciServerPort"), QStringLiteral("50001"));
+    stationSettings.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50001"));
 
     auto stationModel = makeStationRadioModel(1);
     StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
@@ -2681,7 +2689,7 @@ void TstStationSession::settingsProxyIsNotReadyBeforeTheSnapshot()
     AppSettings stationSettings(
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
     // A Station-classified key with a distinctive value.
-    stationSettings.setValue(QStringLiteral("TciServerPort"), QStringLiteral("50123"));
+    stationSettings.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50123"));
 
     auto stationModel = makeStationRadioModel(0);
     StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
@@ -2709,7 +2717,7 @@ void TstStationSession::settingsProxyIsNotReadyBeforeTheSnapshot()
     QVERIFY(proxy.ready());
     QVERIFY(proxy.hasReceivedSnapshot());
     QVERIFY(proxy.setupDialogAllowed() || !proxy.hasNonEmptySnapshot());
-    QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("50001")).toString(),
+    QCOMPARE(proxy.value(QStringLiteral("StationCallsign"), QStringLiteral("50001")).toString(),
              QStringLiteral("50123"));
 
     // ── Fix round 1, Important 2 ─────────────────────────────────────────
@@ -2727,15 +2735,15 @@ void TstStationSession::settingsProxyIsNotReadyBeforeTheSnapshot()
     // Hand-relaying here would pass against exactly that broken build,
     // which is why this now goes through proxy.setValue() and nothing else.
     QSignalSpy outbound(&proxy, &SettingsProxy::outboundWriteRequested);
-    proxy.setValue(QStringLiteral("TciServerPort"), QStringLiteral("50999"));
+    proxy.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50999"));
     QCOMPARE(outbound.count(), 1);
-    QTRY_COMPARE(stationSettings.value(QStringLiteral("TciServerPort")).toString(),
+    QTRY_COMPARE(stationSettings.value(QStringLiteral("StationCallsign")).toString(),
                  QStringLiteral("50999"));
 
     // The removal half of the same seam.
-    QVERIFY(stationSettings.contains(QStringLiteral("TciServerPort")));
-    proxy.remove(QStringLiteral("TciServerPort"));
-    QTRY_VERIFY(!stationSettings.contains(QStringLiteral("TciServerPort")));
+    QVERIFY(stationSettings.contains(QStringLiteral("StationCallsign")));
+    proxy.remove(QStringLiteral("StationCallsign"));
+    QTRY_VERIFY(!stationSettings.contains(QStringLiteral("StationCallsign")));
 }
 
 // Whole-branch review, Important 4. A settings remove on the station used
@@ -2764,7 +2772,7 @@ void TstStationSession::aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmpt
     QVERIFY(settingsDir.isValid());
     AppSettings stationSettings(
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
-    stationSettings.setValue(QStringLiteral("TciServerPort"), QStringLiteral("50123"));
+    stationSettings.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50123"));
 
     auto stationModel = makeStationRadioModel(0);
     StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
@@ -2782,19 +2790,19 @@ void TstStationSession::aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmpt
     server.acceptTransport(stationEnd);
     QTRY_COMPARE(completed.count(), 1);
 
-    QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("fallback")).toString(),
+    QCOMPARE(proxy.value(QStringLiteral("StationCallsign"), QStringLiteral("fallback")).toString(),
              QStringLiteral("50123"));
-    QVERIFY(proxy.contains(QStringLiteral("TciServerPort")));
+    QVERIFY(proxy.contains(QStringLiteral("StationCallsign")));
 
     // ── Station to client ────────────────────────────────────────────────
     // A removal on the daemon, for any reason of its own.
-    stationSettings.remove(QStringLiteral("TciServerPort"));
+    stationSettings.remove(QStringLiteral("StationCallsign"));
 
-    QTRY_VERIFY2(!proxy.contains(QStringLiteral("TciServerPort")),
+    QTRY_VERIFY2(!proxy.contains(QStringLiteral("StationCallsign")),
                  "the client still holds a key the station removed");
-    QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("fallback")).toString(),
+    QCOMPARE(proxy.value(QStringLiteral("StationCallsign"), QStringLiteral("fallback")).toString(),
              QStringLiteral("fallback"));
-    QVERIFY2(!proxy.handledKeys().contains(QStringLiteral("TciServerPort")),
+    QVERIFY2(!proxy.handledKeys().contains(QStringLiteral("StationCallsign")),
              "a removed key must not still be listed");
 
     // ── Client to station, and the echo back ─────────────────────────────
@@ -5136,18 +5144,25 @@ StationCapabilities g21kCaps()
 void TstStationSession::radioIdentityEntriesRoundTrip()
 {
     // The three entries travel last and together, and come back as sent;
-    // radioHardwareVersion (R-R3-46, Task 2) closes the same block.
+    // radioHardwareVersion (R-R3-46, Task 2) follows in the same block, then
+    // remotePgxlControlVersion and remoteRfKitControlVersion (R-R3-47).
     StationCapabilities sent = g21kCaps();
     sent.radioHardwareVersion = 1;
+    sent.remotePgxlControlVersion = 1;
+    sent.remoteRfKitControlVersion = 1;
     const QList<MirrorUpdate> updates = sent.toUpdates();
     const int model = updateIndexOf(updates, "hpsdrModel");
-    QCOMPARE(model, int(updates.size()) - 4);
+    QCOMPARE(model, int(updates.size()) - 6);
     QCOMPARE(updateIndexOf(updates, "radioProtocol"), model + 1);
     QCOMPARE(updateIndexOf(updates, "radioAddress"), model + 2);
     QCOMPARE(updateIndexOf(updates, "radioHardwareVersion"), model + 3);
+    QCOMPARE(updateIndexOf(updates, "remotePgxlControlVersion"), model + 4);
+    QCOMPARE(updateIndexOf(updates, "remoteRfKitControlVersion"), model + 5);
     const StationCapabilities received = StationCapabilities::fromUpdates(updates);
     QVERIFY(received.radioIdentityEntries);
     QCOMPARE(received.radioHardwareVersion, 1);
+    QCOMPARE(received.remotePgxlControlVersion, 1);
+    QCOMPARE(received.remoteRfKitControlVersion, 1);
     QCOMPARE(received.hpsdrModel, HPSDRModel::ANAN_G2_1K);
     QCOMPARE(received.radioProtocol, 2);
     QCOMPARE(received.radioAddress, QStringLiteral("192.168.1.50"));
@@ -5158,7 +5173,8 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     older.radioIdentityEntries = false;
     const QList<MirrorUpdate> olderUpdates = older.toUpdates();
     for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
-                             "radioHardwareVersion"}) {
+                             "radioHardwareVersion", "remotePgxlControlVersion",
+                             "remoteRfKitControlVersion"}) {
         QCOMPARE(updateIndexOf(olderUpdates, name), -1);
     }
     const StationCapabilities fromOlder = StationCapabilities::fromUpdates(olderUpdates);
@@ -5167,6 +5183,8 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     QCOMPARE(fromOlder.radioProtocol, 0);
     QVERIFY(fromOlder.radioAddress.isEmpty());
     QCOMPARE(fromOlder.radioHardwareVersion, 0);
+    QCOMPARE(fromOlder.remotePgxlControlVersion, 0);
+    QCOMPARE(fromOlder.remoteRfKitControlVersion, 0);
 
     // Values this build cannot use read as not reported, never as a guess.
     QList<MirrorUpdate> odd = olderUpdates;
@@ -5233,14 +5251,16 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
     const QList<MirrorUpdate> older = capture(quint16(kRadioIdentitySessionProtocolMinor - 1));
     QVERIFY(!older.isEmpty());
     for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
-                             "radioHardwareVersion"}) {
+                             "radioHardwareVersion", "remotePgxlControlVersion",
+                             "remoteRfKitControlVersion"}) {
         QCOMPARE(updateIndexOf(older, name), -1);
     }
-    // Byte for byte: the minor-11 descriptor without the four (and the
+    // Byte for byte: the minor-11 descriptor without the six (and the
     // display budget reason, which is not sent here) is the minor-10 one.
     QList<MirrorUpdate> stripped = current;
     for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
-                             "radioHardwareVersion"}) {
+                             "radioHardwareVersion", "remotePgxlControlVersion",
+                             "remoteRfKitControlVersion"}) {
         stripped.removeAt(updateIndexOf(stripped, name));
     }
     QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)),
@@ -5395,6 +5415,18 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
         }
         return count;
     };
+    // R-R3-46 fix wave: so does the read-only `ioBoard` object.
+    const auto aboutIoBoard = [](const QList<QByteArray>& wires) {
+        int count = 0;
+        for (const QByteArray& wire : wires) {
+            const SessionMessage m = decodeOrFail(wire);
+            if (m.objectKey == "ioBoard"
+                || (m.kind == SessionMessageKind::Schema && m.className == "IoBoardHl2Facade")) {
+                ++count;
+            }
+        }
+        return count;
+    };
     const auto run = [this, aboutStepAtt](quint16 minor, QList<QByteArray>* wires,
                             QList<SessionPropertyResult>* results) {
         QTemporaryDir dir;
@@ -5449,14 +5481,16 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
     QList<QByteArray> current;
     QList<SessionPropertyResult> currentResults;
     run(kRadioIdentitySessionProtocolMinor, &current, &currentResults);
-    // R-R3-46: 2, since the Core's Alex antennas and the hardware apply
-    // step are behind it too.
-    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 2);
+    // R-R3-46: 3, since the Core's Alex antennas and the hardware apply
+    // step (2), and its I/O board and the per-band antenna verb (3, fix
+    // wave) are behind it too.
+    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 3);
     // Schema, object, the Core's change and the accepted write's echo.
     QVERIFY(aboutStepAtt(current) >= 3);
     QCOMPARE(currentResults.size(), 1);
     QVERIFY(currentResults.first().accepted);
     QVERIFY(aboutAlex(current) >= 2);  // its schema and object
+    QVERIFY(aboutIoBoard(current) >= 2);  // its schema and object
 
     QList<QByteArray> older;
     QList<SessionPropertyResult> olderResults;
@@ -5464,6 +5498,7 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
     QCOMPARE(updateIndexOf(capabilitiesIn(older), "radioHardwareVersion"), -1);
     QCOMPARE(aboutStepAtt(older), 0);
     QCOMPARE(aboutAlex(older), 0);
+    QCOMPARE(aboutIoBoard(older), 0);
     QCOMPARE(olderResults.size(), 1);
     QVERIFY(!olderResults.first().accepted);
     QCOMPARE(olderResults.first().reason,
@@ -5665,7 +5700,10 @@ void TstStationSession::windowAntennaEditsWaitForACoreThatOffersThem()
     // R-R3-46. Against a Core below radioHardwareVersion 2 (an attenuator
     // only Core, or none) the window's antenna object refuses an edit in
     // plain words and sends nothing; with it, the edit is a property write.
-    for (const int version : {0, 1, 2}) {
+    // R-R3-46 fix wave: from radioHardwareVersion 3 a band's edit is the
+    // setAlexRxAntenna command, not a whole-list property write, and the
+    // window's value follows the Core's answer.
+    for (const int version : {0, 1, 2, 3}) {
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);
@@ -5704,10 +5742,16 @@ void TstStationSession::windowAntennaEditsWaitForACoreThatOffersThem()
             QCOMPARE(alex->rxAnt(Band::Band40m), 1);
             QTest::qWait(50);
             QVERIFY(!station->receivedKinds().contains(QByteArrayLiteral("property.write")));
-        } else {
+        } else if (version == 2) {
             QCOMPARE(refused.count(), 0);
             QCOMPARE(alex->rxAnt(Band::Band40m), 2);
             QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("property.write")));
+        } else {
+            QCOMPARE(refused.count(), 0);
+            QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+            QTest::qWait(50);
+            QVERIFY(!station->receivedKinds().contains(QByteArrayLiteral("property.write")));
+            QCOMPARE(alex->rxAnt(Band::Band40m), 1);  // until the Core's delta
         }
     }
 }
@@ -5858,6 +5902,141 @@ void TstStationSession::coreAppliesHardwareConfigWritesLive()
     QVERIFY(reloads.isEmpty());
 }
 
+void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
+{
+    // R-R3-46 / R-R3-21 (transmit safety). The Core's hardware apply step
+    // reloads oc/, cal/ and hl2/ into its live controllers, so a raw write
+    // of a transmit-side hardware key would reach the radio's transmit
+    // path. A receive-only Core refuses every such key, write and remove,
+    // with the transmit reason: its saved value and its live controller
+    // stay as they were, and nothing is reloaded.
+    AppSettings& settings = AppSettings::instance();
+    settings.clearHardwareValues(kHardwareMac);
+    const QStringList globalKeys{QStringLiteral("hardware/oc/extPa/model"),
+                                 QStringLiteral("hardware/oc/extPa/biasDelayMs")};
+    for (const QString& key : globalKeys) {
+        settings.remove(key);
+    }
+    const auto cleanSettings = qScopeGuard([&settings, globalKeys] {
+        settings.clearHardwareValues(kHardwareMac);
+        for (const QString& key : globalKeys) {
+            settings.remove(key);
+        }
+    });
+    HardwareSession s;
+    joinHardwareWindow(s, settings, this, m_securityDir.path());
+    const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
+    if (QTest::currentTestFailed()) { return; }
+    QVERIFY(s.core->receiveOnlyStationPolicy());
+    QStringList reloads;
+    s.core->setHardwareApplyObserverForTest([&reloads](const QString& name) { reloads << name; });
+    QSignalSpy rejected(s.proxy.get(), &SettingsProxy::valueRejected);
+    QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
+    const QString reason =
+        QStringLiteral("Transmit configuration is unavailable on this receive-only station.");
+
+    const QString mac = kHardwareMac;
+    const auto hw = [&mac](const QString& rest) {
+        return QStringLiteral("hardware/%1/%2").arg(mac, rest);
+    };
+    const OcMatrix& oc = s.core->ocMatrix();
+    const CalibrationController& cal = s.core->calibrationController();
+    const Hl2OptionsModel& hl2 = s.core->hl2Options();
+    const OcMatrix::TXPinAction action1 = oc.pinAction(0);
+    const double txDisplay = cal.txDisplayOffsetDb();
+    const double paSens = cal.paCurrentSensitivity();
+    const double paOffset = cal.paCurrentOffset();
+    const PaCalProfile paTable = cal.paCalProfile();
+    const int pttHang = hl2.pttHangMs();
+    const int txLatency = hl2.txLatencyMs();
+    QVERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));
+
+    // One key of each class, with a value its controller would take.
+    const QList<QPair<QString, QString>> writes{
+        {hw(QStringLiteral("oc/tx/40m/pin3")), QStringLiteral("True")},
+        {hw(QStringLiteral("oc/actions/pin1/action")), QStringLiteral("tune")},
+        {hw(QStringLiteral("cal/txDisplayOffset")), QStringLiteral("7.5")},
+        {hw(QStringLiteral("cal/paSens")), QStringLiteral("3.25")},
+        {hw(QStringLiteral("cal/paOffset")), QStringLiteral("1.5")},
+        {hw(QStringLiteral("paCalibration/boardClass")), QStringLiteral("2")},
+        {hw(QStringLiteral("paCalibration/calPoint1")), QStringLiteral("123")},
+        {hw(QStringLiteral("paCalibration/cal/paSens")), QStringLiteral("3.25")},
+        {hw(QStringLiteral("hl2/pttHangMs")), QStringLiteral("30")},
+        {hw(QStringLiteral("hl2/txLatencyMs")), QStringLiteral("40")},
+        {hw(QStringLiteral("tx/UserDigOut")), QStringLiteral("15")},
+        {hw(QStringLiteral("pa/profile/active")), QStringLiteral("Custom")},
+        {hw(QStringLiteral("powerByBand/40m")), QStringLiteral("100")},
+        {hw(QStringLiteral("tunePowerByBand/40m")), QStringLiteral("100")},
+        {hw(QStringLiteral("ocOutputs/hardware/oc/extPa/model")), QStringLiteral("2")},
+        {QStringLiteral("hardware/oc/extPa/model"), QStringLiteral("2")},
+        {QStringLiteral("hardware/oc/extPa/biasDelayMs"), QStringLiteral("50")},
+        // Follow-up item 4.
+        {hw(QStringLiteral("alex/master/hpfBypassOnTx")), QStringLiteral("True")},
+        {hw(QStringLiteral("alex/master/hpfBypassOnPs")), QStringLiteral("False")},
+        {hw(QStringLiteral("alex/master/disable6mLnaOnTx")), QStringLiteral("False")},
+        {hw(QStringLiteral("alex/lpf/20m/start")), QStringLiteral("10.0")},
+        {hw(QStringLiteral("antennaAlex/alex/lpf/20m/end")), QStringLiteral("30.0")},
+        {QStringLiteral("hardware/oc/allowHotSwitching"), QStringLiteral("True")},
+    };
+    int expected = 0;
+    for (const auto& [key, value] : writes) {
+        s.proxy->setValue(key, value);
+        ++expected;
+        QTRY_COMPARE_WITH_TIMEOUT(rejected.count(), expected, 2000);
+        QCOMPARE(rejected.last().at(0).toString(), key);
+        QVERIFY2(!settings.contains(key), qPrintable(key));
+        QCOMPARE(toast.last().at(0).toString(), reason);
+    }
+
+    // A remove of a transmit key the Core already holds keeps it.
+    const QString held = hw(QStringLiteral("oc/tx/20m/pin1"));
+    settings.setValue(held, QStringLiteral("True"));
+    s.proxy->remove(held);
+    ++expected;
+    QTRY_COMPARE(rejected.count(), expected);
+    QCOMPARE(rejected.last().at(0).toString(), held);
+    QCOMPARE(rejected.last().at(1).toString(), QStringLiteral("True"));
+    QCOMPARE(settings.value(held).toString(), QStringLiteral("True"));
+
+    // Nothing reached the Core's controllers.
+    QTest::qWait(150);
+    QVERIFY2(reloads.isEmpty(), qPrintable(reloads.join(QLatin1Char(','))));
+    QVERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));
+    QCOMPARE(oc.pinAction(0), action1);
+    QCOMPARE(cal.txDisplayOffsetDb(), txDisplay);
+    QCOMPARE(cal.paCurrentSensitivity(), paSens);
+    QCOMPARE(cal.paCurrentOffset(), paOffset);
+    QCOMPARE(cal.paCalProfile().boardClass, paTable.boardClass);
+    QVERIFY(cal.paCalProfile().watts == paTable.watts);
+    QCOMPARE(hl2.pttHangMs(), pttHang);
+    QCOMPARE(hl2.txLatencyMs(), txLatency);
+
+    // Follow-up item 1: the N2ADR switch. On a receive-only Core only the
+    // preset's receive half applies; every transmit pin stays as it was
+    // (the preset would clear them and set its own), in memory and saved.
+    reloads.clear();
+    s.core->ocMatrixMutable().setPin(Band::Band20m, 0, /*tx=*/true, true);
+    const QString n2adr = hw(QStringLiteral("hl2IoBoard/n2adrFilter"));
+    s.proxy->setValue(n2adr, QStringLiteral("True"));
+    QTRY_COMPARE(reloads, QStringList{QStringLiteral("n2adr")});
+    QVERIFY(oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));   // receive half applied
+    QVERIFY(oc.pinEnabled(Band::Band20m, 0, /*tx=*/true));    // not cleared
+    QVERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));   // not set
+    QVERIFY(settings.value(hw(QStringLiteral("oc/tx/40m/pin3")), QStringLiteral("False"))
+                .toString() != QStringLiteral("True"));
+    s.proxy->setValue(n2adr, QStringLiteral("False"));
+    QTRY_VERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
+    QVERIFY(oc.pinEnabled(Band::Band20m, 0, /*tx=*/true));
+    s.core->ocMatrixMutable().setPin(Band::Band20m, 0, /*tx=*/true, false);
+
+    // The receive side is still the window's to change.
+    s.proxy->setValue(hw(QStringLiteral("oc/rx/40m/pin3")), QStringLiteral("True"));
+    QTRY_VERIFY(oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
+    s.proxy->setValue(hw(QStringLiteral("cal/freqFactor")), QStringLiteral("1.000002"));
+    QTRY_COMPARE(cal.freqCorrectionFactor(), 1.000002);
+    QCOMPARE(rejected.count(), expected);
+}
+
 void TstStationSession::ioBoardProbeIsAskedOfTheCore()
 {
     // R-R3-46. The window's Probe asks the Core (the radio is the Core's);
@@ -5878,6 +6057,162 @@ void TstStationSession::ioBoardProbeIsAskedOfTheCore()
     QCOMPARE(reason,
              QStringLiteral("The radio is not connected, so there is no I/O board to probe."));
     QVERIFY(OperatorWording::isPlain(reason));
+}
+
+void TstStationSession::windowBandAntennaEditKeepsTheCoresNewerBands()
+{
+    // R-R3-46 fix wave (radioHardwareVersion 3). A window's antenna click
+    // used to send all 14 bands as the window last saw them, so a change
+    // the Core made to another band in between (the VFO flag, another
+    // window) was put back. The window now sends only the band clicked.
+    AppSettings& coreStore = AppSettings::instance();
+    coreStore.clearHardwareValues(kHardwareMac);
+    const auto cleanStore = qScopeGuard([&coreStore] { coreStore.clearHardwareValues(kHardwareMac); });
+    HardwareSession s;
+    joinHardwareWindow(s, coreStore, this, m_securityDir.path());
+    const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
+    if (QTest::currentTestFailed()) { return; }
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 3);
+    s.core->alexControllerMutable().setMacAddress(kHardwareMac);
+    AlexAntennaFacade* window = s.window->alexAntennaFacade();
+    QVERIFY(window->hasBandEditSender());
+    QCOMPARE(window->rxAnt(Band::Band20m), 1);
+
+    // The Core moves 20 m to Ant 3; before that reaches the window, the
+    // window's operator picks Ant 2 on 40 m.
+    s.core->alexControllerMutable().setRxAnt(Band::Band20m, 3);
+    QCOMPARE(window->rxAnt(Band::Band20m), 1);
+    window->setRxAnt(Band::Band40m, 2);
+    QTRY_COMPARE(s.core->alexController().rxAnt(Band::Band40m), 2);
+    QTest::qWait(150);
+    QCOMPARE(s.core->alexController().rxAnt(Band::Band20m), 3);
+    QTRY_COMPARE(window->rxAnt(Band::Band20m), 3);
+    QTRY_COMPARE(window->rxAnt(Band::Band40m), 2);
+
+    // The receive-only input the same way.
+    s.core->alexControllerMutable().setRxOnlyAnt(Band::Band15m, 2);
+    window->setRxOnlyAnt(Band::Band10m, 3);
+    QTRY_COMPARE(s.core->alexController().rxOnlyAnt(Band::Band10m), 3);
+    QTest::qWait(150);
+    QCOMPARE(s.core->alexController().rxOnlyAnt(Band::Band15m), 2);
+
+    // A value the Core cannot take is refused in plain words and the
+    // window's view re-reads the Core's value.
+    QSignalSpy resync(window, &AlexAntennaFacade::bandEditRefused);
+    QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
+    window->setRxAnt(Band::Band17m, 7);
+    QTRY_COMPARE(resync.count(), 1);
+    QTRY_COMPARE(toast.count(), 1);
+    QVERIFY(OperatorWording::isPlain(toast.last().at(0).toString()));
+    QCOMPARE(s.core->alexController().rxAnt(Band::Band17m), 1);
+    QCOMPARE(window->rxAnt(Band::Band17m), 1);
+}
+
+void TstStationSession::windowShowsTheCoresIoBoard()
+{
+    // R-R3-46 fix wave (radioHardwareVersion 3). The HL2 I/O board's
+    // readings come back from the radio after a probe, over later frames,
+    // on the Core. The Core mirrors its board (detected, hardware version,
+    // registers) as `ioBoard`, and the window writes them into its own
+    // board, which Setup's HL2 I/O board tab shows. Read only.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    AppSettings settings(dir.filePath(QStringLiteral("ioboard.settings")));
+    HardwareSession s;
+    joinHardwareWindow(s, settings, this, m_securityDir.path());
+    const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
+    if (QTest::currentTestFailed()) { return; }
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 3);
+    const IoBoardHl2& windowBoard = s.window->ioBoard();
+    QVERIFY(!windowBoard.isDetected());
+
+    // The radio answers the probe on the Core.
+    IoBoardHl2& coreBoard = s.core->ioBoardMutable();
+    coreBoard.setRegisterValue(IoBoardHl2::Register::REG_FIRMWARE_MAJOR, 0x02);
+    coreBoard.setRegisterValue(IoBoardHl2::Register::REG_FIRMWARE_MINOR, 0x07);
+    coreBoard.setRegisterValue(IoBoardHl2::Register::REG_ANTENNA, 0x03);
+    coreBoard.setHardwareVersion(IoBoardHl2::kHardwareVersion1);
+    coreBoard.setDetected(true);
+
+    QTRY_VERIFY(windowBoard.isDetected());
+    QCOMPARE(windowBoard.hardwareVersion(), IoBoardHl2::kHardwareVersion1);
+    QCOMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_FIRMWARE_MAJOR), quint8(0x02));
+    QCOMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_FIRMWARE_MINOR), quint8(0x07));
+    QCOMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_ANTENNA), quint8(0x03));
+
+    // A later register reading follows.
+    coreBoard.setRegisterValue(IoBoardHl2::Register::REG_FAULT, 0x01);
+    QTRY_COMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_FAULT), quint8(0x01));
+
+    // The window never writes the Core's board: every property is the
+    // Core's to report, and a write is refused in plain words.
+    for (const char* name : {"detected", "hardwareVersion", "registers"}) {
+        QVERIFY2(!MirrorPolicy::inboundAllowed(QByteArrayLiteral("IoBoardHl2Facade"),
+                                               QByteArray(name)), name);
+    }
+    QVERIFY(OperatorWording::isPlain(IoBoardHl2Facade::readOnlyReason()));
+}
+
+void TstStationSession::windowForgetsTheIoBoardOfACoreThatDoesNotOfferIt()
+{
+    // R-R3-46 follow-up item 5. A window that showed one Core's I/O board
+    // and then joins a Core that does not offer `ioBoard` (below
+    // radioHardwareVersion 3) no longer shows the first Core's board.
+    RadioModel remote(RadioModel::Role::Remote);
+    IoBoardHl2Facade* facade = remote.ioBoardFacade();
+    QVERIFY(facade->applyRemoteProperty("hardwareVersion", int(IoBoardHl2::kHardwareVersion1)));
+    QString registers(IoBoardHl2Facade::kRegisterCount * 2, QLatin1Char('0'));
+    registers.replace(int(IoBoardHl2::Register::REG_FIRMWARE_MAJOR) * 2, 2, QStringLiteral("02"));
+    QVERIFY(facade->applyRemoteProperty("registers", registers));
+    QVERIFY(facade->applyRemoteProperty("detected", true));
+    QVERIFY(remote.ioBoard().isDetected());
+    QCOMPARE(remote.ioBoard().registerValue(IoBoardHl2::Register::REG_FIRMWARE_MAJOR), quint8(0x02));
+
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    auto* station = new LoopbackTransport(QStringLiteral("io-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("io-client"), this);
+    station->linkTo(peer);
+    client.startSession(peer, QStringLiteral("test-token"));
+    station->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("station"))));
+    station->sendText(SessionMessages::encode(SessionMessages::authResult(true, {}, false)));
+    StationCapabilities caps;
+    caps.propertyResultVersion = 1;
+    caps.radioIdentityEntries = true;
+    caps.radioHardwareVersion = 2;
+    station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
+    station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
+    QTRY_VERIFY(client.isHandshakeComplete());
+
+    QVERIFY(!remote.ioBoard().isDetected());
+    QCOMPARE(remote.ioBoard().hardwareVersion(), quint8(0));
+    QCOMPARE(remote.ioBoard().registerValue(IoBoardHl2::Register::REG_FIRMWARE_MAJOR), quint8(0));
+    QVERIFY(!facade->detected());
+}
+
+void TstStationSession::windowOcMatrixFollowsTheCore()
+{
+    // R-R3-46 fix wave. The window keeps a copy of the Core's OC pin
+    // matrix; OcMatrix::save writes every cell that differs from the store.
+    // When the Core changed a pin (another window, the N2ADR preset) the
+    // window's copy stayed old, and its next pin click sent the old cell
+    // back. The window now reloads its copy when the Core's OC keys arrive.
+    AppSettings& coreStore = AppSettings::instance();
+    coreStore.clearHardwareValues(kHardwareMac);
+    const auto cleanStore = qScopeGuard([&coreStore] { coreStore.clearHardwareValues(kHardwareMac); });
+    HardwareSession s;
+    joinHardwareWindow(s, coreStore, this, m_securityDir.path());
+    const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
+    if (QTest::currentTestFailed()) { return; }
+    OcMatrix& windowOc = s.window->ocMatrixMutable();
+    QVERIFY(!windowOc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
+
+    // The Core sets 40 m pin 3 (as another window's click would).
+    const QString pin = QStringLiteral("hardware/%1/oc/rx/40m/pin3").arg(kHardwareMac);
+    coreStore.setValue(pin, QStringLiteral("True"));
+    QTRY_VERIFY(windowOc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
+    QCOMPARE(s.proxy->value(pin, QString()).toString(), QStringLiteral("True"));
 }
 
 void TstStationSession::hardwareConfigRx1RateGoesToTheCoresFirstReceiver()

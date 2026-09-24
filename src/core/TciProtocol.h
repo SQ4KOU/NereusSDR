@@ -16,6 +16,11 @@
 // Modification history (NereusSDR):
 //   2026-05-10 — Phase 3J-1 Task 3.1 by J.J. Boyd (KG4VCF);
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-23 - R3 receiver audio plan, Task 4 (R-R3-42, R-R3-25) by
+//                J.J. Boyd (KG4VCF): remote-window mode (receive-only init
+//                burst, transmit refused, vfo/modulation answer with the
+//                value the slice holds). AI-assisted transformation via
+//                Anthropic Claude Code.
 
 #pragma once
 
@@ -154,6 +159,17 @@ public:
     // Phase 4 Task 4.1 replaces with the 8-line wrapper from
     // Thetis TCIServer.cs:2512-2552 [v2.10.3.13].
     QStringList buildInitBurst() const;
+
+    // R-R3-42 / R-R3-25: this protocol serves a remote window, whose
+    // receivers belong to a Core that does not transmit for it. The init
+    // burst then says receive_only:true and tx_enable false on both
+    // receivers, trx set commands never touch MOX and answer trx:N,false,
+    // and vfo / modulation set commands answer with the value the slice
+    // holds after the write (the Core's accepted value arrives later
+    // through the slice's own change broadcast). Off by default: local
+    // operation is unchanged.
+    void setRemoteWindow(bool remote) { m_remoteWindow = remote; }
+    bool remoteWindow() const { return m_remoteWindow; }
 
     // Slice ↔ trx mapping (NereusSDR architectural divergence per design doc §1.2):
     //   Slice A | trx:0,    Slice B | trx:1,    Slice C | trx:2,    Slice D | trx:3
@@ -673,6 +689,7 @@ private:
     TciVfoCoalescer m_vfoCoalescer;
     int m_setDispatchCount{0};
     int m_queryDispatchCount{0};
+    bool m_remoteWindow{false};
 };
 
 } // namespace NereusSDR

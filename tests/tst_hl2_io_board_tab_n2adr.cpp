@@ -25,6 +25,7 @@
 #include "core/accessories/N2adrPreset.h"
 #include "gui/setup/hardware/Hl2IoBoardTab.h"
 #include "models/RadioModel.h"
+#include "OperatorWording.h"
 
 using namespace NereusSDR;
 
@@ -287,6 +288,36 @@ private slots:
         Hl2IoBoardTab localTab(&local);
         localTab.restoreSettings(settings);
         QVERIFY(ocMatrixHasAnyPinSet(local.ocMatrix()));
+    }
+
+    // R-R3-46 follow-up item 1: in a remote window whose Core does not let
+    // it transmit, the N2ADR switch applies only the preset's receive half,
+    // so the window saves no transmit pin (the Core would refuse them) and
+    // its transmit pins stay the Core's.
+    void remoteWithoutTransmitAppliesOnlyTheReceiveHalf()
+    {
+        RadioModel model;
+#ifdef NEREUS_BUILD_TESTS
+        model.setBoardForTest(HPSDRHW::HermesLite);
+#endif
+        Hl2IoBoardTab tab(&model);
+        OcMatrix& oc = model.ocMatrixMutable();
+        oc.setPin(Band::Band20m, 0, /*tx=*/true, true);
+        tab.setTransmitPermitted(false, QStringLiteral("Transmit is not available here."));
+        // The switch says it moves the receive filters only.
+        QVERIFY(tab.n2adrToolTipForTest().contains(Hl2IoBoardTab::receiveOnlyN2adrNote()));
+        QVERIFY(OperatorWording::isPlain(Hl2IoBoardTab::receiveOnlyN2adrNote()));
+        tab.triggerN2adrToggleForTest(true);
+        QVERIFY(oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
+        QVERIFY(oc.pinEnabled(Band::Band20m, 0, /*tx=*/true));
+        QVERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));
+
+        // Permitted again: the whole preset, as locally.
+        tab.setTransmitPermitted(true, {});
+        QVERIFY(!tab.n2adrToolTipForTest().contains(Hl2IoBoardTab::receiveOnlyN2adrNote()));
+        tab.triggerN2adrToggleForTest(true);
+        QVERIFY(oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));
+        QVERIFY(!oc.pinEnabled(Band::Band20m, 0, /*tx=*/true));
     }
 };
 

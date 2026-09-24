@@ -11,6 +11,26 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-47 / R-R3-22: the Power Genius
+//                 gauge conversion moved to the Core side
+//                 (PgxlStatusGauges); AmpApplet and Rf2ksApplet read
+//                 RadioModel's AmplifierModel and RfKitModel. AI-assisted
+//                 via Anthropic Claude Code.
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-45: every slice flag learns
+//                 whether a headphones output is open, so a receiver on
+//                 the headphones with none set up says why it is silent.
+//                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23 - J.J. Boyd (KG4VCF). R3 receiver audio fix wave (R-R3-42,
+//                 R-R3-44): a receiver's audio stopping raises one plain
+//                 toast (ReceiverStopNotices), not one from TCI and another
+//                 per VAX channel; none for what the window's status
+//                 already shows. AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-42: the TCI server asks the Core
+//                 for a receiver's audio while an app listens, and its
+//                 refusals and stops reach a toast and the TCI log window
+//                 in plain words. AI-assisted implementation via Anthropic
+//                 Claude Code.
 //   2026-09-23 - J.J. Boyd (KG4VCF). R3 Setup fix wave (R-R3-21, R-R3-10):
 //                 while connected to a Core whose settings have not
 //                 arrived, Setup says "The Core has not sent its
@@ -48,6 +68,11 @@
 //                 radio each band remembers its attenuator and preamp; the
 //                 controller follows the transmit slice's band and mode.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-44: a remote window opens this
+//                 computer's VAX outputs and feeds them from the Core's
+//                 receiver streams (RemoteVaxRouter); the VAX applet's TX
+//                 row takes the transmit permission. AI-assisted
+//                 implementation via Anthropic Claude Code.
 //   2026-09-22 — J.J. Boyd (KG4VCF). Invoke the Aether-derived pan-stack
 //                 shutdown before QWidget destroys its graphics backend.
 //                 AI-assisted integration via OpenAI Codex.
@@ -417,6 +442,9 @@ warren@wpratt.com
 #include "core/session/StationClient.h"
 #include "RemoteConnectionController.h"
 #include "gui/RemoteMediaController.h"
+#include "gui/RemoteVaxRouter.h"
+#include "gui/ReceiverStopNotices.h"
+#include "core/session/media/IReceiverPcmSink.h"
 #include "core/settings/SettingsProxy.h"
 #include "setup/DspSetupPages.h"   // NrAnfSetupPage::selectSubtab
 #include "setup/DspOptionsPage.h"  // applyPersistedHighResFilter (R-R3-21)
@@ -591,6 +619,30 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
                     if (m_tciClientCount > 0) { --m_tciClientCount; }
                     updateTciIndicator();
                 });
+        // R-R3-42: what TCI refused (transmit or raw I/Q in a remote window)
+        // or why a receiver's audio stopped, in the operator's words. Never
+        // on the TCI wire; the applet and the TCI log window show it too.
+        connect(m_tciServer, &TciServer::operatorNotice, this,
+                [this](const QString& peer, const QString& reason, bool raiseToast) {
+            qCInfo(lcConnection) << "TCI notice" << peer << ":" << reason;
+            // A receiver's audio stopping is toasted from
+            // receiverStopNotice below, which names the receiver.
+            if (!raiseToast || ReceiverStopNotices::isReceiverStop(reason)) { return; }
+            showToast(tr("TCI: %1").arg(OperatorReasonText::forDisplay(reason)),
+                      ToastSeverity::Warning, 5000);
+        });
+        // R-R3-42 fix wave: a receiver's audio stopping is one notice for
+        // this computer, however many apps (TCI, VAX channels) hear that
+        // receiver; the same reason for another receiver is another notice.
+        connect(m_tciServer, &TciServer::receiverStopNotice, this,
+                [this](int rx, const QString& reason, bool raiseToast) {
+            if (!raiseToast) { return; }
+            const QString text = m_receiverStopNotices.toastFor(
+                reason, rx, QDateTime::currentMSecsSinceEpoch());
+            if (!text.isEmpty()) {
+                showToast(text, ToastSeverity::Warning, 5000);
+            }
+        });
         connect(m_tciServer, &TciServer::txAudioActiveClientChanged,
                 this, [this](QWebSocket* owner) {
                     m_tciHasTxClient = (owner != nullptr);
@@ -1034,6 +1086,11 @@ MainWindow::~MainWindow()
     // RadioModel child and its speaker AudioEngine.
     delete m_remoteMedia;
     m_remoteMedia = nullptr;
+    // R-R3-44: likewise the VAX feeders' workers, which write this
+    // computer's VAX outputs on the same engine. The controller is gone, so
+    // the router's final releases find nothing to release.
+    delete m_remoteVax;
+    m_remoteVax = nullptr;
     delete m_remoteConnectionPanel;
     m_remoteConnectionPanel = nullptr;
     delete m_remoteConnection;
@@ -1186,6 +1243,57 @@ void MainWindow::ensureRemoteSession()
         connect(m_remoteMedia, &RemoteMediaController::recoveryRequested,
                 m_remoteConnection, &RemoteConnectionController::recoverMediaSession,
                 Qt::QueuedConnection);
+#ifdef HAVE_WEBSOCKETS
+        // R-R3-42: TCI receiver N plays the Core's slice N, asked for while
+        // an app listens. The controller is deleted before the TCI server
+        // (see ~MainWindow), so the server's final release finds it gone.
+        if (m_tciServer) {
+            const QPointer<RemoteMediaController> media(m_remoteMedia);
+            TciServer::RemoteReceiverAudio source;
+            source.request = [media](int sliceId, IReceiverPcmSink* sink) {
+                if (media) { media->requestReceiverAudio(sliceId, sink); }
+            };
+            source.release = [media](int sliceId, IReceiverPcmSink* sink) {
+                if (media) { media->releaseReceiverAudio(sliceId, sink); }
+            };
+            source.unavailableReason =
+                QString::fromLatin1(RemoteMediaController::kReceiverAudioUnavailableReason);
+            m_tciServer->setRemoteReceiverAudio(std::move(source));
+        }
+#endif
+        // R-R3-44: VAX in a remote window. This computer's VAX outputs open
+        // here (the engine never starts in a remote window), and each VAX
+        // channel carries the Core's slice assigned to it, asked for while
+        // an app reads the channel (where the platform says) and released
+        // otherwise. The router is deleted right after the controller (see
+        // ~MainWindow).
+        if (AudioEngine* vaxEngine = m_radioModel->localAudioDevices()) {
+            vaxEngine->openVaxOutputs();
+            m_remoteVax = new RemoteVaxRouter(m_radioModel, vaxEngine,
+                                              RemoteVaxRouter::coreKeyFor(m_station), this);
+            const QPointer<RemoteMediaController> media(m_remoteMedia);
+            RemoteVaxRouter::ReceiverAudio vaxSource;
+            vaxSource.request = [media](int sliceId, IReceiverPcmSink* sink) {
+                if (media) { media->requestReceiverAudio(sliceId, sink); }
+            };
+            vaxSource.release = [media](int sliceId, IReceiverPcmSink* sink) {
+                if (media) { media->releaseReceiverAudio(sliceId, sink); }
+            };
+            m_remoteVax->setReceiverAudio(std::move(vaxSource));
+            connect(m_remoteVax, &RemoteVaxRouter::notice, this,
+                    [this](int channel, int sliceId, const QString& reason) {
+                qCInfo(lcConnection) << "VAX" << channel << "slice" << sliceId
+                                     << "notice:" << reason;
+                // R-R3-44 fix wave: one notice per stop, shared with TCI
+                // and the other VAX channels carrying the same receiver;
+                // none for what the window's own status already says.
+                const QString text = m_receiverStopNotices.toastFor(
+                    reason, sliceId, QDateTime::currentMSecsSinceEpoch());
+                if (!text.isEmpty()) {
+                    showToast(text, ToastSeverity::Warning, 5000);
+                }
+            });
+        }
 
         // R-R3-46 / R-R3-21: an attenuator edit the Core kept at another
         // value (its radio's range, a mode the radio does not offer), or
@@ -1653,6 +1761,15 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     connect(newFlag, &VfoWidget::autoAgcToggled,
             slice, &SliceModel::setAutoAgcEnabled);
     wireAutoAgcVisuals(m_radioModel, slice, newFlag, m_rxApplet);
+
+    // R-R3-45: speakers or headphones. The route itself is wired in
+    // VfoWidget::setSlice; the flag also needs to know whether this
+    // computer has a headphones output open.
+    if (AudioEngine* engine = m_radioModel->audioEngine()) {
+        newFlag->setHeadphonesAvailable(engine->headphonesAvailable());
+        connect(engine, &AudioEngine::headphonesAvailableChanged,
+                newFlag, &VfoWidget::setHeadphonesAvailable);
+    }
 
     // Remote Daemon R2 Task 12: per-slice S-meter. SliceMeterPump
     // (src/core/meters/, owned by RadioModel) writes this slice's own
@@ -4369,10 +4486,11 @@ void MainWindow::buildUI()
     m_stepAttController = new StepAttenuatorController(this);
     m_radioModel->setStepAttController(m_stepAttController);
     // R-R3-46 / R-R3-11: each band remembers its attenuator and preamp with
-    // a local radio, as through the Core: the controller follows the
-    // transmit slice's band and mode and sends a band's restored values to
-    // the radio. A remote window is not wired (the Core does it).
-    m_radioModel->followTxSliceWithStepAttenuator();
+    // a local radio, as through the Core: the controller follows slice A's
+    // receive band (Thetis rx1_band) and the transmit slice's band and mode
+    // for ATT-on-TX, and sends a band's restored values to the radio. A
+    // remote window is not wired (the Core does it).
+    m_radioModel->followReceiveSliceWithStepAttenuator();
 
     // 3M-1a G.1 / F.2: MoxController::hardwareFlipped → StepAttenuatorController.
     // Both objects are now live; RadioModel owns MoxController, MainWindow owns
@@ -6450,36 +6568,16 @@ void MainWindow::populateDefaultMeter()
         // Connection -> applet data flow.
         Rf2ksConnection* rfKitConn = m_radioModel->rfKitConnection();
         if (rfKitConn) {
-            connect(rfKitConn, &Rf2ksConnection::powerUpdated,
-                    m_rfKitApplet, &Rf2ksApplet::setPower);
+            // R-R3-47 / R-R3-22: power, OPERATE, the connection dot and
+            // the name and version come from RadioModel's RfKitModel, which
+            // Rf2ksApplet reads itself (the Core's `rfkit` object in a
+            // remote window). The tuner and antenna rows stay wired here.
             connect(rfKitConn, &Rf2ksConnection::tunerUpdated,
                     m_rfKitApplet, &Rf2ksApplet::setTuner);
             connect(rfKitConn, &Rf2ksConnection::antennasUpdated,
                     m_rfKitApplet, &Rf2ksApplet::setAntennas);
             connect(rfKitConn, &Rf2ksConnection::activeAntennaUpdated,
                     m_rfKitApplet, &Rf2ksApplet::setActiveAntenna);
-            connect(rfKitConn, &Rf2ksConnection::operateModeUpdated,
-                    m_rfKitApplet, &Rf2ksApplet::setOperateMode);
-            connect(rfKitConn, &Rf2ksConnection::connected,
-                    this, [this]() {
-                if (m_rfKitApplet) {
-                    m_rfKitApplet->setConnectedState(true);
-                }
-            });
-            connect(rfKitConn, &Rf2ksConnection::disconnected,
-                    this, [this]() {
-                if (m_rfKitApplet) {
-                    m_rfKitApplet->setConnectedState(false);
-                }
-            });
-            connect(rfKitConn, &Rf2ksConnection::infoUpdated,
-                    this, [this](const QString& /*deviceName*/,
-                                 const QString& softwareVersion,
-                                 const QString& nicknameFromAmp) {
-                if (m_rfKitApplet) {
-                    m_rfKitApplet->setNicknameAndVersion(nicknameFromAmp, softwareVersion);
-                }
-            });
 
             // Applet -> connection (antenna click, operate toggle).
             connect(m_rfKitApplet, &Rf2ksApplet::antennaRequested,
@@ -9873,6 +9971,14 @@ void MainWindow::showTciLogWindow()
         connect(m_tciServer, &TciServer::messageLogged,
                 m_tciLogWindow, &TciLogWindow::appendEntry,
                 Qt::QueuedConnection);
+        // R-R3-42: the operator's notices, in plain words, between the
+        // wire lines (never sent to an app).
+        connect(m_tciServer, &TciServer::operatorNotice, m_tciLogWindow,
+                [log = m_tciLogWindow](const QString& peer, const QString& reason, bool) {
+            log->appendEntry(QStringLiteral("note"), peer,
+                             OperatorReasonText::forDisplay(reason),
+                             QDateTime::currentMSecsSinceEpoch());
+        }, Qt::QueuedConnection);
     }
     m_tciLogWindow->show();
     m_tciLogWindow->raise();
@@ -10790,6 +10896,10 @@ void MainWindow::applyRemoteRoleGating()
     }
     if (m_phoneCwApplet) {
         m_phoneCwApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+    }
+    // R-R3-44: the VAX applet's TX row (VAX as the microphone).
+    if (m_vaxApplet) {
+        m_vaxApplet->setTransmitPermitted(transmitPermitted, transmitReason);
     }
     // R-R3-21: the RX applet's XIT row and TX passband Shift-click.
     if (m_rxApplet) {
@@ -11722,10 +11832,10 @@ void MainWindow::onConnectionStateChanged()
             // persisted "Adaptive" string is clamped to Classic when the
             // connected board lacks the feature.
             m_stepAttController->setHasStepAttenuatorCal(caps.hasStepAttenuatorCal);
-            // R-R3-46: select the transmit slice's band first, because
+            // R-R3-46: select slice A's band first, because
             // loadSettings restores the per-band slot for the current band
             // (DaemonApp::applyStepAttenuatorConnection does the same).
-            m_radioModel->syncStepAttenuatorToTxSlice();
+            m_radioModel->syncStepAttenuatorToReceiveSlice();
             m_stepAttController->loadSettings(conn->radioInfo().macAddress);
         } else if (m_pureSignalApplet) {
             m_pureSignalApplet->setVisible(m_stationClient
@@ -11794,80 +11904,15 @@ void MainWindow::onConnectionStateChanged()
                                 : QStringLiteral("operate=0"));
             });
 
-            connect(m_radioModel->pgxlConnection(),
-                    &PgxlConnection::statusUpdated,
-                    this, [this](const QMap<QString, QString>& kvs) {
-                if (kvs.contains(QStringLiteral("temp")))
-                    m_ampApplet->setTemp(kvs.value(QStringLiteral("temp")).toFloat());
-                if (kvs.contains(QStringLiteral("id")))
-                    m_ampApplet->setDrainCurrent(kvs.value(QStringLiteral("id")).toFloat());
-                if (kvs.contains(QStringLiteral("vac")))
-                    m_ampApplet->setMainsVoltage(kvs.value(QStringLiteral("vac")).toInt());
-                if (kvs.contains(QStringLiteral("state")))
-                    m_ampApplet->setState(kvs.value(QStringLiteral("state")));
-                if (kvs.contains(QStringLiteral("meffa")))
-                    m_ampApplet->setMeff(kvs.value(QStringLiteral("meffa")));
-
-                // 2026-05-22 bench fix: PGXL's `peakfwd` and `swr`
-                // status fields are HOLD values that latch the last TX
-                // peak and DO NOT decay back to 0 when the amp leaves
-                // TRANSMIT_A/B (PGXL's intent is "show the last QSO's
-                // peak on the front panel"). For our applet gauges we
-                // want the live keyed value during TX and a clean zero
-                // between cycles, so we gate the peakfwd / swr writes
-                // on the transmitting state. Without this gate the
-                // previous bench-fix at this site (which forced fwd=0
-                // / swr=1 when state changed to IDLE) was overwritten
-                // 30 ms later by the next status response carrying the
-                // stale latched peakfwd.
-                //
-                // Inferred transmitting state: if the status update
-                // includes state=, use it; otherwise fall back to the
-                // last cached state (m_ampApplet tracks it via
-                // setState).
-                bool transmitting = false;
-                if (kvs.contains(QStringLiteral("state"))) {
-                    const QString st = kvs.value(QStringLiteral("state"));
-                    transmitting =
-                        (st == QStringLiteral("TRANSMIT_A")
-                         || st == QStringLiteral("TRANSMIT_B"));
-                    if (!transmitting) {
-                        m_ampApplet->setFwdPower(0.0f);
-                        m_ampApplet->setSwr(1.0f);
-                    }
-                } else {
-                    transmitting = m_ampApplet->isTransmitting();
-                }
-
-                // 2026-05-20 bench fix: peakfwd is dBm (not watts) and swr
-                // is signed dB return loss (not an SWR ratio). Convert
-                // here so the AmpApplet gauges read the same numbers
-                // the SMeterWidget already gets via
-                // RadioModel::ampMetersChanged.
-                // 2026-05-22 bench fix: only forward the converted
-                // peakfwd / swr when the amp is actually transmitting;
-                // otherwise the stale latched peak would overwrite the
-                // zero set by the state-edge block above.
-                if (transmitting && kvs.contains(QStringLiteral("peakfwd"))) {
-                    const float dbm   = kvs.value(QStringLiteral("peakfwd")).toFloat();
-                    const float watts = std::pow(10.0f, dbm / 10.0f) / 1000.0f;
-                    m_ampApplet->setFwdPower(watts);
-                }
-                if (transmitting && kvs.contains(QStringLiteral("swr"))) {
-                    const float rlDbWire =
-                        kvs.value(QStringLiteral("swr")).toFloat();
-                    float ratio;
-                    if (rlDbWire >= 0.0f) {
-                        ratio = 99.0f;  // RL>=0 -> open/short, cap display
-                    } else {
-                        const float gamma = std::pow(10.0f, rlDbWire / 20.0f);
-                        ratio = (gamma >= 0.999f)
-                            ? 99.0f
-                            : (1.0f + gamma) / (1.0f - gamma);
-                    }
-                    m_ampApplet->setSwr(ratio);
-                }
-            });
+            // R-R3-47 / R-R3-22: the gauges no longer come from here. The
+            // Power Genius conversion (dBm peak forward power to W, signed
+            // return loss to an SWR ratio, the transmit-only gate on those
+            // two latched values, temperature, drain current, mains volts
+            // and the efficiency label) moved to the Core side as
+            // applyPgxlStatus() (src/core/PgxlStatusGauges.cpp), which feeds
+            // RadioModel's AmplifierModel; AmpApplet reads that model, here
+            // in-process and in a remote window as the Core's `amplifier`
+            // object.
 
             // Phase 3P-II Phase 4 Task 88: track PGXL connected state for the
             // context menu Disconnect/Reconnect label.
@@ -12260,11 +12305,11 @@ void MainWindow::tryAutoReconnect()
 void MainWindow::checkVaxFirstRun()
 {
     // R-R3-23: skipped in a remote window, as the Linux audio first-run
-    // below already is. A remote window opens no VAX outputs (the VAX
-    // applet and Setup page say so), so offering to bind virtual cables
-    // to them would set up something that does nothing, and would record
-    // audio/FirstRunComplete and the cable fingerprint for a later local
-    // session that never saw the dialog.
+    // below already is. R-R3-44: a remote window does open this computer's
+    // VAX outputs, but only the ones start() would open (Setup > Audio >
+    // VAX changes them); the check would record audio/FirstRunComplete and
+    // the cable fingerprint for a later local session that never saw the
+    // dialog, so it still runs only in a local window.
     if (!m_radioModel->ownsLocalDsp()) {
         return;
     }

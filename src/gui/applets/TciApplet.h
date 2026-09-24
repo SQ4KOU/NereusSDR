@@ -19,6 +19,10 @@
 //                level meters use placeholder values; real meter wiring
 //                + setup/show-clients navigation in Phase 23.
 //                AppSettings keys: TciSliceAGain, TciTxGain.
+//   2026-09-23 - R3 receiver audio plan, Task 4 (R-R3-42) by J.J. Boyd
+//                (KG4VCF): a notice line for what TCI refused or why a
+//                receiver's audio stopped. AI-assisted transformation via
+//                Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -63,6 +67,9 @@ public:
     QString appletId()    const override { return QStringLiteral("tci"); }
     QString appletTitle() const override { return QStringLiteral("TCI Server"); }
     void    syncFromModel() override;
+
+    // R-R3-42: the notice line, in plain words; empty while hidden.
+    QString noticeText() const;
 
 signals:
     // Emitted when the user clicks the Setup button.
@@ -129,6 +136,10 @@ private:
     HGauge*      m_txGauge{nullptr};
     QSlider*     m_txGain{nullptr};
     QLabel*      m_txGainLabel{nullptr};
+
+    // R-R3-42: the latest TciServer::operatorNotice, in plain words.
+    QLabel*      m_noticeLabel{nullptr};
+    void showNotice(const QString& reason);
 
     // Footer
     QLabel*      m_footerCount{nullptr};

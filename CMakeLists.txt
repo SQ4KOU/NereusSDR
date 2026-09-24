@@ -882,6 +882,7 @@ set(CORE_SOURCES
     src/core/SettingsHygiene.cpp
     src/core/Hl2OptionsModel.cpp
     src/core/IoBoardHl2.cpp
+    src/core/IoBoardHl2Facade.cpp
     src/core/HermesLiteBandwidthMonitor.cpp
     src/core/ModelPaths.cpp
     src/core/accessories/AlexController.cpp
@@ -890,6 +891,8 @@ set(CORE_SOURCES
     src/core/accessories/N2adrPreset.cpp
     src/core/accessories/PennyLaneController.cpp
     src/core/audio/MasterMixer.cpp
+    src/core/audio/VaxChannelMixer.cpp
+    src/core/audio/SpeakerFormatConverter.cpp
     src/core/audio/PcMicSource.cpp
     src/core/audio/RadeTxFilters.cpp
     src/core/audio/RadeTxFilters.h
@@ -924,6 +927,7 @@ set(CORE_SOURCES
     src/core/DxccColorProvider.cpp
     # Phase 3P-II PGXL/TGXL accessories
     src/core/PgxlConnection.cpp
+    src/core/PgxlStatusGauges.cpp
     src/core/TgxlConnection.cpp
     src/core/StationTgxlController.cpp
     # Phase 3P-III RF-Kit RF2K-S amplifier
@@ -933,6 +937,9 @@ set(CORE_SOURCES
     src/core/ConnectionDiagnostics.cpp
     # Phase 3P-II TGXL tuner model
     src/models/TunerModel.cpp
+    # R-R3-47: the Core's Power Genius and RF-Kit status objects
+    src/models/AmplifierModel.cpp
+    src/models/RfKitModel.cpp
     # Phase 3P-II Phase 4 (Advanced UI + helpers)
     src/core/FaultLog.cpp
     src/core/TuneMemoryStore.cpp
@@ -990,6 +997,9 @@ set(CORE_SOURCES
     # R-R3-23 Task 2: RFC 3550 jitter/sequence measurement for one receiver context.
     src/core/session/media/RtpReceptionStats.cpp
     src/core/session/media/RemoteAudioReceiver.cpp
+    # R-R3-44: a remote window's VAX channel fed by a receiver stream, paced
+    # by the VAX output's own clock.
+    src/core/audio/RemoteVaxFeeder.cpp
     # R1 Task 7: consumer-to-stream subscription set extracted from the
     # router-mutation half of MainWindow::rebuildFftRouting. Rebuilds an
     # FFTRouter from its own subscription set on demand, so the daemon can
@@ -1201,10 +1211,13 @@ set(GUI_SOURCES
     src/gui/SliceFlagPresentationBinding.cpp
     src/gui/SliceFlagPresentationBinding.h
     src/gui/RemoteMediaController.cpp
+    # R-R3-44: a remote window's VAX channels, fed by receiver streams.
+    src/gui/RemoteVaxRouter.cpp
     src/gui/RemoteAudioStatus.cpp
     src/gui/RemoteDisplayAllocator.cpp
     src/gui/PanStatusText.cpp
     src/gui/OperatorReasonText.cpp
+    src/gui/ReceiverStopNotices.cpp
     src/gui/RemoteTelemetryController.cpp
     src/gui/RemoteDiagnosticsDialog.cpp
     src/gui/RemoteConnectionController.cpp
@@ -1487,6 +1500,17 @@ set(GUI_SOURCES
 # --------------------------------------------------------------------------
 qt_add_resources(RESOURCES resources.qrc)
 
+# R-R3-10 / R-R3-21: the band plans belong to the Core, not the GUI.
+# BandPlanManager (a NereusCore source, called from RadioModel) reads
+# :/bandplans, so the files are compiled into NereusCore. While they sat in
+# resources.qrc on NereusSDRLib, any program that used only Core symbols
+# (nereusd, and tst_bandplan_manager once GCC's default --as-needed dropped
+# the unused GUI library) loaded no band plans at all. The app still sees
+# the same five files: it loads NereusCore too. BandPlanManager.cpp also
+# calls Q_INIT_RESOURCE(bandplans) so the resource stays reachable from a
+# Core-only link of any kind.
+qt_add_resources(CORE_RESOURCES resources/bandplans.qrc)
+
 # --------------------------------------------------------------------------
 # App icon (per-platform) — from main (PR #11)
 # --------------------------------------------------------------------------
@@ -1520,6 +1544,7 @@ endif()
 add_library(NereusCore SHARED
     ${CORE_SOURCES}
     ${MODEL_SOURCES}
+    ${CORE_RESOURCES}
 )
 
 add_library(NereusSDRLib SHARED
@@ -1556,6 +1581,7 @@ if(NEREUSSDR_LTO_AVAILABLE)
     add_library(NereusCore_LTO OBJECT
         ${CORE_SOURCES}
         ${MODEL_SOURCES}
+        ${CORE_RESOURCES}
     )
     add_library(NereusGui_LTO OBJECT
         ${GUI_SOURCES}
@@ -2135,6 +2161,15 @@ add_executable(nereus-media-probe EXCLUDE_FROM_ALL
 target_link_libraries(nereus-media-probe PRIVATE NereusCore)
 nereus_apply_warnings(nereus-media-probe)
 nereus_apply_warnings(nereus-audio-capture)
+
+# Digital-mode decode bench codec stage (R-R3-43, R-R3-23). Developer
+# measurement tool, kept out of routine builds and installs: runs audio files
+# through the Core's own Opus and L16 codec objects for
+# tools/digital-mode-opus-bench/run-bench.py.
+add_executable(nereus-opus-bench-codec EXCLUDE_FROM_ALL
+    tools/digital-mode-opus-bench/opus-bench-codec.cpp)
+target_link_libraries(nereus-opus-bench-codec PRIVATE NereusCore)
+nereus_apply_warnings(nereus-opus-bench-codec)
 
 # NNR model cost benchmark (R-R3-40). Developer measurement tools, kept out
 # of routine builds and installs. nereus-nnr-bench links wdsp_static as the

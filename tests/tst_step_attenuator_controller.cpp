@@ -778,6 +778,10 @@ private slots:
     {
         StepAttenuatorController ctrl;
         ctrl.setTickTimerEnabled(false);
+        // The band memory is a loaded radio's (R-R3-46 fix wave).
+        const QString mac = QStringLiteral("aa:bb:cc:de:ad:10");
+        AppSettings::instance().clearHardwareValues(mac);
+        ctrl.loadSettings(mac);
         RecordingConnection radio;
         ctrl.setRadioConnection(&radio);
         ctrl.setBandRestoreToRadio(true);
@@ -819,6 +823,9 @@ private slots:
     {
         StepAttenuatorController ctrl;
         ctrl.setTickTimerEnabled(false);
+        const QString mac = QStringLiteral("aa:bb:cc:de:ad:11");
+        AppSettings::instance().clearHardwareValues(mac);
+        ctrl.loadSettings(mac);
         RecordingConnection radio;
         ctrl.setRadioConnection(&radio);
         QVERIFY(!ctrl.bandRestoreToRadio());
@@ -834,6 +841,141 @@ private slots:
         QVERIFY(radio.attenuator.isEmpty());
         QVERIFY(radio.preamp.isEmpty());
         ctrl.setRadioConnection(nullptr);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // R-R3-46 fix wave (review Known 3). A controller that switches radios
+    // starts the new radio with that radio's own band memory: nothing of
+    // the previous radio's is restored on it or saved under its MAC.
+    // ─────────────────────────────────────────────────────────────────────
+    void switchingRadiosDropsThePreviousRadiosBandMemory()
+    {
+        const QString g2 = QStringLiteral("aa:bb:cc:de:ad:20");
+        const QString hl2 = QStringLiteral("aa:bb:cc:de:ad:21");
+        auto& s = AppSettings::instance();
+        s.clearHardwareValues(g2);
+        s.clearHardwareValues(hl2);
+
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setMaxAttenuation(61);
+        ctrl.loadSettings(g2);
+        ctrl.setBand(Band::Band40m);
+        ctrl.setAttenuation(45);
+        ctrl.setBand(Band::Band20m);   // 40 m remembers 45 dB on the G2
+        ctrl.setAttenuation(10);
+        ctrl.saveSettings(g2);
+
+        // The HL2: -28..31 dB, nothing saved yet.
+        ctrl.setMinAttenuation(-28);
+        ctrl.setMaxAttenuation(31);
+        ctrl.loadSettings(hl2);
+        const int start = ctrl.attenuatorDb();
+        ctrl.setBand(Band::Band40m);   // never used on the HL2
+        QCOMPARE(ctrl.attenuatorDb(), start);
+        ctrl.saveSettings(hl2);
+        QVERIFY(s.hardwareValue(hl2, QStringLiteral("options/stepAtt/rx1Band/40m")).toString()
+                != QStringLiteral("45"));
+        s.clearHardwareValues(g2);
+        s.clearHardwareValues(hl2);
+    }
+
+    // Before a radio's settings are loaded the values are the starting
+    // defaults; a band change then stores nothing as the band left's memory
+    // (it used to become the general-coverage band's).
+    void bandChangeBeforeLoadStoresNoMemory()
+    {
+        const QString mac = QStringLiteral("aa:bb:cc:de:ad:22");
+        auto& s = AppSettings::instance();
+        s.clearHardwareValues(mac);
+
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+        ctrl.setBand(Band::Band40m);   // leaves GEN before any radio loads
+        ctrl.loadSettings(mac);
+        ctrl.setAttenuation(20);
+        ctrl.setBand(Band::GEN);       // never used on this radio
+        QCOMPARE(ctrl.attenuatorDb(), 20);
+        ctrl.saveSettings(mac);
+        s.clearHardwareValues(mac);
+    }
+
+    // A restored value stays within the radio's range, as the radio clamps
+    // it, both on a band change and when the settings load.
+    void restoredAttenuationStaysWithinTheRadiosRange()
+    {
+        const QString mac = QStringLiteral("aa:bb:cc:de:ad:23");
+        auto& s = AppSettings::instance();
+        s.clearHardwareValues(mac);
+        s.setHardwareValue(mac, QStringLiteral("options/stepAtt/rx1Band/40m"),
+                           QStringLiteral("45"));
+        s.setHardwareValue(mac, QStringLiteral("options/stepAtt/rx1Band/20m"),
+                           QStringLiteral("45"));
+
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setMinAttenuation(-28);
+        ctrl.setMaxAttenuation(31);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        ctrl.setBandRestoreToRadio(true);
+        ctrl.setBand(Band::Band20m);
+        ctrl.loadSettings(mac);
+        QCOMPARE(ctrl.attenuatorDb(), 31);
+
+        radio.attenuator.clear();
+        ctrl.setBand(Band::Band10m);
+        ctrl.setAttenuation(5);
+        radio.attenuator.clear();
+        ctrl.setBand(Band::Band40m);
+        QCOMPARE(ctrl.attenuatorDb(), 31);
+        QCOMPARE(radio.attenuator, QList<int>{31});
+        ctrl.setRadioConnection(nullptr);
+        s.clearHardwareValues(mac);
+    }
+
+    // R-R3-46 follow-up item 3. On a switch to another radio the window
+    // connects the new radio and selects the band before it loads the new
+    // radio's settings. Between the old radio's teardown and that load a
+    // band change must neither restore the old radio's band memory nor
+    // send it to the new radio.
+    void switchingRadiosSendsNothingBeforeTheNewRadioLoads()
+    {
+        const QString oldRadio = QStringLiteral("aa:bb:cc:de:ad:30");
+        const QString newRadio = QStringLiteral("aa:bb:cc:de:ad:31");
+        auto& s = AppSettings::instance();
+        s.clearHardwareValues(oldRadio);
+        s.clearHardwareValues(newRadio);
+
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBandRestoreToRadio(true);
+        RecordingConnection oldConn;
+        ctrl.setRadioConnection(&oldConn);
+        ctrl.loadSettings(oldRadio);
+        ctrl.setBand(Band::Band40m);
+        ctrl.setAttenuation(20);
+        ctrl.setBand(Band::Band20m);
+        ctrl.setAttenuation(0);
+        // Teardown of the old radio (RadioModel::teardownConnection).
+        ctrl.saveSettings(oldRadio);
+        ctrl.markSettingsUnloaded();
+
+        // The new radio's connect order (MainWindow): connection, band, load.
+        RecordingConnection newConn;
+        ctrl.setRadioConnection(&newConn);
+        ctrl.setBand(Band::Band40m);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+        QVERIFY(newConn.attenuator.isEmpty());
+        QVERIFY(newConn.preamp.isEmpty());
+        ctrl.loadSettings(newRadio);
+        ctrl.setBand(Band::Band20m);
+        ctrl.setBand(Band::Band40m);
+        QVERIFY(!newConn.attenuator.contains(20));
+        ctrl.setRadioConnection(nullptr);
+        s.clearHardwareValues(oldRadio);
+        s.clearHardwareValues(newRadio);
     }
 };
 

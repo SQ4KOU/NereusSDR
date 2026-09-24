@@ -14,6 +14,9 @@
 //   2026-04-30 — New for Phase 3L HL2 Filter visibility brainstorm.
 //                J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: save() writes only changed keys, so a remote
+//                window never rewrites the transmit timings. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -120,15 +123,31 @@ void Hl2OptionsModel::save() const
     if (m_mac.isEmpty()) { return; }
     auto& s = AppSettings::instance();
 
-    s.setHardwareValue(m_mac, QString::fromLatin1(kKeySwapAudio),  boolStr(m_swapAudioChannels));
-    s.setHardwareValue(m_mac, QString::fromLatin1(kKeyCl2Enable),  boolStr(m_cl2Enabled));
-    s.setHardwareValue(m_mac, QString::fromLatin1(kKeyCl2FreqMHz), m_cl2FreqMHz);
-    s.setHardwareValue(m_mac, QString::fromLatin1(kKeyExt10MHz),   boolStr(m_ext10MHz));
-    s.setHardwareValue(m_mac, QString::fromLatin1(kKeyDiscReset),  boolStr(m_disconnectReset));
-    s.setHardwareValue(m_mac, QString::fromLatin1(kKeyPttHang),    m_pttHangMs);
-    s.setHardwareValue(m_mac, QString::fromLatin1(kKeyTxLatency),  m_txLatencyMs);
-    s.setHardwareValue(m_mac, QString::fromLatin1(kKeyPsSync),     boolStr(m_psSync));
-    s.setHardwareValue(m_mac, QString::fromLatin1(kKeyBandVolts),  boolStr(m_bandVolts));
+    // R-R3-46: write only the keys whose saved value differs, read with
+    // load()'s own defaults (as OcMatrix::save does). Every setter saves,
+    // so in a remote window one checkbox used to rewrite all nine keys on
+    // the Core, including the two transmit timings a receive-only Core
+    // refuses (StationServer's transmit hardware keys).
+    const auto store = [this, &s](const char* key, const QString& value,
+                                  const QString& fallback) {
+        const QString name = QString::fromLatin1(key);
+        if (s.hardwareValue(m_mac, name, fallback).toString() != value) {
+            s.setHardwareValue(m_mac, name, value);
+        }
+    };
+    const QString off = boolStr(false);
+    store(kKeySwapAudio,  boolStr(m_swapAudioChannels), off);
+    store(kKeyCl2Enable,  boolStr(m_cl2Enabled),        off);
+    store(kKeyCl2FreqMHz, QString::number(m_cl2FreqMHz),
+          QString::number(kDefaultCl2FreqMHz));
+    store(kKeyExt10MHz,   boolStr(m_ext10MHz),          off);
+    store(kKeyDiscReset,  boolStr(m_disconnectReset),   off);
+    store(kKeyPttHang,    QString::number(m_pttHangMs),
+          QString::number(kDefaultPttHangMs));
+    store(kKeyTxLatency,  QString::number(m_txLatencyMs),
+          QString::number(kDefaultTxLatencyMs));
+    store(kKeyPsSync,     boolStr(m_psSync),            off);
+    store(kKeyBandVolts,  boolStr(m_bandVolts),         off);
 }
 
 #define NEREUS_SETTER_BOOL(method, member, signalName) \

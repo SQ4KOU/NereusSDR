@@ -789,7 +789,7 @@ private slots:
              {"Phase 3J-1"}, {"Slices C and D are not available over TCI."}},
             {"src/gui/setup/AudioVaxPage.cpp", false,
              {"Task 24+", "override \u2014 no consumer", "no consumer"},
-             {"The number of programs using this channel is not shown yet.",
+             {"Whether an app such as WSJT-X has this VAX channel open.",
               "No program is using this device"}},
             {"src/gui/SpectrumOverlayPanel.cpp", true,
              {"design spec", "reserved for future phase"},

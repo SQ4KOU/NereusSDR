@@ -47,6 +47,7 @@
 #include "models/NotchModel.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
+#include "core/IoBoardHl2Facade.h"
 #include "models/PureSignalSettings.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
@@ -57,6 +58,8 @@
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "models/TunerModel.h"
+#include "models/AmplifierModel.h"
+#include "models/RfKitModel.h"
 
 using namespace NereusSDR;
 
@@ -858,7 +861,10 @@ private:
                  &DspAssetService::staticMetaObject,
                  &NotchModel::staticMetaObject,
                  &StepAttenuatorFacade::staticMetaObject,
-                 &AlexAntennaFacade::staticMetaObject };
+                 &AlexAntennaFacade::staticMetaObject,
+                 &IoBoardHl2Facade::staticMetaObject,
+                 &AmplifierModel::staticMetaObject,
+                 &RfKitModel::staticMetaObject };
     }
 };
 

@@ -24,6 +24,8 @@
 //                 block (takeDspIntervalMaxBlockUs).
 //                 Later the same day: the read time (readNs), so a load
 //                 reads busy time over wall time (R-R3-40, R-R3-37).
+//                 Later the same day: DspLoadCounters::consistent, false for
+//                 a read whose busy pair may be torn (R-R3-40).
 // =================================================================
 
 //=================================================================
@@ -907,6 +909,10 @@ public:
         // that gave currentBlockNs). busyNs + currentBlockNs is the worker's
         // time inside blocks up to readNs.
         qint64 readNs{0};
+        // False when the worker kept busyNs and the block in progress
+        // changing through every read attempt, so busyNs + currentBlockNs
+        // may not be one instant's value: measure nothing with this read.
+        bool consistent{true};
     };
 
     // Reads the counters without the channel's DSP lock, so it never waits

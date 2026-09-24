@@ -26,6 +26,16 @@
 //                                    model while limited asks for a retry.
 //                                    NereusSDR-original. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-44: setVaxChannelStore(); with a
+//                                    store set, setVaxChannel() keeps the
+//                                    channel there and writes no setting.
+//                                    NereusSDR-original. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-45: setOutputRoute() and
+//                                    restoreOutputRoute(), speakers or
+//                                    headphones per receiver, persisted as
+//                                    Slice<N>/OutputRoute. NereusSDR-original.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2880,11 +2890,62 @@ void SliceModel::setVaxChannel(int ch)
     const int prev = m_vaxChannel.exchange(ch, std::memory_order_acq_rel);
     if (prev == ch) { return; }
 
-    AppSettings::instance().setValue(
-        slicePrefix(m_sliceIndex) + QStringLiteral("VaxChannel"),
-        QString::number(ch));
+    if (m_vaxChannelStore) {
+        // R-R3-44: a remote window keeps it on this computer.
+        m_vaxChannelStore(m_sliceIndex, ch);
+    } else {
+        AppSettings::instance().setValue(
+            slicePrefix(m_sliceIndex) + QStringLiteral("VaxChannel"),
+            QString::number(ch));
+    }
 
     emit vaxChannelChanged(ch);
+}
+
+void SliceModel::setVaxChannelStore(VaxChannelStore store)
+{
+    m_vaxChannelStore = std::move(store);
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-45: speakers or headphones (VAX design 6.2)
+// ---------------------------------------------------------------------------
+
+QString SliceModel::outputRouteSettingValue(OutputRoute route)
+{
+    return route == OutputRoute::Headphones ? QStringLiteral("Headphones")
+                                            : QStringLiteral("Speakers");
+}
+
+void SliceModel::setOutputRoute(OutputRoute route)
+{
+    if (route != OutputRoute::Headphones) {
+        route = OutputRoute::Speakers;
+    }
+    const int prev = m_outputRoute.exchange(static_cast<int>(route),
+                                            std::memory_order_acq_rel);
+    if (prev == static_cast<int>(route)) { return; }
+
+    AppSettings::instance().setValue(
+        slicePrefix(m_sliceIndex) + QStringLiteral("OutputRoute"),
+        outputRouteSettingValue(route));
+
+    emit outputRouteChanged(route);
+}
+
+void SliceModel::restoreOutputRoute()
+{
+    const QString stored = AppSettings::instance()
+        .value(slicePrefix(m_sliceIndex) + QStringLiteral("OutputRoute"),
+               QStringLiteral("Speakers"))
+        .toString();
+    const OutputRoute route = stored == QLatin1String("Headphones")
+        ? OutputRoute::Headphones : OutputRoute::Speakers;
+    const int prev = m_outputRoute.exchange(static_cast<int>(route),
+                                            std::memory_order_acq_rel);
+    if (prev != static_cast<int>(route)) {
+        emit outputRouteChanged(route);
+    }
 }
 
 // ── Phase 3J-2 Task D5: per-slice live SNR (NereusSDR-native) ──
@@ -2957,6 +3018,9 @@ void SliceModel::loadFromSettings()
         m_vaxChannel.store(vaxCh, std::memory_order_release);
         emit vaxChannelChanged(vaxCh);
     }
+
+    // ── Output route (R-R3-45) ────────────────────────────────────────────────
+    restoreOutputRoute();
 
 }
 

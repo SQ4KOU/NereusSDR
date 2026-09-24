@@ -16,6 +16,9 @@
 //                Hermes Lite Options + I2C Control + I/O Pin State.
 //                J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: the TX buffer latency and PTT hang follow the
+//                transmit permission. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -57,6 +60,7 @@
 //============================================================================================//
 
 #include "Hl2OptionsTab.h"
+#include "HardwareTransmitGate.h"
 
 #include "core/BoardCapabilities.h"
 #include "core/Hl2OptionsModel.h"
@@ -569,11 +573,23 @@ void Hl2OptionsTab::onIoBoardOcByteChanged(quint8 ocByte, int /*bandIdx*/, bool 
     if (m_outputStrip) { m_outputStrip->setBits(ocByte); }
 }
 
+void Hl2OptionsTab::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    HardwareTransmitGate::apply(m_udTxLatency, permitted, reason);
+    HardwareTransmitGate::apply(m_udPttHang, permitted, reason);
+}
+
 #ifdef NEREUS_BUILD_TESTS
 bool Hl2OptionsTab::swapAudioChannelsCheckedForTest() const
 {
     return m_chkSwapAudio && m_chkSwapAudio->isChecked();
 }
+bool Hl2OptionsTab::transmitTimingsEnabledForTest() const
+{
+    return m_udPttHang && m_udTxLatency && m_udPttHang->isEnabled()
+        && m_udTxLatency->isEnabled();
+}
+
 int Hl2OptionsTab::pttHangMsForTest() const
 {
     return m_udPttHang ? m_udPttHang->value() : -1;

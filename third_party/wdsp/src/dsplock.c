@@ -123,6 +123,12 @@ boydsoftprez@gmail.com
 //                 periodic delay (WDSPSetTestPeriodicDelayUs) added by J.J.
 //                 Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code (R-R3-40, R-R3-37).
+//   2026-09-23 - GetChannelDspLoad returns 1 when no attempt found the pair
+//                 at rest (the read may be torn; the caller skips it), and
+//                 the test-only WDSPSetTestHoldLoadPair added by J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code (R-R3-40). 2026-09-24: the hold is a flag the
+//                 reader checks, steady whatever the worker does.
 // =================================================================
 
 #include "comm.h"
@@ -158,6 +164,10 @@ static volatile long test_process_delay_us[MAX_CHANNELS];
 static volatile long test_periodic_delay_us[MAX_CHANNELS];
 static volatile long test_periodic_every[MAX_CHANNELS];
 static long test_periodic_count[MAX_CHANNELS];
+
+// Test-only: 1 while WDSPSetTestHoldLoadPair holds the channel's load pair
+// open, so every read of it finds a change in progress.
+static volatile long test_load_pair_held[MAX_CHANNELS];
 
 // Times each channel's worker has left its loop.
 static volatile long worker_exits[MAX_CHANNELS];
@@ -640,7 +650,10 @@ int GetChannelDspLoad (int channel, WdspChannelLoad* out)
 			busy = load_read64 (&load_busy_ns[channel]);
 			start = load_read64 (&block_start_ns[channel]);
 			now_ns = (long long)dsplock_now_ns ();
-			if ((before & 1) == 0 && load_read64 (&load_seq[channel]) == before)
+			// A test hold (WDSPSetTestHoldLoadPair) makes every attempt
+			// find the pair changing, steadily, whatever the worker does.
+			if ((before & 1) == 0 && load_read64 (&load_seq[channel]) == before
+				&& load_read32 (&test_load_pair_held[channel]) == 0)
 			{
 				break;
 			}
@@ -651,8 +664,28 @@ int GetChannelDspLoad (int channel, WdspChannelLoad* out)
 			out->currentBlockNs = elapsed > 0 ? elapsed : 0;
 		}
 		out->readNs = now_ns;
+		// The worker kept the pair moving for every attempt: the last one
+		// may be torn (a block counted twice or not at all), so the caller
+		// is told to skip this read rather than measure with it.
+		if (attempt == kLoadReadAttempts)
+		{
+			return 1;
+		}
 	}
 	return 0;
+}
+
+PORT
+void WDSPSetTestHoldLoadPair (int channel, int hold)
+{
+	if (!valid_channel (channel))
+	{
+		return;
+	}
+	// Read by GetChannelDspLoad only; the worker's sequence is untouched, so
+	// the hold is steady (a parity trick on load_seq was not: the worker's
+	// own steps briefly made it even again).
+	InterlockedExchange (&test_load_pair_held[channel], hold ? 1L : 0L);
 }
 
 PORT

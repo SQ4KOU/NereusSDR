@@ -211,6 +211,11 @@
 //                 from third_party/wdsp/src/dsplock.c; no Thetis
 //                 counterpart. AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-23  GetChannelDspLoad's return 1 (a read that may be torn) and
+//                 the WDSPSetTestHoldLoadPair declaration added by J.J. Boyd
+//                 (KG4VCF) (R-R3-40). NereusSDR-original, exported from
+//                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -388,6 +393,11 @@ void WDSPSetTestProcessDelayUs(int channel, int microseconds);
 // off. Never call it in production code.
 void WDSPSetTestPeriodicDelayUs(int channel, int microseconds, int everyBlocks);
 
+// Test-only (NereusSDR dsplock.c): while hold is nonzero, every
+// GetChannelDspLoad read of the channel finds its load pair changing and
+// returns 1; hold 0 releases it. Never call it in production code.
+void WDSPSetTestHoldLoadPair(int channel, int hold);
+
 // Test-only (NereusSDR dsplock.c): how long, in microseconds, the channel's
 // latest teardown waited for its worker to leave its loop (that wait alone,
 // not the rest of the teardown); -1 for an invalid channel. Never call it in
@@ -407,8 +417,9 @@ int WDSPGetTestWorkerExitCount(int channel);
 // and readNs, when the read was taken (the clock read that gave
 // currentBlockNs). busyNs + currentBlockNs is the worker's time inside blocks
 // up to readNs, one instant's value. Returns 0 on success, -1 for an invalid
-// channel or a null out. The guard lets a file include both this header and
-// dsplock.h.
+// channel or a null out, and 1 when the worker kept that pair changing
+// through every attempt (the read may be torn; skip it). The guard lets a
+// file include both this header and dsplock.h.
 #ifndef NEREUS_WDSP_CHANNEL_LOAD_DEFINED
 #define NEREUS_WDSP_CHANNEL_LOAD_DEFINED
 typedef struct {

@@ -1246,6 +1246,15 @@ public:
     // per-pan preference restored when a new station stream is acquired.
     void applyRemoteCtunState(bool available, bool pinned);
     void recenterOnVfo();
+    // R-R3-18/19: true while centerChanged comes from a zoom (wheel zoom or
+    // frequency-scale drag) re-centring the view on the VFO, not from the
+    // operator moving the pan. A remote window uses it to keep a zoom a view
+    // change on a stream other receivers share.
+    bool isZoomRecentring() const { return m_draggingBandwidth || m_wheelZoomRecentring; }
+    // Ends the current pan drag without a click-to-tune on release; the
+    // rest of the drag leaves the view where it is. Used when the Core
+    // refuses to move its window for this drag.
+    void endPanDrag();
 
     // ---- Tuning step ----
     void setStepSize(int hz) { m_stepHz = hz; }
@@ -3040,6 +3049,7 @@ private:
 
     // Bandwidth drag (frequency scale bar) — AetherSDR:421-423
     bool   m_draggingBandwidth{false};
+    bool   m_wheelZoomRecentring{false};
     int    m_bwDragStartX{0};
     double m_bwDragStartBw{0.0};
 

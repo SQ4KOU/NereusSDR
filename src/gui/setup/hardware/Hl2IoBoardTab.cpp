@@ -22,6 +22,9 @@
 //   2026-09-23 - R-R3-46: a remote restore leaves the Core's matrix;
 //                 Probe goes through RadioModel (the Core's verb remotely). J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-46: the N2ADR switch applies only its receive half
+//                without the transmit permission, and its tooltip says so.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/setup.cs ---
@@ -957,9 +960,45 @@ void Hl2IoBoardTab::applyN2adrMatrix(bool checked)
 {
     if (!m_model) { return; }
     OcMatrix& oc = m_model->ocMatrixMutable();
-    applyN2adrPreset(oc, checked);
+    // R-R3-46: without the transmit permission (a remote window) only the
+    // receive half applies, as the Core applies it; the transmit pins stay
+    // the Core's and none is saved from here.
+    if (m_transmitPermitted) {
+        applyN2adrPreset(oc, checked);
+    } else {
+        applyN2adrPresetReceiveOnly(oc, checked);
+    }
     // Persist whichever state we just composed (cleared or populated).
     oc.save();
+}
+
+void Hl2IoBoardTab::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    Q_UNUSED(reason);  // the switch stays usable: its receive half applies
+    m_transmitPermitted = permitted;
+    // Say so on the switch: without transmit it moves only the receive
+    // filters (applyN2adrMatrix).
+    if (m_n2adrFilter) {
+        static const char* const kOwnTip = "nereusN2adrOwnToolTip";
+        if (!m_n2adrFilter->property(kOwnTip).isValid()) {
+            m_n2adrFilter->setProperty(kOwnTip, m_n2adrFilter->toolTip());
+        }
+        const QString own = m_n2adrFilter->property(kOwnTip).toString();
+        const QString note = receiveOnlyN2adrNote();
+        m_n2adrFilter->setToolTip(permitted ? own
+                                            : (own.isEmpty() ? note : own + QLatin1Char('\n') + note));
+    }
+}
+
+QString Hl2IoBoardTab::receiveOnlyN2adrNote()
+{
+    return tr("In a remote window this switches the receive filters only; the transmit "
+              "filters follow once remote transmit is available.");
+}
+
+QString Hl2IoBoardTab::n2adrToolTipForTest() const
+{
+    return m_n2adrFilter ? m_n2adrFilter->toolTip() : QString();
 }
 
 void Hl2IoBoardTab::onProbeClicked()

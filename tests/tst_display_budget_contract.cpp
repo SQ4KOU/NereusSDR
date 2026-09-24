@@ -720,7 +720,11 @@ private slots:
                 // R-R3-46: the Core's radio, same unreleased step, last,
                 // closed by radioHardwareVersion (R-R3-46 / R-R3-11).
                 withReason.append({"hpsdrModel", "radioProtocol", "radioAddress",
-                                   "radioHardwareVersion"});
+                                   "radioHardwareVersion",
+                                   // R-R3-47: then the accessory status
+                                   // objects' versions, same block.
+                                   "remotePgxlControlVersion",
+                                   "remoteRfKitControlVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -751,7 +755,9 @@ private slots:
             for (const QByteArray& name : {QByteArrayLiteral("hpsdrModel"),
                                            QByteArrayLiteral("radioProtocol"),
                                            QByteArrayLiteral("radioAddress"),
-                                           QByteArrayLiteral("radioHardwareVersion")}) {
+                                           QByteArrayLiteral("radioHardwareVersion"),
+                                           QByteArrayLiteral("remotePgxlControlVersion"),
+                                           QByteArrayLiteral("remoteRfKitControlVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

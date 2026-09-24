@@ -48,6 +48,9 @@
 //               object and the debounced save (R-R3-46, R-R3-11), by J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-23: nereusd publishes no VAX device (R-R3-44), by J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -59,6 +62,7 @@
 
 #include <utility>
 
+#include "core/AudioEngine.h"
 #include "core/HpsdrModel.h"
 #include "core/MoxController.h"
 #include "core/StepAttenuatorController.h"
@@ -97,6 +101,33 @@ DaemonConfig listenerConfig()
 class TstDaemonApp : public QObject {
     Q_OBJECT
 private slots:
+    // R-R3-44: nereusd publishes no VAX device on the Core host, receive
+    // or transmit. Its engine refuses them before anything connects (the
+    // engine-level proof that start() then opens none is in
+    // tst_remote_vax_feeder, aCoreOpensNoVaxDeviceOfEitherDirection).
+    void publishesNoVaxDevices()
+    {
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(DaemonConfig::defaults()));
+        AudioEngine* const engine = app.m_radioModel->audioEngine();
+        QVERIFY(!engine->vaxOutputsAllowed());
+        // Even with devices on offer, none is made.
+        int asked = 0;
+        engine->setVaxBusFactoryForTest([&asked](int) -> std::unique_ptr<IAudioBus> {
+            ++asked;
+            return nullptr;
+        });
+        engine->openVaxOutputs();
+        engine->setVaxEnabled(1, true);
+        QCOMPARE(asked, 0);
+        for (int channel = 1; channel <= 4; ++channel) {
+            QVERIFY(!engine->isVaxBusOpen(channel));
+        }
+        engine->setVaxBusFactoryForTest({});
+        app.stop();
+    }
+
     void malformedDisplayLimitsCannotReplaceARunningDaemon()
     {
         DaemonApp app;
@@ -451,6 +482,46 @@ private slots:
         txSlice->setFrequency(7'150'000.0);
         QCOMPARE(facade->attenuationDb(), 20);
         txSlice->setFrequency(14'100'000.0);
+        QCOMPARE(facade->attenuationDb(), 5);
+
+        app.stop();
+    }
+
+    // R-R3-46 fix wave (Thetis parity; the cite is at RadioModel::
+    // followReceiveSliceWithStepAttenuator): the Core's attenuator follows
+    // slice A's receive band (Thetis rx1_band), not the transmit slice's. Transmitting on slice B at 20 m while
+    // listening on slice A at 40 m keeps 40 m's attenuator.
+    void coreAttenuatorFollowsSliceAInACrossBandSplit()
+    {
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.sliceCount = 2;
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::Angelia, QStringLiteral("02:00:00:00:00:4A"));
+        QVERIFY(app.start(cfg));
+        RadioModel* const model = app.m_radioModel.get();
+        StepAttenuatorFacade* const facade = model->stepAttFacade();
+        StepAttenuatorController* const controller = app.m_stepAttController.get();
+        SliceModel* const sliceA = model->sliceById(0);
+        SliceModel* const sliceB = model->sliceById(1);
+        QVERIFY(sliceA != nullptr && sliceB != nullptr);
+        QCOMPARE(model->txBoundSlice(), sliceA);
+
+        sliceA->setFrequency(14'200'000.0);
+        facade->setAttenuationDb(5);          // 20 m's memory
+        sliceA->setFrequency(7'100'000.0);
+        facade->setAttenuationDb(20);         // 40 m's
+
+        sliceB->setFrequency(14'250'000.0);
+        QVERIFY(model->requestTxHandoffToSlice(1));
+        QTRY_COMPARE(model->txBoundSlice(), sliceB);
+        QCOMPARE(controller->currentBand(), Band::Band40m);
+        QCOMPARE(facade->attenuationDb(), 20);
+        QCOMPARE(controller->txBand(), Band::Band20m);
+
+        sliceB->setFrequency(21'200'000.0);
+        QCOMPARE(facade->attenuationDb(), 20);
+        sliceA->setFrequency(14'100'000.0);
         QCOMPARE(facade->attenuationDb(), 5);
 
         app.stop();

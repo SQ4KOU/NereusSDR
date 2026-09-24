@@ -345,12 +345,11 @@ private:
     // desktop-local session. The controller is injected before the radio
     // connect so RadioModel's connect-time capability and PureSignal paths
     // can see it; this finishing step runs after slices exist so the
-    // controller can select the authoritative TX-bound band before loading
-    // that band's persisted values.
+    // controller can select slice A's band (RadioModel::
+    // followReceiveSliceWithStepAttenuator) before loading that band's
+    // persisted values.
     void configureStepAttenuatorController(const QString& mac);
     void applyStepAttenuatorConnection(const QString& mac);
-    void wireStepAttenuatorSlice(SliceModel* slice);
-    void syncStepAttenuatorBandAndMode();
 
     // Tops up m_radioModel's slice list to min(cfg.sliceCount,
     // connected-board-maxSlices), starting from however many slices

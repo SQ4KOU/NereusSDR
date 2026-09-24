@@ -37,6 +37,10 @@
 // Modification history (NereusSDR):
 //   2026-09-23  J.J. Boyd / KG4VCF  Created. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 fix wave: one band's antenna at
+//                                    a time (setBandEditSender, the Core's
+//                                    setRxAntForBand). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "models/Band.h"
@@ -76,6 +80,10 @@ class AlexAntennaFacade final : public QObject {
 public:
     /// True when an edit may go ahead; otherwise false with a plain reason.
     using EditGate = std::function<bool(QString* reason)>;
+    /// A remote window: send one band's RX (rxOnly false) or RX-only
+    /// antenna to the Core. False, with a plain reason, when not sent.
+    using BandEditSender = std::function<bool(Band band, int antenna, bool rxOnly,
+                                              QString* reason)>;
 
     /// The bands AlexController keeps antennas for (160 m .. XVTR).
     static constexpr int kBandCount = static_cast<int>(Band::SwlFirst);
@@ -89,6 +97,23 @@ public:
     bool isBound() const;
 
     void setEditGate(EditGate gate) { m_editGate = std::move(gate); }
+
+    /// R-R3-46 fix wave (radioHardwareVersion 3): a remote window whose Core
+    /// takes one band's antenna at a time sets this; setRxAnt and
+    /// setRxOnlyAnt then send only that band (the Core's delta brings the
+    /// value back), so a list built before the Core changed another band
+    /// cannot put that band back. Without it they send the whole list.
+    void setBandEditSender(BandEditSender sender) { m_bandEditSender = std::move(sender); }
+    bool hasBandEditSender() const { return static_cast<bool>(m_bandEditSender); }
+    /// A remote window: the Core refused a band edit sent by the sender;
+    /// views re-read the held values (bandEditRefused).
+    void reportBandEditRefused() { emit bandEditRefused(); }
+
+    /// The Core (bound): one band's RX antenna (1..3) or RX-only antenna
+    /// (0..3), through the controller. Empty when taken as asked; otherwise
+    /// the plain reason the band kept another value.
+    QString setRxAntForBand(Band band, int antenna);
+    QString setRxOnlyAntForBand(Band band, int antenna);
 
     /// A remote window: whether its Hardware Config edits can reach the Core
     /// now and, when they cannot, why, in plain words. Starts unavailable,
@@ -145,6 +170,9 @@ signals:
     void editRejected(const QString& reason);
     /// setWindowAvailability() changed the availability or its reason.
     void windowAvailabilityChanged(bool available);
+    /// A band edit did not reach the Core or the Core refused it; the held
+    /// values are unchanged, so a view that showed the click re-reads them.
+    void bandEditRefused();
 
 private:
     using BandList = std::array<int, kBandCount>;
@@ -170,6 +198,9 @@ private:
     static bool decode(const QString& text, int lo, int hi, BandList* out, bool* clamped);
 
     bool beginEdit(const char* property);
+    /// A remote window with a band edit sender: send one band's edit and
+    /// return true (whatever the outcome); false when the whole list goes.
+    bool sendBandEdit(const char* property, Band band, int ant, bool rxOnly);
     void settle(const char* property, const QString& reason);
     /// Re-read the bound controller and emit each property that changed.
     void refresh();
@@ -178,6 +209,7 @@ private:
     QPointer<AlexController> m_controller;
     QList<QMetaObject::Connection> m_controllerConnections;
     EditGate m_editGate;
+    BandEditSender m_bandEditSender;
     bool m_windowAvailable{false};
     QString m_windowReason;
     QHash<QByteArray, QString> m_settleReasons;

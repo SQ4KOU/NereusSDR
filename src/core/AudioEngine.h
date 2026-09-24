@@ -21,6 +21,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 : R-R3-45 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. Headphones output beside the speakers (VAX
+//                 design 5.3, 6.2, 6.3): opened at start() when Setup,
+//                 Audio, Devices has it enabled, fed the headphones mix
+//                 (the slices routed there), master volume and mute left on
+//                 the speakers; headphonesAvailable() for the flags.
 //   2026-09-23 : R-R3-43 Task 2 by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. Per-slice receiver audio taps
 //                 beside the VAX tee (SliceAudioTap, four slots); the VAX
@@ -120,12 +126,27 @@
 //                 returns to its pre-D.1 form: drain m_txInputBus and
 //                 convert to float32 mono, no accumulator side effects.
 //                 Plan: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
+//   2026-09-23: R-R3-44 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. VAX in a remote window: openVaxOutputs() opens
+//                 the four VAX receive outputs without starting the engine,
+//                 vaxOutputPacing() / writeVaxOutput() / vaxOutputHasReader()
+//                 let a feeder on its own worker write a channel paced by
+//                 that output's clock (per-channel lock against the owner
+//                 thread replacing the output), and setVaxOutputsAllowed()
+//                 lets nereusd publish no VAX devices at all.
+//   2026-09-23: R-R3-23 / R-R3-07 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Remote playback plays on any
+//                 speaker rate and channel count the Devices page offers:
+//                 remotePlaybackFormat() names the format begin accepted,
+//                 and writeRemotePlayback() takes blocks in it.
 // =================================================================
 
 #include "AudioDeviceConfig.h"
 #include "IAudioBus.h"
 #include "audio/CaptureSupervisor.h"
 #include "audio/MasterMixer.h"
+#include "audio/VaxChannelMixer.h"
+#include "audio/SpeakerFormatConverter.h"
 
 #if defined(Q_OS_LINUX)
 #  include "core/audio/LinuxAudioBackend.h"
@@ -351,13 +372,39 @@ public:
 
     // Remote RX playback owns only the existing speakers bus. The caller must
     // stop/join its playback worker before this AudioEngine is destroyed.
-    // Begin/end run on the owner thread; pacing/write are worker-safe.
+    // Begin/end run on the owner thread; format/pacing/write are worker-safe.
+    //
+    // R-R3-23: begin accepts the speaker at the rate and channel count it
+    // opened at: float samples, one or two channels, a rate from
+    // kMinRemotePlaybackRateHz to kMaxRemotePlaybackRateHz (the Devices
+    // page offers 44.1 kHz to 384 kHz), with playback timing.
+    // remotePlaybackFormat() is that format until end, nullopt otherwise.
+    // writeRemotePlayback() takes interleaved float frames in that format
+    // (its channel count), at most kMaxRemotePlaybackFrames; it fails once
+    // the device has reopened in another format, so the caller restarts.
+    static constexpr int kMinRemotePlaybackRateHz = 8'000;
+    static constexpr int kMaxRemotePlaybackRateHz = 384'000;
+    static constexpr int kMaxRemotePlaybackFrames = 4096;
     bool beginRemotePlayback(QString* error = nullptr);
     void endRemotePlayback();
+    std::optional<AudioFormat> remotePlaybackFormat();
     std::optional<IAudioBus::OutputPacing> remotePlaybackPacing();
-    bool writeRemotePlayback(const QVector<float>& stereo);
+    bool writeRemotePlayback(const QVector<float>& pcm);
 
+    // R-R3-45: stores the headphones device and, when the headphones are
+    // enabled, reopens the output on it. Emits headphonesConfigChanged.
     void setHeadphonesConfig(const AudioDeviceConfig& cfg);
+
+    // R-R3-45: the headphones card's Enabled box. On opens the headphones
+    // output on the stored device, off closes it. The card persists
+    // audio/Headphones/Enabled; start() reads it.
+    void setHeadphonesEnabled(bool enabled);
+    bool headphonesEnabled() const { return m_headphonesEnabled; }
+
+    // R-R3-45: true while a headphones output is open, so a receiver routed
+    // to the headphones is heard. Owner thread.
+    bool headphonesAvailable() const { return m_headphonesAvailable; }
+
     // R-R3-36: stores the TX input selection and hands it to the capture
     // supervisor. Never opens a device and never waits; capture opens only
     // while someone holds a demand (acquireCaptureDemand).
@@ -390,6 +437,63 @@ public:
     // the bus regardless of how it was constructed. On Windows it remains
     // the lazy PortAudio path (creates a default-config PortAudioBus).
     void setVaxEnabled(int channel, bool on);
+
+    // ── R-R3-44: VAX outputs in a remote window, none on the Core ─────────
+    // False on nereusd (DaemonApp): the Core host publishes no VAX devices,
+    // so start() opens neither the VAX outputs nor the VAX TX device, and
+    // setVaxConfig / setVaxEnabled / openVaxOutputs / resetAudioSettings
+    // open none. Set before start(). Owner thread.
+    void setVaxOutputsAllowed(bool allowed);
+    bool vaxOutputsAllowed() const { return m_vaxOutputsAllowed; }
+
+    // A remote window opens the four VAX receive outputs start() opens (the
+    // engine itself never starts there), skipping a slot that already has
+    // one. It opens no VAX TX device: VAX as the microphone waits for
+    // remote transmit. In a test run (QStandardPaths test mode) it opens
+    // only what setVaxBusFactoryForTest() supplies. Owner thread.
+    void openVaxOutputs();
+
+    // A remote window's VAX feeder writes a channel from its own worker
+    // thread, never an audio callback. vaxOutputPacing() is the output's
+    // playback timing (nullopt when the output is closed or reports none);
+    // writeVaxOutput() writes interleaved 48 kHz stereo with the channel's
+    // VAX gain and mute applied as the local VAX tee applies them (muted
+    // writes silence, so the output's clock keeps running), and returns
+    // false when the output is closed or the block is not finite. Both take
+    // the channel's lock, which the owner thread also takes to replace the
+    // output. At most kMaxVaxWriteFrames per call.
+    static constexpr int kMaxVaxWriteFrames = 4096;
+    std::optional<IAudioBus::OutputPacing> vaxOutputPacing(int channel);
+    bool writeVaxOutput(int channel, const float* stereo, int frames);
+    // Whether an app is reading the channel's output, where the platform
+    // reports it (IAudioBus::outputHasReader); nullopt otherwise or when
+    // the channel has no output. Owner thread.
+    std::optional<bool> vaxOutputHasReader(int channel);
+
+#ifdef NEREUS_BUILD_TESTS
+    // R-R3-44 test seam: makeVaxBus() (channel 1..4) and makeVaxTxBus()
+    // (channel 0) build the platform's VAX device through this factory
+    // instead, so a test never attaches to this computer's real VAX
+    // devices. An empty function restores the platform. Not consulted
+    // while vaxOutputsAllowed() is false.
+    void setVaxBusFactoryForTest(std::function<std::unique_ptr<IAudioBus>(int channel)> factory)
+    {
+        m_vaxBusFactoryForTest = std::move(factory);
+    }
+
+    // R3 receiver audio fix wave follow-up: speakers, headphones and the
+    // TX input (every PortAudio device the engine opens through makeBus)
+    // come from this factory instead, given the device config and whether
+    // it is a capture device; the engine opens what it returns. In a test
+    // run (QStandardPaths test mode) without a factory the engine opens no
+    // real device of either kind, PortAudio or platform VAX.
+    using DeviceBusFactory =
+        std::function<std::unique_ptr<IAudioBus>(const AudioDeviceConfig& cfg, bool capture)>;
+    void setDeviceBusFactoryForTest(DeviceBusFactory factory)
+    {
+        m_deviceBusFactoryForTest = std::move(factory);
+    }
+#endif
 
 #ifdef NEREUS_BUILD_TESTS
     // Test seam — inject a fake IAudioBus into a VAX slot so unit tests
@@ -787,6 +891,8 @@ signals:
     // DeviceCard's "Negotiated" pill subscribes to these.
     void speakersConfigChanged(NereusSDR::AudioDeviceConfig cfg);
     void headphonesConfigChanged(NereusSDR::AudioDeviceConfig cfg);
+    // R-R3-45: the headphones output opened or closed.
+    void headphonesAvailableChanged(bool available);
     void txInputConfigChanged(NereusSDR::AudioDeviceConfig cfg);
     // R-R3-36: re-emits CaptureSupervisor::statusChanged on the owner thread.
     void captureStatusChanged(const NereusSDR::CaptureSupervisor::Status& status);
@@ -820,6 +926,9 @@ private:
     // for Pactl, nullptr for None. Windows → returns nullptr; Windows BYO
     // wiring lands in Sub-Phase 9 via setVaxConfig().
     std::unique_ptr<IAudioBus> makeVaxBus(int channel);
+
+    // R-R3-44: start()'s and openVaxOutputs()'s loop over VAX 1..4.
+    void openVaxOutputSlots();
 
     // Sub-Phase 8.5: construct + open the platform-native VAX TX virtual
     // bus. Opened so coreaudiod / pactl register the virtual TX device for
@@ -859,7 +968,15 @@ private:
 
     std::unique_ptr<IAudioBus> m_speakersBus;
     bool m_remotePlayback{false}; // protected by m_speakersBusMutex
+    AudioFormat m_remotePlaybackFormat; // protected by m_speakersBusMutex
+    // R-R3-45: the headphones output. Replaced only on the owner thread
+    // under m_headphonesBusMutex; the DSP thread's push takes it with
+    // try_lock and drops the block rather than wait, like the speakers.
+    std::mutex m_headphonesBusMutex;
     std::unique_ptr<IAudioBus> m_headphonesBus;
+    AudioDeviceConfig m_headphonesConfig;  // owner thread
+    bool m_headphonesEnabled{false};       // owner thread
+    bool m_headphonesAvailable{false};     // owner thread
     // Test-injected TX input only (setTxInputBusForTest); production reads
     // the capture supervisor's reader. R-R3-36.
     std::unique_ptr<IAudioBus> m_txInputBus;
@@ -882,6 +999,16 @@ private:
     // Opened in start(), reset in stop(); consumption is a Phase 3M concern.
     std::unique_ptr<IAudioBus> m_vaxTxBus;
     std::array<std::unique_ptr<IAudioBus>, 4> m_vaxBus;
+    // R-R3-44: taken by the owner thread whenever it replaces a VAX output
+    // and by a remote window's VAX feeder around every pacing read and
+    // write. The local VAX tee on the DSP thread never takes it.
+    std::array<std::mutex, 4> m_vaxBusMutex;
+    // R-R3-44: see setVaxOutputsAllowed().
+    bool m_vaxOutputsAllowed{true};
+#ifdef NEREUS_BUILD_TESTS
+    std::function<std::unique_ptr<IAudioBus>(int)> m_vaxBusFactoryForTest;
+    DeviceBusFactory m_deviceBusFactoryForTest;
+#endif
     MasterMixer m_masterMix;
 
     // Second mixer whose output is the anti-VOX reference, not the speakers.
@@ -904,6 +1031,28 @@ private:
     // [v2.10.3.15]), and monitor audio suppressing the operator's own VOX
     // would be feedback by definition.
     MasterMixer m_antiVoxMix;
+
+    // R-R3-44 (fix wave): the local VAX tee's per-channel mix. Slices that
+    // share a VAX channel are summed into one block per period instead of
+    // each pushing its own. Membership rides the same setSliceStreaming
+    // calls as the two mixers above.
+    VaxChannelMixer m_vaxMix;
+
+    // R-R3-23 (fix wave): the master mix converted to the speaker device's
+    // own rate and channel count before the push. Configured wherever the
+    // speakers bus is replaced, under m_speakersBusMutex, which the DSP
+    // thread's push also holds.
+    SpeakerFormatConverter m_speakersConverter;
+    void configureSpeakersConverter();
+
+    // R-R3-45: the same conversion for the headphones device, configured
+    // under m_headphonesBusMutex wherever the headphones bus is replaced.
+    SpeakerFormatConverter m_headphonesConverter;
+    void configureHeadphonesConverter();
+    // Owner thread: (re)open or close the headphones output from
+    // m_headphonesConfig and m_headphonesEnabled, then publish.
+    void reopenHeadphones();
+    void publishHeadphonesAvailable();
 
     // Control-to-audio withdrawal handshake. The audio thread never waits:
     // it either enters a region or drops a block while admission is closed.

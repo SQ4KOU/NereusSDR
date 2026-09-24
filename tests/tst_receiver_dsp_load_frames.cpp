@@ -309,6 +309,37 @@ private slots:
         std::this_thread::sleep_for(kSettle);
     }
 
+    // R-R3-40 fix wave: when the worker keeps busyNs and the block in
+    // progress changing through every attempt, GetChannelDspLoad says so
+    // (1) instead of handing back a pair that may be torn, and reads
+    // normally again once the pair settles.
+    void aReadThatNeverFindsThePairAtRestIsFlagged()
+    {
+        WdspChannelLoad load{};
+        QCOMPARE(GetChannelDspLoad(kChannel, &load), 0);
+        // The hold is steady while the worker keeps running its blocks:
+        // every read while held is flagged, not only most of them.
+        WDSPSetTestHoldLoadPair(kChannel, 1);
+        const auto until = Clock::now() + std::chrono::milliseconds(500);
+        int reads = 0;
+        int unflagged = 0;
+        int held = 1;
+        while (Clock::now() < until) {
+            const int result = GetChannelDspLoad(kChannel, &load);
+            ++reads;
+            if (result != 1) {
+                ++unflagged;
+                held = result;
+            }
+        }
+        WDSPSetTestHoldLoadPair(kChannel, 0);
+        QVERIFY2(unflagged == 0, qPrintable(QStringLiteral("%1 of %2 reads not flagged")
+                                                .arg(unflagged).arg(reads)));
+        QCOMPARE(held, 1);
+        QVERIFY(load.readNs > 0);
+        QCOMPARE(GetChannelDspLoad(kChannel, &load), 0);
+    }
+
     // The defect: one 9 ms block in 12 is about 60% of a core, not overload.
     void aFrameLikeLoadReadsItsCpuShare()
     {

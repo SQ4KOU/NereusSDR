@@ -8,6 +8,7 @@
 #include "gui/meters/MeterPoller.h"
 #include "gui/meters/MeterWidget.h"
 #include "gui/meters/MeterItem.h"
+#include "core/StepAttenuatorController.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -18,6 +19,36 @@ using namespace NereusSDR;
 class TestRemoteMeterPoller : public QObject {
     Q_OBJECT
 private slots:
+    // R-R3-46 fix wave: the Core adds its own calibration (its attenuator,
+    // preamp and meter offset) to the S-meter readings and the spectrum
+    // frames it sends. A remote window's model adds none on top, so the
+    // spectrum's calibration offset and Max Bin show the Core's values;
+    // a local model keeps the Thetis chain.
+    void remoteModelAddsNoSecondCalibration()
+    {
+        StepAttenuatorController controller;
+        controller.setTickTimerEnabled(false);
+        controller.setStepAttEnabled(true);
+        controller.setAttenuation(20);
+
+        RadioModel remote(RadioModel::Role::Remote);
+        QSignalSpy changed(&remote, &RadioModel::rxMeterOffsetChanged);
+        remote.setStepAttController(&controller);
+        QCOMPARE(remote.rxMeterOffsetDb(), 0.0);
+        controller.setAttenuation(25);
+        QCOMPARE(remote.rxMeterOffsetDb(), 0.0);
+        // Whatever it tells the spectrum is 0.
+        for (const QList<QVariant>& emitted : std::as_const(changed)) {
+            QCOMPARE(emitted.at(0).toDouble(), 0.0);
+        }
+        remote.setStepAttController(nullptr);
+
+        RadioModel local;
+        local.setStepAttController(&controller);
+        QVERIFY(local.rxMeterOffsetDb() != 0.0);
+        local.setStepAttController(nullptr);
+    }
+
     void selectsActualRemoteSourceAndFollowsStableActiveSlice()
     {
         RadioModel model(RadioModel::Role::Remote);

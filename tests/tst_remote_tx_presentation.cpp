@@ -23,6 +23,7 @@
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "fakes/LoopbackTransport.h"
+#include "fakes/MainWindowTestSettings.h"
 
 using namespace NereusSDR;
 
@@ -45,7 +46,7 @@ private slots:
     void init()
     {
         AppSettings::instance().clear();
-        AppSettings::instance().setValue(QStringLiteral("audio/FirstRunComplete"), QStringLiteral("True"));
+        Test::markAudioFirstRunDone();
         RadioDiscovery::clearHoldOffForTest();
         RadioDiscovery discovery;
         discovery.holdOffScans(std::chrono::minutes{5});
@@ -129,12 +130,15 @@ private slots:
         QWidget* page = dialog.realizedPageForTest(QStringLiteral("NR/ANF"));
         QVERIFY(page && page->isEnabled());
         QVERIFY(dialog.findChild<QLabel*>(QStringLiteral("setupTransmitUnavailable"))->isHidden());
-        // VAX is receive export. Its existing local-resource restriction
-        // must not be reclassified as a TX-permission restriction.
+        // VAX is receive export. It is this computer's page and works in a
+        // remote window (R-R3-44), and the transmit permission must not
+        // reclassify it: granting or withdrawing it leaves the page usable.
         QWidget* vax = dialog.realizePageForTest(QStringLiteral("VAX"));
-        QVERIFY(vax && !vax->isEnabled());
+        QVERIFY(vax && vax->isEnabled());
         dialog.setTransmitPermitted(true);
-        QVERIFY(!vax->isEnabled());
+        QVERIFY(vax->isEnabled());
+        dialog.setTransmitPermitted(false, QStringLiteral("Permission withdrawn"));
+        QVERIFY(vax->isEnabled());
     }
     void toolsActionKeepsLocalTxEditorAvailable()
     {

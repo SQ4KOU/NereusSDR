@@ -289,6 +289,12 @@ Core restores and sends them (DaemonApp::syncStepAttenuatorBandAndMode, Task 2's
 - A remote window is unchanged (the Core already restores and sends).
 - The test for the local restore fails before the change.
 
+**Final review ruling (fix wave, item 2):** the band the attenuator follows is the
+receive band of slice A (slice 0, Thetis `rx1_band`), locally and on the Core, not the
+transmit-bound slice's; the ATT-on-TX value and the CW check on MOX follow the transmit
+slice's band and mode (Thetis `_tx_band` and the TX DSP mode). The feed is
+`RadioModel::followReceiveSliceWithStepAttenuator`, which the Core also calls.
+
 **Verification:** `tst_step_attenuator_controller` and the local wiring test, built and
 run by exact name. Hardware (pending, operator checkpoint): band changes on the G2 and the
 HL2, locally and through the Rock.

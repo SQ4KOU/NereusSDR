@@ -3,6 +3,8 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QLabel>
+#include <QMouseEvent>
+#include <QWheelEvent>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QRegularExpression>
@@ -383,10 +385,31 @@ bool acceptedOff(const RemoteMediaController& media, quint32 generation,
         && context->offReason == reason;
 }
 
-// What the controller logs when this computer's speaker cannot be opened.
+// What the controller logs when this computer's speaker cannot start remote
+// playback because it reports no playback timing (R-R3-23: any rate and
+// channel count it offers is accepted).
 const char* const kSpeakerOpenFailedLog =
-    "Remote audio playback failed: Remote audio requires a 48 kHz stereo speaker "
-    "device with playback timing";
+    "Remote audio playback failed: The selected speaker device does not report "
+    "its playback timing";
+
+// R-R3-23: the amplitude of a `hz` tone in one channel of audio heard at
+// `rateHz` with `channels` interleaved, over its last `frames` frames.
+double lastToneAmplitude(const QVector<float>& heard, int channels, int channel, double hz,
+                         int rateHz, qint64 frames)
+{
+    const qint64 total = heard.size() / channels;
+    double cosine = 0.0;
+    double sine = 0.0;
+    qint64 counted = 0;
+    for (qint64 frame = std::max<qint64>(0, total - frames); frame < total; ++frame) {
+        const double phase = 2.0 * 3.14159265358979323846 * hz * double(frame) / double(rateHz);
+        const double sample = heard.at(frame * channels + channel);
+        cosine += sample * std::cos(phase);
+        sine += sample * std::sin(phase);
+        ++counted;
+    }
+    return counted > 0 ? 2.0 * std::hypot(cosine, sine) / double(counted) : 0.0;
+}
 
 // What it logs when a playing speaker stops reporting timing: the worker's
 // pacing check or its next write notices first, with the bounded detail.
@@ -863,9 +886,15 @@ private slots:
         connectSession();
         const quint32 offeredEpoch = client.sessionEpoch();
         QTRY_VERIFY(media && media->descriptionClock.isValid());
+        // The recovery this stage waits for stops the media peer, which
+        // deleteLater()s this transport; the event loop QTRY spins runs
+        // that delete, so `media` can be gone by the time the wait returns
+        // (R-R3-21: 3 of 3 SIGSEGV on Linux). The clock starts once and is
+        // never restarted, so a copy taken now measures the same interval.
+        const QElapsedTimer descriptionClock = media->descriptionClock;
         QTRY_COMPARE_WITH_TIMEOUT(recoveries.size(), 2, 5000);
-        QVERIFY2(media->descriptionClock.elapsed() >= kConnectMs - 20,
-                 qPrintable(QString::number(media->descriptionClock.elapsed())));
+        QVERIFY2(descriptionClock.elapsed() >= kConnectMs - 20,
+                 qPrintable(QString::number(descriptionClock.elapsed())));
         QCOMPARE(recoveries.constLast().at(0).toUInt(), offeredEpoch);
         QCOMPARE(recoveries.constLast().at(1).toString(),
                  QStringLiteral("Station media did not connect within 1.5 seconds"));
@@ -1319,6 +1348,281 @@ private slots:
         // still be visible before the new source/context is established.
         QTRY_VERIFY_WITH_TIMEOUT(feed() && replacement->streamCtunPinned(), 5000);
         QTRY_VERIFY(widget->ctunEnabled());
+        client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-18, R-R3-19, R-R3-21: the zoom flash seen on checkpoint 80f45e28.
+    // With C-Tune on and the pan's receiver sharing its stream, a zoom
+    // re-centres the view on the VFO. That must stay a view change: the Core
+    // refuses to move a shared window there, and each refusal used to snap
+    // the view back and blank the trace, at wheel rate. A pan drag still asks
+    // the Core; one refusal stops that drag's requests and keeps the picture.
+    void ctunZoomOnSharedStreamKeepsCoreCentreAndRefusalKeepsPicture()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        auto* sourceSlice = station.sliceById(sliceId);
+        QVERIFY(sourceSlice);
+        const int stream = sourceSlice->streamIndex();
+        QVERIFY(stream >= 0);
+        const double centre = station.streamCentreHz(stream);
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* first = stack.addPanadapter(QStringLiteral("first"));
+        stack.setActivePan(QStringLiteral("first"));
+        first->setActiveSliceIndex(sliceId);
+        auto* widget = first->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(centre, 48000);
+        widget->setVfoFrequency(centre);
+        widget->setCtunEnabled(true);
+        // MainWindow's connection wiring; a disconnected pan swallows clicks.
+        widget->setConnectionState(ConnectionState::Connected);
+        stack.resize(600, 700);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController gui(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QStringList centreVerdicts;
+        connect(&client, &StationClient::commandResponse, this,
+            [&centreVerdicts](const NereusSDR::SessionMessage& message) {
+                if (message.commandVerb == "requestStreamCentre") {
+                    centreVerdicts.append(message.accepted ? QStringLiteral("accepted")
+                                                           : QStringLiteral("refused"));
+                }
+            });
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->other = sinkMedia;
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QVector<float> iq(2048, 0.001f);
+        const auto feed = [&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+            return !widget->renderedPixels().isEmpty();
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(feed(), 5000);
+        QTRY_VERIFY(sourceSlice->streamCtunPinned());
+        QTRY_VERIFY(widget->ctunEnabled());
+
+        // The operator's shape: a second receiver on the same stream, near
+        // the far edge, and the pan's own receiver tuned off-centre inside
+        // the window (C-Tune keeps the Core centre while tuning in-window).
+        const int cohostId = station.addSlice();
+        auto* cohostSlice = station.sliceById(cohostId);
+        QVERIFY(cohostSlice);
+        cohostSlice->setFrequency(centre + 80000);
+        QCOMPARE(cohostSlice->streamIndex(), stream);
+        sourceSlice->setFrequency(centre - 30000);
+        QCOMPARE(station.streamCentreHz(stream), centre);
+        QTRY_VERIFY(remote.sliceById(cohostId)
+            && remote.sliceById(cohostId)->streamIndex() == stream);
+        QTRY_COMPARE(remote.sliceById(sliceId)->frequency(), centre - 30000);
+        widget->setVfoFrequency(centre - 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(feed(), 5000);
+
+        QSignalSpy notices(&remote, &RadioModel::sliceAddRejected);
+        QSignalSpy centreResults(&client, &StationClient::streamCentreFinished);
+        const QPointF inSpectrum(widget->width() * 0.25, widget->height() * 0.2);
+        const auto sendWheel = [&](int delta) {
+            QWheelEvent wheel(inSpectrum, widget->mapToGlobal(inSpectrum), QPoint(),
+                              QPoint(0, delta), Qt::NoButton, Qt::ControlModifier,
+                              Qt::NoScrollPhase, false);
+            QCoreApplication::sendEvent(widget, &wheel);
+        };
+        // Wheel zoom in and out, as on the bench.
+        const double startBandwidth = widget->bandwidth();
+        for (int step = 0; step < 4; ++step) {
+            sendWheel(120);
+            feed();
+            QTest::qWait(20);
+        }
+        QVERIFY(widget->bandwidth() < startBandwidth);
+        for (int step = 0; step < 4; ++step) {
+            sendWheel(-120);
+            feed();
+            QTest::qWait(20);
+        }
+        // Frequency-scale drag zoom.
+        widget->setDisplayWindowPreservingHistory(centre, widget->bandwidth());
+        // The frequency scale sits under the spectrum/waterfall divider; the
+        // GPU and CPU layouts place the divider a little differently, so aim
+        // at the band both put inside the scale (past the divider grab).
+        const int gpuDivider = static_cast<int>((widget->height() - 32) * 0.40);
+        const int cpuDivider = static_cast<int>(widget->height() * 0.40);
+        const int scaleTop = std::max(gpuDivider, cpuDivider) + 4 + 6;
+        const int scaleBottom = std::min(gpuDivider, cpuDivider) + 4 + 28;
+        QVERIFY(scaleTop < scaleBottom);
+        const QPointF onScale(widget->width() * 0.5, (scaleTop + scaleBottom) / 2);
+        const auto sendMouse = [&](QEvent::Type type, QPointF at, Qt::MouseButtons held) {
+            QMouseEvent event(type, at, widget->mapToGlobal(at), Qt::LeftButton, held,
+                              Qt::NoModifier);
+            QCoreApplication::sendEvent(widget, &event);
+        };
+        const double zoomedOutBandwidth = widget->bandwidth();
+        sendMouse(QEvent::MouseButtonPress, onScale, Qt::LeftButton);
+        sendMouse(QEvent::MouseMove, onScale - QPointF(60, 0), Qt::LeftButton);
+        sendMouse(QEvent::MouseMove, onScale - QPointF(120, 0), Qt::LeftButton);
+        sendMouse(QEvent::MouseButtonRelease, onScale - QPointF(120, 0), Qt::NoButton);
+        QVERIFY(widget->bandwidth() > zoomedOutBandwidth);
+        QCOMPARE(widget->centerFrequency(), centre - 30000);
+        for (int i = 0; i < 10; ++i) {
+            feed();
+            QTest::qWait(30);
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(feed(), 5000);
+        // Nothing asked of the Core, so nothing refused or snapped back. The
+        // view stays on the VFO (within the Core's bin-aligned crop).
+        QCOMPARE(centreVerdicts, QStringList{});
+        QCOMPARE(centreResults.size(), 0);
+        QCOMPARE(notices.size(), 0);
+        QCOMPARE(station.streamCentreHz(stream), centre);
+        QVERIFY(std::abs(widget->centerFrequency() - (centre - 30000)) < 50);
+        QCOMPARE(widget->ddcCenterFrequency(), centre);
+
+        // An explicit pan drag still asks. This one would push the cohost
+        // out of the window, so the Core refuses: the picture stays where
+        // the Core has it (the view does not follow the rest of the drag),
+        // one notice is shown,
+        // and the rest of the drag sends nothing more.
+        widget->setDisplayWindowPreservingHistory(centre, 48000);
+        QTRY_VERIFY_WITH_TIMEOUT(feed(), 5000);
+        const QPointF grab(widget->width() * 0.2, widget->height() * 0.2);
+        const double hzPerPx = 48000.0 / widget->width();
+        sendMouse(QEvent::MouseButtonPress, grab, Qt::LeftButton);
+        // 300 px right = view centre about 24 kHz lower: cohost falls outside.
+        sendMouse(QEvent::MouseMove, grab + QPointF(300, 0), Qt::LeftButton);
+        QTRY_COMPARE(centreVerdicts, QStringList{QStringLiteral("refused")});
+        QTRY_VERIFY(std::abs(widget->centerFrequency() - centre) < hzPerPx);
+        for (int step = 1; step <= 5; ++step) {
+            sendMouse(QEvent::MouseMove, grab + QPointF(300 + step * 10, 0), Qt::LeftButton);
+            QVERIFY(std::abs(widget->centerFrequency() - centre) < hzPerPx);
+            feed();
+            QTest::qWait(30);
+        }
+        sendMouse(QEvent::MouseButtonRelease, grab + QPointF(350, 0), Qt::NoButton);
+        QTest::qWait(150);
+        QCOMPARE(centreVerdicts, QStringList{QStringLiteral("refused")});
+        QCOMPARE(notices.size(), 1);
+        QCOMPARE(station.streamCentreHz(stream), centre);
+        QCOMPARE(widget->ddcCenterFrequency(), centre);
+        QTRY_VERIFY_WITH_TIMEOUT(feed(), 5000);
+
+        // A new drag to a centre that keeps both receivers inside is asked
+        // for and accepted.
+        sendMouse(QEvent::MouseButtonPress, grab, Qt::LeftButton);
+        sendMouse(QEvent::MouseMove, grab - QPointF(50, 0), Qt::LeftButton);
+        sendMouse(QEvent::MouseButtonRelease, grab - QPointF(50, 0), Qt::NoButton);
+        QTRY_COMPARE(centreVerdicts,
+                     (QStringList{QStringLiteral("refused"), QStringLiteral("accepted")}));
+        QVERIFY(station.streamCentreHz(stream) > centre);
+        QCOMPARE(notices.size(), 1);
+        client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-19: a pan whose stream is its own still re-centres the Core on a
+    // zoom, as before this hotfix; the Core always accepts that centre.
+    void ctunZoomOnOwnStreamStillMovesCoreCentre()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        auto* sourceSlice = station.sliceById(sliceId);
+        QVERIFY(sourceSlice);
+        const int stream = sourceSlice->streamIndex();
+        const double centre = station.streamCentreHz(stream);
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* first = stack.addPanadapter(QStringLiteral("first"));
+        stack.setActivePan(QStringLiteral("first"));
+        first->setActiveSliceIndex(sliceId);
+        auto* widget = first->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(centre, 48000);
+        widget->setVfoFrequency(centre);
+        widget->setCtunEnabled(true);
+        // MainWindow's connection wiring; a disconnected pan swallows clicks.
+        widget->setConnectionState(ConnectionState::Connected);
+        stack.resize(600, 700);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController gui(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->other = sinkMedia;
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QVector<float> iq(2048, 0.001f);
+        const auto feed = [&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+            return !widget->renderedPixels().isEmpty();
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(feed(), 5000);
+        QTRY_VERIFY(sourceSlice->streamCtunPinned());
+        sourceSlice->setFrequency(centre - 30000);
+        QCOMPARE(station.streamCentreHz(stream), centre);
+        QTRY_COMPARE(remote.sliceById(sliceId)->frequency(), centre - 30000);
+        // The window's pan takes C-Tune from the Core's pin once the pin is
+        // mirrored and the pan's spectrum context is accepted; until then a
+        // zoom is a view change only. Wait for it, as a user would see it.
+        QTRY_VERIFY(widget->ctunEnabled());
+        widget->setVfoFrequency(centre - 30000);
+        QSignalSpy notices(&remote, &RadioModel::sliceAddRejected);
+        const QPointF inSpectrum(widget->width() * 0.25, widget->height() * 0.2);
+        QWheelEvent wheel(inSpectrum, widget->mapToGlobal(inSpectrum), QPoint(),
+                          QPoint(0, 120), Qt::NoButton, Qt::ControlModifier,
+                          Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(widget, &wheel);
+        QTRY_COMPARE(station.streamCentreHz(stream), centre - 30000);
+        QCOMPARE(notices.size(), 0);
         client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
@@ -3792,6 +4096,82 @@ private slots:
             }
         }
         client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-23: a remote window plays the Core's audio on whatever speaker
+    // format this computer's Devices page set: 44.1 or 96 kHz stereo, or a
+    // mono device, over the real encrypted session. The speaker plays at
+    // its own rate and the slice tones come out at their own pitch; a mono
+    // speaker hears both slices. No refusal and no problem is shown.
+    void playsOnTheSpeakerFormatThisComputerChose_data()
+    {
+        QTest::addColumn<int>("rate");
+        QTest::addColumn<int>("channels");
+        QTest::newRow("44.1 kHz stereo") << 44100 << 2;
+        QTest::newRow("96 kHz stereo") << 96000 << 2;
+        QTest::newRow("48 kHz mono") << 48000 << 1;
+    }
+    void playsOnTheSpeakerFormatThisComputerChose()
+    {
+        using State = RemoteAudioStatus::State;
+        QFETCH(int, rate);
+        QFETCH(int, channels);
+        Test::RemoteAudioSessionHarness h;
+        QVERIFY(h.remoteBus->open(AudioFormat{rate, channels, AudioFormat::Sample::Float32}));
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QSignalSpy errors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QTimer source;
+        source.setInterval(10);
+        source.setTimerType(Qt::PreciseTimer);
+        connect(&source, &QTimer::timeout, &source, [&h] { h.feedMixedTone(); });
+        QTimer speaker; // 10 ms of the speaker's own rate at a time
+        speaker.setInterval(10);
+        speaker.setTimerType(Qt::PreciseTimer);
+        connect(&speaker, &QTimer::timeout, &speaker, [&h, rate] { h.remoteBus->render(rate / 100); });
+        source.start();
+        speaker.start();
+        h.connectSession();
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        const qsizetype heardAtPlaying = h.remoteBus->heard.size() / channels;
+        QTRY_VERIFY_WITH_TIMEOUT(h.remoteBus->heard.size() / channels >= heardAtPlaying + rate, 10000);
+        source.stop();
+        speaker.stop();
+        QCOMPARE(errors.size(), 0);
+        QCOMPARE(remoteMedia.audioStatus().state, State::Playing);
+        QVERIFY(!remoteMedia.audioStatus().problem.has_value());
+        const RemoteAudioReceiverTelemetry playback = remoteMedia.audioTelemetry();
+        QVERIFY(playback.running);
+        QVERIFY(playback.deviceConsumedFrames > 0);
+        QVERIFY(playback.speakerQueuedMs && *playback.speakerQueuedMs < 100.0);
+
+        // The last half second heard: each slice's tone at its own pitch
+        // (at a wrong rate it would be heard at pitch x 48 kHz / rate).
+        const QVector<float> heard = h.remoteBus->heard;
+        const qint64 half = rate / 2;
+        const double toneA = Test::RemoteAudioSessionHarness::kSliceAToneHz;
+        const double toneB = Test::RemoteAudioSessionHarness::kSliceBToneHz;
+        const int channelA = 0;
+        const int channelB = channels == 2 ? 1 : 0;
+        const double a = lastToneAmplitude(heard, channels, channelA, toneA, rate, half);
+        const double b = lastToneAmplitude(heard, channels, channelB, toneB, rate, half);
+        qInfo().noquote() << QStringLiteral("%1 Hz %2 ch: slice A %3, slice B %4")
+                                 .arg(rate).arg(channels).arg(a, 0, 'f', 4).arg(b, 0, 'f', 4);
+        // Heard stereo levels at 48 kHz are about 0.062 and 0.042; a mono
+        // speaker hears each at about half (tst_remote_audio_receiver
+        // checks the mix exactly).
+        QVERIFY2(a > 0.02 && b > 0.015, qPrintable(QStringLiteral("%1 %2").arg(a).arg(b)));
+        if (channels == 2) {
+            // Each slice stays on its side of the pan.
+            const double aRight = lastToneAmplitude(heard, channels, 1, toneA, rate, half);
+            QVERIFY2(aRight < a / 3.0, qPrintable(QStringLiteral("%1 %2").arg(aRight).arg(a)));
+        }
+        if (rate != 48000) {
+            const double wrongA = lastToneAmplitude(heard, channels, channelA,
+                                                    toneA * 48000.0 / rate, rate, half);
+            QVERIFY2(wrongA < a / 10.0, qPrintable(QStringLiteral("%1 %2").arg(wrongA).arg(a)));
+        }
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
     // R-R3-23 (a): a real speaker loss becomes a lasting playback problem

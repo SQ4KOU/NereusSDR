@@ -8,13 +8,20 @@
 //   buttons and Disconnect/Reconnect are disabled with the amplifier
 //   reason AmpApplet gives; they drive this computer's own RF2K-S
 //   connection. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23  R-R3-47 / R-R3-22: the status dot, name and version,
+//   OPERATE state, gauges and telemetry strip read the RadioModel's
+//   RfKitModel in local and remote windows; a remote window shows a stale
+//   line when it loses the Core. J.J. Boyd (KG4VCF), AI-assisted via
+//   Anthropic Claude Code.
 // =================================================================
 
 #include "Rf2ksApplet.h"
 #include "AmpApplet.h"
 #include "gui/HGauge.h"
+#include "core/session/IStationLink.h"
 #include "gui/StyleConstants.h"
 #include "models/RadioModel.h"
+#include "models/RfKitModel.h"
 
 #include <QContextMenuEvent>
 #include <QHBoxLayout>
@@ -184,6 +191,32 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
 
     root->addWidget(tunerWrap);
 
+    // R-R3-47: a remote window's readings come from the Core; this line
+    // says when they are not live.
+    m_staleLabel = new QLabel(this);
+    m_staleLabel->setTextFormat(Qt::PlainText);
+    m_staleLabel->setWordWrap(true);
+    m_staleLabel->setContentsMargins(8, 0, 8, 6);
+    m_staleLabel->setStyleSheet(QStringLiteral("color: #d9a441; font-size: 10px;"));
+    m_staleLabel->setVisible(false);
+    root->addWidget(m_staleLabel);
+
+    // R-R3-47: the header, gauges and strip follow the RadioModel's
+    // RfKitModel: the Core's `rfkit` object in a remote window, the same
+    // object fed by this computer's own Rf2ksConnection in a local one.
+    if (m_model) {
+        m_rfKit = m_model->rfKitModel();
+        if (m_rfKit) {
+            connect(m_rfKit, &RfKitModel::statusChanged, this, &Rf2ksApplet::syncFromRfKit);
+            connect(m_rfKit, &RfKitModel::stationConnectionChanged,
+                    this, &Rf2ksApplet::syncFromRfKit);
+        }
+        connect(m_model, &RadioModel::stationLinkStateChanged,
+                this, &Rf2ksApplet::updateStationState);
+        syncFromRfKit();
+        updateStationState();
+    }
+
     // R-R3-21: rfKitEnabled is mirrored from the Core, so a Core with RF-Kit
     // enabled shows this applet in a remote window. OPERATE and the antenna
     // buttons drive this computer's own Rf2ksConnection (MainWindow's
@@ -205,6 +238,65 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
 bool Rf2ksApplet::isRemoteModel() const
 {
     return m_model && !m_model->ownsLocalDsp();
+}
+
+// R-R3-47: every reading the RfKitModel holds. The status dot follows the
+// connection phase; the name and version appear once the amp has sent
+// them; OPERATE and the meters once it has sent a reading, and then as
+// they are, zeros and STANDBY included.
+void Rf2ksApplet::syncFromRfKit()
+{
+    if (!m_rfKit) {
+        return;
+    }
+    setConnectedState(m_rfKit->connectionPhase() == TunerModel::ConnectionPhase::Connected);
+    if (!m_rfKit->deviceNickname().isEmpty() || !m_rfKit->deviceVersion().isEmpty()) {
+        setNicknameAndVersion(m_rfKit->deviceNickname(), m_rfKit->deviceVersion());
+    }
+    if (!m_rfKit->present()) {
+        return;
+    }
+    setOperateMode(m_rfKit->operate() ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
+    RfKitPowerSnapshot snap;
+    snap.forwardW = qRound(m_rfKit->forwardPowerW());
+    snap.reflectedW = qRound(m_rfKit->reflectedPowerW());
+    snap.swr = static_cast<float>(m_rfKit->swr());
+    snap.temperatureC = static_cast<float>(m_rfKit->temperatureC());
+    snap.voltageV = static_cast<float>(m_rfKit->voltageV());
+    snap.currentA = static_cast<float>(m_rfKit->currentA());
+    setPower(snap);
+}
+
+void Rf2ksApplet::updateStationState()
+{
+    if (!m_staleLabel) {
+        return;
+    }
+    if (!isRemoteModel()) {
+        m_staleLabel->setVisible(false);
+        return;
+    }
+    const IStationLink* link = m_model->stationLink();
+    if (!link || !link->stationLinkReady()) {
+        m_staleLabel->setText(tr("Core disconnected. RF-Kit readings are stale."));
+        m_staleLabel->setVisible(true);
+    } else if (!link->remoteRfKitStatusAvailable()) {
+        m_staleLabel->setText(tr("This Core does not report its RF-Kit amplifier to this "
+                                 "app. Updating the Core may help."));
+        m_staleLabel->setVisible(true);
+    } else {
+        m_staleLabel->setVisible(false);
+    }
+}
+
+bool Rf2ksApplet::staleIndicatorVisibleForTesting() const
+{
+    return m_staleLabel && !m_staleLabel->isHidden();
+}
+
+QString Rf2ksApplet::staleIndicatorTextForTesting() const
+{
+    return m_staleLabel ? m_staleLabel->text() : QString();
 }
 
 // ---------- Section A slots ----------

@@ -15,12 +15,18 @@ class AudioEngine;
 // read them at measuredNs, sat matcherFillFrames in the rate matcher and
 // speakerQueuedFrames in the speaker queue, and then the device's own
 // latency when the backend reports it. All times are the receiver clock's.
+// R-R3-23: the rate matcher makes audio at the speaker device's rate, so the
+// matcher fill, the speaker queue and the callback count frames at
+// deviceRateHz; the pipeline and codec delays count 48 kHz stream frames.
 struct RemoteAudioPlayoutPoint {
     quint32 rtpTimestamp = 0;
     qint64 measuredNs = 0;
     int matcherFillFrames = 0;
     int speakerQueuedFrames = 0;
     std::optional<qint64> deviceLatencyNs;
+    /// The speaker device's rate, which the three device-side frame counts
+    /// use.
+    int deviceRateHz = 48'000;
     /// Fixed delays inside the pipeline, in frames at 48 kHz: the codec's
     /// algorithmic delay (Opus lookahead; none for lossless) and the rate
     /// matcher's filter delay. A sample at rtpTimestamp comes out of them
@@ -48,8 +54,9 @@ struct RemoteAudioPlayoutPoint {
     /// so it spans 1 / matcherRatio as much capture time as play time.
     /// Zero at a ratio of 1 (or one that is not a positive number).
     qint64 matcherStretchNs() const;
-    /// measuredNs plus the queued frames, the pipeline delay and half a
-    /// callback at 48 kHz, plus the device latency when known.
+    /// measuredNs plus the matcher fill, the speaker queue and half a
+    /// callback at deviceRateHz, the pipeline delay at 48 kHz, plus the
+    /// device latency when known.
     qint64 playoutNs() const;
     /// How far the true playout time may lie from playoutNs(): half a
     /// callback plus half the read window.
@@ -90,6 +97,7 @@ struct RemoteAudioReceiverTelemetry {
     // lossless (whichever the context runs). This counts duplicates and
     // packets later dropped by the bounded local queue.
     quint64 receivedAudioPayloadBytes = 0;
+    // Frames the speaker device played in this context, at its own rate.
     quint64 deviceConsumedFrames = 0;
     int underflows = 0;
     int overflows = 0;
@@ -141,6 +149,10 @@ struct RemoteAudioReceiverTelemetry {
 // context's own type to its decoder; the other type is a rejected header.
 // A lost lossless packet plays as 4 ms of silence. The jitter window and
 // the arrival bound are the same 320 ms for both profiles.
+// R-R3-23: the speaker plays at whatever rate and channel count it opened
+// at (AudioEngine::remotePlaybackFormat()): the rate matcher matches the
+// 48 kHz stream to the device's rate and clock, and a mono device hears
+// the two channels mixed as (left + right) / 2.
 class RemoteAudioReceiver final : public QObject {
     Q_OBJECT
 public:

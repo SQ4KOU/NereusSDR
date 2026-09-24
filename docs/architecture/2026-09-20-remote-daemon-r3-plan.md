@@ -115,6 +115,10 @@ controller's notes (`questions-for-jj-2026-09-23.md`, "BUILD CHOICES RESULTS";
 - TCI settings: rate limit per slice (milliseconds, 100 by default), CW to CWU, TX
   channel, sensor interval default, the three receiver 2 VFO options starting at
   today's messages, stream channels.
+- The CW peak filter's bandwidth and gain, the AM maximum squelch tail, FM deviation
+  and de-emphasis.
+- DXCC spot colouring end to end (a switch and a log import; the country table already
+  loads).
 
 The matching selector Core/GUI checkpoint `c28e1565` is installed. Its full
 desktop suite passed 738/738, the fresh native build passed, and the GUI

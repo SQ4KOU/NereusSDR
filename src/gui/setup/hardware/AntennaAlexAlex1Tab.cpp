@@ -11,6 +11,9 @@
 //                (KG4VCF), with AI-assisted transformation via Anthropic
 //                Claude Code. Sub-sub-tab under Hardware → Antenna/ALEX.
 //                Saturn BPF1 panel auto-hides on non-Saturn boards.
+//   2026-09-24 - R-R3-46: transmit permission for the TX low-pass table
+//                and TX master switches. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -63,6 +66,7 @@
 // =================================================================
 
 #include "AntennaAlexAlex1Tab.h"
+#include "HardwareTransmitGate.h"
 
 #include "core/AlexSettingsKeys.h"
 #include "core/AppSettings.h"
@@ -930,6 +934,18 @@ void AntennaAlexAlex1Tab::onBpf1SpinChanged(double value, const QString& setting
         AppSettings::instance().save();
     }
     emit settingChanged(settingsKey, value);
+}
+
+void AntennaAlexAlex1Tab::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    for (QWidget* w : std::initializer_list<QWidget*>{
+             m_hpfBypassOnTx, m_hpfBypassOnPs, m_disable6mLnaOnTx}) {
+        HardwareTransmitGate::apply(w, permitted, reason);
+    }
+    for (const LpfRowWidgets& row : m_lpfRows) {
+        HardwareTransmitGate::apply(row.start, permitted, reason);
+        HardwareTransmitGate::apply(row.end, permitted, reason);
+    }
 }
 
 void AntennaAlexAlex1Tab::onMasterCheckChanged(bool checked, const QString& settingsKey)

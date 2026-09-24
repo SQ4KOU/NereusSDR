@@ -36,6 +36,11 @@
 //                                    leaves them disabled with its
 //                                    reason. AI-assisted transformation
 //                                    via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio plan, Task 4
+//                                    (R-R3-42): a Core's stored TCI values
+//                                    are ignored. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -81,7 +86,9 @@
 #include "gui/applets/RxApplet.h"
 #include "gui/setup/DeviceCard.h"
 #include "gui/setup/GeneralOptionsPage.h"
+#include "core/IoBoardHl2.h"
 #include "gui/setup/HardwarePage.h"
+#include "gui/setup/hardware/Hl2IoBoardTab.h"
 #include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
 #include "gui/setup/hardware/OcOutputsHfTab.h"
 #include "core/accessories/AlexAntennaFacade.h"
@@ -907,8 +914,9 @@ private slots:
     void freshWindowFirstConnectRaisesNoOfflineEditWarning()
     {
         RemoteWindowHarness h;
-        // A Core that has run before holds its band plan choice and its TCI
-        // settings, as every real Core profile does.
+        // A Core that has run before holds its band plan choice, and TCI
+        // settings stored while they were still the Core's (before R-R3-42
+        // made them each computer's own; the window ignores them).
         AppSettings& core = h.stationSettings();
         core.setValue(QStringLiteral("BandPlanName"), QStringLiteral("ARRL (US)"));
         core.setValue(QStringLiteral("TciEmulateExpertSDR3Protocol"), QStringLiteral("True"));
@@ -927,6 +935,11 @@ private slots:
         QTest::qWait(kSettleMs);
         QCOMPARE(superseded.size(), 0);
         QCOMPARE(h.acceptedConnections(), 1);
+        // R-R3-42: the window's TCI settings are its own; the Core's stored
+        // values are ignored, not copied here.
+        QVERIFY(!AppSettings::instance().contains(QStringLiteral("TciSliceAGain")));
+        QVERIFY(!AppSettings::instance().contains(QStringLiteral("TciTxGain")));
+        QVERIFY(!h.proxy().handlesKey(QStringLiteral("TciSliceAGain")));
     }
 
     // R-R3-21: the meter update interval (MultimeterDelayMs) is the Core's
@@ -1093,6 +1106,27 @@ private slots:
         const QString key = QStringLiteral("hardware/%1/oc/rx/20m/pin4").arg(mac);
         QTRY_COMPARE(h.stationSettings().value(key).toString(), QStringLiteral("True"));
         QTRY_VERIFY(reloads.contains(QStringLiteral("oc")));
+
+        // R-R3-46 fix wave (radioHardwareVersion 3): the HL2 I/O board tab
+        // shows the Core's board, whose readings arrive on the Core after a
+        // probe.
+        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 3);
+        auto* ioTab = hardware->findChild<Hl2IoBoardTab*>();
+        QVERIFY(ioTab);
+        const auto statusText = [ioTab]() {
+            for (QLabel* label : ioTab->findChildren<QLabel*>()) {
+                if (label->text().startsWith(QStringLiteral("mi0bot custom I/O board"))) {
+                    return label->text();
+                }
+            }
+            return QString();
+        };
+        QCOMPARE(statusText(), QStringLiteral("mi0bot custom I/O board (0x41): Not detected"));
+        IoBoardHl2& coreBoard = h.station().ioBoardMutable();
+        coreBoard.setRegisterValue(IoBoardHl2::Register::REG_FIRMWARE_MAJOR, 0x02);
+        coreBoard.setHardwareVersion(IoBoardHl2::kHardwareVersion1);
+        coreBoard.setDetected(true);
+        QTRY_COMPARE(statusText(), QStringLiteral("mi0bot custom I/O board (0x41): Active"));
     }
 
     // R-R3-46 / R-R3-21: a Core that does not offer its attenuator

@@ -17,6 +17,9 @@
 //   2026-04-20 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - R-R3-46: save() writes only changed keys, so a remote
+//                 window never rewrites the transmit calibration. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -373,25 +376,52 @@ void CalibrationController::save()
     auto& s = AppSettings::instance();
     const QString base = QStringLiteral("hardware/%1/cal/").arg(m_mac);
 
-    s.setValue(base + QStringLiteral("freqFactor"),      QString::number(m_freqCorrectionFactor, 'g', 15));
-    s.setValue(base + QStringLiteral("freqFactor10M"),   QString::number(m_freqCorrectionFactor10M, 'g', 15));
-    s.setValue(base + QStringLiteral("using10M"),        m_using10MHzRef ? QStringLiteral("True") : QStringLiteral("False"));
-    s.setValue(base + QStringLiteral("levelOffset"),     QString::number(m_levelOffsetDb));
-    s.setValue(base + QStringLiteral("rx1_6mLna"),       QString::number(m_rx1_6mLnaOffset));
-    s.setValue(base + QStringLiteral("rx2_6mLna"),       QString::number(m_rx2_6mLnaOffset));
-    s.setValue(base + QStringLiteral("txDisplayOffset"), QString::number(m_txDisplayOffsetDb));
-    s.setValue(base + QStringLiteral("paSens"),          QString::number(m_paCurrentSensitivity));
-    s.setValue(base + QStringLiteral("paOffset"),        QString::number(m_paCurrentOffset));
+    // R-R3-46: write only the keys whose saved value differs, an absent
+    // key reading as load()'s default in the form save() writes it (as
+    // OcMatrix::save does). The Calibration tab
+    // saves after every edit, so in a remote window a frequency calibration
+    // change used to rewrite every key on the Core, including the transmit
+    // ones a receive-only Core refuses (StationServer's transmit hardware
+    // keys). What load() reads back is unchanged.
+    const auto store = [&s](const QString& key, const QString& value, const QString& fallback) {
+        if (s.value(key, fallback).toString() != value) {
+            s.setValue(key, value);
+        }
+    };
+    store(base + QStringLiteral("freqFactor"),      QString::number(m_freqCorrectionFactor, 'g', 15),
+          QString::number(1.0, 'g', 15));
+    store(base + QStringLiteral("freqFactor10M"),   QString::number(m_freqCorrectionFactor10M, 'g', 15),
+          QString::number(1.0, 'g', 15));
+    store(base + QStringLiteral("using10M"),        m_using10MHzRef ? QStringLiteral("True") : QStringLiteral("False"),
+          QStringLiteral("False"));
+    store(base + QStringLiteral("levelOffset"),     QString::number(m_levelOffsetDb),       QString::number(0.0));
+    store(base + QStringLiteral("rx1_6mLna"),       QString::number(m_rx1_6mLnaOffset),     QString::number(0.0));
+    store(base + QStringLiteral("rx2_6mLna"),       QString::number(m_rx2_6mLnaOffset),     QString::number(0.0));
+    store(base + QStringLiteral("txDisplayOffset"), QString::number(m_txDisplayOffsetDb),   QString::number(0.0));
+    store(base + QStringLiteral("paSens"),          QString::number(m_paCurrentSensitivity), QString::number(1.0));
+    store(base + QStringLiteral("paOffset"),        QString::number(m_paCurrentOffset),     QString::number(0.0));
 
-    // PA forward-power cal profile — see load() for schema.
+    // PA forward-power cal profile -- see load() for schema.
     // Source: Thetis console.cs:6691-6724 CalibratedPAPower [v2.10.3.13]
     const QString paBase = QStringLiteral("hardware/%1/paCalibration/").arg(m_mac);
-    s.setValue(paBase + QStringLiteral("boardClass"),
-               QString::number(static_cast<int>(m_paCalProfile.boardClass)));
+    const QString classKey = paBase + QStringLiteral("boardClass");
+    const auto storedClass = static_cast<PaCalBoardClass>(
+        s.value(classKey, QStringLiteral("0")).toInt());
+    const bool classChanged = storedClass != m_paCalProfile.boardClass;
+    store(classKey, QString::number(static_cast<int>(m_paCalProfile.boardClass)),
+          QStringLiteral("0"));
+    // load() reads the points only under a stored class, falling back to
+    // that class's factory table; a new class writes its whole table.
+    const PaCalProfile storedDefaults = PaCalProfile::defaults(storedClass);
     for (int i = 1; i <= 10; ++i) {
-        s.setValue(paBase + QStringLiteral("calPoint%1").arg(i),
-                   QString::number(m_paCalProfile.watts[
-                       static_cast<std::size_t>(i)]));
+        const QString key = paBase + QStringLiteral("calPoint%1").arg(i);
+        const QString value = QString::number(m_paCalProfile.watts[static_cast<std::size_t>(i)]);
+        if (classChanged) {
+            s.setValue(key, value);
+        } else if (m_paCalProfile.boardClass != PaCalBoardClass::None) {
+            store(key, value,
+                  QString::number(storedDefaults.watts[static_cast<std::size_t>(i)]));
+        }
     }
 }
 

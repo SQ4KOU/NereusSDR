@@ -17,6 +17,10 @@
 // through RadioModel::localAudioDevices(): it picks this computer's
 // devices, which a remote window uses for remote playback and Test Mic, so
 // it works there as it does locally.
+//
+// 2026-09-23: R-R3-45 by J.J. Boyd (KG4VCF), with AI-assisted
+// implementation via Anthropic Claude Code. The Headphones card's Enabled
+// box opens and closes the headphones output.
 // =================================================================
 
 #include "AudioDevicesPage.h"
@@ -119,6 +123,18 @@ void AudioDevicesPage::wireEngineConnections()
             this, [this](const AudioDeviceConfig& cfg) {
                 if (m_updatingFromEngine) { return; }
                 m_engine->setHeadphonesConfig(cfg);
+            });
+
+    // R-R3-45: Enabled opens the headphones output on the card's device,
+    // or closes it. The card has already saved audio/Headphones/Enabled.
+    connect(m_headphonesCard, &DeviceCard::enabledChanged,
+            this, [this](bool on) {
+                if (m_updatingFromEngine) { return; }
+                if (on) {
+                    m_engine->setHeadphonesEnabled(false);
+                    m_engine->setHeadphonesConfig(m_headphonesCard->currentConfig());
+                }
+                m_engine->setHeadphonesEnabled(on);
             });
 
     connect(m_engine, &AudioEngine::headphonesConfigChanged,

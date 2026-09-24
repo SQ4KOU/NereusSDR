@@ -79,6 +79,10 @@ boydsoftprez@gmail.com
 //                 (WDSPSetTestPeriodicDelayUs) added by J.J. Boyd (KG4VCF),
 //                 with AI-assisted implementation via Anthropic Claude Code
 //                 (R-R3-40, R-R3-37).
+//   2026-09-23 - GetChannelDspLoad's return 1 (a read that may be torn)
+//                 and the test-only WDSPSetTestHoldLoadPair documented by
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code (R-R3-40).
 // =================================================================
 
 #ifndef _dsplock_h
@@ -147,7 +151,10 @@ typedef struct
 
 // Copies the channel's load counters into *out without taking csDSP, so it
 // never waits for the worker. Returns 0 on success, -1 for an invalid
-// channel or a null out. busyNs, currentBlockNs and readNs are one instant's
+// channel or a null out, and 1 when the worker kept busyNs and the block in
+// progress changing through every attempt: *out is filled, but busyNs,
+// currentBlockNs and readNs may not be one instant's values, so the caller
+// skips this read. busyNs, currentBlockNs and readNs are one instant's
 // values: a block that completes during the read is counted in exactly one
 // of busyNs and currentBlockNs. The other fields are read one by one, so such
 // a block may be counted in some of them and not others.
@@ -180,6 +187,12 @@ PORT void WDSPSetTestProcessDelayUs (int channel, int microseconds);
 // process delay, if both are set. 0 for either value turns it off. Not for
 // production use.
 PORT void WDSPSetTestPeriodicDelayUs (int channel, int microseconds, int everyBlocks);
+
+// Test-only: while hold is nonzero every GetChannelDspLoad read of the
+// channel finds its load pair changing (as if the worker were always mid
+// update) and returns 1; hold 0 releases it. Never call it in production
+// code.
+PORT void WDSPSetTestHoldLoadPair (int channel, int hold);
 
 // Test-only: how long, in microseconds, the channel's latest teardown spent
 // waiting for its worker to leave its loop (WdspWaitWorkerExit alone, not

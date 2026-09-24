@@ -21,6 +21,14 @@
 //   2026-09-23 : R-R3-40 runtime NNR limit (nnrLimit, nnrRetryRequested),
 //                 by J.J. Boyd (KG4VCF), with Anthropic Claude Code
 //                 assistance.
+//   2026-09-23 : R-R3-44 setVaxChannelStore(): in a remote window a
+//                 slice's VAX channel is this computer's, never the Core's
+//                 Slice<N>/VaxChannel. By J.J. Boyd (KG4VCF), with
+//                 Anthropic Claude Code assistance.
+//   2026-09-23 : R-R3-45 outputRoute: each receiver plays on the speakers
+//                 or the headphones, persisted as Slice<N>/OutputRoute
+//                 (VAX design 6.2). By J.J. Boyd (KG4VCF), with Anthropic
+//                 Claude Code assistance.
 // =================================================================
 
 //=================================================================
@@ -169,6 +177,16 @@ inline constexpr int kStageOneStepLadderSize =
 // From AetherSDR SliceModel pattern: Q_PROPERTY + signals for each state.
 class SliceModel : public QObject {
     Q_OBJECT
+
+public:
+    // R-R3-45 (VAX design 6.2): the output this receiver plays on. A
+    // receiver plays on exactly one of them; the VAX tap is separate.
+    enum class OutputRoute : int { Speakers = 0, Headphones = 1 };
+    Q_ENUM(OutputRoute)
+
+private:
+    Q_PROPERTY(NereusSDR::SliceModel::OutputRoute outputRoute READ outputRoute
+               WRITE setOutputRoute NOTIFY outputRouteChanged)
 
     Q_PROPERTY(double     frequency    READ frequency    WRITE setFrequency    NOTIFY frequencyChanged)
     Q_PROPERTY(NereusSDR::DSPMode dspMode READ dspMode   WRITE setDspMode      NOTIFY dspModeChanged)
@@ -1142,6 +1160,27 @@ public:
     int vaxChannel() const { return m_vaxChannel.load(std::memory_order_acquire); }
     void setVaxChannel(int ch);
 
+    // R-R3-44: where setVaxChannel() keeps the channel. Unset (a local
+    // window), it writes Slice<N>/VaxChannel as before. Set, it calls the
+    // store instead and writes no setting: a remote window's RadioModel
+    // installs one on every slice, because the Core's Slice<N>/VaxChannel
+    // is the Core computer's VAX, not this one's. Owner thread.
+    using VaxChannelStore = std::function<void(int sliceIndex, int channel)>;
+    void setVaxChannelStore(VaxChannelStore store);
+
+    // ── R-R3-45: speakers or headphones (VAX design 6.2) ─────────────────────
+    // Speakers by default. Atomic so the audio thread reads it without a
+    // lock. setOutputRoute persists Slice<N>/OutputRoute ("Speakers" or
+    // "Headphones") and emits on change; restoreOutputRoute reads it back
+    // (an unknown value means speakers).
+    OutputRoute outputRoute() const
+    {
+        return static_cast<OutputRoute>(m_outputRoute.load(std::memory_order_acquire));
+    }
+    void setOutputRoute(OutputRoute route);
+    void restoreOutputRoute();
+    static QString outputRouteSettingValue(OutputRoute route);
+
     // ── Phase 3J-2 Task D5: per-slice live SNR (NereusSDR-native) ──
     // NaN sentinel means "no SNR available." setSnrDb() emits
     // snrDbChanged only on actual change: NaN -> NaN is a no-op,
@@ -1320,6 +1359,9 @@ signals:
 
     // ── Phase 3O VAX routing ──────────────────────────────────────────────────
     void vaxChannelChanged(int ch);
+
+    // ── R-R3-45: speakers or headphones ──
+    void outputRouteChanged(NereusSDR::SliceModel::OutputRoute route);
 
     // ── Phase 3J-2 Task D5: live SNR (NereusSDR-native) ──
     void snrDbChanged(double db);
@@ -1510,6 +1552,8 @@ private:
 
     // ── Phase 3O VAX routing ──────────────────────────────────────────────────
     std::atomic<int> m_vaxChannel{0};  // 0=Off, 1..4=VAX N. Atomic for audio-thread-safe reads.
+    VaxChannelStore m_vaxChannelStore;  // R-R3-44: see setVaxChannelStore()
+    std::atomic<int> m_outputRoute{0};  // R-R3-45: OutputRoute; 0 = speakers
 
     // ── Phase 3J-2 Task D5: live SNR (NereusSDR-native) ──
     // Default NaN means "no SNR available." Populated by RadeChannel

@@ -17,6 +17,9 @@
 //                 receive antennas through the `alexAntennas` object; the transmit
 //                 half follows the transmit permission. J.J. Boyd (KG4VCF), AI-
 //                 assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 fix wave: re-reads the Core's antennas when a band
+//                 edit does not take. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -162,6 +165,9 @@ AntennaAlexAntennaControlTab::AntennaAlexAntennaControlTab(RadioModel* model, QW
         connect(m_remoteAlex, &AlexAntennaFacade::rxAntennasChanged, this, resync);
         connect(m_remoteAlex, &AlexAntennaFacade::rxOnlyAntennasChanged, this, resync);
         connect(m_remoteAlex, &AlexAntennaFacade::txAntennasChanged, this, resync);
+        // A band edit that did not take leaves the Core's values: re-read
+        // them over the click.
+        connect(m_remoteAlex, &AlexAntennaFacade::bandEditRefused, this, resync);
         connect(m_remoteAlex, &AlexAntennaFacade::blockTxAnt2Changed, this,
                 &AntennaAlexAntennaControlTab::onBlockTxChanged);
         connect(m_remoteAlex, &AlexAntennaFacade::blockTxAnt3Changed, this,

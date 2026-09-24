@@ -71,6 +71,13 @@ public:
     // buses return nullopt.
     virtual std::optional<OutputPacing> outputPacing() const { return std::nullopt; }
 
+    // R-R3-44: whether an app is reading this output right now, where the
+    // platform reports it (a VAX output on macOS or PipeWire). nullopt when
+    // the backend cannot tell, which callers treat as "maybe": a stream is
+    // then kept while the output is assigned. Owner (GUI) thread; may ask
+    // the platform, so never call it from an audio callback.
+    virtual std::optional<bool> outputHasReader() const { return std::nullopt; }
+
     // Metering (RMS of last block). 0.0–1.0. Published atomically for UI.
     virtual float rxLevel() const = 0;
     virtual float txLevel() const = 0;

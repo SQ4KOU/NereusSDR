@@ -72,6 +72,12 @@
 //                 chkAntiVoxSource at setup.designer.cs:44646-44657
 //                 [v2.10.3.13]; see commit message for rationale.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 fix wave: the stored tune power stays within the
+//                 model's range; follow-up 2026-09-24: clamped and saved at
+//                 loadFromSettings for the radio loaded, never at
+//                 setHpsdrModel (which ran before the load and saved under
+//                 the previous radio). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs (Thetis v2.10.3.13) ---
@@ -899,6 +905,17 @@ void TransmitModel::setTunePower(int watts)
     emit tunePowerChanged(clamped);
 }
 
+void TransmitModel::setHpsdrModel(HPSDRModel m)
+{
+    // R-R3-46 follow-up: only the model. A connect sets it before the new
+    // radio's settings load, while this object still saves under the
+    // previous radio, so clamping here saved the new model's clamp under
+    // the old MAC. loadFromSettings() and load() clamp the new radio's
+    // values to this model (setTunePower, setTunePowerForBand's range) and
+    // save them for that radio.
+    m_hpsdrModel = m;
+}
+
 void TransmitModel::setTxPostGenToneMag(double mag)
 {
     // From mi0bot-Thetis console.cs:47666 [v2.10.3.13-beta2]:
@@ -1679,8 +1696,17 @@ void TransmitModel::loadFromSettings(const QString& mac)
                 QStringLiteral("DriveSlider")).toString()));
     // m_tunePower: persisted per-MAC under FixedTunePower.
     // Default 10 W (NereusSDR-original safer; Thetis Designer ships 0).
-    setTunePower(s.value(pfx + QLatin1String("FixedTunePower"),
-                          QStringLiteral("10")).toInt());
+    // R-R3-46: clamped to the connected model (setHpsdrModel runs first on
+    // connect), and a stored value out of this model's range is saved back
+    // clamped for this radio even when the value in memory already equals
+    // the clamp (setTunePower's idempotent guard would skip the save).
+    const QString storedTune = s.value(pfx + QLatin1String("FixedTunePower"),
+                                       QStringLiteral("10")).toString();
+    setTunePower(storedTune.toInt());
+    if (storedTune != QString::number(m_tunePower)
+        && s.contains(pfx + QLatin1String("FixedTunePower"))) {
+        persistOne(QStringLiteral("FixedTunePower"), QString::number(m_tunePower));
+    }
 }
 
 void TransmitModel::persistToSettings(const QString& mac) const

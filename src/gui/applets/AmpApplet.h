@@ -19,6 +19,11 @@
 //                 instead of upstream positional constructor; public slots
 //                 added (upstream used public methods); appletId/appletTitle/
 //                 syncFromModel pure-virtual overrides added.
+//   2026-09-23  R-R3-47 / R-R3-22: the gauges read the RadioModel's
+//                 AmplifierModel (the Core's `amplifier` object in a remote
+//                 window, the same object in-process locally), with a stale
+//                 line when a remote window loses the Core. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -32,6 +37,7 @@ class QMenu;
 
 namespace NereusSDR {
 
+class AmplifierModel;
 class HGauge;
 class RadioModel;
 
@@ -56,7 +62,8 @@ public:
 
     QString appletId()    const override { return QStringLiteral("amp"); }
     QString appletTitle() const override { return QStringLiteral("Power Genius"); }
-    void    syncFromModel() override {}
+    // R-R3-47: fills the gauges from the RadioModel's AmplifierModel.
+    void    syncFromModel() override { syncFromAmplifier(); }
 
     // Test seam: returns a heap-allocated QMenu* without exec()-ing it.
     // Caller owns the returned menu; delete or deleteLater() as needed.
@@ -68,6 +75,17 @@ public:
     // remote session. Public so the RF-Kit applet, which drives the same
     // kind of station-side amplifier, gives the same reason.
     static QString remoteUnavailableReason();
+
+    // Test seams (R-R3-47).
+    double  fwdGaugeValueForTesting() const;
+    double  swrGaugeValueForTesting() const;
+    double  tempGaugeValueForTesting() const;
+    QString powerLabelTextForTesting() const;
+    QString meffLabelTextForTesting() const;
+    QString operateButtonTextForTesting() const;
+    bool    operateButtonShownForTesting() const;
+    bool    staleIndicatorVisibleForTesting() const;
+    QString staleIndicatorTextForTesting() const;
 
 signals:
     // Emitted when the user clicks the OPERATE/STANDBY button.
@@ -115,6 +133,12 @@ protected:
     // Phase 3P-II Phase 4 Task 88: right-click context menu.
     void contextMenuEvent(QContextMenuEvent* ev) override;
 
+private slots:
+    // R-R3-47: the AmplifierModel's readings into the gauges and labels.
+    void syncFromAmplifier();
+    // R-R3-47: a remote window says when its readings are not live.
+    void updateStationState();
+
 private:
     // From AetherSDR src/gui/AmpApplet.h:29 [@0cd4559]
     void updatePowerLabel();
@@ -140,6 +164,11 @@ private:
     // (true when state == TRANSMIT_A/B). Read by isTransmitting() so
     // MainWindow's PGXL status handler can gate peakfwd/swr forwarding.
     bool m_isTransmitting{false};
+
+    // R-R3-47: the readings this applet shows, and a remote window's line
+    // saying they are stale (Core lost) or not offered (older Core).
+    AmplifierModel* m_amp{nullptr};
+    QLabel*         m_staleLabel{nullptr};
 };
 
 } // namespace NereusSDR

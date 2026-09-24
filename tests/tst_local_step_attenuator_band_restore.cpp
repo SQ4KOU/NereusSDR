@@ -5,7 +5,7 @@
 // R-R3-46 / R-R3-11: with a local radio, each band remembers its attenuator
 // and preamp, as it does through the Core. A local RadioModel with one slice,
 // a StepAttenuatorController driving a fake radio connection, and the
-// wiring MainWindow uses (RadioModel::followTxSliceWithStepAttenuator):
+// wiring MainWindow uses (RadioModel::followReceiveSliceWithStepAttenuator):
 // a band change restores that band's last attenuation and preamp and sends
 // them to the radio; a band never visited keeps the current setting; the
 // memory survives a restart for that radio; a Remote model is not wired.
@@ -14,12 +14,14 @@
 // Modification history (NereusSDR):
 //   2026-09-23: created (R-R3-46, R-R3-11), by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23: R-R3-46 fix wave: the attenuator follows slice A's band.
 
 #include <QtTest/QtTest>
 
 #include <memory>
 
 #include "core/AppSettings.h"
+#include "core/ConnectionState.h"
 #include "core/RadioConnection.h"
 #include "core/StepAttenuatorController.h"
 #include "models/Band.h"
@@ -95,9 +97,9 @@ struct LocalWindow {
         if (slice) {
             slice->setFrequency(startHz);
         }
-        model.followTxSliceWithStepAttenuator();
+        model.followReceiveSliceWithStepAttenuator();
         controller.setRadioConnection(&radio);
-        model.syncStepAttenuatorToTxSlice();
+        model.syncStepAttenuatorToReceiveSlice();
         controller.loadSettings(mac);
     }
 
@@ -221,6 +223,51 @@ private slots:
         QCOMPARE(w.controller.currentDspMode(), DSPMode::USB);
     }
 
+    // R-R3-46 fix wave (Thetis parity, console.cs:17325 [v2.10.3.15]): the
+    // attenuator belongs to the receive ADC and follows slice A's receive
+    // band (Thetis rx1_band), not the transmit slice's. A cross-band split,
+    // transmitting on slice B at 20 m while listening on slice A at 40 m,
+    // keeps 40 m's attenuator; the ATT-on-TX band is slice B's.
+    void crossBandSplitKeepsSliceABandsAttenuator()
+    {
+        const QString mac = QStringLiteral("02:00:00:00:46:55");
+        startFromNothing(mac);
+        LocalWindow w(mac, k20mHz);
+        QVERIFY(w.slice != nullptr);
+        QCOMPARE(w.slice->sliceIndex(), 0);
+        w.controller.setAttenuation(0);      // 20 m's memory
+        w.slice->setFrequency(k40mHz);
+        w.controller.setAttenuation(20);     // 40 m's
+
+        w.model.setBoardForTest(HPSDRHW::OrionMKII);
+        w.model.setConnectionStateForTest(ConnectionState::Connected);
+        const int before = static_cast<int>(w.model.slices().size());
+        w.model.addSlice();
+        QCOMPARE(static_cast<int>(w.model.slices().size()), before + 1);
+        SliceModel* const sliceB = w.model.slices().last();
+        QVERIFY(sliceB != nullptr && sliceB->sliceIndex() != 0);
+        sliceB->setFrequency(k20mHz);
+        w.radio.clear();
+        QVERIFY(w.model.requestTxHandoffToSlice(sliceB->sliceIndex()));
+        QTRY_COMPARE(w.model.txBoundSlice(), sliceB);
+
+        QCOMPARE(w.controller.currentBand(), Band::Band40m);
+        QCOMPARE(w.controller.attenuatorDb(), 20);
+        QVERIFY(w.radio.attenuator.isEmpty());
+        QCOMPARE(w.controller.txBand(), Band::Band20m);
+
+        // Slice B moving changes the transmit band only.
+        sliceB->setFrequency(k17mHz);
+        QCOMPARE(w.controller.attenuatorDb(), 20);
+        QCOMPARE(w.controller.txBand(), Band::Band17m);
+        // Slice A moving restores its new band's memory and sends it.
+        w.slice->setFrequency(k20mHz);
+        QCOMPARE(w.controller.attenuatorDb(), 0);
+        QCOMPARE(w.radio.attenuator, QList<int>{0});
+        QCOMPARE(w.controller.txBand(), Band::Band17m);
+        w.model.setConnectionStateForTest(ConnectionState::Disconnected);
+    }
+
     // A remote window is unchanged: the Core restores and sends, so a
     // Remote model never wires its (radio-less) controller to its slices.
     void remoteModelIsNotWired()
@@ -231,9 +278,9 @@ private slots:
         // A Remote model keeps no controller of its own in a window; this
         // one stands in for the window's, to show nothing reaches it.
         remote.setStepAttController(&controller);
-        remote.followTxSliceWithStepAttenuator();
+        remote.followReceiveSliceWithStepAttenuator();
         QVERIFY(!controller.bandRestoreToRadio());
-        remote.syncStepAttenuatorToTxSlice();
+        remote.syncStepAttenuatorToReceiveSlice();
         QCOMPARE(controller.currentDspMode(), DSPMode::LSB);
         remote.setStepAttController(nullptr);
     }

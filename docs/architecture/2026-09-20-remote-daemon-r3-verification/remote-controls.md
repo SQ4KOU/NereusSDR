@@ -116,7 +116,8 @@ operator receive session. The three exceptions found are listed under
 | Phone/CW applet: compression, mic profile/source, MON, AM carrier, CW and FM pages | Placeholder | NYI overlays | n/a |
 | RADE applet: profile combo | **Transmit (gated here)** | `MicProfileManager::setActiveProfile`, the same mic profile Audio > TX Profile gates; `RadeApplet::setTransmitPermitted`, starts denied on a remote model, pushed from `applyRemoteRoleGating()` | `tst_remote_gui_gating` (`remoteRadeAppletFollowsTheTransmitPermission`, real window in `toolsMenuTestEntriesAreDisabledInARemoteSession`), `tst_remote_window_harness` (`capabilityChangeRegatesWithoutReconnect`) |
 | RADE applet: Reset vocoder | **Unavailable (gated here)** | local `WdspEngine::radeChannel()`; on a remote model always disabled and the window's own DSP is never looked up; while transmit is denied it gives the transmit reason, once transmit is permitted "The RADE vocoder runs on the station computer and cannot be reset from a remote window." | `tst_remote_gui_gating` (`remoteRadeAppletFollowsTheTransmitPermission`), `tst_remote_window_harness` (`capabilityChangeRegatesWithoutReconnect`); hardware pending (S1) |
-| VAX applet: RX gain/mute x4, TX gain | **Unavailable (gated here)** | local `AudioEngine` VAX buses; remote audio plays through the speakers only (`AudioEngine::writeRemotePlayback`) | `tst_remote_gui_gating` (`remoteVaxSurfacesAreUnavailable`) |
+| VAX applet: RX gain/mute x4 | GUI-local, this computer's VAX (R-R3-44) | this computer's `AudioEngine` VAX outputs, which a remote window opens (`AudioEngine::openVaxOutputs`) and feeds from the Core's receiver streams (`RemoteVaxRouter`, `RemoteVaxFeeder`); the feeder applies this gain and mute (`AudioEngine::writeVaxOutput`) as the local tee does | `tst_remote_gui_gating` (`remoteVaxSurfacesWorkOnThisComputer`), `tst_remote_vax_feeder`; hardware pending (WSJT-X on VAX in a remote window, Opus and lossless) |
+| VAX applet: TX gain | **Transmit (gated here)** | the level of VAX used as the microphone, which waits for remote transmit; `VaxApplet::setTransmitPermitted`, pushed by `applyRemoteRoleGating` | `tst_remote_gui_gating` (`remoteVaxSurfacesWorkOnThisComputer`) |
 | PureSignal applet | Station-backed (PS3 facade); hidden unless PS3 is advertised `:10227-10234` | `PureSignalSessionFacade::requestAction` | `tst_ps3_session` |
 | AM Mod Monitor applet | GUI-local display of a transmit analyser; no remote feed | `RadioModel::setAmModFeedbackWanted`, `ModMon/*` keys | hardware pending (S1) |
 | Power Genius applet: OPERATE, Disconnect/Reconnect | **Unavailable (gated here)** | this computer's `PgxlConnection` (`MainWindow.cpp:11113`, `:11210`) | `tst_remote_gui_gating` (`remoteAmplifierAppletControlsAreUnavailable`) |
@@ -124,16 +125,16 @@ operator receive session. The three exceptions found are listed under
 | Tuner Genius applet | Transmit + Core-owned accessory | `TunerApplet::setTransmitPermitted`, `setStationConnected`; remote menu uses `requestDisconnectTgxl` | `tst_station_accessory_state`, `tst_remote_peripherals` |
 | RF-Kit RF2K-S applet: OPERATE, antenna buttons, Disconnect/Reconnect | **Unavailable (gated here)** | shown when the Core has RF-Kit enabled: `rfKitEnabled` is mirrored Bidirectional and its inbound write emits `rfKitEnabledChanged(true)` even with no radio MAC; the controls drive this computer's own `Rf2ksConnection`, so they carry the Power Genius amplifier reason | `tst_remote_gui_gating` (`remoteRfKitAppletControlsAreUnavailable`); hardware pending (S1) |
 | RF-Kit RF2K-S applet: gauges, tuner status, Open RF-Kit Advanced | GUI-local display / Setup RF-Kit (declared unavailable remotely) | availability follows the mirrored `rfKitEnabled` | hardware pending (S1) |
-| TCI Server and TCI Clients applets | GUI-local server on this computer | local `TciServer` start/stop, gains, client close | hardware pending (S1); open question in F6 |
+| TCI Server and TCI Clients applets | GUI-local server on this computer (R-R3-42) | local `TciServer` start/stop, gains, client close; in a remote window receive audio for TCI receiver N is the Core's slice N (`RemoteMediaController::requestReceiverAudio` while an app listens), `vfo`/`modulation` act on the Core's slice, transmit and raw I/Q are refused with the reason on the applet's notice line, a toast and the TCI log window, never on the TCI wire | `tst_tci_remote_window`, `tst_tci_tx_mutex`, `tst_tci_iq_roundtrip`; hardware pending (JTDX over TCI in a remote window, Opus and lossless) |
 | S-meter header and right-click menu | GUI-local | `SMeter_*`, `PeakHold*` keys; needle fed by `MeterPoller::setRemoteRadioModel` | `tst_remote_meter_poller` |
 | VFO flag: frequency, wheel, AF, AGC, pan, mute, BIN, SQL, AGC-T/AUTO, NB, NR bank and popups, ANF, SNB, APF, FM/DIG/RTTY containers, mode, filters, RIT, step, lock, close, sample rate, antenna picker | Station-backed | `SliceModel` setters (mirrored), `removeSlice` / `requestSliceSampleRate` verbs | mirror suites, `tst_remote_slice_commands`, `tst_nnr_controls`; hardware pending (S1) |
 | VFO flag: XIT, TX badge, Make TX slice, BYPS, filter Shift-click | Transmit | `VfoWidget::setTransmitPermitted` `:3214-3254`, MainWindow `:1784-1792` | `tst_remote_tx_presentation` |
-| VFO flag: VAX tab selector | **Unavailable (gated here)** | `SliceModel::setVaxChannel`; `vaxChannel` is not a mirrored property | `tst_remote_gui_gating` (`remoteVaxSurfacesAreUnavailable`) |
+| VFO flag: VAX tab selector | GUI-local, this computer's VAX (R-R3-44) | `SliceModel::setVaxChannel`; on a remote model the channel is kept on this computer per Core and slice (`RadioModel::setRemoteVaxChannelStore`, `RemoteVax/<core>/Slice<N>/Channel`), never the Core's `Slice<N>/VaxChannel`; `RemoteVaxRouter` asks for the slice's receiver stream while an app reads the channel (where the platform reports readers) or while it is assigned | `tst_remote_gui_gating` (`remoteVaxSurfacesWorkOnThisComputer`), `tst_remote_vax_feeder` |
 | VFO flag: record/play | Placeholder | signals with no consumer | n/a |
 | Overlay: +RX, BAND, RX/TX antenna combos | Station-backed | `addSliceOnPan` verb, `onBandButtonClicked`, `SliceModel::setRx/TxAntenna` | `tst_spectrum_overlay_panel`, `tst_remote_slice_commands` |
 | Overlay: +TNF | Station-backed setting, not applied live (F1) | `RadioModel::addNotchForSlice` -> `NotchModel` | see F1 |
 | Overlay: display flyout (scheme, gains, fill, cursor, Clarity re-tune, More) | GUI-local display | `SpectrumWidget` setters, `ClarityController` | `tst_remote_spectrum_render`; hardware pending (S1) |
-| Overlay: VAX channel combo | **Unavailable (gated here)** | as the flag's VAX selector | `tst_remote_gui_gating` (`remoteVaxSurfacesAreUnavailable`) |
+| Overlay: VAX channel combo | GUI-local, this computer's VAX (R-R3-44) | as the flag's VAX selector; the IQ channel combo stays disabled (no I/Q reaches VAX) | `tst_remote_gui_gating` (`remoteVaxSurfacesWorkOnThisComputer`) |
 | Overlay: ATT, IQ combo, RF gain, WNB, zoom buttons | Placeholder / unwired | disabled or no consumer | n/a |
 | Title bar connection segment, audio pip, right-click | GUI-local, opens station session actions | `openNetworkDiagnostics`, `connectionRequestedByOperator`, `showSegmentContextMenu` remote branch | `tst_remote_connection_controls`; hardware pending (S1) |
 | Master output: volume, mute, output device | GUI-local, drives remote playback | local `AudioEngine` through `RadioModel::localAudioDevices()`; `RemoteMediaController.cpp:534-541` follows mute and device; the picked device is saved to `audio/Speakers/DeviceName` before it is announced, so remote playback re-reads the new device (`MasterOutputWidget::selectOutputDevice`) | `tst_remote_audio_receiver`, `tst_remote_media_controller`, `tst_master_output_widget` (`pickedDeviceIsSavedBeforeItIsAnnounced`); hardware pending (S1) |
@@ -155,7 +156,8 @@ visible and are not listed.
 | Hardware > DDC Routing | **Unavailable (gated here)** | A placeholder locally too; DDC override keys are per-MAC and unread | `tst_remote_gui_gating` (`remoteDeclaredUnavailableSetupLeavesSayWhy`) |
 | PA > PA Gain, Watt Meter, PA Values | Unavailable (not shown) | category hidden: remote capabilities are the Unknown board's, `hasPaProfile` false | `tst_remote_gui_gating` (`remotePaCategoryIsNotShown`) |
 | Audio > Devices | GUI-local (scope ThisComputer), usable connected or not | Speakers, Headphones and Microphone cards pick this computer's devices through `RadioModel::localAudioDevices()`, which the local-DSP audit does not count; a card saves `audio/{Speakers,Headphones,TxInput}/*` then hands the config to the engine, and remote playback re-reads `audio/Speakers` on `speakersConfigChanged`. The title-bar picker is a shortcut to the same setting. Headphones behaves as it does locally. Remote playback still refuses speaker formats other than 48 kHz stereo (receiver audio plan). Microphone status and Retry follow this computer's capture | `tst_remote_gui_gating` (`remoteDevicesPageWorksOnThisComputer`, `everyRemoteSetupPageIsEitherLocalDspFreeOrDisabled`), `tst_settings_scope` (card keys); speaker restart on a real device hardware pending (S1) |
-| Audio > VAX, TCI, Advanced | Unavailable (local-DSP gate; reason added here) | VAX and Advanced reach `audioEngine()` themselves; TCI reached it only through the backend strip, which no longer counts, so it is declared unavailable with the same reason (`markRemoteUnavailable`). Advanced Reset in a remote window removes only this computer's `audio/*` keys (never `audio/DspRate`, `audio/DspBlockSize`) and re-creates no VAX output; local Reset unchanged | `tst_remote_gui_gating` (`remoteLocalDspSetupPagesShowAPlainReason`), `tst_audio_advanced_page` |
+| Audio > VAX | GUI-local (scope ThisComputer, R-R3-44), usable connected or not | this computer's VAX outputs through `RadioModel::localAudioDevices()`; `audio/Vax*` keys are this computer's; the "Consumers:" row says whether an app is reading each channel where the platform reports it (macOS, PipeWire) and "Not reported on this computer" elsewhere | `tst_remote_gui_gating` (`remoteVaxAndAdvancedPagesWorkOnThisComputer`), `tst_settings_scope` (`vaxPageIsSweptAsThisComputers`) |
+| Audio > Advanced | Mixed (R-R3-44): VAX groups GUI-local; DSP group Station-backed | VAX feedback tuning, the VAX flags, detected cables and Reset act on this computer through `localAudioDevices()`; DSP rate and block size write the Core's `audio/DspRate`, `audio/DspBlockSize` and follow the Core's availability (`AudioAdvancedPage::setStationSettingsAvailable`). Send IQ to VAX is refused with "Sending the receiver's I/Q to VAX is not available while connected to a Core." Advanced Reset in a remote window removes only this computer's `audio/*` keys (never `audio/DspRate`, `audio/DspBlockSize`) and re-creates no VAX output; local Reset unchanged. Audio > TCI left the old shared row with R-R3-42 (CAT & Network > TCI Server row) | `tst_remote_gui_gating` (`remoteVaxAndAdvancedPagesWorkOnThisComputer`, `disconnectedRemoteSetupPerPageTable`), `tst_audio_advanced_page` |
 | Audio > TX Input | Mixed: this computer's PC microphone usable; mic source, Mic Gain and radio microphone hardware **Transmit (gated here)** | PC Mic backend, device, buffer, Test Mic and Retry through `RadioModel::localAudioDevices()`, saved to `audio/TxInput/*`; Test Mic opens this computer's microphone and meters it. `AudioTxInputPage::setTransmitPermitted` gates the Mic Source group, Mic Gain and the Hermes / Orion-MkII / Saturn radio mic groups with the transmit reason; while the Core's settings are unavailable the same controls carry "Connect to the Core to change these." instead (`setStationSettingsAvailable`, one combined gate). No longer a whole-page transmit leaf | `tst_remote_gui_gating` (`remoteTxInputKeepsThisComputersMicrophoneUsable`), `tst_audio_tx_input_pc_mic_group` (`testMic_opensThisComputersMicrophoneInARemoteWindow`) |
 | Audio > TX Profile | Transmit | `MicProfileManager`, `TransmitModel` | `tst_remote_tx_presentation` |
 | DSP > AGC/ALC (RX AGC) | Station-backed | `SliceModel` AGC setters | mirror suites; hardware pending (S1) |
@@ -174,7 +176,7 @@ visible and are not listed.
 | Appearance > Colors & Theme, Meter Styles | GUI-local | `SpectrumWidget` colours, `AppearanceSmallModeFilterOnVfos` | n/a |
 | Appearance > Gradients, Skins, Collapsible Display | Placeholder | disabled | n/a |
 | CAT & Network > Serial Ports, TCP/IP CAT, MIDI Control | Placeholder | no writes | n/a |
-| CAT & Network > TCI Server | GUI-local server; `Tci*` keys are Station-scoped | `CatTciServerPage`, local `TciServer` restart | hardware pending (S1); F6 |
+| CAT & Network > TCI Server, Audio > TCI | GUI-local server; ThisComputer pages, `Tci*` keys are this computer's (R-R3-42; values a Core stored are ignored, not migrated) | `CatTciServerPage`, `AudioTciPage`, local `TciServer` restart | `tst_remote_gui_gating` (`remoteTciPagesWorkOnThisComputer`), `tst_settings_scope`, `tst_remote_window_harness` (`freshWindowFirstConnectRaisesNoOfflineEditWarning`); hardware pending (S1) |
 | CAT & Network > 4O3A | Station-backed | remote master toggle through `requestFourO3AEnabled`, placeholder PGXL/TGXL tabs, no interlock page | `tst_remote_peripherals` |
 | CAT & Network > Remote Station | GUI-local | `connectionsRequested` -> `connectionRequestedByOperator` | `tst_remote_gui_gating` (`theRemoteStationPageStaysUsableOnARemoteModel`) |
 | CAT & Network > RF-Kit | **Unavailable (gated here)** | `RfKitPage` connects this computer's own `RfKitConnection` (`RfKitPage.cpp:174-190`) | `tst_remote_gui_gating` (`remoteDeclaredUnavailableSetupLeavesSayWhy`) |
@@ -190,8 +192,9 @@ visible and are not listed.
   and leaf tooltip: DSP > CFC and Test > Two-Tone IMD follow the transmit
   permission; Hardware Config, DDC Routing and RF-Kit are declared
   unavailable in a remote session (`SetupDialog::markRemoteUnavailable`).
-- Pages the local-DSP gate disables (Audio > VAX, TCI, Advanced) now show
-  the reason "These settings control audio and signal processing on this
+- Pages the local-DSP gate disables (at the time Audio > VAX, TCI,
+  Advanced; since R-R3-42 and R-R3-44 none of them, and the gate's cases
+  use probe pages) now show the reason "These settings control audio and signal processing on this
   computer. While connected to a Core, the Core does that work, so they
   cannot be changed here." instead of an unexplained grey page. Audio >
   Devices and TX Input were in this list until the R3 remote window Setup
@@ -245,8 +248,10 @@ visible and are not listed.
 - The RX applet's XIT row and its filter-preset Shift-click TX passband
   match follow the negotiated transmit permission, as the VFO flag's XIT
   and Shift-click already did.
-- The VAX applet, the VFO flag's VAX selector and the overlay VAX combo:
-  "VAX audio channels are not available while connected to a Core."
+- The VAX applet, the VFO flag's VAX selector and the overlay VAX combo
+  said "VAX audio channels are not available while connected to a Core."
+  until the R3 receiver audio plan (Task 5, R-R3-44): they now work in a
+  remote window, and only the applet's TX row waits for remote transmit.
 - Power Genius OPERATE and its Disconnect/Reconnect action: "Amplifier
   control is not available from a remote window yet."
 - Fix wave (September 23): DSP > AGC/ALC TX Leveler and TX ALC groups and
@@ -310,10 +315,12 @@ suites listed in the verification line, pass unchanged.
   gives the transmit reason remotely while transmit is denied, and once it
   is permitted says the vocoder runs on the station computer and cannot be
   reset from a remote window.
-- **F6, TCI server in a remote window.** A remote window runs its own TCI
-  server against the mirrored model. Receive state follows the Core; TX
-  audio would feed this window's inert TX channel. Whether the server should
-  run remotely at all is a product decision, not decided here.
+- **F6, TCI server in a remote window.** Decided by the operator on
+  2026-09-23 and built by the R3 receiver audio plan, Task 4 (R-R3-42): a
+  remote window serves TCI to apps on its computer. Commands act on the
+  Core's slices; receive audio for TCI receiver N is the Core's slice N
+  from the network; transmit and raw I/Q are refused in plain words until
+  remote transmit; the TCI settings belong to this computer.
 
 
 ## Current follow-ups (September 22)

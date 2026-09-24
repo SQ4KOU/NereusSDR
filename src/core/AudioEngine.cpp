@@ -19,6 +19,19 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 : R-R3-45 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. Speakers or headphones per receiver (VAX
+//                 design 6.2): the master mixer builds both sums, the
+//                 headphones output opens at start() when enabled and gets
+//                 its own format converter, master volume and mute stay on
+//                 the speakers (design 6.3), the remote program tap carries
+//                 both sums, and the anti-VOX reference leaves out receivers
+//                 on the headphones (their audio is not in the room).
+//   2026-09-23 : R3 receiver audio fix wave follow-up by J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                 setDeviceBusFactoryForTest(); in a test run with no
+//                 test device the engine opens no real PortAudio or VAX
+//                 device.
 //   2026-09-23 : R-R3-43 Task 2 by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. Per-slice receiver audio taps
 //                 beside the VAX tee; the VAX tee undoes the feeding
@@ -117,6 +130,13 @@
 //                 macOS Intel / Core Audio.  Pairs with new IAudioBus::flush()
 //                 (default no-op) and PortAudioBus::flush() (atomic
 //                 ringRead := ringWrite).
+//   2026-09-23: R-R3-44 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. openVaxOutputs() (a remote window's VAX
+//                 outputs without starting the engine), vaxOutputPacing() /
+//                 writeVaxOutput() / vaxOutputHasReader() for its VAX
+//                 feeder, a per-channel lock around VAX output replacement,
+//                 and setVaxOutputsAllowed(false) so nereusd publishes no VAX
+//                 devices. The local VAX tee is unchanged.
 // =================================================================
 
 #include "AudioEngine.h"
@@ -142,10 +162,12 @@
 #endif
 
 #include <QCoreApplication>
+#include <QStandardPaths>
 
 #include <portaudio.h>
 
 #include <algorithm>
+#include <array>
 #include <vector>
 
 namespace NereusSDR {
@@ -251,6 +273,13 @@ AudioEngine::AudioEngine(QObject* parent)
     // supervisor applies the persisted selection without opening anything.
     m_txInputConfig =
         AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/TxInput"));
+
+    // R-R3-45: the headphones selection, opened by start() when enabled.
+    m_headphonesConfig =
+        AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/Headphones"));
+    m_headphonesEnabled = AppSettings::instance()
+        .value(QStringLiteral("audio/Headphones/Enabled"), QStringLiteral("False"))
+        .toString() == QStringLiteral("True");
     // The supervisor needs an application object: its I/O thread runs an
     // event loop and its status reaches this thread through queued calls.
     // Every process that captures has one; an engine built without one
@@ -379,6 +408,11 @@ void AudioEngine::setSliceStreaming(int sliceId, bool streaming)
     // on every transition (console.cs:27650-27651 [v2.10.3.15]).
     m_antiVoxMix.setSliceStreaming(sliceId, streaming);
 
+    // R-R3-44 (fix wave): the VAX channel mixes wait on their slices the
+    // same way, so a withdrawn slice must leave its channel's mix too, or a
+    // channel it shares would stop for the whole withdrawal.
+    m_vaxMix.setSliceStreaming(sliceId, streaming);
+
 #ifdef NEREUS_BUILD_TESTS
     if (!streaming && m_withdrawalPublishedHookForTest) {
         m_withdrawalPublishedHookForTest();
@@ -431,6 +465,13 @@ void AudioEngine::start()
     preregisterSlices(m_radio ? m_radio->boardCapabilities().maxSlices : 1);
 
     ensureSpeakersOpen();
+    // R-R3-45: the headphones output opens at startup too, when Setup,
+    // Audio, Devices has it enabled (audio/Headphones/Enabled). Before this
+    // it opened only on a Devices card change and nothing ever fed it.
+    if (m_headphonesEnabled
+        && !(m_headphonesBus && m_headphonesBus->isOpen())) {
+        reopenHeadphones();
+    }
     // R-R3-36: no TX input is opened here. PC microphone capture starts only
     // when RadioModel (local session with PC mic selected) or Test Mic
     // acquires a capture demand, and it never blocks this call.
@@ -445,22 +486,17 @@ void AudioEngine::start()
     // On Windows m_vaxBus / m_vaxTxBus stay null here.
     // TODO(sub-phase-9-byo): wire user-picked virtual cables via
     // setVaxConfig() once the Setup → Audio → VAX BYO UI lands.
-    for (int channel = 1; channel <= 4; ++channel) {
-        const int idx = channel - 1;
-        if (m_vaxBus[idx]) {
-            // Caller wired an explicit device via setVaxConfig() before
-            // start() ran — honour that and don't clobber it with the
-            // platform-native bus.
-            continue;
-        }
-        m_vaxBus[idx] = makeVaxBus(channel);
-        if (m_vaxBus[idx]) {
-            qCInfo(lcAudio) << "VAX" << channel << "bus opened (eager)"
-                            << "[" << m_vaxBus[idx]->backendName() << "]";
-        }
+    //
+    // R-R3-44: the loop moved into openVaxOutputSlots(), which a remote
+    // window reaches through openVaxOutputs(); on nereusd
+    // (vaxOutputsAllowed() false) it opens nothing, and neither is the VAX
+    // TX device opened below.
+    openVaxOutputSlots();
+    if (!m_vaxOutputsAllowed) {
+        qCInfo(lcAudio) << "VAX devices are not published on this computer (Core)";
     }
 
-    if (!m_vaxTxBus) {
+    if (!m_vaxTxBus && m_vaxOutputsAllowed) {
         m_vaxTxBus = makeVaxTxBus();
         if (m_vaxTxBus) {
             qCInfo(lcAudio) << "VAX TX bus opened (eager)"
@@ -505,7 +541,12 @@ void AudioEngine::stop()
         m_remotePlayback = false;
         m_speakersBus.reset();
     }
-    m_headphonesBus.reset();
+    {
+        std::lock_guard<std::mutex> lock(m_headphonesBusMutex);
+        m_headphonesBus.reset();
+        configureHeadphonesConverter();
+    }
+    publishHeadphonesAvailable();
     // Drops only a test-injected TX input. The capture supervisor and its
     // reader outlive stop(): the TX worker may still be reading it until
     // RadioModel has stopped the worker and released its demand (R-R3-36).
@@ -516,8 +557,9 @@ void AudioEngine::stop()
     // TX-poll consumer release any reference to the TX bus before the
     // RX taps come down.
     m_vaxTxBus.reset();
-    for (auto& bus : m_vaxBus) {
-        bus.reset();
+    for (int idx = 0; idx < 4; ++idx) {
+        std::lock_guard<std::mutex> lock(m_vaxBusMutex[idx]);
+        m_vaxBus[idx].reset();
     }
 
     if (!m_running) {
@@ -584,6 +626,20 @@ std::unique_ptr<IAudioBus> AudioEngine::makeBus(const AudioDeviceConfig& cfg,
     // PortAudio path — used for speakers / mic / Windows-BYO VAX devices.
     // Platform-native VAX RX/TX virtual buses use makeVaxBus() /
     // makeVaxTxBus() (Sub-Phase 8.5).
+#ifdef NEREUS_BUILD_TESTS
+    // Fix wave follow-up: a test never opens this computer's real devices.
+    if (m_deviceBusFactoryForTest) {
+        std::unique_ptr<IAudioBus> fake = m_deviceBusFactoryForTest(cfg, capture);
+        if (!fake || !fake->open(toAudioFormat(cfg))) {
+            return nullptr;
+        }
+        return fake;
+    }
+    if (QStandardPaths::isTestModeEnabled()) {
+        qCInfo(lcAudio) << "Audio device not opened: test run with no test devices";
+        return nullptr;
+    }
+#endif
     auto bus = std::make_unique<PortAudioBus>();
     PortAudioConfig pcfg;
     pcfg.direction     = capture ? AudioDirection::Input
@@ -608,9 +664,20 @@ std::unique_ptr<IAudioBus> AudioEngine::makeVaxBus(int channel)
     // 48 kHz stereo float32 — this is the contract both CoreAudioHalBus and
     // LinuxPipeBus enforce in open(), and it matches the spec §8.1 wire
     // format the HAL plugin / pactl source expose to consumer apps.
-    if (channel < 1 || channel > 4) {
+    if (channel < 1 || channel > 4 || !m_vaxOutputsAllowed) {
         return nullptr;
     }
+#ifdef NEREUS_BUILD_TESTS
+    if (m_vaxBusFactoryForTest) {
+        return m_vaxBusFactoryForTest(channel);
+    }
+    // Fix wave follow-up: a test run never attaches to this computer's
+    // real VAX devices (the macOS ring is shared with any NereusSDR here).
+    if (QStandardPaths::isTestModeEnabled()) {
+        qCInfo(lcAudio) << "VAX device not opened: test run with no test VAX devices";
+        return nullptr;
+    }
+#endif
 
     AudioFormat fmt;
     fmt.sampleRate = 48000;
@@ -686,6 +753,20 @@ std::unique_ptr<IAudioBus> AudioEngine::makeVaxTxBus()
     // outgoing audio (WSJT-X, fldigi, VARA). Consumption (pull() into
     // TxChannel) is a Phase 3M concern — see m_vaxTxBus comment in
     // AudioEngine.h and the TODO in start().
+    //
+    // R-R3-44: nereusd publishes no VAX device of either direction.
+    if (!m_vaxOutputsAllowed) {
+        return nullptr;
+    }
+#ifdef NEREUS_BUILD_TESTS
+    if (m_vaxBusFactoryForTest) {
+        return m_vaxBusFactoryForTest(0);
+    }
+    if (QStandardPaths::isTestModeEnabled()) {
+        qCInfo(lcAudio) << "VAX TX device not opened: test run with no test VAX devices";
+        return nullptr;
+    }
+#endif
     AudioFormat fmt;
     fmt.sampleRate = 48000;
     fmt.channels   = 2;
@@ -862,7 +943,11 @@ void AudioEngine::ensureSpeakersOpen()
     const AudioDeviceConfig cfg =
         AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/Speakers"));
 
-    m_speakersBus = makeBus(cfg, /*capture=*/false);
+    {
+        std::lock_guard<std::mutex> lk(m_speakersBusMutex);
+        m_speakersBus = makeBus(cfg, /*capture=*/false);
+        configureSpeakersConverter();
+    }
     if (m_speakersBus) {
         m_speakersFormat = m_speakersBus->negotiatedFormat();
         qCInfo(lcAudio) << "Speakers bus opened @"
@@ -934,13 +1019,27 @@ bool AudioEngine::beginRemotePlayback(QString* error)
         if (error) { *error = QStringLiteral("Could not open the selected speaker device"); }
         return false;
     }
+    // R-R3-23: any rate and channel count the Devices page offers. The
+    // receiver matches the stream to this rate and mixes it to one channel
+    // for a mono device; a format outside that is refused in plain words.
     const AudioFormat format = m_speakersBus->negotiatedFormat();
-    if (format.sampleRate != kMasterMixSampleRateHz || format.channels != 2
-        || format.sample != AudioFormat::Sample::Float32 || !m_speakersBus->outputPacing()) {
-        if (error) { *error = QStringLiteral("Remote audio requires a 48 kHz stereo speaker device with playback timing"); }
+    if ((format.channels != 1 && format.channels != 2)
+        || format.sampleRate < kMinRemotePlaybackRateHz
+        || format.sampleRate > kMaxRemotePlaybackRateHz
+        || format.sample != AudioFormat::Sample::Float32) {
+        if (error) {
+            *error = QStringLiteral("Remote audio cannot play on a speaker device set to "
+                                    "%1 channels at %2 Hz")
+                         .arg(format.channels).arg(format.sampleRate);
+        }
+        return false;
+    }
+    if (!m_speakersBus->outputPacing()) {
+        if (error) { *error = QStringLiteral("The selected speaker device does not report its playback timing"); }
         return false;
     }
     m_speakersBus->flush();
+    m_remotePlaybackFormat = format;
     m_remotePlayback = true;
     return true;
 }
@@ -949,34 +1048,50 @@ void AudioEngine::endRemotePlayback()
 {
     std::lock_guard<std::mutex> lock(m_speakersBusMutex);
     m_remotePlayback = false;
+    m_remotePlaybackFormat = AudioFormat{};
     if (m_speakersBus) { m_speakersBus->flush(); }
+}
+
+std::optional<AudioFormat> AudioEngine::remotePlaybackFormat()
+{
+    std::lock_guard<std::mutex> lock(m_speakersBusMutex);
+    if (!m_remotePlayback) { return std::nullopt; }
+    return m_remotePlaybackFormat;
 }
 
 std::optional<IAudioBus::OutputPacing> AudioEngine::remotePlaybackPacing()
 {
     std::lock_guard<std::mutex> lock(m_speakersBusMutex);
+    // A device reopened in another format no longer matches the stream the
+    // receiver makes for it: no pacing, so the receiver restarts.
     if (!m_remotePlayback || !m_speakersBus || !m_speakersBus->isOpen()
-        || m_speakersBus->negotiatedFormat() != AudioFormat{}) { return std::nullopt; }
+        || m_speakersBus->negotiatedFormat() != m_remotePlaybackFormat) { return std::nullopt; }
     return m_speakersBus->outputPacing();
 }
 
-bool AudioEngine::writeRemotePlayback(const QVector<float>& stereo)
+bool AudioEngine::writeRemotePlayback(const QVector<float>& pcm)
 {
     // Bounded worker-side scratch; never called by the device callback.
-    if (stereo.size() != 480 * 2) { return false; }
-    std::array<float, 480 * 2> scaled;
+    // The block is interleaved in the format begin accepted (one or two
+    // channels); the channel count is checked again under the lock.
+    if (pcm.isEmpty() || pcm.size() > qsizetype(kMaxRemotePlaybackFrames) * 2) { return false; }
+    std::array<float, kMaxRemotePlaybackFrames * 2> scaled;
     const float gain = m_masterVolume.load(std::memory_order_acquire);
-    for (qsizetype i = 0; i < stereo.size(); ++i) {
-        if (!std::isfinite(stereo[i])) { return false; }
-        scaled[static_cast<size_t>(i)] = stereo[i] * gain;
+    for (qsizetype i = 0; i < pcm.size(); ++i) {
+        if (!std::isfinite(pcm[i])) { return false; }
+        scaled[static_cast<size_t>(i)] = pcm[i] * gain;
     }
     std::lock_guard<std::mutex> lock(m_speakersBusMutex);
     if (!m_remotePlayback || !m_speakersBus || !m_speakersBus->isOpen()
-        || m_speakersBus->negotiatedFormat() != AudioFormat{}) { return false; }
+        || m_speakersBus->negotiatedFormat() != m_remotePlaybackFormat) { return false; }
+    const int channels = m_remotePlaybackFormat.channels;
+    if (channels <= 0 || pcm.size() % channels != 0
+        || pcm.size() / channels > kMaxRemotePlaybackFrames) { return false; }
+    const int frames = int(pcm.size() / channels);
     if (m_masterMuted.load(std::memory_order_acquire)) { return true; }
     const auto pacing = m_speakersBus->outputPacing();
-    if (!pacing || pacing->capacityFrames - pacing->queuedFrames < 480) { return false; }
-    const auto bytes = static_cast<qint64>(sizeof(scaled));
+    if (!pacing || pacing->capacityFrames - pacing->queuedFrames < frames) { return false; }
+    const auto bytes = static_cast<qint64>(pcm.size()) * qint64(sizeof(float));
     return m_speakersBus->push(reinterpret_cast<const char*>(scaled.data()), bytes) == bytes;
 }
 
@@ -1002,6 +1117,7 @@ void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
 
     m_speakersBus.reset();
     m_speakersBus = makeBus(cfg, /*capture=*/false);
+    configureSpeakersConverter();
 
     AudioDeviceConfig negotiated = cfg;  // carry non-bus fields through
     if (m_speakersBus) {
@@ -1021,16 +1137,67 @@ void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
 
 void AudioEngine::setHeadphonesConfig(const AudioDeviceConfig& cfg)
 {
-    m_headphonesBus.reset();
+    m_headphonesConfig = cfg;
     if (!m_paInitialized) {
         return;
     }
-    m_headphonesBus = makeBus(cfg, /*capture=*/false);
+    // R-R3-45: the device opens only while the headphones are enabled.
+    reopenHeadphones();
+    emit headphonesConfigChanged(cfg);
+}
+
+void AudioEngine::setHeadphonesEnabled(bool enabled)
+{
+    if (m_headphonesEnabled == enabled
+        && (m_headphonesBus != nullptr) == enabled) {
+        return;
+    }
+    m_headphonesEnabled = enabled;
+    reopenHeadphones();
+}
+
+void AudioEngine::reopenHeadphones()
+{
+    {
+        // Held across tear-down and rebuild; the DSP thread's push uses
+        // try_lock and drops a block rather than wait (as the speakers do).
+        std::lock_guard<std::mutex> lk(m_headphonesBusMutex);
+        m_headphonesBus.reset();
+        if (m_headphonesEnabled) {
+            m_headphonesBus = makeBus(m_headphonesConfig, /*capture=*/false);
+        }
+        configureHeadphonesConverter();
+    }
     if (m_headphonesBus) {
         qCInfo(lcAudio) << "Headphones bus opened"
                         << "[" << m_headphonesBus->backendName() << "]";
+    } else if (m_headphonesEnabled) {
+        qCWarning(lcAudio) << "Headphones bus open failed for device"
+                           << m_headphonesConfig.deviceName
+                           << "- receivers on the headphones are silent";
     }
-    emit headphonesConfigChanged(cfg);
+    publishHeadphonesAvailable();
+}
+
+void AudioEngine::publishHeadphonesAvailable()
+{
+    const bool available = m_headphonesBus && m_headphonesBus->isOpen();
+    if (available == m_headphonesAvailable) {
+        return;
+    }
+    m_headphonesAvailable = available;
+    emit headphonesAvailableChanged(available);
+}
+
+void AudioEngine::configureHeadphonesConverter()
+{
+    // Caller holds m_headphonesBusMutex.
+    if (m_headphonesBus) {
+        const AudioFormat format = m_headphonesBus->negotiatedFormat();
+        m_headphonesConverter.configure(format.sampleRate, format.channels);
+    } else {
+        m_headphonesConverter.configure(0, 0);
+    }
 }
 
 void AudioEngine::setTxInputConfig(const AudioDeviceConfig& cfg)
@@ -1058,7 +1225,13 @@ void AudioEngine::setVaxConfig(int channel, const AudioDeviceConfig& cfg)
         return;
     }
     const int idx = channel - 1;
+    // R-R3-44: a remote window's VAX feeder writes this slot from its own
+    // worker; it waits while the output is replaced.
+    std::unique_lock<std::mutex> busLock(m_vaxBusMutex[idx]);
     m_vaxBus[idx].reset();
+    if (!m_vaxOutputsAllowed) {
+        return;
+    }
 
 #if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
     // Empty deviceName = user has not picked a BYO override. Fall back to
@@ -1074,6 +1247,7 @@ void AudioEngine::setVaxConfig(int channel, const AudioDeviceConfig& cfg)
                             << "bus restored (native HAL fallback)"
                             << "[" << m_vaxBus[idx]->backendName() << "]";
         }
+        busLock.unlock();
         emit vaxConfigChanged(channel, cfg);
         return;
     }
@@ -1087,6 +1261,7 @@ void AudioEngine::setVaxConfig(int channel, const AudioDeviceConfig& cfg)
         qCInfo(lcAudio) << "VAX" << channel << "bus reconfigured (BYO)"
                         << "[" << m_vaxBus[idx]->backendName() << "]";
     }
+    busLock.unlock();
     emit vaxConfigChanged(channel, cfg);
 }
 
@@ -1096,8 +1271,13 @@ void AudioEngine::setVaxEnabled(int channel, bool on)
         return;
     }
     const int idx = channel - 1;
+    // R-R3-44: see setVaxConfig().
+    std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
     if (!on) {
         m_vaxBus[idx].reset();
+        return;
+    }
+    if (!m_vaxOutputsAllowed) {
         return;
     }
     // Already populated (eagerly opened by start() on Mac/Linux, or via a
@@ -1129,23 +1309,144 @@ void AudioEngine::setVaxEnabled(int channel, bool on)
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// R-R3-44: VAX outputs in a remote window, none on the Core
+// ---------------------------------------------------------------------------
+
+void AudioEngine::setVaxOutputsAllowed(bool allowed)
+{
+    m_vaxOutputsAllowed = allowed;
+}
+
+void AudioEngine::openVaxOutputs()
+{
+#ifdef NEREUS_BUILD_TESTS
+    // A remote window built by a test (the window harness, the gating
+    // sweeps) must not attach to this computer's real VAX devices: the
+    // macOS ring is shared with any NereusSDR running here. A test that
+    // wants outputs supplies them through setVaxBusFactoryForTest().
+    if (QStandardPaths::isTestModeEnabled() && !m_vaxBusFactoryForTest) {
+        qCInfo(lcAudio) << "VAX outputs not opened: test run with no test VAX devices";
+        return;
+    }
+#endif
+    openVaxOutputSlots();
+}
+
+void AudioEngine::openVaxOutputSlots()
+{
+    for (int channel = 1; channel <= 4; ++channel) {
+        const int idx = channel - 1;
+        std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
+        if (m_vaxBus[idx]) {
+            // Caller wired an explicit device via setVaxConfig() before
+            // start() ran — honour that and don't clobber it with the
+            // platform-native bus.
+            continue;
+        }
+        m_vaxBus[idx] = makeVaxBus(channel);
+        if (m_vaxBus[idx]) {
+            qCInfo(lcAudio) << "VAX" << channel << "bus opened (eager)"
+                            << "[" << m_vaxBus[idx]->backendName() << "]";
+        }
+    }
+}
+
+std::optional<IAudioBus::OutputPacing> AudioEngine::vaxOutputPacing(int channel)
+{
+    if (channel < 1 || channel > 4) {
+        return std::nullopt;
+    }
+    std::lock_guard<std::mutex> busLock(m_vaxBusMutex[channel - 1]);
+    IAudioBus* bus = m_vaxBus[channel - 1].get();
+    if (bus == nullptr || !bus->isOpen()) {
+        return std::nullopt;
+    }
+    return bus->outputPacing();
+}
+
+bool AudioEngine::writeVaxOutput(int channel, const float* stereo, int frames)
+{
+    if (channel < 1 || channel > 4 || stereo == nullptr || frames <= 0
+        || frames > kMaxVaxWriteFrames) {
+        return false;
+    }
+    const int idx = channel - 1;
+    // The same channel gain and mute the local tee in rxBlockReady applies.
+    // The receiver stream already carries the slice's audio with its AF gain
+    // undone (feedSliceTaps on the Core), the tee's other factor.
+    const bool muted = m_vaxMuted[idx].load(std::memory_order_acquire);
+    const float gain = muted ? 0.0f : m_vaxRxGain[idx].load(std::memory_order_acquire);
+    // Worker-thread scratch, never an audio callback: 32 KiB on the stack.
+    std::array<float, kMaxVaxWriteFrames * 2> scaled;
+    const int count = frames * 2;
+    for (int i = 0; i < count; ++i) {
+        if (!std::isfinite(stereo[i])) {
+            return false;
+        }
+        scaled[static_cast<size_t>(i)] = stereo[i] * gain;
+    }
+    std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
+    IAudioBus* bus = m_vaxBus[idx].get();
+    if (bus == nullptr || !bus->isOpen()) {
+        return false;
+    }
+    const auto bytes = static_cast<qint64>(count) * static_cast<qint64>(sizeof(float));
+    return bus->push(reinterpret_cast<const char*>(scaled.data()), bytes) == bytes;
+}
+
+std::optional<bool> AudioEngine::vaxOutputHasReader(int channel)
+{
+    if (channel < 1 || channel > 4) {
+        return std::nullopt;
+    }
+    // Owner thread, the only thread that replaces the output, so no lock:
+    // the platform query (CoreAudio's device list) must not hold up a
+    // feeder writing this channel.
+    const IAudioBus* bus = m_vaxBus[channel - 1].get();
+    if (bus == nullptr || !bus->isOpen()) {
+        return std::nullopt;
+    }
+    return bus->outputHasReader();
+}
+
 #ifdef NEREUS_BUILD_TESTS
 void AudioEngine::setVaxBusForTest(int channel, std::unique_ptr<IAudioBus> bus)
 {
     if (channel < 1 || channel > 4) {
         return;
     }
+    std::lock_guard<std::mutex> busLock(m_vaxBusMutex[channel - 1]);
     m_vaxBus[channel - 1] = std::move(bus);
 }
 
 void AudioEngine::setSpeakersBusForTest(std::unique_ptr<IAudioBus> bus)
 {
+    std::lock_guard<std::mutex> lk(m_speakersBusMutex);
     m_speakersBus = std::move(bus);
+    configureSpeakersConverter();
+}
+
+void AudioEngine::configureSpeakersConverter()
+{
+    // Caller holds m_speakersBusMutex. A closed or missing bus leaves the
+    // converter passing through (nothing is pushed to it anyway).
+    if (m_speakersBus) {
+        const AudioFormat format = m_speakersBus->negotiatedFormat();
+        m_speakersConverter.configure(format.sampleRate, format.channels);
+    } else {
+        m_speakersConverter.configure(0, 0);
+    }
 }
 
 void AudioEngine::setHeadphonesBusForTest(std::unique_ptr<IAudioBus> bus)
 {
-    m_headphonesBus = std::move(bus);
+    {
+        std::lock_guard<std::mutex> lk(m_headphonesBusMutex);
+        m_headphonesBus = std::move(bus);
+        configureHeadphonesConverter();
+    }
+    publishHeadphonesAvailable();
 }
 
 void AudioEngine::setTxInputBusForTest(std::unique_ptr<IAudioBus> bus)
@@ -1441,7 +1742,13 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // Mute rides in as an argument rather than through setSliceMuted(),
     // which takes the slice-map mutex: this is the audio thread, and
     // CLAUDE.md's rule is that it never holds a lock.
-    m_masterMix.accumulate(sliceId, samples, frames, slice->muted());
+    //
+    // R-R3-45: the route rides in the same way (VAX design 6.2): the mixer
+    // builds this slice into the speakers sum or the headphones sum.
+    const bool toHeadphones =
+        slice->outputRoute() == SliceModel::OutputRoute::Headphones;
+    m_masterMix.accumulate(sliceId, samples, frames, slice->muted(),
+                           toHeadphones);
 
     // Anti-VOX hears exactly what the speakers hear. From Thetis
     // cmaster.c:370-372 [v2.10.3.15], every sub-receiver's audio is handed
@@ -1460,14 +1767,19 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // in the room for the microphone to pick up, and counting it would have
     // DEXP subtract audio that was never there. Following the stated intent
     // rather than the mask.
-    m_antiVoxMix.accumulate(sliceId, samples, frames, slice->muted());
+    //
+    // R-R3-45: a slice on the headphones is left out by the same reasoning:
+    // the reference is drained speakers-only (tryDrain(out, n)), so a
+    // headphones slice is queued, keeps its barrier place, and adds
+    // nothing, since its audio is not in the room either.
+    m_antiVoxMix.accumulate(sliceId, samples, frames, slice->muted(),
+                            toHeadphones);
 
     // VAX tap receives raw demodulated audio — pre-MasterMixer gain/pan,
     // pre-master-volume — matching Thetis VAC behavior and the spec §3.4
-    // pseudocode. Per-channel mute skips the push; non-unity per-channel
-    // gain copy-multiplies into a thread_local scratch (distinct from
-    // the master-mix `mix` scratch below) so the unity-gain fast path
-    // stays zero-copy. See docs/architecture/2026-04-19-vax-design.md
+    // pseudocode. Per-channel mute skips the push; the per-channel gain
+    // (and the slice's 1 / AF gain) scale the block as it is queued for
+    // the channel's mix below. See docs/architecture/2026-04-19-vax-design.md
     // §3.4 and §6.4.
     // R-R3-43 receiver taps: the same point and the same channel-independent
     // scaling as the VAX tee below (1 / the slice's AF gain, no VAX channel
@@ -1475,75 +1787,80 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // would.
     feedSliceTaps(sliceId, samples, frames);
 
+    // R-R3-44 (fix wave): slices that share a VAX channel are summed into
+    // one block per period (VaxChannelMixer). Each used to push its own
+    // block, so a channel carrying two slices got two periods of audio per
+    // real period and its device ring overran.
+    static_assert(VaxChannelMixer::kMaxSlices >= WdspEngine::kMaxSliceChannels,
+                  "every slice id needs a VAX mix slot");
     const int vaxCh = slice->vaxChannel();
-    if (vaxCh >= 1 && vaxCh <= 4) {
+    const bool vaxValid = vaxCh >= 1 && vaxCh <= 4;
+    float vaxGain = 1.0f;
+    if (vaxValid) {
         const int vaxIdx = vaxCh - 1;
+        const float gainUser =
+            m_vaxRxGain[vaxIdx].load(std::memory_order_acquire);
 
-        // Mute wins over gain: when muted the tap skips push() entirely —
-        // spec says "tags / level UI still reflect routing, but no
-        // downstream audio" and we don't waste the bus-push bandwidth.
+        // AF-Gain bypass for VAX (post-v0.3.2 AF-Gain rewire fix).
+        //
+        // Commit e61658f routed AF Gain through WDSP's PanelGain1
+        // stage (third_party/wdsp/src/rxa.c:538 [v2.10.3.14]),
+        // which is upstream of `samples` here.  Pre-fix WDSP shipped
+        // PanelGain1=4.0 (+12 dB) silently and the AF slider acted
+        // as a post-DSP scalar elsewhere — VAX inherited the +12 dB
+        // and felt "really hot".  Post-fix, VAX inherits whatever
+        // attenuation the speaker slider is currently applying,
+        // which is wrong for digital-mode apps that expect a stable
+        // calibrated level.
+        //
+        // Inverse-scale by 1/afGain so VAX recovers the pre-
+        // PanelGain1 signal level.  Clamped to skip compensation
+        // when the slider is essentially muted (≤ 0.001) — div-
+        // by-zero guard.  At full mute VAX goes silent (samples
+        // were already multiplied by ~0 inside WDSP); proper
+        // VAX-independent-of-mute requires the larger pre-PanelGain1
+        // tap (Option C in 2026-05-08 design discussion).
+        //
+        // R-R3-43: the AF gain undone is the feeding slice's own,
+        // from its WDSP RX channel. This used to read channel 0's,
+        // receiver 1's, for every slice.
+        //
+        // The fix wave applies it per slice as the block is queued, so a
+        // channel's sum carries each slice at its own level.
+        vaxGain = gainUser * afGainInverseForSlice(sliceId);
+    }
+    // A slice with no (or an out-of-range) channel leaves any channel it
+    // was on, so it stops holding that channel's mix.
+    m_vaxMix.accumulate(sliceId, vaxValid ? vaxCh : 0, samples, frames, vaxGain);
+
+    if (vaxValid) {
+        const int vaxIdx = vaxCh - 1;
+        // Distinct from `mix` scratch below: that one is reserved for the
+        // master-mix accumulate path. Grows once per thread via resize(),
+        // zero-alloc thereafter.
+        static thread_local std::vector<float> vaxScratch;
+        const int stereoFloats = frames * 2;
+        if (static_cast<int>(vaxScratch.size()) < stereoFloats) {
+            vaxScratch.resize(static_cast<size_t>(stereoFloats));
+        }
+        // Mute wins over gain: when muted the channel's block is taken and
+        // not pushed; spec says "tags / level UI still reflect routing,
+        // but no downstream audio". Taking it keeps the mix in step.
         const bool muted = m_vaxMuted[vaxIdx].load(std::memory_order_acquire);
-        if (!muted) {
-            // Snapshot the bus pointer into a local so the isOpen() check
-            // and the push() below observe the same IAudioBus instance.
-            // The live-reconfig contract (AudioEngine.h) forbids
-            // setVaxConfig / setVaxEnabled mid-block, but the snapshot
-            // eliminates any torn-read window should a caller violate it.
-            IAudioBus* vaxBus = m_vaxBus[vaxIdx].get();
-            if (vaxBus != nullptr && vaxBus->isOpen()) {
-                const float gainUser =
-                    m_vaxRxGain[vaxIdx].load(std::memory_order_acquire);
-
-                // AF-Gain bypass for VAX (post-v0.3.2 AF-Gain rewire fix).
-                //
-                // Commit e61658f routed AF Gain through WDSP's PanelGain1
-                // stage (third_party/wdsp/src/rxa.c:538 [v2.10.3.14]),
-                // which is upstream of `samples` here.  Pre-fix WDSP shipped
-                // PanelGain1=4.0 (+12 dB) silently and the AF slider acted
-                // as a post-DSP scalar elsewhere — VAX inherited the +12 dB
-                // and felt "really hot".  Post-fix, VAX inherits whatever
-                // attenuation the speaker slider is currently applying,
-                // which is wrong for digital-mode apps that expect a stable
-                // calibrated level.
-                //
-                // Inverse-scale by 1/afGain so VAX recovers the pre-
-                // PanelGain1 signal level.  Clamped to skip compensation
-                // when the slider is essentially muted (≤ 0.001) — div-
-                // by-zero guard.  At full mute VAX goes silent (samples
-                // were already multiplied by ~0 inside WDSP); proper
-                // VAX-independent-of-mute requires the larger pre-PanelGain1
-                // tap (Option C in 2026-05-08 design discussion).
-                //
-                // R-R3-43: the AF gain undone is the feeding slice's own,
-                // from its WDSP RX channel. This used to read channel 0's,
-                // receiver 1's, for every slice.
-                const float afInverse = afGainInverseForSlice(sliceId);
-                const float gain = gainUser * afInverse;
-
-                const qint64 payloadBytes =
-                    static_cast<qint64>(frames) * 2 * sizeof(float);
-                if (gain == 1.0f) {
-                    // Fast path — raw samples, zero copy.  Hit when both
-                    // the per-channel VAX gain and AF slider are at 1.0.
-                    vaxBus->push(reinterpret_cast<const char*>(samples),
-                                 payloadBytes);
-                } else {
-                    // Distinct from `mix` scratch below — that one is
-                    // reserved for the master-mix accumulate path and
-                    // must not be clobbered by the VAX tee. Grows once
-                    // per thread via resize(), zero-alloc thereafter.
-                    static thread_local std::vector<float> vaxScratch;
-                    const int stereoFloats = frames * 2;
-                    if (static_cast<int>(vaxScratch.size()) < stereoFloats) {
-                        vaxScratch.resize(static_cast<size_t>(stereoFloats));
-                    }
-                    for (int i = 0; i < stereoFloats; ++i) {
-                        vaxScratch[i] = samples[i] * gain;
-                    }
-                    vaxBus->push(
-                        reinterpret_cast<const char*>(vaxScratch.data()),
-                        payloadBytes);
-                }
+        // Snapshot the bus pointer into a local so the isOpen() check
+        // and the push() below observe the same IAudioBus instance.
+        // The live-reconfig contract (AudioEngine.h) forbids
+        // setVaxConfig / setVaxEnabled mid-block, but the snapshot
+        // eliminates any torn-read window should a caller violate it.
+        IAudioBus* vaxBus = m_vaxBus[vaxIdx].get();
+        // Normally one block. More only after a slice on the channel was
+        // late: then the backlog every slice has queued goes out at once.
+        int mixedVax = 0;
+        while ((mixedVax = m_vaxMix.tryDrain(vaxCh, vaxScratch.data(), frames)) > 0) {
+            if (!muted && vaxBus != nullptr && vaxBus->isOpen()) {
+                vaxBus->push(reinterpret_cast<const char*>(vaxScratch.data()),
+                             static_cast<qint64>(mixedVax) * 2
+                                 * static_cast<qint64>(sizeof(float)));
             }
         }
     }
@@ -1566,7 +1883,14 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // With a single slice the barrier is satisfied by this very call, so
     // the push happens in the same call stack at the same instant it
     // always did: no added latency on the common path.
-    const int mixed = m_masterMix.tryDrain(mix.data(), frames);
+    //
+    // R-R3-45: the same drain builds the headphones sum, the slices routed
+    // there, so both outputs are paced by one barrier.
+    static thread_local std::vector<float> hpMix;
+    if (static_cast<int>(hpMix.size()) < frames * 2) {
+        hpMix.resize(static_cast<size_t>(frames) * 2);
+    }
+    const int mixed = m_masterMix.tryDrain(mix.data(), hpMix.data(), frames);
 
     // Drain the anti-VOX reference in the same call stack, so both mixes are
     // paced by their own barrier over the same period.
@@ -1626,11 +1950,47 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
             MasterMixAudioTap* tap =
                 m_masterMixAudioTap.load(std::memory_order_seq_cst);
             if (tap != nullptr) {
-                tap->consume(mix.data(), mixed, kMasterMixSampleRateHz);
+                // R-R3-45: the station's program is every receiver, on
+                // whichever local output it plays, so the local speakers or
+                // headphones choice cannot change it either.
+                static thread_local std::vector<float> program;
+                if (static_cast<int>(program.size()) < stereoFloats) {
+                    program.resize(static_cast<size_t>(stereoFloats));
+                }
+                for (int i = 0; i < stereoFloats; ++i) {
+                    program[static_cast<size_t>(i)] = mix[static_cast<size_t>(i)]
+                        + hpMix[static_cast<size_t>(i)];
+                }
+                tap->consume(program.data(), mixed, kMasterMixSampleRateHz);
             }
         }
         if (m_masterMixTapCallsInFlight.fetch_sub(1, std::memory_order_seq_cst) == 1) {
             m_masterMixTapCallsInFlight.notify_all();
+        }
+    }
+
+    // R-R3-45: the headphones output. No master volume or mute: design 6.3
+    // puts both on the speakers. Same try_lock idiom as the speakers push
+    // below, so a contending reopen drops this block instead of waiting.
+    {
+        std::unique_lock<std::mutex> hpLk(m_headphonesBusMutex, std::try_to_lock);
+        if (hpLk.owns_lock()) {
+            IAudioBus* headphonesBus = m_headphonesBus.get();
+            if (headphonesBus != nullptr && headphonesBus->isOpen()) {
+                if (m_headphonesConverter.passthrough()) {
+                    headphonesBus->push(
+                        reinterpret_cast<const char*>(hpMix.data()),
+                        static_cast<qint64>(stereoFloats) * sizeof(float));
+                } else {
+                    const int hpSamples =
+                        m_headphonesConverter.convert(hpMix.data(), mixed);
+                    if (hpSamples > 0) {
+                        headphonesBus->push(
+                            reinterpret_cast<const char*>(m_headphonesConverter.output()),
+                            static_cast<qint64>(hpSamples) * sizeof(float));
+                    }
+                }
+            }
         }
     }
 
@@ -1669,9 +2029,22 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         if (speakersLk.owns_lock()) {
             IAudioBus* speakersBus = m_speakersBus.get();
             if (speakersBus != nullptr && speakersBus->isOpen()) {
-                speakersBus->push(
-                    reinterpret_cast<const char*>(mix.data()),
-                    static_cast<qint64>(stereoFloats) * sizeof(float));
+                if (m_speakersConverter.passthrough()) {
+                    speakersBus->push(
+                        reinterpret_cast<const char*>(mix.data()),
+                        static_cast<qint64>(stereoFloats) * sizeof(float));
+                } else {
+                    // R-R3-23 (fix wave): the device's own rate and channel
+                    // count, not the 48 kHz stereo mix read as if it were
+                    // (a 96 kHz device played it at twice the speed, a mono
+                    // one read interleaved stereo). Preallocated at open.
+                    const int samples = m_speakersConverter.convert(mix.data(), mixed);
+                    if (samples > 0) {
+                        speakersBus->push(
+                            reinterpret_cast<const char*>(m_speakersConverter.output()),
+                            static_cast<qint64>(samples) * sizeof(float));
+                    }
+                }
             }
         }
         // A contending writer holding m_speakersBusMutex
@@ -2228,6 +2601,12 @@ void AudioEngine::resetAudioSettings()
     // default, matching addendum §2.5 "rebuild buses from seeded defaults".
     setSpeakersConfig(AudioDeviceConfig{});
 
+    // R-R3-45: audio/Headphones/Enabled is gone with the rest, so the
+    // headphones close (the default is off) and forget their device.
+    m_headphonesConfig = AudioDeviceConfig{};
+    setHeadphonesEnabled(false);
+    emit headphonesConfigChanged(AudioDeviceConfig{});
+
     // Rebuild each VAX bus as well — previously we only emitted the config-
     // changed signal, but rxBlockReady kept pushing audio to whatever bus
     // was live pre-reset (stale BYO PortAudio bus, or the prior native HAL
@@ -2236,15 +2615,18 @@ void AudioEngine::resetAudioSettings()
     // Windows leave the slot null until the user picks a device.
     for (int ch = 1; ch <= 4; ++ch) {
         const int idx = ch - 1;
-        m_vaxBus[idx].reset();
+        {
+            std::lock_guard<std::mutex> busLock(m_vaxBusMutex[idx]);
+            m_vaxBus[idx].reset();
 #if defined(Q_OS_MAC) || defined(Q_OS_LINUX)
-        m_vaxBus[idx] = makeVaxBus(ch);
-        if (m_vaxBus[idx]) {
-            qCInfo(lcAudio) << "VAX" << ch
-                            << "bus restored to native HAL (reset)"
-                            << "[" << m_vaxBus[idx]->backendName() << "]";
-        }
+            m_vaxBus[idx] = makeVaxBus(ch);
+            if (m_vaxBus[idx]) {
+                qCInfo(lcAudio) << "VAX" << ch
+                                << "bus restored to native HAL (reset)"
+                                << "[" << m_vaxBus[idx]->backendName() << "]";
+            }
 #endif
+        }
         emit vaxConfigChanged(ch, AudioDeviceConfig{});
     }
 

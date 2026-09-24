@@ -14,12 +14,18 @@
 //                                    declared enum domains. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-47: AmplifierModel::State.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-45: SliceModel::OutputRoute.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorEnumDomain.h"
 
 #include "core/WdspTypes.h"
+#include "models/AmplifierModel.h"
 #include "models/Band.h"
+#include "models/SliceModel.h"
 #include "models/TunerModel.h"
 
 #include <QHash>
@@ -103,6 +109,26 @@ const DomainTable& table()
             TunerModel::ConnectionPhase::Retrying,
             TunerModel::ConnectionPhase::Connected,
             TunerModel::ConnectionPhase::Error,
+        });
+
+        // R-R3-47: the Power Genius's state on the `amplifier` object.
+        // The `amplifier` and `rfkit` connection phases are
+        // TunerModel::ConnectionPhase, declared above.
+        declare<AmplifierModel::State>(&t, {
+            AmplifierModel::State::Unknown,
+            AmplifierModel::State::PowerUp,
+            AmplifierModel::State::Standby,
+            AmplifierModel::State::Idle,
+            AmplifierModel::State::Operate,
+            AmplifierModel::State::TransmitA,
+            AmplifierModel::State::TransmitB,
+            AmplifierModel::State::Fault,
+        });
+
+        // R-R3-45: each receiver plays on the speakers or the headphones.
+        declare<SliceModel::OutputRoute>(&t, {
+            SliceModel::OutputRoute::Speakers,
+            SliceModel::OutputRoute::Headphones,
         });
 
         // From src/models/Band.h. Count is deliberately ABSENT: it is an

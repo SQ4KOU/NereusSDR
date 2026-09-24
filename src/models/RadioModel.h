@@ -45,6 +45,17 @@
 //   2026-09-23 - R-R3-46: alexAntennaFacade(),
 //                 scheduleRemoteHardwareApply(), requestIoBoardProbe(). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 fix wave: ioBoardFacade(), the `ioBoard` object;
+//                 scheduleRemoteOcReload(); rxMeterOffsetDb() is 0 on a
+//                 Remote model. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-47 / R-R3-22: amplifierModel() and rfKitModel(), the
+//                 Power Genius and RF-Kit status objects. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-23 : R-R3-44 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. setRemoteVaxChannelStore(): where a remote
+//                 window's slices keep their VAX channel. NereusSDR-original;
+//                 no Thetis logic.
 // =================================================================
 
 //=================================================================
@@ -216,6 +227,7 @@ class DspAssetService;
 class PureSignalSessionFacade;
 class StepAttenuatorFacade;
 class AlexAntennaFacade;
+class IoBoardHl2Facade;
 class PsccPump;
 // Phase 4 Agent 4A of issue #167: PaProfileManager forward declaration.
 // RadioModel owns the per-MAC PA gain profile bank (parallel to
@@ -267,6 +279,8 @@ class RadeChannel;
 // I/Q wire rate before m_connection->sendTxIq.  Lives in core/Resampler.h.
 class Resampler;
 class StationTgxlController;
+class AmplifierModel;
+class RfKitModel;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -350,6 +364,13 @@ public:
     // lease. Owner thread only.
     void setPcCaptureAllowed(bool allowed);
     bool pcCaptureAllowed() const { return m_pcCaptureAllowed; }
+
+    // R-R3-44: Role::Remote only. Every slice of a remote model keeps its
+    // VAX channel through this store (SliceModel::setVaxChannelStore) and
+    // never writes the Core's Slice<N>/VaxChannel: a remote window's VAX
+    // channels are this computer's. Until one is set a pick is kept on the
+    // slice alone. Owner thread.
+    void setRemoteVaxChannelStore(SliceModel::VaxChannelStore store);
     // True when the mic source is Pc and local keying would read PC
     // capture (a Role::Local model with PC capture allowed).
     bool pcCaptureRequired() const;
@@ -516,9 +537,10 @@ public:
     // AudioEngine audioEngine() returns, handed out WITHOUT bumping the
     // local-DSP audit below. A remote window's engine is not inert for this
     // purpose: it drives this computer's speakers for remote playback, and
-    // its capture supervisor opens this computer's microphone for Test Mic.
-    // So a Setup page that only picks those devices is working, not dead,
-    // and must not be caught by the SetupDialog gate.
+    // its capture supervisor opens this computer's microphone for Test Mic,
+    // and (R-R3-44) it opens this computer's VAX outputs, which the Core's
+    // receiver streams feed. So a Setup page that only picks those devices
+    // is working, not dead, and must not be caught by the SetupDialog gate.
     //
     // Allowed only where that is true. Check 3 of
     // scripts/verify-no-gui-dsp-access.py lists the files that may call it
@@ -1411,19 +1433,20 @@ public:
     // gate fires (Thetis console.cs:46740-46748 [v2.10.3.13] [2.10.3.5]MW0LGE).
     // Implementation in RadioModel.cpp.
     void setStepAttController(class StepAttenuatorController* c);
-    /// R-R3-46 / R-R3-11: a local window's step attenuator follows the
-    /// transmit-bound slice, as the Core's does (DaemonApp::
-    /// syncStepAttenuatorBandAndMode): its band and mode on every band or
-    /// mode change of that slice, and when the transmit binding moves.
-    /// The controller's setBand then restores that band's attenuation and
-    /// preamp and sends them to the radio (setBandRestoreToRadio), as
-    /// Thetis's RX1Band setter does. Wires once; a no-op on a Remote model
+    /// R-R3-46 / R-R3-11: the step attenuator follows the receive band of
+    /// slice A (slice 0, Thetis rx1_band), with a local radio and on the
+    /// Core (DaemonApp): on every band change of that slice its band's
+    /// attenuation and preamp are restored and sent to the radio
+    /// (setBandRestoreToRadio), as Thetis's RX1Band setter does
+    /// (console.cs:17325 [v2.10.3.15]). The ATT-on-TX value and the CW
+    /// check on MOX follow the transmit-bound slice's band and mode (Thetis
+    /// _tx_band and the TX DSP mode). Wires once; a no-op on a Remote model
     /// (the Core restores and sends) and without a controller.
-    void followTxSliceWithStepAttenuator();
-    /// R-R3-46: hand the controller the transmit-bound slice's band and
-    /// mode now. MainWindow calls it before loadSettings on connect, which
+    void followReceiveSliceWithStepAttenuator();
+    /// R-R3-46: hand the controller slice A's band and the transmit slice's
+    /// band and mode now. Called before loadSettings on connect, which
     /// restores the per-band slot for the controller's current band.
-    void syncStepAttenuatorToTxSlice();
+    void syncStepAttenuatorToReceiveSlice();
     /// R-R3-46: the step attenuator and preamp as the mirrored `stepAtt`
     /// object. A Local model binds it to its controller (the Core's, or a
     /// local window's, where nothing reads it); a Remote model leaves it
@@ -1434,6 +1457,18 @@ public:
     /// AlexController; a Remote model leaves it unbound and it holds the
     /// Core's values (and the window's Hardware Config availability).
     AlexAntennaFacade* alexAntennaFacade() const { return m_alexAntennaFacade; }
+    /// R-R3-46 (radioHardwareVersion 3): the HL2 I/O board's detected state,
+    /// hardware version and registers as the read-only mirrored `ioBoard`
+    /// object. A Local model binds it to its own IoBoardHl2; a Remote model
+    /// writes the Core's values into its own IoBoardHl2, which Setup's HL2
+    /// I/O board tab shows.
+    IoBoardHl2Facade* ioBoardFacade() const { return m_ioBoardFacade; }
+
+    /// R-R3-46: a remote window's copy of the Core's OC pin matrix is
+    /// reloaded from the Core's settings when one of its keys arrives
+    /// (`key` is the settings key), coalesced, so the window never saves a
+    /// stale cell back over a newer Core value. A no-op on a Local model.
+    void scheduleRemoteOcReload(const QString& key);
 
     /// R-R3-46: ask the radio's HL2 I/O board to identify itself (three
     /// I2C reads). Locally the P1 connection enqueues them; a remote window
@@ -1706,6 +1741,12 @@ public:
     Rf2ksConnection* rfKitConnection() const { return m_rfKitConnection.get(); }
     TgxlConnection* tgxlConnection() { return m_tgxlConnection; }
     TunerModel*     tunerModel()     { return m_tunerModel;     }
+    // R-R3-47 / R-R3-22: the Power Genius XL and RF-Kit RF2K-S status, as
+    // the Core mirrors them (`amplifier`, `rfkit`). Non-null from
+    // construction. A Local model binds them to its own connections; a
+    // Remote model's hold the Core's values only.
+    AmplifierModel* amplifierModel() const { return m_amplifierModel; }
+    RfKitModel*     rfKitModel()     const { return m_rfKitModel; }
     // SmartSDR API server on TCP 4992. Owned by RadioModel; lifetime matches.
     // Used by MainWindow to push slice/transmit state so PGXL/TGXL pull the
     // current band/freq via the SmartSDR API rather than from a stale cache.
@@ -1899,6 +1940,9 @@ public:
     // applied to those exact reading types.  ADC_PK / ADC_AV / AGC_PK /
     // AGC_AV / AGC_GAIN do NOT take the offset (Thetis line 46831-46835
     // omit +offset for the same reason).
+    //
+    // R-R3-46: 0 on a Remote model; the Core's readings and spectrum frames
+    // already carry the Core's offset.
     double rxMeterOffsetDb() const;
 
 signals:
@@ -4281,8 +4325,8 @@ private:
     class TxAnalyzer*         m_txAnalyzer{nullptr};
     class ClarityController*  m_clarityController{nullptr};
     class StepAttenuatorController* m_stepAttController{nullptr};
-    // R-R3-46: followTxSliceWithStepAttenuator() has wired its connects.
-    bool m_stepAttFollowsTxSlice{false};
+    // R-R3-46: followReceiveSliceWithStepAttenuator() has wired its connects.
+    bool m_stepAttFollowsSlices{false};
 
     // 2026-05-22 spectrum-calibration fix: cache of the last rxMeterOffsetDb
     // value we emitted via rxMeterOffsetChanged. NaN sentinel forces the
@@ -4331,6 +4375,7 @@ private:
     // moxChanging, cleared by any unkey).
     bool m_generatedKeyLive{false};
     bool m_pcCaptureAllowed{true};
+    SliceModel::VaxChannelStore m_remoteVaxChannelStore;  // R-R3-44
     bool m_pcCaptureSessionActive{false};
     CaptureSupervisor::Lease m_pcCaptureLease;
 
@@ -4723,6 +4768,9 @@ private:
     PureSignalSessionFacade* m_pureSignalFacade{nullptr};
     StepAttenuatorFacade* m_stepAttFacade{nullptr};
     AlexAntennaFacade* m_alexAntennaFacade{nullptr};
+    IoBoardHl2Facade* m_ioBoardFacade{nullptr};
+    // R-R3-46: coalesces a remote window's OC matrix reloads.
+    QTimer* m_remoteOcReloadTimer{nullptr};
     std::unique_ptr<PureSignal> m_pureSignal;
 
     // 3M-4 Task 17 chunk C: pscc() driver — pairs per-DDC IQ streams
@@ -4897,6 +4945,8 @@ private:
     TgxlConnection* m_tgxlConnection{nullptr};
     StationTgxlController* m_stationTgxl{nullptr};
     TunerModel*     m_tunerModel{nullptr};
+    AmplifierModel* m_amplifierModel{nullptr};
+    RfKitModel*     m_rfKitModel{nullptr};
 
     // Phase 3P-III: RF-Kit RF2K-S connection. unique_ptr with Qt parent=this
     // so destruction order is deterministic and QObject hierarchy is intact.

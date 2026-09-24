@@ -119,7 +119,12 @@ private:
 
 private slots:
 
-    // ── 1. Fan-in: two slices on the same VAX channel both push ─────────────
+    // ── 1. Fan-in: two slices on one VAX channel make ONE summed block ────
+    //
+    // R-R3-44 (fix wave): each slice used to push its own block into the
+    // channel's ring, two periods of audio per real period, so the app
+    // reading the channel heard the ring overrun and garbled audio. The
+    // channel now waits for every slice on it and pushes their sum once.
 
     void fanIn() {
         Harness h = makeHarness();
@@ -128,12 +133,109 @@ private slots:
         const int s1 = h.addSlice(/*vaxChannel=*/2);
         const int s2 = h.addSlice(/*vaxChannel=*/2);
 
+        // A slice joins a channel's mix with its first block, as it joins
+        // the speakers mix: the first period carries slice 1 alone while
+        // slice 2 joins, and slice 2's first block waits for the next.
         h.engine->rxBlockReady(s1, kTestSamples.data(), kTestFrames);
         h.engine->rxBlockReady(s2, kTestSamples.data(), kTestFrames);
+        QCOMPARE(vax2->pushCount(), 1);
 
+        // From then on, one summed block per period. The first slice alone
+        // does not make it.
+        h.engine->rxBlockReady(s1, kTestSamples.data(), kTestFrames);
         QCOMPARE(vax2->pushCount(), 2);
-        QCOMPARE(static_cast<qint64>(vax2->buffer().size()),
-                 kExpectedPushBytes * 2);
+        h.engine->rxBlockReady(s2, kTestSamples.data(), kTestFrames);
+        QCOMPARE(vax2->pushCount(), 2);
+        h.engine->rxBlockReady(s1, kTestSamples.data(), kTestFrames);
+        h.engine->rxBlockReady(s2, kTestSamples.data(), kTestFrames);
+        QCOMPARE(vax2->pushCount(), 3);
+
+        QCOMPARE(static_cast<qint64>(vax2->buffer().size()), kExpectedPushBytes * 3);
+        const auto* pushed = reinterpret_cast<const float*>(vax2->buffer().constData());
+        for (int block = 1; block < 3; ++block) {
+            for (int i = 0; i < kTestStereoFloats; ++i) {
+                QCOMPARE(pushed[block * kTestStereoFloats + i],
+                         2.0f * kTestSamples[static_cast<size_t>(i)]);
+            }
+        }
+    }
+
+    // One summed block per period, whichever slice delivers first.
+    void fanInPushesOncePerPeriod() {
+        Harness h = makeHarness();
+        FakeAudioBus* vax2 = injectFakeVax(h.engine, 2);
+        const int s1 = h.addSlice(/*vaxChannel=*/2);
+        const int s2 = h.addSlice(/*vaxChannel=*/2);
+
+        const std::array<float, kTestStereoFloats> other = {0.01f, 0.02f, 0.03f, 0.04f};
+        for (int period = 0; period < 10; ++period) {
+            if (period % 3 == 0) {
+                h.engine->rxBlockReady(s2, other.data(), kTestFrames);
+                h.engine->rxBlockReady(s1, kTestSamples.data(), kTestFrames);
+            } else {
+                h.engine->rxBlockReady(s1, kTestSamples.data(), kTestFrames);
+                h.engine->rxBlockReady(s2, other.data(), kTestFrames);
+            }
+            QCOMPARE(vax2->pushCount(), period + 1);
+        }
+        QCOMPARE(static_cast<qint64>(vax2->buffer().size()), kExpectedPushBytes * 10);
+        const auto* pushed = reinterpret_cast<const float*>(vax2->buffer().constData());
+        // Period 0 is the join (slice 2 alone); every later block is the sum.
+        for (int period = 1; period < 10; ++period) {
+            for (int i = 0; i < kTestStereoFloats; ++i) {
+                QCOMPARE(pushed[period * kTestStereoFloats + i],
+                         kTestSamples[static_cast<size_t>(i)] + other[static_cast<size_t>(i)]);
+            }
+        }
+    }
+
+    // A slice moved to another channel stops holding its old channel.
+    void aSliceMovedAwayLeavesTheChannel() {
+        Harness h = makeHarness();
+        FakeAudioBus* vax2 = injectFakeVax(h.engine, 2);
+        FakeAudioBus* vax3 = injectFakeVax(h.engine, 3);
+        const int s1 = h.addSlice(/*vaxChannel=*/2);
+        const int s2 = h.addSlice(/*vaxChannel=*/2);
+        h.engine->rxBlockReady(s1, kTestSamples.data(), kTestFrames);
+        h.engine->rxBlockReady(s2, kTestSamples.data(), kTestFrames);
+        QCOMPARE(vax2->pushCount(), 1);
+
+        h.radio->sliceById(s2)->setVaxChannel(3);
+        h.engine->rxBlockReady(s1, kTestSamples.data(), kTestFrames);
+        h.engine->rxBlockReady(s2, kTestSamples.data(), kTestFrames);
+        h.engine->rxBlockReady(s1, kTestSamples.data(), kTestFrames);
+        h.engine->rxBlockReady(s2, kTestSamples.data(), kTestFrames);
+        QCOMPARE(vax2->pushCount(), 3);
+        QCOMPARE(vax3->pushCount(), 2);
+        const auto* last = reinterpret_cast<const float*>(vax2->buffer().constData())
+                           + 2 * kTestStereoFloats;
+        for (int i = 0; i < kTestStereoFloats; ++i) {
+            QCOMPARE(last[i], kTestSamples[static_cast<size_t>(i)]);
+        }
+    }
+
+    // A slice withdrawn from the mix (a closed pan, the slice keyed for
+    // transmit) stops holding its channel, as it stops holding the speakers.
+    void aWithdrawnSliceDoesNotHoldTheChannel() {
+        Harness h = makeHarness();
+        FakeAudioBus* vax2 = injectFakeVax(h.engine, 2);
+        const int s1 = h.addSlice(/*vaxChannel=*/2);
+        const int s2 = h.addSlice(/*vaxChannel=*/2);
+        h.engine->rxBlockReady(s1, kTestSamples.data(), kTestFrames);
+        h.engine->rxBlockReady(s2, kTestSamples.data(), kTestFrames);
+        QCOMPARE(vax2->pushCount(), 1);
+
+        h.engine->setSliceStreaming(s2, false);
+        h.engine->rxBlockReady(s1, kTestSamples.data(), kTestFrames);
+        h.engine->rxBlockReady(s1, kTestSamples.data(), kTestFrames);
+        QCOMPARE(vax2->pushCount(), 3);
+
+        // Back in: it joins again with its next block.
+        h.engine->setSliceStreaming(s2, true);
+        h.engine->rxBlockReady(s2, kTestSamples.data(), kTestFrames);
+        QCOMPARE(vax2->pushCount(), 3);
+        h.engine->rxBlockReady(s1, kTestSamples.data(), kTestFrames);
+        QCOMPARE(vax2->pushCount(), 4);
     }
 
     // ── 2. vaxChannel == 0 → no VAX push ────────────────────────────────────

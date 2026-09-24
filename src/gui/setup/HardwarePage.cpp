@@ -339,6 +339,8 @@ void HardwarePage::setTransmitPermitted(bool permitted, const QString& reason)
     m_antennaAlexTab->setTransmitPermitted(permitted, reason);
     m_ocOutputsTab->setTransmitPermitted(permitted, reason);
     m_paCalTab->setTransmitPermitted(permitted, reason);
+    m_hl2OptionsTab->setTransmitPermitted(permitted, reason);
+    m_hl2IoTab->setTransmitPermitted(permitted, reason);
 }
 
 // ── Test helper ───────────────────────────────────────────────────────────────
