@@ -1,5 +1,8 @@
 // no-port-check: NereusSDR-original. R-R3-48 the app's one TCI switch.
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-48 follow-up: the port handover to a Core on this
+// computer, the wait on the Core's whole answer, the link-down rule. J.J.
+// Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/TciSwitch.h"
 
 #include "core/LogCategories.h"
@@ -28,9 +31,17 @@ TciSwitch::TciSwitch(TciServer* local, RadioModel* model, QObject* parent)
     }
 }
 
+bool TciSwitch::linkUp() const
+{
+    const IStationLink* link = m_model ? m_model->stationLink() : nullptr;
+    return link && link->stationLinkReady();
+}
+
 bool TciSwitch::coreCoversThisComputer() const
 {
-    if (!coreServesThisComputer()) {
+    // Follow-up 1c: with the link down the Core may be gone; its last state
+    // does not keep this window from serving.
+    if (!coreServesThisComputer() || !linkUp()) {
         return false;
     }
     const StationTciModel* station = m_model->stationTciModel();
@@ -40,9 +51,23 @@ bool TciSwitch::coreCoversThisComputer() const
 
 void TciSwitch::onStationTciChanged()
 {
-    // The Core answered (or another window changed its switch): whatever
-    // it reports now decides.
-    if (m_awaitingCore) {
+    const StationTciModel* station = m_model ? m_model->stationTciModel() : nullptr;
+    if (station) {
+        // The Core's switch or port moved: a new state, which may be
+        // handed over again (not while this window waits: that is the
+        // answer to its own request).
+        if (station->enabled() != m_lastCoreEnabled || station->port() != m_lastCorePort) {
+            if (!m_awaitingCore) {
+                m_handoverTried = false;
+            }
+            m_lastCoreEnabled = station->enabled();
+            m_lastCorePort = station->port();
+        }
+    }
+    // Follow-up 1d: the wait ends on the Core's whole answer (on, listening,
+    // this port), not on its first property; a Core that cannot listen is
+    // still retrying, so the wait runs out instead.
+    if (m_awaitingCore && coreCoversThisComputer()) {
         m_awaitingCore = false;
         m_awaitTimer.stop();
     }
@@ -97,6 +122,7 @@ void TciSwitch::setSwitch(bool on, quint16 port, const QHostAddress& bindAddress
     m_on = on;
     m_port = port;
     m_bind = bindAddress;
+    m_handoverTried = false;
     if (tell) {
         tellCore();
     }
@@ -107,6 +133,9 @@ void TciSwitch::setPortOrBind(quint16 port, const QHostAddress& bindAddress)
 {
     const bool portChanged = port != m_port;
     m_port = port;
+    if (portChanged) {
+        m_handoverTried = false;
+    }
     m_bind = bindAddress;
 #ifdef HAVE_WEBSOCKETS
     if (m_local && m_local->isRunning()) {
@@ -121,6 +150,8 @@ void TciSwitch::setPortOrBind(quint16 port, const QHostAddress& bindAddress)
 
 void TciSwitch::reevaluate()
 {
+    // The link changed: the Core's state is fresh again.
+    m_handoverTried = false;
     applyLocal();
 }
 
@@ -130,10 +161,27 @@ void TciSwitch::applyLocal()
     if (!m_local) {
         return;
     }
-    const bool coreHere = coreServesThisComputer();
+    const bool coreHere = coreServesThisComputer() && linkUp();
     if (!m_on || !coreHere) {
         m_awaitingCore = false;
         m_awaitTimer.stop();
+    }
+    const StationTciModel* station = m_model ? m_model->stationTciModel() : nullptr;
+    if (coreCoversThisComputer()) {
+        m_handoverTried = false;   // a later loss may be handed over again
+    }
+    // Follow-up 1a: the Core here is on, on this port, but not listening
+    // (it could not take the port, perhaps from this window): release it
+    // and ask the Core again, once for this state, under the wait.
+    if (m_on && coreHere && station && station->enabled() && !station->listening()
+        && station->port() == int(m_port) && !m_awaitingCore && !m_handoverTried) {
+        m_handoverTried = true;
+        if (m_local->isRunning()) {
+            qCInfo(lcTci) << "Handing TCI port" << m_port
+                          << "to the Core on this computer, which could not listen on it";
+            m_local->stop();
+        }
+        tellCore();
     }
     const bool wanted = m_on && !coreCoversThisComputer() && !(m_awaitingCore && coreHere);
     if (wanted && !m_local->isRunning()) {
@@ -162,9 +210,10 @@ void TciSwitch::tellCore()
         emit stationRequestFailed(outcome.reason);
         return;
     }
-    if (m_on && coreServesThisComputer() && !coreCoversThisComputer()) {
+    if (m_on && coreServesThisComputer() && linkUp() && !coreCoversThisComputer()) {
         // The Core here was asked to serve this port: wait for its answer
         // before this window takes the port itself.
+        m_handoverTried = true;
         m_awaitingCore = true;
         m_awaitTimer.start();
     }

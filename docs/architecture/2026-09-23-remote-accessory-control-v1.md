@@ -429,7 +429,13 @@ computer (127.0.0.1), so apps there reach it.
 It transmits for no app until remote transmit: the init burst says
 `receive_only:true` and `tx_enable:<rx>,false`; `trx:<rx>,true` touches no
 MOX, takes no transmit audio lock and is answered `trx:<rx>,false`; transmit
-audio frames are dropped. Nor does it let an app change the Core's
+audio frames are dropped. A listener that cannot start (another program
+holds the port) is retried while the switch is on, after 1, 2, 5 and 10
+seconds and then every 30 seconds; a new `setStationTci` tries at once.
+Meanwhile `error` reads "The station's TCI server cannot use port <port>
+right now; another program may be using it. The Core keeps trying." and
+the Core logs one line when it starts failing and one when it listens
+again, not one per try. Nor does it let an app change the Core's
 transmit configuration: `tx_profile_ex:<name>`, `xit_enable:<rx>,<bool>`
 and `xit_offset:<rx>,<hz>` change nothing, are not broadcast, and are
 answered to the asking app with the value the Core keeps (queries answer
@@ -1029,8 +1035,16 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   another window turns it off, not listening, another port, an older
   Core) the window keeps its own server, so apps on that computer never
   lose TCI. A window turning the switch on with the Core there waits up
-  to 3 seconds for the Core's answer before serving itself, so the two do
-  not race for the port.
+  to 3 seconds for the Core's whole answer (on, listening, on that port;
+  the object's properties arrive one at a time and the first is not the
+  answer) before serving itself, so the two do not race for the port.
+  When the Core there reports its switch on, on the window's port, but not
+  listening (another window or the phone turned it on while this window
+  held the port), the window releases the port and sends `setStationTci`
+  again, once for that state, under the same wait; if the Core still
+  cannot listen the window serves again. With the link to a Core on the
+  same computer down, the Core's last state is not trusted and the window
+  serves.
 - A local window's RF-Kit band follow is worked out from its own TCI server
   the same way.
 - With `accessoryDataVersion` 1 the desktop remote window's 4O3A page
@@ -1157,8 +1171,14 @@ rewrite the fixtures, and update this document in the same commit.
   the RF-Kit's band follow over the server, the one switch driving both
   servers (none of the window's own when the Core is on this computer and
   serving that port; the window's own when the Core's switch is off, not
-  listening or on another port, and after a wait with no answer), and the
-  TCI page's line.
+  listening or on another port, and after a wait with no answer), the
+  wait ending on the Core's whole answer in the wire's property order, the
+  handover of the port to a Core that cannot listen (once per state), the
+  window serving while the link is down, the Core retrying a listener
+  that could not start with its plain reason, and the TCI page's line.
+  `tst_remote_peripherals` completes the handover over the loopback: a
+  window serving the port, the Core's switch turned on by another app,
+  then the Core serving apps on its computer and on a station address.
 - `tst_tci_tx_mutex`: the station server's transmit refusal on the wire,
   and its refusal of TX profile and XIT changes (nothing applied or
   broadcast, the kept value to the asking app, the reason off the wire).

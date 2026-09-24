@@ -1,5 +1,8 @@
 // no-port-check: NereusSDR-original. R-R3-48 / R-R3-25 the Core's station TCI server.
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-48 follow-up: a listener that cannot start is retried
+// with a bounded backoff and a plain reason. J.J. Boyd (KG4VCF), AI-assisted
+// via Anthropic Claude Code.
 #include "core/StationTciController.h"
 
 #include "core/AppSettings.h"
@@ -8,12 +11,16 @@
 #include "core/TciServer.h"
 #include "models/RadioModel.h"
 
+#include <iterator>
+
 namespace NereusSDR {
 
 StationTciController::StationTciController(RadioModel* radio, StationTciModel* model,
                                            QObject* parent)
     : QObject(parent), m_radio(radio), m_model(model)
 {
+    m_retryTimer.setSingleShot(true);
+    connect(&m_retryTimer, &QTimer::timeout, this, &StationTciController::apply);
 #ifdef HAVE_WEBSOCKETS
     // The Core's own server on the Core's radio model (a Local model, so
     // vfo:, split_enable:, audio and I/Q come from the Core's receivers).
@@ -29,8 +36,9 @@ StationTciController::StationTciController(RadioModel* radio, StationTciModel* m
     m_server = std::make_unique<TciServer>(radio);
     m_server->setStationReceiveOnly(true);
     connect(m_server.get(), &TciServer::errorOccurred, this, [this](const QString& error) {
+        // The raw socket error is for the log; the object carries plain
+        // words (apply()).
         m_error = error;
-        publish();
     });
     connect(m_server.get(), &TciServer::operatorNotice, this,
             [](const QString& peer, const QString& reason, bool) {
@@ -46,6 +54,19 @@ StationTciController::~StationTciController()
         m_server->stop();
     }
 #endif
+}
+
+// static
+QString StationTciController::cannotListenReason(quint16 port)
+{
+    return QStringLiteral("The station's TCI server cannot use port %1 right now; another "
+                          "program may be using it. The Core keeps trying.").arg(port);
+}
+
+void StationTciController::resetRetry()
+{
+    m_retryTimer.stop();
+    m_retryStep = 0;
 }
 
 TciServer* StationTciController::server() const
@@ -107,6 +128,7 @@ bool StationTciController::setEnabled(bool enabled, int port, QString* reason)
     settings.setValue(enabledKey(), enabled ? QStringLiteral("True") : QStringLiteral("False"));
     settings.setValue(portKey(), QString::number(port));
     settings.save();
+    resetRetry();   // a request tries at once, from the first delay again
     apply();
     if (reason) {
         reason->clear();
@@ -127,6 +149,9 @@ void StationTciController::apply()
         return;
     }
     if (!m_enabled) {
+        resetRetry();
+        m_failing = false;
+        m_server->setQuietListenAttempts(false);
         if (m_server->isRunning()) {
             m_server->stop();
         }
@@ -146,11 +171,24 @@ void StationTciController::apply()
     m_error.clear();
     if (m_server->start(wanted, m_port)) {
         m_listening = wanted;
-        qCInfo(lcTci) << "Station TCI server listening on" << wanted << "port" << m_port;
+        resetRetry();
+        qCInfo(lcTci) << (m_failing ? "Station TCI server listening again on"
+                                    : "Station TCI server listening on")
+                      << wanted << "port" << m_port;
+        m_failing = false;
+        m_server->setQuietListenAttempts(false);
     } else {
         m_listening.clear();
-        qCWarning(lcTci) << "Station TCI server could not listen on" << wanted
-                         << "port" << m_port << m_error;
+        const int delay = kRetryDelaysMs[qMin(m_retryStep, int(std::size(kRetryDelaysMs)) - 1)];
+        ++m_retryStep;
+        if (!m_failing) {
+            // One line when it starts failing; the tries stay quiet.
+            qCWarning(lcTci) << "Station TCI server could not listen on" << wanted
+                             << "port" << m_port << m_error << "; retrying";
+            m_failing = true;
+            m_server->setQuietListenAttempts(true);
+        }
+        m_retryTimer.start(delay);
     }
 #endif
     publish();
@@ -173,7 +211,7 @@ void StationTciController::publish()
             break;
         }
     }
-    state.error = state.listening ? QString() : m_error;
+    state.error = state.listening || !m_failing ? QString() : cannotListenReason(m_port);
     m_model->setState(state);
 }
 

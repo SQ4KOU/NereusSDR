@@ -33,6 +33,9 @@
 //                why a TX profile or XIT change was not made; its extra
 //                listeners go through deleteLater, not raw delete. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-48 follow-up: quiet listen attempts while the Core
+//                retries its station listener. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -1287,9 +1290,15 @@ bool TciServer::start(const QList<QHostAddress>& bindAddresses, quint16 port)
                                            QWebSocketServer::NonSecureMode, this);
         if (!extra->listen(bindAddresses.at(i), boundPort)) {
             const QString errStr = extra->errorString();
-            qCWarning(lcTci) << "TciServer: failed to listen on"
-                             << bindAddresses.at(i).toString() << "port" << boundPort
-                             << errStr;
+            if (m_quietListenAttempts) {
+                qCDebug(lcTci) << "TciServer: failed to listen on"
+                               << bindAddresses.at(i).toString() << "port" << boundPort
+                               << errStr;
+            } else {
+                qCWarning(lcTci) << "TciServer: failed to listen on"
+                                 << bindAddresses.at(i).toString() << "port" << boundPort
+                                 << errStr;
+            }
             // M6: Qt ownership (parented to this); it never listened.
             extra->deleteLater();
             stop();
@@ -1299,8 +1308,13 @@ bool TciServer::start(const QList<QHostAddress>& bindAddresses, quint16 port)
         connect(extra, &QWebSocketServer::newConnection,
                 this, &TciServer::onNewConnection);
         m_extraServers.append(extra);
-        qCInfo(lcTci) << "TciServer: also listening on" << bindAddresses.at(i).toString()
-                      << "port" << boundPort;
+        if (m_quietListenAttempts) {
+            qCDebug(lcTci) << "TciServer: also listening on"
+                           << bindAddresses.at(i).toString() << "port" << boundPort;
+        } else {
+            qCInfo(lcTci) << "TciServer: also listening on"
+                          << bindAddresses.at(i).toString() << "port" << boundPort;
+        }
     }
     return true;
 }
@@ -1344,9 +1358,13 @@ bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
     // Setup UI surfaces a tooltip warning when a non-loopback option is
     // selected.
     if (!m_server->listen(bindAddress, port)) {
-        qCWarning(lcTci) << "TciServer: failed to listen on"
-                         << bindAddress.toString() << "port" << port
-                         << m_server->errorString();
+        if (m_quietListenAttempts) {
+            qCDebug(lcTci) << "TciServer: failed to listen on" << bindAddress.toString()
+                           << "port" << port << m_server->errorString();
+        } else {
+            qCWarning(lcTci) << "TciServer: failed to listen on" << bindAddress.toString()
+                             << "port" << port << m_server->errorString();
+        }
         const QString errStr = m_server->errorString();
         delete m_server;
         m_server = nullptr;
@@ -1357,7 +1375,11 @@ bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
     connect(m_server, &QWebSocketServer::newConnection,
             this, &TciServer::onNewConnection);
 
-    qCInfo(lcTci) << "TciServer: listening on" << m_server->serverPort();
+    if (m_quietListenAttempts) {
+        qCDebug(lcTci) << "TciServer: listening on" << m_server->serverPort();
+    } else {
+        qCInfo(lcTci) << "TciServer: listening on" << m_server->serverPort();
+    }
     emit serverStarted(m_server->serverPort());
 
     // From Thetis TCIServer.cs:2650-2654 [v2.10.3.13] — 20s server-driven ping
@@ -1486,7 +1508,11 @@ void TciServer::stop()
     }
     m_extraServers.clear();
 
-    qCInfo(lcTci) << "TciServer: stopped";
+    if (m_quietListenAttempts) {
+        qCDebug(lcTci) << "TciServer: stopped";
+    } else {
+        qCInfo(lcTci) << "TciServer: stopped";
+    }
     emit serverStopped();
 }
 

@@ -1,5 +1,8 @@
 // no-port-check: NereusSDR-original. R-R3-48 the app's one TCI switch.
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-48 follow-up: the port handover to a Core on this
+// computer, the wait on the Core's whole answer, the link-down rule. J.J.
+// Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #pragma once
 
 #include <QHostAddress>
@@ -28,8 +31,15 @@ class TciServer;
 // (the Core's switch off, not listening, another port, or an older Core)
 // this window keeps its own server, so apps here never lose TCI. When this
 // window turns the switch on with the Core here, it waits up to
-// kCoreAnswerWaitMs for the Core's answer before serving itself, so the
-// two do not race for the port.
+// kCoreAnswerWaitMs for the Core's whole answer (on, listening, this port)
+// before serving itself, so the two do not race for the port.
+//
+// Handover: when the Core here reports its switch on, on this port, but
+// not listening (it could not take the port, typically because this
+// window held it), this window releases the port and asks the Core again,
+// once for that state, under the same wait; if the Core still cannot
+// listen, the window serves again. With the link to the Core down, the
+// Core's last state is not trusted: the window serves.
 class TciSwitch : public QObject {
     Q_OBJECT
 public:
@@ -71,6 +81,7 @@ private:
     void applyLocal();
     void tellCore();
     void onStationTciChanged();
+    bool linkUp() const;
 
     QPointer<TciServer> m_local;
     QPointer<RadioModel> m_model;
@@ -79,6 +90,12 @@ private:
     QHostAddress m_bind{QHostAddress::LocalHost};
     // A switch-on sent to the Core on this computer, not yet answered.
     bool m_awaitingCore{false};
+    // A handover (or switch-on) was asked of the Core for its current
+    // state; not again until the Core's switch or port changes, it listens,
+    // the link changes or this window's switch or port does.
+    bool m_handoverTried{false};
+    bool m_lastCoreEnabled{false};
+    int m_lastCorePort{0};
     QTimer m_awaitTimer;
 };
 

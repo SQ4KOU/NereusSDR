@@ -74,6 +74,7 @@ class FakeStationLink final : public IStationLink {
 public:
     bool tciAvailable{true};
     bool coreHere{false};
+    bool ready{true};
     int requests{0};
     bool requestedOn{false};
     quint16 requestedPort{0};
@@ -82,8 +83,8 @@ public:
     CommandOutcome requestRemoveSlice(int) override { return {}; }
     CommandOutcome requestActiveSlice(int) override { return {}; }
     CommandOutcome requestSliceSampleRate(int, int) override { return {}; }
-    bool stationLinkReady() const override { return true; }
-    bool stationTciAvailable() const override { return tciAvailable; }
+    bool stationLinkReady() const override { return ready; }
+    bool stationTciAvailable() const override { return ready && tciAvailable; }
     bool coreServesTciOnThisComputer() const override { return coreHere; }
     CommandOutcome requestStationTci(bool on, quint16 port) override
     {
@@ -382,12 +383,17 @@ private slots:
         window.reportStationLinkStateChanged();
         QVERIFY(local.isRunning());
 
-        // The Core's switch on, but not listening: still this window's.
+        // The Core's switch on, on this port, but not listening: the window
+        // offers it the port once (follow-up 1a); the Core never listens,
+        // so after the wait this window serves again.
         StationTciModel::State state;
         state.enabled = true;
         state.port = port;
         window.stationTciModel()->setState(state);
-        QVERIFY(local.isRunning());
+        QVERIFY(!local.isRunning());
+        QCOMPARE(link.requests, 1);
+        QTRY_VERIFY_WITH_TIMEOUT(local.isRunning(), TciSwitch::kCoreAnswerWaitMs + 2000);
+        QCOMPARE(link.requests, 1);
 
         // Listening on another port: still this window's.
         state.listening = true;
@@ -431,7 +437,11 @@ private slots:
         state.port = port;
         state.error = QStringLiteral("The port is in use.");
         window.stationTciModel()->setState(state);   // answered: not listening
-        QVERIFY(local.isRunning());
+        // The Core retries (follow-up 1b); this window serves once the wait
+        // runs out, and does not ask again for the same state.
+        QVERIFY(!local.isRunning());
+        QTRY_VERIFY_WITH_TIMEOUT(local.isRunning(), TciSwitch::kCoreAnswerWaitMs + 2000);
+        QCOMPARE(link.requests, 1);
 
         // No answer at all: this window serves after the wait.
         tci.setSwitch(false, port, loopback);
@@ -441,6 +451,132 @@ private slots:
         tci.setSwitch(true, port, loopback);
         QVERIFY(!local.isRunning());
         QTRY_VERIFY_WITH_TIMEOUT(local.isRunning(), TciSwitch::kCoreAnswerWaitMs + 2000);
+    }
+
+    // Follow-up 1d (R-R3-48): the Core's answer arrives one property at a
+    // time, in the object's order (enabled, port, listening,
+    // stationAddress, error). The wait ends on the whole answer (on,
+    // listening, this port), so the first property never makes this
+    // window try to bind the port the Core is taking.
+    void waitEndsOnTheCoresWholeAnswer()
+    {
+        const quint16 port = freePort();
+        RadioModel window(RadioModel::Role::Remote);
+        FakeStationLink link;
+        link.coreHere = true;
+        window.attachStation(&link);
+        TciServer local(&window);
+        TciSwitch tci(&local, &window);
+        QSignalSpy starts(&local, &TciServer::serverStarted);
+        tci.setSwitch(true, port, QHostAddress(QHostAddress::LocalHost));
+        QVERIFY(!local.isRunning());
+        StationTciModel* station = window.stationTciModel();
+        station->applyStationValue("enabled", true);
+        QVERIFY(!local.isRunning());
+        station->applyStationValue("port", int(port));
+        QVERIFY(!local.isRunning());
+        station->applyStationValue("listening", true);
+        station->applyStationValue("error", QString());
+        QVERIFY(!local.isRunning());
+        QCOMPARE(starts.count(), 0);   // no bind was ever tried
+    }
+
+    // Follow-up 1c: with the link to the Core on this computer down, the
+    // Core may be gone; its last state must not keep this window from
+    // serving. The link back with the Core serving: one server again.
+    void linkDropLetsThisWindowServe()
+    {
+        const quint16 port = freePort();
+        RadioModel window(RadioModel::Role::Remote);
+        FakeStationLink link;
+        link.coreHere = true;
+        window.attachStation(&link);
+        TciServer local(&window);
+        TciSwitch tci(&local, &window);
+        StationTciModel::State serving;
+        serving.enabled = true;
+        serving.listening = true;
+        serving.port = port;
+        window.stationTciModel()->setState(serving);
+        tci.setSwitch(true, port, QHostAddress(QHostAddress::LocalHost), /*tellCore=*/false);
+        QVERIFY(!local.isRunning());
+
+        link.ready = false;
+        window.reportStationLinkStateChanged();
+        QVERIFY(local.isRunning());
+
+        link.ready = true;
+        window.reportStationLinkStateChanged();
+        QVERIFY(!local.isRunning());
+    }
+
+    // Follow-up 1a: this window serves the port on the Core's computer and
+    // the Core's station switch comes on (from another window or the
+    // phone), but the Core cannot listen: it reports on, not listening, on
+    // this port. The window releases the port and asks the Core again,
+    // once; the Core's listening answer completes the handover. With no
+    // such answer inside the wait the window serves again, and does not
+    // hand over again for the same state.
+    void handsThePortToTheCoreWhenItCannotListen()
+    {
+        const quint16 port = freePort();
+        RadioModel window(RadioModel::Role::Remote);
+        FakeStationLink link;
+        link.coreHere = true;
+        window.attachStation(&link);
+        TciServer local(&window);
+        TciSwitch tci(&local, &window);
+        tci.setSwitch(true, port, QHostAddress(QHostAddress::LocalHost), /*tellCore=*/false);
+        QVERIFY(local.isRunning());
+        QCOMPARE(link.requests, 0);
+
+        StationTciModel* station = window.stationTciModel();
+        station->applyStationValue("enabled", true);
+        station->applyStationValue("port", int(port));
+        station->applyStationValue("error", QStringLiteral("The port is in use."));
+        QVERIFY(!local.isRunning());   // released
+        QCOMPARE(link.requests, 1);
+        QVERIFY(link.requestedOn);
+        QCOMPARE(link.requestedPort, port);
+        station->applyStationValue("listening", true);
+        station->applyStationValue("error", QString());
+        QVERIFY(!local.isRunning());   // the Core serves it now
+        QVERIFY(tci.coreCoversThisComputer());
+
+        // The Core loses it again and never answers: the window serves
+        // after the wait, and asks only once for this state.
+        station->applyStationValue("listening", false);
+        QCOMPARE(link.requests, 2);
+        QVERIFY(!local.isRunning());
+        QTRY_VERIFY_WITH_TIMEOUT(local.isRunning(), TciSwitch::kCoreAnswerWaitMs + 2000);
+        station->applyStationValue("error", QStringLiteral("Still in use."));
+        QTest::qWait(50);
+        QVERIFY(local.isRunning());
+        QCOMPARE(link.requests, 2);
+    }
+
+    // Follow-up 1b: the Core retries a station listener that could not
+    // start (another program had its port), with a plain reason while it
+    // cannot listen, and listens once the port is free.
+    void coreRetriesAFailedStationListener()
+    {
+        QTcpServer blocker;
+        QVERIFY(blocker.listen(QHostAddress::LocalHost, 0));
+        const quint16 port = blocker.serverPort();
+        RadioModel model;
+        StationTciModel state;
+        StationTciController controller(&model, &state);
+        controller.setBindOverride(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(controller.setEnabled(true, port, &reason));
+        QVERIFY(state.enabled());
+        QVERIFY(!state.listening());
+        QCOMPARE(state.error(), StationTciController::cannotListenReason(port));
+        QVERIFY(OperatorWording::isPlain(state.error()));
+        blocker.close();
+        QTRY_VERIFY_WITH_TIMEOUT(state.listening(), 5000);
+        QVERIFY(state.error().isEmpty());
+        QVERIFY(controller.setEnabled(false, port, &reason));
     }
 
     // The TCI page's line, in user words.

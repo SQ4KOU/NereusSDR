@@ -10,6 +10,7 @@
 #include <QNetworkAddressEntry>
 #include <QObject>
 #include <QPointer>
+#include <QTimer>
 
 #include <memory>
 #include <optional>
@@ -37,6 +38,12 @@ class TciServer;
 //
 // The server transmits for no app until remote transmit (R-R3-25): see
 // TciServer::setStationReceiveOnly.
+//
+// A listener that cannot start (another program, or a window on this
+// computer, holds the port) is retried with a bounded backoff (1, 2, 5, 10,
+// then every 30 s) while the switch is on; the object says why in plain
+// words meanwhile, and the log has one line when it starts failing and one
+// when it listens again, not one per try.
 class StationTciController : public QObject {
     Q_OBJECT
 public:
@@ -64,6 +71,11 @@ public:
     /// a plain reason) for a port outside 1024 to 65535.
     bool setEnabled(bool enabled, int port, QString* reason);
 
+    /// The plain reason the object carries while the server cannot listen.
+    static QString cannotListenReason(quint16 port);
+    /// The retry delays, ms; the last repeats.
+    static constexpr int kRetryDelaysMs[] = {1000, 2000, 5000, 10000, 30000};
+
     /// The addresses the server listens on when on.
     QList<QHostAddress> wantedAddresses() const;
 
@@ -72,6 +84,7 @@ public:
 private:
     void apply();
     void publish();
+    void resetRetry();
 
     QPointer<RadioModel> m_radio;
     QPointer<StationTciModel> m_model;
@@ -83,6 +96,9 @@ private:
     quint16 m_port{kDefaultPort};
     QList<QHostAddress> m_listening;
     QString m_error;
+    QTimer m_retryTimer;
+    int m_retryStep{0};
+    bool m_failing{false};
 };
 
 } // namespace NereusSDR

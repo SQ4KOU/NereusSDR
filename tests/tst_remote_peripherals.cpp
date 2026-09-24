@@ -378,6 +378,7 @@ private slots:
     void rawRfKitSwitchWriteIsRefused();
     void pgxlBandFollowLineLocalAndRemote();
     void oneTciSwitchDrivesTheCoresStationServer();
+    void windowHandsTheTciPortToTheCore();
     // R-R3-47 / R-R3-22
     void remoteWindowShowsTheCoresRecords();
     void remoteWindowChangesTheInterlockOnTheCore();
@@ -1455,6 +1456,80 @@ void RemotePeripheralsTest::oneTciSwitchDrivesTheCoresStationServer()
     QVERIFY(!secondLocal.isRunning());
     QTRY_VERIFY(!second.stationTciModel()->listening());
     stationEnd2->closeLink(QStringLiteral("test done"));
+    AppSettings::instance().clear();
+}
+
+// Follow-up 1 (R-R3-48): a window on the Core's computer serves its TCI
+// port while the Core's station switch is off (I1). Another window (or the
+// phone) turns the Core's switch on: the Core cannot take the port on this
+// computer and says so; the window hands it over and the Core serves apps
+// on this computer and on the station network (a real address of this
+// computer stands in for the station network when there is one).
+void RemotePeripheralsTest::windowHandsTheTciPortToTheCore()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const quint16 port = freeLoopbackPort();
+    QString stationAddress;
+    for (const QHostAddress& address : QNetworkInterface::allAddresses()) {
+        if (address.protocol() == QAbstractSocket::IPv4Protocol && !address.isLoopback()) {
+            stationAddress = address.toString();
+            break;
+        }
+    }
+    RadioModel station;
+    station.enableStationTci(stationAddress.isEmpty() ? QStringLiteral("127.0.0.1")
+                                                      : stationAddress);
+    AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
+    StationServer server(&station, stationSettings, dir.path());
+
+    RadioModel window(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&window, &proxy);
+    window.attachStation(&client);
+    client.setCoreOnThisComputerForTest(true);
+    TciServer local(&window);
+    TciSwitch tci(&local, &window);
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QVERIFY(completed.wait(5000) || !completed.isEmpty());
+    QTRY_VERIFY(client.stationTciAvailable());
+    window.reportStationLinkStateChanged();
+
+    // The window's switch at start, the Core's off: the window serves here.
+    tci.setSwitch(true, port, QHostAddress(QHostAddress::LocalHost), /*tellCore=*/false);
+    QVERIFY(local.isRunning());
+
+    // The phone turns the Core's switch on: it cannot take the port here...
+    QString reason;
+    QVERIFY(station.setStationTciForStation(true, port, &reason));
+    // ...and the window hands it over; the Core serves.
+    QTRY_VERIFY_WITH_TIMEOUT(station.stationTciModel()->listening(), 5000);
+    QTRY_VERIFY(window.stationTciModel()->listening());
+    QVERIFY(!local.isRunning());
+    QVERIFY(station.stationTciModel()->error().isEmpty());
+    const auto servedAt = [](const QString& address, quint16 appPort) {
+        QWebSocket app;
+        QStringList frames;
+        QObject::connect(&app, &QWebSocket::textMessageReceived, &app,
+                         [&frames](const QString& text) { frames.append(text); });
+        app.open(QUrl(QStringLiteral("ws://%1:%2").arg(address).arg(appPort)));
+        const bool ok = QTest::qWaitFor([&] {
+            return frames.join(QString()).contains(QStringLiteral("receive_only:true;"));
+        }, 5000);
+        app.close();
+        return ok;
+    };
+    QVERIFY(servedAt(QStringLiteral("127.0.0.1"), port));   // an app on this computer
+    if (!stationAddress.isEmpty()) {
+        QVERIFY(servedAt(stationAddress, port));             // a device at the station
+    }
+    stationEnd->closeLink(QStringLiteral("test done"));
+    QVERIFY(station.setStationTciForStation(false, port, &reason));
     AppSettings::instance().clear();
 }
 
