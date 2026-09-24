@@ -3067,9 +3067,12 @@ void VfoWidget::contextMenuEvent(QContextMenuEvent* event)
 
     menu.addSeparator();
 
-    // Diversity submenu (placeholder; Sub-Epic G enables on Slice A + 2-ADC SKU).
-    QAction* divAct = menu.addAction(QStringLiteral("Diversity >"));
-    divAct->setEnabled(false);
+    // R-R3-21: opens the Diversity dialog (Tools > Diversity), which holds
+    // the diversity controls. It used to be a greyed placeholder.
+    QAction* divAct = menu.addAction(QStringLiteral("Diversity..."));
+    connect(divAct, &QAction::triggered, this, [this]() {
+        emit diversityRequested();
+    });
 
     // Filter policy (opens FilterPolicyDialog via chainIndex=0 default).
     QAction* filterAct = menu.addAction(QStringLiteral("Filter policy..."));
@@ -3342,6 +3345,16 @@ void VfoWidget::updateTransmitControlAvailability()
 SliceModel* VfoWidget::contextMenuSliceForTest() const
 {
     return m_radioModel ? m_radioModel->sliceById(m_sliceIndex) : nullptr;
+}
+
+void VfoWidget::showTab(Tab tab)
+{
+    const int index = static_cast<int>(tab);
+    if (index < 0 || index >= m_tabButtons.size() || m_activeTab == index) {
+        return;
+    }
+    // The tab button's own handler opens the page and resizes the flag.
+    m_tabButtons[index]->click();
 }
 
 // --- Task 3.4: Small filter display mode (Appearance > Meter Styles) ---

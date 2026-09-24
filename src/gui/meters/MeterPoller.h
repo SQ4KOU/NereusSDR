@@ -237,6 +237,10 @@ public:
 
 signals:
     void remoteSliceLevelUpdated(int sliceId, double dbm);
+    /// R-R3-21: each transmit reading pollTxMeters() hands the meters
+    /// (bindingId is a MeterBinding Tx* id), for controls outside a meter
+    /// container: the Phone/CW applet's compression gauge.
+    void txMeterReading(int bindingId, double value);
 
 public slots:
     // Switch between RX and TX meter polling.

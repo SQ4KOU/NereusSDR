@@ -84,7 +84,14 @@ public:
     /// design doc §5.1 invariant 2).
     int residualWidth() const;
 
+    /// R-R3-21: which badge was clicked. MainWindow opens the matching
+    /// tab of the slice's VFO flag.
+    enum class Badge { Mode, Filter, Agc, Nr, Nb, Apf, Squelch };
+
 signals:
+    /// R-R3-21: a badge was left-clicked.
+    void badgeClicked(NereusSDR::RxDashboard::Badge badge);
+
     /// A pill's DSP-active state (and/or its content, hence its width)
     /// just changed. rung matches badgeForRung's mapping (5 SQL .. 9 AGC).
     /// available is the badge's new should-show state; AGC has no "off"

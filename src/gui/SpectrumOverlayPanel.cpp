@@ -38,6 +38,10 @@
 //                 plain reason, on a remote-station model. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-21: the ATT button opens the step attenuator; the
+//                 VAX button's tooltip says what it does. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "SpectrumOverlayPanel.h"
@@ -46,6 +50,7 @@
 #include "core/AntennaLabels.h"
 #include "core/BoardCapabilities.h"
 #include "core/SkuUiProfile.h"
+#include "core/StepAttenuatorFacade.h"
 #include "gui/AntennaPopupBuilder.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -54,6 +59,8 @@
 #include <QComboBox>
 #include <QSlider>
 #include <QLabel>
+#include <QCheckBox>
+#include <QSpinBox>
 #include <QGridLayout>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -111,11 +118,6 @@ namespace OverlayColors {
         "QPushButton { background: rgba(0, 112, 192, 180); "
         "border: 1px solid #0090e0; border-radius: 2px; "
         "color: #ffffff; font-size: 11px; font-weight: bold; }";
-
-    constexpr auto kMenuBtnDisabled =
-        "QPushButton { background: rgba(20, 30, 45, 180); "
-        "border: 1px solid rgba(255, 255, 255, 15); border-radius: 2px; "
-        "color: #556070; font-size: 11px; font-weight: bold; }";
 } // namespace OverlayColors
 
 // File-local helpers for opaque styles that diverge from the canonical
@@ -152,17 +154,6 @@ static QPushButton* makeMenuBtn(const QString& text, QWidget* parent)
     auto* btn = new QPushButton(text, parent);
     btn->setFixedSize(kBtnW, kBtnH);
     btn->setStyleSheet(OverlayColors::kMenuBtnNormal);
-    return btn;
-}
-
-// Helper: create a disabled NYI menu button
-static QPushButton* makeDisabledBtn(const QString& text, QWidget* parent)
-{
-    auto* btn = new QPushButton(text, parent);
-    btn->setFixedSize(kBtnW, kBtnH);
-    btn->setStyleSheet(OverlayColors::kMenuBtnDisabled);
-    btn->setEnabled(false);
-    btn->setToolTip("Not yet implemented");
     return btn;
 }
 
@@ -268,18 +259,20 @@ SpectrumOverlayPanel::SpectrumOverlayPanel(QWidget* parent)
         m_menuBtns.append(btn);  // index 4
     }
 
-    // Button 7: VAX — flyout (NYI Phase 3-VAX)
+    // Button 7: VAX flyout
     {
         auto* btn = makeMenuBtn("VAX", this);
-        btn->setToolTip("Open VAX audio routing (NYI Phase 3-VAX)");
+        btn->setToolTip("Choose the VAX channel this panadapter's slice sends its audio to");
         connect(btn, &QPushButton::clicked, this, &SpectrumOverlayPanel::toggleVaxFlyout);
         m_menuBtns.append(btn);  // index 5
     }
 
-    // Button 8: ATT (NYI)
+    // Button 8: ATT flyout (R-R3-21): the radio's step attenuator.
     {
-        auto* btn = makeDisabledBtn("ATT", this);
-        btn->setToolTip("Attenuator control (NYI)");
+        auto* btn = makeMenuBtn("ATT", this);
+        btn->setObjectName(QStringLiteral("attMenuButton"));
+        btn->setToolTip("Open the step attenuator");
+        connect(btn, &QPushButton::clicked, this, &SpectrumOverlayPanel::toggleAttFlyout);
         m_menuBtns.append(btn);  // index 6
     }
 
@@ -291,6 +284,7 @@ SpectrumOverlayPanel::SpectrumOverlayPanel(QWidget* parent)
     buildAntFlyout();
     buildDisplayFlyout();
     buildVaxFlyout();
+    buildAttFlyout();
     buildZoomButtons();
 
     // Install event filter for auto-close on outside click and parent resize tracking
@@ -1007,8 +1001,30 @@ void SpectrumOverlayPanel::setRadioModel(RadioModel* model)
         m_vaxCmb->setToolTip("VAX channel (not yet bound to a radio model)");
         if (m_rxAntCmb) { m_rxAntCmb->setEnabled(false); }
         if (m_txAntCmb) { m_txAntCmb->setEnabled(false); }
+        showAttValues();
         return;
     }
+
+    // R-R3-21: the ATT flyout follows the step attenuator's object.
+    if (StepAttenuatorFacade* att = m_radioModel->stepAttFacade()) {
+        connect(att, &StepAttenuatorFacade::enabledChanged,
+                this, [this](bool) { showAttValues(); });
+        for (auto signal : {&StepAttenuatorFacade::attenuationDbChanged,
+                            &StepAttenuatorFacade::minDbChanged,
+                            &StepAttenuatorFacade::maxDbChanged}) {
+            connect(att, signal, this, [this](int) { showAttValues(); });
+        }
+        connect(att, &StepAttenuatorFacade::windowAvailabilityChanged,
+                this, [this](bool) { showAttValues(); });
+        connect(att, &StepAttenuatorFacade::editRejected, this,
+                [this](const QString& reason) {
+            if (m_attReason) {
+                m_attReason->setText(reason);
+                m_attReason->setVisible(true);
+            }
+        });
+    }
+    showAttValues();
 
     // Any slice topology change can change this pan's resolved slice.
     const auto rebind = [this](int) {
@@ -1206,13 +1222,131 @@ void SpectrumOverlayPanel::toggleVaxFlyout()
     vaxBtn->setStyleSheet(OverlayColors::kMenuBtnActive);
 }
 
+// ── ATT flyout (R-R3-21) ─────────────────────────────────────────────────────
+//
+// The ATT button was a disabled placeholder. It now opens the radio's step
+// attenuator: its on/off and its level, through RadioModel::stepAttFacade(),
+// the object the RX applet's ATT row and Setup > General > Options use. A
+// local window reaches the StepAttenuatorController; a remote window
+// reaches the Core's, and shows the Core's reason while it cannot.
+
+void SpectrumOverlayPanel::buildAttFlyout()
+{
+    m_attFlyout = new QWidget(parentWidget());
+    m_attFlyout->setObjectName(QStringLiteral("attFlyout"));
+    m_attFlyout->setStyleSheet(OverlayColors::kPanelStyle);
+    m_attFlyout->hide();
+
+    auto* vb = new QVBoxLayout(m_attFlyout);
+    vb->setContentsMargins(6, 6, 6, 6);
+    vb->setSpacing(4);
+
+    m_attEnableChk = new QCheckBox(QStringLiteral("Step attenuator"));
+    m_attEnableChk->setObjectName(QStringLiteral("attEnableCheck"));
+    m_attEnableChk->setStyleSheet(OverlayColors::kLabelStyle);
+    m_attEnableChk->setToolTip(QStringLiteral("Use the radio's step attenuator"));
+    vb->addWidget(m_attEnableChk);
+
+    auto* row = new QHBoxLayout;
+    row->setSpacing(4);
+    auto* lbl = new QLabel(QStringLiteral("ATT"));
+    lbl->setStyleSheet(OverlayColors::kLabelStyle);
+    row->addWidget(lbl);
+    m_attSpin = new QSpinBox;
+    m_attSpin->setObjectName(QStringLiteral("attSpin"));
+    m_attSpin->setSuffix(QStringLiteral(" dB"));
+    m_attSpin->setRange(0, 31);
+    m_attSpin->setToolTip(QStringLiteral("Step attenuator level"));
+    row->addWidget(m_attSpin, 1);
+    vb->addLayout(row);
+
+    m_attReason = new QLabel;
+    m_attReason->setObjectName(QStringLiteral("attReason"));
+    m_attReason->setWordWrap(true);
+    m_attReason->setStyleSheet(OverlayColors::kLabelStyle);
+    m_attReason->setVisible(false);
+    vb->addWidget(m_attReason);
+
+    connect(m_attEnableChk, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_updatingFromModel || !m_radioModel) { return; }
+        if (StepAttenuatorFacade* att = m_radioModel->stepAttFacade()) {
+            att->setEnabled(on);
+        }
+        showAttValues();
+    });
+    connect(m_attSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int dB) {
+        if (m_updatingFromModel || !m_radioModel) { return; }
+        if (StepAttenuatorFacade* att = m_radioModel->stepAttFacade()) {
+            att->setAttenuationDb(dB);
+        }
+        showAttValues();
+    });
+
+    m_attFlyout->setFixedWidth(160);
+    m_attFlyout->adjustSize();
+    showAttValues();
+}
+
+void SpectrumOverlayPanel::showAttValues()
+{
+    if (!m_attEnableChk || !m_attSpin || !m_attReason) { return; }
+    StepAttenuatorFacade* att = m_radioModel ? m_radioModel->stepAttFacade() : nullptr;
+    if (!att) {
+        m_attEnableChk->setEnabled(false);
+        m_attSpin->setEnabled(false);
+        m_attReason->setVisible(false);
+        return;
+    }
+    // A local model's object is bound to the radio's controller; a remote
+    // one reaches the Core only while the window says it can.
+    const bool available = att->isBound() || att->windowAvailable();
+    m_updatingFromModel = true;
+    {
+        QSignalBlocker blockChk(m_attEnableChk);
+        QSignalBlocker blockSpin(m_attSpin);
+        m_attEnableChk->setChecked(att->enabled());
+        if (att->maxDb() > att->minDb()) {
+            m_attSpin->setRange(att->minDb(), att->maxDb());
+        }
+        m_attSpin->setValue(att->attenuationDb());
+    }
+    m_updatingFromModel = false;
+    m_attEnableChk->setEnabled(available);
+    m_attSpin->setEnabled(available && att->enabled());
+    m_attReason->setText(available ? QString() : att->windowUnavailableReason());
+    m_attReason->setVisible(!available);
+}
+
+void SpectrumOverlayPanel::toggleAttFlyout()
+{
+    // Button index 6 (ATT)
+    QPushButton* attBtn = m_menuBtns[6];
+
+    if (m_activeFlyout == m_attFlyout) {
+        hideFlyout();
+        return;
+    }
+    hideFlyout();
+    showAttValues();
+    m_attFlyout->adjustSize();
+
+    const int btnCenterY = attBtn->y() + attBtn->height() / 2;
+    const int panelY = y() + btnCenterY - m_attFlyout->sizeHint().height() / 2;
+    m_attFlyout->move(x() + width(), std::max(0, panelY));
+    m_attFlyout->raise();
+    m_attFlyout->show();
+    m_activeFlyout = m_attFlyout;
+    m_activeButton = attBtn;
+    attBtn->setStyleSheet(OverlayColors::kMenuBtnActive);
+}
+
 void SpectrumOverlayPanel::wheelEvent(QWheelEvent* event) { event->accept(); }
 void SpectrumOverlayPanel::mousePressEvent(QMouseEvent* event) { event->accept(); }
 void SpectrumOverlayPanel::mouseReleaseEvent(QMouseEvent* event) { event->accept(); }
 
 // ── Waterfall zoom buttons ─────────────────────────────────────────────────────
 // Four small buttons [S][B][-][+] docked at bottom-left of the spectrum widget.
-// [S] = Segment zoom (fit visible slice passband), [B] = Band zoom (fit whole band),
+// [S] = Segment zoom (fit the band plan segment), [B] = Band zoom (fit whole band),
 // [-] = zoom out, [+] = zoom in.
 // From AetherSDR SpectrumOverlayMenu.cpp zoom controls section.
 
@@ -1247,10 +1381,10 @@ void SpectrumOverlayPanel::buildZoomButtons()
     m_zoomOutBtn  = makeZBtn(QStringLiteral("-"));
     m_zoomInBtn   = makeZBtn(QStringLiteral("+"));
 
-    m_zoomSegBtn->setToolTip(QStringLiteral("Segment zoom — fit visible slice passband"));
-    m_zoomBandBtn->setToolTip(QStringLiteral("Band zoom — fit entire amateur band"));
-    m_zoomOutBtn->setToolTip(QStringLiteral("Zoom out — increase visible bandwidth"));
-    m_zoomInBtn->setToolTip(QStringLiteral("Zoom in — decrease visible bandwidth"));
+    m_zoomSegBtn->setToolTip(QStringLiteral("Segment zoom: fit the band plan segment the slice is in"));
+    m_zoomBandBtn->setToolTip(QStringLiteral("Band zoom: fit the whole amateur band"));
+    m_zoomOutBtn->setToolTip(QStringLiteral("Zoom out: show more bandwidth"));
+    m_zoomInBtn->setToolTip(QStringLiteral("Zoom in: show less bandwidth"));
 
     connect(m_zoomSegBtn,  &QPushButton::clicked, this, &SpectrumOverlayPanel::zoomSegment);
     connect(m_zoomBandBtn, &QPushButton::clicked, this, &SpectrumOverlayPanel::zoomBand);

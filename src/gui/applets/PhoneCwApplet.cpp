@@ -86,6 +86,8 @@
 #include "gui/widgets/DexpPeakMeter.h"
 #include "NyiOverlay.h"
 #include "core/BoardCapabilities.h"
+#include "core/HpsdrModel.h"
+#include "core/MicProfileManager.h"
 #include "core/AudioEngine.h"
 #include "core/MoxController.h"
 #include "core/TxChannel.h"
@@ -103,6 +105,7 @@
 #include <QSlider>
 #include <QStackedWidget>
 #include <QTimer>
+#include <QStandardItemModel>
 #include <QVariant>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -118,7 +121,6 @@ static constexpr int kValueW   = 36;
 // NYI phase tags
 static const QString kNyiPhone  = QStringLiteral("Phase 3I-1");
 // kNyiCw removed — CW page is now a placeholder (Phase 3M-2 deferred).
-static const QString kNyiProc   = QStringLiteral("Phase 3I-3");
 static const QString kNyiVax    = QStringLiteral("Phase 3-VAX");
 static const QString kNyiFm     = QStringLiteral("Phase 3I-1");
 
@@ -282,6 +284,9 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
                                  QStringLiteral("-15"),   QStringLiteral("-10"),
                                  QStringLiteral("-5"),    QStringLiteral("0")});
     m_compGauge->setAccessibleName(QStringLiteral("Compression gauge"));
+    m_compGauge->setToolTip(QStringLiteral(
+        "Speech compression while transmitting, as the Compression meter shows it"));
+    m_compGauge->setValue(0.0);
     vbox->addWidget(m_compGauge);
     vbox->addSpacing(4);
 
@@ -291,6 +296,8 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
     m_micProfileCombo->addItems({QStringLiteral("Default"), QStringLiteral("DX"),
                                  QStringLiteral("Contest"), QStringLiteral("Custom")});
     m_micProfileCombo->setAccessibleName(QStringLiteral("Microphone profile"));
+    m_micProfileCombo->setToolTip(QStringLiteral(
+        "Transmit profile (the same list as the TX applet's profile)"));
     applyComboStyle(m_micProfileCombo);
     vbox->addWidget(m_micProfileCombo);
 
@@ -307,6 +314,10 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
                                     QStringLiteral("LINE"), QStringLiteral("ACC"),
                                     QStringLiteral("PC")});
         m_micSourceCombo->setAccessibleName(QStringLiteral("Microphone source"));
+        m_micSourceCombo->setToolTip(QStringLiteral(
+            "Transmit audio input: the radio's microphone jack (MIC), its "
+            "balanced XLR input (BAL), its line input (LINE), or this "
+            "computer's microphone (PC)"));
         applyComboStyle(m_micSourceCombo);
         row->addWidget(m_micSourceCombo);
 
@@ -519,6 +530,7 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
         m_amCarSlider->setValue(25);
         m_amCarSlider->setStyleSheet(NereusSDR::Style::sliderHStyle());
         m_amCarSlider->setAccessibleName(QStringLiteral("AM carrier level"));
+        m_amCarSlider->setToolTip(QStringLiteral("AM carrier level, in percent"));
         row->addWidget(m_amCarSlider, 1);
 
         m_amCarLabel = new QLabel(QStringLiteral("25"), page);
@@ -538,14 +550,12 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
     //     members removed entirely)
     // #11 m_dexpBtn / m_dexpSlider — wired (Phase 3M-3a-iii Task 15;
     //     m_dexpSlider is decorative-only per Thetis quirk, see wireControls())
-    NyiOverlay::markNyi(m_compGauge,        kNyiProc);    // #2 — Phase 3I-3
-    NyiOverlay::markNyi(m_micProfileCombo,  kNyiPhone);   // #3
-    NyiOverlay::markNyi(m_micSourceCombo,   kNyiPhone);   // #4
+    // #2 m_compGauge, #3 m_micProfileCombo, #4 m_micSourceCombo and #13
+    // m_amCarSlider: wired (R-R3-21, see wireControls()).
     NyiOverlay::markNyi(m_accBtn,           kNyiPhone);   // #6
     // #8 m_vaxBtn: wired (Phase 3M-VAX-toggle)
     NyiOverlay::markNyi(m_monBtn,           kNyiPhone);   // #9
     NyiOverlay::markNyi(m_monSlider,        kNyiPhone);   // #9 slider
-    NyiOverlay::markNyi(m_amCarSlider,      kNyiProc);    // #13 — Phase 3I-3
 }
 
 // ── CW page — placeholder until Phase 3M-2 ───────────────────────────────────
@@ -1096,6 +1106,72 @@ void PhoneCwApplet::wireControls()
             this, &PhoneCwApplet::pollDexpMeters);
     m_dexpMeterTimer->start();
 
+    // ── #3 Mic profile combo ↔ MicProfileManager (R-R3-21) ───────────────────
+    // The same profiles the TX applet's profile combo picks from, wired the
+    // same way (TxApplet::setMicProfileManager / rebuildProfileCombo).
+    if (MicProfileManager* mgr = m_model->micProfileManager()) {
+        connect(mgr, &MicProfileManager::profileListChanged,
+                this, &PhoneCwApplet::rebuildMicProfileCombo);
+        connect(mgr, &MicProfileManager::activeProfileChanged,
+                this, [this](const QString& name) {
+            QSignalBlocker b(m_micProfileCombo);
+            const int idx = m_micProfileCombo->findText(name);
+            if (idx >= 0) { m_micProfileCombo->setCurrentIndex(idx); }
+        });
+        connect(m_micProfileCombo, &QComboBox::currentTextChanged,
+                this, [this, &tx](const QString& name) {
+            if (m_updatingFromModel || !m_transmitPermitted || name.isEmpty()) { return; }
+            if (MicProfileManager* m = m_model->micProfileManager()) {
+                m->setActiveProfile(name, &tx);
+            }
+        });
+    }
+    rebuildMicProfileCombo();
+
+    // ── #4 Mic source combo ↔ TransmitModel (R-R3-21) ────────────────────────
+    // Setup > Audio > TX Input's choices: PC mic, or the radio's mic input
+    // with its line-in (Hermes family) or XLR (Saturn) selection.
+    connect(m_micSourceCombo, QOverload<int>::of(&QComboBox::activated),
+            this, [this](int index) {
+        if (m_updatingFromModel || !m_transmitPermitted) { return; }
+        applyMicInput(static_cast<MicInput>(index));
+    });
+    connect(&tx, &TransmitModel::micSourceChanged,
+            this, [this](MicSource) { showMicSourceFromModel(); });
+    connect(&tx, &TransmitModel::lineInChanged,
+            this, [this](bool) { showMicSourceFromModel(); });
+    connect(&tx, &TransmitModel::micXlrChanged,
+            this, [this](bool) { showMicSourceFromModel(); });
+    connect(m_model, &RadioModel::currentRadioChanged,
+            this, [this](const RadioInfo&) { refreshMicSourceItems(); });
+    refreshMicSourceItems();
+
+    // ── #13 AM carrier level ↔ TransmitModel::amCarrierLevel (R-R3-21) ──────
+    {
+        QSignalBlocker b(m_amCarSlider);
+        m_amCarSlider->setRange(TransmitModel::kAmCarrierLevelMin,
+                                TransmitModel::kAmCarrierLevelMax);
+        m_amCarSlider->setValue(tx.amCarrierLevel());
+        m_amCarLabel->setText(QString::number(tx.amCarrierLevel()));
+    }
+    connect(m_amCarSlider, &QSlider::valueChanged, this, [this, &tx](int v) {
+        m_amCarLabel->setText(QString::number(v));
+        if (m_updatingFromModel || !m_transmitPermitted) { return; }
+        tx.setAmCarrierLevel(v);
+    });
+    connect(&tx, &TransmitModel::amCarrierLevelChanged, this, [this](int percent) {
+        QSignalBlocker b(m_amCarSlider);
+        m_amCarSlider->setValue(percent);
+        m_amCarLabel->setText(QString::number(percent));
+    });
+
+    // ── #2 Compression gauge: back to none on receive (R-R3-21) ─────────────
+    // MainWindow feeds setCompressionReading() from the meter poller while
+    // transmitting; the poller stops the transmit readings on receive.
+    connect(&tx, &TransmitModel::moxChanged, this, [this](bool on) {
+        if (!on) { setCompressionReading(0.0); }
+    });
+
     // ── #1 Mic level gauge ────────────────────────────────────────────────────
     // 50 ms timer (20 fps) — same polling cadence as VAX/HGauge meter precedent.
     // Reads AudioEngine::pcMicInputLevel() (linear 0..1, thread-safe atomic) +
@@ -1242,10 +1318,132 @@ void PhoneCwApplet::updateTransmitControlAvailability()
     };
 
     apply(m_micLevelSlider);
+    apply(m_micProfileCombo);
+    apply(m_micSourceCombo);
+    apply(m_amCarSlider);
     apply(m_procBtn);
     apply(m_procSlider);
     apply(m_vaxBtn);
     apply(m_dexpBtn);
+}
+
+// ── R-R3-21: compression gauge, mic profile and mic source ───────────────────
+
+void PhoneCwApplet::setCompressionReading(double dB)
+{
+    if (!m_compGauge) { return; }
+    // Gauge range -25..0 dB (AetherSDR PhoneCwApplet layout).
+    const double v = std::isfinite(dB) ? std::clamp(dB, -25.0, 0.0) : 0.0;
+    m_compGauge->setValue(v);
+}
+
+void PhoneCwApplet::rebuildMicProfileCombo()
+{
+    MicProfileManager* mgr = m_model ? m_model->micProfileManager() : nullptr;
+    if (!m_micProfileCombo || !mgr) { return; }
+    QSignalBlocker b(m_micProfileCombo);
+    m_micProfileCombo->clear();
+    m_micProfileCombo->addItems(mgr->profileNames());
+    const int idx = m_micProfileCombo->findText(mgr->activeProfileName());
+    if (idx >= 0) { m_micProfileCombo->setCurrentIndex(idx); }
+}
+
+namespace {
+
+bool isHermesFamily(HPSDRHW hw)
+{
+    // The boards Setup > Audio > TX Input shows its Mic In / Line In
+    // choice for (AudioTxInputPage::updateRadioMicGroupVisibility).
+    return hw == HPSDRHW::Hermes || hw == HPSDRHW::HermesII
+        || hw == HPSDRHW::Angelia || hw == HPSDRHW::Atlas;
+}
+
+bool isSaturnFamily(HPSDRHW hw)
+{
+    // The boards it shows the 3.5 mm jack / XLR choice for.
+    return hw == HPSDRHW::Saturn || hw == HPSDRHW::SaturnMKII;
+}
+
+} // namespace
+
+void PhoneCwApplet::refreshMicSourceItems()
+{
+    if (!m_micSourceCombo || !m_model) { return; }
+    auto* items = qobject_cast<QStandardItemModel*>(m_micSourceCombo->model());
+    if (!items) { return; }
+
+    const BoardCapabilities& caps = m_model->boardCapabilities();
+    const HPSDRHW hw = caps.board;
+    const QString noJack = tr("This radio has no microphone jack.");
+    struct Row { MicInput input; bool available; QString why; };
+    const Row rows[] = {
+        {MicInput::Mic, caps.hasMicJack, noJack},
+        {MicInput::Balanced, caps.hasMicJack && isSaturnFamily(hw),
+         caps.hasMicJack ? tr("This radio has no balanced XLR input.") : noJack},
+        {MicInput::Line, caps.hasMicJack && isHermesFamily(hw),
+         caps.hasMicJack ? tr("This radio has no line input.") : noJack},
+        {MicInput::Accessory, false, tr("This radio has no accessory audio input.")},
+        {MicInput::Pc, true, QString()},
+    };
+    for (const Row& row : rows) {
+        QStandardItem* item = items->item(static_cast<int>(row.input));
+        if (!item) { continue; }
+        item->setEnabled(row.available);
+        item->setToolTip(row.available ? QString() : row.why);
+    }
+    showMicSourceFromModel();
+}
+
+void PhoneCwApplet::showMicSourceFromModel()
+{
+    if (!m_micSourceCombo || !m_model) { return; }
+    const TransmitModel& tx = m_model->transmitModel();
+    // VAX has its own button; the combo keeps showing the source VAX
+    // hands back to (TransmitModel::previousNonVaxMicSource).
+    const MicSource src = tx.micSource() == MicSource::Vax
+        ? tx.previousNonVaxMicSource() : tx.micSource();
+    MicInput shown = MicInput::Pc;
+    if (src == MicSource::Radio) {
+        const HPSDRHW hw = m_model->boardCapabilities().board;
+        if (isSaturnFamily(hw) && tx.micXlr()) {
+            shown = MicInput::Balanced;
+        } else if (isHermesFamily(hw) && tx.lineIn()) {
+            shown = MicInput::Line;
+        } else {
+            shown = MicInput::Mic;
+        }
+    }
+    QSignalBlocker b(m_micSourceCombo);
+    m_micSourceCombo->setCurrentIndex(static_cast<int>(shown));
+}
+
+void PhoneCwApplet::applyMicInput(MicInput input)
+{
+    if (!m_model) { return; }
+    TransmitModel& tx = m_model->transmitModel();
+    const HPSDRHW hw = m_model->boardCapabilities().board;
+    switch (input) {
+    case MicInput::Pc:
+        tx.setMicSource(MicSource::Pc);
+        break;
+    case MicInput::Mic:
+        if (isSaturnFamily(hw)) { tx.setMicXlr(false); }
+        if (isHermesFamily(hw)) { tx.setLineIn(false); }
+        tx.setMicSource(MicSource::Radio);
+        break;
+    case MicInput::Balanced:
+        tx.setMicXlr(true);
+        tx.setMicSource(MicSource::Radio);
+        break;
+    case MicInput::Line:
+        tx.setLineIn(true);
+        tx.setMicSource(MicSource::Radio);
+        break;
+    case MicInput::Accessory:
+        break;  // disabled item: no radio here has one
+    }
+    // The model may coerce (HL2 has no jack): show what it settled on.
+    showMicSourceFromModel();
 }
 
 // ── pollDexpMeters — Phase 3M-3a-iii Task 15 ─────────────────────────────────

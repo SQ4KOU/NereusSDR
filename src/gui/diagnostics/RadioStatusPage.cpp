@@ -781,7 +781,9 @@ void RadioStatusPage::onBwPollTick()
         ).arg(QLatin1String(Style::kTextPrimary)));
     }
 
-    m_bwSeqGapLabel->setText(QStringLiteral("—"));  // Phase 3L will fill this in
+    // R-R3-21: the EP6 sequence error count P1RadioConnection keeps (the
+    // Connection Quality page shows the same number).
+    m_bwSeqGapLabel->setText(QString::number(bw.ep6SequenceErrorCount()));
 }
 
 void RadioStatusPage::refreshPttPills()

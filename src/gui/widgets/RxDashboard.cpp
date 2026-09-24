@@ -104,6 +104,19 @@ void RxDashboard::buildUi()
     hbox->addWidget(m_apfBadge);
     hbox->addWidget(m_sqlBadge);
 
+    // R-R3-21: a click opens the VFO flag tab that holds the setting.
+    const std::pair<StatusBadge*, Badge> clickable[] = {
+        {m_modeBadge, Badge::Mode}, {m_filterBadge, Badge::Filter},
+        {m_agcBadge, Badge::Agc},   {m_nrBadge, Badge::Nr},
+        {m_nbBadge, Badge::Nb},     {m_apfBadge, Badge::Apf},
+        {m_sqlBadge, Badge::Squelch},
+    };
+    for (const auto& [badge, which] : clickable) {
+        badge->setClickable(true);
+        connect(badge, &StatusBadge::clicked, this,
+                [this, which = which]() { emit badgeClicked(which); });
+    }
+
     // Active-only badges hidden by default — "no NYI" rule.
     m_nrBadge->setVisible(false);
     m_nbBadge->setVisible(false);

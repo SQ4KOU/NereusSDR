@@ -350,6 +350,12 @@ warren@wpratt.com
 #include "meters/ItemGroup.h"
 #include "meters/MeterPoller.h"
 #include "meters/VfoDisplayItem.h"  // 3M-1c L.3 — TX badge routing
+#include "meters/ModeButtonItem.h"      // R-R3-21 container controls
+#include "meters/FilterButtonItem.h"
+#include "meters/AntennaButtonItem.h"
+#include "meters/TuneStepButtonItem.h"
+#include "models/FilterPresetStore.h"
+#include "core/SkuUiProfile.h"
 // Remote Daemon R2 Task 12: source-selector wiring below (setSourceSelector).
 #include "core/meters/SliceMeterPump.h"
 #include "applets/AppletPanelWidget.h"
@@ -415,6 +421,7 @@ warren@wpratt.com
 #include "setup/DspSetupPages.h"   // NrAnfSetupPage::selectSubtab
 #include "setup/DspOptionsPage.h"  // applyPersistedHighResFilter (R-R3-21)
 #include "setup/MultimeterPage.h"  // applyPersistedSettings (R-R3-21)
+#include "setup/HardwarePage.h"    // showAntennaTab (R-R3-21)
 #include "gui/DspAssetDialog.h"
 #include "models/PureSignalSettings.h"
 #include "core/session/PureSignalSessionFacade.h"
@@ -1706,6 +1713,8 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             [this](int idx) {
         if (m_radioModel) { m_radioModel->removeSlice(idx); }
     });
+    connect(newFlag, &VfoWidget::diversityRequested,
+            this, &MainWindow::openDiversityDialog);
     // Phase 3F (Bug 2): the floating ✕ close button emits closeRequested.
     // Wire it to removeSlice so operators can dismiss a flag they opened.
     // (removeSliceRequested above is the right-click-menu path; this is the
@@ -2865,6 +2874,15 @@ void MainWindow::ensureOverlayPanels()
         connect(panel, &SpectrumOverlayPanel::addTnfClicked, this,
                 &MainWindow::onAddTnfClicked, Qt::UniqueConnection);
 
+        // R-R3-21: the zoom buttons zoom the pan they are drawn on, through
+        // the same path as its Ctrl+wheel zoom. They emitted signals nothing
+        // received. Step from AetherSDR src/gui/SpectrumWidget.cpp:2168-2169
+        // [@1e0718ad]: emitZoom(1.5) out, emitZoom(1.0 / 1.5) in.
+        connect(panel, &SpectrumOverlayPanel::zoomOut, sw, [sw]() { sw->zoomBy(1.5); });
+        connect(panel, &SpectrumOverlayPanel::zoomIn, sw, [sw]() { sw->zoomBy(1.0 / 1.5); });
+        connect(panel, &SpectrumOverlayPanel::zoomSegment, sw, &SpectrumWidget::zoomToSegment);
+        connect(panel, &SpectrumOverlayPanel::zoomBand, sw, &SpectrumWidget::zoomToBand);
+
         // Band clicks act on this pan's active slice rather than the globally
         // active one, for the same reason (#118 fixed the mode-vs-frequency
         // half of this; the pan-targeting half arrives with per-pan strips).
@@ -3789,8 +3807,15 @@ void MainWindow::buildUI()
         if (auto* c = m_containerManager->container(id)) {
             c->setBoardCapabilities(m_radioModel->boardCapabilities());
             wireContainerBandClick(c);
+            wireContainerControls(c);
         }
     });
+    // R-R3-21: follow the active slice so the container controls show it.
+    connect(m_radioModel, &RadioModel::activeSliceChanged, this,
+            [this](int) { followActiveSliceForContainers(); });
+    connect(m_radioModel, &RadioModel::sliceAdded, this,
+            [this](int) { followActiveSliceForContainers(); });
+    followActiveSliceForContainers();
 
     // Create the MeterPoller BEFORE restoreState / populateDefaultMeter
     // so the meterReadyForPolling signal fires into a live poller as
@@ -6255,6 +6280,15 @@ void MainWindow::populateDefaultMeter()
     // PhoneCwApplet — Phone + CW pages, NYI
     m_phoneCwApplet = new PhoneCwApplet(m_radioModel, nullptr);
     panel->addApplet(m_phoneCwApplet);
+    // R-R3-21: the compression gauge shows the meters' Compression reading.
+    if (m_meterPoller) {
+        connect(m_meterPoller, &MeterPoller::txMeterReading, m_phoneCwApplet,
+                [applet = m_phoneCwApplet](int bindingId, double value) {
+            if (bindingId == MeterBinding::TxComp) {
+                applet->setCompressionReading(value);
+            }
+        });
+    }
 
     // RadeApplet — Phase 3R L2.  Sits alongside PhoneCwApplet but is
     // visible only when the active slice's mode is DSPMode::RADE_U or
@@ -6731,20 +6765,28 @@ void MainWindow::buildMenuBar()
     }
 
     {
+        // R-R3-21: each entry opens the Setup page that already does the
+        // job. TX and mic profiles are one set (MicProfileManager), edited
+        // on Setup > Audio > TX Profile; settings import and export live on
+        // Setup > Diagnostics > Export / Import.
         QMenu* profilesMenu = fileMenu->addMenu(QStringLiteral("&Profiles"));
         QAction* txProfilesAction = profilesMenu->addAction(QStringLiteral("&TX Profiles..."));
-        txProfilesAction->setEnabled(false);
-        txProfilesAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        txProfilesAction->setToolTip(QStringLiteral("Open Setup > Audio > TX Profile"));
+        connect(txProfilesAction, &QAction::triggered, this,
+                [this]() { openSetupAtPage(QStringLiteral("TX Profile")); });
         QAction* micProfilesAction = profilesMenu->addAction(QStringLiteral("&Mic Profiles..."));
-        micProfilesAction->setEnabled(false);
-        micProfilesAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        micProfilesAction->setToolTip(QStringLiteral("Open Setup > Audio > TX Profile"));
+        connect(micProfilesAction, &QAction::triggered, this,
+                [this]() { openSetupAtPage(QStringLiteral("TX Profile")); });
         profilesMenu->addSeparator();
         QAction* importAction = profilesMenu->addAction(QStringLiteral("&Import..."));
-        importAction->setEnabled(false);
-        importAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        importAction->setToolTip(QStringLiteral("Open Setup > Diagnostics > Export / Import"));
+        connect(importAction, &QAction::triggered, this,
+                [this]() { openSetupAtPage(QStringLiteral("Export / Import")); });
         QAction* exportAction = profilesMenu->addAction(QStringLiteral("&Export..."));
-        exportAction->setEnabled(false);
-        exportAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        exportAction->setToolTip(QStringLiteral("Open Setup > Diagnostics > Export / Import"));
+        connect(exportAction, &QAction::triggered, this,
+                [this]() { openSetupAtPage(QStringLiteral("Export / Import")); });
     }
 
     fileMenu->addSeparator();
@@ -6852,9 +6894,11 @@ void MainWindow::buildMenuBar()
     radioMenu->addSeparator();
 
     {
+        // R-R3-21: Setup > Hardware Config, on its Antenna / ALEX tab.
         QAction* antennaSetupAction = radioMenu->addAction(QStringLiteral("&Antenna Setup…"));
-        antennaSetupAction->setEnabled(false);
-        antennaSetupAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        antennaSetupAction->setToolTip(
+            QStringLiteral("Open Setup > Hardware Config > Antenna / ALEX"));
+        connect(antennaSetupAction, &QAction::triggered, this, &MainWindow::openAntennaSetup);
     }
     {
         QAction* transvertersAction = radioMenu->addAction(QStringLiteral("Trans&verters…"));
@@ -7397,9 +7441,11 @@ void MainWindow::buildMenuBar()
                 this, &MainWindow::openPureSignalDialog);
     }
     {
+        // R-R3-21: the same dialog as Tools > Diversity.
         QAction* divAction = dspMenu->addAction(QStringLiteral("&Diversity..."));
-        divAction->setEnabled(false);
-        divAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        divAction->setToolTip(QStringLiteral(
+            "Open the Diversity dialog (Slice A: enable, phase, gain)."));
+        connect(divAction, &QAction::triggered, this, &MainWindow::openDiversityDialog);
     }
 
     // =========================================================================
@@ -7441,16 +7487,20 @@ void MainWindow::buildMenuBar()
         placeholder->setToolTip(QStringLiteral("VHF bands NYI — Phase X"));
     }
 
+    // R-R3-21: GEN and WWV go through the band buttons' path, like the HF
+    // entries above, so the band's saved frequency, mode and filter come
+    // back (a first visit uses the band's seed). GEN was an empty submenu
+    // and WWV set 10.0 MHz directly, skipping the per-band memory.
     {
-        QMenu* genMenu = bandMenu->addMenu(QStringLiteral("&GEN"));
-        QAction* placeholder = genMenu->addAction(QStringLiteral("(NYI — Phase X)"));
-        placeholder->setEnabled(false);
-        placeholder->setToolTip(QStringLiteral("GEN coverage NYI — Phase X"));
+        QAction* genAction = bandMenu->addAction(QStringLiteral("&GEN"));
+        genAction->setToolTip(QStringLiteral("General coverage"));
+        connect(genAction, &QAction::triggered, this, [this]() {
+            if (m_radioModel) { m_radioModel->onBandButtonClicked(Band::GEN); }
+        });
     }
 
     bandMenu->addAction(QStringLiteral("&WWV (10.0 MHz)"), this, [this]() {
-        SliceModel* slice = m_radioModel->activeSlice();
-        if (slice) { slice->setFrequency(10.0e6); }
+        if (m_radioModel) { m_radioModel->onBandButtonClicked(Band::WWV); }
     });
 
     bandMenu->addSeparator();
@@ -7715,16 +7765,7 @@ void MainWindow::buildMenuBar()
         divDlgAct->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+D")));
         divDlgAct->setToolTip(QStringLiteral(
             "Open the Diversity dialog (Slice A: enable, phase, gain)."));
-        connect(divDlgAct, &QAction::triggered, this, [this]() {
-            static DiversityDialog* dlg = nullptr;
-            if (!dlg) {
-                dlg = new DiversityDialog(m_radioModel, this);
-                dlg->setAttribute(Qt::WA_DeleteOnClose, false);
-            }
-            dlg->show();
-            dlg->raise();
-            dlg->activateWindow();
-        });
+        connect(divDlgAct, &QAction::triggered, this, &MainWindow::openDiversityDialog);
     }
 
     toolsMenu->addSeparator();
@@ -7752,9 +7793,11 @@ void MainWindow::buildMenuBar()
         connect(tciAction, &QAction::triggered, this, &MainWindow::openTciSetupPage);
     }
     {
+        // R-R3-21: Setup > Audio > VAX, where the VAX channels are set up.
         QAction* daxAction = toolsMenu->addAction(QStringLiteral("&VAX Audio..."));
-        daxAction->setEnabled(false);
-        daxAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        daxAction->setToolTip(QStringLiteral("Open Setup > Audio > VAX"));
+        connect(daxAction, &QAction::triggered, this,
+                [this]() { openSetupAtPage(QStringLiteral("VAX")); });
     }
     {
         QAction* midiAction = toolsMenu->addAction(QStringLiteral("&MIDI Mapping..."));
@@ -7847,9 +7890,12 @@ void MainWindow::buildMenuBar()
     helpMenu->addSeparator();
 
     {
+        // R-R3-21: the release notes the About dialog links to.
         QAction* whatsNewAction = helpMenu->addAction(QStringLiteral("What's &New"));
-        whatsNewAction->setEnabled(false);
-        whatsNewAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        whatsNewAction->setToolTip(QStringLiteral("Open the NereusSDR release notes"));
+        connect(whatsNewAction, &QAction::triggered, this, []() {
+            QDesktopServices::openUrl(AboutDialog::releaseNotesUrl());
+        });
     }
 
     helpMenu->addSeparator();
@@ -8269,6 +8315,26 @@ void MainWindow::buildStatusBar()
     // "—" until the slice receives live values from the radio.
     m_rxDashboard = new RxDashboard(barWidget);
     hbox->addWidget(m_rxDashboard);
+    // R-R3-21: a badge click opens the VFO flag tab holding that setting,
+    // on the flag of the slice the dashboard describes.
+    connect(m_rxDashboard, &RxDashboard::badgeClicked, this,
+            [this](RxDashboard::Badge badge) {
+        SliceModel* slice = m_rxDashboard ? m_rxDashboard->slice() : nullptr;
+        VfoWidget* flag = slice ? m_vfoWidgetsBySlice.value(slice->sliceIndex()) : nullptr;
+        if (!flag) { return; }
+        VfoWidget::Tab tab = VfoWidget::Tab::Mode;
+        switch (badge) {
+        case RxDashboard::Badge::Mode:
+        case RxDashboard::Badge::Filter:  tab = VfoWidget::Tab::Mode;  break;
+        case RxDashboard::Badge::Agc:
+        case RxDashboard::Badge::Squelch: tab = VfoWidget::Tab::Audio; break;
+        case RxDashboard::Badge::Nr:
+        case RxDashboard::Badge::Nb:
+        case RxDashboard::Badge::Apf:     tab = VfoWidget::Tab::Dsp;   break;
+        }
+        flag->showTab(tab);
+        flag->raise();
+    });
 
     // ── Phase 3M-4 Task 10: PSA bottom-banner pair (FB + PS) ──────────────────
     // Source-first port of Thetis ucInfoBar.cs:820-1098 [v2.10.3.13].
@@ -9253,6 +9319,241 @@ void MainWindow::openSetup(const QString& pageKey)
     }
     dialog->show();
     dialog->raise();
+}
+
+// ── R-R3-21: container Mode / Filter / Antenna / Tune Step / VFO display ────
+//
+// Each ButtonBoxItem is a port of a Thetis MeterManager.cs button box; its
+// click did nothing past ContainerWidget's relay (only the band buttons were
+// connected). They now act on the active slice through the same SliceModel
+// setters the VFO flag and the RX applet use, so a remote window changes the
+// Core's slice exactly as those do. Acting on the container's own slice is a
+// later change (the unfinished-controls plan, Task 3).
+
+void MainWindow::wireContainerControls(ContainerWidget* c)
+{
+    if (!c) { return; }
+    connect(c, &ContainerWidget::modeClicked, this, &MainWindow::onContainerModeClicked);
+    connect(c, &ContainerWidget::filterClicked, this, &MainWindow::onContainerFilterClicked);
+    connect(c, &ContainerWidget::antennaSelected,
+            this, &MainWindow::onContainerAntennaSelected);
+    connect(c, &ContainerWidget::tuneStepSelected,
+            this, &MainWindow::onContainerTuneStepSelected);
+    connect(c, &ContainerWidget::frequencyChangeRequested,
+            this, &MainWindow::onContainerFrequencyStep);
+    // An item added later (Container settings > Add) shows the slice's
+    // state from the next refresh; one now covers restored containers.
+    connect(c, &ContainerWidget::contentChanged, this,
+            [this](QWidget*) { refreshContainerControls(); });
+    refreshContainerControls();
+}
+
+void MainWindow::followActiveSliceForContainers()
+{
+    for (const QMetaObject::Connection& conn : std::as_const(m_containerSliceConnections)) {
+        QObject::disconnect(conn);
+    }
+    m_containerSliceConnections.clear();
+    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    if (slice) {
+        const auto refresh = [this]() { refreshContainerControls(); };
+        m_containerSliceConnections
+            << connect(slice, &SliceModel::frequencyChanged, this, refresh)
+            << connect(slice, &SliceModel::dspModeChanged, this, refresh)
+            << connect(slice, &SliceModel::filterChanged, this, refresh)
+            << connect(slice, &SliceModel::stepHzChanged, this, refresh)
+            << connect(slice, &SliceModel::rxAntennaChanged, this, refresh)
+            << connect(slice, &SliceModel::txAntennaChanged, this, refresh);
+    }
+    refreshContainerControls();
+}
+
+void MainWindow::refreshContainerControls()
+{
+    if (!m_containerManager || !m_radioModel) { return; }
+    SliceModel* slice = m_radioModel->activeSlice();
+    if (!slice) { return; }
+
+    const QString modeName = SliceModel::modeName(slice->dspMode());
+    int modeIndex = -1;
+    for (int i = 0; ; ++i) {
+        const QString label = ModeButtonItem::modeLabel(i);
+        if (label.isEmpty()) { break; }
+        if (label == modeName) { modeIndex = i; break; }
+    }
+
+    QList<FilterPreset> presets;
+    if (FilterPresetStore* store = m_radioModel->filterPresetStore()) {
+        presets = store->presetsForMode(slice->dspMode());
+    }
+    int filterIndex = -1;
+    for (int i = 0; i < presets.size(); ++i) {
+        // RxApplet::updateFilterButtons tolerance: 50 Hz per edge.
+        if (qAbs(slice->filterLow() - presets[i].low) <= 50
+            && qAbs(slice->filterHigh() - presets[i].high) <= 50) {
+            filterIndex = i;
+            break;
+        }
+    }
+
+    int stepIndex = -1;
+    for (int i = 0; TuneStepButtonItem::stepHz(i) != 0; ++i) {
+        if (TuneStepButtonItem::stepHz(i) == slice->stepHz()) { stepIndex = i; break; }
+    }
+
+    const auto antIndex = [](const QString& ant) {
+        if (ant == QLatin1String("ANT1")) { return 0; }
+        if (ant == QLatin1String("ANT2")) { return 1; }
+        if (ant == QLatin1String("ANT3")) { return 2; }
+        return -1;
+    };
+
+    const int widthHz = std::abs(slice->filterHigh() - slice->filterLow());
+    const QString filterText = widthHz >= 1000
+        ? QStringLiteral("%1k").arg(widthHz / 1000.0, 0, 'f', widthHz % 1000 == 0 ? 0 : 1)
+        : QString::number(widthHz);
+    const Band band = bandFromFrequency(slice->frequency());
+
+    m_containerManager->forEachMeterItem([&](MeterItem* item) {
+        if (auto* mode = qobject_cast<ModeButtonItem*>(item)) {
+            mode->setActiveMode(modeIndex);
+        } else if (auto* filter = qobject_cast<FilterButtonItem*>(item)) {
+            for (int i = 0; i < presets.size() && i < 10; ++i) {
+                if (!presets[i].name.isEmpty()) { filter->setFilterLabel(i, presets[i].name); }
+            }
+            filter->setActiveFilter(filterIndex);
+        } else if (auto* step = qobject_cast<TuneStepButtonItem*>(item)) {
+            step->setActiveStep(stepIndex);
+        } else if (auto* ant = qobject_cast<AntennaButtonItem*>(item)) {
+            ant->setActiveRxAntenna(antIndex(slice->rxAntenna()));
+            ant->setActiveTxAntenna(antIndex(slice->txAntenna()));
+        } else if (auto* vfo = qobject_cast<VfoDisplayItem*>(item)) {
+            vfo->setFrequency(static_cast<int64_t>(std::llround(slice->frequency())));
+            vfo->setModeLabel(modeName);
+            vfo->setFilterLabel(filterText);
+            vfo->setBandLabel(bandLabel(band));
+        }
+    });
+    for (ContainerWidget* c : m_containerManager->allContainers()) {
+        if (c) { c->update(); }
+    }
+}
+
+void MainWindow::onContainerModeClicked(int index)
+{
+    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    if (!slice) { return; }
+    // From Thetis MeterManager.cs:10277 [v2.10.3.15] (clsModeButtonBox.setMode):
+    //   if (abortForLockedVFO()) return;
+    if (slice->locked()) { return; }
+    const QString label = ModeButtonItem::modeLabel(index);
+    if (label.isEmpty()) { return; }
+    slice->setDspMode(SliceModel::modeFromName(label));
+}
+
+void MainWindow::onContainerFilterClicked(int index)
+{
+    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    FilterPresetStore* store = m_radioModel ? m_radioModel->filterPresetStore() : nullptr;
+    if (!slice || !store) { return; }
+    // From Thetis MeterManager.cs:7952 [v2.10.3.15] (clsFilterButtonBox.MouseUp):
+    //   Filter f = (Filter)((int)Filter.F1 + index); console.RX1Filter = f;
+    // F1..F10 are the mode's presets, as the RX applet and the VFO flag
+    // apply them. Var1 / Var2 (index 10, 11) have no NereusSDR filter yet.
+    const QList<FilterPreset> presets = store->presetsForMode(slice->dspMode());
+    if (index < 0 || index >= presets.size()) { return; }
+    slice->setFilter(presets[index].low, presets[index].high);
+}
+
+void MainWindow::onContainerAntennaSelected(int index)
+{
+    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    if (!slice) { return; }
+    // From Thetis MeterManager.cs:9974-9985 [v2.10.3.15] (clsAntennaButtonBox.MouseUp):
+    //   if (index >= 0 && index <= 2) setRXAntenna(index, _rx1_band);
+    //   if (index >= 3 && index <= 4) // ignore xvtr for now
+    //       setAuxAntenna(index, _rx1_band, index == 3, index == 4, index == 5);
+    //   if (index >= 6 && index <= 8)
+    //       setTXAntenna(index - 6, _tx_band);//[2.10.3.9]MW0LGE fix, was using _rx1_band
+    //   if (index == 9) toggleTxRxAnt();
+    // The slice setters route to AlexController for the slice's band, as
+    // the VFO flag's and RX applet's antenna pickers do (RadioModel's
+    // rxAntennaChanged / txAntennaChanged handlers). Rx/Tx (index 9) has
+    // no NereusSDR counterpart yet.
+    if (index >= 0 && index <= 2) {
+        slice->setRxAntenna(QStringLiteral("ANT%1").arg(index + 1));
+    } else if (index >= 3 && index <= 4) {
+        // Buttons 3-4 carry the radio's receive-only input labels
+        // (AntennaButtonItem::setHpsdrSku); RadioModel maps the label back.
+        const SkuUiProfile sku = skuUiProfileFor(m_radioModel->hardwareProfile().model);
+        slice->setRxAntenna(sku.rxOnlyLabels[static_cast<size_t>(index - 3)]);
+    } else if (index >= 6 && index <= 8) {
+        if (!transmitControlsPermitted()) {
+            showToast(tr("Remote transmit controls are not available from this Core yet."),
+                      ToastSeverity::Warning, 3000);
+            return;
+        }
+        SliceModel* tx = m_radioModel->txBoundSlice();
+        (tx ? tx : slice)->setTxAntenna(QStringLiteral("ANT%1").arg(index - 5));
+    }
+}
+
+void MainWindow::onContainerTuneStepSelected(int index)
+{
+    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    const int hz = TuneStepButtonItem::stepHz(index);
+    if (!slice || hz <= 0) { return; }
+    // From Thetis MeterManager.cs:8242 [v2.10.3.15] (clsTunestepButtons.MouseUp):
+    //   _console.TuneStepIndex = index;
+    slice->setStepHz(hz);
+}
+
+void MainWindow::onContainerFrequencyStep(int64_t deltaHz)
+{
+    SliceModel* slice = m_radioModel ? m_radioModel->activeSlice() : nullptr;
+    if (!slice || deltaHz == 0) { return; }
+    // SliceModel::setFrequency refuses a locked slice itself.
+    slice->setFrequency(slice->frequency() + static_cast<double>(deltaHz));
+}
+
+void MainWindow::openSetupAtPage(const QString& label)
+{
+    auto* dialog = createSetupDialog();
+    if (dialog == nullptr) {
+        return;  // the gate refused and has already said why
+    }
+    dialog->selectPage(label);
+    dialog->show();
+    dialog->raise();
+}
+
+void MainWindow::openAntennaSetup()
+{
+    auto* dialog = createSetupDialog();
+    if (dialog == nullptr) {
+        return;
+    }
+    // selectPage realizes the lazily built page before it returns.
+    dialog->selectPage(QStringLiteral("Hardware Config"));
+    if (auto* hw = dialog->findChild<HardwarePage*>()) {
+        hw->showAntennaTab();
+    }
+    dialog->show();
+    dialog->raise();
+}
+
+// Phase 3F Sub-Epic G T4: Diversity dialog (bench minimum). Lazy, one per
+// window, kept alive across close so its own state survives a re-open
+// (SliceModel persistence handles the real settings round-trip).
+void MainWindow::openDiversityDialog()
+{
+    if (!m_diversityDialog) {
+        m_diversityDialog = new DiversityDialog(m_radioModel, this);
+        m_diversityDialog->setAttribute(Qt::WA_DeleteOnClose, false);
+    }
+    m_diversityDialog->show();
+    m_diversityDialog->raise();
+    m_diversityDialog->activateWindow();
 }
 
 // Phase 3P-II Phase 4 Task 97: PGXL power cap soft-alert toast.

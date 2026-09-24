@@ -583,7 +583,11 @@ void MeterPoller::pollTxMeters()
         // (the existing setRadioStatus() path); this reading is the WDSP
         // TXA output peak (post-ALC, pre-PA), a different quantity.
         // Both are useful; 3M-1a populates both for completeness.
-        { MeterBinding::TxComp,    static_cast<int>(TxMeterType::OutPeak) },   // TXA_OUT_PK [v2.10.3.13]
+        // R-R3-21: the compression reading. It read TXA_OUT_PK, the output
+        // peak, although TxComp is TXA_COMP_AV (MeterPoller.h) as in
+        // Thetis: From Thetis dsp.cs:1013-1014 [v2.10.3.15]
+        //   case MeterType.COMP: val = GetTXAMeter(channel, txaMeterType.TXA_COMP_AV);
+        { MeterBinding::TxComp,    static_cast<int>(TxMeterType::CompAvg) },   // TXA_COMP_AV [v2.10.3.15]
     };
 
     for (const auto& entry : kTxPollSet) {
@@ -601,6 +605,7 @@ void MeterPoller::pollTxMeters()
             if (!target) { continue; }
             target->updateMeterValue(entry.bindingId, value);
         }
+        emit txMeterReading(entry.bindingId, value);
     }
 }
 

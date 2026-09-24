@@ -38,7 +38,7 @@
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
 //   2026-09-23 - R-R3-21: applyPersistedSettings() carries the saved
-//                 averaging window, unit, decimal and history
+//                 averaging window, update interval, unit, decimal and history
 //                 duration into the meters at startup, not only when this
 //                 page opens. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
@@ -224,6 +224,9 @@ void MultimeterPage::applyPersistedSettings(RadioModel* model)
     // From Thetis udDisplayMeterAvg [v2.10.3.13]
     if (auto* p = model->meterPoller()) {
         p->setAverageWindow(s.value(QStringLiteral("MultimeterAverageWindow"), 1).toInt());
+        // From Thetis udDisplayMeterDelay [v2.10.3.13]: the meter update
+        // interval (R-R3-21: it too applied only when this page opened).
+        p->setIntervalMs(s.value(QStringLiteral("MultimeterDelayMs"), 100).toInt());
     }
 
     auto* cm = model->containerManager();

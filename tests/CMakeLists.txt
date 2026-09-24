@@ -6876,6 +6876,11 @@ target_compile_definitions(tst_gui_session_coordinator PRIVATE NEREUS_BUILD_TEST
 # table, and Connection Quality's EP6 sequence gap count.
 nereus_add_test(tst_controls_that_work)
 target_compile_definitions(tst_controls_that_work PRIVATE NEREUS_BUILD_TESTS)
+# R3 controls that work, Task 2 (R-R3-21): menu entries, the Phone/CW
+# applet's transmit controls, container controls, the pan overlay's ATT
+# and zoom buttons and the status badges reach their existing features.
+nereus_add_test(tst_controls_connected)
+target_compile_definitions(tst_controls_connected PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_connection_selector)
 nereus_add_test(tst_station_lan_cache)
 nereus_add_test(tst_station_lan_transport)

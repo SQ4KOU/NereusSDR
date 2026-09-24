@@ -330,6 +330,16 @@ public:
     // ---- Frequency range ----
     void setFrequencyRange(double centerHz, double bandwidthHz);
 
+    /// R-R3-21: the pan overlay's zoom buttons. zoomBy() scales the visible
+    /// span (factor > 1 zooms out); zoomToSegment() fits the band-plan
+    /// segment holding the VFO; zoomToBand() fits every segment of the
+    /// VFO's band. Each goes through the Ctrl+wheel zoom's path, so the
+    /// FFT replans and the wideband view follows as it does there. The
+    /// fits do nothing where the band plan has no segment under the VFO.
+    void zoomBy(double factor);
+    void zoomToSegment();
+    void zoomToBand();
+
     /// Re-aim the display window WITHOUT touching waterfall history.
     ///
     /// setFrequencyRange treats any bandwidth change as a large shift and
@@ -1923,6 +1933,9 @@ private:
     /// withdrawn, through setFrequencyRange so the change carries the same
     /// repaint and waterfall handling as any other zoom.
     void applyViewWindowForExtendedClamp(double bandwidthHz);
+    /// The Ctrl+wheel zoom's steps for an operator zoom to `bandwidthHz`
+    /// around `centreHz` (clamped to 1 kHz .. maxZoomOutBandwidthHz()).
+    void applyOperatorZoom(double centreHz, double bandwidthHz);
 
     /// Overwrite the wing pixels (everything outside the listenable island)
     /// with wideband ADC data, in the linear-power domain the avenger

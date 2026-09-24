@@ -47,6 +47,8 @@ class QPushButton;
 class QComboBox;
 class QSlider;
 class QLabel;
+class QCheckBox;
+class QSpinBox;
 class QEvent;
 class QMouseEvent;
 
@@ -158,12 +160,17 @@ private:
     void buildAntFlyout();
     void buildDisplayFlyout();
     void buildVaxFlyout();
+    void buildAttFlyout();
+    // R-R3-21: show the step attenuator (RadioModel::stepAttFacade(), the
+    // same object the RX applet's ATT row and Setup use, local or remote).
+    void showAttValues();
 
     // Flyout toggles
     void toggleBandFlyout();
     void toggleAntFlyout();
     void toggleDisplayFlyout();
     void toggleVaxFlyout();
+    void toggleAttFlyout();
 
     // Auto-close helper
     void hideFlyout();
@@ -231,6 +238,12 @@ private:
     bool                     m_updatingFromModel{false};
 
     SliceModel* resolvedSlice() const;
+
+    // ── ATT flyout (R-R3-21) ─────────────────────────────────────────────
+    QWidget*   m_attFlyout{nullptr};
+    QCheckBox* m_attEnableChk{nullptr};
+    QSpinBox*  m_attSpin{nullptr};
+    QLabel*    m_attReason{nullptr};
 
     // ── Waterfall zoom buttons (bottom-left of spectrum widget) ──────────
     QWidget*     m_zoomStrip{nullptr};   // container for the 4 zoom buttons
