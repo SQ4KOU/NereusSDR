@@ -315,9 +315,11 @@ TCI app is connected from the amp's configured address (an amp configured
 by host name never matches and reads `waiting`; the address line is still
 right). While the station's TCI server is on, the Core switches an admitted
 amp into TCI mode through its web interface (`PUT /operational-interface`
-`{"operational_interface":"TCI"}`), once per connection, and only when the
-amp reports another interface; an operator who switches it back on the
-amp's panel is not fought. The TCI server's address is entered on the amp's
+`{"operational_interface":"TCI"}`), once when band follow starts (the first
+admission of that amp in the Core's run while the switch is on, or the
+switch turned on), and only when the amp reports another interface; not
+again after a link blip or a reconnect, so an operator who switches it back
+on the amp's panel is not fought. The TCI server's address is entered on the amp's
 own touchscreen (the REST call carries no address).
 
 The lines a window shows, in user words: "Band follow: following the
@@ -921,10 +923,12 @@ transmit, the Core refuses or does not offer:
   `amplifier` `operate` is refused with the receive-only reason above.
 - TGXL TUNE (autotune), operate, bypass, antenna choice, relay nudges, and
   tune-memory recall on a band change.
-- RF2K-S OPERATE and STANDBY, antenna choice, error reset. (The Core does
-  put an admitted RF2K-S into TCI mode while the station's TCI server is on,
-  once per connection; that chooses where the amp reads the radio's
-  frequency from and keys nothing.)
+- RF2K-S OPERATE and STANDBY, antenna choice. (The Core does put an
+  admitted RF2K-S into TCI mode once when band follow starts; that chooses
+  where the amp reads the radio's frequency from and keys nothing. Its
+  error reset works from a remote window with `remoteRfKitControlVersion`
+  3, by operator ruling in the fix wave: it clears the amp's error and
+  operates nothing.)
 - Transmit over the Core's station TCI server (see "The `stationTci`
   object").
 - Enforcement of the interlock policy, and the MOX RF-flow gate. These stay
@@ -1117,8 +1121,9 @@ rewrite the fixtures, and update this document in the same commit.
   admitted and only then connected; another device, or none, is refused,
   recorded as a fault and never retried; no answer retries (or says why with
   retry off); cancelling while identifying never admits; the Core puts the
-  amp in TCI mode once per connection while the station's TCI server is on,
-  not otherwise and not when it already is; the Core's configure and switch
+  amp in TCI mode once when band follow starts while the station's TCI
+  server is on, not otherwise, not when it already is, and not again after
+  a link blip (again only when the switch is turned on again); the Core's configure and switch
   rules; a radio's saved address dialled through the identity check.
 - `tst_rf2ks_connection_lifecycle`, `tst_rf2ks_connection_parse`: identity
   admission on the wire, a device changing mid-session, the local default

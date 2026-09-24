@@ -331,6 +331,48 @@ private slots:
         }
     }
 
+    // M3 (R-R3-48): the Core switches the amp to TCI once when band follow
+    // starts, not again after every link blip (an operator who chose
+    // another interface on the amp's front panel keeps it). Turning the
+    // station's TCI switch on again is band follow starting again.
+    void tciModeIsNotForcedAgainAfterALinkBlip()
+    {
+        FakeAmp amp;
+        Rf2ksConnection connection;
+        RfKitModel model;
+        model.bindConnection(&connection);
+        StationRfKitController controller(&connection, &model);
+        const QString put = QStringLiteral(
+            R"(PUT /operational-interface {"operational_interface":"TCI"})");
+        controller.start(QStringLiteral("127.0.0.1"), amp.serverPort());
+        QTRY_COMPARE_WITH_TIMEOUT(model.connectionPhase(), Phase::Connected, 3000);
+        connection.injectJsonForTesting(QStringLiteral("/operational-interface"),
+                                        amp.operationalInterface);
+        controller.setBandFollowWanted(true);
+        QTRY_COMPARE_WITH_TIMEOUT(amp.count(put), 1, 3000);
+
+        // The link blips: three failed polls, then the amp answers again.
+        // The operator has set it back to UDP on its front panel.
+        QSignalSpy reconnected(&connection, &Rf2ksConnection::connected);
+        connection.testMarkPollFailure();
+        connection.testMarkPollFailure();
+        connection.testMarkPollFailure();
+        QVERIFY(!connection.isConnected());
+        QTRY_VERIFY_WITH_TIMEOUT(reconnected.count() >= 1, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(model.connectionPhase(), Phase::Connected, 3000);
+        connection.injectJsonForTesting(QStringLiteral("/operational-interface"),
+                                        amp.operationalInterface);
+        QTest::qWait(200);
+        QCOMPARE(amp.count(put), 1);
+
+        // The station's TCI switch off and on again: band follow starts
+        // again, so the amp is switched once more.
+        controller.setBandFollowWanted(false);
+        controller.setBandFollowWanted(true);
+        QTRY_COMPARE_WITH_TIMEOUT(amp.count(put), 2, 3000);
+        controller.cancel();
+    }
+
     // The amp's own interface errors and a lost link are faults.
     void faultsAreEmitted()
     {

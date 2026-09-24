@@ -3,6 +3,8 @@
 // 2026; AI-assisted via Anthropic Claude Code.
 // 2026-09-24: R-R3-47: a window's Reset amp error (resetError). J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-48: TCI mode once when band follow starts, not on every
+// reconnect. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/StationRfKitController.h"
 
 namespace NereusSDR {
@@ -25,13 +27,11 @@ StationRfKitController::StationRfKitController(Rf2ksConnection* connection,
     }
     connect(connection, &Rf2ksConnection::connected, this, [this] {
         if (!m_running) { return; }
-        m_tciModeRequested = false;
         publish(Phase::Connected);
         maybeRequestTciMode();
     });
     connect(connection, &Rf2ksConnection::disconnected, this, [this] {
         if (!m_running) { return; }
-        m_tciModeRequested = false;
         publish(m_connection && m_connection->reconnectPending() ? Phase::Retrying
                                                                  : Phase::Disconnected);
     });
@@ -66,7 +66,6 @@ void StationRfKitController::resetScope(const QString& host, quint16 port, bool 
 {
     const auto generation = ++m_generation;
     m_running = false;
-    m_tciModeRequested = false;
     QPointer<StationRfKitController> self(this);
     if (m_connection) { m_connection->disconnect(); }
     if (!self || m_generation != generation) { return; }
@@ -106,7 +105,6 @@ void StationRfKitController::cancel(bool disabled)
 {
     ++m_generation;
     m_running = false;
-    m_tciModeRequested = false;
     QPointer<StationRfKitController> self(this);
     if (m_connection) { m_connection->disconnect(); }
     if (!self) { return; }
@@ -139,22 +137,32 @@ void StationRfKitController::setBandFollowWanted(bool wanted)
 {
     if (wanted == m_bandFollowWanted) { return; }
     m_bandFollowWanted = wanted;
+    if (wanted) {
+        // M3: band follow starts: each amp may be switched once more.
+        m_tciSwitched.clear();
+    }
     maybeRequestTciMode();
 }
 
 void StationRfKitController::maybeRequestTciMode()
 {
     // Only an admitted amp, only once its interface is known, only once per
-    // connection, and only while the station's TCI server is on.
-    if (!m_running || !m_bandFollowWanted || m_tciModeRequested || !m_connection
-        || !m_connection->isConnected()) {
+    // amp since band follow started (M3: not per connection), and only while
+    // the station's TCI server is on.
+    if (!m_running || !m_bandFollowWanted || m_tciSwitched.contains(ampKey())
+        || !m_connection || !m_connection->isConnected()) {
         return;
     }
     const QString current = m_connection->operationalInterface();
-    if (current.isEmpty() || current == kTciInterface) {
+    if (current.isEmpty()) {
         return;
     }
-    m_tciModeRequested = true;
+    // Already in TCI mode counts: band follow is running on this amp, and a
+    // later change on its front panel is the operator's.
+    m_tciSwitched.insert(ampKey());
+    if (current == kTciInterface) {
+        return;
+    }
     m_connection->setOperationalInterface(kTciInterface);
 }
 
