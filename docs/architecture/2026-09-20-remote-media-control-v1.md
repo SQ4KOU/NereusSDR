@@ -166,7 +166,7 @@ is discarded; the GUI requests a keyframe after accepting context.
 
 | Operation | Exact additional fields |
 | --- | --- |
-| `unsubscribe` | `endpointId` |
+| `unsubscribe` | `endpointId` (and `revision` on the display budget wire, below) |
 | `keyframe` | `endpointId`, `contextGeneration` |
 | `rejected` (Core to GUI) | `endpointId`, `revision`, `reason` |
 | `noise-floor` (Core to GUI) | `endpointId`, `revision`, `contextGeneration`, `floorDbm` |
@@ -193,6 +193,57 @@ match its current context. A whole-peer rejection uses endpoint/revision
 zero. Unsubscribe releases an unused source. Rebinding, slice removal and
 disconnect invalidate the corresponding endpoint. Hidden GUI panes
 unsubscribe, and a newly shown pane receives a new endpoint ID.
+
+### Display budget (unsubscribe revision and allocation-result)
+
+When the Core enforces a session display budget it advertises capability
+`remoteDisplayBudgetVersion=1`, and a peer at session protocol minor 7 or
+later (`kRemoteDisplayBudgetSessionProtocolMinor`) gets the budget wire
+below. The Core applies it while media is available, budget enforcement is
+on and a budget is in force for the session (`StationServer::
+displayBudgetAvailable`). A budget the Core computed for itself is in
+force only for a peer at minor 11 (`kDisplayBudgetReasonSessionProtocolMinor`);
+an older peer keeps the legacy wire exactly: no budget, no pacing, no
+allocation results. `DaemonMediaController::handleUnsubscribe` and
+`sendAllocationResult` are the code.
+
+On the budget wire, GUI-to-Core `unsubscribe` has exactly `op`,
+`connectionId`, `endpointId` and `revision`: the endpoint's release is a
+revisioned operation like a subscribe, and `revision` is a nonzero uint32.
+Without the budget wire it has exactly `op`, `connectionId` and
+`endpointId`, as in the table above.
+
+Core-to-GUI `allocation-result` answers every subscribe and unsubscribe
+outcome on the budget wire, and replaces `rejected` for an endpoint with a
+nonzero endpoint and revision there (an involuntary retirement, such as a
+source retune or slice removal, is reported the same way, so the GUI learns
+the charge the Core released). It has exactly 11 fields:
+
+```text
+op, connectionId, endpointId, revision, accepted, reason, budgetGeneration,
+acceptedRevision, applicationBytesPerSecond, spectrumSampleUnitsPerSecond,
+messagesPerSecond
+```
+
+| Field | Meaning |
+| --- | --- |
+| `op` | `allocation-result` |
+| `connectionId` | the media peer's connection ID |
+| `endpointId` | the endpoint the operation named; the desktop client accepts 1 to 4294967295 |
+| `revision` | the revision of the subscribe or unsubscribe this answers; 1 to 4294967295 |
+| `accepted` | boolean: whether that operation was granted |
+| `reason` | empty when accepted; otherwise why not, in plain words (the link document's section 17); the desktop client reads at most 512 characters |
+| `budgetGeneration` | the generation of the display budget the Core judged it against (`DisplayBudgetLimits::generation`); 1 to 4294967295 |
+| `acceptedRevision` | the revision the Core now holds for the endpoint, or 0 when it holds none; 0 to 4294967295 |
+| `applicationBytesPerSecond`, `spectrumSampleUnitsPerSecond` | the charge the Core retains for the endpoint after this outcome; whole numbers up to 9007199254740991 |
+| `messagesPerSecond` | the retained message rate; 0 to 200 (`kDisplaySenderMessagesPerSecond`, one per 5 ms sender interval) |
+
+The desktop client refuses a result unless the three charge fields are
+all 0 when `acceptedRevision` is 0 and all above 0 when it is not, and
+unless it has exactly these 11 fields. A result whose `revision` is not the GUI's
+pending one only restates what the Core retains: the desktop client
+applies it only when it releases a reservation (acceptedRevision 0, zero
+charge) for the endpoint's current revision.
 
 The [display codec specification](2026-09-20-display-codec-v1.md) defines
 the binary packets, reconstruction and loss recovery. Pending source/output
