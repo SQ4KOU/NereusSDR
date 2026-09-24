@@ -14,7 +14,7 @@ deltas, `property.write` / `property.result`, `command.invoke` /
 The plan that builds it is
 [2026-09-23-r3-core-owned-accessories-plan.md](2026-09-23-r3-core-owned-accessories-plan.md).
 Each of its tasks extends this document in the same commit that adds what it
-describes. This revision covers Tasks 1 to 4: the read-only `amplifier` and
+describes. This revision covers Tasks 1 to 6: the read-only `amplifier` and
 `rfkit` status objects, everything the Core already serves for its
 accessories (the `tuner` object, the 4O3A fields, and the TGXL and 4O3A
 commands), the Core-owned PGXL (identity before admission, pairing only
@@ -29,7 +29,10 @@ Core's accessory records and settings (the `accessoryData` object: fault
 history for all three devices, connection counters, the transmit interlock
 policy, the Power Genius output limit and its alert, tune memory and
 antenna names; the `setTxInterlockPolicy`, `setPgxlPowerCap` and
-`clearAccessoryFaults` commands).
+`clearAccessoryFaults` commands), and the Power Genius's and Tuner
+Genius's own settings (the `accessorySettings` object and the commands the
+Core sends to the device as a local window's Advanced page does: name, the
+amp's bias, fan and LED, network, Save & Reboot and Revert).
 
 ## Wire conventions
 
@@ -73,11 +76,17 @@ contract; each feature has its own version.
 | `remoteRfKitControlVersion` | 11 | 2 | Also: the interface, antenna, tuner and band-follow rows of `rfkit`; `configureRfKit`, `disconnectRfKit` and `setRfKitEnabled` work, and the Core identifies the RF2K-S itself |
 | `stationTciVersion` | 11 | 1 | The Core runs its own TCI server on the station network: the read-only `stationTci` object, and `setStationTci` works |
 | `accessoryDataVersion` | 11 | 1 | The Core mirrors its accessory records and settings as the read-only `accessoryData` object, and `setTxInterlockPolicy`, `setPgxlPowerCap` and `clearAccessoryFaults` work |
+| `remotePgxlControlVersion` | 11 | 3 | Also: the amp's own settings. The `pgxl*` properties of the read-only `accessorySettings` object, and `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings` and `readPgxlSettings` work |
+| `remoteTgxlControlVersion` | 11 | 1 | The tuner's own settings: the `tgxl*` properties of `accessorySettings`, and `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings` and `readTgxlSettings` work |
 
-- The Core advertises `remotePgxlControlVersion` and
-  `remoteRfKitControlVersion` as 2 and the TGXL and 4O3A versions as 1 when
-  it owns its accessories (the headless Core, `nereusd`, always does), and
-  all four as 0 otherwise. A Core built between Tasks 1 and 3 says 1 for the
+- The Core advertises `remotePgxlControlVersion` as 3,
+  `remoteRfKitControlVersion` as 2 and the TGXL and 4O3A versions
+  (`remoteTgxlConfigVersion`, `remoteFourO3AControlVersion`,
+  `remoteTgxlControlVersion`) as 1 when it owns its accessories (the
+  headless Core, `nereusd`, always does), and all of them as 0 otherwise. A
+  Core built between Tasks 2 and 5 says 2 for the PGXL and sends no
+  `remoteTgxlControlVersion`: the amp's and tuner's own settings are not
+  offered there. A Core built between Tasks 1 and 3 says 1 for the
   RF2K-S (and, before Task 2, for the PGXL): the object, no commands. An app
   treats 1 as "readings only" and 2 or more as "readings and commands".
 - `stationTciVersion` is 1 on a Core that runs its station TCI server
@@ -86,18 +95,26 @@ contract; each feature has its own version.
 - `accessoryDataVersion` is 1 on a Core that owns its accessories (the same
   condition as `remotePgxlControlVersion` 2), 0 otherwise.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
-  `stationTciVersion` and then `accessoryDataVersion` travel last in the
+  `stationTciVersion`, `accessoryDataVersion` and then
+  `remoteTgxlControlVersion` travel last in the
   minor-11 block of the capabilities message, after `hpsdrModel`,
   `radioProtocol`, `radioAddress` and `radioHardwareVersion`, and only to an
   app that agreed minor 11. An app below minor 11 receives exactly the
-  capabilities, objects and deltas it received before: none of the four
-  entries, and no `amplifier`, `rfkit`, `stationTci` or `accessoryData`
-  schema, object or delta. A minor-11 app built before `accessoryData`
+  capabilities, objects and deltas it received before: none of the five
+  entries, and no `amplifier`, `rfkit`, `stationTci`, `accessoryData` or
+  `accessorySettings` schema, object or delta. (`remoteTgxlConfigVersion`
+  keeps its place and value in the older block.) A minor-11 app built before `accessoryData`
   drops its schema, object and deltas as an unknown key (see Wire
   conventions) and keeps reading the fault history from the settings
-  snapshot as before.
+  snapshot as before; one built before `accessorySettings` drops that
+  object the same way.
 - An app that sees version 0, or no entry, shows no Power Genius or RF-Kit
   readings from this Core and says so (see Window behaviour).
+- An app that sees `remotePgxlControlVersion` below 3 (or
+  `remoteTgxlControlVersion` 0, or no entry) does not offer to change the
+  amp's (or tuner's) own settings on this Core and says why: "This Core does
+  not let this app change the Power Genius's own settings. Updating the
+  Core may help." (or "the Tuner Genius's").
 - An app that sees `accessoryDataVersion` 0, or no entry, shows the
   accessory records it can read from the settings snapshot, and does not
   offer to change the interlock policy, the output limit or the fault
@@ -522,6 +539,84 @@ long as it runs (a local window counts on its own connection the same way).
 A remote window shows the Core's counters and never its own: its accessory
 connections stay idle.
 
+## The `accessorySettings` object
+
+Class `AccessorySettingsModel`, key `accessorySettings`, sent to an app at
+minor 11 when the Core offers `remotePgxlControlVersion` 3 or
+`remoteTgxlControlVersion` 1. Read-only: the settings the Power Genius and
+the Tuner Genius keep themselves, as the Core last heard them from the
+device (a Revert read, or a change the device took), and the device's last
+answer to a window's request. A window changes them only through the
+commands below. Two change notices: a delta carries every `pgxl*` property
+when the amp's side changed, every `tgxl*` one when the tuner's did.
+
+| Property | Kind | Meaning |
+| --- | --- | --- |
+| `pgxlNickname`, `tgxlNickname` | utf8 | The device's name; empty until the Core has heard it |
+| `pgxlBiasMode` | utf8 | `ClassA` or `ClassAB`; empty until heard |
+| `pgxlFanMode` | utf8 | `Auto`, `Quiet` or `Continuous`; empty until heard |
+| `pgxlLedIntensity` | i64 | 0 to 100; -1 until heard |
+| `pgxlNetworkKnown`, `tgxlNetworkKnown` | bool | The four network values below are the device's (it reported or took them) |
+| `pgxlDhcp`, `tgxlDhcp` | bool | The device takes its address from DHCP |
+| `pgxlAddress`, `pgxlNetmask`, `pgxlGateway`, `tgxlAddress`, `tgxlNetmask`, `tgxlGateway` | utf8 | Its fixed address, netmask and gateway (may be empty) |
+| `pgxlAnswer`, `tgxlAnswer` | utf8 | The device's last answer in user words (table below); show this |
+| `pgxlAnswerAccepted`, `tgxlAnswerAccepted` | bool | False when the device did not take the request, or went offline first |
+| `pgxlAnswerCount`, `tgxlAnswerCount` | i64 | Moves by one with each new answer; it follows the answer and its acceptance in the delta |
+
+The Tuner Genius has no bias, fan or LED setting; there are no `tgxl`
+properties for them. When the Core's address, radio or 4O3A switch for a
+device changes, the values are forgotten (the last answer stays).
+
+**What the Core sends the device.** Each command is sent as exactly the
+line a local window's Advanced page sends through its own connection
+(`PgxlAdvancedPage.cpp`, `TgxlAdvancedPage.cpp`; the wire forms are
+`PgxlConnection.cpp`'s and `TgxlConnection.cpp`'s, "From FlexRadio wiki
+spec" and design section 6.4), framed `C<seq>|<command>`:
+
+| Command | Sent to the device | Local page control |
+| --- | --- | --- |
+| `setPgxlName`, `setTgxlName` | `setup nickname=<name>` | Identity: Nickname (on edit) |
+| `setPgxlHardware` `biasMode` | `setup bias=a` (`ClassA`) or `setup bias=ab` (`ClassAB`) | Hardware: Bias Mode |
+| `setPgxlHardware` `fanMode` | `setup fan=auto`, `setup fan=quiet` or `setup fan=continuous` | Hardware: Fan Mode |
+| `setPgxlHardware` `ledIntensity` | `setup led=<0-100>` | Hardware: LED Intensity |
+| `setPgxlNetwork`, `setTgxlNetwork` | `ifconf address=<ip> netmask=<mask> gateway=<gw> dhcp=<true\|false>` | Network: Apply Network Settings |
+| `savePgxlSettings`, `saveTgxlSettings` | `save` | Save & Reboot |
+| `readPgxlSettings`, `readTgxlSettings` | `setup read`, then `ifconf read` | Revert |
+
+The Core matches the device's `R<seq>|<code>|<body>` answer by its
+sequence. Code 0 is taken: the value is published, and a read's body
+(`nickname=`, `bias=`, `fan=`, `led=`; `dhcp=`, `ip=`, `netmask=`,
+`gateway=`, the fields the local page reads) replaces the Core's values.
+Any other code is not taken and nothing changes. Beside each change the
+Core saves the setting the local page saves (`PGXL_Nickname`,
+`PGXL_BiasMode`, `PGXL_FanMode`, `PGXL_LedIntensity`, `TGXL_Nickname`, and
+`TGXL_Nickname` from a Tuner Genius read, as the local page does). None of
+these commands keys a transmitter, puts the amp in operate, tunes or
+changes an antenna.
+
+Answers (`<device>` is "Power Genius" or "Tuner Genius"):
+
+| When | `...Answer` | `...AnswerAccepted` |
+| --- | --- | --- |
+| A request left for the device | "Sent to the `<device>`. Waiting for its answer." | true |
+| Name taken, or not | "The `<device>` took the new name." / "The `<device>` did not take the new name." | true / false |
+| Bias, fan or LED taken, or not | "The Power Genius took the new setting." / "The Power Genius did not take the new setting." | true / false |
+| Network taken, or not | "The `<device>` took the new network settings." / "... did not take the new network settings." | true / false |
+| Save acknowledged, or not | "The `<device>` is saving its settings and restarting." / "The `<device>` did not save its settings." | true / false |
+| Revert read answered, or not | "The `<device>` sent its settings." then "The `<device>` sent its network settings." / "... did not send its settings." / "... did not send its network settings." | true / false |
+| The device went away with a request waiting | "The `<device>` went offline before it answered." | false |
+
+**Asking first.** A window asks before it sends a network change or Save &
+Reboot, and sends nothing without a yes. Save & Reboot asks the local
+window's own question, word for word ("Sending `save` will persist your
+configuration to flash and reboot the PGXL. ...", titled "Save & Reboot
+PGXL" or "Save & Reboot TGXL"). A local window applies network settings
+without a dialog; a remote window, which may be far from the station, asks
+with the Network section's own warning ("PGXL must be unicast-reachable
+from this host after the change; if you lose connection, use Scan LAN to
+rediscover.", or TGXL), titled "Apply Network Settings". The iPhone app
+asks the same.
+
 ## The 4O3A and RF-Kit fields on the `radio` object
 
 Class `RadioModel`, key `radio`, sent to every app.
@@ -554,6 +649,17 @@ the Core took the request (see "Accepted is not connected").
 | `setTxInterlockPolicy` | `mode` (i64, the `interlockMode` value 0 to 2), `graceMs` (i64, 0 to 30000), `swrGateEnabled` (bool), `swrGateMax` (f64, 1.0 to 10.0) | minor 11, `accessoryDataVersion` 1 | Sets the whole transmit interlock policy on the Core, which saves it and enforces it from the next transmit request. Keys nothing |
 | `setPgxlPowerCap` | `enabled` (bool), `watts` (i64, 100 to 2000) | minor 11, `accessoryDataVersion` 1 | Sets the Power Genius output limit on the Core, which saves it and raises the alert from then on |
 | `clearAccessoryFaults` | `device` (utf8: `pgxl`, `tgxl` or `rfkit`) | minor 11, `accessoryDataVersion` 1 | Empties that device's fault history on the Core (and in its settings) |
+| `setPgxlName` | `name` (utf8; no line breaks or tabs; trimmed) | minor 11, `remotePgxlControlVersion` 3 | Sends the amp its new name (see "The `accessorySettings` object") and saves it on the Core |
+| `setPgxlHardware` | exactly one of `biasMode` (utf8: `ClassA`, `ClassAB`), `fanMode` (utf8: `Auto`, `Quiet`, `Continuous`), `ledIntensity` (i64, 0 to 100) | minor 11, `remotePgxlControlVersion` 3 | Sends the amp that one hardware setting and saves it on the Core. The amp applies it after Save & Reboot |
+| `setPgxlNetwork`, `setTgxlNetwork` | `dhcp` (bool), `address`, `netmask`, `gateway` (utf8: empty, or four numbers from 0 to 255 separated by dots) | minor 11, `remotePgxlControlVersion` 3 / `remoteTgxlControlVersion` 1 | Sends the device its network settings |
+| `savePgxlSettings`, `saveTgxlSettings` | none | minor 11, `remotePgxlControlVersion` 3 / `remoteTgxlControlVersion` 1 | Sends `save`: the device keeps its settings and restarts (about 20 seconds offline; the Core reconnects as for any drop) |
+| `readPgxlSettings`, `readTgxlSettings` | none | minor 11, `remotePgxlControlVersion` 3 / `remoteTgxlControlVersion` 1 | Revert: asks the device for its settings and network settings |
+| `setTgxlName` | `name` (as `setPgxlName`) | minor 11, `remoteTgxlControlVersion` 1 | Sends the tuner its new name and saves it on the Core |
+
+For these, `accepted: true` means the request left for the device; the
+device's answer arrives on `accessorySettings`. The desktop app shows a
+refusal of one of them on the Advanced page that sent it (never the slice
+notice).
 
 ## Refusals
 
@@ -574,6 +680,7 @@ Property writes:
 | `rfKitEnabled` on `radio` (what every app before this contract sent) | "Update this app to turn the RF-Kit amplifier on or off on this Core." The Core's switch stays |
 | Any property of `stationTci` | "The Core reports its TCI server here. Turn it on or off with this app's TCI switch." |
 | Any property of `accessoryData` | "The Core keeps the amplifier and tuner records and settings. Change them from this app's Setup pages." |
+| Any property of `accessorySettings` | "The Core reports the amplifier's and tuner's own settings. Change them from this app's Setup pages." |
 | `operate` on `amplifier`, on a receive-only Core (every `nereusd` today) | "Operating the station's amplifier or tuner waits for remote transmit. This station is receive-only." |
 | `tuner` telemetry (everything except the three below) | "TunerModel::<name> is hardware telemetry TunerModel only learns from the tuner itself; there is no remote-write path" |
 | `tuner` `isOperate`, `isBypass`, `antennaA`, on a receive-only Core | "Operating the station's amplifier or tuner waits for remote transmit. This station is receive-only." Nothing changes on the Core and nothing is sent to the tuner |
@@ -612,6 +719,18 @@ Commands:
 | `setPgxlPowerCap` with other arguments | "The request to change the Power Genius output limit was not understood." |
 | `setPgxlPowerCap` out of range | "Choose an output limit from 100 to 2000 W." |
 | `clearAccessoryFaults` with other arguments, or another device | "The request to clear the fault history was not understood." |
+| `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings`, `readPgxlSettings` below minor 11 | "Update this app to change the Power Genius's own settings on this Core." |
+| `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings`, `readTgxlSettings` below minor 11 | "Update this app to change the Tuner Genius's own settings on this Core." |
+| Any of the nine on a Core that does not own its accessories | "Station accessory configuration is unavailable." |
+| Any of the nine while the Core is not connected to the device (or has not admitted it) | "The Core is not connected to the Power Genius." / "The Core is not connected to the Tuner Genius." |
+| `setPgxlName`, `setTgxlName` with other arguments | "The request to rename the Power Genius was not understood." (or Tuner Genius) |
+| `setPgxlName`, `setTgxlName` with a line break or tab | "Enter a name without line breaks or tabs." |
+| `setPgxlHardware` with no argument, two, or another | "The request to change the Power Genius hardware was not understood." |
+| `setPgxlHardware` out of range | "Choose Class A or Class AB.", "Choose Auto, Quiet or Continuous." or "Choose an LED brightness from 0 to 100." |
+| `setPgxlNetwork`, `setTgxlNetwork` with other arguments | "The request to change the Power Genius network settings was not understood." (or Tuner Genius) |
+| `setPgxlNetwork`, `setTgxlNetwork` with an address that is not four numbers from 0 to 255 | "Enter each address as four numbers from 0 to 255 separated by dots." |
+| `savePgxlSettings`, `saveTgxlSettings` with arguments | "The request to save and restart the Power Genius was not understood." (or Tuner Genius) |
+| `readPgxlSettings`, `readTgxlSettings` with arguments | "The request to read the Power Genius settings was not understood." (or Tuner Genius) |
 | `setFourO3AEnabled` below minor 4 | "Remote 4O3A control requires a newer station protocol." |
 | `configureTgxl` with other arguments | "invalid host or port argument" |
 | `disconnectTgxl` with arguments | "disconnectTgxl takes no arguments" |
@@ -627,9 +746,10 @@ The desktop app does not send a command its Core did not offer. It shows
 "The station does not support remote TGXL configuration.", "The station
 does not support remote PGXL configuration.", "The station does not
 support remote 4O3A control.", "This Core does not offer RF-Kit amplifier
-setup to this app.", "This Core has no TCI server for the station." or
+setup to this app.", "This Core has no TCI server for the station.",
 "This Core does not share its amplifier and tuner settings with this app."
-instead.
+or "This Core does not let this app change the Power Genius's own settings.
+Updating the Core may help." (or the Tuner Genius's) instead.
 
 PGXL identity reasons in `amplifier`.`connectionError` (diagnostic text; an
 app shows them in its own words):
@@ -691,14 +811,24 @@ older app's change is not held back until the Core restarts. Version 1 has
 no command for the names and the tune memory: an app without station
 settings shows them read-only.
 
+Station-wide, saved by the Core beside the device commands (see "The
+`accessorySettings` object"): `PGXL_Nickname` (`setPgxlName`),
+`PGXL_BiasMode`, `PGXL_FanMode`, `PGXL_LedIntensity` (`setPgxlHardware`),
+`TGXL_Nickname` (`setTgxlName`, and a Tuner Genius read). The network
+settings live only in the device.
+
+Station-wide, the Power Genius tab's Pairing & Band Source section: there is
+no device command behind it (the local page only saves the settings, which
+the Core reads when it next pairs the amp), so the desktop app changes
+`PGXL_PairAttempt` (`True` / `False`), `PGXL_TxAnt` (`ANT1` / `ANT2`) and
+`PGXL_FlexAmpSlice` (`A` / `B`) as station settings, as it changes the
+antenna names; they take effect on the Core at the next Power Genius
+connection.
+
 Station-wide, not yet behind a command: `PGXL_BroadcastDiscovery`,
-`PGXL_BroadcastNickname`, `PGXL_FlexRadioSerial`, `PGXL_FlexAmpSlice`,
-`PGXL_TxAnt`, `PGXL_AntMap`, `PGXL_PairModel`, `PGXL_DiscoveryModel`,
-`PGXL_Nickname`, `PGXL_FanMode`, `PGXL_BiasMode`, `PGXL_LedIntensity`,
-`TGXL_AutoReconnect`, `TGXL_KeepaliveSec`, `TGXL_Nickname`,
-`RfKit_AutoReconnect`, `RfKit_PollIntervalMs`. The amp's and tuner's own
-settings (name, hardware, network) are read and written over a connection
-to the device, which a remote window never opens.
+`PGXL_BroadcastNickname`, `PGXL_FlexRadioSerial`, `PGXL_AntMap`,
+`PGXL_PairModel`, `PGXL_DiscoveryModel`, `TGXL_AutoReconnect`,
+`TGXL_KeepaliveSec`, `RfKit_AutoReconnect`, `RfKit_PollIntervalMs`.
 
 ## The fault record
 
@@ -839,14 +969,29 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   tune memory, counters and fault history (When, What happened; the
   `detail` in the tooltip; Clear All through the Core); a name or memory
   changed there is written as a station setting and comes back on
-  `accessoryData`. The amp's and tuner's own settings (name, hardware,
-  network, pairing, save and reboot) are not offered in a remote window.
-  Without `accessoryDataVersion` the interlock section, the output limit
+  `accessoryData`. Without `accessoryDataVersion` the interlock section, the output limit
   and Clear All are shown unchangeable with "This Core does not share its
   transmit interlock with this app. Updating the Core may help." (or its
   Power Genius or Tuner Genius records), and the Tuner Genius tab stays
   closed with "This Core does not share its Tuner Genius records with this
   app."
+- With `remotePgxlControlVersion` 3 (and `remoteTgxlControlVersion` 1) the
+  Power Genius (and Tuner Genius) tab has every section a local window's
+  Advanced page has, and each control works: Identity (the name; firmware,
+  serial, state and, for the amp, MeFFA from `amplifier`, for the tuner the
+  variant and state from `tuner`), Hardware (bias, fan, LED, output limit),
+  Network, Pairing & Band Source, Diagnostics, Fault History, Revert and
+  Save & Reboot. The device settings go to the Core as the commands above
+  (one per change; the LED once the slider is let go); network changes and
+  Save & Reboot ask first (see "Asking first"); the device's answer shows
+  above the sections, and the values it reports or takes fill the fields;
+  a refusal shows there too and the Core's values stay. Apply, Revert and
+  Save & Reboot are enabled only while the Core is connected to the device
+  (Save & Reboot after a change, as in a local window). The pairing
+  settings are written as station settings. Below those versions the
+  device's own controls are shown unchangeable with the reason (see
+  Negotiation); the pairing settings, the output limit, the counters and
+  the fault history work as before.
 - Every window (local or remote) shows the power-cap alert as a five-second
   notice when `powerCapAlertCount` moves while `powerCapExceeded` is true;
   a remote window's applet antenna names follow the Core's.
@@ -871,11 +1016,15 @@ load:
   one tune memory and two antenna names, `snapshot.complete`, then deltas
   (a Tuner Genius `link` fault, the output going over the limit, the Power
   Genius counters).
+- `accessorySettings.jsonl`: the `accessorySettings` object as the Core
+  sends it: the `schema`, the `object.create` with the amp's settings and
+  its answer to a Revert, `snapshot.complete`, then deltas (the amp taking
+  a new name; the tuner's network settings).
 - `enums.json`: the `connectionPhase`, `amplifierState`, `bandFollow`,
-  `rfkitTunerMode` and `interlockMode` tables and the four read-only
+  `rfkitTunerMode` and `interlockMode` tables and the five read-only
   refusal texts.
 
-`tst_station_accessory_state` regenerates the three `.jsonl` files from the
+`tst_station_accessory_state` regenerates the four `.jsonl` files from the
 objects and fails if they differ, parses them, applies them to a window's
 objects, and checks `enums.json` against the enums. After a deliberate
 contract change, run it once with `NEREUS_WRITE_ACCESSORY_FIXTURES=1` to
@@ -974,6 +1123,28 @@ rewrite the fixtures, and update this document in the same commit.
   shown by that window and by one connecting later, and a request out of
   range changes nothing and is shown in user words; an older Core leaves
   the section unchangeable with the reason.
+- `tst_station_pgxl_controller`, `tst_tgxl_station_identity`: a window's
+  requests for the amp's (tuner's) own settings reach a fake device on a
+  loopback socket as exactly the commands above; the device's answers
+  (taken, not taken, a read's values, `saving`) are published in user
+  words; bad values are refused before anything is sent; nothing reaches a
+  device the Core has not admitted; a request waiting when the device goes
+  says so; a new scope forgets the values; nothing operates, bypasses or
+  switches an antenna.
+- `tst_station_accessory_state`: `remotePgxlControlVersion` 3 and
+  `remoteTgxlControlVersion` 1 last in the block, neither to an older app
+  or from a Core that does not own its accessories; `accessorySettings`
+  read-only and its fixture; the nine commands refused below minor 11, on
+  a non-owning Core, malformed, and with no device, in user words.
+- `tst_remote_peripherals`: over the loopback, the same clicks on a remote
+  window's Power Genius (Tuner Genius) tab and on a local window's page
+  reach their devices as the same commands (the remote one once per
+  change); network changes and Save & Reboot ask first in the local
+  words and send nothing on a no; the device's answers and values show on
+  the page; a Core refusal arrives on its own route (not the slice notice)
+  and changes nothing; Apply and Revert wait for the Core's connection; the
+  window opens no connection to the device; an older Core leaves the
+  controls unchangeable with the reason.
 - `tst_remote_peripherals`: the RF-Kit set up, switched and disconnected
   from a remote window through the Core over the loopback, its rows reaching
   the applet, a raw `rfKitEnabled` write refused, the Power Genius's
@@ -993,4 +1164,8 @@ accessory discovery bound on the Rock's station network and not its other
 network, and the FlexRadio beacon announcing the station address there; a real Power Genius fault, a Tuner Genius drop and an RF-Kit
 interface error reaching a remote window and the iPhone app from the Rock,
 and the Rock's fault history after a restart; the power-cap alert from a
-real transmit through the Power Genius (with remote transmit).
+real transmit through the Power Genius (with remote transmit); and, only
+with the operator's go-ahead because it changes the devices' own settings,
+a name change and a Save & Reboot on the real Power Genius and Tuner Genius
+from the Rock's remote window (the setup and ifconf read replies used here
+are shaped as the local pages parse them; no capture of them exists yet).

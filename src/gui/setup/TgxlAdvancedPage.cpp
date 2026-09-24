@@ -24,6 +24,18 @@
 //                                    shows when and what happened in plain
 //                                    words. AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: a remote window
+//                                    builds every section. The tuner's own
+//                                    settings (name, network, Save &
+//                                    Reboot, Revert) go to the Core as
+//                                    typed requests, which it sends the
+//                                    tuner as this page's own commands; the
+//                                    page asks the same Save & Reboot
+//                                    question and, before network changes,
+//                                    the Network section's own warning; the
+//                                    tuner's answers, its values and the
+//                                    Core's refusals show on the page.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TgxlAdvancedPage.h"
@@ -37,6 +49,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QModelIndex>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -55,6 +68,8 @@
 #include "../../models/Band.h"
 #include "../../core/session/IStationLink.h"
 #include "../../models/AccessoryDataModel.h"
+#include "../../models/AccessorySettingsModel.h"
+#include "../../models/TunerModel.h"
 #include "../../models/RadioModel.h"
 #include "../OperatorReasonText.h"
 #include "../PgxlSaveRebootDialog.h"
@@ -288,19 +303,45 @@ TgxlAdvancedPage::TgxlAdvancedPage(RadioModel* model, QWidget* parent)
     topLay->setSpacing(16);
 
     if (isRemote()) {
-        // R-R3-47 / R-R3-22: the Core's antenna names, tune memory,
-        // counters and fault history. The tuner's own settings (name,
-        // network) are read and written over a connection to the tuner,
-        // which a remote window never opens.
+        // R-R3-47 / R-R3-22: every section, as in a local window. The
+        // tuner's own settings go to the Core, which sends the tuner this
+        // page's own commands (a remote window never opens a connection to
+        // the tuner); the antenna names, tune memory, counters and fault
+        // history are the Core's.
         m_remoteNote = new QLabel;
         m_remoteNote->setObjectName(QStringLiteral("tgxlAdvancedRemoteNote"));
         m_remoteNote->setWordWrap(true);
         topLay->addWidget(m_remoteNote);
+        m_deviceAnswer = new QLabel;
+        m_deviceAnswer->setObjectName(QStringLiteral("tgxlAdvancedDeviceAnswer"));
+        m_deviceAnswer->setWordWrap(true);
+        topLay->addWidget(m_deviceAnswer);
+        buildIdentitySection(topLay);
         buildAntennaLabelsSection(topLay);
+        buildNetworkSection(topLay);
         buildTuneMemorySection(topLay);
         buildDiagnosticsSection(topLay);
         buildFaultHistorySection(topLay);
+        buildFooter(topLay);
         topLay->addStretch();
+        if (TunerModel* tuner = m_model->tunerModel()) {
+            connect(tuner, &TunerModel::stationConnectionChanged,
+                    this, &TgxlAdvancedPage::refreshRemoteIdentity);
+            connect(tuner, &TunerModel::stateChanged,
+                    this, &TgxlAdvancedPage::refreshRemoteIdentity);
+            connect(tuner, &TunerModel::presenceChanged,
+                    this, &TgxlAdvancedPage::refreshRemoteIdentity);
+        }
+        connect(m_model->accessorySettingsModel(), &AccessorySettingsModel::tgxlChanged,
+                this, &TgxlAdvancedPage::refreshRemoteDevice);
+        // A request for the tuner's own settings the Core refused: the
+        // Core's values stay and its words show here.
+        connect(m_model, &RadioModel::accessoryRequestRefused, this,
+                [this](const QString& device, const QString& reason) {
+            if (device == QLatin1String("tgxl")) {
+                showRemoteOutcome(false, reason);
+            }
+        });
         connect(m_diagnostics, &ConnectionDiagnostics::changed,
                 this, &TgxlAdvancedPage::onDiagnosticsChanged);
         connect(m_model->accessoryDataModel(), &AccessoryDataModel::labelsChanged,
@@ -418,6 +459,20 @@ void TgxlAdvancedPage::buildIdentitySection(QVBoxLayout* topLay)
 
     // Nickname editingFinished -> writeSetup
     connect(m_nickname, &QLineEdit::editingFinished, this, [this]() {
+        if (isRemote()) {
+            // R-R3-47 / R-R3-22: the Core renames the tuner (the same
+            // `setup nickname=`) and keeps the name. One request per edit.
+            if (m_updatingFromDevice || !m_nickname->isModified()) {
+                return;
+            }
+            m_nickname->setModified(false);
+            IStationLink* link = m_model->stationLink();
+            const IStationLink::CommandOutcome outcome = link
+                ? link->requestTgxlName(m_nickname->text().trimmed())
+                : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+            showRemoteOutcome(outcome.sent, outcome.reason);
+            return;
+        }
         if (m_model && m_model->tgxlConnection() && m_model->tgxlConnection()->isConnected()) {
             m_model->tgxlConnection()->writeSetup(
                 {{QStringLiteral("nickname"), m_nickname->text().trimmed()}});
@@ -505,9 +560,7 @@ void TgxlAdvancedPage::buildNetworkSection(QVBoxLayout* topLay)
 
     lay->addLayout(form);
 
-    auto* warnLabel = new QLabel(
-        QStringLiteral("TGXL must be unicast-reachable from this host after the change; "
-                       "if you lose connection, use Scan LAN to rediscover."));
+    auto* warnLabel = new QLabel(networkWarningText());
     warnLabel->setWordWrap(true);
     warnLabel->setStyleSheet(QStringLiteral("color: #e8c01e;"));
     lay->addWidget(warnLabel);
@@ -699,6 +752,153 @@ void TgxlAdvancedPage::refreshRemote()
             : tr("This Core does not share its Tuner Genius records with this app. Updating the "
                  "Core may help."));
     }
+    refreshRemoteIdentity();
+    refreshRemoteDevice();
+}
+
+bool TgxlAdvancedPage::deviceSettingsAvailable() const
+{
+    const IStationLink* link = isRemote() ? m_model->stationLink() : nullptr;
+    return link && link->tgxlDeviceSettingsAvailable();
+}
+
+bool TgxlAdvancedPage::remoteTunerConnected() const
+{
+    const IStationLink* link = isRemote() ? m_model->stationLink() : nullptr;
+    return link && link->stationLinkReady() && m_model->tunerModel()
+        && m_model->tunerModel()->connectionPhase() == TunerModel::ConnectionPhase::Connected;
+}
+
+// The tuner's identity and state as the Core reports them (`tuner`), shown
+// the way onTgxlStatusUpdated shows the tuner's own status keys.
+void TgxlAdvancedPage::refreshRemoteIdentity()
+{
+    if (!isRemote() || !m_firmwareVersion || !m_model->tunerModel()) {
+        return;
+    }
+    const TunerModel* tuner = m_model->tunerModel();
+    const auto orDash = [](const QString& text) {
+        return text.isEmpty() ? QStringLiteral("--") : text;
+    };
+    QMap<QString, QString> kvs;
+    kvs.insert(QStringLiteral("version"), orDash(tuner->deviceVersion()));
+    kvs.insert(QStringLiteral("serial"), orDash(tuner->deviceSerial()));
+    if (remoteTunerConnected()) {
+        kvs.insert(QStringLiteral("one_by_three"),
+                   tuner->hasAntennaSwitch() ? QStringLiteral("1") : QStringLiteral("0"));
+        // The TunerApplet's three states (TunerApplet.cpp, the operate
+        // button): operate alone is OPERATE, operate with bypass is BYPASS,
+        // anything else STANDBY.
+        kvs.insert(QStringLiteral("state"),
+                   tuner->isOperate() && !tuner->isBypass() ? QStringLiteral("OPERATE")
+                   : tuner->isOperate()                     ? QStringLiteral("BYPASS")
+                                                            : QStringLiteral("STANDBY"));
+    }
+    onTgxlStatusUpdated(kvs);
+    updateRemoteControls();
+}
+
+// The tuner's own settings as the Core last heard them, and its last answer.
+void TgxlAdvancedPage::refreshRemoteDevice()
+{
+    if (!isRemote() || !m_nickname) {
+        return;
+    }
+    const AccessorySettingsModel::Device tuner = m_model->accessorySettingsModel()->tgxl();
+    m_updatingFromDevice = true;
+    if (!tuner.nickname.isEmpty() && !m_nickname->hasFocus()) {
+        m_nickname->setText(tuner.nickname);
+        m_nickname->setModified(false);
+    }
+    if (tuner.networkKnown) {
+        m_dhcpCheck->setChecked(tuner.dhcp);
+        QLineEdit* edits[] = { m_ipEdit, m_netmaskEdit, m_gatewayEdit };
+        const QString values[] = { tuner.address, tuner.netmask, tuner.gateway };
+        for (int i = 0; i < 3; ++i) {
+            if (!edits[i]->hasFocus()) {
+                edits[i]->setText(values[i]);
+            }
+        }
+    }
+    m_updatingFromDevice = false;
+    if (!deviceSettingsAvailable()) {
+        m_deviceAnswer->setText(IStationLink::tgxlDeviceSettingsUnavailableReason());
+    } else {
+        m_deviceAnswer->setText(tuner.answerCount > 0 ? tuner.answer : QString());
+    }
+    updateRemoteControls();
+}
+
+// What a remote window can change: the tuner's own settings only when the
+// Core offers them; Apply, Revert and Save & Reboot only while the Core is
+// connected to the tuner (as a local window's need its own connection).
+void TgxlAdvancedPage::updateRemoteControls()
+{
+    if (!isRemote() || !m_revertBtn) {
+        return;
+    }
+    const bool available = deviceSettingsAvailable();
+    const bool connected = remoteTunerConnected();
+    m_nickname->setEnabled(available);
+    m_dhcpCheck->setEnabled(available);
+    const bool manual = available && !m_dhcpCheck->isChecked();
+    m_ipEdit->setEnabled(manual);
+    m_netmaskEdit->setEnabled(manual);
+    m_gatewayEdit->setEnabled(manual);
+    updateConnectionUi(connected);
+    m_applyIfconfBtn->setEnabled(available && connected);
+    m_revertBtn->setEnabled(available && connected);
+    m_saveAndRebootBtn->setEnabled(available && connected && m_pendingSaveReboot);
+}
+
+void TgxlAdvancedPage::showRemoteOutcome(bool sent, const QString& reason)
+{
+    if (sent) {
+        return;
+    }
+    // Not sent, or refused by the Core: the Core's values stay on the page.
+    refreshRemoteDevice();
+    if (m_deviceAnswer) {
+        m_deviceAnswer->setText(OperatorReasonText::forDisplay(reason));
+    }
+}
+
+bool TgxlAdvancedPage::confirmRemote(const QString& title, const QString& text)
+{
+    if (m_confirmForTesting) {
+        return m_confirmForTesting(title, text);
+    }
+    if (text == PgxlSaveRebootDialog::message()) {
+        PgxlSaveRebootDialog dlg(this);
+        dlg.setWindowTitle(title);
+        return dlg.exec() == QDialog::Accepted;
+    }
+    QMessageBox box(QMessageBox::Warning, title, text, QMessageBox::Cancel, this);
+    QPushButton* apply = box.addButton(title, QMessageBox::AcceptRole);
+    box.setDefaultButton(QMessageBox::Cancel);
+    box.exec();
+    return box.clickedButton() == apply;
+}
+
+QString TgxlAdvancedPage::networkWarningText()
+{
+    return QStringLiteral("TGXL must be unicast-reachable from this host after the change; "
+                          "if you lose connection, use Scan LAN to rediscover.");
+}
+
+QString TgxlAdvancedPage::firmwareTextForTesting() const
+{
+    return m_firmwareVersion ? m_firmwareVersion->text() : QString();
+}
+
+QString TgxlAdvancedPage::variantTextForTesting() const
+{
+    return m_variantLabel ? m_variantLabel->text() : QString();
+}
+
+QString TgxlAdvancedPage::deviceAnswerForTesting() const
+{
+    return m_deviceAnswer ? m_deviceAnswer->text() : QString();
 }
 
 int TgxlAdvancedPage::faultRowCountForTesting() const
@@ -880,6 +1080,28 @@ void TgxlAdvancedPage::onTuneMemoryChanged()
 
 void TgxlAdvancedPage::onSaveAndReboot()
 {
+    if (isRemote()) {
+        // R-R3-47 / R-R3-22: the same question as a local window, then the
+        // Core sends the tuner `save`.
+        if (!confirmRemote(QStringLiteral("Save & Reboot TGXL"),
+                           PgxlSaveRebootDialog::message())) {
+            return;
+        }
+        IStationLink* link = m_model->stationLink();
+        const IStationLink::CommandOutcome outcome = link
+            ? link->requestTgxlSaveAndRestart()
+            : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        if (!outcome.sent) {
+            showRemoteOutcome(false, outcome.reason);
+            return;
+        }
+        m_stateBadge->setText(QStringLiteral("Rebooting..."));
+        m_stateBadge->setStyleSheet(
+            QStringLiteral("background: #c88000; color: #fff;"
+                           " border-radius: 3px; padding: 2px 6px;"));
+        setPendingState(false);
+        return;
+    }
     if (!m_model || !m_model->tgxlConnection()) {
         return;
     }
@@ -906,6 +1128,17 @@ void TgxlAdvancedPage::onSaveAndReboot()
 
 void TgxlAdvancedPage::onRevert()
 {
+    if (isRemote()) {
+        // R-R3-47 / R-R3-22: the Core asks the tuner for its settings again
+        // (`setup read`, `ifconf read`); they arrive on accessorySettings.
+        IStationLink* link = m_model->stationLink();
+        const IStationLink::CommandOutcome outcome = link
+            ? link->requestTgxlReadSettings()
+            : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        showRemoteOutcome(outcome.sent, outcome.reason);
+        setPendingState(false);
+        return;
+    }
     // Reload fields from device
     if (m_model && m_model->tgxlConnection()
             && m_model->tgxlConnection()->isConnected()) {
@@ -955,10 +1188,31 @@ void TgxlAdvancedPage::onDhcpToggled(bool checked)
     m_ipEdit->setEnabled(!checked);
     m_netmaskEdit->setEnabled(!checked);
     m_gatewayEdit->setEnabled(!checked);
+    updateRemoteControls();
 }
 
 void TgxlAdvancedPage::onApplyIfconf()
 {
+    if (isRemote()) {
+        // R-R3-47 / R-R3-22: new network settings can take the tuner off the
+        // Core's network, so the window asks first, in the Network
+        // section's own words; nothing is sent without a yes.
+        if (!confirmRemote(QStringLiteral("Apply Network Settings"), networkWarningText())) {
+            return;
+        }
+        IStationLink* link = m_model->stationLink();
+        const IStationLink::CommandOutcome outcome = link
+            ? link->requestTgxlNetwork(m_dhcpCheck->isChecked(), m_ipEdit->text().trimmed(),
+                                       m_netmaskEdit->text().trimmed(),
+                                       m_gatewayEdit->text().trimmed())
+            : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        if (!outcome.sent) {
+            showRemoteOutcome(false, outcome.reason);
+            return;
+        }
+        setPendingState(true);
+        return;
+    }
     if (!m_model || !m_model->tgxlConnection()) {
         return;
     }
@@ -983,6 +1237,7 @@ void TgxlAdvancedPage::setPendingState(bool pending)
     if (m_saveAndRebootBtn) {
         m_saveAndRebootBtn->setEnabled(pending);
     }
+    updateRemoteControls();
 }
 
 void TgxlAdvancedPage::updateConnectionUi(bool connected)

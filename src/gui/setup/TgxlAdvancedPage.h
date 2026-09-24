@@ -32,6 +32,12 @@
 //                                    antenna names, tune memory, counters and
 //                                    fault history. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: every section in a
+//                                    remote window: the tuner's own
+//                                    settings through the Core, with the
+//                                    local page's confirmations and the
+//                                    tuner's answers. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -40,6 +46,8 @@
 #include <QMap>
 #include <QString>
 #include <QVector>
+
+#include <functional>
 
 class QLineEdit;
 class QLabel;
@@ -73,6 +81,25 @@ public:
     QString antennaLabelForTesting(int index) const;
     int tuneMemoryRowCountForTesting() const;
     QPushButton* clearFaultsButtonForTesting() const { return m_clearFaultsBtn; }
+    // R-R3-47 / R-R3-22: the tuner's own settings in a remote window.
+    QLineEdit* nicknameEditForTesting() const { return m_nickname; }
+    QCheckBox* dhcpCheckForTesting() const { return m_dhcpCheck; }
+    QLineEdit* ipEditForTesting() const { return m_ipEdit; }
+    QLineEdit* netmaskEditForTesting() const { return m_netmaskEdit; }
+    QLineEdit* gatewayEditForTesting() const { return m_gatewayEdit; }
+    QPushButton* applyNetworkButtonForTesting() const { return m_applyIfconfBtn; }
+    QPushButton* revertButtonForTesting() const { return m_revertBtn; }
+    QPushButton* saveAndRebootButtonForTesting() const { return m_saveAndRebootBtn; }
+    QString firmwareTextForTesting() const;
+    QString variantTextForTesting() const;
+    QString deviceAnswerForTesting() const;
+    /// Answer the page's confirmations instead of showing them; `ask`
+    /// receives the title and the words the dialog would show.
+    void setConfirmationForTesting(std::function<bool(const QString&, const QString&)> ask)
+    { m_confirmForTesting = std::move(ask); }
+    /// The Network section's warning: the words a remote window asks
+    /// before it sends new network settings.
+    static QString networkWarningText();
 
 signals:
     // Phase 3P-II Phase 4 Task 95: emitted when the operator edits an antenna
@@ -116,6 +143,13 @@ private:
     // R-R3-47 / R-R3-22: a remote window.
     bool isRemote() const;
     void refreshRemote();
+    bool deviceSettingsAvailable() const;
+    bool remoteTunerConnected() const;
+    void refreshRemoteIdentity();
+    void refreshRemoteDevice();
+    void updateRemoteControls();
+    void showRemoteOutcome(bool sent, const QString& reason);
+    bool confirmRemote(const QString& title, const QString& text);
 
     // Helpers
     void setPendingState(bool pending);
@@ -180,6 +214,8 @@ private:
     // R-R3-47: remote window only.
     QLabel*      m_remoteNote{nullptr};
     QPushButton* m_clearFaultsBtn{nullptr};
+    QLabel*      m_deviceAnswer{nullptr};
+    std::function<bool(const QString&, const QString&)> m_confirmForTesting;
 
     // Footer
     QPushButton* m_revertBtn{nullptr};

@@ -23,6 +23,12 @@
 //                                    output limit, counters and fault
 //                                    history with its commands. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: every section in a
+//                                    remote window: the amp's own settings
+//                                    through the Core, with the local
+//                                    page's confirmations and the amp's
+//                                    answers. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #pragma once
@@ -31,6 +37,8 @@
 #include <QMap>
 #include <QString>
 #include <QVector>
+
+#include <functional>
 
 class QLineEdit;
 class QLabel;
@@ -66,6 +74,28 @@ public:
     QCheckBox* powerCapCheckForTesting() const { return m_powerCapCheck; }
     QSpinBox* powerCapSpinForTesting() const { return m_powerCapSpin; }
     QPushButton* clearFaultsButtonForTesting() const { return m_clearFaultsBtn; }
+    // R-R3-47 / R-R3-22: the amp's own settings in a remote window.
+    QLineEdit* nicknameEditForTesting() const { return m_nickname; }
+    QRadioButton* biasClassAForTesting() const { return m_biasClassA; }
+    QComboBox* fanModeComboForTesting() const { return m_fanModeCombo; }
+    QSlider* ledSliderForTesting() const { return m_ledSlider; }
+    QCheckBox* dhcpCheckForTesting() const { return m_dhcpCheck; }
+    QLineEdit* ipEditForTesting() const { return m_ipEdit; }
+    QLineEdit* netmaskEditForTesting() const { return m_netmaskEdit; }
+    QLineEdit* gatewayEditForTesting() const { return m_gatewayEdit; }
+    QPushButton* applyNetworkButtonForTesting() const { return m_applyIfconfBtn; }
+    QPushButton* revertButtonForTesting() const { return m_revertBtn; }
+    QPushButton* saveAndRebootButtonForTesting() const { return m_saveAndRebootBtn; }
+    QCheckBox* pairAttemptCheckForTesting() const { return m_pairAttemptCheckbox; }
+    QString firmwareTextForTesting() const;
+    QString deviceAnswerForTesting() const;
+    /// Answer the page's confirmations instead of showing them; `ask`
+    /// receives the title and the words the dialog would show.
+    void setConfirmationForTesting(std::function<bool(const QString&, const QString&)> ask)
+    { m_confirmForTesting = std::move(ask); }
+    /// The Network section's warning: the words a remote window asks
+    /// before it sends new network settings.
+    static QString networkWarningText();
 
 private slots:
     void onPgxlConnected();
@@ -109,6 +139,14 @@ private:
     void buildRemoteSections(QVBoxLayout* topLay);
     void refreshRemote();
     void sendRemotePowerCap();
+    bool deviceSettingsAvailable() const;
+    bool remoteAmpConnected() const;
+    void refreshRemoteIdentity();
+    void refreshRemoteDevice();
+    void updateRemoteControls();
+    void showRemoteOutcome(bool sent, const QString& reason);
+    void sendRemoteHardware(const QString& setting, const QString& value);
+    bool confirmRemote(const QString& title, const QString& text);
 
     // Helpers
     void setPendingState(bool pending);
@@ -185,6 +223,8 @@ private:
     // R-R3-47: remote window only.
     QLabel*      m_remoteNote{nullptr};
     QPushButton* m_clearFaultsBtn{nullptr};
+    QLabel*      m_deviceAnswer{nullptr};
+    std::function<bool(const QString&, const QString&)> m_confirmForTesting;
 
     // Footer
     QPushButton* m_revertBtn{nullptr};

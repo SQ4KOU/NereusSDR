@@ -27,6 +27,13 @@
 // remote window, applied and enforced on the Core, and shown by every
 // window; an older Core leaves the interlock section saying why. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-47 / R-R3-22: every control on a remote window's Power
+// Genius and Tuner Genius Advanced pages works through the Core: a fake
+// amp and tuner on the Core record the bytes, which are the ones a local
+// window's page sends; network changes and Save & Reboot ask first; the
+// device's answers, its values and the Core's refusals (on their own route)
+// show on the page; an older Core leaves the controls saying why. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include <QtTest>
 
@@ -47,6 +54,11 @@
 #include <QTcpSocket>
 #include <QWebSocket>
 #include <QMenu>
+#include <QRadioButton>
+#include <QSlider>
+#include <QTimer>
+#include <QApplication>
+#include <QDialog>
 
 #include "OperatorWording.h"
 #include "core/PgxlConnection.h"
@@ -57,6 +69,7 @@
 #include "core/TgxlConnection.h"
 #include "core/SmartSdrApiListener.h"
 #include "core/StationPgxlController.h"
+#include "core/StationTgxlController.h"
 #include "core/LanDiscovery.h"
 #include "core/AppSettings.h"
 #include "core/Rf2ksConnection.h"
@@ -74,6 +87,8 @@
 #include "gui/setup/PgxlInterlockPage.h"
 #include "gui/setup/TgxlAdvancedPage.h"
 #include "gui/SetupDialog.h"
+#include "gui/PgxlSaveRebootDialog.h"
+#include "models/AccessorySettingsModel.h"
 #include "models/AccessoryDataModel.h"
 #include "models/AmplifierModel.h"
 #include "models/RadioModel.h"
@@ -239,6 +254,84 @@ public:
     int requests{0};
 };
 
+// A loopback stand-in for the Power Genius or Tuner Genius: records every
+// command line it receives (the bytes on the wire) and answers on request.
+class FakeGenius : public QObject {
+public:
+    QTcpServer server;
+    QPointer<QTcpSocket> peer;
+    QStringList commands;          // the command part of each C<seq>|<command> line
+    QList<quint32> sequences;
+    QByteArray pending;
+
+    bool listen() { return server.listen(QHostAddress::LocalHost, 0); }
+    quint16 port() const { return server.serverPort(); }
+    bool accept()
+    {
+        if (!QTest::qWaitFor([this] { return server.hasPendingConnections(); }, 3000)) {
+            return false;
+        }
+        peer = server.nextPendingConnection();
+        connect(peer.data(), &QTcpSocket::readyRead, this, [this] { read(); });
+        return true;
+    }
+    void read()
+    {
+        pending += peer->readAll();
+        qsizetype nl = 0;
+        while ((nl = pending.indexOf('\n')) >= 0) {
+            const QString line = QString::fromUtf8(pending.left(nl)).trimmed();
+            pending.remove(0, nl + 1);
+            const qsizetype bar = line.indexOf(QLatin1Char('|'));
+            if (line.startsWith(QLatin1Char('C')) && bar > 1) {
+                sequences.append(line.mid(1, bar - 1).toUInt());
+                commands.append(line.mid(bar + 1));
+            }
+        }
+    }
+    void send(const QString& line)
+    {
+        peer->write(line.toUtf8() + '\n');
+        peer->flush();
+    }
+    /// Index of the first `command` received at or after `from`; -1 if none
+    /// arrives in time.
+    int waitFor(const QString& command, int from = 0)
+    {
+        int found = -1;
+        (void)QTest::qWaitFor([&] {   // -1 when it never arrives
+            for (int i = from; i < commands.size(); ++i) {
+                if (commands.at(i) == command) {
+                    found = i;
+                    return true;
+                }
+            }
+            return false;
+        }, 3000);
+        return found;
+    }
+    void reply(int index, const QString& codeAndBody)
+    {
+        send(QStringLiteral("R%1|%2").arg(sequences.at(index)).arg(codeAndBody));
+    }
+    /// The commands that change or read the device's own settings, from
+    /// `from` on (status polls, keepalive and pairing left out).
+    QStringList settingsCommands(int from) const
+    {
+        QStringList out;
+        for (int i = from; i < commands.size(); ++i) {
+            const QString& c = commands.at(i);
+            if (c.startsWith(QLatin1String("setup ")) || c.startsWith(QLatin1String("ifconf "))
+                || c == QLatin1String("save")) {
+                if (out.isEmpty() || out.last() != c) {   // one per change
+                    out.append(c);
+                }
+            }
+        }
+        return out;
+    }
+};
+
 quint16 freeLoopbackPort()
 {
     QTcpServer reservation;
@@ -286,6 +379,9 @@ private slots:
     void remoteWindowShowsTheCoresRecords();
     void remoteWindowChangesTheInterlockOnTheCore();
     void olderCoreLeavesTheInterlockSayingWhy();
+    void remoteWindowChangesTheAmpsOwnSettingsThroughTheCore();
+    void remoteWindowChangesTheTunersOwnSettingsThroughTheCore();
+    void olderCoreLeavesTheDeviceSettingsSayingWhy();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -1587,6 +1683,411 @@ void RemotePeripheralsTest::olderCoreLeavesTheInterlockSayingWhy()
     QVERIFY(!advanced.powerCapCheckForTesting()->isEnabled());
     QVERIFY(!advanced.clearFaultsButtonForTesting()->isEnabled());
     QVERIFY(OperatorWording::isPlain(advanced.remoteNoteForTesting()));
+}
+
+namespace {
+
+// Accept the modal dialog a local page opens (Save & Reboot).
+void acceptNextModal()
+{
+    QTimer::singleShot(0, [] {
+        if (auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget())) {
+            dialog->accept();
+        }
+    });
+}
+
+void editName(QLineEdit* edit, const QString& name)
+{
+    edit->setText(name);
+    edit->setModified(true);
+    emit edit->editingFinished();
+}
+
+// The Core's Power Genius, admitted: the V banner, the captured `info`
+// reply and the captured discovery announcement.
+bool admitCoreAmp(RadioModel& station, FakeGenius& amp)
+{
+    QString reason;
+    if (!station.configurePgxlForStation(QStringLiteral("127.0.0.1"), amp.port(), &reason)
+        || !amp.accept()) {
+        return false;
+    }
+    amp.send(QStringLiteral("V3.8.9"));
+    const int info = amp.waitFor(QStringLiteral("info"));
+    if (info < 0) {
+        return false;
+    }
+    amp.reply(info, QStringLiteral("0|serial=10-200/24-0046  version=3.8.9 protocol=1.0 mains=240"));
+    auto* controller = station.findChild<StationPgxlController*>();
+    if (!controller
+        || !QTest::qWaitFor([&] { return controller->findChild<LanDiscovery*>() != nullptr; },
+                            3000)) {
+        return false;
+    }
+    controller->findChild<LanDiscovery*>()->injectDatagramForTesting(
+        QStringLiteral("PowerGeniusXL ip=127.0.0.1 v=3.8.9 serial=10-200/24-0046 "
+                       "nickname=PowerGeniusXL"),
+        amp.port());
+    return QTest::qWaitFor([&] { return station.pgxlConnection()->isConnected(); }, 3000);
+}
+
+// The Core's Tuner Genius, admitted likewise.
+bool admitCoreTuner(RadioModel& station, FakeGenius& tuner)
+{
+    QString reason;
+    if (!station.configureTgxlForStation(QStringLiteral("127.0.0.1"), tuner.port(), &reason)
+        || !tuner.accept()) {
+        return false;
+    }
+    tuner.send(QStringLiteral("V1.2.17"));
+    const int info = tuner.waitFor(QStringLiteral("info"));
+    if (info < 0) {
+        return false;
+    }
+    tuner.reply(info, QStringLiteral("0|info serial=241288-1 version=1.2.17 "
+                                     "nickname=Tuner_Genius_XL 3way=1"));
+    auto* controller = station.findChild<StationTgxlController*>();
+    if (!controller
+        || !QTest::qWaitFor([&] { return controller->findChild<LanDiscovery*>() != nullptr; },
+                            3000)) {
+        return false;
+    }
+    controller->findChild<LanDiscovery*>()->injectDatagramForTesting(
+        QStringLiteral("TunerGeniusXL ip=127.0.0.1 v=1.2.17 serial=241288-1 "
+                       "nickname=Tuner_Genius_XL"),
+        tuner.port());
+    return QTest::qWaitFor([&] { return station.tgxlConnection()->isConnected(); }, 3000);
+}
+
+} // namespace
+
+// R-R3-47 / R-R3-22: every control on a remote window's Power Genius
+// Advanced page works through the Core. The same clicks on a remote page
+// and on a local window's page reach their amps as the same commands; the
+// remote page asks before network changes and Save & Reboot, and sends
+// nothing on a no; the amp's answers and values, and the Core's refusals,
+// show on the page in plain words; the window opens no connection to the amp
+// and nothing operates it.
+void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore()
+{
+    AppSettings::instance().clear();
+    CoreAndWindow cw;
+    RadioModel& station = cw.station;
+    RadioModel& window = cw.window;
+    station.smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
+    station.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+    FakeGenius amp;
+    QVERIFY(amp.listen());
+    PgxlAdvancedPage page(&window);
+    bool yes = true;
+    QStringList asked;
+    page.setConfirmationForTesting([&](const QString& title, const QString& text) {
+        asked.append(title + QLatin1Char('|') + text);
+        return yes;
+    });
+    // A local window's page, on its own amp, for the same clicks.
+    FakeGenius localAmp;
+    QVERIFY(localAmp.listen());
+    RadioModel local;
+    PgxlAdvancedPage localPage(&local);
+
+    LoopbackTransport* stationEnd = cw.connect(this);
+    QTRY_VERIFY(cw.client.pgxlDeviceSettingsAvailable());
+    window.reportStationLinkStateChanged();
+    QVERIFY(page.nicknameEditForTesting()->isEnabled());
+    QVERIFY(page.pairAttemptCheckForTesting()->isEnabled());
+    // The Core has no amp yet: Apply, Revert and Save & Reboot wait for it,
+    // and a request says why in the Core's words.
+    QVERIFY(!page.applyNetworkButtonForTesting()->isEnabled());
+    QVERIFY(!page.revertButtonForTesting()->isEnabled());
+    editName(page.nicknameEditForTesting(), QStringLiteral("Offline"));
+    QTRY_COMPARE(page.deviceAnswerForTesting(),
+                 QStringLiteral("The Core is not connected to the Power Genius."));
+    QVERIFY(OperatorWording::isPlain(page.deviceAnswerForTesting()));
+
+    QVERIFY(admitCoreAmp(station, amp));
+    QTRY_VERIFY(page.applyNetworkButtonForTesting()->isEnabled());
+    QTRY_COMPARE(page.firmwareTextForTesting(), QStringLiteral("3.8.9"));
+    local.pgxlConnection()->connectToPgxl(QStringLiteral("127.0.0.1"), localAmp.port());
+    QVERIFY(localAmp.accept());
+    localAmp.send(QStringLiteral("V3.8.9"));
+    // The local page reads the amp's settings when it connects.
+    QVERIFY(localAmp.waitFor(QStringLiteral("ifconf read")) >= 0);
+
+    // ---- The same clicks on both pages reach the amps as the same commands.
+    const int remoteMark = amp.commands.size();
+    const int localMark = localAmp.commands.size();
+    const auto drive = [](PgxlAdvancedPage& p) {
+        editName(p.nicknameEditForTesting(), QStringLiteral("Shack PGXL"));
+        p.biasClassAForTesting()->click();
+        p.fanModeComboForTesting()->setCurrentText(QStringLiteral("Quiet"));
+        p.ledSliderForTesting()->setValue(40);
+        p.dhcpCheckForTesting()->setChecked(false);
+        p.ipEditForTesting()->setText(QStringLiteral("192.168.1.50"));
+        p.netmaskEditForTesting()->setText(QStringLiteral("255.255.255.0"));
+        p.gatewayEditForTesting()->setText(QStringLiteral("192.168.1.1"));
+        p.applyNetworkButtonForTesting()->click();
+        p.revertButtonForTesting()->click();
+        p.ledSliderForTesting()->setValue(50);
+        QVERIFY(p.saveAndRebootButtonForTesting()->isEnabled());
+        acceptNextModal();
+        p.saveAndRebootButtonForTesting()->click();
+    };
+    drive(page);
+    drive(localPage);
+    QVERIFY(amp.waitFor(QStringLiteral("save"), remoteMark) >= 0);
+    QVERIFY(localAmp.waitFor(QStringLiteral("save"), localMark) >= 0);
+    const QStringList expected{
+        QStringLiteral("setup nickname=Shack PGXL"),
+        QStringLiteral("setup bias=a"),
+        QStringLiteral("setup fan=quiet"),
+        QStringLiteral("setup led=40"),
+        QStringLiteral("ifconf address=192.168.1.50 netmask=255.255.255.0 "
+                       "gateway=192.168.1.1 dhcp=false"),
+        QStringLiteral("setup read"),
+        QStringLiteral("ifconf read"),
+        QStringLiteral("setup led=50"),
+        QStringLiteral("save"),
+    };
+    QCOMPARE(localAmp.settingsCommands(localMark), expected);
+    QCOMPARE(amp.settingsCommands(remoteMark), expected);
+    // One request per click on the remote page (the local page sends the
+    // bias twice, once per radio button).
+    QCOMPARE(amp.commands.mid(remoteMark).count(QStringLiteral("setup bias=a")), 1);
+    // The remote page asked first, in the local page's words.
+    QCOMPARE(asked, (QStringList{
+        QStringLiteral("Apply Network Settings|") + PgxlAdvancedPage::networkWarningText(),
+        QStringLiteral("Save & Reboot PGXL|") + PgxlSaveRebootDialog::message()}));
+
+    // ---- A no sends nothing.
+    yes = false;
+    const int declineMark = amp.commands.size();
+    page.applyNetworkButtonForTesting()->click();
+    page.ledSliderForTesting()->setValue(60);
+    QVERIFY(amp.waitFor(QStringLiteral("setup led=60"), declineMark) >= 0);
+    page.saveAndRebootButtonForTesting()->click();
+    QCOMPARE(asked.size(), 4);
+    QTest::qWait(150);
+    QCOMPARE(amp.settingsCommands(declineMark), QStringList{QStringLiteral("setup led=60")});
+    yes = true;
+
+    // ---- The amp's answers and values show on the page.
+    int at = -1;
+    const int answerMark = amp.commands.size();
+    editName(page.nicknameEditForTesting(), QStringLiteral("Remote Amp"));
+    at = amp.waitFor(QStringLiteral("setup nickname=Remote Amp"), answerMark);
+    QVERIFY(at >= 0);
+    QTRY_COMPARE(page.deviceAnswerForTesting(),
+                 QStringLiteral("Sent to the Power Genius. Waiting for its answer."));
+    amp.reply(at, QStringLiteral("0|"));
+    QTRY_COMPARE(page.deviceAnswerForTesting(),
+                 QStringLiteral("The Power Genius took the new name."));
+    QVERIFY(OperatorWording::isPlain(page.deviceAnswerForTesting()));
+    QCOMPARE(window.accessorySettingsModel()->pgxlNickname(), QStringLiteral("Remote Amp"));
+    editName(page.nicknameEditForTesting(), QStringLiteral("Refused"));
+    at = amp.waitFor(QStringLiteral("setup nickname=Refused"), answerMark);
+    QVERIFY(at >= 0);
+    amp.reply(at, QStringLiteral("50000015|"));
+    QTRY_COMPARE(page.deviceAnswerForTesting(),
+                 QStringLiteral("The Power Genius did not take the new name."));
+    page.revertButtonForTesting()->click();
+    const int setupAt = amp.waitFor(QStringLiteral("setup read"), answerMark);
+    const int ifconfAt = amp.waitFor(QStringLiteral("ifconf read"), answerMark);
+    QVERIFY(setupAt >= 0 && ifconfAt >= 0);
+    amp.reply(setupAt, QStringLiteral("0|nickname=Amp2 bias=classab fan=continuous led=90"));
+    amp.reply(ifconfAt, QStringLiteral("0|dhcp=0 ip=10.0.0.5 netmask=255.0.0.0 gateway=10.0.0.1"));
+    QTRY_COMPARE(page.ipEditForTesting()->text(), QStringLiteral("10.0.0.5"));
+    QCOMPARE(page.nicknameEditForTesting()->text(), QStringLiteral("Amp2"));
+    QVERIFY(!page.biasClassAForTesting()->isChecked());
+    QCOMPARE(page.fanModeComboForTesting()->currentText(), QStringLiteral("Continuous"));
+    QCOMPARE(page.ledSliderForTesting()->value(), 90);
+    QCOMPARE(page.netmaskEditForTesting()->text(), QStringLiteral("255.0.0.0"));
+    QCOMPARE(page.gatewayEditForTesting()->text(), QStringLiteral("10.0.0.1"));
+    QVERIFY(!page.dhcpCheckForTesting()->isChecked());
+    QCOMPARE(page.deviceAnswerForTesting(),
+             QStringLiteral("The Power Genius sent its network settings."));
+
+    // ---- A Core refusal reaches the page on its own route, not the slice
+    // toast, and changes nothing.
+    QSignalSpy sliceToast(&window, &RadioModel::sliceAddRejected);
+    QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
+    const int refuseMark = amp.commands.size();
+    QVERIFY(cw.client.requestPgxlNetwork(false, QStringLiteral("999.1.1.1"), QString(),
+                                         QString()).sent);
+    QTRY_COMPARE(refused.count(), 1);
+    QCOMPARE(refused.first().first().toString(), QStringLiteral("pgxl"));
+    QCOMPARE(sliceToast.count(), 0);
+    QCOMPARE(page.deviceAnswerForTesting(),
+             QStringLiteral("Enter each address as four numbers from 0 to 255 separated by dots."));
+    QVERIFY(OperatorWording::isPlain(page.deviceAnswerForTesting()));
+    QCOMPARE(page.ipEditForTesting()->text(), QStringLiteral("10.0.0.5"));
+    QCOMPARE(amp.settingsCommands(refuseMark), QStringList{});
+
+    // ---- Pairing settings are the station's: the window writes them.
+    page.pairAttemptCheckForTesting()->setChecked(false);
+    QCOMPARE(AppSettings::instance().value(QStringLiteral("PGXL_PairAttempt")).toString(),
+             QStringLiteral("False"));
+
+    // Nothing operated the amp; the window opened no connection to it.
+    for (const QString& command : amp.commands) {
+        QVERIFY2(!command.contains(QStringLiteral("operate")), qPrintable(command));
+    }
+    QVERIFY(!station.amplifierModel()->operate());
+    QCOMPARE(window.pgxlConnection()->socketAttemptToken(), quint64(0));
+    local.pgxlConnection()->disconnect();
+    stationEnd->closeLink(QStringLiteral("test done"));
+    AppSettings::instance().clear();
+}
+
+// R-R3-47 / R-R3-22: every control on a remote window's Tuner Genius
+// Advanced page works through the Core, as for the Power Genius.
+void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCore()
+{
+    AppSettings::instance().clear();
+    CoreAndWindow cw;
+    RadioModel& station = cw.station;
+    RadioModel& window = cw.window;
+    station.smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
+    station.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+    FakeGenius tuner;
+    QVERIFY(tuner.listen());
+    TgxlAdvancedPage page(&window);
+    bool yes = true;
+    QStringList asked;
+    page.setConfirmationForTesting([&](const QString& title, const QString& text) {
+        asked.append(title + QLatin1Char('|') + text);
+        return yes;
+    });
+    FakeGenius localTuner;
+    QVERIFY(localTuner.listen());
+    RadioModel local;
+    TgxlAdvancedPage localPage(&local);
+
+    LoopbackTransport* stationEnd = cw.connect(this);
+    QTRY_VERIFY(cw.client.tgxlDeviceSettingsAvailable());
+    window.reportStationLinkStateChanged();
+    QVERIFY(page.nicknameEditForTesting()->isEnabled());
+    QVERIFY(!page.applyNetworkButtonForTesting()->isEnabled());
+
+    QVERIFY(admitCoreTuner(station, tuner));
+    QTRY_VERIFY(page.applyNetworkButtonForTesting()->isEnabled());
+    QTRY_COMPARE(page.firmwareTextForTesting(), QStringLiteral("1.2.17"));
+    QCOMPARE(page.variantTextForTesting(), QStringLiteral("3x1"));
+    local.tgxlConnection()->connectToTgxl(QStringLiteral("127.0.0.1"), localTuner.port());
+    QVERIFY(localTuner.accept());
+    localTuner.send(QStringLiteral("V1.2.17"));
+    QVERIFY(localTuner.waitFor(QStringLiteral("ifconf read")) >= 0);
+
+    const int remoteMark = tuner.commands.size();
+    const int localMark = localTuner.commands.size();
+    const auto drive = [](TgxlAdvancedPage& p) {
+        editName(p.nicknameEditForTesting(), QStringLiteral("Shack Tuner"));
+        p.dhcpCheckForTesting()->setChecked(true);
+        p.applyNetworkButtonForTesting()->click();
+        QVERIFY(p.saveAndRebootButtonForTesting()->isEnabled());
+        acceptNextModal();
+        p.saveAndRebootButtonForTesting()->click();
+        p.revertButtonForTesting()->click();
+    };
+    drive(page);
+    drive(localPage);
+    QVERIFY(tuner.waitFor(QStringLiteral("ifconf read"), remoteMark) >= 0);
+    QVERIFY(localTuner.waitFor(QStringLiteral("ifconf read"), localMark) >= 0);
+    const QStringList expected{
+        QStringLiteral("setup nickname=Shack Tuner"),
+        QStringLiteral("ifconf address= netmask= gateway= dhcp=true"),
+        QStringLiteral("save"),
+        QStringLiteral("setup read"),
+        QStringLiteral("ifconf read"),
+    };
+    QCOMPARE(localTuner.settingsCommands(localMark), expected);
+    QCOMPARE(tuner.settingsCommands(remoteMark), expected);
+    QCOMPARE(asked, (QStringList{
+        QStringLiteral("Apply Network Settings|") + TgxlAdvancedPage::networkWarningText(),
+        QStringLiteral("Save & Reboot TGXL|") + PgxlSaveRebootDialog::message()}));
+
+    // A no sends nothing.
+    yes = false;
+    const int declineMark = tuner.commands.size();
+    page.applyNetworkButtonForTesting()->click();
+    QTest::qWait(150);
+    QCOMPARE(tuner.settingsCommands(declineMark), QStringList{});
+    yes = true;
+
+    // The tuner's values and answers.
+    const int readAt = tuner.waitFor(QStringLiteral("setup read"), remoteMark);
+    const int ifconfAt = tuner.waitFor(QStringLiteral("ifconf read"), remoteMark);
+    tuner.reply(readAt, QStringLiteral("0|nickname=Tuner_Genius_XL"));
+    tuner.reply(ifconfAt, QStringLiteral("0|dhcp=1 ip=192.168.1.60 netmask=255.255.255.0 "
+                                         "gateway=192.168.1.1"));
+    QTRY_COMPARE(page.ipEditForTesting()->text(), QStringLiteral("192.168.1.60"));
+    QCOMPARE(page.nicknameEditForTesting()->text(), QStringLiteral("Tuner_Genius_XL"));
+    QVERIFY(page.dhcpCheckForTesting()->isChecked());
+    QVERIFY(!page.ipEditForTesting()->isEnabled());   // DHCP gates the fields
+    const int saveAt = tuner.waitFor(QStringLiteral("save"), remoteMark);
+    tuner.reply(saveAt, QStringLiteral("0|saving"));
+    QTRY_COMPARE(page.deviceAnswerForTesting(),
+                 QStringLiteral("The Tuner Genius is saving its settings and restarting."));
+    QVERIFY(OperatorWording::isPlain(page.deviceAnswerForTesting()));
+
+    // A Core refusal on its own route.
+    QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
+    QVERIFY(cw.client.requestTgxlName(QStringLiteral("Bad\tname")).sent);
+    QTRY_COMPARE(refused.count(), 1);
+    QCOMPARE(refused.first().first().toString(), QStringLiteral("tgxl"));
+    QCOMPARE(page.deviceAnswerForTesting(),
+             QStringLiteral("Enter a name without line breaks or tabs."));
+
+    // The Core loses the tuner: Apply and Revert wait for it again.
+    QString reason;
+    QVERIFY(station.disconnectTgxlForStation(&reason));
+    QTRY_VERIFY(!page.applyNetworkButtonForTesting()->isEnabled());
+    QVERIFY(!page.revertButtonForTesting()->isEnabled());
+
+    for (const QString& command : tuner.commands) {
+        QVERIFY2(!command.contains(QStringLiteral("operate"))
+                     && !command.contains(QStringLiteral("bypass")), qPrintable(command));
+    }
+    QCOMPARE(window.tgxlConnection()->socketAttemptToken(), quint64(0));
+    local.tgxlConnection()->disconnect();
+    stationEnd->closeLink(QStringLiteral("test done"));
+    AppSettings::instance().clear();
+}
+
+// R-R3-47 / R-R3-22: a Core that does not offer the devices' own settings
+// (an older Core) leaves those controls unchangeable, saying why in plain
+// words; the station settings (pairing) still reach it.
+void RemotePeripheralsTest::olderCoreLeavesTheDeviceSettingsSayingWhy()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    RecordingTgxlLink link;
+    link.linkReady = true;
+    model.attachStation(&link);
+    PgxlAdvancedPage pgxl(&model);
+    QVERIFY(!pgxl.nicknameEditForTesting()->isEnabled());
+    QVERIFY(!pgxl.biasClassAForTesting()->isEnabled());
+    QVERIFY(!pgxl.fanModeComboForTesting()->isEnabled());
+    QVERIFY(!pgxl.ledSliderForTesting()->isEnabled());
+    QVERIFY(!pgxl.dhcpCheckForTesting()->isEnabled());
+    QVERIFY(!pgxl.ipEditForTesting()->isEnabled());
+    QVERIFY(!pgxl.applyNetworkButtonForTesting()->isEnabled());
+    QVERIFY(!pgxl.revertButtonForTesting()->isEnabled());
+    QVERIFY(!pgxl.saveAndRebootButtonForTesting()->isEnabled());
+    QVERIFY(pgxl.pairAttemptCheckForTesting()->isEnabled());
+    QCOMPARE(pgxl.deviceAnswerForTesting(), IStationLink::pgxlDeviceSettingsUnavailableReason());
+    QVERIFY(OperatorWording::isPlain(pgxl.deviceAnswerForTesting()));
+    TgxlAdvancedPage tgxl(&model);
+    QVERIFY(!tgxl.nicknameEditForTesting()->isEnabled());
+    QVERIFY(!tgxl.dhcpCheckForTesting()->isEnabled());
+    QVERIFY(!tgxl.applyNetworkButtonForTesting()->isEnabled());
+    QVERIFY(!tgxl.revertButtonForTesting()->isEnabled());
+    QCOMPARE(tgxl.deviceAnswerForTesting(), IStationLink::tgxlDeviceSettingsUnavailableReason());
+    QVERIFY(OperatorWording::isPlain(tgxl.deviceAnswerForTesting()));
+    // A request is not sent: the link says why.
+    const IStationLink::CommandOutcome outcome = link.requestPgxlSaveAndRestart();
+    QVERIFY(!outcome.sent);
+    QVERIFY(OperatorWording::isPlain(outcome.reason));
 }
 
 QTEST_MAIN(RemotePeripheralsTest)
