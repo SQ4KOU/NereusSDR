@@ -4234,6 +4234,25 @@ private:
     /// relay them (Phase 3F design section 3).
     QString sliceCapReason(int cap) const;
 
+    /// Slice ids below this have a WDSP channel: the stream pool's ceiling
+    /// clamped to WdspEngine::kMaxSliceChannels, or that absolute ceiling
+    /// before any pool is sized.
+    int sliceChannelLimit() const;
+
+    /// The operator sentence for a slice closed because the board cannot
+    /// host its id (R-R3-34: explicit, with a way to recover).
+    QString closedSliceSentence(const SliceModel* slice, int channelLimit) const;
+
+    /// Adds Slice A on pan-0 at constructor defaults, bound to its own
+    /// stream, when no slice 0 exists. Used before every remaining slice is
+    /// closed or refused, so the radio always keeps one receiver.
+    void installReceiveFallbackSlice();
+
+    /// At connect, outside startup admission of a saved layout: closes every
+    /// slice whose id has no WDSP channel on this board, highest id first,
+    /// and reports them through the receive-layout restore status.
+    void closeSlicesPastChannelLimit();
+
     /// Remote-daemon R2: shared body of removeSlice() and
     /// removeSliceWithStationId(), for the same reason addSliceImpl above
     /// is shared. removeSlice() now sends a verb on a Role::Remote model,
@@ -4672,6 +4691,10 @@ private:
     bool m_receiveLayoutPendingAdmission{false};
     bool m_receiveLayoutManaged{false};
     bool m_receiveLayoutOverridesCount{false};
+    // Slices closed at connect because the board cannot host their ids,
+    // for the one run of admission that reports them. Kept so a later
+    // admission step does not report an accepted restore over it.
+    QString m_sliceClosureNotice;
     bool m_receiveLayoutProtected{false};
     QString m_receiveLayoutMac;
     std::optional<int> m_restoredRadeReceiveOwner;

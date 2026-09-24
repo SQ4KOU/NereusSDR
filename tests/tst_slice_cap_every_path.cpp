@@ -11,6 +11,12 @@
 // whenever the new slice fitted an existing receiver window. The slice then
 // sat on a slice id the Core never opened a demodulator channel for.
 //
+// Follow-up (controller ruling; R-R3-27, R-R3-34): a Core that has never
+// reached its radio holds session adds to WdspEngine::kMaxSliceChannels, and
+// when a smaller board then connects, the slices it cannot host are closed,
+// highest id first, and named in plain words on the receive-layout restore
+// status, so no slice is left looking configured with no channel.
+//
 // Covers: a local addSlice() at the cap returns -1, creates nothing and
 // emits the cap message; the session verb at the cap is refused with the
 // same plain reason and the Core creates nothing, both against a sized
@@ -20,9 +26,25 @@
 // =================================================================
 
 #include <QtTest/QtTest>
+#include <QFile>
 #include <QSignalSpy>
 
+#include <atomic>
 #include <memory>
+
+#include "core/AppSettings.h"
+#include "core/AudioEngine.h"
+#include "core/RxChannel.h"
+#include "core/WdspEngine.h"
+#include "core/daemon/DaemonConfig.h"
+#include "fakes/FakeAudioBus.h"
+#include "fakes/P1FakeRadio.h"
+// DaemonApp's discovery and retry seams are private, as in
+// tst_receive_layout_native.cpp.
+#define private public
+#include "core/daemon/DaemonApp.h"
+#include "models/RadioModel.h"
+#undef private
 
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionCommandDispatcher.h"
@@ -83,12 +105,51 @@ public:
     QList<SessionMessage> results;
 };
 
+void installOpenAudioBuses(AudioEngine& audio)
+{
+    AudioFormat format;
+    format.sampleRate = 48000;
+    format.channels = 2;
+    format.sample = AudioFormat::Sample::Float32;
+    auto speakers = std::make_unique<FakeAudioBus>();
+    auto mic = std::make_unique<FakeAudioBus>();
+    speakers->open(format);
+    mic->open(format);
+    audio.setSpeakersBusForTest(std::move(speakers));
+    audio.setTxInputBusForTest(std::move(mic));
+}
+
+// The closure sentence for one slice, as the operator reads it.
+QString closedSentence(QChar letter, double frequencyHz, DSPMode mode)
+{
+    return QStringLiteral("Receiver %1 (%2\u00A0MHz %3) was closed because this radio "
+                          "supports only receivers A and B. Add it again with +RX after "
+                          "closing another receiver.")
+        .arg(letter)
+        .arg(QString::number(frequencyHz / 1.0e6, 'f', 4))
+        .arg(SliceModel::modeName(mode));
+}
+
 } // namespace
 
 class TestSliceCapEveryPath : public QObject {
     Q_OBJECT
 
 private slots:
+
+    void initTestCase()
+    {
+        AppSettings::setProfileOverride(QStringLiteral("slice-cap-every-path-%1")
+                                            .arg(QCoreApplication::applicationPid()));
+    }
+
+    void init()
+    {
+        AppSettings::instance().clear();
+        QVERIFY(AppSettings::instance().save());
+    }
+
+    void cleanupTestCase() { QFile::remove(AppSettings::instance().filePath()); }
 
     void localAddSliceAtCapReturnsMinusOneAndEmitsCapMessage()
     {
@@ -196,6 +257,150 @@ private slots:
         QCOMPARE(remote.addSliceWithStationId(2, QStringLiteral("pan-1")), 2);
         QCOMPARE(remote.slices().size(), 3);
         QCOMPARE(rejected.count(), 0);
+    }
+
+    // ── Before the first radio connect (R-R3-27) ─────────────────────────
+
+    void neverConnectedCoreRefusesTheSixthSessionAddSlice()
+    {
+        RadioModel model; // no radio has ever connected: no stream pool
+        QCOMPARE(WdspEngine::kMaxSliceChannels, 5);
+        DispatchHarness harness(&model);
+
+        for (quint32 id = 1; id <= 5; ++id) {
+            harness.invokeAddSlice(id);
+            QCOMPARE(harness.results.size(), qsizetype(id));
+            QVERIFY2(harness.results.last().accepted,
+                     qPrintable(harness.results.last().reason));
+        }
+        QCOMPARE(model.slices().size(), 5);
+
+        harness.invokeAddSlice(6);
+        QCOMPARE(harness.results.size(), 6);
+        const SessionMessage& refused = harness.results.last();
+        QVERIFY(!refused.accepted);
+        QCOMPARE(refused.reason, QStringLiteral("The Core supports a maximum of 5 slices"));
+        QVERIFY2(OperatorWording::isPlain(refused.reason), qPrintable(refused.reason));
+        QVERIFY(refused.affectedKeys.isEmpty());
+        QCOMPARE(model.slices().size(), 5);
+        QVERIFY(model.sliceById(5) == nullptr);
+    }
+
+    // ── A smaller board connects (R-R3-34) ───────────────────────────────
+
+    void coreHoldingFourSlicesClosesTwoWhenATwoSliceBoardConnects()
+    {
+        // The Core in production: DaemonApp started with its radio off. A
+        // window adds slices while it waits; then a HermesII (two slices)
+        // is switched on and discovered.
+        Test::P1FakeRadio fake;
+        fake.start();
+        RadioInfo info;
+        info.address = fake.localAddress();
+        info.port = fake.localPort();
+        info.boardType = HPSDRHW::HermesII;
+        info.protocol = ProtocolVersion::Protocol1;
+        info.macAddress = QStringLiteral("AA:BB:CC:DD:EE:61");
+        info.firmwareVersion = 72;
+        info.name = QStringLiteral("Slice cap loopback");
+
+        auto radioOn = std::make_shared<std::atomic_bool>(false);
+        DaemonApp app;
+        app.m_synchronousWdspForTest = true;
+        app.m_radioRetryInitialMs = 50;
+        app.m_radioRetryNextMs = 50;
+        app.m_radioRetryMaximumMs = 50;
+        app.m_discoveryProviderForTest = [info, radioOn] {
+            return radioOn->load() ? QList<RadioInfo>{info} : QList<RadioInfo>{};
+        };
+        app.m_radioInitializerForTest = [](RadioModel* model) {
+            model->audioEngine()->setStartInitializerForTest(installOpenAudioBuses);
+        };
+        DaemonConfig config = DaemonConfig::defaults();
+        config.radioMac = info.macAddress;
+        config.remotePort = 0;
+        config.sampleRateHz = 48000;
+        config.sliceCount = 1;
+        QVERIFY(app.start(config));
+        RadioModel* model = app.m_radioModel.get();
+        QVERIFY(!model->isConnected());
+        QCOMPARE(model->slices().size(), 1);
+
+        DispatchHarness harness(model);
+        for (quint32 id = 1; id <= 3; ++id) {
+            harness.invokeAddSlice(id);
+            QVERIFY2(harness.results.last().accepted,
+                     qPrintable(harness.results.last().reason));
+        }
+        QCOMPARE(model->slices().size(), 4);
+        const QString expected = closedSentence(QLatin1Char('C'),
+                                                model->sliceById(2)->frequency(),
+                                                model->sliceById(2)->dspMode())
+            + QLatin1Char(' ')
+            + closedSentence(QLatin1Char('D'), model->sliceById(3)->frequency(),
+                             model->sliceById(3)->dspMode());
+
+        radioOn->store(true);
+        QTRY_VERIFY_WITH_TIMEOUT(model->isConnected(), 15000);
+
+        QCOMPARE(model->slices().size(), 2);
+        QVERIFY(model->sliceById(2) == nullptr);
+        QVERIFY(model->sliceById(3) == nullptr);
+        for (int id : {0, 1}) {
+            SliceModel* slice = model->sliceById(id);
+            QVERIFY(slice);
+            QVERIFY(slice->streamIndex() >= 0);
+            RxChannel* channel = model->wdspEngine()->rxChannel(id);
+            QVERIFY2(channel && channel->isActive(), qPrintable(QString::number(id)));
+        }
+        QCOMPARE(model->receiveLayoutRestoreState(), QStringLiteral("degraded"));
+        QCOMPARE(model->receiveLayoutRestoreMessage(), expected);
+        QVERIFY2(OperatorWording::isPlain(expected), qPrintable(expected));
+        app.stop();
+    }
+
+    void windowReconnectingToASmallerBoardClosesSlicesItCannotHost()
+    {
+        // A local window (no saved-layout management) holding four slices
+        // connects to a two-slice HermesII. Before the fix the extra slices
+        // stayed, bound to a stream, with no WDSP channel behind their ids.
+        QList<int> added;
+        double freqC = 0.0;
+        double freqD = 0.0;
+        DSPMode modeC = DSPMode::USB;
+        DSPMode modeD = DSPMode::USB;
+        auto connected = ConnectableRadioModel::create(
+            10000, RadioModel::Role::Local,
+            [&](RadioModel& model) {
+                for (int i = 0; i < 4; ++i) {
+                    added.append(model.addSlice());
+                }
+                if (model.sliceById(3)) {
+                    freqC = model.sliceById(2)->frequency();
+                    modeC = model.sliceById(2)->dspMode();
+                    freqD = model.sliceById(3)->frequency();
+                    modeD = model.sliceById(3)->dspMode();
+                }
+            },
+            HPSDRHW::HermesII);
+        QCOMPARE(added, (QList<int>{0, 1, 2, 3}));
+        QVERIFY(connected);
+        RadioModel& model = connected->model();
+        QCOMPARE(model.maxSlices(), 2);
+
+        QCOMPARE(model.slices().size(), 2);
+        QVERIFY(model.sliceById(2) == nullptr);
+        QVERIFY(model.sliceById(3) == nullptr);
+        for (int id : {0, 1}) {
+            SliceModel* slice = model.sliceById(id);
+            QVERIFY(slice);
+            QVERIFY(slice->streamIndex() >= 0);
+            QVERIFY(model.wdspEngine()->rxChannel(id) != nullptr);
+        }
+        const QString expected = closedSentence(QLatin1Char('C'), freqC, modeC)
+            + QLatin1Char(' ') + closedSentence(QLatin1Char('D'), freqD, modeD);
+        QCOMPARE(model.receiveLayoutRestoreState(), QStringLiteral("degraded"));
+        QCOMPARE(model.receiveLayoutRestoreMessage(), expected);
     }
 };
 
