@@ -168,9 +168,14 @@
 #include "models/Band.h"
 #include "gui/containers/ContainerManager.h"
 #include "gui/containers/ContainerWidget.h"
+#include "gui/meters/AntennaButtonItem.h"
 #include "gui/meters/BandButtonItem.h"
+#include "gui/meters/FilterButtonItem.h"
 #include "gui/meters/MeterWidget.h"
+#include "gui/meters/ModeButtonItem.h"
 #include "gui/meters/OtherButtonItem.h"
+#include "gui/meters/TuneStepButtonItem.h"
+#include "gui/meters/VfoDisplayItem.h"
 #include "gui/widgets/StatusToast.h"
 #include "gui/MainWindow.h"
 #include "gui/OperatorReasonText.h"
@@ -3786,6 +3791,85 @@ private slots:
     // the transmit buttons say the transmit reason and change nothing;
     // the others act on the Core's slice.
     // ====================================================================
+    // Fix wave M2 (R-R3-49, R-R3-21): a container set to a slice that
+    // closes shows none of that slice's state. Its VFO display says the
+    // slice is not open instead of the slice's last frequency, its mode,
+    // filter, step and antenna buttons light nothing, and a wheel on the
+    // display says why it does nothing.
+    void aContainerOnASliceThatClosesShowsNoneOfIt()
+    {
+        Test::markAudioFirstRunDone();
+        RadioDiscovery::clearHoldOffForTest();
+        {
+            RadioDiscovery discovery;
+            discovery.holdOffScans(std::chrono::minutes{5});
+        }
+        const auto releaseHoldOff = qScopeGuard([] {
+            RadioDiscovery::clearHoldOffForTest();
+        });
+
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.replace({}, false));
+        MainWindow* const window = sessions.window();
+        RadioModel* const model = window->radioModel();
+        while (model->slices().size() < 2) { QVERIFY(model->addSlice() >= 0); }
+        SliceModel* const b = model->sliceById(1);
+        QVERIFY(b != nullptr);
+        b->setFrequency(7100000.0);
+
+        auto* manager = window->findChild<ContainerManager*>();
+        QVERIFY(manager != nullptr);
+        ContainerWidget* const container = manager->createContainer(2, DockMode::Floating);
+        auto* meter = new MeterWidget();
+        container->setContent(meter);
+        auto* modes = new ModeButtonItem();
+        auto* filters = new FilterButtonItem();
+        auto* steps = new TuneStepButtonItem();
+        auto* antennas = new AntennaButtonItem();
+        auto* vfo = new VfoDisplayItem();
+        for (MeterItem* item : std::initializer_list<MeterItem*>{modes, filters, steps, antennas, vfo}) {
+            meter->addItem(item);
+            container->wireInteractiveItem(item);
+        }
+        const auto destroy = qScopeGuard([manager, container] {
+            manager->destroyContainer(container->id());
+        });
+
+        // On slice B: lit from slice B.
+        QVERIFY(modes->activeMode() >= 0);
+        QCOMPARE(vfo->frequency(), int64_t(7100000));
+        QVERIFY(vfo->unavailableText().isEmpty());
+
+        // Slice B closes.
+        model->removeSlice(1);
+        QVERIFY(model->sliceById(1) == nullptr);
+
+        QCOMPARE(modes->activeMode(), -1);
+        QCOMPARE(filters->activeFilter(), -1);
+        for (int i = 0; i < 10; ++i) { QVERIFY(filters->filterLabel(i).isEmpty()); }
+        QCOMPARE(steps->activeStep(), -1);
+        for (int i = 0; i < antennas->buttonCount(); ++i) {
+            QVERIFY2(!antennas->button(i).on, qPrintable(QString::number(i)));
+        }
+        QCOMPARE(vfo->unavailableText(), QStringLiteral("Slice B is not open"));
+        QVERIFY(OperatorWording::isPlain(vfo->unavailableText()));
+
+        // A wheel on the display says why it does nothing.
+        emit container->frequencyChangeRequested(1000);
+        bool said = false;
+        for (StatusToast* toast : window->findChildren<StatusToast*>()) {
+            if (toast->message() == ContainerButtonDispatcher::noSliceReason(2)) { said = true; }
+        }
+        QVERIFY(said);
+
+        // Set to slice A, which is open: its state is back.
+        container->setRxSource(1);
+        QVERIFY(vfo->unavailableText().isEmpty());
+        QCOMPARE(vfo->frequency(),
+                 static_cast<int64_t>(std::llround(model->sliceById(0)->frequency())));
+        QVERIFY(modes->activeMode() >= 0);
+    }
+
     void containerButtonsActOnTheirOwnSliceLocallyAndRemotely()
     {
         using Id = OtherButtonItem::ButtonId;

@@ -9656,10 +9656,29 @@ void MainWindow::refreshContainer(ContainerWidget* c, MeterItem* only)
     };
 
     if (!slice) {
+        // Fix wave M2 (R-R3-49, R-R3-21): a slice that is not open (never
+        // opened, or closed while this container was set to it) shows
+        // none of its last state. The buttons light nothing and say why
+        // when clicked; the VFO display says the slice is not open.
+        const QString notOpen = tr("%1 is not open")
+                                    .arg(ContainerWidget::sliceNameForRxSource(rxSource));
         const auto applyNoSlice = [&](MeterItem* item) {
             if (applyAlways(item)) { return; }
             if (auto* box = qobject_cast<ButtonBoxItem*>(item)) {
                 m_containerButtons->applySliceAvailability(box, rxSource);
+            }
+            if (auto* mode = qobject_cast<ModeButtonItem*>(item)) {
+                mode->setActiveMode(-1);
+            } else if (auto* filter = qobject_cast<FilterButtonItem*>(item)) {
+                for (int i = 0; i < 10; ++i) { filter->setFilterLabel(i, QString()); }
+                filter->setActiveFilter(-1);
+            } else if (auto* step = qobject_cast<TuneStepButtonItem*>(item)) {
+                step->setActiveStep(-1);
+            } else if (auto* ant = qobject_cast<AntennaButtonItem*>(item)) {
+                ant->setActiveRxAntenna(-1);
+                ant->setActiveTxAntenna(-1);
+            } else if (auto* vfo = qobject_cast<VfoDisplayItem*>(item)) {
+                vfo->setUnavailableText(notOpen);
             }
         };
         if (only) {
@@ -9737,6 +9756,7 @@ void MainWindow::refreshContainer(ContainerWidget* c, MeterItem* only)
             ant->setActiveRxAntenna(antIndex(slice->rxAntenna()));
             ant->setActiveTxAntenna(antIndex(slice->txAntenna()));
         } else if (auto* vfo = qobject_cast<VfoDisplayItem*>(item)) {
+            vfo->setUnavailableText(QString());
             vfo->setFrequency(static_cast<int64_t>(std::llround(slice->frequency())));
             vfo->setModeLabel(modeName);
             vfo->setFilterLabel(filterText);
@@ -9865,6 +9885,11 @@ void MainWindow::onContainerTuneStepSelected(ContainerWidget* c, int index)
 void MainWindow::onContainerFrequencyStep(ContainerWidget* c, int64_t deltaHz)
 {
     SliceModel* slice = containerSlice(c);
+    if (!slice && c && m_containerButtons) {
+        // Fix wave M2: the wheel says why it does nothing, as a click does.
+        showContainerButtonReason(ContainerButtonDispatcher::noSliceReason(c->rxSource()));
+        return;
+    }
     if (!slice || deltaHz == 0) { return; }
     // SliceModel::setFrequency refuses a locked slice itself.
     slice->setFrequency(slice->frequency() + static_cast<double>(deltaHz));
