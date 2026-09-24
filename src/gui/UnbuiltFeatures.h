@@ -98,10 +98,13 @@ enum class UnbuiltFeature {
     FmDeviation,      // Setup > DSP > FM deviation and de-emphasis (built after R4)
     ExportRadio,      // Setup > Diagnostics > Export / Import: Export Connected Radio
     FmTransmit,       // Setup > DSP > FM transmit group; the VFO flag's FM repeater minus,
-                      // simplex and plus buttons (table rows fm-tx and fm-repeater)
+                      // simplex and plus buttons, the Offset box and Rev (table rows fm-tx,
+                      // fm-repeater and fm-flag)
     DdcRouting,       // Setup > Hardware > DDC Routing (multi-panadapter receiver routing)
     HpfBroadcastReject,   // The filter policy dialog's "HPF (broadcast band reject) enabled"
     FrequencyCalibration, // Setup > Hardware > Calibration: the frequency calibration Start button
+    FmTones,          // CTCSS tone encode and tone squelch: the VFO flag's FM tone mode and tone
+                      // choices (plan row fm-flag)
 };
 
 namespace UnbuiltFeatures {

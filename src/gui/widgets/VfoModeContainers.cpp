@@ -18,6 +18,10 @@
 //                 transmit is built; their tooltips say what they do
 //                 (R-R3-49, R-R3-21). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 : Offset and Rev hidden with FM transmit, the CTCSS tone
+//                 choices until tones are built (plan row fm-flag, R-R3-49,
+//                 R-R3-21). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -198,6 +202,10 @@ void FmOptContainer::buildUi()
         row->addWidget(m_toneModeCmb, 1);
         row->addWidget(m_toneValueCmb, 1);
         vbox->addLayout(row);
+        // R-R3-49 (fm-flag, fm-tone): no tone encoder or tone squelch is
+        // built; the choices are hidden until one is. Saved values stay.
+        UnbuiltFeatures::hideUnlessBuilt(m_toneModeCmb, UnbuiltFeature::FmTones);
+        UnbuiltFeatures::hideUnlessBuilt(m_toneValueCmb, UnbuiltFeature::FmTones);
     }
 
     // ── Row 2: offset label + spinbox ─────────────────────────────────────
@@ -206,6 +214,7 @@ void FmOptContainer::buildUi()
         row->setSpacing(4);
 
         QLabel* offsetLbl = new QLabel(QStringLiteral("Offset:"), this);
+        offsetLbl->setObjectName(QStringLiteral("fmOffsetLabel"));
         offsetLbl->setStyleSheet(kLabelStyle.toString());
 
         m_offsetKhzSpin = new QSpinBox(this);
@@ -217,6 +226,10 @@ void FmOptContainer::buildUi()
         row->addWidget(offsetLbl);
         row->addWidget(m_offsetKhzSpin, 1);
         vbox->addLayout(row);
+        // R-R3-49 (fm-flag, under fm-tx): the offset is a transmit shift;
+        // hidden until FM transmit is built. Its saved value stays.
+        UnbuiltFeatures::hideUnlessBuilt(offsetLbl, UnbuiltFeature::FmTransmit);
+        UnbuiltFeatures::hideUnlessBuilt(m_offsetKhzSpin, UnbuiltFeature::FmTransmit);
     }
 
     // ── Row 3: TX direction buttons + Reverse toggle ──────────────────────
@@ -249,10 +262,10 @@ void FmOptContainer::buildUi()
         row->addWidget(m_revBtn);
         vbox->addLayout(row);
 
-        // R-R3-49 (fm-repeater, under fm-tx): the repeater direction buttons
-        // store a transmit direction; they are hidden until FM transmit is
-        // built. Rev (receive on the repeater output) stays.
-        for (QPushButton* btn : {m_txLowBtn, m_simplexBtn, m_txHighBtn}) {
+        // R-R3-49 (fm-repeater and fm-flag, under fm-tx): the repeater
+        // direction buttons store a transmit direction and Rev only changes
+        // the display; they are hidden until FM transmit is built.
+        for (QPushButton* btn : {m_txLowBtn, m_simplexBtn, m_txHighBtn, m_revBtn}) {
             UnbuiltFeatures::hideUnlessBuilt(btn, UnbuiltFeature::FmTransmit);
         }
     }
@@ -320,6 +333,12 @@ void FmOptContainer::buildUi()
         if (!m_slice) { return; }
         m_slice->setFmReverse(checked);
     });
+}
+
+bool FmOptContainer::hasBuiltControls()
+{
+    return UnbuiltFeatures::isBuilt(UnbuiltFeature::FmTransmit)
+        || UnbuiltFeatures::isBuilt(UnbuiltFeature::FmTones);
 }
 
 void FmOptContainer::setSlice(SliceModel* s)

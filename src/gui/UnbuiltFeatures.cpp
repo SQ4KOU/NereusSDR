@@ -214,13 +214,18 @@ const QList<Entry>& all()
         // one feature, one entry.
         {F::FmTransmit, QStringLiteral("fm-tx"),
          QStringLiteral("FM transmit: Setup > DSP > FM transmit group; the VFO flag's FM "
-                        "repeater minus, simplex and plus buttons")},
+                        "repeater minus, simplex and plus buttons, Offset and Rev")},
         {F::DdcRouting, QStringLiteral("ddc-routing"),
          QStringLiteral("Setup > Hardware > DDC Routing (multi-panadapter receiver routing)")},
         {F::HpfBroadcastReject, QStringLiteral("hpf-bcast"),
          QStringLiteral("Filter policy dialog: HPF (broadcast band reject) enabled")},
         {F::FrequencyCalibration, QStringLiteral("freq-cal"),
          QStringLiteral("Setup > Hardware > Calibration: frequency calibration Start")},
+        // Plan row fm-flag: the tone choices serve both a tone encoder and a
+        // tone squelch, neither built.
+        {F::FmTones, QStringLiteral("fm-tone"),
+         QStringLiteral("CTCSS tone encode and tone squelch: the VFO flag's FM tone mode and "
+                        "tone choices")},
     };
     return entries;
 }

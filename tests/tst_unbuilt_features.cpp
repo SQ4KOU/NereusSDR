@@ -746,9 +746,9 @@ QMap<F, QList<Surface>> surfaces()
                                   named(QStringLiteral("exportRadioGroup")))};
     const auto flagButton = [](const QString& name) {
         // The FM controls sit on the flag's FM mode page, not shown in USB:
-        // the button's own hidden flag is the surface.
+        // the control's own hidden flag is the surface.
         return Surface{QStringLiteral("slice flag ") + name, Host::Flag, [name](Hosts& h) {
-                           const auto* b = h.flag()->findChild<QPushButton*>(name);
+                           const auto* b = h.flag()->findChild<QWidget*>(name);
                            return b != nullptr && !b->isHidden();
                        }};
     };
@@ -756,7 +756,14 @@ QMap<F, QList<Surface>> surfaces()
                                  named(QStringLiteral("fmTxGroup"))),
                           flagButton(QStringLiteral("txLowBtn")),
                           flagButton(QStringLiteral("simplexBtn")),
-                          flagButton(QStringLiteral("txHighBtn"))};
+                          flagButton(QStringLiteral("txHighBtn")),
+                          // Plan row fm-flag: the transmit shift and Rev.
+                          flagButton(QStringLiteral("fmOffsetLabel")),
+                          flagButton(QStringLiteral("offsetKhzSpin")),
+                          flagButton(QStringLiteral("revBtn"))};
+    // Plan row fm-flag: the CTCSS tone choices (no tone encoder or detector).
+    map[F::FmTones] = {flagButton(QStringLiteral("toneModeCmb")),
+                       flagButton(QStringLiteral("toneValueCmb"))};
     map[F::DdcRouting] = {setupPage(QStringLiteral("DDC Routing"))};
     // Plan rows hpf-bcast and freq-cal (added 2026-09-24): nothing reads the
     // one or handles the other.

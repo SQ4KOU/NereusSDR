@@ -40,6 +40,9 @@
 //   2026-09-24 - R-R3-49: the floating record and play buttons are hidden
 //                 (UnbuiltFeatures) until the voice recorder is built.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the FM box shows only once one of its features
+//                 is built (plan row fm-flag). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2503,7 +2506,9 @@ void VfoWidget::applyModeVisibility(DSPMode mode)
     // Mode containers embedded in DspTab — show only the one matching
     // the active demodulation mode.
     if (m_fmContainer) {
-        m_fmContainer->setVisible(mode == DSPMode::FM);
+        // R-R3-49: no empty FM box while every FM control is unbuilt.
+        m_fmContainer->setVisible(mode == DSPMode::FM
+                                  && FmOptContainer::hasBuiltControls());
     }
     if (m_digContainer) {
         m_digContainer->setVisible(mode == DSPMode::DIGL || mode == DSPMode::DIGU);
