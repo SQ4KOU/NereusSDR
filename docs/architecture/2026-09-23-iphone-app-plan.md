@@ -398,7 +398,18 @@ described by the station. I (47 to 50, station): the desktop's station. J (51 to
 phone): the app. K (68 to 70, phone; 70 with JJ): proof and release. The station tasks
 follow JJ's saved order (R3 follow-ons, then R5, then R4, then R6), with identity first
 because remote access and transmit both depend on it; the phone tasks run in number
-order as the station tasks they consume land.
+order as the station tasks they consume land, except for the first usable build below.
+
+**The first usable build: listening first (JJ, 2026-09-24).** The first build on JJ's
+iPhone connects to the Pi 4 Core with the Hermes Lite 2 over the Pi's public IPv6
+address, pairs by code, shows the band and plays the sound. The phone tasks on that path
+run first, in this order, as the station tasks they need land: 51, 15, 52, 53, 54a,
+55a, 56a, then the check on his iPhone, 56b. Their station path is Part C (12 to 16) in
+integration, then 19 and 20; the Core/GUI session puts the build on the Pi 4 with JJ's
+go-ahead, and JJ reads the pairing code there himself. Finding Cores by Bonjour (16a)
+joins the path when its station half is in. The transmit and remote halves (54, 55, 56,
+27a to 29a) follow, and everything stays in the first release (D5): the order changes,
+not the scope.
 
 **Tasks flagged for an earlier independent review** (they touch authorisation, secrets,
 networking that could expose or strand the station, or the transmit boundary): 4, 12, 13,
@@ -1774,7 +1785,7 @@ items 3 and 7.
 - `normalise("7 Anvil  harbor")` is `"7-anvil-harbor"`; `normalise("7-anvil-harbour")`
   is nil (not a list word) and `suggestions(forPrefix: "harb")` includes `"harbor"`.
 - On macOS the key store used in tests is `InMemoryKeyStore`; the Secure Enclave path is
-  exercised on a device in Task 56's device checks.
+  exercised on a device in Task 56b's check on JJ's iPhone.
 
 **Verification:** authorisation, cryptography across two implementations: integration.
 `ios/scripts/swift-test.sh --filter 'NereusLinkTests'` and `ios/scripts/interop-test.sh`.
@@ -1873,6 +1884,9 @@ Network question, "Found it", the station list), pairing design §6.
 **Files:**
 - Create: `ios/NereusKit/Sources/NereusLink/StationBrowser.swift`,
   `ios/NereusKit/Tests/NereusLinkTests/StationBrowserTests.swift`
+- Create: `ios/NereusApp/Connect/FindStationScreen.swift`, `FoundItScreen.swift`
+- Modify: `ios/NereusApp/Connect/ConnectionFlow.swift`, `YourStationsScreen.swift` (Task
+  56a's), `ios/NereusApp/Tests/ConnectionFlowTests.swift`
 
 **Interfaces:**
 - Consumes: the Bonjour service type and TXT keys (Task 16; the link document's
@@ -1881,20 +1895,27 @@ Network question, "Found it", the station list), pairing design §6.
   - `actor StationBrowser` using `NWBrowser(for: .bonjourWithTXTRecord(type: "_nereus-station._tcp", domain: nil), using: .tcp)`,
     publishing `[FoundStation]` with `claimed`, `pairing`, `label`, `identityPrefix`, and
     a resolvable endpoint.
+  - In `ConnectionFlow`: the Local Network question (asked once, by starting the
+    browser), Found it (the one-tap claim of an unclaimed Core on this network, then
+    straight on to the band as Task 56a's pairing does), and your Cores listing the
+    unclaimed Cores on this network after the paired ones (Cores only, never radios).
 
 **Acceptance:**
 - `StationBrowserTests` parses TXT records into `FoundStation` values, including
   missing and malformed keys, and (on macOS) finds a record registered by the test with
   `dns-sd -R`.
 - A TXT key the browser does not know is ignored, so a newer station still lists.
+- Against `FakeStation` announced by the test, Found it claims the Core in one tap and
+  the flow reaches the band with no other tap; screenshots against `06-first-launch.jpg`
+  and `07-connecting.jpg`.
 
 **Verification:** discovery on a network: unit tests plus the macOS browse in the test.
-`ios/scripts/swift-test.sh --filter StationBrowserTests`. Device (controller, pending
-until observed): once Task 56 shows the list, a phone on the LAN lists the Rock's
-station.
+`ios/scripts/swift-test.sh --filter StationBrowserTests` and the simulator test run.
+Device (controller, pending until observed): a phone on the Pi 4's network lists its
+Core and claims it in one tap.
 
-**Execution note (advisory):** opus. Networking (local browse only). Requires Tasks 8
-and 16.
+**Execution note (advisory):** opus. Networking (local browse only). Requires Tasks 8,
+16 and 56a. On the listening path, joining it when Task 16's station half is in.
 
 - [ ] **Step 1:** The browser and its tests.
 
@@ -4455,6 +4476,17 @@ plan strip on, ARRL by default).
 - Produces: `BandGeometry(centerHz:, spanHz:, size:, dbmRange:)` with `x(forHz:)`,
   `hz(forX:)`, `y(forDbm:)`; `BandRenderer.draw(frame:history:overlays:into:)`; the
   endpoint width requested equals the view's width in pixels (1 to 4096).
+  - `DisplayQualityAllocator` (in NereusMedia), the phone's half of the display budget:
+    when the Core's budget or an `allocation-result` says the requested display doesn't
+    fit, it follows the budget design's agreed quality policy
+    (`docs/architecture/2026-09-22-session-display-budget-design.md`, "Agreed GUI quality
+    policy"): background frame rate first, then background pixels, then the active
+    band's frame rate and pixels, never below `min(requestedPixels, 256)` by
+    `min(requestedFps, 10)`; past the floor it suspends the display with the capacity
+    reason, keeps the band's slice and sound, and marks the frozen band as paused. It
+    recomputes on every focus, layout, geometry or limit change, so quality comes back
+    when there's room. The frame rate it settles on is what the Sharing chip shows (Task
+    54).
 
 **Acceptance:**
 - Geometry round trips: `hz(forX: x(forHz: f)) == f` within one hertz across the span;
@@ -4467,12 +4499,18 @@ plan strip on, ARRL by default).
 - The renderer draws in under 8 ms per frame for a 1179-pixel-wide band at 30 frames a
   second on the simulator's Metal device (logged); on an iPhone the device check repeats
   it (pending until observed).
+- The allocator, fed a budget that fits, changes nothing; fed tighter budgets, it lowers
+  the frame rate before the pixels, stops at the 256-pixel, 10-frames-a-second floor,
+  then suspends and reports paused; a larger budget later restores the requested
+  quality. No allocation step sends a network request of its own.
 
 **Verification:** UI rendering: offscreen render tests plus simulator screenshots
 compared with `01-on-the-band.jpg` and `02-sideways.jpg`.
 `ios/scripts/swift-test.sh --filter NereusBandTests` and the simulator test run.
 
-**Execution note (advisory):** opus. Requires Tasks 7, 11, 19, 20 and 51.
+**Execution note (advisory):** opus. Requires Tasks 7, 11, 19, 20 and 51. On the
+listening path (JJ, 2026-09-24). Metal sources ship as a folder reference, as Task 51's
+shaders do.
 
 - [ ] **Step 1:** Geometry, history and the band-plan strip with tests.
 - [ ] **Step 2:** The Metal renderer, the display settings and the render tests.
@@ -4482,8 +4520,8 @@ compared with `01-on-the-band.jpg` and `02-sideways.jpg`.
 **Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** R-IOS-11 (flags and the fold rule, markers per D10, zoom), R-IOS-12
-(tap and drag to tune; the Touch settings), D9, D10, spec §5.1 items 3, 4 and 9;
-R-IOS-17 and D46, D47 (other devices' slices, spec §5.8 item 1).
+(tap and drag to tune; the Touch settings), D9, D10, spec §5.1 items 3, 4 and 9. Other
+devices' slices on the band (D46, D47) are Task 56's.
 
 **Files:**
 - Create: `ios/NereusKit/Sources/NereusBand/FlagLayout.swift` (the fold rule),
@@ -4508,12 +4546,6 @@ R-IOS-17 and D46, D47 (other devices' slices, spec §5.8 item 1).
   - Touch settings in `PhoneSettings`: drag to tune (on), tap to tune (on) with snap to
     step (off), pinch to zoom (on), double-tap action (`.none`, `.zoomToFilter`,
     `.centerOnSlice`), each as spec §5.1 item 9 lists them.
-  - `SliceMarkers.foreignStyle(for:)` and `ForeignSliceLabel`: a slice another device
-    owns (its owner and its Core-wide letter come from the mirror, as the station's
-    design for several devices names them) draws a dashed centre line in that slice's
-    colour, a hollow triangle, dashed grey passband edges with no fill, and a label at
-    the foot of the spectrum with its letter and the owning device's name, plus TX
-    while that device has transmit; it has no flag and is never tuned from this device.
 
 **Acceptance:**
 - Two slices 2 kHz apart on a 390-point-wide phone band fold the inactive one; on a
@@ -4525,25 +4557,64 @@ R-IOS-17 and D46, D47 (other devices' slices, spec §5.8 item 1).
   drag and the final value at the end.
 - Zoom minus and plus sit at the bottom right of the waterfall; PTT's place at the bottom
   left is kept clear (Task 54 puts it there).
-- A slice another device owns draws as `foreignStyle` (render test sampling the dashed
-  line, the hollow triangle and the unfilled passband); its label sits at the foot of
-  the spectrum, centred on its line and kept inside the band; a tap on the label opens a
-  note with whose slice it is, its frequency and mode, and "Only <device> can tune it or
-  close it"; a drag or tap on the band never moves it, and no write for it is ever sent.
 - Screenshots of one, two and three slices, upright and sideways, against
   `01-on-the-band.jpg` and `02-sideways.jpg`.
 
 **Verification:** unit tests for the layout and arithmetic; simulator screenshots.
 `ios/scripts/swift-test.sh --filter 'FlagLayoutTests|SliceMarkersTests|TuneGesturesTests'`.
 
-**Execution note (advisory):** opus. Requires Task 52, and for other devices' slices
-the station's several-devices tasks (Task 41 as rewritten), whose field names this
-task's interfaces take when they land.
+**Execution note (advisory):** opus. Requires Task 52. On the listening path.
 
 - [ ] **Step 1:** The fold rule, markers and gesture arithmetic with tests.
 - [ ] **Step 2:** The views and the screenshots.
 
-## Task 54: The main screen: toolbar, panels, PTT and the keyed view
+## Task 54a: The main screen for listening
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
+**Requirements:** R-IOS-11 (§5.1 items 1, 2, 5, 6 and 7 as they apply to listening; D7,
+D11), spec §5.2 item 2 (the tab bar as the board draws it), JJ's listening-first order
+(2026-09-24).
+
+**Files:**
+- Create: `ios/NereusApp/Main/MainScreen.swift`, `Toolbar.swift`, `RxPanel.swift`
+- Modify: `ios/NereusApp/App/RootView.swift` (the tab bar)
+- Create: `ios/NereusApp/Tests/MainScreenTests.swift`
+
+**Interfaces:**
+- Consumes: `BandView`, `BandGeometry` (Task 52), the flags, markers and gestures (Task
+  53), `MirrorStore`, `SettingsProxyClient` and `CommandClient` (Task 9), `AppModel` (Task
+  51).
+- Produces:
+  - `MainScreen`: the toolbar left to right: RX panel, speaker mute, Slice A, Pan 1,
+    Display, the link dot with its round-trip time (the TX panel's button arrives with
+    Task 54); the band edge to edge with zoom at the bottom right of the waterfall; the
+    RX panel with AF gain, AGC, filter presets, the noise buttons and squelch, each
+    writing to its owner and showing the Core's value.
+  - The tab bar as the board draws it: NereusSDR's flat bar and its own glyphs (the
+    panadapter trace, the RX/TX box, the wrench, the radio, the gear), in place of the
+    system's floating bar and symbols that Task 51's shell uses. If iOS 27 makes that
+    costly, stop and bring the controller a side-by-side for JJ rather than choosing.
+
+**Acceptance:**
+- The toolbar's order and the RX panel's controls are as listed; each control's write
+  arrives at `FakeStation` and the control shows the value the Core answers with.
+- Sideways: the toolbar on top with the Core's name in the middle, the band edge to edge,
+  the RX panel sliding in from the side.
+- No PTT, TX panel or transmit control appears yet, and nothing stands greyed in their
+  place; Task 54 adds them.
+- Screenshots listening, upright and sideways, against `01-on-the-band.jpg` and
+  `02-sideways.jpg`, and the tab bar against `05-tabs.jpg`.
+
+**Verification:** UI: the simulator test run and screenshots.
+`ios/scripts/generate-project.sh && xcodebuild -project ios/NereusSDR.xcodeproj -scheme NereusSDR -destination 'platform=iOS Simulator,name=iPhone 17' test`.
+
+**Execution note (advisory):** opus. Requires Tasks 51, 52 and 53. On the listening path.
+
+- [ ] **Step 1:** The main screen, the toolbar and the RX panel with tests.
+- [ ] **Step 2:** The tab bar as drawn, and the screenshots.
+
+## Task 54: The main screen's transmit: PTT, the TX panel and the keyed view
 
 **Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
@@ -4554,9 +4625,10 @@ R-IOS-17 with D51, D52 and D54 (spec §5.8 items 2 to 7: transmit held by anothe
 taking it, having it taken, the radio's own PTT, the "Sharing" chip).
 
 **Files:**
-- Create: `ios/NereusApp/Main/MainScreen.swift`, `Toolbar.swift`, `RxPanel.swift`,
-  `TxPanel.swift`, `PttButton.swift`, `KeyedOverlay.swift`, `TxPill.swift`,
-  `LinearGauge.swift`
+- Create: `ios/NereusApp/Main/TxPanel.swift`, `PttButton.swift`, `KeyedOverlay.swift`,
+  `TxPill.swift`, `LinearGauge.swift`
+- Modify: `ios/NereusApp/Main/MainScreen.swift`, `Toolbar.swift` (Task 54a's; the TX
+  panel's button and the PTT)
 - Create: `ios/NereusKit/Sources/NereusLink/PttController.swift` (the PTT state machine
   and the keepalive sender)
 - Create: `ios/NereusKit/Tests/NereusLinkTests/PttControllerTests.swift`
@@ -4572,10 +4644,12 @@ taking it, having it taken, the radio's own PTT, the "Sharing" chip).
     100 ms with the current epoch; `.ending` shows "TX ending" on the PTT while
     `txState.txEnding` is true; after any reconnect it is `.idle` and never keys by
     itself.
-  - The toolbar left to right: RX panel, speaker mute, Slice A, Pan 1, Display, the link
-    dot with its round-trip time, TX panel. The RX panel: AF gain, AGC, filter presets,
-    the noise buttons, squelch. The TX panel: RF and tune power, TUNE, MOX, the amp's
-    OPERATE, the tuner's TUNE, the mic level, PROC, VOX, MON.
+  - The toolbar gains the TX panel's button at its right end (Task 54a built the rest).
+    The TX panel: RF and tune power, TUNE, MOX, the amp's OPERATE, the tuner's TUNE, the
+    mic level, PROC, VOX, MON. While another device holds transmit, the transmit settings
+    are that device's (the station's design for several devices): the panel shows them
+    and offers Take transmit rather than changing them, and arming VOX takes transmit
+    first.
   - Keyed view: a timer on the PTT; the orange TX filter; the passband shading hidden;
     RF power, SWR and "Mic level" gauges on the waterfall (mic scale -40 to +10 dB,
     yellow from -10, red from 0, each title inside its bar); a red TX pill with the clock
@@ -4613,8 +4687,7 @@ taking it, having it taken, the radio's own PTT, the "Sharing" chip).
   notice names who and when.
 - The screen stays awake while keyed (`isIdleTimerDisabled`), whatever the screen-on
   setting.
-- Sideways: toolbar on top with the station's name in the middle, the band edge to edge,
-  PTT and zoom on the waterfall, the panels sliding in from the sides.
+- Sideways: PTT and zoom on the waterfall, the TX panel sliding in from its side.
 - Screenshots listening and keyed, upright and sideways, compared with
   `01-on-the-band.jpg` and `02-sideways.jpg`.
 
@@ -4623,14 +4696,55 @@ screenshots. `ios/scripts/swift-test.sh --filter PttControllerTests` and the sim
 test run. Bench: Task 70 (keying on air from the phone).
 
 **Execution note (advisory):** opus. The phone's transmit control: flag for earlier
-review. Requires Tasks 39, 40, 42 and 53, and the station's several-devices tasks (Task
-41 as rewritten), whose request and report names this task's interfaces take when they
-land.
+review. Requires Tasks 39, 40, 42, 53 and 54a, and the station's several-devices tasks
+(Task 41 as rewritten), whose request and report names this task's interfaces take when
+they land.
 
 - [ ] **Step 1:** The PTT state machine and keepalive with tests.
-- [ ] **Step 2:** Toolbar, panels, keyed view and pills with screenshots.
+- [ ] **Step 2:** The TX panel, the keyed view and the pills with screenshots.
 
-## Task 55: Sound and the microphone on the phone
+## Task 55a: Sound on the phone
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
+**Requirements:** R-IOS-20 (the routes: speaker, earpiece, AirPods; the speaker's route
+menu), spec §4.7 (sound keeps playing in the background and while locked), §5.4 items 6
+and 10, JJ's listening-first order (2026-09-24).
+
+**Files:**
+- Create: `ios/NereusApp/Audio/AudioSessionController.swift`, `RouteMenu.swift`
+- Create: `ios/NereusApp/Tests/AudioSessionControllerTests.swift`
+
+**Interfaces:**
+- Consumes: `AudioPlaybackCore` and `MediaControlClient` (Task 11), `MainScreen`'s
+  speaker button (Task 54a).
+- Produces: `AudioSessionController` configuring `.playAndRecord` with
+  `.defaultToSpeaker` and `.allowBluetoothA2DP` (not `.allowBluetooth`, so AirPods stay in
+  high-quality output), mode `.default` (no voice processing), the same category Task 55's
+  microphone uses, so routes don't change when transmit arrives; playback through
+  `AudioPlaybackCore` on the chosen route; interruption handling for playback; the route
+  menu on press and hold of the speaker button.
+
+**Acceptance:**
+- An interruption (the test posts `AVAudioSession.interruptionNotification`) with
+  `.began` pauses playback and `.ended` resumes it.
+- Pressing and holding the speaker button opens the route menu (speaker, earpiece,
+  AirPods) without leaving the band; the choice changes the output route.
+- Sound keeps playing with the app in the background and with the phone locked (the
+  audio background mode Task 51 declared); the lock-screen card is Task 64's.
+- The session never brings up the microphone question itself: Task 56a's flow asks it
+  after the first pairing. Check on the simulator that activating the session doesn't
+  prompt; if it does, stop and report rather than switching category.
+
+**Verification:** unit tests of the session policy on the simulator; device (JJ, in
+Task 56b): the speaker, the earpiece and AirPods, and sound while locked.
+
+**Execution note (advisory):** opus. Requires Tasks 11, 51 and 54a. On the listening path.
+
+- [ ] **Step 1:** The session controller, playback and interruptions with tests.
+- [ ] **Step 2:** The route menu.
+
+## Task 55: The microphone on the phone
 
 **Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
@@ -4640,19 +4754,19 @@ speaker's route menu), R-IOS-13 (a call or Siri interrupting unkeys), spec §4.7
 the background), §5.4 items 6 to 10.
 
 **Files:**
-- Create: `ios/NereusApp/Audio/AudioSessionController.swift`,
-  `MicCapture.swift` (AVAudioEngine input, voice processing off, Opus microphone profile,
-  RTP on the mic line), `RouteMenu.swift`, `ios/NereusApp/Setup/AudioOnThisPhonePage.swift`
+- Create: `ios/NereusApp/Audio/MicCapture.swift` (AVAudioEngine input, voice processing
+  off, Opus microphone profile, RTP on the mic line),
+  `ios/NereusApp/Setup/AudioOnThisPhonePage.swift`
+- Modify: `ios/NereusApp/Audio/AudioSessionController.swift` (Task 55a's)
 - Create: `ios/NereusApp/Tests/AudioSessionControllerTests.swift`
 - Modify: `ios/NereusKit/Sources/NereusLink/LinkFeatures.swift` (`remoteTx: 1`)
 
 **Interfaces:**
 - Consumes: `AudioPlaybackCore` (Task 11), `MediaPeer.sendAudio` (Task 10), the mic line
   (Task 36), `PttController` (Task 54), the audio quality offer (Task 23).
-- Produces: `AudioSessionController` configuring `.playAndRecord` with
-  `.defaultToSpeaker` and `.allowBluetoothA2DP` (not `.allowBluetooth`, so AirPods stay
-  in high-quality output and the microphone stays on the iPhone), mode `.default` (no
-  voice processing); `MicCapture.start()` at the PTT tap and while VOX is armed, and
+- Produces: on Task 55a's session (whose `.allowBluetoothA2DP` keeps the microphone on
+  the iPhone while AirPods play), `MicCapture.start()` at the PTT tap and while VOX is
+  armed, and
   `stop()` on unkey or when VOX is disarmed; the band's
   playback muted while keyed and MON routed only when the output is headphones (both
   settings on by default); the quality choice sent as the audio control's `opusBitrate`.
@@ -4665,37 +4779,139 @@ the background), §5.4 items 6 to 10.
 - While keyed on the speaker the band is silent and MON plays nowhere; on AirPods MON
   plays.
 - High appears only when the station's catalogue lists the 48 kbit/s profile as offered.
-- Pressing and holding the speaker button opens the route menu (speaker, earpiece,
-  AirPods) without leaving the band.
-- The microphone permission is requested only by Task 56's flow, never here.
+- The microphone permission is requested only by Task 56a's flow, never here.
 
 **Verification:** unit tests of the session policy on the simulator; device (JJ,
 pending until observed): every route including AirPods, no feedback on the speaker while
 keyed, a call arriving mid-transmission unkeys on air (Task 70's bench row).
 
-**Execution note (advisory):** opus. Requires Tasks 11, 23, 36 and 54.
+**Execution note (advisory):** opus. Requires Tasks 11, 23, 36, 54 and 55a.
 
-- [ ] **Step 1:** The session controller and interruption handling with tests.
-- [ ] **Step 2:** Capture, the route menu, the page and the quality choice.
+- [ ] **Step 1:** Capture and the transmit interruption handling with tests.
+- [ ] **Step 2:** The page and the quality choice.
 
-## Task 56: Connecting, pairing, trouble and several-devices screens
+## Task 56a: Connecting for listening: an address, a code and the band
 
 **Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
-**Requirements:** R-IOS-16 (§5.3 items 1 to 9 and 14; the version rules of §4.4),
-R-IOS-17 (§5.3 items 12 and 13, and §5.8 items 8 to 12 and 14 to 16), R-IOS-08 (the
-app's pairing screens), D19, D22, D23, D44 to D56 (D21 was replaced by §3.9).
+**Requirements:** R-IOS-16 (§5.3 items 1, 2 as it applies, 4 and 6 to 9, and 14, for a
+direct connection; the version rules of §4.4), R-IOS-08 (the app's pairing screens),
+D19, D23, JJ's listening-first order and his first test target, the Pi 4 over its public
+IPv6 address (2026-09-24).
 
 **Files:**
-- Create: `ios/NereusApp/Connect/WelcomeScreen.swift`, `FindStationScreen.swift`,
-  `FoundItScreen.swift`, `PairByCodeScreen.swift`, `TypeAddressScreen.swift`,
-  `SetUpAStationScreen.swift`, `YourStationsScreen.swift`, `LinkLostBanner.swift`,
-  `TroubleScreens.swift` (five), `FifthDeviceSheet.swift`, `PlaceTakenScreen.swift`,
-  `ios/NereusApp/Shared/TakeReceiverSheet.swift`, `MoveSharedReceiverSheet.swift`,
-  `SharedChangeSheet.swift`, `ReceiverTakenOverlay.swift`, `SharedNotice.swift`,
-  `ios/NereusApp/Connect/ConnectionFlow.swift`
+- Create: `ios/NereusApp/Connect/ConnectionFlow.swift`, `WelcomeScreen.swift`,
+  `TypeAddressScreen.swift`, `PairByCodeScreen.swift`, `YourStationsScreen.swift`,
+  `LinkLostBanner.swift`, `TroubleScreens.swift` (five)
 - Create: `ios/NereusApp/Tests/ConnectionFlowTests.swift`
-- Modify: `ios/NereusKit/Sources/NereusLink/LinkFeatures.swift` (`sessionHolder: 1`)
+
+**Interfaces:**
+- Consumes: `PairingClient` with `PairingCarrier.direct`, `DeviceKeyAuthenticator` and
+  `PairedStationStore` (Task 15), `StationSession`, its refusals and `ReconnectPolicy`
+  (Task 8), `AppModel` (Task 51), `MainScreen` (Task 54a).
+- Produces: `ConnectionFlow`, the state machine behind the screens: welcome, a typed
+  address, code entry (validated against the word list), the microphone question right
+  after the first pairing, your Cores (the paired ones), connecting, connected (the
+  band), link lost while listening (retrying, with Cancel), back on the air, and the five
+  trouble screens. The address field takes an IPv6 literal with or without brackets and
+  a port, an IPv4 address, or a host name; with no port typed it uses the Core's default
+  remote port (Task 12).
+
+**Acceptance:**
+- `2001:db8::10`, `[2001:db8::10]:50055`, `192.0.2.10:47910` and `core.example` become
+  endpoints; a malformed address is refused with a plain reason before anything is sent.
+- Against `FakeStation`, a code pairs over the direct carrier, and the flow connects
+  straight away, signs in with the device key and shows the band, with the microphone
+  question first after the first pairing and no other tap.
+- A typed code with a word not in the list is caught before sending, with suggestions.
+- Each trouble screen appears for its cause against `FakeStation` configured to produce
+  it: the radio off (the desktop's DISCONNECTED over the band, the last frame, the
+  five-second retry); the Core not answering (what was tried: the typed address, and
+  what to check); the Core needs updating (two majors apart, naming both versions); an
+  older Core (one major behind: connects and greys each feature whose capability is
+  missing with "Needs a newer Core"); this phone offline (waits for a network).
+- Link lost while listening shows the retry with Cancel, and back on the air the band
+  resumes.
+- When the Core removes this phone (`session.end` with the removal reason) the phone
+  returns to the list of Cores, says the Core must be paired again, and drops that Core's
+  stored identity (spec §7).
+- Screenshots of every screen against `06-first-launch.jpg`, `07-connecting.jpg` and
+  `10-trouble.jpg`.
+
+**Verification:** authorisation flows: the flow tests on the simulator first;
+screenshots. Device: Task 56b.
+
+**Execution note (advisory):** opus. Authorisation flows. Requires Tasks 15, 51 and 54a.
+On the listening path. Finding a Core on this network and the one-tap claim come with
+Task 16a; the relay and the several-devices screens with Task 56.
+
+- [ ] **Step 1:** `ConnectionFlow` with its tests.
+- [ ] **Step 2:** The screens and screenshots.
+
+## Task 56b: The listening build on JJ's iPhone
+
+**Runs in:** the phone session's controller with JJ, once Tasks 15, 52, 53, 54a, 55a and
+56a have landed and the Core/GUI session has put their station half on the Pi 4.
+
+**Requirements:** JJ's listening-first order and test target (2026-09-24); the Device
+evidence of R-IOS-11 (the band on a real iPhone), R-IOS-16 (connecting by a typed
+address, pairing by code), R-IOS-20 (the routes), R-IOS-08 (the code read at the Core,
+never sent anywhere), spec §4.7 (sound while locked).
+
+**Files:**
+- Create: `docs/architecture/2026-09-23-iphone-app-verification/README.md` (the matrix;
+  this task writes its listening rows, Task 70 the rest; each row with the requirement,
+  the setup, the steps, the expected observation, and the result with date and device,
+  pending until observed)
+
+**Interfaces:**
+- Consumes: everything on the listening path.
+- Produces: the listening rows of the verification matrix.
+
+**Acceptance:** each row observed and recorded:
+1. JJ's one-time setup is done: his Apple ID in Xcode's Settings, Accounts; Developer Mode
+   on the iPhone; the phone connected to the Mac once and trusted.
+2. The controller builds with automatic signing (`xcodebuild -allowProvisioningUpdates`,
+   Task 51's team) and installs on the iPhone. If a capability the project declares (Push
+   to Talk) can't be provisioned yet, the controller stops and brings JJ the error; the
+   project keeps the entitlement.
+3. The Core/GUI session has put the build on the Pi 4 with JJ's go-ahead and given the
+   address and port; JJ reads the pairing code on the Pi himself (over SSH, with the
+   command that session gives him).
+4. JJ types the Pi's IPv6 address and the code: the phone pairs, signs in and shows the
+   band from the HL2.
+5. Sound on the speaker, the earpiece and AirPods; locking the phone keeps it playing.
+6. Tuning by drag and by tap, zoom, and the RX panel's controls change what he hears.
+7. Turning Wi-Fi and cellular off shows the link-lost screen; turning them on reconnects.
+8. The band's frame time on the iPhone (Task 52's device check).
+No address, code or key goes into the repository or a log.
+
+**Verification:** device, JJ with the controller; each row pending until observed.
+
+**Execution note (advisory):** the controller and JJ, not a crew implementer. Touches a
+device and a Core box: only the controller or JJ acts on them.
+
+- [ ] **Step 1:** Signing and the install.
+- [ ] **Step 2:** The rows, observed with JJ and recorded.
+
+## Task 56: Connecting from anywhere, and the several-devices screens
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
+**Requirements:** R-IOS-16 (§5.3 item 14's Core-not-answering screen listing this Wi-Fi,
+direct and relay; pairing by code through the relay), R-IOS-17 (§5.3 items 12 and 13, and
+§5.8 items 1 and 8 to 16), R-IOS-08 (pairing through the relay), D22, D44 to D64 (D21 was
+replaced by §3.9).
+
+**Files:**
+- Create: `ios/NereusApp/Connect/SetUpAStationScreen.swift`, `FifthDeviceSheet.swift`,
+  `PlaceTakenScreen.swift`, `ios/NereusApp/Shared/TakeReceiverSheet.swift`,
+  `MoveSharedReceiverSheet.swift`, `SharedChangeSheet.swift`, `ReceiverTakenOverlay.swift`,
+  `SharedNotice.swift`, `ios/NereusKit/Sources/NereusBand/ForeignSliceMarkers.swift`,
+  `ios/NereusApp/Band/ForeignSliceLabel.swift`
+- Modify: `ios/NereusApp/Connect/ConnectionFlow.swift`, `TroubleScreens.swift` (Task
+  56a's), `ios/NereusKit/Sources/NereusLink/LinkFeatures.swift` (`sessionHolder: 1`)
+- Modify: `ios/NereusApp/Tests/ConnectionFlowTests.swift`
 
 **Interfaces:**
 - Consumes: `StationBrowser` (Task 16a), `PairingClient` (Tasks 15, 27a), `PathRacer`
@@ -4704,16 +4920,19 @@ app's pairing screens), D19, D22, D23, D44 to D56 (D21 was replaced by §3.9).
   rewrites it: who is on the Core, receivers and whose slices they carry, the effects a
   shared change or a pan move would have, the notices), whose names this task's
   interfaces take when they land.
-- Produces: `ConnectionFlow`, the state machine behind the screens:
-  welcome, local-network permission (asked once, by starting the browser), found
-  (one-tap claim of an unclaimed Core on this network), code entry (validated against
-  the word list), typed address, microphone permission right after the first pairing,
-  your Cores (paired first, then unclaimed on this network; Cores only, never
-  radios; a Core with devices on it says how many), connecting, the fifth device's
-  question, connected, link lost (listening and keyed), place taken, and the five
-  trouble screens. From this task on the app declares `sessionHolder: 1` in its
-  `hello` (or the name the station's design gives it), so the station sends it the
-  several-devices reports.
+- Produces: `ConnectionFlow` (Task 56a's) gains the rungs that reach a Core from anywhere
+  (the path race and its attempt record), pairing by code through the rendezvous, Set up a
+  Core, a Core with devices on it saying how many in your Cores, the fifth device's
+  question, link lost while keyed, and place taken. From this task on the app declares
+  `sessionHolder: 1` in its `hello` (or the name the station's design gives it), so the
+  station sends it the several-devices reports.
+  - Other devices' slices on the band (D46, D47): `ForeignSliceMarkers` and
+    `ForeignSliceLabel`. A slice another device owns (its owner and its Core-wide letter
+    come from the mirror, as the station's design names them) draws a dashed centre line
+    in its colour, a hollow triangle, dashed grey passband edges with no fill, and a label
+    at the foot of the spectrum with its letter and the owning device's short name, plus
+    TX while that device holds transmit; it has no flag and is never tuned from this
+    device.
   - The several-devices sheets and notices, shared by every tab: Take a receiver (D49:
     each receiver in use with the device and slice on it and when last active; the
     button names the device), Move a shared receiver (D50: the device sharing it and
@@ -4723,13 +4942,19 @@ app's pairing screens), D19, D22, D23, D44 to D56 (D21 was replaced by §3.9).
     changes a shared setting.
 
 **Acceptance:**
-- Each trouble screen appears for its cause against `FakeStation` configured to produce
-  it: the radio off (the desktop's DISCONNECTED over the band, the last frame, the
-  five-second retry); the Core not answering (what was tried: this Wi-Fi, direct,
-  relay, and what to check); the Core needs updating (two majors apart, naming both
-  versions); an older Core (one major behind: connects and greys each feature whose
-  capability is missing with "Needs a newer Core"); this phone offline (waits for a
-  network and says the Core has already unkeyed).
+- The Core-not-answering screen lists what was tried (this Wi-Fi, direct, relay) and
+  what to check; this phone offline also says the Core has already unkeyed when it was
+  keyed.
+- A slice another device owns draws as the foreign style (render test sampling the
+  dashed line, the hollow triangle and the unfilled passband); its label sits at the
+  foot of the spectrum, centred on its line and kept inside the band; a tap on the label
+  opens a note with whose slice it is, its frequency and mode, and "Only <device> can
+  tune it or close it"; a drag or tap on the band never moves it, and no write for it is
+  ever sent.
+- Once a confirmation question is open, a drag sends only its final value; the fifth
+  device's sheet closes when the Core admits the device while the question is showing;
+  each device shows one name everywhere (Devices, markers, sheets), as the Core numbers
+  duplicate names.
 - A second, third or fourth device connects with no question. A fifth device's
   question lists the four connected (name, how long, listening on what or transmitting,
   when last active), starting on the one idle longest; picking one on the air turns the
@@ -4744,22 +4969,19 @@ app's pairing screens), D19, D22, D23, D44 to D56 (D21 was replaced by §3.9).
   names both answers). A receiver taken from this phone shows
   RECEIVER TAKEN with who and when, keeps the connection, and Take it back opens the
   Take a receiver sheet for that receiver.
-- A typed code with a word not in the list is caught before sending, with suggestions.
-- After a successful pairing, by one tap or by code, the flow connects straight away
-  through the normal path, so the operator goes from Found it or the code to the band
-  (with the microphone question first, after the first pairing) without another tap.
-- When the Core removes this phone (`session.end` with the removal reason) the phone
-  returns to the list of Cores, says the Core must be paired again, and drops that
-  Core's stored identity (spec §7).
-- Screenshots of every screen against `06-first-launch.jpg`, `07-connecting.jpg`,
-  `10-trouble.jpg` and `22-several-devices.jpg`.
+- Pairing by code through the rendezvous connects straight away through the normal
+  path, as Task 56a's direct pairing does.
+- Screenshots of every new screen against `07-connecting.jpg`, `10-trouble.jpg` and
+  `22-several-devices.jpg`.
 
 **Verification:** the flow tests on the simulator; screenshots; device (JJ, pending until
-observed): the Local Network and microphone prompts on a real iPhone; pairing on the LAN,
-by code through the relay, and by typed address against the Rock's station.
+observed): pairing by code through the relay; two devices on one Core.
 
-**Execution note (advisory):** opus. Authorisation flows. Requires Tasks 15, 16, 27, 29,
-41 (as the Core/GUI session rewrites it for several devices) and 51.
+**Execution note (advisory):** opus. Authorisation flows. Requires Tasks 16a, 27a, 29a,
+41 (as the Core/GUI session rewrites it for several devices), 53, 54 and 56a. Before
+dispatch, the states the board doesn't draw yet (a holder that's away, changing hands,
+away markers and entries, a slice frozen while the radio's own PTT is keyed) are drawn
+and JJ has approved them (the several-devices design review, finding 12).
 
 - [ ] **Step 1:** `ConnectionFlow` with its tests.
 - [ ] **Step 2:** The screens and screenshots.
@@ -5241,7 +5463,7 @@ spec §5.4 items 11 to 13, §5.5 items 9 to 12.
 - Create: `ios/NereusApp/Tests/IPadLayoutTests.swift`
 
 **Interfaces:**
-- Consumes: the main screen (Task 54), the panels, `FlagLayout` (Task 53), the
+- Consumes: the main screen (Tasks 54a and 54), the panels, `FlagLayout` (Task 53), the
   catalogue's meter ranges (Task 19).
 - Produces: on its side, the band on the left and one column on the right with the
   analog S-meter at its head, then RX, then TX with the amp and tuner; a corner button
@@ -5365,9 +5587,10 @@ device matrix; remote design §12.1's mandatory severing test with the phone as 
 client.
 
 **Files:**
-- Create: `docs/architecture/2026-09-23-iphone-app-verification/README.md` (the matrix;
-  one row per item below, each with the requirement, the setup, the steps, the expected
-  observation, and the result with date and device, pending until observed)
+- Modify: `docs/architecture/2026-09-23-iphone-app-verification/README.md` (the matrix
+  Task 56b started; one row per item below, each with the requirement, the setup, the
+  steps, the expected observation, and the result with date and device, pending until
+  observed)
 
 **Interfaces:**
 - Consumes: everything.
