@@ -326,8 +326,14 @@ private slots:
         QCOMPARE(link.requests, 2);
         QCOMPARE(link.requestedPort, other);
 
-        // The Core turns out to be on this computer: one server, the Core's.
+        // The Core turns out to be on this computer and serves TCI on this
+        // port: one server, the Core's.
         link.coreHere = true;
+        StationTciModel::State serving;
+        serving.enabled = true;
+        serving.listening = true;
+        serving.port = other;
+        window.stationTciModel()->setState(serving);
         window.reportStationLinkStateChanged();
         QVERIFY(!local.isRunning());
         QVERIFY(tci.coreServesThisComputer());
@@ -351,6 +357,90 @@ private slots:
         tci.setSwitch(false, port, loopback);
         QVERIFY(!local.isRunning());
         QCOMPARE(link.requests, 4);
+    }
+
+    // I1 (R-R3-48): a Core on this computer whose station switch is off (or
+    // not listening, or on another port) serves no TCI here, so this
+    // window's own server keeps running. Turning the Core's switch off from
+    // another window brings this window's server back.
+    void coreHereWithItsSwitchOffKeepsThisWindowsServer()
+    {
+        const quint16 port = freePort();
+        RadioModel window(RadioModel::Role::Remote);
+        FakeStationLink link;
+        link.coreHere = true;
+        window.attachStation(&link);
+        TciServer local(&window);
+        TciSwitch tci(&local, &window);
+        const QHostAddress loopback(QHostAddress::LocalHost);
+
+        // Startup: the window applies its switch without telling the Core,
+        // and the Core's station switch is off (its default).
+        tci.setSwitch(true, port, loopback, /*tellCore=*/false);
+        QVERIFY(local.isRunning());
+        QCOMPARE(link.requests, 0);
+        window.reportStationLinkStateChanged();
+        QVERIFY(local.isRunning());
+
+        // The Core's switch on, but not listening: still this window's.
+        StationTciModel::State state;
+        state.enabled = true;
+        state.port = port;
+        window.stationTciModel()->setState(state);
+        QVERIFY(local.isRunning());
+
+        // Listening on another port: still this window's.
+        state.listening = true;
+        state.port = port + 1;
+        window.stationTciModel()->setState(state);
+        QVERIFY(local.isRunning());
+
+        // Listening on this port: the Core serves it; one server.
+        state.port = port;
+        window.stationTciModel()->setState(state);
+        QVERIFY(!local.isRunning());
+
+        // Another window turns the Core's switch off: this one serves again.
+        state.enabled = false;
+        state.listening = false;
+        window.stationTciModel()->setState(state);
+        QVERIFY(local.isRunning());
+        QCOMPARE(local.port(), port);
+    }
+
+    // I1: this window turns the switch on with the Core here. It waits for
+    // the Core rather than taking the port first; if the Core cannot listen,
+    // this window serves.
+    void switchOnWithCoreHereWaitsForTheCore()
+    {
+        const quint16 port = freePort();
+        RadioModel window(RadioModel::Role::Remote);
+        FakeStationLink link;
+        link.coreHere = true;
+        window.attachStation(&link);
+        TciServer local(&window);
+        TciSwitch tci(&local, &window);
+        const QHostAddress loopback(QHostAddress::LocalHost);
+
+        tci.setSwitch(true, port, loopback);
+        QCOMPARE(link.requests, 1);
+        QVERIFY(!local.isRunning());   // the Core was asked; its answer decides
+
+        StationTciModel::State state;
+        state.enabled = true;
+        state.port = port;
+        state.error = QStringLiteral("The port is in use.");
+        window.stationTciModel()->setState(state);   // answered: not listening
+        QVERIFY(local.isRunning());
+
+        // No answer at all: this window serves after the wait.
+        tci.setSwitch(false, port, loopback);
+        QVERIFY(!local.isRunning());
+        StationTciModel::State off;
+        window.stationTciModel()->setState(off);
+        tci.setSwitch(true, port, loopback);
+        QVERIFY(!local.isRunning());
+        QTRY_VERIFY_WITH_TIMEOUT(local.isRunning(), TciSwitch::kCoreAnswerWaitMs + 2000);
     }
 
     // The TCI page's line, in user words.

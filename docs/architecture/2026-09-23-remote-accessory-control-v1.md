@@ -953,9 +953,15 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   page adds "Also at the station: <address>, port <port>" while the Core's
   server listens ("The station's TCI server is not running." while it is on
   and not listening). When the Core runs on the same computer as the
-  window, the window runs no server of its own and apps there use the
-  Core's; the page then says "The Core on this computer serves TCI apps
-  here, port <port>."
+  window and its station server is on, listening and on the same port,
+  the window runs no server of its own and apps there use the Core's; the
+  page then says "The Core on this computer serves TCI apps here, port
+  <port>." In every other case (the Core's switch off, including when
+  another window turns it off, not listening, another port, an older
+  Core) the window keeps its own server, so apps on that computer never
+  lose TCI. A window turning the switch on with the Core there waits up
+  to 3 seconds for the Core's answer before serving itself, so the two do
+  not race for the port.
 - A local window's RF-Kit band follow is worked out from its own TCI server
   the same way.
 - With `accessoryDataVersion` 1 the desktop remote window's 4O3A page
@@ -1079,8 +1085,10 @@ rewrite the fixtures, and update this document in the same commit.
   Core across restarts, a TCI app at the station hearing receive-only,
   `split_enable:` and `vfo:` as the Core's slice moves, transmit refused,
   the RF-Kit's band follow over the server, the one switch driving both
-  servers (none of the window's own when the Core is on this computer), and
-  the TCI page's line.
+  servers (none of the window's own when the Core is on this computer and
+  serving that port; the window's own when the Core's switch is off, not
+  listening or on another port, and after a wait with no answer), and the
+  TCI page's line.
 - `tst_tci_tx_mutex`: the station server's transmit refusal on the wire.
 - `tst_smartsdr_api_listener_bind`: the one station rule on a Core with two
   networks (the radio's network, the override, every address, this computer

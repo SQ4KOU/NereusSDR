@@ -5,6 +5,7 @@
 #include <QHostAddress>
 #include <QObject>
 #include <QPointer>
+#include <QTimer>
 
 namespace NereusSDR {
 
@@ -20,12 +21,22 @@ class TciServer;
 // another app connects: the command is sent only when the operator
 // changes the switch or the port here.
 //
-// A Core on this same computer already serves TCI here (it listens on this
+// A Core on this same computer whose station server is on, listening and
+// on this switch's port already serves TCI here (it listens on this
 // computer too), so the window then runs no server of its own and apps on
-// this computer use the Core's: one server, one port.
+// this computer use the Core's: one server, one port. In every other case
+// (the Core's switch off, not listening, another port, or an older Core)
+// this window keeps its own server, so apps here never lose TCI. When this
+// window turns the switch on with the Core here, it waits up to
+// kCoreAnswerWaitMs for the Core's answer before serving itself, so the
+// two do not race for the port.
 class TciSwitch : public QObject {
     Q_OBJECT
 public:
+    /// How long this window waits for the Core on this computer to answer
+    /// a switch-on before it serves TCI itself.
+    static constexpr int kCoreAnswerWaitMs = 3000;
+
     TciSwitch(TciServer* local, RadioModel* model, QObject* parent = nullptr);
 
     /// The switch changed (or the window started): apply it here and, when
@@ -39,8 +50,11 @@ public:
     void reevaluate();
 
     bool switchOn() const { return m_on; }
-    /// The Core on this computer serves TCI here, so this window runs none.
+    /// The Core is on this computer (whether or not it serves TCI here).
     bool coreServesThisComputer() const;
+    /// The Core on this computer serves TCI here on this switch's port
+    /// (its station switch on and listening), so this window runs none.
+    bool coreCoversThisComputer() const;
     /// The Core runs a station TCI server this switch also controls.
     bool coreHasStationServer() const;
 
@@ -56,12 +70,16 @@ signals:
 private:
     void applyLocal();
     void tellCore();
+    void onStationTciChanged();
 
     QPointer<TciServer> m_local;
     QPointer<RadioModel> m_model;
     bool m_on{false};
     quint16 m_port{50001};
     QHostAddress m_bind{QHostAddress::LocalHost};
+    // A switch-on sent to the Core on this computer, not yet answered.
+    bool m_awaitingCore{false};
+    QTimer m_awaitTimer;
 };
 
 } // namespace NereusSDR

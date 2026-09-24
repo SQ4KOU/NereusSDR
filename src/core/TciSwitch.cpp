@@ -13,9 +13,40 @@ namespace NereusSDR {
 TciSwitch::TciSwitch(TciServer* local, RadioModel* model, QObject* parent)
     : QObject(parent), m_local(local), m_model(model)
 {
+    m_awaitTimer.setSingleShot(true);
+    m_awaitTimer.setInterval(kCoreAnswerWaitMs);
+    connect(&m_awaitTimer, &QTimer::timeout, this, [this]() {
+        m_awaitingCore = false;
+        applyLocal();
+    });
     if (model) {
         connect(model, &RadioModel::stationLinkStateChanged, this, &TciSwitch::reevaluate);
+        if (StationTciModel* station = model->stationTciModel()) {
+            connect(station, &StationTciModel::stateChanged,
+                    this, &TciSwitch::onStationTciChanged);
+        }
     }
+}
+
+bool TciSwitch::coreCoversThisComputer() const
+{
+    if (!coreServesThisComputer()) {
+        return false;
+    }
+    const StationTciModel* station = m_model->stationTciModel();
+    return station && station->enabled() && station->listening()
+        && station->port() == int(m_port);
+}
+
+void TciSwitch::onStationTciChanged()
+{
+    // The Core answered (or another window changed its switch): whatever
+    // it reports now decides.
+    if (m_awaitingCore) {
+        m_awaitingCore = false;
+        m_awaitTimer.stop();
+    }
+    applyLocal();
 }
 
 bool TciSwitch::coreHasStationServer() const
@@ -66,10 +97,10 @@ void TciSwitch::setSwitch(bool on, quint16 port, const QHostAddress& bindAddress
     m_on = on;
     m_port = port;
     m_bind = bindAddress;
-    applyLocal();
     if (tell) {
         tellCore();
     }
+    applyLocal();
 }
 
 void TciSwitch::setPortOrBind(quint16 port, const QHostAddress& bindAddress)
@@ -82,10 +113,10 @@ void TciSwitch::setPortOrBind(quint16 port, const QHostAddress& bindAddress)
         m_local->stop();
     }
 #endif
-    applyLocal();
     if (m_on && portChanged) {
         tellCore();
     }
+    applyLocal();
 }
 
 void TciSwitch::reevaluate()
@@ -99,7 +130,12 @@ void TciSwitch::applyLocal()
     if (!m_local) {
         return;
     }
-    const bool wanted = m_on && !coreServesThisComputer();
+    const bool coreHere = coreServesThisComputer();
+    if (!m_on || !coreHere) {
+        m_awaitingCore = false;
+        m_awaitTimer.stop();
+    }
+    const bool wanted = m_on && !coreCoversThisComputer() && !(m_awaitingCore && coreHere);
     if (wanted && !m_local->isRunning()) {
         m_local->start(m_bind, m_port);
     } else if (!wanted && m_local->isRunning()) {
@@ -124,6 +160,13 @@ void TciSwitch::tellCore()
     const auto outcome = link->requestStationTci(m_on, m_port);
     if (!outcome.sent) {
         emit stationRequestFailed(outcome.reason);
+        return;
+    }
+    if (m_on && coreServesThisComputer() && !coreCoversThisComputer()) {
+        // The Core here was asked to serve this port: wait for its answer
+        // before this window takes the port itself.
+        m_awaitingCore = true;
+        m_awaitTimer.start();
     }
 }
 
