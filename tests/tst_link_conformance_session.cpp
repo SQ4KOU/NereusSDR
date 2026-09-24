@@ -47,6 +47,10 @@
 //                                    offers that major.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4b (R-IOS-01): the
+//                                    connectable station waits for
+//                                    PureSignal's readiness to settle.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -66,9 +70,11 @@
 #include "core/ConnectionState.h"
 #include "core/StepAttenuatorController.h"
 #include "core/dsp/DspAssetService.h"
+#include "core/PureSignal.h"
 #include "core/meters/SliceMeterPump.h"
 #include "core/security/TokenStore.h"
 #include "core/session/LinkVersion.h"
+#include "core/session/PureSignalSessionFacade.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationServer.h"
@@ -195,6 +201,42 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
                                                       QList<quint16>{major});
     if (setup.value(QStringLiteral("media")).toBool(false)) {
         station->server->setMediaEnabled(true);
+    }
+    if (station->harness) {
+        // Task 4b (R-IOS-01): a StationServer makes its radio receive-only
+        // (setReceiveOnlyStationPolicy), which turns PureSignal's readiness
+        // (canActuate) off. The pureSignal object reads that on the
+        // coordinator's next status poll (PureSignal::pollTimerTick, every
+        // 100 ms). Wait for one poll after the server exists, so the
+        // snapshot always carries the settled value instead of whichever
+        // side of that poll the client happened to attach on.
+        PureSignal* const coordinator = station->model->pureSignal();
+        PureSignalSessionFacade* const facade = station->model->pureSignalFacade();
+        if (coordinator == nullptr || facade == nullptr) {
+            return QStringLiteral("the connectable radio has no PureSignal");
+        }
+        QSignalSpy polled(coordinator, &PureSignal::ps3StatusChanged);
+        if (!polled.wait(5000)) {
+            return QStringLiteral("PureSignal never polled its status");
+        }
+        if (facade->canActuate() != coordinator->canActuate()) {
+            return QStringLiteral("PureSignal's readiness did not settle");
+        }
+        // The same for each slice's signal readings: the meter pump writes
+        // the no-reading value until the receiver's meter has one.
+        const bool readings = QTest::qWaitFor([station]() {
+            for (SliceModel* slice : station->model->slices()) {
+                if (slice->signalStrengthDbm() <= SliceMeterPump::kNoReadingDbm
+                    || slice->signalPeakDbm() <= SliceMeterPump::kNoReadingDbm
+                    || slice->signalAverageDbm() <= SliceMeterPump::kNoReadingDbm) {
+                    return false;
+                }
+            }
+            return true;
+        }, 5000);
+        if (!readings) {
+            return QStringLiteral("the slices' signal readings did not settle");
+        }
     }
 
     const int failures = setup.value(QStringLiteral("priorFailedAuthentications")).toInt(0);
