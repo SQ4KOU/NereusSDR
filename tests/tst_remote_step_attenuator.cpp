@@ -18,6 +18,10 @@
 // Modification history (NereusSDR):
 //   2026-09-23: created (R-R3-46, R-R3-11, R-R3-13), by J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23: each radio starts with no saved attenuator values, so a
+//               second run in the same test sandbox passes too (R-R3-46),
+//               by J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -144,6 +148,13 @@ private:
 
     std::unique_ptr<Session> join(HPSDRHW board, const QString& mac)
     {
+        // The Core saves this radio's attenuator into the process's own
+        // settings (the test sandbox, kept between runs). Start each radio
+        // from nothing, or a value an earlier run saved (40 m at 20 dB)
+        // makes the window's 20 dB no change and nothing reaches the radio.
+        AppSettings::instance().load();
+        AppSettings::instance().clearHardwareValues(mac);
+        AppSettings::instance().save();
         auto s = std::make_unique<Session>();
         s->mac = mac;
         s->stationSettings = std::make_unique<AppSettings>(

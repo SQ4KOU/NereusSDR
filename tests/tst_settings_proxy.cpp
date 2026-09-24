@@ -1231,31 +1231,6 @@ private slots:
         QCOMPARE(fromInboundPath.toString(), fromLocalPath.toString());
     }
 
-    // ── Fix rounds 1-3 (review, Important 3): step-attenuator bounds check ─
-
-    void serverRejectsOutOfRangeStepAttenuatorValue()
-    {
-        QTemporaryDir tmp;
-        QVERIFY(tmp.isValid());
-        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
-        daemon.setHardwareValue(QStringLiteral("aa:bb"), QStringLiteral("options/stepAtt/rx1Value"), 10);
-        SettingsProxyServer server(daemon);
-        QSignalSpy spy(&server, &SettingsProxyServer::outboundValueChanged);
-
-        const QString key = QStringLiteral("hardware/aa:bb/options/stepAtt/rx1Value");
-
-        const SettingsApplyResult tooHigh = server.applyInboundWrite(key, 999, QStringLiteral("client-1"));
-        QVERIFY(!tooHigh.accepted);
-        QVERIFY(!tooHigh.reason.isEmpty());
-        QCOMPARE(tooHigh.restoredValue.toInt(), 10); // the daemon's own current value, untouched
-
-        const SettingsApplyResult tooLow = server.applyInboundWrite(key, -999, QStringLiteral("client-1"));
-        QVERIFY(!tooLow.accepted);
-
-        QCOMPARE(daemon.value(key).toInt(), 10); // still untouched
-        QCOMPARE(spy.count(), 0); // nothing broadcast for a rejected write
-    }
-
     // ── Whole-branch review, Minor 7 ──────────────────────────────────────
     //
     // SwrProtectionLimit is Station-scoped and reaches a PA-protection
@@ -1307,7 +1282,10 @@ private slots:
     // saves them itself, so a raw write is refused whatever its value, in
     // range or not, with the plain "update this app" reason; the Core's own
     // value is handed back. This replaces the fix-round range tests, which
-    // accepted in-range raw writes the controller then overwrote.
+    // accepted in-range raw writes the controller then overwrote, and (R3
+    // remote radio hardware Task 3) the out-of-range one: 999, -999 and a
+    // value that is not a number are refused the same way, before any
+    // range is read, and nothing is broadcast.
     void serverRefusesEveryStepAttenuatorAndPreampKeyWithThePlainReason()
     {
         QTemporaryDir tmp;
@@ -1333,7 +1311,9 @@ private slots:
         };
         for (const QString& key : keys) {
             QVERIFY2(isModelOwnedStepAttenuatorSettingsKey(key), qPrintable(key));
-            for (const int dB : {-28, 0, 40, 61}) {
+            for (const QVariant& dB : {QVariant(-999), QVariant(-28), QVariant(0), QVariant(40),
+                                       QVariant(61), QVariant(999),
+                                       QVariant(QStringLiteral("not a number"))}) {
                 const SettingsApplyResult result =
                     server.applyInboundWrite(key, dB, QStringLiteral("client-1"));
                 QVERIFY2(!result.accepted, qPrintable(key));
