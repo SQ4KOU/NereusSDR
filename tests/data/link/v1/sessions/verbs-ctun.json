@@ -25,17 +25,17 @@
         {"from": "station", "message": {"class": "TunerModel", "key": "tuner", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"class": "SliceModel", "key": "slice:0", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"type": "snapshot.complete"}},
-        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "requestStreamCtunPinned", "id": "$int:invoke23", "args": [{"ordinal": 0, "name": "sliceId", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "pinned", "kind": "bool", "value": true}]}},
+        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "requestStreamCtunPinned", "id": "$int:invoke23:0:4294967295", "args": [{"ordinal": 0, "name": "sliceId", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "pinned", "kind": "bool", "value": true}]}},
         {"from": "station", "message": {"accepted": false, "affected": [], "id": "$ref:invoke23", "reason": "That receiver is not running on the Core.", "type": "command.result", "verb": "requestStreamCtunPinned"}},
         {"advanceMs": 50},
-        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "requestStreamCtunPinned", "id": 114, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "pinned", "kind": "bool", "value": true}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 114, "reason": "The Core could not read this request.", "type": "command.result", "verb": "requestStreamCtunPinned"}},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "requestStreamCtunPinned", "id": 1114, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "pinned", "kind": "bool", "value": true}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 1114, "reason": "The Core could not read this request.", "type": "command.result", "verb": "requestStreamCtunPinned"}},
         {"advanceMs": 50},
-        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "requestStreamCentre", "id": "$int:invoke29", "args": [{"ordinal": 0, "name": "sliceId", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "centreHz", "kind": "f64", "value": 14100000.0}]}},
+        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "requestStreamCentre", "id": "$int:invoke29:0:4294967295", "args": [{"ordinal": 0, "name": "sliceId", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "centreHz", "kind": "f64", "value": 14100000.0}]}},
         {"from": "station", "message": {"accepted": false, "affected": [], "id": "$ref:invoke29", "reason": "C-Tune cannot centre there while other receivers share this spectrum.", "type": "command.result", "verb": "requestStreamCentre"}},
         {"advanceMs": 50},
-        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "requestStreamCentre", "id": 116, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "centreHz", "kind": "f64", "value": 14100000.0}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 116, "reason": "The Core could not read this request.", "type": "command.result", "verb": "requestStreamCentre"}},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "requestStreamCentre", "id": 1116, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "centreHz", "kind": "f64", "value": 14100000.0}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 1116, "reason": "The Core could not read this request.", "type": "command.result", "verb": "requestStreamCentre"}},
         {"advanceMs": 50}
     ]
 }

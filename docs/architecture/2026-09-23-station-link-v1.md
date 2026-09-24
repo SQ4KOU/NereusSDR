@@ -1551,11 +1551,12 @@ a JSON string:
 | --- | --- | --- | --- |
 | `"$any"` | any value; the key must be present | yes | no |
 | `"$string"` | any string | yes | yes, filled with `"conformance"` |
-| `"$string:<name>"` | any string, recorded under `<name>` | yes | yes, filled with `"conformance"` and recorded |
+| `"$string:<name>"` | any string, recorded under `<name>` | yes, but not in a fixture for the app | yes, filled with `"conformance"` and recorded |
 | `"$int"` | any whole number | yes | yes, filled with `0` |
-| `"$int:<name>"` | any whole number, recorded under `<name>` | yes | yes, filled with the next number of the fixture's counter (1 first, then 2, ...) and recorded |
-| `"$object"` | any JSON object | no | yes, filled with `{}` |
-| `"$majors"` | only as the `majors` of a `hello`: a non-empty array of whole numbers from 0 to 65535, ascending, without repeats, that holds the same message's `major` | yes | yes, filled with `[major]`, the message's own (filled) `major` alone |
+| `"$int:<name>"` | any whole number, recorded under `<name>` | yes, but not in a fixture for the app | yes, filled with the next number of the fixture's counter (1 first, then 2, ...) and recorded |
+| `"$int:<name>:<min>:<max>"` | a whole number from `<min>` to `<max>` (each a whole number in JSON syntax), recorded under `<name>` | yes, but not in a fixture for the app | yes, filled as `"$int:<name>"`; a counter value outside the range is a malformed fixture |
+| `"$object"` | any JSON object | yes, but not in a fixture for the app | yes, filled with `{}` |
+| `"$majors"` | only as the `majors` of a `hello`: a non-empty array of whole numbers from 0 to 65535, ascending, without repeats, that holds the same message's `major` | yes, but not in a fixture for the app | yes, filled with `[major]`, the message's own (filled) `major` alone |
 | `"$capture:<name>"` | any value, recorded under `<name>` | yes | no |
 | `"$ref:<name>"` | the value recorded under `<name>`, compared the same way | yes | yes, filled with the recorded value |
 | `"$within:<t>:<v>"` | a number no further than `<t>` from `<v>`; `<t>` and `<v>` are each exactly a JSON number (RFC 8259 section 6: no `+`, no leading `.`, no `inf` or `nan`, no spaces), `<t>` at least 0; any other text is a malformed fixture | yes | no |
@@ -1569,8 +1570,19 @@ length; numbers compare by value, so `1` and `1.0` are equal. A name is
 recorded once per fixture run; a later placeholder with the same name
 records it again. `token` is recorded before the first step (section
 16.3). Where a message is sent rather than matched, "filled" is the value
-the sender puts in the placeholder's place; both runners fill the same way,
-so what one records the other records too.
+the sender puts in the placeholder's place.
+
+**Who fills what.** Only the station's runner fills a client message's
+placeholders: it sends every client step itself. Its counter starts at 1
+in each fixture and advances once for each `"$int:<name>"` it fills, in
+step order. An app's runner fills no client placeholder: in a behaviour
+step it records what its client chose under each name, and in a fixture
+for the app a scripted step holds no placeholder except `"$ref:token"`
+(checked), so it has nothing to fill. Each runner therefore records every
+name the fixture uses, the station's runner from its counter and fills,
+an app's runner from its client; the values can differ between the two
+runs, and the station messages that follow refer to them only through
+`"$ref:<name>"`, which each runner resolves from its own record.
 
 ### 16.2 Control fixtures
 
@@ -1624,15 +1636,28 @@ client. Two runners play it, one from each end.
   behaviour message in order and nothing else while the steps run; a
   runner may set its client up to do nothing on its own beyond the
   connect sequence.
+  A behaviour step's arguments and property values are literals, never
+  placeholders: they are what the runner tells its client to send.
+- **What the runner drives.** An app's runner drives its client's link
+  layer (the part that sends and receives link messages), not its screens.
+  That layer must send what it is told whatever the mirrored properties
+  say: the summarised stand-ins (below) give, for example, a `pureSignal`
+  object with `canActuate` false, and a link layer that refused to send a
+  PureSignal verb on that account would fail behaviour steps a real
+  station would answer. Deciding what to offer the operator from those
+  properties belongs above the link layer.
 - `"scripted"`: a message a conformant client never sends (an unknown
   kind or verb, a verb with an argument renamed, a write to a property the
   station sets itself or to one that does not exist, a write without a
   `writeId`, an operator-local setting, an older app's `hello`). An app's
-  runner does not wait for its client: it fills the message's placeholders
-  as the station's runner does, records their names, and goes on, so the
-  station's answers that follow are given to the client as if the client
-  had sent the message. They hold the client to handling an answer to
-  something it did not send.
+  runner does not wait for its client and sends nothing for the step; it
+  goes on, and the station's answers that follow are given to the client
+  as if the client had sent the message. They hold the client to handling
+  an answer to something it did not send. In a fixture for the app a
+  scripted message holds no placeholder but `"$ref:token"`, and its
+  `id` or `writeId` is a literal from 1000 up; an app's runner keeps its
+  client's own ids below 1000 while a fixture runs, so an answer to a
+  scripted message never carries an id the client used.
 
 **Which fixtures run on the app.** A fixture whose client behaviour no
 app can adopt runs on the station only (`"runs": ["station"]`): an older
@@ -1649,20 +1674,29 @@ nothing an app's runner could not send its client:
   both, section 6.1) and `features` `"$object"`, with `peer`
   `"$string"` and `settingsSchema` `"$int"`; the token is `"$ref:token"`
   or, for a refused token, `"$string"`;
-- a behaviour `command.invoke` has `id` `"$int:<name>"`, a verb from
-  `commands` with exactly its arguments, names and kinds in order, and
-  its gating capability advertised in the last `capabilities` message
-  before it at the version `commands` gives, at an agreed minor of at
-  least the verb's `minMinor`;
-- a behaviour `property.write` has `writeId` `"$int:<name>"` and writes
+- a behaviour `command.invoke` has `id` `"$int:<name>:1:4294967295"` for
+  the `nnr.*`, `ps3.*` and `dspAssets.*` verbs and
+  `"$int:<name>:0:4294967295"` for the rest (section 9.1), a verb from
+  `commands` with exactly its arguments, names and kinds in order, all
+  literal, and its gating capability advertised in the last
+  `capabilities` message before it at the version `commands` gives (at
+  least that version; exactly it for `psAlgorithmVersion`, section 6.2),
+  at an agreed minor of at least the verb's `minMinor`;
+- a behaviour `property.write` has `writeId` `"$int:<name>:1:4294967295"`
+  (a `writeId` is never 0 on the wire) and writes
   only properties of the object's class (from `mirrorClasses`, the class
   named by the key's `object.create`) that are not outbound, with their
   ordinals and kinds;
 - a behaviour `settings.write` or `settings.remove` names a station-scoped
   key (section 8), and a write's `origin` is `"$string:<name>"`;
 - a behaviour message is of a kind a client sends (section 16.2);
-- a station message holds no `"$capture:<name>"` and no `"$object"`, and
-  `"$any"` only as a summarised snapshot (below).
+- a scripted message holds no placeholder but `"$ref:token"`, and a
+  scripted `id` or `writeId` is a literal from 1000 up;
+- a station message holds no `"$capture:<name>"`, `"$string:<name>"`,
+  `"$int:<name>"` (ranged or not), `"$object"` or `"$majors"`, and
+  `"$any"` only as a summarised snapshot (below); what an app's runner
+  sends for each placeholder a station message may hold is defined
+  below.
 
 **Filling a station message (an app's runner).** An app's runner sends
 its client each station message with `"$string"` as `""`, `"$int"` as `0`,

@@ -150,6 +150,35 @@ QString majorsProblem(const QJsonValue& actual, const QJsonValue& major, const Q
                        .arg(path, shown(actual), shown(major));
 }
 
+struct NamedInt {
+    QString name;
+    bool ranged = false;
+    double min = 0.0;
+    double max = 0.0;
+};
+
+// "$int:<name>" or "$int:<name>:<min>:<max>" (min and max whole numbers in
+// JSON syntax, min not above max); false when the text is neither.
+bool parseNamedInt(const QString& text, NamedInt* out)
+{
+    const QStringList parts = text.mid(5).split(QLatin1Char(':'));
+    if (parts.isEmpty() || parts.first().isEmpty() || (parts.size() != 1 && parts.size() != 3)) {
+        return false;
+    }
+    out->name = parts.first();
+    out->ranged = parts.size() == 3;
+    if (!out->ranged) {
+        return true;
+    }
+    static const QRegularExpression whole(QStringLiteral("^-?(?:0|[1-9][0-9]*)$"));
+    if (!whole.match(parts.at(1)).hasMatch() || !whole.match(parts.at(2)).hasMatch()) {
+        return false;
+    }
+    out->min = parts.at(1).toDouble();
+    out->max = parts.at(2).toDouble();
+    return out->min <= out->max;
+}
+
 bool isWholeNumber(const QJsonValue& value)
 {
     const double d = value.toDouble();
@@ -495,13 +524,21 @@ QString LinkFixtures::match(const QJsonValue& expected, const QJsonValue& actual
             return QString();
         }
         if (text == QStringLiteral("$int") || text.startsWith(QStringLiteral("$int:"))) {
+            NamedInt named;
+            if (text != QStringLiteral("$int") && !parseNamedInt(text, &named)) {
+                return QStringLiteral("%1: %2 is not $int:<name>[:<min>:<max>]").arg(path, text);
+            }
             if (!isWholeNumber(actual)) {
                 return QStringLiteral("%1: expected a whole number, got %2")
                     .arg(path, shown(actual));
             }
-            const QString name = placeholderArgument(text, QStringLiteral("$int:"));
-            if (!name.isEmpty()) {
-                captures->insert(name, actual);
+            if (named.ranged && (actual.toDouble() < named.min || actual.toDouble() > named.max)) {
+                return QStringLiteral("%1: expected a whole number from %2 to %3, got %4")
+                    .arg(path, text.section(QLatin1Char(':'), 2, 2),
+                         text.section(QLatin1Char(':'), 3, 3), shown(actual));
+            }
+            if (!named.name.isEmpty()) {
+                captures->insert(named.name, actual);
             }
             return QString();
         }
@@ -619,10 +656,19 @@ QJsonValue LinkFixtures::substitute(const QJsonValue& value, Captures* captures,
         if (text == QStringLiteral("$int")) {
             return QJsonValue(0);
         }
-        const QString counted = placeholderArgument(text, QStringLiteral("$int:"));
-        if (!counted.isEmpty()) {
+        if (text.startsWith(QStringLiteral("$int:"))) {
+            NamedInt named;
+            if (!parseNamedInt(text, &named)) {
+                *error = QStringLiteral("%1 is not $int:<name>[:<min>:<max>]").arg(text);
+                return {};
+            }
             const QJsonValue filled(++*counter);
-            captures->insert(counted, filled);
+            if (named.ranged && (filled.toDouble() < named.min || filled.toDouble() > named.max)) {
+                *error = QStringLiteral("%1: the counter's %2 is outside its range")
+                             .arg(text).arg(*counter);
+                return {};
+            }
+            captures->insert(named.name, filled);
             return filled;
         }
         if (text == QStringLiteral("$object")) {

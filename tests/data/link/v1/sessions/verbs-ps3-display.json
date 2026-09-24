@@ -25,11 +25,11 @@
         {"from": "station", "message": {"class": "TunerModel", "key": "tuner", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"class": "SliceModel", "key": "slice:0", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"type": "snapshot.complete"}},
-        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "ps3.subscribeDisplay", "id": "$int:invoke23", "args": [{"ordinal": 0, "name": "enabled", "kind": "bool", "value": false}]}},
+        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "ps3.subscribeDisplay", "id": "$int:invoke23:1:4294967295", "args": [{"ordinal": 0, "name": "enabled", "kind": "bool", "value": false}]}},
         {"from": "station", "message": {"accepted": true, "affected": ["pureSignal"], "id": "$ref:invoke23", "reason": "", "type": "command.result", "verb": "ps3.subscribeDisplay"}},
         {"advanceMs": 50},
-        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "ps3.subscribeDisplay", "id": 161, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "bool", "value": false}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 161, "reason": "The Core could not read the PureSignal display request.", "type": "command.result", "verb": "ps3.subscribeDisplay"}},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "ps3.subscribeDisplay", "id": 1161, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "bool", "value": false}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 1161, "reason": "The Core could not read the PureSignal display request.", "type": "command.result", "verb": "ps3.subscribeDisplay"}},
         {"advanceMs": 50}
     ]
 }

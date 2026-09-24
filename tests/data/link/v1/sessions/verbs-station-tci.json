@@ -27,11 +27,11 @@
         {"from": "station", "message": {"class": "StationTciModel", "key": "stationTci", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"class": "SliceModel", "key": "slice:0", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"type": "snapshot.complete"}},
-        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "setStationTci", "id": "$int:invoke25", "args": [{"ordinal": 0, "name": "enabled", "kind": "bool", "value": false}, {"ordinal": 0, "name": "port", "kind": "i64", "value": 50001}]}},
+        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "setStationTci", "id": "$int:invoke25:0:4294967295", "args": [{"ordinal": 0, "name": "enabled", "kind": "bool", "value": false}, {"ordinal": 0, "name": "port", "kind": "i64", "value": 50001}]}},
         {"from": "station", "message": {"accepted": true, "affected": [], "id": "$ref:invoke25", "reason": "", "type": "command.result", "verb": "setStationTci"}},
         {"advanceMs": 50},
-        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "setStationTci", "id": 133, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "bool", "value": false}, {"ordinal": 0, "name": "port", "kind": "i64", "value": 50001}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 133, "reason": "The request to turn the station's TCI server on or off was not understood.", "type": "command.result", "verb": "setStationTci"}},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "setStationTci", "id": 1133, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "bool", "value": false}, {"ordinal": 0, "name": "port", "kind": "i64", "value": 50001}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 1133, "reason": "The request to turn the station's TCI server on or off was not understood.", "type": "command.result", "verb": "setStationTci"}},
         {"advanceMs": 50}
     ]
 }

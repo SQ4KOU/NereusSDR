@@ -23,9 +23,9 @@
 //
 // This file holds what every station runner shares: the loader, the
 // placeholder matcher and filler ("$any", "$string[:<name>]",
-// "$int[:<name>]", "$object", "$capture:<name>", "$ref:<name>",
-// "$within:<t>:<v>"; section 16.1 says where each may stand and how a
-// sender fills it), the control fixture check and the session script
+// "$int[:<name>[:<min>:<max>]]", "$object", "$majors", "$capture:<name>",
+// "$ref:<name>", "$within:<t>:<v>"; section 16.1 says where each may stand
+// and how a sender fills it), the control fixture check and the session script
 // player.
 // Building the station a session fixture describes (its stationSetup) is
 // the session test's own job, because it needs the fake radio.
@@ -119,8 +119,10 @@ public:
     /// A client message to send, placeholders filled as the link
     /// document's section 16.3 says both runners fill them: "$string" and
     /// "$string:<name>" with "conformance", "$int" with 0, "$int:<name>"
-    /// with the next whole number of `counter` (1 first in each fixture),
-    /// "$object" with {}, "$ref:<name>" with the recorded value. Named ones
+    /// (and "$int:<name>:<min>:<max>", in range) with the next whole number
+    /// of `counter` (1 first in each fixture), "$object" with {}, "$majors"
+    /// (a hello's majors) with [major], "$ref:<name>" with the recorded
+    /// value. Named ones
     /// are recorded into `captures`. Any other placeholder is an error.
     static QJsonValue substitute(const QJsonValue& value, Captures* captures, int* counter,
                                  QString* error);

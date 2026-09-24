@@ -25,7 +25,7 @@
         {"from": "station", "message": {"class": "TunerModel", "key": "tuner", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"class": "SliceModel", "key": "slice:0", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"type": "snapshot.complete"}},
-        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "conformanceUnknownVerb", "id": 102, "args": []}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 102, "reason": "The Core does not know this request. Updating the Core may help.", "type": "command.result", "verb": "conformanceUnknownVerb"}}
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "conformanceUnknownVerb", "id": 1102, "args": []}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 1102, "reason": "The Core does not know this request. Updating the Core may help.", "type": "command.result", "verb": "conformanceUnknownVerb"}}
     ]
 }

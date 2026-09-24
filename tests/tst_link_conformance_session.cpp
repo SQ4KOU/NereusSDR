@@ -350,8 +350,10 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
                         || (type == QStringLiteral("object.create")
                             && path == QStringLiteral("$.properties")));
                 if (text.startsWith(QStringLiteral("$capture:"))
+                    || text.startsWith(QStringLiteral("$string:"))
+                    || text.startsWith(QStringLiteral("$int:"))
                     || (text == QStringLiteral("$any") && !summarised)
-                    || text == QStringLiteral("$object")) {
+                    || text == QStringLiteral("$object") || text == QStringLiteral("$majors")) {
                     fail(index, QStringLiteral("%1 is %2, which an app runner cannot send")
                                     .arg(path, text));
                 }
@@ -383,6 +385,23 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
                             .arg(type));
         }
         if (role != QStringLiteral("behaviour")) {
+            // A scripted message is filled alike by both runners only when
+            // it names nothing: no $string:<name> or $int:<name> (so only
+            // the station's runner ever advances the counter), and its own
+            // ids are literals from 1000 up, clear of the client's.
+            QList<QPair<QString, QString>> strings;
+            collectStrings(message, QStringLiteral("$"), &strings);
+            for (const auto& [path, text] : strings) {
+                if (text.startsWith(QLatin1Char('$')) && text != QStringLiteral("$ref:token")) {
+                    fail(index, QStringLiteral("a scripted message holds %1 at %2").arg(text, path));
+                }
+            }
+            for (const QString& key : {QStringLiteral("id"), QStringLiteral("writeId")}) {
+                if ((type == QStringLiteral("command.invoke") || type == QStringLiteral("property.write"))
+                    && message.contains(key) && message.value(key).toDouble() < 1000.0) {
+                    fail(index, QStringLiteral("a scripted %1 is a literal from 1000 up").arg(key));
+                }
+            }
             continue;
         }
         if (!clientKinds.contains(type)) {
@@ -411,10 +430,30 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
                 fail(index, QStringLiteral("token must be $ref:token or $string"));
             }
         } else if (type == QStringLiteral("command.invoke")) {
-            if (!message.value(QStringLiteral("id")).toString().startsWith(QStringLiteral("$int:"))) {
-                fail(index, QStringLiteral("id is the app's own: $int:<name>"));
-            }
             const QString verb = message.value(QStringLiteral("verb")).toString();
+            // Section 9.1: an id is a whole number the client chooses, from
+            // 0 to 4294967295, and from 1 for the nnr, ps3 and dspAssets
+            // families. The placeholder holds the client to that range.
+            const bool fromOne = verb.startsWith(QStringLiteral("nnr."))
+                || verb.startsWith(QStringLiteral("ps3."))
+                || verb.startsWith(QStringLiteral("dspAssets."));
+            const QString id = message.value(QStringLiteral("id")).toString();
+            const QString range = fromOne ? QStringLiteral(":1:4294967295")
+                                          : QStringLiteral(":0:4294967295");
+            if (!id.startsWith(QStringLiteral("$int:")) || !id.endsWith(range)
+                || id.count(QLatin1Char(':')) != 3) {
+                fail(index, QStringLiteral("id is the app's own: $int:<name>%1").arg(range));
+            }
+            QList<QPair<QString, QString>> argStrings;
+            collectStrings(message.value(QStringLiteral("args")), QStringLiteral("$.args"),
+                           &argStrings);
+            for (const auto& [path, text] : argStrings) {
+                if (text.startsWith(QLatin1Char('$'))) {
+                    fail(index, QStringLiteral("%1 holds %2: arguments are what the app is told "
+                                               "to send, never placeholders")
+                                    .arg(path, text));
+                }
+            }
             if (!verbs.contains(verb)) {
                 fail(index, QStringLiteral("%1 is not a verb").arg(verb));
                 continue;
@@ -434,7 +473,11 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
             }
             const QString capability = spec.value(QStringLiteral("capability")).toString();
             const double version = spec.value(QStringLiteral("capabilityVersion")).toDouble();
-            if (!capability.isEmpty() && capabilities.value(capability, 0.0) < version) {
+            // The PureSignal action verbs need psAlgorithmVersion equal to
+            // their version, not at least (section 6.2).
+            const bool exact = capability == QStringLiteral("psAlgorithmVersion");
+            const double advertised = capabilities.value(capability, 0.0);
+            if (!capability.isEmpty() && (exact ? advertised != version : advertised < version)) {
                 fail(index, QStringLiteral("%1 was not advertised (%2 %3 needed)")
                                 .arg(verb, capability).arg(version));
             }
@@ -442,9 +485,11 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
                 fail(index, QStringLiteral("%1 needs a newer minor").arg(verb));
             }
         } else if (type == QStringLiteral("property.write")) {
-            if (!message.value(QStringLiteral("writeId")).toString().startsWith(
-                    QStringLiteral("$int:"))) {
-                fail(index, QStringLiteral("writeId is the app's own: $int:<name>"));
+            const QString writeId = message.value(QStringLiteral("writeId")).toString();
+            if (!writeId.startsWith(QStringLiteral("$int:"))
+                || !writeId.endsWith(QStringLiteral(":1:4294967295"))
+                || writeId.count(QLatin1Char(':')) != 3) {
+                fail(index, QStringLiteral("writeId is the app's own: $int:<name>:1:4294967295"));
             }
             const QString cls = classOfKey.value(message.value(QStringLiteral("key")).toString());
             QHash<QString, QJsonObject> fields;
@@ -909,6 +954,100 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
     }, &at), surface);
     QVERIFY2(p.join(QLatin1Char('|')).contains(QStringLiteral("never sends")),
              qPrintable(p.join('|')));
+    // The rest of the rules, each planted once on a copy of a fixture:
+    // step `index` of `id`, changed by `change`, must be named by `expect`.
+    const auto planted = [&surface, this](const QString& id, int index,
+                                          const std::function<void(QJsonObject&)>& change) {
+        QJsonObject o = fixture(id);
+        QJsonArray steps = o.value(QStringLiteral("steps")).toArray();
+        QJsonObject step = steps.at(index).toObject();
+        change(step);
+        steps.replace(index, step);
+        o.insert(QStringLiteral("steps"), steps);
+        return appConformanceProblems(id, o, surface).join(QLatin1Char('|'));
+    };
+    const auto setIn = [](QJsonObject& step, const QString& key, const QJsonValue& value) {
+        QJsonObject message = step.value(QStringLiteral("message")).toObject();
+        message.insert(key, value);
+        step.insert(QStringLiteral("message"), message);
+    };
+    const QString write = QStringLiteral("session-property-write");
+    const QString ps3 = QStringLiteral("session-verbs-ps3");
+    // A scripted hello or token in a fixture for the app.
+    QString found = planted(write, 1, [](QJsonObject& step) {
+        step.insert(QStringLiteral("role"), QStringLiteral("scripted"));
+    });
+    QVERIFY2(found.contains(QStringLiteral("cannot be scripted")), qPrintable(found));
+    found = planted(write, 2, [](QJsonObject& step) {
+        step.insert(QStringLiteral("role"), QStringLiteral("scripted"));
+    });
+    QVERIFY2(found.contains(QStringLiteral("own auth.request")), qPrintable(found));
+    // Station messages an app's runner cannot fill: $capture, a stray
+    // $any, a named $int.
+    found = planted(write, 3, [&setIn](QJsonObject& step) {
+        setIn(step, QStringLiteral("reason"), QStringLiteral("$capture:why"));
+    });
+    QVERIFY2(found.contains(QStringLiteral("$capture:why")), qPrintable(found));
+    found = planted(write, 3, [&setIn](QJsonObject& step) {
+        setIn(step, QStringLiteral("accepted"), QStringLiteral("$any"));
+    });
+    QVERIFY2(found.contains(QStringLiteral("$.accepted is $any")), qPrintable(found));
+    found = planted(write, 3, [&setIn](QJsonObject& step) {
+        setIn(step, QStringLiteral("retryable"), QStringLiteral("$int:n"));
+    });
+    QVERIFY2(found.contains(QStringLiteral("$int:n")), qPrintable(found));
+    // A verb with arguments it does not take, and one not advertised
+    // (PureSignal's gate is psAlgorithmVersion equal to 3; 4 fails it).
+    found = planted(ps3, 36, [&setIn](QJsonObject& step) {
+        setIn(step, QStringLiteral("args"),
+              QJsonArray{QJsonObject{{QStringLiteral("ordinal"), 0},
+                                     {QStringLiteral("name"), QStringLiteral("enabled")},
+                                     {QStringLiteral("kind"), QStringLiteral("i64")},
+                                     {QStringLiteral("value"), 0}}});
+    });
+    QVERIFY2(found.contains(QStringLiteral("ps3.twoTone's arguments")), qPrintable(found));
+    found = planted(ps3, 4, [](QJsonObject& step) {
+        QJsonObject message = step.value(QStringLiteral("message")).toObject();
+        QJsonArray properties = message.value(QStringLiteral("properties")).toArray();
+        for (int i = 0; i < properties.size(); ++i) {
+            QJsonObject entry = properties.at(i).toObject();
+            if (entry.value(QStringLiteral("name")).toString() == QStringLiteral("psAlgorithmVersion")) {
+                entry.insert(QStringLiteral("value"), 4);
+                properties.replace(i, entry);
+            }
+        }
+        message.insert(QStringLiteral("properties"), properties);
+        step.insert(QStringLiteral("message"), message);
+    });
+    QVERIFY2(found.contains(QStringLiteral("ps3.off was not advertised")), qPrintable(found));
+    // A placeholder among a behaviour step's arguments.
+    found = planted(ps3, 43, [&setIn](QJsonObject& step) {
+        setIn(step, QStringLiteral("args"),
+              QJsonArray{QJsonObject{{QStringLiteral("ordinal"), 0},
+                                     {QStringLiteral("name"), QStringLiteral("label")},
+                                     {QStringLiteral("kind"), QStringLiteral("utf8")},
+                                     {QStringLiteral("value"), QStringLiteral("$string")}}});
+    });
+    QVERIFY2(found.contains(QStringLiteral("never placeholders")), qPrintable(found));
+    // An id without the link's range, or from 0 where 1 is the least.
+    found = planted(ps3, 23, [&setIn](QJsonObject& step) {
+        setIn(step, QStringLiteral("id"), QStringLiteral("$int:invoke23"));
+    });
+    QVERIFY2(found.contains(QStringLiteral(":1:4294967295")), qPrintable(found));
+    found = planted(ps3, 23, [&setIn](QJsonObject& step) {
+        setIn(step, QStringLiteral("id"), QStringLiteral("$int:invoke23:0:4294967295"));
+    });
+    QVERIFY2(found.contains(QStringLiteral(":1:4294967295")), qPrintable(found));
+    // A scripted id below 1000, and a scripted message naming a value.
+    found = planted(ps3, 40, [&setIn](QJsonObject& step) {
+        setIn(step, QStringLiteral("id"), 167);
+    });
+    QVERIFY2(found.contains(QStringLiteral("from 1000 up")), qPrintable(found));
+    found = planted(ps3, 40, [&setIn](QJsonObject& step) {
+        setIn(step, QStringLiteral("id"), QStringLiteral("$int:scripted"));
+    });
+    QVERIFY2(found.contains(QStringLiteral("a scripted message holds $int:scripted")),
+             qPrintable(found));
 }
 
 void TstLinkConformanceSession::refusalsOfOutboundWritesArePlain()
