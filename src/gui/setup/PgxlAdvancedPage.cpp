@@ -36,6 +36,13 @@
 //                                    the page. Pairing settings reach the
 //                                    Core as station settings. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22 fix wave: a fixed
+//                                    network setting needs an address and a
+//                                    netmask (both windows); the remote
+//                                    window's network warning and question
+//                                    in words true there; only this
+//                                    device's refusals reload the page.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "PgxlAdvancedPage.h"
@@ -453,7 +460,8 @@ void PgxlAdvancedPage::buildNetworkSection(QVBoxLayout* topLay)
 
     lay->addLayout(form);
 
-    auto* warnLabel = new QLabel(networkWarningText());
+    // M4: a remote window's words (no Scan LAN there); local unchanged.
+    auto* warnLabel = new QLabel(isRemote() ? remoteNetworkWarningText() : networkWarningText());
     warnLabel->setWordWrap(true);
     warnLabel->setStyleSheet(QStringLiteral("color: #e8c01e;"));
     lay->addWidget(warnLabel);
@@ -847,6 +855,13 @@ bool PgxlAdvancedPage::confirmRemote(const QString& title, const QString& text)
     box.setDefaultButton(QMessageBox::Cancel);
     box.exec();
     return box.clickedButton() == apply;
+}
+
+QString PgxlAdvancedPage::remoteNetworkWarningText()
+{
+    return QStringLiteral("The Power Genius will switch to these network settings. If the Core "
+                          "cannot reach it afterwards, enter its new address for the "
+                          "Power Genius on the Peripherals page and connect again.");
 }
 
 QString PgxlAdvancedPage::networkWarningText()
@@ -1282,7 +1297,8 @@ void PgxlAdvancedPage::onApplyIfconf()
         // R-R3-47 / R-R3-22: new network settings can take the amp off the
         // Core's network, so the window asks first, in the Network
         // section's own words; nothing is sent without a yes.
-        if (!confirmRemote(QStringLiteral("Apply Network Settings"), networkWarningText())) {
+        if (!confirmRemote(QStringLiteral("Apply Network Settings"),
+                           remoteNetworkWarningText())) {
             return;
         }
         IStationLink* link = m_model->stationLink();

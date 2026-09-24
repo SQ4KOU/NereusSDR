@@ -36,6 +36,13 @@
 //                                    tuner's answers, its values and the
 //                                    Core's refusals show on the page.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22 fix wave: a fixed
+//                                    network setting needs an address and a
+//                                    netmask (both windows); the remote
+//                                    window's network warning and question
+//                                    in words true there; only this
+//                                    device's refusals reload the page.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TgxlAdvancedPage.h"
@@ -561,7 +568,8 @@ void TgxlAdvancedPage::buildNetworkSection(QVBoxLayout* topLay)
 
     lay->addLayout(form);
 
-    auto* warnLabel = new QLabel(networkWarningText());
+    // M4: a remote window's words (no Scan LAN there); local unchanged.
+    auto* warnLabel = new QLabel(isRemote() ? remoteNetworkWarningText() : networkWarningText());
     warnLabel->setWordWrap(true);
     warnLabel->setStyleSheet(QStringLiteral("color: #e8c01e;"));
     lay->addWidget(warnLabel);
@@ -886,6 +894,13 @@ bool TgxlAdvancedPage::confirmRemote(const QString& title, const QString& text)
     box.setDefaultButton(QMessageBox::Cancel);
     box.exec();
     return box.clickedButton() == apply;
+}
+
+QString TgxlAdvancedPage::remoteNetworkWarningText()
+{
+    return QStringLiteral("The Tuner Genius will switch to these network settings. If the Core "
+                          "cannot reach it afterwards, enter its new address for the "
+                          "Tuner Genius on the Peripherals page and connect again.");
 }
 
 QString TgxlAdvancedPage::networkWarningText()
@@ -1220,7 +1235,8 @@ void TgxlAdvancedPage::onApplyIfconf()
         // R-R3-47 / R-R3-22: new network settings can take the tuner off the
         // Core's network, so the window asks first, in the Network
         // section's own words; nothing is sent without a yes.
-        if (!confirmRemote(QStringLiteral("Apply Network Settings"), networkWarningText())) {
+        if (!confirmRemote(QStringLiteral("Apply Network Settings"),
+                           remoteNetworkWarningText())) {
             return;
         }
         IStationLink* link = m_model->stationLink();

@@ -94,9 +94,11 @@ public:
     /// receives the title and the words the dialog would show.
     void setConfirmationForTesting(std::function<bool(const QString&, const QString&)> ask)
     { m_confirmForTesting = std::move(ask); }
-    /// The Network section's warning: the words a remote window asks
-    /// before it sends new network settings.
+    /// The Network section's warning in a local window.
     static QString networkWarningText();
+    /// M4: the Network section's warning and the question before Apply in
+    /// a remote window, in plain words that are true there (no Scan LAN).
+    static QString remoteNetworkWarningText();
 
 private slots:
     void onPgxlConnected();

@@ -1893,9 +1893,16 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     // One request per click on the remote page (the local page sends the
     // bias twice, once per radio button).
     QCOMPARE(amp.commands.mid(remoteMark).count(QStringLiteral("setup bias=a")), 1);
-    // The remote page asked first, in the local page's words.
+    // The remote page asked first (M4: in words true in a remote window,
+    // with no Scan LAN, which a remote window does not offer).
+    for (const QString& text : {PgxlAdvancedPage::remoteNetworkWarningText(),
+                                TgxlAdvancedPage::remoteNetworkWarningText()}) {
+        QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+        QVERIFY(!text.contains(QStringLiteral("Scan LAN")));
+        QVERIFY(!text.contains(QStringLiteral("host")));
+    }
     QCOMPARE(asked, (QStringList{
-        QStringLiteral("Apply Network Settings|") + PgxlAdvancedPage::networkWarningText(),
+        QStringLiteral("Apply Network Settings|") + PgxlAdvancedPage::remoteNetworkWarningText(),
         QStringLiteral("Save & Reboot PGXL|") + PgxlSaveRebootDialog::message()}));
 
     // ---- A no sends nothing.
@@ -2070,7 +2077,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
     QCOMPARE(localTuner.settingsCommands(localMark), expected);
     QCOMPARE(tuner.settingsCommands(remoteMark), expected);
     QCOMPARE(asked, (QStringList{
-        QStringLiteral("Apply Network Settings|") + TgxlAdvancedPage::networkWarningText(),
+        QStringLiteral("Apply Network Settings|") + TgxlAdvancedPage::remoteNetworkWarningText(),
         QStringLiteral("Save & Reboot TGXL|") + PgxlSaveRebootDialog::message()}));
 
     // A no sends nothing.
