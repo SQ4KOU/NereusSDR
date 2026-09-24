@@ -9675,6 +9675,21 @@ void MainWindow::setVoltsAmpsVisible(bool visible)
 void MainWindow::wireSetupDialog(SetupDialog* dialog)
 {
     if (!dialog) { return; }
+    // R-R3-21: Appearance > Meter Styles changes the S-meter on screen.
+    const auto sMeter = [this]() {
+        return m_appletPanel ? m_appletPanel->smeterWidget() : nullptr;
+    };
+    connect(dialog, &SetupDialog::sMeterFaceChanged, this, [sMeter](int face) {
+        if (SMeterWidget* sm = sMeter()) {
+            sm->setFaceStyle(static_cast<SMeterWidget::FaceStyle>(face));
+        }
+    });
+    connect(dialog, &SetupDialog::sMeterPeakHoldChanged, this, [sMeter](bool on) {
+        if (SMeterWidget* sm = sMeter()) { sm->setPeakHoldEnabled(on); }
+    });
+    connect(dialog, &SetupDialog::sMeterPeakDecayChanged, this, [sMeter](const QString& rate) {
+        if (SMeterWidget* sm = sMeter()) { sm->setPeakDecayRate(rate); }
+    });
     connect(dialog, &SetupDialog::connectionsRequested,
             this, &MainWindow::connectionRequestedByOperator);
     if (m_txApplet) {

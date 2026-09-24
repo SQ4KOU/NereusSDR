@@ -789,8 +789,10 @@ private slots:
         // Floors: Task 1 registered 19 ThisComputer leaves and the R3 Setup
         // fix wave five more (Filter Presets, Spectrum Peaks, Waterfall
         // Defaults, 3D View, Export / Import); a registration regex that
-        // stopped matching would otherwise pass vacuously.
-        QVERIFY2(pages.size() >= 22,
+        // stopped matching would otherwise pass vacuously. Startup &
+        // Preferences became Mixed when its callsign and grid were
+        // connected to the station identity (R3 controls that work).
+        QVERIFY2(pages.size() >= 21,
                  qPrintable(QStringLiteral("only %1 ThisComputer registrations found")
                                 .arg(pages.size())));
 

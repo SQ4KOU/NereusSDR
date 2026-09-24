@@ -257,6 +257,21 @@ public:
     // SpotModel::SpotData::index (by callsign + freq + source) and
     // selects it.  -1 clears.  Companion signal
     // spotListHoverChanged(spotIdx) lives in the signals block below.
+    // R-R3-21: the operator identity the Settings tab saves, shared with
+    // Setup > General > Startup & Preferences so both edit one callsign
+    // and grid. identityError() is the Settings tab's check (empty when
+    // valid); saveIdentity() writes User/Callsign and User/GridSquare,
+    // the per-source copies and the message, and saves;
+    // applyIdentityToClients() hands it to running FreeDV / PSK Reporter
+    // clients (either may be null).
+    static QString identityError(const QString& call, const QString& grid);
+    static void saveIdentity(const QString& call, const QString& grid,
+                             const QString& message);
+    static void applyIdentityToClients(FreeDVReporterClient* freedv,
+                                       PskReporterClient* psk,
+                                       const QString& call, const QString& grid,
+                                       const QString& message);
+
 public slots:
     void setHoveredPanadapterSpot(int spotIdx);
 

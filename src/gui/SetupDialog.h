@@ -130,6 +130,12 @@ signals:
     // MainWindow::setVoltsAmpsVisible() is the handler.
     void anan8000DleVoltsAmpsChanged(bool visible);
 
+    // R-R3-21: forwarded from Appearance > Meter Styles. MainWindow applies
+    // them to the S-meter on screen.
+    void sMeterFaceChanged(int faceStyle);
+    void sMeterPeakHoldChanged(bool enabled);
+    void sMeterPeakDecayChanged(const QString& rate);
+
     // Phase 3P-II Phase 4 Task 95: forwarded from TgxlAdvancedPage::antennaLabelChanged.
     // MainWindow::wireSetupDialog connects this to TunerApplet::onAntennaLabelChanged.
     // index is 1..3; label is the new text (empty resets to "ANT N" default).

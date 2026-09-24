@@ -1742,6 +1742,7 @@ private slots:
         // Waterfall Defaults, 3D View and Export / Import have no Core
         // controls and are ThisComputer (R3 Setup fix wave, final review I4).
         const QMap<QString, int> coreControls{
+            {QStringLiteral("Startup & Preferences"), 2}, // callsign, grid (R-R3-21)
             {QStringLiteral("Options"), 1},             // General: Region
             {QStringLiteral("Spectrum Defaults"), 5},   // FFT size, window, Hz/bin, fps x2
             {QStringLiteral("Grid & Scales"), 3},       // dB max, dB min, copy

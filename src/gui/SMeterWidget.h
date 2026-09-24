@@ -213,6 +213,13 @@ public slots:
     // NereusSDR-native; no upstream equivalent.
     void setFaceStyle(FaceStyle style);
 
+    // Persisted name <-> enum for SMeter_FaceStyle, and the menu label.
+    // Public for Setup > Appearance > Meter Styles, which offers the same
+    // faces (R-R3-21).
+    static QString faceStyleKey(FaceStyle style);
+    static FaceStyle faceStyleFromKey(const QString& key);
+    static QString faceStyleLabel(FaceStyle style);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
     // Right-click context menu delegates to buildContextMenu().
@@ -227,10 +234,6 @@ private:
     void paintClassic(QPainter& p);
     void paintVintage(QPainter& p);
 
-    // Persisted name <-> enum for SMeter_FaceStyle, and the menu label.
-    static QString faceStyleKey(FaceStyle style);
-    static FaceStyle faceStyleFromKey(const QString& key);
-    static QString faceStyleLabel(FaceStyle style);
 
     void updateNeedleTarget();
     void animateNeedle();

@@ -36,6 +36,12 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWheelEvent>
+#include <QShowEvent>
+#include <QHideEvent>
+#include <QTimer>
+
+#include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -283,11 +289,10 @@ VaxChannelCard::VaxChannelCard(int channel, QWidget* parent)
         m_levelGauge->setRange(-60.0, 0.0);
         m_levelGauge->setYellowStart(-12.0);
         m_levelGauge->setRedStart(-3.0);
-        m_levelGauge->setValue(-60.0);  // quiescent; telemetry wiring deferred
-        m_levelGauge->setToolTip(tr("Audio level — telemetry wiring deferred "
-                                    "to follow-up task."));
-        // TODO(later-task): wire telemetry from engine's owned VAX buses
-        // once AudioEngine exposes a vaxBus(int) accessor (Task 22+).
+        m_levelGauge->setValue(-60.0);  // quiet until AudioVaxPage polls it
+        m_levelGauge->setObjectName(QStringLiteral("vaxLevelGauge"));
+        // R-R3-21: AudioVaxPage feeds it from AudioEngine::vaxRxLevel.
+        m_levelGauge->setToolTip(tr("Audio level of this VAX channel"));
         form->addRow(levelLbl, m_levelGauge);
 
         outerLayout->addLayout(form);
@@ -840,6 +845,46 @@ AudioVaxPage::AudioVaxPage(RadioModel* model, QWidget* parent)
 {
     buildPage();
     wirePillFeedback();
+    m_levelTimer = new QTimer(this);
+    m_levelTimer->setInterval(50);  // 20 Hz, as VaxApplet polls
+    connect(m_levelTimer, &QTimer::timeout, this, &AudioVaxPage::pollLevels);
+}
+
+void AudioVaxPage::showEvent(QShowEvent* event)
+{
+    SetupPage::showEvent(event);
+    pollLevels();
+    m_levelTimer->start();
+}
+
+void AudioVaxPage::hideEvent(QHideEvent* event)
+{
+    m_levelTimer->stop();
+    SetupPage::hideEvent(event);
+}
+
+void AudioVaxPage::pollLevels()
+{
+    if (!m_engine) { return; }
+    for (VaxChannelCard* card : std::as_const(m_channelCards)) {
+        card->setLevel(m_engine->vaxRxLevel(card->channelIndex()));
+    }
+}
+
+void VaxChannelCard::setLevel(float linear)
+{
+    if (!m_levelGauge) { return; }
+    // Linear 0..1 to dBFS, floored at the gauge floor, -60 dB.
+    double dB = -60.0;
+    if (std::isfinite(linear) && linear > 0.001f) {
+        dB = 20.0 * std::log10(static_cast<double>(linear));
+    }
+    m_levelGauge->setValue(std::clamp(dB, -60.0, 0.0));
+}
+
+double VaxChannelCard::levelDbForTest() const
+{
+    return m_levelGauge ? m_levelGauge->value() : -60.0;
 }
 
 void AudioVaxPage::buildPage()

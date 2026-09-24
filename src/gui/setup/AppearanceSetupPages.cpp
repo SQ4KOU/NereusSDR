@@ -1,5 +1,6 @@
 #include "AppearanceSetupPages.h"
 #include "gui/ColorSwatchButton.h"
+#include "gui/SMeterWidget.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/StyleConstants.h"
 #include "core/AppSettings.h"
@@ -242,24 +243,66 @@ void MeterStylesPage::buildUI()
     auto* smForm  = new QFormLayout(smGroup);
     smForm->setSpacing(6);
 
-    m_typeCombo = new QComboBox(smGroup);
-    m_typeCombo->addItems({QStringLiteral("Arc"), QStringLiteral("Bar"),
-                           QStringLiteral("Digital")});
-    m_typeCombo->setEnabled(false);  // NYI
-    m_typeCombo->setToolTip(QStringLiteral("S-Meter display type — not yet implemented"));
-    smForm->addRow(QStringLiteral("Type:"), m_typeCombo);
+    // R-R3-21: the analog S-meter settings, the ones its right-click
+    // menu holds (Meter Face, Peak Hold > Enabled, Peak Hold > Decay),
+    // saved under its keys. The group was three greyed placeholders; the
+    // S-meter has faces rather than the Arc / Bar / Digital types it
+    // listed, so the first row picks the face.
+    const auto& s0 = AppSettings::instance();
+    using Face = SMeterWidget::FaceStyle;
+
+    m_faceCombo = new QComboBox(smGroup);
+    m_faceCombo->setObjectName(QStringLiteral("sMeterFaceCombo"));
+    for (int i = 0; i <= static_cast<int>(Face::Classic); ++i) {
+        m_faceCombo->addItem(SMeterWidget::faceStyleLabel(static_cast<Face>(i)), i);
+    }
+    const Face savedFace = SMeterWidget::faceStyleFromKey(
+        s0.value(QStringLiteral("SMeter_FaceStyle"),
+                 SMeterWidget::faceStyleKey(Face::AgedCream)).toString());
+    m_faceCombo->setCurrentIndex(m_faceCombo->findData(static_cast<int>(savedFace)));
+    m_faceCombo->setToolTip(QStringLiteral("The S-meter's face"));
+    smForm->addRow(QStringLiteral("Face:"), m_faceCombo);
 
     m_peakHoldToggle = new QCheckBox(QStringLiteral("Peak hold"), smGroup);
-    m_peakHoldToggle->setEnabled(false);  // NYI
-    m_peakHoldToggle->setToolTip(QStringLiteral("S-Meter peak hold — not yet implemented"));
+    m_peakHoldToggle->setObjectName(QStringLiteral("sMeterPeakHoldCheck"));
+    m_peakHoldToggle->setChecked(
+        s0.value(QStringLiteral("PeakHoldEnabled"), QStringLiteral("True")).toString()
+        == QStringLiteral("True"));
+    m_peakHoldToggle->setToolTip(QStringLiteral("Hold the S-meter's peak reading"));
     smForm->addRow(QString(), m_peakHoldToggle);
 
-    m_decayRateSlider = new QSlider(Qt::Horizontal, smGroup);
-    m_decayRateSlider->setRange(1, 100);
-    m_decayRateSlider->setValue(20);
-    m_decayRateSlider->setEnabled(false);  // NYI
-    m_decayRateSlider->setToolTip(QStringLiteral("S-Meter peak decay rate — not yet implemented"));
-    smForm->addRow(QStringLiteral("Decay Rate:"), m_decayRateSlider);
+    m_decayRateCombo = new QComboBox(smGroup);
+    m_decayRateCombo->setObjectName(QStringLiteral("sMeterDecayCombo"));
+    // SMeterWidget::setPeakDecayRate: 20 / 10 / 5 dB/s.
+    m_decayRateCombo->addItem(QStringLiteral("Fast (20 dB/s)"), QStringLiteral("Fast"));
+    m_decayRateCombo->addItem(QStringLiteral("Medium (10 dB/s)"), QStringLiteral("Medium"));
+    m_decayRateCombo->addItem(QStringLiteral("Slow (5 dB/s)"), QStringLiteral("Slow"));
+    {
+        const int at = m_decayRateCombo->findData(
+            s0.value(QStringLiteral("PeakDecayRate"), QStringLiteral("Medium")).toString());
+        m_decayRateCombo->setCurrentIndex(at >= 0 ? at : 1);
+    }
+    m_decayRateCombo->setToolTip(QStringLiteral("How fast the held peak falls back"));
+    smForm->addRow(QStringLiteral("Decay Rate:"), m_decayRateCombo);
+
+    connect(m_faceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int index) {
+        const int face = m_faceCombo->itemData(index).toInt();
+        AppSettings::instance().setValue(QStringLiteral("SMeter_FaceStyle"),
+                                         SMeterWidget::faceStyleKey(static_cast<Face>(face)));
+        emit sMeterFaceChanged(face);
+    });
+    connect(m_peakHoldToggle, &QCheckBox::toggled, this, [this](bool on) {
+        AppSettings::instance().setValue(QStringLiteral("PeakHoldEnabled"),
+                                         on ? QStringLiteral("True") : QStringLiteral("False"));
+        emit sMeterPeakHoldChanged(on);
+    });
+    connect(m_decayRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int index) {
+        const QString rate = m_decayRateCombo->itemData(index).toString();
+        AppSettings::instance().setValue(QStringLiteral("PeakDecayRate"), rate);
+        emit sMeterPeakDecayChanged(rate);
+    });
 
     contentLayout()->addWidget(smGroup);
 

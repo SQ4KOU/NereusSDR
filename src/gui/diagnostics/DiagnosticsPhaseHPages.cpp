@@ -32,12 +32,17 @@
 #include "core/HermesLiteBandwidthMonitor.h"
 #include "core/SettingsHygiene.h"
 #include "models/RadioModel.h"
+#include "gui/SupportDialog.h"
 
 #include <QFile>
 #include <QFileDialog>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QMessageBox>
+#include <QPlainTextEdit>
+#include <QPushButton>
+#include <QShowEvent>
+#include <QTextCursor>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -328,22 +333,42 @@ void LogsPage::buildUI()
     auto* group = addSection(QStringLiteral("Recent Log"));
     auto* layout = qobject_cast<QVBoxLayout*>(group->layout());
     m_logView = new QPlainTextEdit;
+    m_logView->setObjectName(QStringLiteral("logsView"));
     m_logView->setReadOnly(true);
+    m_logView->setMaximumBlockCount(2000);  // SupportDialog::kMaxLogViewLines
     m_logView->setStyleSheet(QStringLiteral(
         "QPlainTextEdit { background: #0a0a18; color: #c8d8e8; "
         "border: 1px solid #304050; font-family: 'Monaco','Menlo',monospace; }"));
-    m_logView->setPlaceholderText(QStringLiteral(
-        "qCWarning / qCDebug capture is wired in a follow-up phase. "
-        "For now, run with QT_LOGGING_TO_CONSOLE=1 and read stderr."));
+    m_logView->setToolTip(QStringLiteral("The most recent lines of the NereusSDR log file"));
     m_logView->setMinimumHeight(280);
     layout->addWidget(m_logView);
 
+    auto* buttons = new QHBoxLayout;
+    m_refreshBtn = new QPushButton(QStringLiteral("Refresh"));
+    m_refreshBtn->setToolTip(QStringLiteral("Read the log file again"));
+    buttons->addWidget(m_refreshBtn);
     m_clearBtn = new QPushButton(QStringLiteral("Clear"));
-    layout->addWidget(m_clearBtn, 0, Qt::AlignLeft);
+    m_clearBtn->setToolTip(QStringLiteral("Clear this view (the log file is kept)"));
+    buttons->addWidget(m_clearBtn);
+    buttons->addStretch(1);
+    layout->addLayout(buttons);
+    connect(m_refreshBtn, &QPushButton::clicked, this, &LogsPage::refresh);
     connect(m_clearBtn, &QPushButton::clicked, m_logView, &QPlainTextEdit::clear);
-    SetupPage::markNyi(m_logView, QStringLiteral("3P-H follow-up"));
 
     contentLayout()->addStretch();
+    refresh();
+}
+
+void LogsPage::refresh()
+{
+    m_logView->setPlainText(SupportDialog::logTailText());
+    m_logView->moveCursor(QTextCursor::End);
+}
+
+void LogsPage::showEvent(QShowEvent* event)
+{
+    SetupPage::showEvent(event);
+    refresh();
 }
 
 } // namespace NereusSDR

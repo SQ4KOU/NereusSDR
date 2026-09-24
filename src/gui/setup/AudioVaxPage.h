@@ -48,6 +48,10 @@
 #include <QPushButton>
 #include <QVector>
 
+class QTimer;
+class QShowEvent;
+class QHideEvent;
+
 namespace NereusSDR {
 
 class AudioEngine;
@@ -141,6 +145,11 @@ public:
     // the bus).
     void setBusOpen(bool open);
 
+    // R-R3-21: the channel's audio level, linear 0..1, as the VAX applet's
+    // meters read it (AudioEngine::vaxRxLevel). Shown in dB, -60..0.
+    void setLevel(float linear);
+    double levelDbForTest() const;
+
 signals:
     void configChanged(int channel, NereusSDR::AudioDeviceConfig cfg);
     void enabledChanged(int channel, bool on);
@@ -218,6 +227,16 @@ private:
 
     AudioEngine*                m_engine{nullptr};
     QVector<VaxChannelCard*>    m_channelCards;  // index 0 = channel 1
+
+protected:
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
+private:
+    // R-R3-21: 20 Hz level poll while the page is showing, the VAX
+    // applet's cadence (VaxApplet::pollLevels).
+    void pollLevels();
+    QTimer* m_levelTimer{nullptr};
 };
 
 } // namespace NereusSDR

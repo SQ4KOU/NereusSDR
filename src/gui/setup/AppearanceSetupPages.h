@@ -49,13 +49,21 @@ class MeterStylesPage : public SetupPage {
 public:
     explicit MeterStylesPage(RadioModel* model, QWidget* parent = nullptr);
 
+signals:
+    // R-R3-21: the S-meter settings its right-click menu holds. The page
+    // saves them under the S-meter's own keys; MainWindow applies them to
+    // the S-meter on screen (SetupDialog forwards these).
+    void sMeterFaceChanged(int faceStyle);           // SMeterWidget::FaceStyle
+    void sMeterPeakHoldChanged(bool enabled);
+    void sMeterPeakDecayChanged(const QString& rate); // "Fast" / "Medium" / "Slow"
+
 private:
     void buildUI();
 
     // Section: S-Meter
-    QComboBox* m_typeCombo{nullptr};       // Arc/Bar/Digital
+    QComboBox* m_faceCombo{nullptr};       // SMeterWidget faces
     QCheckBox* m_peakHoldToggle{nullptr};
-    QSlider*   m_decayRateSlider{nullptr};
+    QComboBox* m_decayRateCombo{nullptr};  // Fast / Medium / Slow
 
     // Section: VFO Flag
     QCheckBox* m_smallModeFilterToggle{nullptr};

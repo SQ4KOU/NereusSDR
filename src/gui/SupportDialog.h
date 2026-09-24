@@ -22,6 +22,11 @@ public:
     explicit SupportDialog(RadioModel* model, QWidget* parent = nullptr);
     ~SupportDialog() override;
 
+    /// R-R3-21: the last 200 KB of the log file, or a one-line reason why
+    /// there is none. The log viewer here and Setup > Diagnostics > Logs
+    /// show the same text.
+    static QString logTailText();
+
 private slots:
     void onRefresh();
     void onClearLog();

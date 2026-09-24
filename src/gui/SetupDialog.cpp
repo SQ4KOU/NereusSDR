@@ -963,7 +963,9 @@ void SetupDialog::buildTree()
 
     // ── General ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* general = addCategory("General");
-    registerPage(general, "Startup & Preferences", SetupScope::ThisComputer,
+    // R-R3-21: Mixed, since its callsign and grid are the station's
+    // operator identity (User/Callsign, User/GridSquare).
+    registerPage(general, "Startup & Preferences", SetupScope::Mixed,
                  [this] { return new StartupPrefsPage(m_model); });
     registerPage(general, "UI Scale & Theme", SetupScope::ThisComputer,
                  [this] { return new UiScalePage(m_model); });
@@ -1294,8 +1296,16 @@ void SetupDialog::buildTree()
     QTreeWidgetItem* appearance = addCategory("Appearance");
     registerPage(appearance, "Colors & Theme", SetupScope::ThisComputer,
                  [this] { return new ColorsThemePage(m_model); });
-    registerPage(appearance, "Meter Styles", SetupScope::ThisComputer,
-                 [this] { return new MeterStylesPage(m_model); });
+    registerPage(appearance, "Meter Styles", SetupScope::ThisComputer, [this]() -> QWidget* {
+        auto* page = new MeterStylesPage(m_model);
+        connect(page, &MeterStylesPage::sMeterFaceChanged,
+                this, &SetupDialog::sMeterFaceChanged);
+        connect(page, &MeterStylesPage::sMeterPeakHoldChanged,
+                this, &SetupDialog::sMeterPeakHoldChanged);
+        connect(page, &MeterStylesPage::sMeterPeakDecayChanged,
+                this, &SetupDialog::sMeterPeakDecayChanged);
+        return page;
+    });
     registerPage(appearance, "Gradients", SetupScope::ThisComputer,
                  [this] { return new GradientsPage(m_model); });
     registerPage(appearance, "Skins", SetupScope::ThisComputer,

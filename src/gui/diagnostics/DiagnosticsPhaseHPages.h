@@ -111,15 +111,22 @@ private:
     void buildUI();
 };
 
-// Diagnostics → Logs (Phase H placeholder — real qCWarning/qCDebug
-// capture is deferred follow-up).
+// Diagnostics → Logs. R-R3-21: shows the log file's recent lines, the
+// ones Help > Support's log viewer shows (SupportDialog::logTailText),
+// read again each time the page is shown or Refresh is pressed.
 class LogsPage : public SetupPage {
     Q_OBJECT
 public:
     explicit LogsPage(QWidget* parent = nullptr);
 
+    void refresh();
+
+protected:
+    void showEvent(QShowEvent* event) override;
+
 private:
     QPlainTextEdit* m_logView{nullptr};
+    QPushButton*    m_refreshBtn{nullptr};
     QPushButton*    m_clearBtn{nullptr};
 
     void buildUI();
