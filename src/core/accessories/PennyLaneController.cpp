@@ -24,6 +24,11 @@
 //                Code: load() adopts the unread global
 //                hardware/oc/pennyExtCtrl once for a radio with no value
 //                of its own (R-R3-21).
+//   2026-09-24   J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code: that carry-over moved to startup for every saved
+//                radio (AppSettings::migrateLegacyPennyExtCtrl), which
+//                removes the global key; load() no longer reads it
+//                (R-R3-21).
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Penny.cs header (lines 1-22) ===
@@ -148,19 +153,10 @@ void PennyLaneController::load()
     auto& s = AppSettings::instance();
     const QString base = persistenceKey();
     const QString key = QStringLiteral("%1/extCtrlEnabled").arg(base);
-    // R-R3-21: Setup's checkbox used to save a global
-    // hardware/oc/pennyExtCtrl that nothing read. A radio with no value of
-    // its own takes that saved value once, under its own key, so an
-    // operator's earlier choice survives the rename. The global key stays
-    // for any other saved radio that has not loaded yet.
-    if (!s.contains(key)) {
-        const QString legacyKey = QStringLiteral("hardware/oc/pennyExtCtrl");
-        if (s.contains(legacyKey)) {
-            const bool legacyOn = s.value(legacyKey).toString()
-                                      .compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
-            s.setValue(key, legacyOn ? QStringLiteral("True") : QStringLiteral("False"));
-        }
-    }
+    // R-R3-21: the global hardware/oc/pennyExtCtrl Setup used to save is
+    // carried to every saved radio at startup
+    // (AppSettings::migrateLegacyPennyExtCtrl), so a radio added later
+    // starts at the default below, not the old global value.
     // Default "True" matches Thetis penny_ext_ctrl_enabled = true [console.cs:14899] [@501e3f5]
     m_extCtrlEnabled = (s.value(key, QStringLiteral("True")).toString() == QStringLiteral("True"));
     emit extCtrlEnabledChanged(m_extCtrlEnabled);

@@ -679,6 +679,16 @@ public:
     // settings files after upgrade.  Idempotent (no-op if key absent).
     static void removeOrphanOcN2adrFilter(AppSettings& s);
 
+    // R-R3-21: Setup's Penny Ext Control checkbox used to save a global
+    // "hardware/oc/pennyExtCtrl" that nothing read; PennyLaneController
+    // reads per-MAC "hardware/<mac>/penny/extCtrlEnabled". Copies the
+    // global value to every saved radio that has no value of its own, then
+    // removes the global key (kept only while no radio is saved, so the
+    // next launch can still carry it over), so a radio added later starts
+    // at Thetis's default (True) instead of the old global value.
+    // Same shape as migrateLegacyN2adrFilter. Idempotent.
+    static void migrateLegacyPennyExtCtrl(AppSettings& s);
+
     // R-R3-21: one-shot renames for settings whose writer and reader used
     // different names, so the saved value was never read. Each old name is
     // read once and written under the name everything now uses, then

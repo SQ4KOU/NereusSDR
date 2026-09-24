@@ -1393,6 +1393,46 @@ void AppSettings::migrateLegacyN2adrFilter(AppSettings& s)
     s.save();
 }
 
+// R-R3-21: legacy global Penny Ext Control -> per-MAC migration
+// ---------------------------------------------------------------------------
+
+void AppSettings::migrateLegacyPennyExtCtrl(AppSettings& s)
+{
+    static constexpr auto kLegacyKey = QLatin1String("hardware/oc/pennyExtCtrl");
+    static constexpr auto kRadioKey  = QLatin1String("penny/extCtrlEnabled");
+    if (!s.contains(QString(kLegacyKey))) {
+        return;  // nothing to carry over (also the idempotent path)
+    }
+
+    // The old checkbox stored a QVariant(bool), saved as "true"/"false";
+    // PennyLaneController reads "True"/"False".
+    const bool legacyOn = s.value(QString(kLegacyKey)).toString()
+                              .compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
+    const QString legacyValue = legacyOn ? QStringLiteral("True") : QStringLiteral("False");
+
+    const QList<SavedRadio> radios = s.savedRadios();
+    int migratedCount = 0;
+    for (const SavedRadio& r : radios) {
+        // A radio that already has its own value keeps it.
+        if (s.hardwareValue(r.info.macAddress, QString(kRadioKey)).isValid()) {
+            continue;
+        }
+        s.setHardwareValue(r.info.macAddress, QString(kRadioKey), legacyValue);
+        ++migratedCount;
+    }
+
+    if (!radios.isEmpty()) {
+        s.remove(QString(kLegacyKey));
+        qDebug() << "Migrated legacy Penny Ext Control setting (" << legacyValue
+                 << ") to" << migratedCount << "saved radio(s); legacy global removed";
+    } else {
+        qDebug() << "Legacy Penny Ext Control setting (" << legacyValue
+                 << "): no saved radios yet; legacy global kept for next launch";
+    }
+    s.save();
+}
+
+// ---------------------------------------------------------------------------
 // Issue #174: orphan-key cleanup for hardware/oc/n2adrFilter
 // ---------------------------------------------------------------------------
 
