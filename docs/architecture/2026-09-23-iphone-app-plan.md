@@ -4737,9 +4737,11 @@ app's pairing screens), D19, D22, D23, D44 to D56 (D21 was replaced by §3.9).
   of this phone's own session never shows it, and brings transmit back only when the Core
   says nobody took it. The device whose place is taken shows who and when, stops the
   band, and Take it back asks the fifth-device question the other way.
-- Taking a receiver, moving a shared receiver and a shared change each send their
-  request only after confirmation, and Cancel sends nothing; each sheet names exactly the
-  devices and slices the Core said it reaches. A receiver taken from this phone shows
+- Taking a receiver, moving a shared receiver and a shared change go to the Core first,
+  which applies nothing and asks for confirmation, naming the devices and slices the change
+  reaches; the sheet shows exactly those. Confirm tells the Core to go ahead; Cancel tells
+  it to drop the change, and nothing is applied (the station's design for several devices
+  names both answers). A receiver taken from this phone shows
   RECEIVER TAKEN with who and when, keeps the connection, and Take it back opens the
   Take a receiver sheet for that receiver.
 - A typed code with a word not in the list is caught before sending, with suggestions.

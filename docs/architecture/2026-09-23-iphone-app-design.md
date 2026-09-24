@@ -510,9 +510,11 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
    Display, which are about the desktop's window; the desktop's Remote Access
    page, whose job Devices does on the phone.
 8. **Devices**: Rename for the Core; a reminder to back up the Core's key;
-   each paired device with when it was paired and last seen; one-tap Revoke,
-   which drops that device at once, even mid-session; Add a device, which shows
-   a one-time code; a note that only one device can be connected at a time.
+   the devices connected now (their slices and bands, and TX on the one with
+   transmit) apart from the devices only paired, each paired device with when it
+   was paired and last seen; one-tap Revoke, which drops that device at once,
+   even mid-session; Add a device, which shows a one-time code; a note that up to
+   four devices can be connected at once (D57, §5.8 item 13).
 
 ### 5.3 Getting connected
 
