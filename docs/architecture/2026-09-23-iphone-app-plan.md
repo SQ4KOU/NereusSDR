@@ -2,8 +2,9 @@
 
 > **Execution:** run with `crew` (`/crew <this file>`) under `cost-aware-execution`.
 > Requirements and acceptance cases are binding; test order and review effort follow
-> the risk-based policy; UI evidence follows `ui-verification`. No review between
-> tasks; one whole-branch review at the end.
+> the risk-based policy; UI evidence follows `ui-verification`. Two sessions run this
+> one plan, each only its own tasks (Global Constraints, "Who runs which task"). No
+> review between tasks; each session ends with one whole-branch review of its branch.
 
 **Goal:** Ship the NereusSDR iPhone and iPad app, with receive and transmit in the first
 App Store release, together with every station, desktop and service change it needs, as
@@ -41,10 +42,29 @@ read for this plan at `4bb89b5d`.
   (`2026-08-02-remote-station-identity-and-pairing-design.md`) and the R3 plan
   (`2026-09-20-remote-daemon-r3-plan.md`). Do not relitigate a decision. If the spec is
   wrong or silent on something material, stop and report NEEDS_CONTEXT.
-* **Branch.** All work happens on `claude/iphone-app`, cut from `codex/integrate-r2-main`
-  (see "Before Task 1"). Never commit to `codex/integrate-r2-main`. The controller merges
-  `codex/integrate-r2-main` into `claude/iphone-app` only between tasks. Another agent
-  works in `/Users/j.j.boyd/.codex/`; never open or change anything there.
+* **Who runs which task** (JJ's decision, 2026-09-24): one plan, one owner per task,
+  and each task opens with a **Runs in** line that says which.
+  * **Station tasks** (1 to 4, 12 to 14, and 16 to 50 without the lettered ones) run in
+    the Core/GUI session's lanes and reach `codex/integrate-r2-main`. Their build
+    directory is the lane's (`build-integration` or `build-lane-b`), and `build` in a
+    verification command means that directory.
+  * **Phone tasks** (5 to 11, 15, 16a, 27a, 28a, 29a, 51 to 69, and 70 with JJ) run in
+    the phone session on `claude/iphone-app`, cut from `codex/integrate-r2-main` (see
+    "Before Task 1"). Its controller merges `codex/integrate-r2-main` into
+    `claude/iphone-app` only between tasks and never commits to
+    `codex/integrate-r2-main`.
+  * A phone task starts only when every station task it consumes has reached
+    `codex/integrate-r2-main` and been merged in. Until then it waits, and the controller
+    tells JJ which station task it is waiting on; nothing stands in for a missing piece.
+  * Each controller's ledger records the other session's tasks as they land
+    (`Task N: complete (<session>, <commit>)`) and skips every task it does not own.
+  * This plan and its spec change only on `claude/nereussdr-iphone-app-5fb988`, whose
+    copy is the authority; the Core/GUI session cherry-picks each plan commit into its
+    lanes. Before a station task changes anything a phone task reads (the
+    `tests/data/link/v1/` layout, `surface.json`'s top-level keys, `hello`'s `majors`
+    and `features`, the version rule), the Core/GUI session tells the phone session.
+* **The other agent.** Another agent works in `/Users/j.j.boyd/.codex/`; never open or
+  change anything there.
 * **Tracing.** Every commit names the requirement IDs it implements at the end of the
   subject line, in the remote branch's style: `(R-IOS-04)`, or `(R-IOS-12, R-IOS-08)`.
   Where a task also touches an R3 requirement, name it too (`R-R3-39`).
@@ -61,7 +81,12 @@ read for this plan at `4bb89b5d`.
 * **The link document and the conformance suite move with the wire.** A task that adds or
   changes anything on the wire updates `docs/architecture/2026-09-23-station-link-v1.md`,
   `tests/data/link/v1/` and `surface.json` in the same commit, and the conformance
-  runners pass on both ends.
+  runners pass on both ends. That document, as merged from `codex/integrate-r2-main`,
+  is the authority for the wire: where this plan describes the wire differently, the
+  document wins, and an implementer follows it and names the difference in its report
+  so the controller corrects the plan. Its Conformance section defines the fixture
+  format both runners implement; the phone's runners follow that section, not any
+  description of the format in this plan.
 * **The transmit safety boundary.** Nothing lets a remote client key the radio outside the
   station's gates: transmit disabled until snapshot-complete; the watchdog; the
   starvation deadline; the time-out; the unkey-confirmed gate; `TxInterlockPolicy`, PA
@@ -321,7 +346,9 @@ not, the controller stops and asks JJ.
 | `CMakeLists.txt`, `tests/CMakeLists.txt`, `.github/workflows/{ci,release}.yml` | New targets and resources, packaging `nereusd`, the CI steps |
 | `docs/attribution/*`, `scripts/verify-thetis-headers.py`, `docs/architecture/2026-09-20-remote-media-control-v1.md`, `docs/architecture/2026-09-23-iphone-app-design.md`, `CLAUDE.md` | Provenance, the mic line, the measured figures, the index |
 
-## Before Task 1 (controller)
+## Before Task 1 (controllers)
+
+The phone session's controller:
 
 - [ ] Create the branch: `git switch -c claude/iphone-app codex/integrate-r2-main` in a
       worktree of its own (never the `.codex` worktree), merge
@@ -329,32 +356,35 @@ not, the controller stops and asks JJ.
       the resulting HEAD in the ledger header as BASE.
 - [ ] Configure the station build once:
       `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNEREUS_BUILD_TESTS=ON`
-      and build `nereusd` (`cmake --build build --target nereusd`).
+      and build `nereusd` (`cmake --build build --target nereusd`); the phone tasks'
+      interop helpers build there too.
 - [ ] Before Task 51, JJ installs Xcode 27 (this Mac runs macOS 27, which Xcode 26 does not
       support), runs `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` and
       `xcodebuild -runFirstLaunch`, and installs the iOS 27 platform; the controller installs
       XcodeGen with `brew install xcodegen`.
+
+The Core/GUI session's controller:
+
 - [ ] Before Task 26's deployment step, the controller confirms `rv.nereussdr.com` (A and
       AAAA records) points at the website's server (D38), and asks JJ before the R5 bench's
       `netbench` server gives up UDP 443 and 3478 there. That server also runs the website
       and the bench: nothing touches its firewall or the `netbench` account, and Caddy
       changes go through the website's own server-config flow.
-- [ ] Before Task 12, confirm with JJ which session runs the station tasks (Parts C to I):
-      this plan's controller, or the Core/GUI session's controller in its station lanes.
-      Both sessions were set to build pairing, R5 and R4; the Core/GUI session is holding
-      its own R5 and R4 plans (2026-09-23) until JJ decides.
 
-**Order and parts.** A (Tasks 1 to 4): the written link. B (5 to 11): the app's
-foundation. C (12 to 18): identity and pairing. D (19 to 25): what the phone shows. E (26
-to 29): reaching the station from anywhere (R5). F (30 to 40): remote transmit (R4). G
-(41, 42): sessions and accessories. H (43 to 46): Setup, described by the station. I (47
-to 50): the desktop's station. J (51 to 67): the app. K (68 to 70): proof and release.
-This follows JJ's saved order (R3 follow-ons, then R5, then R4, then R6), with identity
-first because remote access and transmit both depend on it.
+**Order and parts.** A (Tasks 1 to 4, station): the written link. B (5 to 11, phone):
+the app's foundation. C (12 to 18): identity and pairing (15 and 16a phone, the rest
+station). D (19 to 25, station): what the phone shows. E (26 to 29 station, 27a to 29a
+phone): reaching the station from anywhere (R5). F (30 to 40, station): remote transmit
+(R4). G (41, 42, station): sessions and accessories. H (43 to 46, station): Setup,
+described by the station. I (47 to 50, station): the desktop's station. J (51 to 67,
+phone): the app. K (68 to 70, phone; 70 with JJ): proof and release. The station tasks
+follow JJ's saved order (R3 follow-ons, then R5, then R4, then R6), with identity first
+because remote access and transmit both depend on it; the phone tasks run in number
+order as the station tasks they consume land.
 
 **Tasks flagged for an earlier independent review** (they touch authorisation, secrets,
 networking that could expose or strand the station, or the transmit boundary): 4, 12, 13,
-14, 17, 18, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 41, 42, 45, 47, 48,
+14, 17, 18, 25, 26, 27, 27a, 28, 28a, 29, 29a, 30, 31, 32, 33, 34, 35, 36, 37, 38, 41, 42, 45, 47, 48,
 54, 64, 65. JJ decides whether any of them gets one.
 
 ---
@@ -367,6 +397,8 @@ down and pinned by a conformance suite both ends run before anything else builds
 surface manifest, the document and the fixtures in the same commit.
 
 ## Task 1: The link's surface, captured and guarded
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-01 (the surface half: what the link carries, captured from the
 code so the written specification and the fixtures cannot drift from it).
@@ -445,6 +477,8 @@ before it.
 
 ## Task 2: The link specification
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** R-IOS-01 (the written specification: framing, handshake, snapshot,
 messages, capabilities, version rules).
 
@@ -509,6 +543,8 @@ Task 1.
       `CLAUDE.md` row.
 
 ## Task 3: The conformance suite on the station
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-01 (the conformance suite the station and the app both run).
 
@@ -575,6 +611,8 @@ authentication behaviour only in tests; no production change.
       the document's Conformance section.
 
 ## Task 4: Versions both ways, and declared features
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-01 (version rules), D23 and D39 (§4.4: each end supports its
 own major and the one before it and agrees the highest shared; only two or more majors
@@ -653,6 +691,8 @@ the command line tools, so the app's link, state, media and band logic are prove
 against the conformance suite long before the app has a screen.
 
 ## Task 5: The app's tree, licence and provenance check
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** R-IOS-29 (the licence and a provenance check over the app's sources
 in CI), D4, spec §4.11.
@@ -739,6 +779,8 @@ run in a worktree in parallel with Part A.
 
 ## Task 6: Opus in the app
 
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
 **Requirements:** spec §4.1 (audio playback on the phone; the microphone's Opus
 uplink), R-IOS-01 (the app runs the Opus conformance vectors).
 
@@ -775,8 +817,10 @@ uplink), R-IOS-01 (the app runs the Opus conformance vectors).
     `#filePath`, used by every app conformance test.
 
 **Acceptance:**
-- Each Opus media fixture decodes within its stated tolerance of the station's
-  reference PCM, 1920 stereo samples per packet.
+- Each Opus media fixture the app runs decodes within its stated tolerance of the
+  station's reference PCM, 1920 stereo samples per packet. Which fixtures the app runs,
+  and how a fixture that decodes after others on one decoder is played, come from the
+  link document's Conformance section.
 - `concealLoss(frames: 1920)` after a decoded packet returns 3840 finite floats.
 - A 1 kHz sine at -12 dBFS encoded with `.microphone` and decoded has an SNR of at
   least 20 dB against the input after aligning for the codec's delay; every packet is at
@@ -793,6 +837,8 @@ uplink), R-IOS-01 (the app runs the Opus conformance vectors).
 - [ ] **Step 2:** Decoder and encoder with the fixture and round-trip tests.
 
 ## Task 7: Display frames in the app
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** spec §4.1 (the station sends display frames per endpoint; the phone
 draws them), R-IOS-01.
@@ -816,15 +862,17 @@ draws them), R-IOS-01.
     `Float(min(max(minDb + Double(v) * (maxDb - minDb) / 255.0, minDb), maxDb))`.
 
 **Acceptance:**
-- Every NSDC fixture decodes to its expected bins within 0.01 dB and its expected
-  header fields.
+- Every NSDC fixture the app runs decodes to its expected bins within 0.01 dB and its
+  expected header fields, played as the link document's Conformance section says
+  (including fixtures that decode after others on one decoder).
 - A delta whose predecessor was dropped yields `nil` and `needsKeyframe == true`; the
   following keyframe decodes and clears it.
 - A truncated datagram, a wrong magic, an unknown version and a bin count above 4096 each
   throw a distinct error and never crash.
 - The decoder was written from the document, not translated from
   `src/core/session/media/DisplayCodec.cpp`; where the two disagree, the test follows
-  the station's fixtures and the document is corrected in the same commit.
+  the station's fixtures and the controller asks the Core/GUI session to correct the
+  document.
 
 **Verification:** unit. `ios/scripts/swift-test.sh --filter DisplayFrameDecoderTests`.
 
@@ -835,6 +883,8 @@ draws them), R-IOS-01.
 
 ## Task 8: The control session in the app
 
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
 **Requirements:** R-IOS-01 (the app side of the suite), R-IOS-16 (connecting, the
 version rules of §4.4, a typed address), spec §7 (link lost: retry with backoff,
 cancellable).
@@ -842,8 +892,8 @@ cancellable).
 **Files:**
 - Create: `ios/NereusKit/Sources/NereusLink/` with `StationEndpoint.swift`,
   `ManualAddress.swift`, `LinkMessage.swift`, `LinkCodec.swift`, `StationSession.swift`,
-  `CertificatePin.swift`, `LinkVersionPolicy.swift`, `ReconnectPolicy.swift`,
-  `StationAuthenticator.swift`
+  `CertificatePin.swift`, `LinkVersionPolicy.swift`, `LinkFeatures.swift`,
+  `ReconnectPolicy.swift`, `StationAuthenticator.swift`
 - Create: `ios/NereusKit/Tests/NereusLinkTests/` with `ManualAddressTests.swift`,
   `LinkConformanceControlTests.swift`, `LinkConformanceSessionTests.swift`,
   `ReconnectPolicyTests.swift`, `StationSessionLoopbackTests.swift`
@@ -878,6 +928,14 @@ cancellable).
     with the same table as the station's `LinkVersion::agreeMajor`; in debug builds the
     launch argument `-NereusLinkMajors 1,2` replaces the list, for the version screens'
     integration checks (Task 70), and release builds ignore it.
+  - The app's `hello`: `major` is the highest major both ends support, read from the
+    station's `majors` (a station's own `major` names only its oldest supported major,
+    so it is used alone only when `majors` is absent); `majors` is
+    `LinkVersionPolicy.supportedMajors`; `features` is `LinkFeatures.app`, a
+    `static let [String: Int]` in `LinkFeatures.swift`, empty here. Each later task that
+    builds something the station gates on a declared feature adds its entry:
+    `deviceAuth` (Task 15), `remoteTx` (Task 55), `sessionHolder` (Task 56),
+    `setupDescription` (Task 58).
   - `ReconnectPolicy`: delays 1, 2, 5, 10, 30, 60 s then 60 s repeating; `reset()` on
     a session that reached `.ready`; `cancel()` stops the next attempt at once.
 
@@ -887,15 +945,27 @@ cancellable).
   47910 where none is given; it rejects `2001:db8::1` without brackets, `host:0`,
   `host:65536`, an empty string and `http://host`.
 - The control conformance test decodes and re-encodes every control fixture the manifest
-  lists, equal after parsing; negative fixtures throw.
-- The session conformance test plays every session fixture from the client side: the
-  app's messages match the expected ones (placeholders honoured) given the station's.
+  marks as run by the app, equal after parsing; negative fixtures throw.
+- The session conformance test plays every session fixture the app runs, in the
+  client's role, by the rules of the link document's Conformance section (the steps
+  the runner scripts, the behaviour the app must produce, placeholders and
+  tolerances), and passes them all, including the fixture that requires `majors` and
+  `features` in the client's `hello`.
 - The WebSocket accepts messages up to 8 MiB and answers the station's pings; the
-  session sends its own ping every 20 s and treats two missed pongs as a lost link.
+  session sends its own ping every 20 s and treats two missed pongs as a lost link. The
+  heartbeat is WebSocket ping and pong frames, never a message kind.
 - The certificate check rejects any certificate whose DER SHA-256 differs from the pin,
   before any byte of `hello` is read.
 - A station `hello` with no shared major yields `.refused(.stationTooOld)` or
   `.refused(.appTooOld)` by which side is behind, and no retry.
+- A refused sign-in (`auth.result` not accepted, then the connection closes with no
+  `session.end`) yields `.refused(.authentication(reason))` with the station's words
+  and no automatic retry.
+- A `session.end` that arrives before `hello` (a station already at its connection
+  limit) yields `.refused(.ended(reason, retryable:))`, and whether the session retries
+  follows `retryable`.
+- A message kind the app does not know is logged and ignored, and the session carries
+  on.
 - After a lost link the session moves through `.waitingToRetry` on the policy's
   schedule, driven by an injected clock in the test; `disconnect()` during a wait stops
   it with no further attempt.
@@ -914,6 +984,8 @@ Tasks 3, 4 and 5.
       heartbeat, reconnect; the session conformance and loopback tests.
 
 ## Task 9: The station's state in the app
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** R-IOS-18 (each control writes to its owner), R-IOS-01, spec §4.2 R2
 (the state mirror, the settings proxy).
@@ -942,7 +1014,8 @@ Tasks 3, 4 and 5.
     `func remove(_ key: String) async`, holding the snapshot as a local cache and
     telling its own echo from another device's change by the origin tag.
   - `actor CommandClient { func invoke(_ verb: String, arguments: [String: MirrorValue], timeout: Duration) async throws -> CommandResult }`
-    with `CommandResult { accepted: Bool; reason: String; affectedKeys: [String]; values: [String: MirrorValue] }`.
+    with `CommandResult { accepted: Bool; reason: String; affectedKeys: [String]; values: [String: MirrorValue] }`,
+    where `affectedKeys` is read from the wire key `affected`.
   - `struct StationMetrics` decoded from `station.metrics.v1` at telemetry versions 1
     to 3.
 
@@ -959,6 +1032,12 @@ Tasks 3, 4 and 5.
   timeout throws without leaking the pending entry.
 - After a lost link `isStale` is true and values stay readable; the next
   `snapshot.complete` clears it.
+- A `capabilities` message after the snapshot (a changed display allowance) replaces the
+  capabilities alone; `capabilities` followed by `settings.snapshot` (a radio that
+  arrived late) replaces both; the mirror clears nothing on either.
+- A verb the station does not know comes back as a `command.result` that is not
+  accepted, with a reason; `invoke` returns it with that reason and the session stays
+  up.
 
 **Verification:** unit and conformance. `ios/scripts/swift-test.sh --filter NereusMirrorTests`.
 
@@ -968,6 +1047,8 @@ Tasks 3, 4 and 5.
 - [ ] **Step 2:** Writes, settings, commands, telemetry and staleness.
 
 ## Task 10: WebRTC in the app
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** spec §4.2 R3 (Opus audio and display endpoints over the station's
 media peer), R-IOS-01 (the media plane interoperates with the station's).
@@ -1036,6 +1117,8 @@ more than one attempt. Requires Tasks 6 and 7, and a configured station build.
 - [ ] **Step 2:** `MediaPeer` over the C API, the station helper and the interop tests.
 
 ## Task 11: Media control and playback in the app
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** spec §4.1 (audio playback on the phone), §4.2 R3 (display endpoints
 the client sizes itself: 1 to 4096 pixels, 1 to 60 frames a second), R-IOS-10 (sound
@@ -1128,6 +1211,8 @@ the reclaim rule, the time-out by device kind).
 
 ## Task 12: Station identity and device keys
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** R-IOS-08 (identity per the pairing design §3 and §7), R-IOS-02 (the
 same device key is how a reclaim is recognised).
 
@@ -1215,6 +1300,8 @@ exposes the station on the LAN: flag for earlier review. Requires Task 4.
 
 ## Task 13: Devices, rename and revoke
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** R-IOS-08 (the device list, revoke dropping a live session, the
 station-key backup prompt), spec §5.2 item 8.
 
@@ -1263,6 +1350,8 @@ with Task 12. Requires Task 12.
 - [ ] **Step 2:** Rename, backup acknowledgement, token retirement, fixtures, document.
 
 ## Task 14: The pairing window and code
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-08 (one tap on the LAN, the code from anywhere, the window open
 while unclaimed with no timer, reopening from the console or a paired device), D37,
@@ -1349,6 +1438,8 @@ flag for earlier review. Requires Tasks 12 and 13.
 
 ## Task 15: The app's identity and pairing
 
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
 **Requirements:** R-IOS-08 (the app's half), R-IOS-16 (pairing three ways), spec §5.3
 items 3 and 7.
 
@@ -1364,7 +1455,9 @@ items 3 and 7.
   `PairedStationStoreTests.swift`
 - Modify: `ios/scripts/interop-test.sh` (builds and runs `nereus_pairing_peer` too),
   `ios/NereusKit/Package.swift`, `scripts/verify-ios-provenance.py` (the word list copy
-  must equal `resources/pairing-words-v1.txt`)
+  must equal `resources/pairing-words-v1.txt`),
+  `ios/NereusKit/Sources/NereusLink/LinkFeatures.swift` (`deviceAuth: 1`, so the
+  station accepts the device key in `auth.request`)
 
 **Interfaces:**
 - Consumes: `StationSession`, `StationAuthenticator` (Task 8); the wire values above.
@@ -1382,7 +1475,7 @@ items 3 and 7.
   - `actor PairingClient` with `func pairOnThisNetwork(endpoint:) async throws -> PairedStation`
     and `func pair(code: String, via: PairingCarrier) async throws -> PairedStation`,
     where `PairingCarrier` is `.direct(StationEndpoint)` now and `.rendezvous(server:nameplate:)`
-    from Task 27.
+    from Task 27a.
   - `enum PairingCodeText { static func normalise(_:) -> String?; static func suggestions(forPrefix:) -> [String] }`
     rejecting a code whose words are not in the list before it is sent, so a typing
     mistake never burns the code.
@@ -1411,6 +1504,8 @@ nothing logs it). Requires Tasks 8 and 14.
 
 ## Task 16: Finding stations: the announcement and Bonjour
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** D36 (the station also advertises itself over Bonjour, and the phone
 finds stations that way), R-IOS-16 (the Local Network question, "Found it", the station
 list), pairing design §6.
@@ -1425,8 +1520,6 @@ list), pairing design §6.
   optional through `pkg-config avahi-client`, like the PipeWire bridge),
   `DnsSdAdvertiserWindows.cpp` (`DnsServiceRegister`)
 - Modify: `CMakeLists.txt`, `src/core/daemon/DaemonApp.cpp`
-- Create: `ios/NereusKit/Sources/NereusLink/StationBrowser.swift`,
-  `ios/NereusKit/Tests/NereusLinkTests/StationBrowserTests.swift`
 - Modify: `tests/data/link/v1/` (announcement fixtures), the link document (a Discovery
   section)
 - Test: `tests/tst_station_lan_announcement.cpp`, `tests/tst_dns_sd_advertiser.cpp`
@@ -1442,9 +1535,7 @@ list), pairing design §6.
     `pair=click|code|closed`, `name=<label>`.
   - `class DnsSdAdvertiser : public QObject` with `bool start(quint16 port, const DnsSdRecord&)`,
     `void update(const DnsSdRecord&)`, `void stop()`, `bool isAvailable() const`.
-  - `actor StationBrowser` using `NWBrowser(for: .bonjourWithTXTRecord(type: "_nereus-station._tcp", domain: nil), using: .tcp)`,
-    publishing `[FoundStation]` with `claimed`, `pairing`, `label`, `identityPrefix`, and
-    a resolvable endpoint.
+  - The phone's browser is Task 16a.
 
 **Acceptance:**
 - An older schema-1 decoder still reads the station's schema-1 datagram; the new decoder
@@ -1454,23 +1545,56 @@ list), pairing design §6.
   record with the right TXT keys; `update` after a claim changes `claimed` and `pair`.
 - On Linux without Avahi the build succeeds, `isAvailable()` is false and the station
   logs once, in plain words, that it cannot advertise itself for iPhones.
-- `StationBrowserTests` parses TXT records into `FoundStation` values, including
-  missing and malformed keys, and (on macOS) finds a record registered by the test with
-  `dns-sd -R`.
 
 **Verification:** discovery on a network: observe first. The macOS registration and
 browse run in the tests; the Linux Avahi backend is checked by the controller on the
 Rock or the Pi (device step, pending until observed): `avahi-browse -rt _nereus-station._tcp`
 shows the station. Commands:
-`cmake --build build --target tst_station_lan_announcement tst_dns_sd_advertiser && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_lan_announcement|tst_dns_sd_advertiser)$' --output-on-failure`
-and `ios/scripts/swift-test.sh --filter StationBrowserTests`.
+`cmake --build build --target tst_station_lan_announcement tst_dns_sd_advertiser && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_lan_announcement|tst_dns_sd_advertiser)$' --output-on-failure`.
 
 **Execution note (advisory):** opus. Networking. Requires Tasks 12 and 14.
 
 - [ ] **Step 1:** Schema 2 and the dual announcement with fixtures.
-- [ ] **Step 2:** The three advertiser backends, the app's browser, the document.
+- [ ] **Step 2:** The three advertiser backends and the document.
+
+## Task 16a: Finding stations on the phone
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
+**Requirements:** D36 (the phone finds stations over Bonjour), R-IOS-16 (the Local
+Network question, "Found it", the station list), pairing design §6.
+
+**Files:**
+- Create: `ios/NereusKit/Sources/NereusLink/StationBrowser.swift`,
+  `ios/NereusKit/Tests/NereusLinkTests/StationBrowserTests.swift`
+
+**Interfaces:**
+- Consumes: the Bonjour service type and TXT keys (Task 16; the link document's
+  Discovery section is the authority), `StationEndpoint` (Task 8).
+- Produces:
+  - `actor StationBrowser` using `NWBrowser(for: .bonjourWithTXTRecord(type: "_nereus-station._tcp", domain: nil), using: .tcp)`,
+    publishing `[FoundStation]` with `claimed`, `pairing`, `label`, `identityPrefix`, and
+    a resolvable endpoint.
+
+**Acceptance:**
+- `StationBrowserTests` parses TXT records into `FoundStation` values, including
+  missing and malformed keys, and (on macOS) finds a record registered by the test with
+  `dns-sd -R`.
+- A TXT key the browser does not know is ignored, so a newer station still lists.
+
+**Verification:** discovery on a network: unit tests plus the macOS browse in the test.
+`ios/scripts/swift-test.sh --filter StationBrowserTests`. Device (controller, pending
+until observed): once Task 56 shows the list, a phone on the LAN lists the Rock's
+station.
+
+**Execution note (advisory):** opus. Networking (local browse only). Requires Tasks 8
+and 16.
+
+- [ ] **Step 1:** The browser and its tests.
 
 ## Task 17: The status page and console commands
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-08 (the code on a small box's status page and console;
 reopening from the console), spec §5.3 item 11, spec §9 (console command names, settled
@@ -1525,6 +1649,8 @@ review with Tasks 12 to 14. Requires Task 14.
 - [ ] **Step 2:** The status page and first-start output with tests.
 
 ## Task 18: The desktop pairs with stations
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-08 (pairing per the pairing design for every client: the
 desktop's remote window also holds its own key; pairing design §6 and §11), R-IOS-17
@@ -1597,6 +1723,8 @@ ports). So the station sends every value the phone shows, and computes every por
 behaviour itself, sending the result as data.
 
 ## Task 19: The station catalogue
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-06 (the mode list, filter presets per mode, the tune-step list,
 AGC ranges, meter ranges and the board's capabilities), R-IOS-27, D40 (filter presets
@@ -1679,6 +1807,8 @@ scripts must still pass). Requires Part A.
 
 ## Task 20: Display computations at the station
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** R-IOS-27 and spec §4.11 (behaviour ported from Thetis stays on the
 station: the active peak hold trace and peak blobs, the noise-floor line, the waterfall's
 automatic levels, normalise, the calibration offset and the averaging constant are Thetis
@@ -1735,6 +1865,8 @@ Requires Part A.
       vectors.
 
 ## Task 21: Record streams, and the spot sources at the station
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-25 (the station's spot clients feed the phone), remote design
 §6.1a (record streams) and §6.4 (spot clients at the station; WSJT-X wherever it runs),
@@ -1799,6 +1931,8 @@ Part A.
 
 ## Task 22: FreeDV Reporter at the station
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** R-IOS-26 (the callsign, never the station label), D33, spec §4.9, §5.7
 items 5 to 10.
 
@@ -1836,6 +1970,8 @@ Integration (JJ, pending until observed): the live reporter shows the station.
 - [ ] **Step 2:** The verbs, the callsign test and the remote window's dialog.
 
 ## Task 23: The audio quality the station offers
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-09 (the higher quality offered only when the station advertises a
 measured profile; otherwise greyed), R-R3-23, spec §5.4 item 9.
@@ -1877,6 +2013,8 @@ measured profile; otherwise greyed), R-R3-23, spec §5.4 item 9.
 
 ## Task 24: Sound only, proven
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** R-IOS-10 (with every display endpoint disabled, audio and the card's
 readings keep flowing), R-R3-08, R-R3-13.
 
@@ -1908,6 +2046,8 @@ Measurement: Task 68 records the data rate with the band off.
 - [ ] **Step 1:** The test, and any fix it forces.
 
 ## Task 25: The station's radios, tools and support bundle
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-18 (the Radio tab's Manage Radios and the Tools tab's station
 tools), spec §5.2 items 3 to 5, §5.3 item 5 (a new station finds its radio), R-R3-48's
@@ -2037,6 +2177,8 @@ over UDP first, the web-only fallback required, a separate control connection):
 
 ## Task 26: The rendezvous service on the website's server
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** R-IOS-08 (pair by code through the relay), R-IOS-16 (direct and
 relay), D38, pairing design §5.1 to §5.5.
 
@@ -2107,7 +2249,7 @@ relay), D38, pairing design §5.1 to §5.5.
   and coturn in Docker (Ubuntu 24.04's version) accepts a valid allocation, refuses an
   expired one and never relays to a blocked address (`turnutils_uclient`).
 - The conformance vectors pass in the service's tests and in the C++ and Swift client
-  tests (Task 27).
+  tests (Tasks 27 and 27a).
 - The service and coturn listen on IPv4 and IPv6; `README.md` explains every step a
   self-hoster needs, including the AAAA records the pairing design §9.5 item 3 requires,
   and a fresh container built from it alone serves both roles.
@@ -2139,6 +2281,8 @@ Part C.
 
 ## Task 27: Reaching the station through the rendezvous
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** R-IOS-08 (pair by code through the relay), R-IOS-16 (connecting from
 anywhere; what the phone tried), pairing design §5.3 (cached address first; an ordered
 server list; sessions survive a rendezvous outage) and §8.
@@ -2155,15 +2299,10 @@ server list; sessions survive a rendezvous outage) and §8.
   allow)
 - Modify: `src/core/session/StationClient.{h,cpp}`, `src/gui/CoreTargetStore.{h,cpp}`
   (cached addresses per station)
-- Create: `ios/NereusKit/Sources/NereusLink/RendezvousClient.swift`,
-  `ios/NereusKit/Sources/NereusLink/ConnectionAttempt.swift`
-- Modify: `ios/NereusKit/Sources/NereusLink/PairingClient.swift`
-  (`PairingCarrier.rendezvous(server:nameplate:)`), `PairedStationStore.swift`
-- Test: `tests/tst_rendezvous_client.cpp`, `tests/tst_ice_configuration.cpp`,
-  `ios/NereusKit/Tests/NereusLinkTests/RendezvousClientTests.swift`
+- Test: `tests/tst_rendezvous_client.cpp`, `tests/tst_ice_configuration.cpp`
 
 **Interfaces:**
-- Consumes: the rendezvous wire (Task 26); pairing (Tasks 14, 15, 18).
+- Consumes: the rendezvous wire (Task 26); pairing (Tasks 14 and 18).
 - Produces:
   - `class RendezvousClient : public QObject` with station role (`registerStation`,
     signal `introduced(Introduction)`, `claimNameplate()`) and client role
@@ -2173,10 +2312,11 @@ server list; sessions survive a rendezvous outage) and §8.
     `"NereusSDR introduce v1\n" || station id || the rendezvous connection's nonce`
     against its device store before creating any peer; unknown or revoked devices get
     no answer.
-  - `ConnectionAttempt` (app) and its C++ twin record, per attempt, which paths were
-    tried (this network, direct, relay) and how each ended, for the trouble screen.
-  - `PairedStation.endpoints` and the desktop's `CoreTargetStore` keep the station's last
-    good addresses, tried first on the next connect.
+  - The desktop's attempt record: per attempt, which paths were tried (this network,
+    direct, relay) and how each ended, for its connection messages. The app's twin,
+    `ConnectionAttempt`, has the same fields (Task 27a).
+  - The desktop's `CoreTargetStore` keeps the station's last good addresses, tried
+    first on the next connect (the phone's `PairedStation.endpoints` is Task 27a).
   - ICE settings that respect the pinned libjuice's limits: libdatachannel uses one STUN
     server and at most two TURN servers, and libjuice resolves one address per TURN host
     preferring IPv4, so each rendezvous server publishes an IPv4-only and an IPv6-only
@@ -2206,9 +2346,8 @@ UDP blocked, datagrams over about 1100 bytes dropped, an IPv6-only client behind
 and DNS64 with a CLAT, netem loss), with the rendezvous service and coturn started
 inside it and test secrets generated at run time; it runs in a Linux CI job under an
 opt-in ctest label `traversal`, never on the live server. Plus
-`cmake --build build --target tst_rendezvous_client tst_ice_configuration && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_rendezvous_client|tst_ice_configuration)$' --output-on-failure`
-and `ios/scripts/swift-test.sh --filter RendezvousClientTests`.
-Bench (controller and JJ, pending until observed): the phone on a cellular hotspot
+`cmake --build build --target tst_rendezvous_client tst_ice_configuration && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_rendezvous_client|tst_ice_configuration)$' --output-on-failure`.
+Bench (controller and JJ, pending until observed): the desktop on a cellular hotspot
 reaches the Rock's station through `rv.nereussdr.com`, direct and relayed.
 
 **Execution note (advisory):** opus. Networking and authorisation: flag for earlier
@@ -2216,9 +2355,77 @@ review. Requires Task 26.
 
 - [ ] **Step 1:** The station role: registration, introductions, nameplates, ICE
       servers.
-- [ ] **Step 2:** The client roles (desktop and app), cached addresses, attempt records.
+- [ ] **Step 2:** The desktop's client role, cached addresses and the attempt record.
+
+## Task 27a: Reaching the station through the rendezvous, on the phone
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
+**Requirements:** R-IOS-08 (pair by code through the relay), R-IOS-16 (connecting from
+anywhere; what the phone tried), pairing design §5.3 (cached address first; an ordered
+server list; sessions survive a rendezvous outage) and §8.
+
+**Files:**
+- Create: `ios/NereusKit/Sources/NereusLink/RendezvousClient.swift`,
+  `ios/NereusKit/Sources/NereusLink/ConnectionAttempt.swift`
+- Modify: `ios/NereusKit/Sources/NereusLink/PairingClient.swift`
+  (`PairingCarrier.rendezvous(server:nameplate:)`), `PairedStationStore.swift`
+  (`PairedStation.endpoints` kept up to date),
+  `ios/NereusKit/Sources/NereusMedia/MediaPeer.swift` and `RtcBridge.swift` (the ICE
+  settings below)
+- Test: `ios/NereusKit/Tests/NereusLinkTests/RendezvousClientTests.swift`,
+  `ios/NereusKit/Tests/NereusMediaTests/IceSettingsTests.swift`
+
+**Interfaces:**
+- Consumes: the rendezvous wire and its conformance vectors (Task 26), the station's
+  introduction check and ICE limits (Task 27), `PairingClient` and `PairedStationStore`
+  (Task 15), `MediaPeer` (Task 10).
+- Produces:
+  - `actor RendezvousClient` in the client role: `introduce(stationId:device:offer:)`
+    and `openMailbox(nameplate:)`, trying each server in the ordered list and using the
+    first that answers; the introduction's `deviceSignature` is the device key's
+    signature over `"NereusSDR introduce v1\n" || station id || the rendezvous connection's nonce`.
+  - `struct ConnectionAttempt`: per attempt, which paths were tried (this network,
+    direct, relay) and how each ended, in order, with the same fields as the desktop's
+    record (Task 27), for the trouble screens (Task 56).
+  - `PairedStation.endpoints` holds the station's last good addresses, tried first on
+    the next connect.
+  - `PairingCarrier.rendezvous(server:nameplate:)`: Task 15's `pair.*` messages carried
+    unchanged inside mailbox bodies.
+  - The app's peers use the same ICE settings as the station's (Task 27): one STUN
+    server, both TURN slots carrying the IPv4-only and IPv6-only relay names,
+    credentials fixed before gathering starts, MTU 996, and a connect deadline that
+    covers gathering (up to 23.5 s) as well as the 39.5 s connectivity timer.
+
+**Acceptance:**
+- The rendezvous conformance vectors (Task 26) pass in `RendezvousClientTests`.
+- A known-answer test: the introduction's `deviceSignature` verifies with the device's
+  public key over exactly the stated transcript.
+- A pairing by code through a mailbox carries Task 15's `pair.*` messages unchanged, and
+  the code never appears in any mailbox body.
+- With the rendezvous unreachable, a phone with a cached address still tries it first
+  and connects.
+- `IceSettingsTests`: the configuration the bridge builds has at most one STUN and two
+  TURN servers, the IPv4-only and IPv6-only relay names in the two slots, gathering
+  started only after credentials are set, and MTU 996.
+- The attempt record lists each path tried and how it ended, in the order tried.
+
+**Verification:** networking and authorisation: conformance and unit tests first.
+`ios/scripts/swift-test.sh --filter RendezvousClientTests` and
+`ios/scripts/swift-test.sh --filter IceSettingsTests`. Bench (controller and JJ,
+pending until observed): the phone on a cellular hotspot reaches the Rock's station
+through `rv.nereussdr.com`, direct and relayed.
+
+**Execution note (advisory):** opus. Networking and authorisation: flag for earlier
+review. Requires Tasks 10, 15 and 27.
+
+- [ ] **Step 1:** The client role, the introduction signature and the mailbox carrier,
+      with the conformance vectors.
+- [ ] **Step 2:** The ICE settings, cached addresses and the attempt record.
 
 ## Task 28: The control session across NAT
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-16 (connecting from anywhere), remote design §10.4, the R5
 decision brief's separate control-only ICE connection.
@@ -2228,16 +2435,12 @@ decision brief's separate control-only ICE connection.
   reliable ordered data channel)
 - Modify: `src/core/session/StationServer.{h,cpp}` (accepts sessions from either
   transport), `src/core/session/StationClient.{h,cpp}`, `RendezvousClient`
-- Create: `ios/NereusKit/Sources/NereusLink/DataChannelSessionTransport.swift`
-- Modify: `ios/NereusKit/Sources/NereusLink/StationSession.swift` (a transport
-  abstraction: WebSocket or data channel)
 - Modify: the link document (a "Control over a data channel" section),
   `tests/data/link/v1/` (chunking fixtures)
-- Test: `tests/tst_data_channel_transport.cpp`,
-  `ios/NereusKit/Tests/NereusLinkTests/DataChannelSessionTransportTests.swift`
+- Test: `tests/tst_data_channel_transport.cpp`
 
 **Interfaces:**
-- Consumes: `RendezvousClient` (Task 27), `MediaPeer` (Task 10).
+- Consumes: `RendezvousClient` and the ICE settings (Task 27).
 - Produces:
   - A data channel labelled `control`, reliable and ordered, on its own peer
     connection; each session message is split into chunks of at most 61 440 bytes, each
@@ -2257,21 +2460,74 @@ decision brief's separate control-only ICE connection.
 - A 300 KiB settings snapshot crosses in chunks and reassembles exactly; a message over
   the cap is refused and the connection ends as the WebSocket's would.
 - A control connection whose DTLS certificate is not the bound station certificate is
-  refused by the client before any session message is sent.
+  refused by the desktop client before any session message is sent (the app's check is
+  Task 28a).
 - The heartbeat declares the link dead after two missed pongs, as on the WebSocket.
 
 **Verification:** networking and authorisation: integration on loopback.
-`cmake --build build --target tst_data_channel_transport tst_link_conformance_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_data_channel_transport|tst_link_conformance_session)$' --output-on-failure`
-and `ios/scripts/swift-test.sh --filter DataChannelSessionTransportTests`.
+`cmake --build build --target tst_data_channel_transport tst_link_conformance_session && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_data_channel_transport|tst_link_conformance_session)$' --output-on-failure`.
 
 **Execution note (advisory):** opus. Networking and authorisation: flag for earlier
 review. Requires Task 27.
 
 - [ ] **Step 1:** The transport with chunking and heartbeat, station and desktop.
-- [ ] **Step 2:** The persistent DTLS certificate and its check, the app transport,
-      conformance in data-channel mode, the document.
+- [ ] **Step 2:** The persistent DTLS certificate and the desktop's check, conformance
+      in data-channel mode, the document.
+
+## Task 28a: The control session across NAT, on the phone
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
+**Requirements:** R-IOS-16 (connecting from anywhere), remote design §10.4, the R5
+decision brief's separate control-only ICE connection.
+
+**Files:**
+- Create: `ios/NereusKit/Sources/NereusLink/DataChannelSessionTransport.swift`
+- Modify: `ios/NereusKit/Sources/NereusLink/StationSession.swift` (a transport
+  abstraction: WebSocket or data channel)
+- Test: `ios/NereusKit/Tests/NereusLinkTests/DataChannelSessionTransportTests.swift`,
+  the app's session conformance test (Task 8) in a data-channel mode
+
+**Interfaces:**
+- Consumes: the control data channel's wire (Task 28; the link document's "Control over
+  a data channel" section and its chunking fixtures), `RendezvousClient` (Task 27a),
+  `MediaPeer` (Task 10), `StationSession` (Task 8).
+- Produces:
+  - `protocol SessionTransport` in `StationSession.swift`, implemented by the WebSocket
+    transport and by `DataChannelSessionTransport` over the reliable, ordered data
+    channel labelled `control`, on its own peer connection: chunks of at most 61 440
+    bytes whose first byte is `0x01` (more follows) or `0x02` (last), reassembled within
+    the client's 8 MiB cap; ping and pong as the single bytes `0x10` and `0x11` followed
+    by a 4-byte id.
+  - The DTLS certificate check: the fingerprint seen in the DTLS handshake must equal the
+    station certificate its identity key binds (Task 15's trust), compared at the same
+    gate as on the WebSocket and before anything is sent; the SDP's fingerprint alone is
+    never trusted, since it arrives through the rendezvous.
+
+**Acceptance:**
+- The chunking fixtures decode and reassemble exactly; a 300 KiB settings snapshot
+  crosses in chunks and reassembles exactly; a message over the cap ends the connection
+  as the WebSocket's would.
+- The app's session conformance test passes every session fixture it runs in
+  data-channel mode.
+- A control connection whose DTLS certificate is not the bound station certificate is
+  refused before any session message is sent.
+- The heartbeat declares the link dead after two missed pongs, as on the WebSocket.
+
+**Verification:** networking and authorisation: conformance and loopback first.
+`ios/scripts/swift-test.sh --filter DataChannelSessionTransportTests` and
+`ios/scripts/swift-test.sh --filter LinkConformanceSessionTests`.
+
+**Execution note (advisory):** opus. Networking and authorisation: flag for earlier
+review. Requires Tasks 8, 10, 27a and 28.
+
+- [ ] **Step 1:** The transport abstraction and the data-channel transport with
+      chunking and heartbeat.
+- [ ] **Step 2:** The certificate check and conformance in data-channel mode.
 
 ## Task 29: The web-only fallback, racing paths and upgrading
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-16 (direct first, relay last, what the phone tried), R-IOS-08
 (pairing through the relay), pairing design §5.4 (both relay rungs, raced; path switches
@@ -2282,22 +2538,19 @@ are measured before one is chosen).
 **Files:**
 - Create: `docs/architecture/2026-09-23-relay-floor-measurement.md` (the comparison and
   JJ's choice), `tests/scripts/floor-measurement.sh`
-- Create: `src/core/session/PathRacer.{h,cpp}`,
-  `ios/NereusKit/Sources/NereusLink/PathRacer.swift`
+- Create: `src/core/session/PathRacer.{h,cpp}`
 - Create, for the option JJ chooses in Step 1: (B) patches to the fetched libjuice and
-  libdatachannel under `cmake/patches/`, carried by `cmake/NereusRemoteMedia.cmake` and
-  the app's vendoring script; (C) `src/core/session/TurnTlsShim.{h,cpp}` and
-  `ios/NereusKit/Sources/NereusLink/TurnTlsShim.swift`; (E)
-  `src/core/session/RelayTransport.{h,cpp}`,
-  `ios/NereusKit/Sources/NereusLink/RelayTransport.swift` and a `/v1/relay` role in the
-  rendezvous service
+  libdatachannel under `cmake/patches/`, carried by `cmake/NereusRemoteMedia.cmake`; (C)
+  `src/core/session/TurnTlsShim.{h,cpp}`; (E) `src/core/session/RelayTransport.{h,cpp}`
+  and a `/v1/relay` role in the rendezvous service. The app's side of each is
+  Task 29a.
 - Modify: `src/core/session/StationClient.{h,cpp}` and `src/core/session/StationServer.{h,cpp}`
   (a switchable transport beneath the session for make-before-break upgrades),
   `src/core/session/media/DaemonMediaController.{h,cpp}` (a media `replace` operation),
-  the desktop's and the app's audio jitter buffers (dual receive across a switch), the
-  link document (a "Paths" section)
+  the desktop's audio jitter buffer (dual receive across a switch), the link document
+  (a "Paths" section)
 - Test: `tests/tst_path_racer.cpp`, `tests/tst_session_transport_switch.cpp`,
-  `tests/tst_media_replace.cpp`, `ios/NereusKit/Tests/NereusLinkTests/PathRacerTests.swift`
+  `tests/tst_media_replace.cpp`
 
 **Interfaces:**
 - Consumes: Tasks 26 to 28; the traversal harness (Task 27).
@@ -2347,11 +2600,10 @@ are measured before one is chosen).
   station turned them off.
 
 **Verification:** networking and the transmit boundary: the traversal harness, plus
-`cmake --build build --target tst_path_racer tst_session_transport_switch tst_media_replace && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_path_racer|tst_session_transport_switch|tst_media_replace)$' --output-on-failure`
-and `ios/scripts/swift-test.sh --filter PathRacerTests`. Bench (controller and JJ,
-pending until observed): the phone on a cellular hotspot connects through each rung
-(forced by the station's settings and by blocking UDP on the phone's network), and an
-upgrade from relay to direct is heard without a glitch.
+`cmake --build build --target tst_path_racer tst_session_transport_switch tst_media_replace && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_path_racer|tst_session_transport_switch|tst_media_replace)$' --output-on-failure`.
+Bench (controller and JJ, pending until observed): the desktop on a cellular hotspot
+connects through each rung (forced by the station's settings and by blocking UDP on its
+network), and an upgrade from relay to direct is heard without a glitch.
 
 **Execution note (advisory):** opus. Networking and the transmit safety boundary: flag
 for earlier review. Step 1 is a measurement spike whose result goes to JJ; Step 2 waits
@@ -2360,7 +2612,76 @@ for his choice. Requires Task 28.
 - [ ] **Step 1:** Prototype the three options far enough to measure them; run the
       measurement; write the comparison; the controller brings JJ the recommendation.
 - [ ] **Step 2:** Build the chosen floor, the racer, the make-before-break control
-      switch, the media replace with dual receive, and the document.
+      switch and the media replace with dual receive, at the station and the desktop,
+      and the document.
+
+## Task 29a: The web-only fallback, racing paths and upgrading, on the phone
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
+**Requirements:** R-IOS-16 (direct first, relay last, what the phone tried), R-IOS-08
+(pairing through the relay), pairing design §5.4 (both relay rungs, raced; path switches
+seamless; switchable off), remote design §12.1 (no path change while keyed).
+
+**Files:**
+- Create: `ios/NereusKit/Sources/NereusLink/PathRacer.swift`
+- Create, for the floor JJ chose in Task 29: (B) the patched libjuice and
+  libdatachannel through `ios/scripts/vendor-sources.sh`, their `ios/THIRD-PARTY.md`
+  rows naming the patches; (C) `ios/NereusKit/Sources/NereusLink/TurnTlsShim.swift`;
+  (E) `ios/NereusKit/Sources/NereusLink/RelayTransport.swift`
+- Modify: `ios/NereusKit/Sources/NereusLink/StationSession.swift` (the make-before-break
+  switch beneath the session), `ios/NereusKit/Sources/NereusMedia/AudioJitterBuffer.swift`
+  (dual receive across a switch, duplicates dropped by RTP timestamp),
+  `ios/NereusKit/Sources/NereusMedia/MediaControlClient.swift` (the media `replace`
+  operation)
+- Test: `ios/NereusKit/Tests/NereusLinkTests/PathRacerTests.swift`,
+  `ios/NereusKit/Tests/NereusLinkTests/SessionTransportSwitchTests.swift`,
+  `ios/NereusKit/Tests/NereusMediaTests/DualReceiveTests.swift`
+
+**Interfaces:**
+- Consumes: Task 29's measurement document (JJ's choice) and the station's side of the
+  chosen floor, the in-band barrier and `replace` (capability `mediaReplaceVersion = 1`);
+  `RendezvousClient` and `ConnectionAttempt` (Task 27a); `DataChannelSessionTransport`
+  (Task 28a); `AudioJitterBuffer` and `MediaControlClient` (Task 11).
+- Produces:
+  - `actor PathRacer` starts, at once and together: direct TLS to each cached and LAN
+    address (IPv6 first, IPv4 250 ms later), the rendezvous introduction with ICE, and,
+    when the station allows the relay, the chosen floor; the first session to reach
+    `snapshot.complete` wins and the others stop; `ConnectionAttempt` records what each
+    rung did.
+  - Upgrades as Task 29 defines them: a second peer connection; control moved
+    make-before-break beneath the session through the in-band barrier, with no close,
+    re-authentication, snapshot or preemption; media received on both across the
+    switch with duplicates dropped by RTP timestamp, the display resumed on a keyframe,
+    and the first peer retired with `replace`. No upgrade starts while the phone is
+    keyed or while MOX's delay timers run.
+
+**Acceptance:**
+- With every path open the direct path wins; with only the floor, the floor wins and the
+  attempt record says what failed.
+- A relay-to-direct upgrade while listening leaves no audio gap over 40 ms and no
+  repeated audio over 40 ms in the app's playback, with no new snapshot and no
+  re-authentication.
+- While the phone is keyed, or while MOX's delay timers run, no upgrade starts until
+  unkey.
+- With the station's `relay = deny` the relay rungs are not tried, and the attempt
+  record says the station turned them off.
+- The floor's relayed traffic never contains the Opus or JSON plaintext (checked in the
+  test).
+
+**Verification:** networking and the transmit boundary: tests first.
+`ios/scripts/swift-test.sh --filter PathRacerTests`,
+`ios/scripts/swift-test.sh --filter SessionTransportSwitchTests` and
+`ios/scripts/swift-test.sh --filter DualReceiveTests`. Bench (controller and JJ,
+pending until observed): the phone on a cellular hotspot connects through each rung
+(forced by the station's settings and by blocking UDP on the phone's network), and an
+upgrade from relay to direct is heard without a glitch.
+
+**Execution note (advisory):** opus. Networking and the transmit safety boundary: flag
+for earlier review. Requires Tasks 11, 27a, 28a and 29, and JJ's floor choice.
+
+- [ ] **Step 1:** The racer, the attempt record and the chosen floor's app side.
+- [ ] **Step 2:** The make-before-break switch, dual receive and `replace`.
 
 ---
 
@@ -2383,6 +2704,8 @@ through silence (silence there puts no carrier on the air); AM, SAM, FM, DRM, RA
 RADE_L unkey at the starvation deadline (silence there is a bare or garbage carrier).
 
 ## Task 30: The DSP control lanes and the caller check
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-R3-39 (a DSP-control thread that keeps WDSP calls off the event loop
 entirely, before remote transmit), spec §4.6 (every safety layer runs on the station).
@@ -2456,6 +2779,8 @@ can start after Part A.
 
 ## Task 31: Receive DSP off the event loop
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** R-R3-39.
 
 **Files:**
@@ -2513,6 +2838,8 @@ for earlier review. Requires Task 30.
 
 ## Task 32: Transmit DSP off the event loop
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** R-R3-39.
 
 **Files:**
@@ -2561,6 +2888,8 @@ Requires Task 31.
       counting test and the drain measurement.
 
 ## Task 33: Stopping transmission at once
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** remote design §12.1 (the station keys down immediately), spec §4.6
 items 1 to 3 and 8, R-IOS-03 (the carrier stops before a handover).
@@ -2620,6 +2949,8 @@ review. Requires Task 32.
 - [ ] **Step 2:** The Thetis `StopAllTx` port with its cite, provenance and the warning.
 
 ## Task 34: Transmit gates and refusals
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** remote design §12.2 (transmit disabled until snapshot-complete; the
 interlocks stay authoritative; the unkey-confirmed handoff gate) and §7.1, spec §4.6
@@ -2689,6 +3020,8 @@ review. Requires Task 33.
 
 ## Task 35: Keying from a remote device
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** R-IOS-13 (the toggle PTT keys through the station; transmit never
 resumes after a reconnect), spec §4.6 item 7.
 
@@ -2754,6 +3087,8 @@ resumes after a reconnect), spec §4.6 item 7.
 - [ ] **Step 2:** Attribution, the reconnect case, fixtures and the document.
 
 ## Task 36: The microphone uplink
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-13, remote design §8.2 and §8.3 (the TX jitter buffer shorter
 than the starvation deadline; drift correction both ways; high-rate or lossless uplink
@@ -2834,6 +3169,8 @@ review with the other transmit tasks. Requires Task 35.
 
 ## Task 37: The watchdog and microphone starvation
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** remote design §12.1 (drop MOX on link loss; the test severs the path on
 each rung) and §12.3 (starvation deadline shorter than link loss; per-mode action), pairing
 design §9.7, spec §4.6 items 1 and 2, R-IOS-13.
@@ -2892,6 +3229,8 @@ review. Requires Task 36 and Part E.
 
 ## Task 38: The transmit time-out
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** R-IOS-04 (on by default at 180 s for phones and tablets, 30 s to 30
 minutes or off; off by default for computers as in Thetis; the station drops MOX and TUNE
 and says why; the time remaining is part of the transmit state), D29, R-IOS-21 (the
@@ -2949,6 +3288,8 @@ for earlier review. Requires Task 35.
 
 ## Task 39: Transmit meters and state
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** D14 (RF power, SWR and mic level while transmitting), R-IOS-13,
 R-IOS-21 (the time left), spec §5.5 items 5 and 8.
 
@@ -2990,6 +3331,8 @@ R-IOS-21 (the time left), spec §5.5 items 5 and 8.
 - [ ] **Step 2:** The remote window's meters, fixtures and the document.
 
 ## Task 40: Transmit controls on the link
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** D15 and D18 (the TX panel and the Modes tab's transmit section: RF and
 tune power, PROC, LEV, EQ, CFC, VOX, MON, mic gain, TX filter), spec §5.1 item 5 and §5.2
@@ -3034,6 +3377,8 @@ item 1, the Tools tab's TX Equalizer.
 # Part G: Sessions and accessories
 
 ## Task 41: Asking before taking over
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-02 (the holder report; preempt only on confirmation; the same
 device reclaims without being asked), R-IOS-03 ("Unkey and take over" unkeys through the
@@ -3103,6 +3448,8 @@ earlier review. Requires Tasks 12, 34 and 35.
       fixtures and the document.
 
 ## Task 42: Transmit-coupled accessory commands
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** R-IOS-05 (the amp's OPERATE and STANDBY; the tuner's TUNE, OPERATE,
 BYPASS and antenna; the RF2K-S's OPERATE, STANDBY and antenna; the interlock enforced at
@@ -3224,6 +3571,8 @@ page, and a station test proves each station setting on it takes effect live.
 
 ## Task 43: Setup descriptions: the format, the service, the parity test, and General, Test, Diagnostics and CAT & Network
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** D16 (the desktop's whole Setup tree, same categories, order and page
 names, each marked), R-IOS-18 (each control writes to its owner), R-IOS-27.
 
@@ -3282,6 +3631,8 @@ the three verifier scripts pass.
 
 ## Task 44: Setup descriptions: DSP, Transmit and Audio
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** D16, R-IOS-18, R-IOS-27.
 
 **Files:**
@@ -3311,6 +3662,8 @@ Profiles, Speech Processor and DEXP/VOX, all described; the verifier scripts pas
 - [ ] **Step 2:** Transmit and Audio.
 
 ## Task 45: Setup descriptions: Hardware, PA, 4O3A, RF-Kit and TCI
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** D16, R-IOS-18, R-IOS-27.
 
@@ -3346,6 +3699,8 @@ Requires Task 43 and the two plans.
 - [ ] **Step 2:** 4O3A, RF-Kit and TCI.
 
 ## Task 46: Setup descriptions: Display and Appearance
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** D16, R-IOS-18, R-IOS-27, spec §5.2 item 6 (Display marked Both,
 Appearance marked This phone).
@@ -3384,6 +3739,8 @@ of Task 52 or a subscription field of Task 20 (a test cross-checks the lists).
 # Part I: The desktop's station
 
 ## Task 47: `nereusd` in every package, and starting it
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** D20 (the station runs from a switch in the desktop app, keeps running
 after the app closes and can start with the computer), remote design §4.4 (one installer,
@@ -3442,6 +3799,8 @@ network access: flag for earlier review. Requires Task 17.
 - [ ] **Step 2:** The service manager with its per-platform start entries and tests.
 
 ## Task 48: The station inside the desktop, and the radio handover
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** D35 (while NereusSDR is open it runs the station and serves the phone;
 when it closes the background station takes the radio; when it opens again it takes the
@@ -3509,6 +3868,8 @@ Parts C, F and G.
 
 ## Task 49: The Remote Station page
 
+**Runs in:** the Core/GUI session's lanes (a station task).
+
 **Requirements:** R-IOS-07, spec §5.3 item 10 (Run a station on this computer; Keep it
 running when NereusSDR is closed; Start it with the computer; the station's name with
 Rename; the pairing code, shown until a device claims it; the paired devices with Revoke;
@@ -3552,6 +3913,8 @@ phone by one tap, revoke the phone from the page.
 - [ ] **Step 2:** The screenshots.
 
 ## Task 50: The card image for a small computer
+
+**Runs in:** the Core/GUI session's lanes (a station task).
 
 **Requirements:** spec §5.3 items 5 and 11 (a station on a small box from a flashed card;
 its code on a status page and in its console), D20's alternative to the desktop.
@@ -3608,6 +3971,8 @@ facts, band plans, colour lists and Setup page descriptions come from the statio
 (Tasks 19, 20 and 43 to 46); the app draws controls from them.
 
 ## Task 51: The Xcode project, the app shell and CI
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** spec §4.12 (SwiftUI screens, a Metal band, the module list, minimum
 iOS 17.4) and §4.13, R-IOS-28 (the Push to Talk capability on the app ID), R-IOS-29.
@@ -3670,6 +4035,8 @@ observed): the app installs and launches on JJ's iPhone through a development pr
 
 ## Task 52: The band in Metal
 
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
 **Requirements:** R-IOS-11 (the panadapter, the waterfall with zoom, the band-plan strip,
 the dBm scale), D7, spec §5.1 item 4 (the dBm scale a little larger for fingers; the band
 plan strip on, ARRL by default).
@@ -3712,6 +4079,8 @@ compared with `01-on-the-band.jpg` and `02-sideways.jpg`.
 - [ ] **Step 2:** The Metal renderer, the display settings and the render tests.
 
 ## Task 53: Flags, markers, gestures and zoom
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** R-IOS-11 (flags and the fold rule, markers per D10, zoom), R-IOS-12
 (tap and drag to tune; the Touch settings), D9, D10, spec §5.1 items 3, 4 and 9.
@@ -3762,6 +4131,8 @@ compared with `01-on-the-band.jpg` and `02-sideways.jpg`.
 - [ ] **Step 2:** The views and the screenshots.
 
 ## Task 54: The main screen: toolbar, panels, PTT and the keyed view
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** R-IOS-11 (§5.1 items 1, 2, 5, 6, 7; D8, D11), R-IOS-13 (the toggle PTT,
 the keyed view with RF power, SWR and mic level (D14), refusals with the station's reason
@@ -3824,6 +4195,8 @@ review. Requires Tasks 39, 40, 42 and 53.
 
 ## Task 55: Sound and the microphone on the phone
 
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
 **Requirements:** R-IOS-20 (routes; the iPhone microphone by default; the band muted
 while talking; MON in headphones only; voice processing off; the quality choice; the
 speaker's route menu), R-IOS-13 (a call or Siri interrupting unkeys), spec §4.7 (audio in
@@ -3834,6 +4207,7 @@ the background), §5.4 items 6 to 10.
   `MicCapture.swift` (AVAudioEngine input, voice processing off, Opus microphone profile,
   RTP on the mic line), `RouteMenu.swift`, `ios/NereusApp/Setup/AudioOnThisPhonePage.swift`
 - Create: `ios/NereusApp/Tests/AudioSessionControllerTests.swift`
+- Modify: `ios/NereusKit/Sources/NereusLink/LinkFeatures.swift` (`remoteTx: 1`)
 
 **Interfaces:**
 - Consumes: `AudioPlaybackCore` (Task 11), `MediaPeer.sendAudio` (Task 10), the mic line
@@ -3845,6 +4219,8 @@ the background), §5.4 items 6 to 10.
   `stop()` on unkey or when VOX is disarmed; the band's
   playback muted while keyed and MON routed only when the output is headphones (both
   settings on by default); the quality choice sent as the audio control's `opusBitrate`.
+  From this task on the app declares `remoteTx: 1` in its `hello`, once it can send its
+  microphone as well as key, so the station's transmit gate lets it key.
 
 **Acceptance:**
 - An interruption (the test posts `AVAudioSession.interruptionNotification` with `.began`)
@@ -3867,6 +4243,8 @@ keyed, a call arriving mid-transmission unkeys on air (Task 70's bench row).
 
 ## Task 56: Connecting, pairing, trouble and takeover screens
 
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
 **Requirements:** R-IOS-16 (§5.3 items 1 to 9 and 14; the version rules of §4.4),
 R-IOS-17 (§5.3 items 12 and 13), R-IOS-08 (the app's pairing screens), D19, D21 to D23.
 
@@ -3877,18 +4255,20 @@ R-IOS-17 (§5.3 items 12 and 13), R-IOS-08 (the app's pairing screens), D19, D21
   `TroubleScreens.swift` (five), `TakeoverQuestionScreen.swift`,
   `TakenOverScreen.swift`, `ios/NereusApp/Connect/ConnectionFlow.swift`
 - Create: `ios/NereusApp/Tests/ConnectionFlowTests.swift`
+- Modify: `ios/NereusKit/Sources/NereusLink/LinkFeatures.swift` (`sessionHolder: 1`)
 
 **Interfaces:**
-- Consumes: `StationBrowser` (Task 16), `PairingClient` (Tasks 15, 27), `PathRacer`
-  and the attempt record (Task 29), `StationSession` refusals (Task 8), `session.held`
-  (Task 41).
+- Consumes: `StationBrowser` (Task 16a), `PairingClient` (Tasks 15, 27a), `PathRacer`
+  and the attempt record (Tasks 27a, 29a), `StationSession` refusals (Task 8),
+  `session.held` (Task 41).
 - Produces: `ConnectionFlow`, the state machine behind the screens:
   welcome, local-network permission (asked once, by starting the browser), found
   (one-tap claim of an unclaimed station on this network), code entry (validated against
   the word list), typed address, microphone permission right after the first pairing,
   your stations (paired first, then unclaimed on this network; stations only, never
   radios), connecting, the takeover question, connected, link lost (listening and
-  keyed), taken over, and the five trouble screens.
+  keyed), taken over, and the five trouble screens. From this task on the app declares
+  `sessionHolder: 1` in its `hello`, so the station asks it the takeover question.
 
 **Acceptance:**
 - Each trouble screen appears for its cause against `FakeStation` configured to produce
@@ -3920,6 +4300,8 @@ by code through the relay, and by typed address against the Rock's station.
 - [ ] **Step 2:** The screens and screenshots.
 
 ## Task 57: The Modes tab
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** R-IOS-18 (controls in both places; each writes to its owner), D15, D17,
 spec §5.2 item 1, R-IOS-27.
@@ -3964,6 +4346,8 @@ hardware plan.
 
 ## Task 58: Setup and Devices
 
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
 **Requirements:** R-IOS-18 (the Setup tree with its tags; each control writes to its
 owner), D16, spec §5.2 items 6 to 8, R-IOS-08 (Devices: rename, the key backup reminder,
 revoke, Add a device), and the This phone pages the other requirements name (Navigation's
@@ -3978,6 +4362,7 @@ Touch section and the dial (R-IOS-12), PTT buttons and the transmit time-out gro
   `ios/NereusKit/Sources/NereusMirror/SetupDescription.swift`
 - Create: `ios/NereusApp/Tests/SetupRenderingTests.swift`,
   `ios/NereusKit/Tests/NereusMirrorTests/SetupDescriptionTests.swift`
+- Modify: `ios/NereusKit/Sources/NereusLink/LinkFeatures.swift` (`setupDescription: 1`)
 
 **Interfaces:**
 - Consumes: the Setup description (Tasks 43 to 46), the settings proxy (Task 9), the
@@ -3987,7 +4372,9 @@ Touch section and the dial (R-IOS-12), PTT buttons and the transmit time-out gro
   description, which leaves out pages the desktop has not built (D41), so each appears
   once it exists; This phone pages native. Left off: the Keyboard page (the desktop has
   not built it; an iPad with a keyboard gets it once it exists), Appearance's Skins and
-  Collapsible Display, and the desktop's Remote Station page.
+  Collapsible Display, and the desktop's Remote Station page. From this task on the app
+  declares `setupDescription: 1` in its `hello`, so the station sends it the
+  descriptions.
   - Devices: Rename for the station; the key backup reminder; each paired device with
     when it was paired and last seen; one-tap Revoke; Add a device (shows the code);
     "Only one device can be connected at a time."
@@ -4021,6 +4408,8 @@ until observed).
 
 ## Task 59: The Tools and Radio tabs
 
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
 **Requirements:** R-IOS-18, spec §5.2 items 3 to 5.
 
 **Files:**
@@ -4035,7 +4424,7 @@ until observed).
 **Interfaces:**
 - Consumes: the catalogue's tool list (Task 19), the transmit controls (Task 40), the
   station's radios, TCI clients and support bundle (Task 25), telemetry (Task 9), the
-  attempt record (Task 29).
+  attempt record (Tasks 27a and 29a).
 - Produces:
   - Tools, in the desktop's order, each marked Station, This phone or Both, showing
     only what the station offers (D41): Spot Hub (Task 62), FreeDV Reporter (Task 63),
@@ -4071,6 +4460,8 @@ until observed).
 - [ ] **Step 2:** The Radio tab and Manage Radios; screenshots.
 
 ## Task 60: Accessories on the phone
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** R-IOS-19 (the three pages, the TX panel controls, the interlock
 refusal with "Operate amp"), D18, spec §5.4 items 1 to 5.
@@ -4108,6 +4499,8 @@ refusal with "Operate amp"), D18, spec §5.4 items 1 to 5.
 
 ## Task 61: The tuning dial
 
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
 **Requirements:** R-IOS-12 (the three dials, off until chosen; steps from the station's
 list; a haptic tick per detent and a firmer bump per whole kilohertz), D12, spec §5.1
 item 8.
@@ -4144,6 +4537,8 @@ haptics felt on a real iPhone.
 - [ ] **Step 2:** The three dials, haptics and screenshots.
 
 ## Task 62: Spots and Spot Hub on the phone
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** R-IOS-25, D13, D32, spec §5.1 items 10 and 11, §5.7 items 1 to 4.
 
@@ -4189,6 +4584,8 @@ observed): the station's cluster feeding the phone.
 
 ## Task 63: FreeDV Reporter on the phone
 
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
 **Requirements:** R-IOS-26 (with the callsign, never the station label), D33, spec §5.7
 items 5 to 10.
 
@@ -4222,6 +4619,8 @@ the live reporter.
 - [ ] **Step 2:** Details, QSY, status messages; screenshots.
 
 ## Task 64: The lock screen, the Dynamic Island and the Live Activity
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** R-IOS-14 (§5.5 items 1 to 5: locking unkeys; the screen awake while
 keyed; switching apps keeps transmitting with the island; the card; the eight-hour last
@@ -4269,6 +4668,8 @@ earlier review. Requires Tasks 39 and 54.
 - [ ] **Step 2:** The widget's four presentations and screenshots.
 
 ## Task 65: Hardware PTT through Push to Talk
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** R-IOS-15 (a headset button, a paired Bluetooth PTT button and the Action
 button; keying a locked phone; "Keyed by headset"), D26, spec §5.5 items 6 to 8.
@@ -4318,6 +4719,8 @@ flag for earlier review. Requires Tasks 54 and 64.
 
 ## Task 66: Long sessions, battery, heat and data use
 
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
 **Requirements:** R-IOS-22 (sound only when locked, the screen-on choice defaulting to
 Always, the sleep timer, Low Power Mode to Saver, the heat slow-down, the locked stretch
 marked in the waterfall), R-IOS-23 (the modes and their defaults, the counters, the 5 GB
@@ -4358,6 +4761,8 @@ spec §5.4 items 11 to 13, §5.5 items 9 to 12.
 
 ## Task 67: iPad
 
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
 **Requirements:** R-IOS-24, D30, D31, spec §5.6.
 
 **Files:**
@@ -4392,6 +4797,8 @@ two slices 2 kHz apart; screenshots on the 11-inch iPad simulator against
 # Part K: Proof and release
 
 ## Task 68: Measurements, and the published figures
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
 **Requirements:** R-IOS-23 (the estimates replaced by measured figures before release),
 R-IOS-22 (a multi-hour run with battery and heat logged), R-IOS-10 (traffic drops to
@@ -4435,6 +4842,8 @@ station set up as for the bench. Requires Task 66.
 
 ## Task 69: Store readiness
 
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
 **Requirements:** R-IOS-28 (the TestFlight round, the App Review video on a real station,
 the export-compliance and privacy answers, the Push to Talk capability), D2, D19, spec
 §4.13, R-IOS-29 (the licence's Corresponding Source offer).
@@ -4477,6 +4886,8 @@ Requires every other app task.
 - [ ] **Step 2:** The screenshots; JJ's App Store Connect steps.
 
 ## Task 70: Bench acceptance
+
+**Runs in:** the phone session's controller with JJ, once every other task has landed.
 
 **Requirements:** the Bench and Device evidence of R-IOS-02 to R-IOS-05, R-IOS-08,
 R-IOS-13 to R-IOS-17, R-IOS-19, R-IOS-20, R-IOS-22 and R-IOS-24; spec §8's bench and

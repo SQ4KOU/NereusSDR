@@ -720,9 +720,11 @@ Hardware evidence stays **pending** until a device or the bench shows it.
 ### 6.3 How this becomes a plan
 
 One plan builds all of it, station and app together, ordered by dependency:
-[2026-09-23-iphone-app-plan.md](2026-09-23-iphone-app-plan.md). What follows was
-the first proposal, which JJ turned down on 2026-09-23 ("i hate us splitting
-plans"); it is kept for the record.
+[2026-09-23-iphone-app-plan.md](2026-09-23-iphone-app-plan.md). Two sessions run
+it, one owner per task (JJ, 2026-09-24): the Core/GUI session builds every station
+and desktop task in its lanes, and the phone session builds the app, each phone task
+waiting for the station tasks it uses. What follows was the first proposal, which JJ
+turned down on 2026-09-23 ("i hate us splitting plans"); it is kept for the record.
 
 This spec is larger than one plan. The station-side requirements (§6.1) go
 into the remote-station phase plans that own them: R-IOS-06, R-IOS-09 and
