@@ -48,9 +48,11 @@ libsodium has no CMake build. `cmake/NereusPairing.cmake` compiles every
 `src/libsodium/**/*.c` of the pinned archive into the static library
 `nereus_sodium`, with the portable configuration:
 
-- the reference C implementations only: no assembly (`HAVE_AMD64_ASM`,
-  `HAVE_AVX_ASM` unset) and no SIMD variants (no `HAVE_*INTRIN_H`, no
-  `HAVE_ARMCRYPTO`), so those files compile to nothing;
+- no assembly (`HAVE_AMD64_ASM`, `HAVE_AVX_ASM` unset); with GCC and
+  Clang no SIMD variants either (no `HAVE_*INTRIN_H`, no `HAVE_ARMCRYPTO`),
+  so those files compile to nothing and the reference C code runs; with
+  MSVC, libsodium's own `private/common.h` turns its intrinsics on, as its
+  Visual Studio projects build it;
 - the platform macros of the archive's own `build.zig` for macOS, Linux
   and Windows, minus its assembly and intrinsics entries;
 - `HAVE_TI_MODE` with GCC and Clang on 64-bit targets (MSVC has no

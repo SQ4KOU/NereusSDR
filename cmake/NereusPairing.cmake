@@ -18,16 +18,18 @@
 #     no tags, so the commit's codeload archive is pinned.
 #
 # libsodium has no CMake build of its own. Its sources are compiled here
-# from the pinned archive with the portable configuration: the reference C
-# implementations on every platform, no hand-written assembly and no SIMD
-# variants (those files compile to nothing unless their HAVE_*INTRIN_H
-# macro is defined). That builds unchanged with Clang (macOS arm64 and
-# x86_64), GCC (Linux x86_64 and arm64) and MSVC, which is what the pairing
-# exchange needs: it runs once per pairing, not per sample. The macro set
-# follows the build.zig libsodium ships in the same archive, minus its
-# assembly and intrinsics entries. version.h is taken from the archive's
-# builds/msvc/version.h, which the same build.zig uses in place of
-# configure's version.h.in.
+# from the pinned archive with the portable configuration: no hand-written
+# assembly, and with GCC and Clang no SIMD variants either (those files
+# compile to nothing unless their HAVE_*INTRIN_H macro is defined, and
+# defining them would need per-file instruction-set flags), so macOS arm64
+# and x86_64 and Linux x86_64 and arm64 build the reference C code. With
+# MSVC, libsodium's own private/common.h turns its intrinsics on by itself,
+# as its Visual Studio projects build it; MSVC needs no per-file flags for
+# them. Speed is not the point: the exchange runs once per pairing. The
+# macro set follows the build.zig libsodium ships in the same archive,
+# minus its assembly and intrinsics entries. version.h is taken from the
+# archive's builds/msvc/version.h, which the same build.zig uses in place
+# of configure's version.h.in.
 #
 # docs/attribution/LIBSODIUM-PROVENANCE.md and SPAKE2EE-PROVENANCE.md
 # record the pins, the archive hashes and the licences; the licence texts
