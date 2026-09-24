@@ -64,6 +64,14 @@ remote_port = 0
 # Default: 127.0.0.1
 remote_bind = 127.0.0.1
 
+# Address the station TCI server listens on, so devices on the station
+# network (the RF-Kit RF2K-S) follow this Core's radio. Empty uses this
+# machine's address on the radio's network, found once the radio connects.
+# The server also always listens on this machine. It runs only while the
+# TCI switch in a connected app is on, and transmits for no app.
+# Default: empty
+station_tci_bind =
+
 # Name shown under LAN Cores in the GUI Connections window. Empty uses this
 # machine's hostname. At most 128 UTF-8 bytes, without control characters.
 # An available non-loopback remote listener announces its certificate identity,

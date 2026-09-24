@@ -102,6 +102,10 @@
 //                 Multimeter and high-resolution filter settings and the
 //                 DXCC country table load at startup. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-48: the one TCI switch (TciSwitch),
+//                the local RF-Kit band follow, the remote RF-Kit applet's
+//                Disconnect or Reconnect through the Core. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -440,6 +444,8 @@ warren@wpratt.com
 #  include "applets/TciApplet.h"
 #  include "applets/ClientChainApplet.h"
 #  include "core/TciServer.h"
+#  include "core/TciSwitch.h"
+#  include "core/RfKitBandFollow.h"
 #  include "setup/TciLogWindow.h"  // Phase 3J-1 closeout Item 2 (2026-05-12)
 #  include <QWebSocket>
 #endif
@@ -448,6 +454,7 @@ warren@wpratt.com
 // Remote-daemon R2 Task 20: the wss client and the settings backend it
 // writes through. Both are used only on the m_station.isRemote() path.
 #include "core/session/StationClient.h"
+#include "models/RfKitModel.h"
 #include "RemoteConnectionController.h"
 #include "gui/RemoteMediaController.h"
 #include "gui/RemoteVaxRouter.h"
@@ -616,6 +623,19 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
 #ifdef HAVE_WEBSOCKETS
     {
         m_tciServer = new TciServer(m_radioModel, this);
+        // R-R3-48: the app's one TCI switch drives this server and, on a
+        // Core that runs a station server, the Core's too.
+        m_tciSwitch = new TciSwitch(m_tciServer, m_radioModel, this);
+        connect(m_tciSwitch, &TciSwitch::stationRequestFailed, this,
+                [this](const QString& reason) {
+            statusBar()->showMessage(OperatorReasonText::forDisplay(reason), 5000);
+        });
+        // R-R3-48: a local window's RF-Kit follows the band as an app of
+        // this server; the band-follow line says whether it does.
+        if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local) {
+            m_rfKitBandFollow = new RfKitBandFollow(m_radioModel->rfKitModel(), this);
+            m_rfKitBandFollow->setServer(m_tciServer);
+        }
         connect(m_tciServer, &TciServer::serverStarted,
                 this, [this](quint16) { m_tciServerRunning = true;  updateTciIndicator(); });
         connect(m_tciServer, &TciServer::serverStopped,
@@ -1017,7 +1037,11 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
             // shouldn't crash startup.
             bindAddr = QHostAddress(QHostAddress::LocalHost);
         }
-        if (enabled) {
+        // R-R3-48: through the one switch. At startup this window only
+        // applies it here; the Core keeps its own switch.
+        if (m_tciSwitch) {
+            m_tciSwitch->setSwitch(enabled, port, bindAddr, /*tellCore=*/false);
+        } else if (enabled) {
             m_tciServer->start(bindAddr, port);
         }
     }
@@ -6593,16 +6617,10 @@ void MainWindow::populateDefaultMeter()
         // Connection -> applet data flow.
         Rf2ksConnection* rfKitConn = m_radioModel->rfKitConnection();
         if (rfKitConn) {
-            // R-R3-47 / R-R3-22: power, OPERATE, the connection dot and
-            // the name and version come from RadioModel's RfKitModel, which
-            // Rf2ksApplet reads itself (the Core's `rfkit` object in a
-            // remote window). The tuner and antenna rows stay wired here.
-            connect(rfKitConn, &Rf2ksConnection::tunerUpdated,
-                    m_rfKitApplet, &Rf2ksApplet::setTuner);
-            connect(rfKitConn, &Rf2ksConnection::antennasUpdated,
-                    m_rfKitApplet, &Rf2ksApplet::setAntennas);
-            connect(rfKitConn, &Rf2ksConnection::activeAntennaUpdated,
-                    m_rfKitApplet, &Rf2ksApplet::setActiveAntenna);
+            // R-R3-47 / R-R3-22: power, OPERATE, the connection dot, the
+            // name and version, and (Task 3) the tuner and antenna rows come
+            // from RadioModel's RfKitModel, which Rf2ksApplet reads itself
+            // (the Core's `rfkit` object in a remote window).
 
             // Applet -> connection (antenna click, operate toggle).
             connect(m_rfKitApplet, &Rf2ksApplet::antennaRequested,
@@ -6623,6 +6641,24 @@ void MainWindow::populateDefaultMeter()
 
         connect(m_rfKitApplet, &Rf2ksApplet::connectionToggleRequested,
                 this, [this]() {
+            // R-R3-47: a remote window asks the Core, which owns the amp.
+            if (m_radioModel->role() == RadioModel::Role::Remote) {
+                IStationLink* link = m_radioModel->stationLink();
+                RfKitModel* rfKit = m_radioModel->rfKitModel();
+                if (!link || !rfKit || !link->remoteRfKitControlAvailable()) { return; }
+                using Phase = RfKitModel::ConnectionPhase;
+                const auto phase = rfKit->connectionPhase();
+                const bool active = phase == Phase::Connected || phase == Phase::Connecting
+                    || phase == Phase::Identifying || phase == Phase::Retrying;
+                const auto outcome = active
+                    ? link->requestDisconnectRfKit()
+                    : link->requestConfigureRfKit(rfKit->configuredHost(),
+                                                  static_cast<quint16>(rfKit->configuredPort()));
+                if (!outcome.sent) {
+                    statusBar()->showMessage(OperatorReasonText::forDisplay(outcome.reason), 5000);
+                }
+                return;
+            }
             Rf2ksConnection* conn = m_radioModel->rfKitConnection();
             if (!conn) { return; }
             if (conn->isConnected()) {
@@ -9936,9 +9972,10 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
                         if (!bindAddr.setAddress(bindStr)) {
                             bindAddr = QHostAddress(QHostAddress::LocalHost);
                         }
-                        m_tciServer->start(bindAddr, port);
+                        // R-R3-48: this window's server and the Core's.
+                        m_tciSwitch->setSwitch(true, port, bindAddr);
                     } else {
-                        m_tciServer->stop();
+                        m_tciSwitch->setSwitch(false, port, QHostAddress(QHostAddress::LocalHost));
                     }
                 });
         // Phase 3J-1 closeout Item 1 (2026-05-12): live-restart on bind /
@@ -9949,15 +9986,13 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
         // start.  Mirrors the enable-toggled pattern above.
         connect(dialog, &SetupDialog::tciServerBindOrPortChanged,
                 this, [this](const QString& bindStr, quint16 port) {
-                    if (!m_tciServer->isRunning()) {
-                        return;
-                    }
                     QHostAddress bindAddr;
                     if (!bindAddr.setAddress(bindStr)) {
                         bindAddr = QHostAddress(QHostAddress::LocalHost);
                     }
-                    m_tciServer->stop();
-                    m_tciServer->start(bindAddr, port);
+                    // R-R3-48: restarts this window's server if it runs,
+                    // and gives the Core the new port while the switch is on.
+                    m_tciSwitch->setPortOrBind(port, bindAddr);
                 });
         // Phase 3J-1 closeout Item 2 (2026-05-12): "Show Log..." button.
         // The window is owned by MainWindow (lazy-constructed) so it

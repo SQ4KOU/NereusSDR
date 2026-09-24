@@ -70,6 +70,9 @@
 //                                    remoteRfKitControlVersion, in the same
 //                                    minor-11 block. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24 - R-R3-48: stationTciVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -124,8 +127,15 @@ struct StationCapabilities {
     /// no Power Genius readings from this Core.
     int remotePgxlControlVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its RF-Kit RF2K-S status
-    /// as the read-only `rfkit` object. Sent last in the same block.
+    /// as the read-only `rfkit` object; 2 adds the interface, antenna and
+    /// tuner rows, band follow, and the configureRfKit, disconnectRfKit and
+    /// setRfKitEnabled commands. Sent in the same block.
     int remoteRfKitControlVersion = 0;
+    /// R-R3-48: 1 means the Core runs its own TCI server on the station
+    /// network, mirrored as the read-only `stationTci` object and switched
+    /// by the setStationTci command. Sent last in the same block. 0: a
+    /// window's TCI switch changes only its own server.
+    int stationTciVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

@@ -23,6 +23,9 @@
 //                   - relayChanged() signal added (plan addition over upstream)
 //                   - fwd/swr parsed in applyStatus as raw floats (upstream parses
 //                     them only via stateUpdated/statusUpdated direct-conn lambdas)
+//   2026-09-24 - R-R3-47 / R-R3-48: BandFollow, the band-follow
+//                state the `amplifier` and `rfkit` objects share. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 #include <QObject>
@@ -76,6 +79,19 @@ public:
         Retrying, Connected, Error,
     };
     Q_ENUM(ConnectionPhase)
+
+    /// R-R3-47: whether an amplifier follows the radio's band, shared by
+    /// the `amplifier` (Power Genius XL) and `rfkit` (RF2K-S) objects. Wire
+    /// values are fixed; new ones are only appended.
+    enum class BandFollow {
+        Off = 0,              ///< the amp is not connected, or nothing to follow
+        Waiting = 1,          ///< connected, not following yet (PGXL: not paired;
+                              ///< RF2K-S: not connected to the TCI server)
+        Following = 2,        ///< the amp follows the radio's band
+        ThisComputerOnly = 3, ///< RF2K-S: the TCI server accepts only apps on
+                              ///< its own computer, so the amp cannot reach it
+    };
+    Q_ENUM(BandFollow)
 
     struct StationConnectionState {
         QString configuredHost;

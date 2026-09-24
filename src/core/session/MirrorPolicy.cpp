@@ -30,6 +30,9 @@
 //   2026-09-24 - R-R3-45: SliceModel outputRoute is Outbound until the
 //                 headphones plan's remote window task makes it two-way.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-48: RfKitModel rows, bandFollow,
+//                StationTciModel, all Outbound; rfKitEnabled Outbound. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - Merge: lane B's headphones Task 2 makes outputRoute
 //                 two-way; the Outbound entry is removed. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -415,6 +418,8 @@ const MirrorPolicy::Entry kEntries[] = {
     { "AmplifierModel", "mainsVoltageV", MirrorDirection::Outbound },
     { "AmplifierModel", "drainCurrentA", MirrorDirection::Outbound },
     { "AmplifierModel", "efficiencyText", MirrorDirection::Outbound },
+    // R-R3-48 (remotePgxlControlVersion 2): band follow, read-only.
+    { "AmplifierModel", "bandFollow", MirrorDirection::Outbound },
 
     // R-R3-47 / R-R3-22 (remoteRfKitControlVersion 1): the Core's RF-Kit
     // RF2K-S status, read-only for the same reason.
@@ -434,6 +439,30 @@ const MirrorPolicy::Entry kEntries[] = {
     { "RfKitModel", "temperatureC", MirrorDirection::Outbound },
     { "RfKitModel", "voltageV", MirrorDirection::Outbound },
     { "RfKitModel", "currentA", MirrorDirection::Outbound },
+    // R-R3-47 / R-R3-48 (remoteRfKitControlVersion 2): the interface,
+    // antenna and tuner rows and band follow, read-only.
+    { "RfKitModel", "operationalInterface", MirrorDirection::Outbound },
+    { "RfKitModel", "antennaPresentMask", MirrorDirection::Outbound },
+    { "RfKitModel", "antennaDisabledMask", MirrorDirection::Outbound },
+    { "RfKitModel", "activeAntennaNumber", MirrorDirection::Outbound },
+    { "RfKitModel", "activeAntennaExternal", MirrorDirection::Outbound },
+    { "RfKitModel", "tunerMode", MirrorDirection::Outbound },
+    { "RfKitModel", "tunerSetup", MirrorDirection::Outbound },
+    { "RfKitModel", "tunerInductanceNh", MirrorDirection::Outbound },
+    { "RfKitModel", "tunerCapacitancePf", MirrorDirection::Outbound },
+    { "RfKitModel", "tunerFrequencyKhz", MirrorDirection::Outbound },
+    { "RfKitModel", "tunerSegmentKhz", MirrorDirection::Outbound },
+    { "RfKitModel", "bandFollow", MirrorDirection::Outbound },
+    { "RfKitModel", "bandFollowAddress", MirrorDirection::Outbound },
+    { "RfKitModel", "bandFollowPort", MirrorDirection::Outbound },
+
+    // R-R3-48 (stationTciVersion 1): the Core's station TCI server,
+    // read-only. Its switch changes only through setStationTci.
+    { "StationTciModel", "enabled", MirrorDirection::Outbound },
+    { "StationTciModel", "port", MirrorDirection::Outbound },
+    { "StationTciModel", "listening", MirrorDirection::Outbound },
+    { "StationTciModel", "stationAddress", MirrorDirection::Outbound },
+    { "StationTciModel", "error", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },
@@ -463,7 +492,9 @@ const MirrorPolicy::Entry kEntries[] = {
     { "RadioModel", "rxFilter1Effective", MirrorDirection::Outbound },
     { "RadioModel", "rxFilter1Band", MirrorDirection::Outbound },
     { "RadioModel", "rxFilter1Reason", MirrorDirection::Outbound },
-    { "RadioModel", "rfKitEnabled", MirrorDirection::Bidirectional },
+    // R-R3-47: the Core's RF-Kit switch. A window changes it with the
+    // setRfKitEnabled command; a raw write is refused.
+    { "RadioModel", "rfKitEnabled", MirrorDirection::Outbound },
     // The 4O3A listener and its bind error exist only at Core. A remote
     // client renders these observational values and must never write one
     // back into a listener, socket, or per-MAC settings scope.

@@ -16,6 +16,11 @@
 // transmit is refused. No MOX write, no TX audio lock, no TX_CHRONO, the
 // app hears trx:N,false, and the plain reason goes to the operator, never
 // onto the TCI wire.
+//
+// R3 Core-owned accessories, Task 3 (R-R3-48, R-R3-25), 2026-09-24, J.J.
+// Boyd (KG4VCF), AI-assisted via Anthropic Claude Code: the Core's station
+// TCI server refuses transmit the same way until remote transmit, with its
+// own plain reason, while the Core's receive path is unchanged.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -59,6 +64,7 @@ private slots:
     void tx_mutex_single_client_claim_and_release();
     void tx_mutex_second_client_frame_is_dropped();
     void remote_window_refuses_transmit_off_the_wire();
+    void station_server_refuses_transmit_until_remote_transmit();
 };
 
 // ── tx_mutex_single_client_claim_and_release() ───────────────────────────────
@@ -260,6 +266,72 @@ void TestTciTxMutex::remote_window_refuses_transmit_off_the_wire()
     QCOMPARE(notices.count(), 2);
     QVERIFY(!remote.mox());
 
+    client.close();
+    server.stop();
+}
+
+// R-R3-48 / R-R3-25: the Core's station TCI server (a Local model with the
+// station receive-only mode on) keys nothing for any app: no MOX, no TX
+// audio lock, no TX audio; trx:N,false back to the app; the reason plain
+// and off the wire. The init burst says receive-only.
+void TestTciTxMutex::station_server_refuses_transmit_until_remote_transmit()
+{
+    RadioModel core;
+    TciServer server(&core);
+    QVERIFY(!server.isRemoteWindow());
+    server.setStationReceiveOnly(true);
+    QVERIFY(server.stationReceiveOnly());
+    QSignalSpy notices(&server, &TciServer::operatorNotice);
+    QSignalSpy txOwner(&server, &TciServer::txAudioActiveClientChanged);
+    QVERIFY(server.start(0));
+
+    QWebSocket client;
+    QSignalSpy connected(&client, &QWebSocket::connected);
+    QSignalSpy text(&client, &QWebSocket::textMessageReceived);
+    client.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    const auto lines = [&text] {
+        QStringList out;
+        for (const auto& call : text) { out << call.at(0).toString(); }
+        return out;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(lines().contains(QStringLiteral("ready;")), 3000);
+    QVERIFY(lines().contains(QStringLiteral("receive_only:true;")));
+    QVERIFY(lines().contains(QStringLiteral("tx_enable:0,false;")));
+    const int linesBefore = int(text.count());
+
+    client.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(lines().mid(linesBefore).contains(QStringLiteral("trx:0,false;")),
+                             3000);
+    QTest::qWait(100);
+    QVERIFY(!core.mox());
+    QCOMPARE(server.activeTxClientCount(), 0);
+    QCOMPARE(txOwner.count(), 0);
+    client.sendBinaryMessage(makeTxFrame(128));
+    QTest::qWait(50);
+    QCOMPARE(server.peekTxRingSize(), 0);
+
+    QCOMPARE(notices.count(), 1);
+    const QString reason = notices.constFirst().at(1).toString();
+    QCOMPARE(reason, QString::fromLatin1(TciServer::kStationTransmitRefusedReason));
+    QCOMPARE(server.operatorNoticeReason(), reason);
+    for (const QString& line : lines()) {
+        QVERIFY2(!line.contains(reason), qPrintable(line));
+    }
+
+    // Off (a local window): transmit works as it always has.
+    server.stop();
+    server.setStationReceiveOnly(false);
+    QVERIFY(server.start(0));
+    QWebSocket local;
+    QSignalSpy localConnected(&local, &QWebSocket::connected);
+    local.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(localConnected.wait(2000));
+    local.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeTxClientCount(), 1, 3000);
+    local.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeTxClientCount(), 0, 3000);
+    local.close();
     client.close();
     server.stop();
 }

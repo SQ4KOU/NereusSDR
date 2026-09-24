@@ -427,6 +427,14 @@ public:
     // accessories (the `amplifier` object and the configurePgxl,
     // disconnectPgxl and setPgxlConnectionSettings verbs); 0 otherwise.
     int pgxlControlVersion() const;
+    // R-R3-47: remoteRfKitControlVersion. 2 on a Core that owns its
+    // accessories (the `rfkit` object with its interface, antenna, tuner
+    // and band-follow rows, and the configureRfKit, disconnectRfKit and
+    // setRfKitEnabled verbs); 0 otherwise.
+    int rfKitControlVersion() const;
+    // R-R3-48: stationTciVersion. 1 on a Core that runs its own station
+    // TCI server (the `stationTci` object and the setStationTci verb).
+    int stationTciVersion() const;
 
     // ---- Subsystem accessors, non-owning, for tests and diagnostics ----
     StateMirror* stateMirror() const { return m_mirror; }

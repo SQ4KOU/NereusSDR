@@ -10,6 +10,14 @@
 // a receive-only Core refuses the amp's operate and the tuner's operate,
 // bypass and antenna writes, changing nothing and sending nothing. J.J.
 // Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-47 / R-R3-48 / R-R3-22 / R-R3-25: a remote window
+// switches, connects and disconnects the Core's RF-Kit through the Core (the
+// RF-Kit page and the applet), sees its tuner, antenna and band-follow rows,
+// and a raw write of the RF-Kit switch is refused in plain words; the Power
+// Genius's band-follow line, local and remote; the one TCI switch turns the
+// Core's station TCI server on and off, which keeps running when the window
+// goes and another connects. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+// Claude Code.
 
 #include <QtTest>
 
@@ -25,6 +33,8 @@
 #include <QTabWidget>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QWebSocket>
+#include <QMenu>
 
 #include "OperatorWording.h"
 #include "core/PgxlConnection.h"
@@ -43,12 +53,17 @@
 #include "gui/applets/Rf2ksApplet.h"
 #include "gui/setup/CatNetworkSetupPages.h"
 #include "gui/setup/FourO3APage.h"
+#include "gui/setup/RfKitPage.h"
 #include "gui/setup/PgxlAdvancedPage.h"
 #include "gui/setup/TgxlAdvancedPage.h"
 #include "gui/SetupDialog.h"
 #include "models/AmplifierModel.h"
 #include "models/RadioModel.h"
 #include "models/RfKitModel.h"
+#include "models/StationTciModel.h"
+#include "core/StationTciController.h"
+#include "core/TciServer.h"
+#include "core/TciSwitch.h"
 #include "models/TunerModel.h"
 
 #include "fakes/LoopbackTransport.h"
@@ -175,6 +190,46 @@ RfKitPowerSnapshot rfKitPower(int forwardW, float swr, float tempC, float volts,
     return snap;
 }
 
+// R-R3-47: the RF-Kit's REST interface on the loopback (the /info body is
+// tst_rf2ks_connection_parse's).
+class FakeRfKit : public QTcpServer {
+public:
+    FakeRfKit()
+    {
+        listen(QHostAddress::LocalHost, 0);
+        connect(this, &QTcpServer::newConnection, this, [this] {
+            while (QTcpSocket* sock = nextPendingConnection()) {
+                connect(sock, &QTcpSocket::readyRead, this, [this, sock] {
+                    const QByteArray req = sock->readAll();
+                    const int sp = req.indexOf(' ') + 1;
+                    const QByteArray path = req.mid(sp, req.indexOf(' ', sp) - sp);
+                    ++requests;
+                    QByteArray body = "{}";
+                    if (path == "/info") {
+                        body = R"({"device":"RF2K-S","software_version":{"GUI":200,"controller":267},"custom_device_name":"KG4VCF"})";
+                    } else if (path == "/operate-mode") {
+                        body = R"({"operate_mode":"STANDBY"})";
+                    }
+                    sock->write("HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                                + QByteArray::number(body.size()) + "\r\n\r\n" + body);
+                    sock->flush();
+                    sock->disconnectFromHost();
+                });
+            }
+        });
+    }
+    int requests{0};
+};
+
+quint16 freeLoopbackPort()
+{
+    QTcpServer reservation;
+    if (!reservation.listen(QHostAddress::LocalHost, 0)) { return 0; }
+    const quint16 port = reservation.serverPort();
+    reservation.close();
+    return port;
+}
+
 TunerModel::StationConnectionState state(TunerModel::ConnectionPhase phase,
                                          const QString& host = {},
                                          quint16 port = 0,
@@ -205,6 +260,10 @@ private slots:
     void remotePgxlRowAndTabUseTheStationLink();
     void remoteWindowSetsUpThePgxlThroughTheCore();
     void receiveOnlyCoreRefusesTunerAndAmpOperation();
+    void remoteWindowSetsUpTheRfKitThroughTheCore();
+    void rawRfKitSwitchWriteIsRefused();
+    void pgxlBandFollowLineLocalAndRemote();
+    void oneTciSwitchDrivesTheCoresStationServer();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -927,6 +986,346 @@ void RemotePeripheralsTest::receiveOnlyCoreRefusesTunerAndAmpOperation()
     QCOMPARE(station.tunerModel()->isBypass(), bypassBefore);
     QCOMPARE(station.tunerModel()->antennaA(), antennaBefore);
     core->closeLink(QStringLiteral("test done"));
+}
+
+// R-R3-47 / R-R3-48: the RF-Kit page and applet in a remote window ask the
+// Core, which switches, identifies, connects and disconnects its amp; the
+// window sees the rows and the band-follow line, and dials nothing.
+void RemotePeripheralsTest::remoteWindowSetsUpTheRfKitThroughTheCore()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    AppSettings::instance().setValue(QStringLiteral("PeripheralsMigrationDone"),
+                                     QStringLiteral("True"));
+    AppSettings::instance().setValue(QStringLiteral("RfKit_PollIntervalMs"), QStringLiteral("5000"));
+    FakeRfKit amp;
+    RadioModel station;
+    station.enableStationAccessoryIdentity();
+    station.setReceiveOnlyStationPolicy(true);
+    RadioInfo radio;
+    radio.macAddress = QStringLiteral("aa:bb:cc:dd:ee:83");
+    station.setLastRadioInfoForTest(radio);
+    station.setConnectionStateForTest(ConnectionState::Connected);
+    AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
+    StationServer server(&station, stationSettings, dir.path());
+
+    RadioModel window(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&window, &proxy);
+    window.attachStation(&client);
+    RfKitPage page(&window);
+    Rf2ksApplet applet(&window);
+    QCheckBox* master = page.masterCheckboxForTesting();
+    QVERIFY(master);
+    QVERIFY(!master->isEnabled());   // no Core yet
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QVERIFY(completed.wait(5000) || !completed.isEmpty());
+    QTRY_VERIFY(client.remoteRfKitControlAvailable());
+    window.reportStationLinkStateChanged();
+    QTRY_VERIFY(master->isEnabled());
+    QVERIFY(!window.rfKitEnabled());
+    QVERIFY(!page.detailTabIsEnabledForTesting());
+
+    // Switch it on at the Core.
+    master->setChecked(true);
+    QTRY_VERIFY(station.rfKitEnabled());
+    QTRY_VERIFY(window.rfKitEnabled());
+    QVERIFY(master->isChecked());
+    QTRY_VERIFY(page.detailTabIsEnabledForTesting());
+
+    // Connect: the Core identifies the amp and admits it.
+    page.setHostForTesting(QStringLiteral("127.0.0.1"));
+    page.setPortForTesting(amp.serverPort());
+    page.testConnectionButtonForTesting()->click();
+    QTRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
+                              RfKitModel::ConnectionPhase::Connected, 5000);
+    QCOMPARE(window.rfKitModel()->deviceModel(), QStringLiteral("RF2K-S"));
+    QCOMPARE(window.rfKitModel()->configuredPort(), int(amp.serverPort()));
+    QCOMPARE(station.peripheralValue(QStringLiteral("RfKit_ManualIp")), QStringLiteral("127.0.0.1"));
+    QTRY_VERIFY(page.liveStatusTextForTesting().contains(QStringLiteral("Connected")));
+    QVERIFY(OperatorWording::isPlain(page.liveStatusTextForTesting()));
+    QTRY_VERIFY(applet.connectedStateForTesting());
+
+    // The rows the Core's amp reports reach the window's applet.
+    station.rfKitConnection()->injectJsonForTesting(QStringLiteral("/power"), kRfKitPower);
+    station.rfKitConnection()->injectJsonForTesting(QStringLiteral("/tuner"),
+        R"({"mode":"AUTO","setup":"LC","L":{"value":1200,"unit":"nH"},"C":{"value":345,"unit":"pF"},"tuned_frequency":{"value":3891,"unit":"kHz"},"segment_size":{"value":9,"unit":"kHz"}})");
+    station.rfKitConnection()->injectJsonForTesting(QStringLiteral("/antennas"),
+        R"({"antennas":[{"type":"INTERNAL","number":1,"state":"AVAILABLE"},{"type":"INTERNAL","number":2,"state":"ACTIVE"},{"type":"INTERNAL","number":3,"state":"AVAILABLE"},{"type":"INTERNAL","number":4,"state":"AVAILABLE"}]})");
+    station.rfKitConnection()->injectJsonForTesting(QStringLiteral("/antennas/active"),
+                                                   R"({"type":"INTERNAL","number":2})");
+    QTRY_COMPARE(applet.tunerStatusTextForTesting(), QStringLiteral("TUNED 3.891 MHz (LC)"));
+    QTRY_VERIFY(applet.antennaButtonIsActiveForTesting(2));
+    QVERIFY(!applet.antennaButtonIsActiveForTesting(1));
+    QVERIFY(!applet.antennaButtonIsEnabledForTesting(2));   // antennas wait for remote transmit
+
+    // Band follow: the Core runs no station TCI server here, so it is off.
+    QCOMPARE(applet.bandFollowTextForTesting(), window.rfKitModel()->bandFollowText());
+    QCOMPARE(page.bandFollowTextForTesting(), window.rfKitModel()->bandFollowText());
+    QVERIFY(page.bandFollowTextForTesting().startsWith(QStringLiteral("Band follow: off")));
+
+    // The applet's Disconnect asks the Core (MainWindow sends it).
+    std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
+    bool toggleEnabled = false;
+    for (QAction* a : menu->actions()) {
+        if (a->text() == QStringLiteral("Disconnect")) { toggleEnabled = a->isEnabled(); }
+    }
+    QVERIFY(toggleEnabled);
+
+    // Disconnect from the page.
+    page.disconnectButtonForTesting()->click();
+    QTRY_COMPARE(window.rfKitModel()->connectionPhase(),
+                 RfKitModel::ConnectionPhase::Disconnected);
+    QVERIFY(!station.rfKitConnection()->isConnected());
+
+    // Switch it off.
+    master->setChecked(false);
+    QTRY_VERIFY(!station.rfKitEnabled());
+    QTRY_VERIFY(!window.rfKitEnabled());
+    QTRY_COMPARE(window.rfKitModel()->connectionPhase(), RfKitModel::ConnectionPhase::Disabled);
+
+    // The window opened no connection of its own.
+    QVERIFY(!window.rfKitConnection()->isConnected());
+    QCOMPARE(window.rfKitConnection()->pollsSucceeded() + window.rfKitConnection()->pollsFailed(), 0);
+    QVERIFY(window.rfKitConnection()->peerAddress().isEmpty());
+    stationEnd->closeLink(QStringLiteral("test done"));
+    AppSettings::instance().clear();
+}
+
+// R-R3-47: an app that writes the RF-Kit switch as a raw value (every app
+// before this one) is refused in plain words; the Core's switch stays.
+void RemotePeripheralsTest::rawRfKitSwitchWriteIsRefused()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    AppSettings::instance().setValue(QStringLiteral("PeripheralsMigrationDone"),
+                                     QStringLiteral("True"));
+    RadioModel station;
+    station.enableStationAccessoryIdentity();
+    RadioInfo radio;
+    radio.macAddress = QStringLiteral("aa:bb:cc:dd:ee:84");
+    station.setLastRadioInfoForTest(radio);
+    station.setConnectionStateForTest(ConnectionState::Connected);
+    QVERIFY(!station.rfKitEnabled());
+    AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
+    StationServer server(&station, stationSettings, dir.path());
+
+    auto* core = new LoopbackTransport(QStringLiteral("core"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("raw-gui"), this);
+    core->linkTo(peer);
+    server.acceptTransport(core);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("switch-test"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    const auto messages = [peer] {
+        QList<SessionMessage> list;
+        for (const QByteArray& wire : peer->received()) {
+            SessionMessage message;
+            if (SessionMessages::decode(wire, &message)) { list.append(message); }
+        }
+        return list;
+    };
+    QTRY_VERIFY([&] {
+        for (const SessionMessage& m : messages()) {
+            if (m.kind == SessionMessageKind::SnapshotComplete) { return true; }
+        }
+        return false;
+    }());
+    peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+        "radio", {MirrorUpdate{0, "rfKitEnabled", MirrorWireKind::Bool, QVariant(true)}}, 21)));
+    SessionPropertyResult result;
+    QTRY_VERIFY([&] {
+        for (const SessionMessage& m : messages()) {
+            if (m.kind == SessionMessageKind::PropertyResult && !m.propertyResults.isEmpty()) {
+                result = m.propertyResults.first();
+                return true;
+            }
+        }
+        return false;
+    }());
+    QVERIFY(!result.accepted);
+    QCOMPARE(result.reason,
+             QStringLiteral("Update this app to turn the RF-Kit amplifier on or off on this Core."));
+    QVERIFY(OperatorWording::isPlain(result.reason));
+    QVERIFY(!station.rfKitEnabled());
+
+    // The command is what changes it.
+    peer->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+        "setRfKitEnabled", 31, {MirrorUpdate{0, "enabled", MirrorWireKind::Bool, QVariant(true)}})));
+    QTRY_VERIFY(station.rfKitEnabled());
+    core->closeLink(QStringLiteral("test done"));
+    AppSettings::instance().clear();
+}
+
+// R-R3-48: the Power Genius's band-follow line on the applet and the 4O3A
+// page follows its pairing, in a local window and from the Core.
+void RemotePeripheralsTest::pgxlBandFollowLineLocalAndRemote()
+{
+    // The amp's own reports drive the state: connected, paired, dropped.
+    // (A bare connection and model, so no pairing request is sent.)
+    {
+        PgxlConnection conn;
+        AmplifierModel amp;
+        amp.bindConnection(&conn);
+        QCOMPARE(amp.bandFollow(), TunerModel::BandFollow::Off);
+        emit conn.connected();
+        QCOMPARE(amp.bandFollow(), TunerModel::BandFollow::Waiting);
+        emit conn.pairingResult(false, QStringLiteral("R12|1|"));
+        QCOMPARE(amp.bandFollow(), TunerModel::BandFollow::Waiting);
+        emit conn.pairingResult(true, QString());
+        QCOMPARE(amp.bandFollow(), TunerModel::BandFollow::Following);
+        emit conn.disconnected();
+        QCOMPARE(amp.bandFollow(), TunerModel::BandFollow::Off);
+    }
+
+    // A local window's applet and 4O3A page show the line.
+    RadioModel local;
+    AmpApplet localApplet(&local);
+    FourO3APage localPage(&local);
+    auto* localLine = localPage.findChild<QLabel*>(QStringLiteral("pgxlBandFollowLabel"));
+    QVERIFY(localLine);
+    QCOMPARE(localApplet.bandFollowTextForTesting(),
+             QStringLiteral("Band follow: off while the Power Genius is not connected."));
+    local.amplifierModel()->setBandFollow(TunerModel::BandFollow::Waiting);
+    QCOMPARE(localApplet.bandFollowTextForTesting(),
+             QStringLiteral("Band follow: waiting for the Power Genius to pair with the radio."));
+    local.amplifierModel()->setBandFollow(TunerModel::BandFollow::Following);
+    QCOMPARE(localApplet.bandFollowTextForTesting(),
+             QStringLiteral("Band follow: following the radio"));
+    QCOMPARE(localLine->text(), QStringLiteral("Band follow: following the radio"));
+    for (const QString& text : {localApplet.bandFollowTextForTesting(), localLine->text()}) {
+        QVERIFY(OperatorWording::isPlain(text));
+    }
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    RadioModel station;
+    station.enableStationAccessoryIdentity();
+    AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
+    StationServer server(&station, stationSettings, dir.path());
+    RadioModel window(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&window, &proxy);
+    window.attachStation(&client);
+    AmpApplet remoteApplet(&window);
+    FourO3APage remotePage(&window);
+    auto* remoteLine = remotePage.findChild<QLabel*>(QStringLiteral("pgxlBandFollowLabel"));
+    QVERIFY(remoteLine);
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QVERIFY(completed.wait(5000) || !completed.isEmpty());
+    station.amplifierModel()->setBandFollow(TunerModel::BandFollow::Following);
+    QTRY_COMPARE(window.amplifierModel()->bandFollow(), TunerModel::BandFollow::Following);
+    QCOMPARE(remoteApplet.bandFollowTextForTesting(),
+             QStringLiteral("Band follow: following the radio"));
+    QCOMPARE(remoteLine->text(), QStringLiteral("Band follow: following the radio"));
+    station.amplifierModel()->setBandFollow(TunerModel::BandFollow::Waiting);
+    QTRY_COMPARE(remoteApplet.bandFollowTextForTesting(),
+                 QStringLiteral("Band follow: waiting for the Power Genius to pair with the radio."));
+    stationEnd->closeLink(QStringLiteral("test done"));
+}
+
+// R-R3-48: the app's one TCI switch turns the Core's station server on and
+// off. The Core keeps it when the window goes and when another connects.
+// On the same computer as the Core, the window runs no server of its own
+// and apps here reach the Core's.
+void RemotePeripheralsTest::oneTciSwitchDrivesTheCoresStationServer()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const quint16 port = freeLoopbackPort();
+    RadioModel station;
+    station.enableStationTci(QStringLiteral("127.0.0.1"));
+    AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
+    StationServer server(&station, stationSettings, dir.path());
+    QCOMPARE(server.stationTciVersion(), 1);
+
+    auto window = std::make_unique<RadioModel>(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    auto client = std::make_unique<StationClient>(window.get(), &proxy);
+    window->attachStation(client.get());
+    client->setCoreOnThisComputerForTest(true);
+    auto local = std::make_unique<TciServer>(window.get());
+    auto tci = std::make_unique<TciSwitch>(local.get(), window.get());
+    CatTciServerPage page;
+    page.setRadioModel(window.get());
+    QVERIFY(page.stationLineForTesting().isEmpty());
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(client.get(), &StationClient::handshakeComplete);
+    client->startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QVERIFY(completed.wait(5000) || !completed.isEmpty());
+    QTRY_VERIFY(client->stationTciAvailable());
+    window->reportStationLinkStateChanged();
+
+    // On: the Core listens on this port; this window runs none of its own.
+    tci->setSwitch(true, port, QHostAddress(QHostAddress::LocalHost));
+    QTRY_VERIFY(station.stationTciModel()->listening());
+    QCOMPARE(station.stationTciModel()->port(), int(port));
+    QVERIFY(!local->isRunning());
+    QTRY_VERIFY(window->stationTciModel()->listening());
+    QCOMPARE(page.stationLineForTesting(),
+             QStringLiteral("The Core on this computer serves TCI apps here, port %1.").arg(port));
+    QVERIFY(OperatorWording::isPlain(page.stationLineForTesting()));
+    {
+        QWebSocket app;
+        QStringList frames;
+        connect(&app, &QWebSocket::textMessageReceived, &app,
+                [&frames](const QString& text) { frames.append(text); });
+        app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(port)));
+        QTRY_VERIFY(frames.join(QString()).contains(QStringLiteral("receive_only:true;")));
+        app.close();
+    }
+
+    // The window goes: the Core keeps its switch.
+    stationEnd->closeLink(QStringLiteral("window closed"));
+    tci.reset();
+    local.reset();
+    client.reset();
+    window.reset();
+    QTest::qWait(50);
+    QVERIFY(station.stationTciModel()->enabled());
+    QVERIFY(station.stationTciModel()->listening());
+
+    // Another app connects: the Core's switch is unchanged, and that app
+    // sees it; its own switch turns both off.
+    RadioModel second(RadioModel::Role::Remote);
+    SettingsProxy secondProxy;
+    StationClient secondClient(&second, &secondProxy);
+    second.attachStation(&secondClient);
+    TciServer secondLocal(&second);
+    TciSwitch secondSwitch(&secondLocal, &second);
+    auto* stationEnd2 = new LoopbackTransport(QStringLiteral("station-end-2"), this);
+    auto* clientEnd2 = new LoopbackTransport(QStringLiteral("client-end-2"), this);
+    stationEnd2->linkTo(clientEnd2);
+    QSignalSpy completed2(&secondClient, &StationClient::handshakeComplete);
+    secondClient.startSession(clientEnd2, server.token());
+    server.acceptTransport(stationEnd2);
+    QVERIFY(completed2.wait(5000) || !completed2.isEmpty());
+    QTRY_VERIFY(second.stationTciModel()->listening());
+    QVERIFY(station.stationTciModel()->listening());
+    QTRY_VERIFY(secondClient.stationTciAvailable());
+
+    secondSwitch.setSwitch(false, port, QHostAddress(QHostAddress::LocalHost));
+    QTRY_VERIFY(!station.stationTciModel()->enabled());
+    QVERIFY(!station.stationTciModel()->listening());
+    QVERIFY(!secondLocal.isRunning());
+    QTRY_VERIFY(!second.stationTciModel()->listening());
+    stationEnd2->closeLink(QStringLiteral("test done"));
+    AppSettings::instance().clear();
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

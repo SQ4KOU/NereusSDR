@@ -140,6 +140,8 @@
 //                                    settingsScopeRules(). AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24 - R-R3-48: StationTci_ is Station scope. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -276,8 +278,10 @@ const Rule kPrefixes[] = {
     // enabled, ExpertSDR3/SunSDR2Pro/CWLU compatibility flags, IQ/audio
     // stream shape, sensor poll intervals, rate limiting, the TCI gain
     // sliders. R-R3-42: all of it configures the TCI WebSocket server,
-    // which runs in the window on this computer (only MainWindow builds a
-    // TciServer; the Core runs none) and serves apps on this computer. A
+    // which runs in the window on this computer and serves apps on this
+    // computer. (R-R3-48: the Core also runs one on the station network;
+    // its switch and port are the Core's own StationTci_ keys below, and
+    // it reads no Tci key but the compatibility defaults.) A
     // remote window's TCI settings are therefore its own, like a local
     // window's; Tci values a Core stored while this rule said Station are
     // ignored, not migrated. The rule is explicit rather than left to the
@@ -345,6 +349,9 @@ const Rule kPrefixes[] = {
     { "PGXL_", SettingsScope::Station },
     { "TGXL_", SettingsScope::Station },
     { "RfKit_", SettingsScope::Station },
+    // R-R3-48: the Core's station TCI switch and port, written by the Core
+    // itself when a window's TCI switch sends setStationTci.
+    { "StationTci_", SettingsScope::Station },
 
     // Spot-source client connection + display config (DX cluster/RBN
     // telnet, WSJT-X UDP, SpotCollector/DXLab UDP, POTA HTTPS, FreeDV

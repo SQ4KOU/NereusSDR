@@ -930,6 +930,12 @@ private slots:
     // R-R3-42: the exemption above is honest only while the TCI server is
     // built by the window alone. A Core (nereusd, DaemonApp) that built one
     // would read settings this computer keeps to itself.
+    //
+    // R-R3-48: the one exception is the Core's station TCI server
+    // (StationTciController). It reads the Tci keys of the Core's own
+    // settings file, which no window writes (they are OperatorLocal), so it
+    // runs on their defaults; its switch and port are its own StationTci_
+    // keys. Any other builder still fails here.
     void tciServerIsBuiltOnlyByTheWindow()
     {
         const QString root = QStringLiteral(NEREUS_SOURCE_DIR);
@@ -949,7 +955,9 @@ private slots:
             }
         }
         QVERIFY2(scanned > 300, qPrintable(QStringLiteral("only %1 files scanned").arg(scanned)));
-        QCOMPARE(builders, QStringList{QStringLiteral("src/gui/MainWindow.cpp")});
+        builders.sort();
+        QCOMPARE(builders, (QStringList{QStringLiteral("src/core/StationTciController.cpp"),
+                                        QStringLiteral("src/gui/MainWindow.cpp")}));
     }
 
     // ---- Step 4: the completeness sweep --------------------------------

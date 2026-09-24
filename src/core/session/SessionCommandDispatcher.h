@@ -208,6 +208,13 @@ private:
     void handleConfigurePgxl(const NereusSDR::SessionMessage& invoke);
     void handleDisconnectPgxl(const NereusSDR::SessionMessage& invoke);
     void handleSetPgxlConnectionSettings(const NereusSDR::SessionMessage& invoke);
+    // R-R3-47 / R-R3-22 (remoteRfKitControlVersion 2): the Core's RF-Kit
+    // RF2K-S, and its switch.
+    void handleConfigureRfKit(const NereusSDR::SessionMessage& invoke);
+    void handleDisconnectRfKit(const NereusSDR::SessionMessage& invoke);
+    void handleSetRfKitEnabled(const NereusSDR::SessionMessage& invoke);
+    // R-R3-48 (stationTciVersion 1): the station's TCI switch and port.
+    void handleSetStationTci(const NereusSDR::SessionMessage& invoke);
     void handleRequestIoBoardProbe(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 fix wave (radioHardwareVersion 3): one band's RX or RX-only
     // antenna, applied through the Core's AlexAntennaFacade.

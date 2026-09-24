@@ -309,6 +309,10 @@ struct SessionMessage {
     ///   disconnectPgxl         -- {}
     ///   setPgxlConnectionSettings -- {"autoReconnect": Bool,
     ///                               "keepaliveSec": Int64, "pingSec": Int64}
+    ///   configureRfKit         -- {"host": Utf8, "port": Int64}
+    ///   disconnectRfKit        -- {}
+    ///   setRfKitEnabled        -- {"enabled": Bool}
+    ///   setStationTci          -- {"enabled": Bool, "port": Int64}
     ///   requestStreamCentre     -- {"sliceId": Int64, "centreHz": Double}
     QList<MirrorUpdate> arguments;
 

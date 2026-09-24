@@ -31,6 +31,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  The Core's controller owns the
 //                                    connection state (identity, phases).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-48: band follow (the
+//                                    amp is paired with the radio). AI-
+//                                    assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/PgxlStatusGauges.h"
@@ -69,6 +72,10 @@ class AmplifierModel : public QObject {
     Q_PROPERTY(double mainsVoltageV READ mainsVoltageV NOTIFY statusChanged)
     Q_PROPERTY(double drainCurrentA READ drainCurrentA NOTIFY statusChanged)
     Q_PROPERTY(QString efficiencyText READ efficiencyText NOTIFY statusChanged)
+    // R-R3-48: whether the amp follows the radio's band: it does once it
+    // is paired with the radio (Off while not connected, Waiting until the
+    // pairing is answered).
+    Q_PROPERTY(NereusSDR::TunerModel::BandFollow bandFollow READ bandFollow NOTIFY bandFollowChanged)
 
 public:
     /// The amp's state. Wire values are fixed; new ones are only appended.
@@ -86,6 +93,7 @@ public:
 
     using ConnectionPhase = TunerModel::ConnectionPhase;
     using StationConnectionState = TunerModel::StationConnectionState;
+    using BandFollow = TunerModel::BandFollow;
 
     /// Why a window cannot change this object: the Core refuses every write.
     static QString readOnlyReason();
@@ -116,6 +124,11 @@ public:
     double mainsVoltageV() const { return m_gauges.mainsVoltageV; }
     double drainCurrentA() const { return m_gauges.drainCurrentA; }
     QString efficiencyText() const { return m_gauges.efficiencyText; }
+    BandFollow bandFollow() const { return m_bandFollow; }
+    /// R-R3-48: the band-follow line the amp page and applet show.
+    QString bandFollowText() const;
+    /// R-R3-48: band follow as the bound connection reports it (or a test).
+    void setBandFollow(BandFollow state);
 
     /// The State for an amp's state word.
     static State stateFromWord(const QString& deviceState);
@@ -148,6 +161,7 @@ public:
 signals:
     void stationConnectionChanged();
     void statusChanged();
+    void bandFollowChanged();
 
 private:
     void publishConnection(const StationConnectionState& next);
@@ -161,6 +175,7 @@ private:
     State m_state{State::Unknown};
     bool m_operate{false};
     PgxlGauges m_gauges;
+    BandFollow m_bandFollow{BandFollow::Off};
 };
 
 } // namespace NereusSDR

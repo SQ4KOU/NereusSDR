@@ -59,6 +59,22 @@ void AmplifierModel::bindConnection(PgxlConnection* connection)
     }
     connect(connection, &PgxlConnection::statusUpdated,
             this, &AmplifierModel::applyStatusFrame);
+    // R-R3-48: band follow runs once the amp is paired with the radio
+    // (PgxlConnection::setBand sends nothing before the pairing answer).
+    // On the Core `connected` means admitted; pairing follows it.
+    connect(connection, &PgxlConnection::connected, this, [this] {
+        setBandFollow(BandFollow::Waiting);
+    });
+    connect(connection, &PgxlConnection::pairingResult, this,
+            [this](bool succeeded, const QString&) {
+        setBandFollow(succeeded ? BandFollow::Following : BandFollow::Waiting);
+    });
+    connect(connection, &PgxlConnection::disconnected, this, [this] {
+        setBandFollow(BandFollow::Off);
+    });
+    connect(connection, &PgxlConnection::connectionFailed, this, [this](const QString&) {
+        setBandFollow(BandFollow::Off);
+    });
     connect(connection, &PgxlConnection::connected, this, [this] {
         refreshFromConnection(ConnectionPhase::Connected, {});
     });
@@ -157,9 +173,38 @@ void AmplifierModel::applyStatusFrame(const QMap<QString, QString>& kvs)
     }
 }
 
+QString AmplifierModel::bandFollowText() const
+{
+    switch (m_bandFollow) {
+    case BandFollow::Following:
+        return QStringLiteral("Band follow: following the radio");
+    case BandFollow::Waiting:
+        return QStringLiteral("Band follow: waiting for the Power Genius to pair with the radio.");
+    case BandFollow::Off:
+    case BandFollow::ThisComputerOnly:
+        break;
+    }
+    return QStringLiteral("Band follow: off while the Power Genius is not connected.");
+}
+
+void AmplifierModel::setBandFollow(BandFollow state)
+{
+    if (state != m_bandFollow) {
+        m_bandFollow = state;
+        emit bandFollowChanged();
+    }
+}
+
 bool AmplifierModel::applyStationValue(const QByteArray& propertyName, const QVariant& value)
 {
     StationConnectionState connection = m_connection;
+    if (propertyName == "bandFollow") {
+        // R-R3-48: a plain state apply.
+        const int raw = value.toInt();
+        setBandFollow(raw >= 0 && raw <= static_cast<int>(BandFollow::ThisComputerOnly)
+                          ? static_cast<BandFollow>(raw) : BandFollow::Off);
+        return true;
+    }
     if (propertyName == "connectionPhase") {
         connection.phase = static_cast<ConnectionPhase>(value.toInt());
     } else if (propertyName == "configuredHost") {

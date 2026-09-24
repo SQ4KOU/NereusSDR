@@ -1383,6 +1383,11 @@ private:
     // Phase 23: TCI server + applets.
     // m_tciServer is nullptr in non-WebSocket builds (HAVE_WEBSOCKETS not defined).
     TciServer*         m_tciServer{nullptr};
+    // R-R3-48: the one TCI switch (this window's server and, on a Core with
+    // a station server, the Core's) and the RF-Kit's band follow over this
+    // window's server in a local window.
+    class TciSwitch*       m_tciSwitch{nullptr};
+    class RfKitBandFollow* m_rfKitBandFollow{nullptr};
     TciApplet*         m_tciApplet{nullptr};
     ClientChainApplet* m_clientChainApplet{nullptr};
 

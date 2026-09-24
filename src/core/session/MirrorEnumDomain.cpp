@@ -22,6 +22,9 @@
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-45: SliceModel::OutputRoute.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-48: TunerModel::BandFollow and
+//                RfKitModel::TunerMode. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  Merge: lane B already declared
 //                                    SliceModel::OutputRoute; the
 //                                    duplicate declaration is removed.
@@ -33,6 +36,7 @@
 
 #include "core/WdspTypes.h"
 #include "models/AmplifierModel.h"
+#include "models/RfKitModel.h"
 #include "models/Band.h"
 #include "models/SliceModel.h"
 #include "models/TunerModel.h"
@@ -136,6 +140,23 @@ const DomainTable& table()
             AmplifierModel::State::TransmitA,
             AmplifierModel::State::TransmitB,
             AmplifierModel::State::Fault,
+        });
+
+        // R-R3-48: band follow on the `amplifier` and `rfkit` objects.
+        declare<TunerModel::BandFollow>(&t, {
+            TunerModel::BandFollow::Off,
+            TunerModel::BandFollow::Waiting,
+            TunerModel::BandFollow::Following,
+            TunerModel::BandFollow::ThisComputerOnly,
+        });
+
+        // R-R3-47: the RF-Kit tuner's mode on the `rfkit` object.
+        declare<RfKitModel::TunerMode>(&t, {
+            RfKitModel::TunerMode::Unknown,
+            RfKitModel::TunerMode::Bypass,
+            RfKitModel::TunerMode::Manual,
+            RfKitModel::TunerMode::AutoTuning,
+            RfKitModel::TunerMode::Auto,
         });
 
         // From src/models/Band.h. Count is deliberately ABSENT: it is an

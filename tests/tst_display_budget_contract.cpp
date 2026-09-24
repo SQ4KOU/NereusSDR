@@ -724,7 +724,9 @@ private slots:
                                    // R-R3-47: then the accessory status
                                    // objects' versions, same block.
                                    "remotePgxlControlVersion",
-                                   "remoteRfKitControlVersion"});
+                                   "remoteRfKitControlVersion",
+                                   // R-R3-48: the station TCI server.
+                                   "stationTciVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -757,7 +759,8 @@ private slots:
                                            QByteArrayLiteral("radioAddress"),
                                            QByteArrayLiteral("radioHardwareVersion"),
                                            QByteArrayLiteral("remotePgxlControlVersion"),
-                                           QByteArrayLiteral("remoteRfKitControlVersion")}) {
+                                           QByteArrayLiteral("remoteRfKitControlVersion"),
+                                           QByteArrayLiteral("stationTciVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

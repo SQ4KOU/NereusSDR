@@ -22,6 +22,9 @@
 //                                    remotePgxlControlVersion and
 //                                    remoteRfKitControlVersion after it.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-48: stationTciVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -114,6 +117,8 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         // R-R3-47 / R-R3-22: the Core's amplifier and RF-Kit status objects.
         updates.append(intEntry("remotePgxlControlVersion", remotePgxlControlVersion));
         updates.append(intEntry("remoteRfKitControlVersion", remoteRfKitControlVersion));
+        // R-R3-48: the Core's station TCI server, last.
+        updates.append(intEntry("stationTciVersion", stationTciVersion));
     }
     return updates;
 }
@@ -292,16 +297,20 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 caps.radioHardwareVersion = raw >= 0 && raw <= 65535 ? static_cast<int>(raw) : 0;
             }
         } else if (u.name == "remotePgxlControlVersion"
-                   || u.name == "remoteRfKitControlVersion") {
-            // R-R3-47 / R-R3-22: sent in the same block as the four above.
+                   || u.name == "remoteRfKitControlVersion"
+                   || u.name == "stationTciVersion") {
+            // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
+            // four above.
             caps.radioIdentityEntries = true;
             if (u.kind == MirrorWireKind::Int64 && u.value.typeId() == QMetaType::LongLong) {
                 const qlonglong raw = u.value.toLongLong();
                 const int version = raw >= 0 && raw <= 65535 ? static_cast<int>(raw) : 0;
                 if (u.name == "remotePgxlControlVersion") {
                     caps.remotePgxlControlVersion = version;
-                } else {
+                } else if (u.name == "remoteRfKitControlVersion") {
                     caps.remoteRfKitControlVersion = version;
+                } else {
+                    caps.stationTciVersion = version;
                 }
             }
         } else if (u.name == "settingsSchemaVersion") {

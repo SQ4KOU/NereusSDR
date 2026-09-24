@@ -31,6 +31,9 @@
 //               host (VAX belongs to the remote window's computer), by
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-24: R-R3-48: the Core runs its own station TCI server
+//               (station_tci_bind), by J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -155,6 +158,10 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     // normal local role.
     m_radioModel->setReceiveOnlyStationPolicy(true);
     m_radioModel->enableStationAccessoryIdentity();
+    // R-R3-48: the Core's own TCI server on the station network, switched
+    // by the app's one TCI switch (setStationTci) and kept in the Core's
+    // settings. Receive-only until remote transmit (StationTciController).
+    m_radioModel->enableStationTci(cfg.stationTciBind);
     m_stepAttController = std::make_unique<StepAttenuatorController>();
     // R-R3-46 / R-R3-11: a change from a remote window is on disk shortly
     // after the Core applies it, not only when the Core stops.

@@ -106,6 +106,13 @@ struct DaemonConfig {
     int     remotePort {0};
     QString remoteBind {QStringLiteral("127.0.0.1")};
 
+    // R-R3-48: where the Core's station TCI server listens on the station
+    // network (the RF-Kit RF2K-S follows the radio through it). Empty: this
+    // computer's address on the radio's subnet, found once the radio
+    // connects. Either way the server also listens on this computer. The
+    // station's TCI switch (StationTci_Enabled, off by default) turns it on.
+    QString stationTciBind;
+
     // R-R3-23: the Opus encoder target for station audio, bit/s. Only the
     // two supported profiles are accepted (OpusAudioEncoder refuses any
     // other): 24000, the measured default, codes wideband sound up to 8 kHz;

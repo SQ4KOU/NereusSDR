@@ -11,6 +11,7 @@
 #include "core/LogCategories.h"
 
 #include <QFile>
+#include <QHostAddress>
 #include <QRegularExpression>
 #include <QTextStream>
 
@@ -148,6 +149,8 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
             cfg.coreName = value;
         } else if (key == QLatin1String("remote_bind")) {
             cfg.remoteBind = value;
+        } else if (key == QLatin1String("station_tci_bind")) {
+            cfg.stationTciBind = value;
         } else if (key == QLatin1String("display_application_bytes_per_second")
                    || key == QLatin1String("spectrum_sample_units_per_second")) {
             bool ok = false;
@@ -192,6 +195,13 @@ bool DaemonConfig::validate(QString* errorOut) const
             *errorOut = QStringLiteral("display_application_bytes_per_second and "
                 "spectrum_sample_units_per_second must both be positive integers "
                 "no greater than 9007199254740991");
+        }
+        return false;
+    }
+    if (!stationTciBind.isEmpty() && QHostAddress(stationTciBind).isNull()) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("station_tci_bind must be empty or an IP address, got %1")
+                            .arg(stationTciBind);
         }
         return false;
     }
