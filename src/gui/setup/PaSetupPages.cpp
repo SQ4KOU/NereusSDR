@@ -337,9 +337,8 @@ void buildPhase8WarningRows(
     contentLayout->insertWidget(contentLayout->count() - 1, noPaSupportBanner);
 
     ganymedeWarning = new QLabel(QStringLiteral(
-        "ANAN Ganymede 500W PA support is a follow-up to this PR. The "
-        "standard PA Gain table below applies to the radio's internal PA. "
-        "Ganymede-specific PA calibration will arrive in a separate Setup tab."), parent);
+        "NereusSDR has no settings for the ANAN Ganymede 500 W amplifier yet. "
+        "The PA Gain table below applies to the radio's internal PA."), parent);
     ganymedeWarning->setStyleSheet(bannerInfoStyle());
     ganymedeWarning->setWordWrap(true);
     ganymedeWarning->setVisible(false);
@@ -802,9 +801,8 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     contentLayout()->insertWidget(contentLayout()->count() - 1, m_noPaSupportBanner);
 
     m_ganymedeWarning = new QLabel(QStringLiteral(
-        "ANAN Ganymede 500W PA support is a follow-up to this PR. The "
-        "standard PA Gain table below applies to the radio's internal PA. "
-        "Ganymede-specific PA calibration will arrive in a separate Setup tab."), this);
+        "NereusSDR has no settings for the ANAN Ganymede 500 W amplifier yet. "
+        "The PA Gain table below applies to the radio's internal PA."), this);
     m_ganymedeWarning->setStyleSheet(bannerInfoStyle());
     m_ganymedeWarning->setWordWrap(true);
     m_ganymedeWarning->setVisible(false);

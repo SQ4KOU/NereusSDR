@@ -236,7 +236,7 @@ void AudioAdvancedPage::buildFeatureFlagsSection()
                     QStringLiteral("False")).toString() == QStringLiteral("True");
         m_sendIqToVaxCheck->setChecked(on);
         auto* note = new QLabel(
-            QStringLiteral("(reserved for Phase 3M — no routing yet)"), box);
+            QStringLiteral("(not built yet)"), box);
         // R-R3-44: a remote window never acts on it. The Core's raw I/Q is
         // not sent to this computer, so there is nothing to put on VAX.
         if (model() && !model()->ownsLocalDsp()) {
@@ -272,7 +272,7 @@ void AudioAdvancedPage::buildFeatureFlagsSection()
                     QStringLiteral("False")).toString() == QStringLiteral("True");
         m_txMonitorToVaxCheck->setChecked(on);
         auto* note = new QLabel(
-            QStringLiteral("(reserved for Phase 3M — no routing yet)"), box);
+            QStringLiteral("(not built yet)"), box);
         note->setStyleSheet(QLatin1String(kNoteStyle));
         row->addWidget(m_txMonitorToVaxCheck);
         row->addWidget(note);

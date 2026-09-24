@@ -593,10 +593,9 @@ void PhoneCwApplet::buildCwPage(QWidget* page)
     layout->setAlignment(Qt::AlignCenter);
 
     auto* label = new QLabel(QStringLiteral(
-        "CW TX coming in Phase 3M-2.\n\n"
-        "Speed, pitch, sidetone, break-in, iambic, firmware keyer\n"
-        "controls will appear here when CW TX is wired up.\n\n"
-        "For now, see Setup \xe2\x86\x92 DSP \xe2\x86\x92 CW for available CW config."
+        "Sending CW from NereusSDR is not built yet.\n\n"
+        "Speed, pitch, sidetone, break-in and keyer controls\n"
+        "belong on this page once it is."
     ), page);
     label->setAlignment(Qt::AlignCenter);
     label->setWordWrap(true);

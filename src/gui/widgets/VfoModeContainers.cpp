@@ -225,11 +225,11 @@ void FmOptContainer::buildUi()
         m_revBtn     = new QPushButton(QStringLiteral("Rev"), this);
 
         m_txLowBtn->setObjectName("txLowBtn");
-        m_txLowBtn->setToolTip(QStringLiteral("TX below RX (repeater Low offset) — Phase 3M-1"));
+        m_txLowBtn->setToolTip(QStringLiteral("Transmit below the receive frequency by the offset (repeater minus)"));
         m_simplexBtn->setObjectName("simplexBtn");
         m_simplexBtn->setToolTip(QStringLiteral("Simplex — TX on same frequency as RX"));
         m_txHighBtn->setObjectName("txHighBtn");
-        m_txHighBtn->setToolTip(QStringLiteral("TX above RX (repeater High offset) — Phase 3M-1"));
+        m_txHighBtn->setToolTip(QStringLiteral("Transmit above the receive frequency by the offset (repeater plus)"));
         m_revBtn->setObjectName("revBtn");
         m_revBtn->setToolTip(QStringLiteral("Reverse — listen on the repeater output frequency"));
 

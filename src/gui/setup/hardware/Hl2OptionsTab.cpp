@@ -305,12 +305,9 @@ void Hl2OptionsTab::buildI2cControl(QWidget* parent)
     // Bus radio — bus 0 deferred per design §4 (no NereusSDR I2cTxn path
     // for bus 0 today), so render as disabled with explanatory tooltip.
     grid->addWidget(new QLabel(tr("Bus:"), parent), row, 0);
-    auto* bus0 = new QCheckBox(tr("0 (deferred)"), parent);
+    auto* bus0 = new QCheckBox(tr("0"), parent);
     bus0->setEnabled(false);
-    bus0->setToolTip(tr(
-        "Bus 0 surface deferred to a Phase 3L follow-up — NereusSDR's "
-        "I2cTxn pipeline currently emits bus 1 only.  See "
-        "docs/architecture/phase3l-hl2-visibility-design.md §4."));
+    bus0->setToolTip(tr("I2C bus 0 on the HL2. NereusSDR reads and writes bus 1 only."));
     grid->addWidget(bus0, row, 1);
     // R-R3-49: the second bus is hidden until it is built; bus 1 stays.
     bus0->setObjectName(QStringLiteral("hl2I2cBus0"));

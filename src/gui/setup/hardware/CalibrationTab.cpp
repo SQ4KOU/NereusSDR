@@ -220,8 +220,7 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     //   calibration routine on a background thread [@501e3f5]
     m_freqCalStartBtn = new QPushButton(tr("Start"), freqCalGroup);
     m_freqCalStartBtn->setToolTip(
-        tr("Start frequency calibration. Requires radio powered on.\n"
-           "Calibration logic deferred — emits calFreqStartRequested."));
+        tr("Start frequency calibration. The radio must be on."));
     freqCalForm->addRow(QString(), m_freqCalStartBtn);
 
     // Source: setup.cs:6471 helptext above freq cal controls

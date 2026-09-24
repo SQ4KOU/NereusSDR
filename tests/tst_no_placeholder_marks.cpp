@@ -30,6 +30,9 @@
 #include <QFile>
 #include <QGroupBox>
 #include <QLabel>
+#include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QTextEdit>
 #include <QMenu>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -64,11 +67,16 @@ StationStartupSelection remoteCore()
 }
 
 // The words of a not-yet-implemented mark: the NYI badge, the old overlay's
-// and markNyi's tooltips, and the "Phase X" roadmap placeholder.
+// and markNyi's tooltips, and the "Phase X" roadmap placeholder. Fix wave
+// I2: also roadmap wording, which promises later work instead of saying
+// what a control does: a numbered phase ("Phase 3M-1"), "deferred",
+// "follow-up", "will appear here" and "will add".
 const QRegularExpression& placeholderWording()
 {
     static const QRegularExpression pattern(
-        QStringLiteral("\\bNYI\\b|not yet implemented|\\bPhase X\\b|Available in Phase"),
+        QStringLiteral("\\bNYI\\b|not yet implemented|\\bPhase X\\b|Available in Phase"
+                       "|\\bPhase [0-9]|\\bdeferred\\b|\\bfollow-up\\b|\\bfollow up\\b"
+                       "|will appear here|\\bwill add\\b"),
         QRegularExpression::CaseInsensitiveOption);
     return pattern;
 }
@@ -91,6 +99,13 @@ QStringList textsOf(const QWidget* w)
 {
     QStringList texts{w->toolTip(), w->statusTip(), w->whatsThis(),
                       w->accessibleName(), w->accessibleDescription()};
+    if (const auto* edit = qobject_cast<const QLineEdit*>(w)) {
+        texts << edit->placeholderText();
+    } else if (const auto* plain = qobject_cast<const QPlainTextEdit*>(w)) {
+        texts << plain->placeholderText();
+    } else if (const auto* rich = qobject_cast<const QTextEdit*>(w)) {
+        texts << rich->placeholderText();
+    }
     if (const auto* label = qobject_cast<const QLabel*>(w)) {
         texts << label->text();
     } else if (const auto* button = qobject_cast<const QAbstractButton*>(w)) {
@@ -248,6 +263,35 @@ private slots:
             item->setToolTip(QStringLiteral("NYI - Phase X"));
             QVERIFY2(!marksInApp().isEmpty(), "a menu item's placeholder tooltip was not found");
         }
+        // Fix wave I2: roadmap wording in a label, a tooltip or a field's
+        // placeholder text is found too.
+        const QStringList roadmap{
+            QStringLiteral("TX above RX (repeater High offset), Phase 3M-1"),
+            QStringLiteral("A later phase will add a per-band override."),
+            QStringLiteral("Deferred to a later release"),
+            QStringLiteral("Follow-up work"),
+            QStringLiteral("Profiles will appear here"),
+        };
+        for (const QString& text : roadmap) {
+            {
+                QWidget host;
+                new QLabel(text, &host);
+                QVERIFY2(!marksInApp().isEmpty(), qPrintable(QStringLiteral("label: ") + text));
+            }
+            {
+                QWidget host;
+                auto* button = new QPushButton(QStringLiteral("Try"), &host);
+                button->setToolTip(text);
+                QVERIFY2(!marksInApp().isEmpty(), qPrintable(QStringLiteral("tooltip: ") + text));
+            }
+            {
+                QWidget host;
+                auto* edit = new QLineEdit(&host);
+                edit->setPlaceholderText(text);
+                QVERIFY2(!marksInApp().isEmpty(),
+                         qPrintable(QStringLiteral("placeholder text: ") + text));
+            }
+        }
         QVERIFY(marksInApp().isEmpty());
     }
 
@@ -257,6 +301,8 @@ private slots:
         GuiSessionCoordinator sessions;
         for (bool remote : {false, true}) {
             const QStringList marks = marksInWindow(sessions, remote);
+            // One line per mark: a test failure message is cut short.
+            for (const QString& mark : marks) { qWarning().noquote() << "mark:" << mark; }
             QVERIFY2(marks.isEmpty(),
                      qPrintable((remote ? QStringLiteral("remote: ") : QStringLiteral("local: "))
                                 + marks.join(QStringLiteral("; "))));
@@ -275,6 +321,8 @@ private slots:
         GuiSessionCoordinator sessions;
         for (bool remote : {false, true}) {
             const QStringList marks = marksInWindow(sessions, remote);
+            // One line per mark: a test failure message is cut short.
+            for (const QString& mark : marks) { qWarning().noquote() << "mark:" << mark; }
             QVERIFY2(marks.isEmpty(),
                      qPrintable((remote ? QStringLiteral("remote, all built: ")
                                         : QStringLiteral("local, all built: "))

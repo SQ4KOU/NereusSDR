@@ -986,19 +986,9 @@ void AudioVaxPage::buildPage()
         }
     }
 
-    // TX row — informational.
-    auto* txGroup = new QGroupBox(QStringLiteral("TX Monitor"), this);
-    txGroup->setStyleSheet(QLatin1String(kGroupStyle));
-    auto* txLayout = new QVBoxLayout(txGroup);
-    auto* txLabel = new QLabel(
-        QStringLiteral("TX → VAX routing is configured in the Transmit section. "
-                       "Phase 3M (SendIqToVax / TxMonitorToVax) will add "
-                       "per-band override here."),
-        txGroup);
-    txLabel->setStyleSheet(QStringLiteral("QLabel { color: #607080; font-size: 11px; }"));
-    txLabel->setWordWrap(true);
-    txLayout->addWidget(txLabel);
-    insertBeforeStretch(txGroup);
+    // R-R3-49 fix wave I2: the informational "TX Monitor" group is gone. Its
+    // only text promised a later per-band override and pointed at Send IQ to
+    // VAX and TX Monitor to VAX, which are hidden until built (iq-to-vax).
 }
 
 void AudioVaxPage::wirePillFeedback()
