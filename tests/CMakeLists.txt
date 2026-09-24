@@ -7266,6 +7266,15 @@ nereus_add_test(tst_daemon_telemetry fakes/LoopbackTransport.cpp)
 # R-R3-32/33: Core host sampler against fixture procfs/sysfs trees.
 nereus_add_test(tst_host_telemetry_sampler EXTRA_LABELS core)
 nereus_add_test(tst_remote_audio_receiver)
+# R-R3-23, R-R3-07, R-R3-21: playsOnEverySpeakerFormat plays through the
+# real receiver worker against a speaker that plays on the wall clock, and
+# asserts the speaker never ran short once playing. The worker keeps two
+# 10 ms blocks queued, so that is a real-time guarantee: a loaded -j4 Linux
+# run starved the 192 kHz row for one 1 ms callback (1461 dry frames against
+# 1269) while it passed every run alone. About 35 s. RUN_SERIAL (as for
+# tst_receiver_dsp_load_frames, R-R3-40): ctest never runs it beside another
+# test that would take the worker's processor away.
+set_tests_properties(tst_remote_audio_receiver PROPERTIES RUN_SERIAL TRUE)
 nereus_add_test(tst_remote_audio_session fakes/LoopbackTransport.cpp)
 # R-R3-44 (R3 receiver audio plan, Task 5): VAX in a remote window. The
 # feed contract (two 10-minute runs of the harness clock at +/-200 ppm
