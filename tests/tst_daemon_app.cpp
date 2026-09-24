@@ -94,6 +94,10 @@ NereusSDR::DaemonConfig testCoreConfig()
 {
     NereusSDR::DaemonConfig config = NereusSDR::DaemonConfig::defaults();
     config.remotePort = 0;
+    // iPhone app Task 17: nor its status page (on by default beside the
+    // listener, TCP 47911), which listenerConfig() below would otherwise
+    // open on a shared port.
+    config.statusPage = false;
     return config;
 }
 } // namespace

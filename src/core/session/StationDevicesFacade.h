@@ -61,6 +61,9 @@
 //               pairingCode, openPairing() and closePairing(). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: iPhone app Task 17 (R-IOS-08): resetUnclaimed(), the
+//               console's `reset --unclaimed --yes`. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -140,6 +143,14 @@ public:
     DeviceAdminResult openPairing();
     /// pairing.close: close a reopened window (a no-op while it is closed).
     DeviceAdminResult closePairing();
+    /// iPhone app Task 17: the console's `reset --unclaimed --yes`, which no
+    /// device can ask for. Moves a damaged token file and a damaged device
+    /// list aside, retires the token, removes every paired device, so the
+    /// Core is unclaimed and its pairing window open again with a new
+    /// code. Every connection ends: each removed device's through
+    /// DeviceStore::deviceRemoved, and every one signed in with the token
+    /// through tokenRetired().
+    DeviceAdminResult resetUnclaimed();
 
     /// The paired devices (by id) that hold an authenticated connection.
     void setConnectedDevices(const QSet<QByteArray>& ids);

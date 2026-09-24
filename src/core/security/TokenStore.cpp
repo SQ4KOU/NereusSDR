@@ -10,6 +10,8 @@
 //               Claude Code.
 //   2026-09-24: iPhone app Task 12: load only, never generate; retire().
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 17: moveDamagedAside(). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/TokenStore.h"
@@ -18,6 +20,7 @@
 
 #include <QByteArray>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QLoggingCategory>
@@ -130,6 +133,30 @@ bool TokenStore::retire()
     }
     m_token.fill(QLatin1Char('\0'));
     m_token.clear();
+    m_consecutiveFailures = 0;
+    return true;
+}
+
+bool TokenStore::moveDamagedAside()
+{
+    if (m_valid) {
+        return true;
+    }
+    if (!QDir(m_directory).exists()) {
+        return false;
+    }
+    if (QFile::exists(m_tokenPath)) {
+        const QString aside = m_tokenPath + QStringLiteral(".damaged-")
+                              + QDateTime::currentDateTimeUtc().toString(
+                                  QStringLiteral("yyyyMMdd'T'HHmmsszzz'Z'"));
+        if (!QFile::rename(m_tokenPath, aside)) {
+            qCWarning(lcTokenStore) << "Could not move the damaged token file aside";
+            return false;
+        }
+    }
+    m_token.clear();
+    m_lastError.clear();
+    m_valid = true;
     m_consecutiveFailures = 0;
     return true;
 }

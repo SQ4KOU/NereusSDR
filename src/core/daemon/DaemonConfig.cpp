@@ -7,6 +7,9 @@
 // 2026-09-24: iPhone app Task 12 (R-IOS-08): the listener defaults and
 // pairing_lan_click, J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 // Code.
+// 2026-09-24: iPhone app Task 17 (R-IOS-08): status_page, status_port and
+// state_directory, J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+// Code.
 // =================================================================
 
 #include "DaemonConfig.h"
@@ -14,6 +17,7 @@
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
 
+#include <QDir>
 #include <QFile>
 #include <QHostAddress>
 #include <QRegularExpression>
@@ -174,6 +178,28 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
                                   << "pairing_lan_click must be allow or deny, keeping allow:"
                                   << value;
             }
+        } else if (key == QLatin1String("status_page")) {
+            if (value.compare(QLatin1String("on"), Qt::CaseInsensitive) == 0) {
+                cfg.statusPage = true;
+            } else if (value.compare(QLatin1String("off"), Qt::CaseInsensitive) == 0) {
+                cfg.statusPage = false;
+            } else {
+                cfg.statusPage = true;
+                qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
+                                  << "status_page must be on or off, keeping on:" << value;
+            }
+        } else if (key == QLatin1String("status_port")) {
+            bool ok = false;
+            const int v = value.toInt(&ok);
+            if (ok) {
+                cfg.statusPort = v;
+            } else {
+                qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
+                                  << "status_port is not a number, keeping"
+                                  << cfg.statusPort << ":" << value;
+            }
+        } else if (key == QLatin1String("state_directory")) {
+            cfg.stateDirectory = value;
         } else if (key == QLatin1String("station_bind")) {
             cfg.stationBind = value;
         } else if (key == QLatin1String("station_tci_bind")) {
@@ -286,6 +312,19 @@ bool DaemonConfig::validate(QString* errorOut) const
             *errorOut = QStringLiteral(
                             "remote_port must be 0 (disabled) or 1-65535, got %1")
                             .arg(remotePort);
+        }
+        return false;
+    }
+    if (statusPort < 1 || statusPort > 65535) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("status_port must be 1-65535, got %1").arg(statusPort);
+        }
+        return false;
+    }
+    if (!stateDirectory.isEmpty() && !QDir::isAbsolutePath(stateDirectory)) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("state_directory must be empty or an absolute path, got %1")
+                            .arg(stateDirectory);
         }
         return false;
     }

@@ -1089,6 +1089,11 @@ set(CORE_SOURCES
     # on the same NereusCore target either way (see the add_library
     # call further down).
     src/core/daemon/DaemonApp.cpp
+    # iPhone app Task 17 (R-IOS-08): the Core's read-only status page, its
+    # owner-only console socket and the console commands it answers.
+    src/core/daemon/StationStatusPage.cpp
+    src/core/daemon/StationControlSocket.cpp
+    src/core/daemon/StationControlCommands.cpp
     # R-R3-34: bounded per-radio receive-layout persistence. Runtime
     # restoration is wired separately at the RadioModel/daemon boundary.
     src/core/ReceiveLayoutStore.cpp

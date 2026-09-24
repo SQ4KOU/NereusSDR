@@ -37,6 +37,8 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: reset() for the console's reset (iPhone app Task 17).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -95,6 +97,16 @@ public:
     /// Removes a device; false when it is not paired or the file could not
     /// be written. Emits deviceRemoved(id) and devicesChanged().
     bool remove(const QByteArray& id);
+    /// iPhone app Task 17 (R-IOS-08): the console's `reset --unclaimed`.
+    /// A damaged file is moved aside first (renamed to
+    /// `paired-devices.json.damaged-<UTC time>`, never deleted, so nothing
+    /// is lost to a reset), then an empty list is written and the store is
+    /// valid again. Emits deviceRemoved(id) for each device it held, then
+    /// devicesChanged(). False, with lastError() set and nothing changed,
+    /// when the damaged file cannot be moved or the empty list cannot be
+    /// written. `movedTo`, when given, receives where a damaged file went
+    /// ("" when there was none).
+    bool reset(QString* movedTo = nullptr);
     std::optional<PairedDevice> find(const QByteArray& id) const;
     QList<PairedDevice> list() const { return m_devices; }
     /// An authenticated connection: lastSeen becomes now and lastAddress

@@ -7296,6 +7296,22 @@ add_dependencies(tst_station_pairing nereus_pairing_peer)
 target_compile_definitions(tst_station_pairing PRIVATE
     NEREUS_PAIRING_PEER="$<TARGET_FILE:nereus_pairing_peer>")
 
+# iPhone app Task 17 (R-IOS-08): the Core's read-only status page on
+# loopback (the code only while unclaimed, nothing for a peer elsewhere, 404
+# for anything but GET /), and the owner-only console socket with every
+# console command against a Core started in the test, including the real
+# entry point (server_main.cpp, as tst_daemon_signals runs it) and the real
+# nereusd binary finding the socket through --config.
+nereus_add_test(tst_station_status_page EXTRA_LABELS session)
+nereus_add_test(tst_station_control_socket
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+if(TARGET nereusd)
+    add_dependencies(tst_station_control_socket nereusd)
+endif()
+target_compile_definitions(tst_station_control_socket PRIVATE
+    NEREUSD_BINARY="$<TARGET_FILE:nereusd>")
+
 # Remote Daemon R2, Task 18: the wss session. Everything tasks 7 through 17
 # built converges here -- StateMirror, ObjectRegistry,
 # SessionCommandDispatcher and SettingsProxyServer on a socket, behind Task

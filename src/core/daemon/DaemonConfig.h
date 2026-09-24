@@ -46,6 +46,9 @@
 //               default (TCP 47910, every interface, IPv4 and IPv6) unless
 //               the file sets remote_port or remote_bind; pairing_lan_click.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 17 (R-IOS-08): status_page, status_port
+//               and state_directory. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -126,6 +129,29 @@ struct DaemonConfig {
     // StationServer::setPairingLanClickAllowed() from
     // DaemonApp::startStationServer(); the pairing window (Task 14) reads it.
     bool    pairingLanClickAllowed {true};
+
+    // iPhone app Task 17 (R-IOS-08; pairing design section 4.3): the Core's
+    // small read-only status page. nereusd.conf `status_page = on|off`
+    // (default on; anything else logs one warning and keeps on) and
+    // `status_port` (default 47911). It runs beside the remote listener,
+    // bound where the listener binds (DaemonApp::listenerAddressFor), and
+    // answers only peers on this computer's directly connected networks
+    // (StationServer::isOnDirectNetwork). Feeds StationStatusPage from
+    // DaemonApp::startStationServer().
+    static constexpr int kDefaultStatusPort = 47911;
+    bool    statusPage {true};
+    int     statusPort {kDefaultStatusPort};
+
+    // iPhone app Task 17: where the console's control socket
+    // (`nereusd-control`) lives. Empty (the default) is the profile's own
+    // directory (AppSettings::resolveConfigDir). A packaged Core sets its
+    // systemd StateDirectory here (/var/lib/nereusd in the shipped sample),
+    // so `sudo nereusd status` finds the socket through --config alone,
+    // never through the caller's $HOME. Only the socket moves; the identity
+    // key and the device list stay in the profile's directory. Must be an
+    // absolute path when set. Read by StationControlSocket::socketPathFor()
+    // on both sides.
+    QString stateDirectory;
 
     // R-R3-22 / R-R3-47 / R-R3-48: the station network, where every station
     // listener accepts connections: the SmartSDR API listener on TCP 4992,

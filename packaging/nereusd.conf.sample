@@ -73,6 +73,23 @@ audio_device =
 # is ignored with a warning.
 pairing_lan_click = allow
 
+# The Core's status page: a small read-only web page on this port showing
+# the Core's name, its radio, whether a device has paired with it, and,
+# only until the first device pairs, the pairing code. It answers only
+# browsers on this computer's own networks and binds where the remote
+# listener binds; it runs only while the remote listener is on. on (the
+# default) or off; any other value is ignored with a warning.
+status_page = on
+status_port = 47911
+
+# Where the console commands (nereusd status, nereusd pairing show, ...)
+# reach the running Core. Empty uses the profile's own directory. The
+# packaged service keeps its state in /var/lib/nereusd; with this line, run
+# the commands with sudo and the same --config, for example
+# `sudo nereusd status`. The Core's key and paired devices stay where they
+# are; only the command socket lives here.
+state_directory = /var/lib/nereusd
+
 # The station network: where this Core accepts connections from the
 # devices at the station. It covers the amplifier and tuner connection
 # (TCP 4992), the Power Genius and Tuner Genius announcements (UDP 9008 and

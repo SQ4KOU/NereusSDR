@@ -50,6 +50,9 @@
 //   2026-09-24: iPhone app Task 14 (R-IOS-08): the pairing code is printed
 //               on the Core's console. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 17 (R-IOS-08): the status page, the first
+//               start's label and page address, and the console socket.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -68,6 +71,8 @@
 #include "core/StepAttenuatorController.h"
 #include "core/TxSliceArbiter.h"
 #include "core/WdspEngine.h"
+#include "core/daemon/StationControlCommands.h"
+#include "core/daemon/StationControlSocket.h"
 #include "core/session/StationServer.h"
 #include "core/session/StationLanAnnouncer.h"
 #include "core/session/DnsSdAdvertiser.h"
@@ -310,6 +315,11 @@ bool DaemonApp::start(const DaemonConfig& cfg)
 
 void DaemonApp::stop()
 {
+    // iPhone app Task 17: nothing answers the console or a browser once
+    // the Core is going away.
+    m_controlSocket.reset();
+    m_controlCommands.reset();
+    m_statusPage.reset();
     m_radioRecoveryEnabled = false;
     cancelRadioDiscovery();
     cancelStationServerListenRetry();
@@ -501,6 +511,33 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     // iPhone app Task 12: nereusd.conf's pairing_lan_click, read by the
     // pairing window (Task 14) for the one-click pairing on this network.
     m_stationServer->setPairingLanClickAllowed(cfg.pairingLanClickAllowed);
+    // iPhone app Task 17 (R-IOS-08): the status page, bound where the
+    // listener binds (the same helper), answering only this computer's own
+    // networks whatever the bind. Its failure to listen is logged, never
+    // fatal: the Core still runs and the console still shows the code.
+    if (cfg.statusPage) {
+        StationStatusPage::Sources sources;
+        sources.server = [this]() { return m_stationServer.get(); };
+        sources.radio = [this]() { return radioStatus(); };
+        sources.label = [this]() { return coreLabel(); };
+        m_statusPage = std::make_unique<StationStatusPage>(std::move(sources));
+        if (m_statusPage->listen(bind, static_cast<quint16>(cfg.statusPort))) {
+            qCInfo(lcApp) << "DaemonApp: status page on port" << m_statusPage->serverPort();
+        } else {
+            qCWarning(lcApp) << "DaemonApp: the status page could not listen on port"
+                              << cfg.statusPort << ":" << m_statusPage->lastError();
+            m_statusPage.reset();
+        }
+    }
+    // The first start's notice, beside the identity key banner the server
+    // printed (which names station-identity.pem's full path and asks for a
+    // backup): the Core's label and where its status page is. The code
+    // follows from setPairingConsole() below. Standard output, never the
+    // log.
+    if (m_stationServer->stationIdentity().wasCreatedThisRun()) {
+        StationServer::printToConsole(
+            StationStatusPage::formatFirstStartNotice(coreLabel(), statusPageAddress()));
+    }
     // iPhone app Task 14 (R-IOS-08): the pairing code is printed on the
     // Core's console (standard output) whenever it changes, never logged.
     m_stationServer->setPairingConsole(&StationServer::printToConsole);
@@ -599,6 +636,67 @@ QString announcementName(const QString& input, const QString& fallback)
     }
     return result.trimmed().isEmpty() ? fallback : result.trimmed();
 }
+}
+
+QString DaemonApp::coreLabel() const
+{
+    if (m_stationServer) {
+        if (const StationDevicesFacade* devices = m_stationServer->devicesFacade()) {
+            if (!devices->stationLabel().isEmpty()) {
+                return devices->stationLabel();
+            }
+        }
+    }
+    return announcementName(m_radioConfig.coreName.isEmpty() ? QHostInfo::localHostName()
+                                                             : m_radioConfig.coreName,
+                            QStringLiteral("Nereus Core"));
+}
+
+StationRadioStatus DaemonApp::radioStatus() const
+{
+    StationRadioStatus status;
+    if (m_radioModel && m_radioModel->isConnected()) {
+        status.connected = true;
+        status.model = m_radioModel->model();
+        status.name = m_radioModel->name();
+    }
+    return status;
+}
+
+QString DaemonApp::statusPageAddress() const
+{
+    if (!m_statusPage || !m_statusPage->isListening()) {
+        return {};
+    }
+    return StationStatusPage::addressForOperator(m_statusPage->serverAddress(),
+                                                 m_statusPage->serverPort());
+}
+
+StationControlReply DaemonApp::runControlCommand(const QStringList& args)
+{
+    if (!m_controlCommands) {
+        StationControlCommands::Sources sources;
+        sources.server = [this]() { return m_stationServer.get(); };
+        sources.radio = [this]() { return radioStatus(); };
+        sources.label = [this]() { return coreLabel(); };
+        sources.statusPageAddress = [this]() { return statusPageAddress(); };
+        m_controlCommands = std::make_unique<StationControlCommands>(std::move(sources));
+    }
+    return m_controlCommands->execute(args);
+}
+
+bool DaemonApp::startControlSocket(const QString& path)
+{
+    m_controlSocket = std::make_unique<StationControlSocket>(
+        [this](const QStringList& args) { return runControlCommand(args); });
+    if (!m_controlSocket->listen(path)) {
+        qCWarning(lcApp) << "DaemonApp: the console commands cannot reach this Core:"
+                          << m_controlSocket->lastError();
+        m_controlSocket.reset();
+        return false;
+    }
+    qCInfo(lcApp) << "DaemonApp: console commands answered at" << path;
+    return true;
 }
 
 static_assert(DisplayLoadGovernor::kLoadIntervalMs == ReceiverDspLoadSampler::kSampleIntervalMs,

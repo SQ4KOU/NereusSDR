@@ -83,6 +83,9 @@
 //   2026-09-24: iPhone app Task 12 (R-IOS-08): no token is generated any
 //               more; isActive() and retire(). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 17: moveDamagedAside() for the console's
+//               reset. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QElapsedTimer>
@@ -148,6 +151,14 @@ public:
     // token stays active) when the file could not be deleted. Retiring a
     // Core with no token is a success that changes nothing.
     bool retire();
+
+    // iPhone app Task 17 (R-IOS-08): the console's `reset --unclaimed`. A
+    // token file that exists but could not be read keeps the Core claimed
+    // (DeviceStore::isClaimed()); this renames it to
+    // `station-token.damaged-<UTC time>` (never deleted) and leaves the
+    // store valid with no token. True when the store is valid afterwards;
+    // nothing to do on a valid store.
+    bool moveDamagedAside();
 
     // Absolute path this instance loads from / writes to. Always
     // populated, derived from the constructor's directory argument,

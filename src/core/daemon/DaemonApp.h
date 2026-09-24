@@ -97,11 +97,17 @@
 //               and does not run for apps older than the budget reason
 //               (R-R3-08, R-R3-37, R-R3-40). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 17 (R-IOS-08): the status page beside the
+//               remote listener, the first start's notice, and the console
+//               socket (startControlSocket()). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadioDiscovery.h"       // RadioInfo, RadioDiscovery, HPSDRHW
 #include "core/daemon/DaemonConfig.h"
 #include "core/daemon/DisplayLoadInputs.h"
+#include "core/daemon/StationControlSocket.h"
+#include "core/daemon/StationStatusPage.h"
 #include "core/session/DnsSdAdvertiser.h"
 #include "core/platform/ThreadPlacement.h"
 #include "core/session/media/DisplayLoadGovernor.h"
@@ -133,6 +139,7 @@ class DisplayLoadGovernor;
 class SharedHostSampler;
 class SliceModel;
 class StepAttenuatorController;
+class StationControlCommands;
 
 // Connects a headless nereusd process to a radio and keeps its slice list
 // in sync with the resolved DaemonConfig. See the file header above for
@@ -196,6 +203,27 @@ public:
     // transient bind failure is waiting for its next bounded retry.
     bool stationListenerReady() const;
     bool stationListenerRetryPending() const;
+
+    /// iPhone app Task 17 (R-IOS-08): listens for the console commands at
+    /// `path` (StationControlSocket::socketPathFor(), from nereusd.conf's
+    /// state_directory or the profile). server_main.cpp calls it once the
+    /// Core has started; a test calls it with a scratch path. False (and
+    /// logged) when it cannot listen, which does not stop the Core. The
+    /// socket closes on stop().
+    bool startControlSocket(const QString& path);
+    /// What the console commands answer, without the socket (the same
+    /// object startControlSocket() serves).
+    StationControlReply runControlCommand(const QStringList& args);
+
+    /// The Core's label as the status page and console show it: its
+    /// renamed label, or core_name, or this computer's name.
+    QString coreLabel() const;
+    /// The Core's radio as the status page and console show it.
+    StationRadioStatus radioStatus() const;
+    /// The status page's address for the operator; "" while it is off.
+    QString statusPageAddress() const;
+    /// The status page, while it runs; null otherwise.
+    StationStatusPage* statusPage() const { return m_statusPage.get(); }
 
 #ifdef NEREUS_BUILD_TESTS
     // Test-only observer, only compiled when NEREUS_BUILD_TESTS is
@@ -460,6 +488,10 @@ private:
     // live peer sockets that must be told the station is going away while
     // there is still a station to speak for.
     std::unique_ptr<StationServer> m_stationServer;
+    /// iPhone app Task 17: before the server in stop(); reads it per request.
+    std::unique_ptr<StationStatusPage> m_statusPage;
+    std::unique_ptr<StationControlCommands> m_controlCommands;
+    std::unique_ptr<StationControlSocket> m_controlSocket;
     QList<quint16> m_linkMajors;
     std::unique_ptr<StationLanAnnouncer> m_stationAnnouncer;
     // iPhone app Task 16 (D36): Bonjour beside the announcement.

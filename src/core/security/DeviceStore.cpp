@@ -270,6 +270,41 @@ bool DeviceStore::remove(const QByteArray& id)
     return true;
 }
 
+bool DeviceStore::reset(QString* movedTo)
+{
+    if (movedTo) {
+        movedTo->clear();
+    }
+    if (!m_valid && QFile::exists(m_path)) {
+        // Kept, not deleted: the operator may want to see what was in it.
+        const QString aside = m_path + QStringLiteral(".damaged-")
+                              + now().toString(QStringLiteral("yyyyMMdd'T'HHmmsszzz'Z'"));
+        if (!QFile::rename(m_path, aside)) {
+            m_lastError = QStringLiteral("%1 could not be moved aside").arg(m_path);
+            qCWarning(lcConnection) << "Could not move the damaged paired-device list aside:"
+                                    << m_path;
+            return false;
+        }
+        if (movedTo) {
+            *movedTo = aside;
+        }
+        qCInfo(lcConnection) << "The damaged paired-device list was moved aside to" << aside;
+    }
+    if (!save({})) {
+        m_lastError = QStringLiteral("%1 could not be written").arg(m_path);
+        return false;
+    }
+    const QList<PairedDevice> removed = m_valid ? m_devices : QList<PairedDevice>{};
+    m_devices.clear();
+    m_valid = true;
+    m_lastError.clear();
+    for (const PairedDevice& device : removed) {
+        emit deviceRemoved(device.id);
+    }
+    emit devicesChanged();
+    return true;
+}
+
 std::optional<PairedDevice> DeviceStore::find(const QByteArray& id) const
 {
     if (!m_valid) {

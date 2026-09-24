@@ -209,6 +209,12 @@ private slots:
             // iPhone app Task 12: reaches StationServer::
             // setPairingLanClickAllowed() from DaemonApp::startStationServer().
             QStringLiteral("pairing_lan_click"),
+            // iPhone app Task 17: reach StationStatusPage from DaemonApp::
+            // startStationServer(), and the control socket's place (the
+            // daemon's and every console command's).
+            QStringLiteral("status_page"),
+            QStringLiteral("status_port"),
+            QStringLiteral("state_directory"),
         };
 
         // Each documented key parses without an "unknown key" complaint.
@@ -231,7 +237,10 @@ private slots:
                 "display_adaptive = off\n"
                 "audio_lossless = deny\n"
                 "station_bind = 192.168.1.20\n"
-                "pairing_lan_click = deny\n");
+                "pairing_lan_click = deny\n"
+                "status_page = off\n"
+                "status_port = 8080\n"
+                "state_directory = /var/lib/nereusd\n");
         f.flush();
         QString err;
         const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
@@ -249,6 +258,9 @@ private slots:
         QCOMPARE(c.audioLosslessAllowed, false);
         QCOMPARE(c.stationBind, QStringLiteral("192.168.1.20"));
         QCOMPARE(c.pairingLanClickAllowed, false);
+        QCOMPARE(c.statusPage, false);
+        QCOMPARE(c.statusPort, 8080);
+        QCOMPARE(c.stateDirectory, QStringLiteral("/var/lib/nereusd"));
         const std::optional<DisplayBudgetLimits> limits = c.displayBudgetLimits();
         QVERIFY(limits.has_value());
         QCOMPARE(limits->applicationBytesPerSecond, quint64(2400000));
@@ -671,6 +683,93 @@ private slots:
         const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
         QVERIFY2(err.isEmpty(), qPrintable(err));
         QCOMPARE(c.pairingLanClickAllowed, allowed);
+    }
+
+    // iPhone app Task 17 (R-IOS-08): the status page is on by default, on
+    // TCP 47911; status_page takes on or off, anything else warns once and
+    // keeps on; a status_port that is not a number warns and keeps 47911,
+    // and validate() refuses one outside 1-65535.
+    void statusPageIsOnOrOff_data()
+    {
+        QTest::addColumn<QByteArray>("contents");
+        QTest::addColumn<bool>("on");
+        QTest::addColumn<bool>("warns");
+        QTest::newRow("absent") << QByteArray("slice_count = 1\n") << true << false;
+        QTest::newRow("on") << QByteArray("status_page = on\n") << true << false;
+        QTest::newRow("off") << QByteArray("status_page = off\n") << false << false;
+        QTest::newRow("Off") << QByteArray("status_page = Off\n") << false << false;
+        QTest::newRow("garbage") << QByteArray("status_page = maybe\n") << true << true;
+    }
+
+    void statusPageIsOnOrOff()
+    {
+        QFETCH(QByteArray, contents);
+        QFETCH(bool, on);
+        QFETCH(bool, warns);
+        QTemporaryFile f;
+        QVERIFY(f.open());
+        f.write(contents);
+        f.flush();
+        if (warns) {
+            QTest::ignoreMessage(QtWarningMsg,
+                                 QRegularExpression(QStringLiteral("status_page must be")));
+        }
+        QString err;
+        const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QCOMPARE(c.statusPage, on);
+        QCOMPARE(c.statusPort, 47911);
+        QVERIFY(c.validate(&err));
+    }
+
+    void statusPortDefaultsAndRange()
+    {
+        const DaemonConfig d = DaemonConfig::defaults();
+        QVERIFY(d.statusPage);
+        QCOMPARE(d.statusPort, 47911);
+        QVERIFY(d.stateDirectory.isEmpty());
+
+        QTemporaryFile f;
+        QVERIFY(f.open());
+        f.write("status_port = eighty\n");
+        f.flush();
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("status_port is not a number")));
+        QString err;
+        const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QCOMPARE(c.statusPort, 47911);
+
+        DaemonConfig bad = DaemonConfig::defaults();
+        for (int port : {0, -1, 65536}) {
+            bad.statusPort = port;
+            QVERIFY(!bad.validate(&err));
+            QVERIFY(err.contains(QStringLiteral("status_port")));
+        }
+        bad.statusPort = 65535;
+        QVERIFY(bad.validate(&err));
+    }
+
+    // state_directory: empty keeps the profile's directory; set, it must be
+    // an absolute path. The shipped sample names the packaged Core's
+    // StateDirectory, so `sudo nereusd status` finds the control socket
+    // through the default --config.
+    void stateDirectoryIsEmptyOrAbsolute()
+    {
+        DaemonConfig c = DaemonConfig::defaults();
+        QString err;
+        c.stateDirectory = QStringLiteral("relative/dir");
+        QVERIFY(!c.validate(&err));
+        QVERIFY(err.contains(QStringLiteral("state_directory")));
+        c.stateDirectory = QStringLiteral("/var/lib/nereusd");
+        QVERIFY(c.validate(&err));
+
+        const DaemonConfig sample = DaemonConfig::fromFile(
+            QStringLiteral(NEREUS_SOURCE_DIR "/packaging/nereusd.conf.sample"), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QCOMPARE(sample.stateDirectory, QStringLiteral("/var/lib/nereusd"));
+        QVERIFY(sample.statusPage);
+        QCOMPARE(sample.statusPort, 47911);
     }
 
     void rejectsRemotePortOutOfRange()

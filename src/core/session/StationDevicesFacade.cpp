@@ -11,6 +11,9 @@
 //   2026-09-24: iPhone app Task 14 (R-IOS-08): the pairing window's two
 //               properties and verbs. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 17 (R-IOS-08): resetUnclaimed(). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationDevicesFacade.h"
@@ -263,6 +266,32 @@ DeviceAdminResult StationDevicesFacade::closePairing()
         return {false, QStringLiteral("This Core cannot pair new devices.")};
     }
     m_pairingWindow->close();
+    return {true, QString()};
+}
+
+DeviceAdminResult StationDevicesFacade::resetUnclaimed()
+{
+    // One change for the object, however many steps below move it.
+    holdRefresh();
+    // The token first: the device list's change below is what the pairing
+    // window follows, and it must find the Core unclaimed by then.
+    const bool tokenWasActive = m_tokens.isActive() || !m_tokens.isValid();
+    if (!m_tokens.moveDamagedAside() || !m_tokens.retire()) {
+        resumeRefresh();
+        return {false, QStringLiteral("The Core could not stop accepting its pairing token, so "
+                                      "nothing was reset. Try again.")};
+    }
+    if (tokenWasActive) {
+        emit tokenRetired();
+    }
+    if (!m_devices.reset()) {
+        resumeRefresh();
+        return {false, QStringLiteral("The Core could not clear its list of paired devices. "
+                                      "Try again.")};
+    }
+    qCInfo(lcDevices) << "The Core was reset to unclaimed from its console";
+    refresh();
+    resumeRefresh();
     return {true, QString()};
 }
 
