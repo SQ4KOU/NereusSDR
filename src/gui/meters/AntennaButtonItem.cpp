@@ -91,7 +91,7 @@ AntennaButtonItem::AntennaButtonItem(QObject* parent)
     // NereusSDR setting behind it; neither is drawn until built (the saved
     // visibility is untouched).
     setButtonHiddenUntilBuilt(5, !UnbuiltFeatures::isBuilt(UnbuiltFeature::Transverters));
-    setButtonHiddenUntilBuilt(9, !UnbuiltFeatures::isBuilt(UnbuiltFeature::ContainerButtons));
+    setButtonHiddenUntilBuilt(9, !UnbuiltFeatures::isBuilt(UnbuiltFeature::AntennaRxTxSplit));
 
     connect(this, &ButtonBoxItem::buttonClicked, this, &AntennaButtonItem::onButtonClicked);
 }

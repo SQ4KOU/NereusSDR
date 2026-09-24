@@ -144,8 +144,12 @@ const QList<Entry>& all()
          QStringLiteral("RF-Kit applet TUNE and BYPASS")},
         {F::ContainerButtons, QStringLiteral("macro-buttons"),
          QStringLiteral("Container function buttons with nothing behind them: RX2, SUB RX, "
-                        "Pan Swap, AVG, filter Var1 and Var2, antenna Rx/Tx, and the macro "
-                        "buttons")},
+                        "Pan Swap, AVG, and the macro buttons")},
+        {F::VariableFilters, QStringLiteral("variable-filters"),
+         QStringLiteral("The variable filter slots: the container filter Var1 and Var2 buttons")},
+        {F::AntennaRxTxSplit, QStringLiteral("antenna-rx-tx"),
+         QStringLiteral("The antenna box's receive/transmit split: the container antenna Rx/Tx "
+                        "button")},
         {F::Voice, QStringLiteral("voice"),
          QStringLiteral("Voice record and play container control; VFO flag record and play; "
                         "DVK on the status bar")},

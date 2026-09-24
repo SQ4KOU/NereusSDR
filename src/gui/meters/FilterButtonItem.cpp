@@ -75,7 +75,7 @@ FilterButtonItem::FilterButtonItem(QObject* parent)
     }
     // R-R3-49: Var1 and Var2 have no NereusSDR filter behind them; not
     // drawn until they do (the saved visibility is untouched).
-    const bool varBuilt = UnbuiltFeatures::isBuilt(UnbuiltFeature::ContainerButtons);
+    const bool varBuilt = UnbuiltFeatures::isBuilt(UnbuiltFeature::VariableFilters);
     setButtonHiddenUntilBuilt(10, !varBuilt);
     setButtonHiddenUntilBuilt(11, !varBuilt);
 

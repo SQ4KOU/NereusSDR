@@ -32,6 +32,10 @@
 // modes, the antenna and band XVTR under their features' entries) are
 // surfaces of the list like any other.
 //
+// R3 unfinished controls, Task 4 (R-R3-49, R-R3-21): filter Var1 and Var2
+// ("variable-filters") and antenna Rx/Tx ("antenna-rx-tx") have entries of
+// their own, so marking the macro buttons built does not show them.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, Task 1.
@@ -41,6 +45,9 @@
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, Task 3.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, Task 4.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
 // =================================================================
@@ -585,10 +592,12 @@ QMap<F, QList<Surface>> surfaces()
         functionButton(QStringLiteral("RX2"), B::Rx2),
         functionButton(QStringLiteral("SUB"), B::SubRx),
         functionButton(QStringLiteral("SWAP"), B::PanSwap),
-        functionButton(QStringLiteral("AVG"), B::Avg),
-        boxButton(QStringLiteral("filter Var1"), filters, 10),
-        boxButton(QStringLiteral("filter Var2"), filters, 11),
-        boxButton(QStringLiteral("antenna Rx/Tx"), antennas, 9)};
+        functionButton(QStringLiteral("AVG"), B::Avg)};
+    // Task 4 carried finding: Var1, Var2 and Rx/Tx front features of their
+    // own, so marking the macro buttons built does not show them.
+    map[F::VariableFilters] = {boxButton(QStringLiteral("filter Var1"), filters, 10),
+                               boxButton(QStringLiteral("filter Var2"), filters, 11)};
+    map[F::AntennaRxTxSplit] = {boxButton(QStringLiteral("antenna Rx/Tx"), antennas, 9)};
     map[F::RfkitTune] = {
         applet(QStringLiteral("RF-Kit TUNE"),
                [](Hosts& h) { return textShown(h.rfKit(), QStringLiteral("TUNE")); }),

@@ -58,8 +58,9 @@ enum class UnbuiltFeature {
     FmPage,           // Phone/CW applet FM page
     RfkitTune,        // RF-Kit applet TUNE and BYPASS
     ContainerButtons, // Container buttons with nothing behind them: RX2, SUB RX, Pan Swap
-                      // (Thetis's two-receiver layout), AVG, filter Var1 and Var2,
-                      // antenna Rx/Tx, and the macro buttons (built after R4)
+                      // (Thetis's two-receiver layout), AVG, and the macro buttons (built after R4)
+    VariableFilters,  // The variable filter slots: the container filter Var1 and Var2 buttons
+    AntennaRxTxSplit, // The antenna box's receive/transmit split: the container antenna Rx/Tx button
     Voice,            // Voice Rec/Play container control; VFO flag record and play; DVK on the status bar;
                       // the container Play and Rec buttons
     Fdx,              // FDX on the status bar; the container DUP button
