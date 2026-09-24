@@ -4038,7 +4038,7 @@ void P1RadioConnection::hl2CheckBandwidthMonitor()
                                     << "watchdog ticks;"
                                     << "throttle events:" << m_bwMonitor->throttleEventCount();
             emit errorOccurred(RadioConnectionError::None,
-                               QStringLiteral("HL2 LAN throttled; pausing ep2"));
+                               QStringLiteral("The Hermes Lite 2 asked for a pause because its network link is busy."));
         } else if (!nowThrottled && m_hl2Throttled) {
             m_hl2Throttled = false;
             qCInfo(lcConnection) << "HL2: LAN throttle cleared — ep6 stream resumed";
@@ -4071,7 +4071,7 @@ void P1RadioConnection::hl2CheckBandwidthMonitor()
                                     << m_hl2ThrottleCount << "watchdog ticks;"
                                     << "pausing ep2 command frames";
             emit errorOccurred(RadioConnectionError::None,
-                               QStringLiteral("HL2 LAN throttled; pausing ep2"));
+                               QStringLiteral("The Hermes Lite 2 asked for a pause because its network link is busy."));
         }
     } else {
         // Sequence advanced — clear throttle.

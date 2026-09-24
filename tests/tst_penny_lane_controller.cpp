@@ -158,6 +158,56 @@ private slots:
         s.remove(perMac);
     }
 
+    // A manual radio saved without its MAC (manual-<ip>-<port> key) or under
+    // a MANUAL:<ip>:<port> placeholder gets no Penny key (none would be
+    // read), and the old global stays while it is saved, so the radio's
+    // real-MAC entry takes the value on a later launch.
+    void legacy_migration_skips_radios_without_a_real_mac() {
+        auto& s = AppSettings::instance();
+        const QString legacy = QStringLiteral("hardware/oc/pennyExtCtrl");
+        const QString realMac = QStringLiteral("de:ad:be:ef:00:0e");
+        const QString placeholder = QStringLiteral("MANUAL:192.168.1.40:1024");
+        const auto perMac = [](const QString& mac) {
+            return QStringLiteral("hardware/%1/penny/extCtrlEnabled").arg(mac);
+        };
+        const auto saveTestRadio = [&s](const QString& mac, const QString& ip) {
+            RadioInfo info;
+            info.macAddress = mac;
+            info.address    = QHostAddress(ip);
+            info.port       = 1024;
+            info.boardType  = HPSDRHW::Hermes;
+            info.protocol   = ProtocolVersion::Protocol1;
+            info.name       = QStringLiteral("Test Radio");
+            s.saveRadio(info, false, false);
+        };
+        saveTestRadio(realMac, QStringLiteral("192.168.1.12"));
+        saveTestRadio(QString(), QStringLiteral("192.168.1.30"));   // manual-192.168.1.30-1024
+        saveTestRadio(placeholder, QStringLiteral("192.168.1.40"));
+        s.setValue(legacy, false);
+
+        AppSettings::migrateLegacyPennyExtCtrl(s);
+
+        QCOMPARE(s.value(perMac(realMac)).toString(), QStringLiteral("False"));
+        QVERIFY2(!s.contains(perMac(QString())), "junk key for the empty MAC");
+        QVERIFY2(!s.contains(perMac(placeholder)), "key under the placeholder MAC");
+        QVERIFY2(s.contains(legacy), "the old value must stay for the manual radios");
+
+        // Their real MAC is learned: the manual entries go, the real one is
+        // saved; the next launch carries the value over and retires the key.
+        const QString learned = QStringLiteral("de:ad:be:ef:00:0f");
+        s.forgetRadio(QStringLiteral("manual-192.168.1.30-1024"));
+        s.forgetRadio(placeholder);
+        saveTestRadio(learned, QStringLiteral("192.168.1.40"));
+        AppSettings::migrateLegacyPennyExtCtrl(s);
+        QCOMPARE(s.value(perMac(learned)).toString(), QStringLiteral("False"));
+        QVERIFY(!s.contains(legacy));
+
+        s.forgetRadio(realMac);
+        s.forgetRadio(learned);
+        s.remove(perMac(realMac));
+        s.remove(perMac(learned));
+    }
+
     // load() without MAC is a no-op; default remains true
     void load_without_mac_is_noop() {
         PennyLaneController p;

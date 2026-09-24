@@ -802,6 +802,10 @@ private slots:
             // Fix wave item 2: the VFO flag's tooltips carried Thetis and
             // WDSP file cites and WDSP function names; the cites are
             // comments beside the strings now.
+            // Follow-up: the HL2 throttle notice named the ep2 stream.
+            {"src/core/P1RadioConnection.cpp", false,
+             {"LAN throttled; pausing ep2"},
+             {"The Hermes Lite 2 asked for a pause because its network link is busy."}},
             {"src/gui/widgets/VfoWidget.cpp", false,
              {"From Thetis", "patchpanel.c", "(SetRXAPanelRun)", "(SetRXAPanelBinaural)",
               "Maps to Thetis", "Alex.cs", "nob.c", "matches AetherSDR",
@@ -921,7 +925,8 @@ private slots:
              {"Band %1 ignored: the slice is locked. Unlock it to change bands."}},
             {"src/core/P1RadioConnection.cpp",
              {"No response from radio within %1 ms. Check the IP address, radio power and "
-              "network."}},
+              "network.",
+              "The Hermes Lite 2 asked for a pause because its network link is busy."}},
         };
         for (const auto& site : sites) {
             const QStringList literals = userVisibleLiterals(sourcePath(site.file));

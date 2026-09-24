@@ -605,19 +605,25 @@ void MeterPoller::pollTxMeters()
         Q_UNUSED(chanId)
         Q_UNUSED(entry)
 #endif
-        // R-R3-21: Thetis floors the Compression reading at -30 before any
-        // meter sees it (console.cs:46979 [v2.10.3.15]); PROC off (-400)
-        // reads -30.
-        if (entry.bindingId == MeterBinding::TxComp) {
-            value = compressionReading(value);
-        }
-        for (auto& guarded : m_targets) {
-            MeterWidget* target = guarded.data();
-            if (!target) { continue; }
-            target->updateMeterValue(entry.bindingId, value);
-        }
-        emit txMeterReading(entry.bindingId, value);
+        handOutTxReading(entry.bindingId, value);
     }
+}
+
+// Hands one WDSP transmit reading to the meters and to txMeterReading.
+void MeterPoller::handOutTxReading(int bindingId, double value)
+{
+    // R-R3-21: Thetis floors the Compression reading at -30 before any
+    // meter sees it (console.cs:46979 [v2.10.3.15]); PROC off (-400)
+    // reads -30.
+    if (bindingId == MeterBinding::TxComp) {
+        value = compressionReading(value);
+    }
+    for (auto& guarded : m_targets) {
+        MeterWidget* target = guarded.data();
+        if (!target) { continue; }
+        target->updateMeterValue(bindingId, value);
+    }
+    emit txMeterReading(bindingId, value);
 }
 
 // From Thetis console.cs:46979 [v2.10.3.15]:

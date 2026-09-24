@@ -274,6 +274,19 @@ private:
     // registered MeterWidget targets.
     // Porting from Thetis dsp.cs:999-1050 [v2.10.3.13] CalculateTXMeter.
     void pollTxMeters();
+    // pollTxMeters()'s hand-out of one raw reading (the Compression floor
+    // applies here).
+    void handOutTxReading(int bindingId, double rawValue);
+
+#ifdef NEREUS_BUILD_TESTS
+public:
+    // Test seam: what pollTxMeters() does with one raw WDSP reading.
+    void handOutTxReadingForTest(int bindingId, double rawValue)
+    {
+        handOutTxReading(bindingId, rawValue);
+    }
+private:
+#endif
 
     // ── SMeterWidget poll helper (Task 41, Phase 3P-II) ──────────────────────
     // Branches on m_sMeter->rxMode() to read the correct WDSP source and

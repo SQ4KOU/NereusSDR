@@ -2541,6 +2541,7 @@ nereus_add_test(tst_meter_item_no_reading)
 # R-R3-21: the Compression reading's Thetis floor, the container bar and
 # the Phone/CW gauge mapping (reversed gauges: maximum is empty).
 nereus_add_test(tst_compression_reading)
+target_compile_definitions(tst_compression_reading PRIVATE NEREUS_BUILD_TESTS)
 
 # ── RX meter cal offset port (Thetis-faithful) ───────────────────────────────
 # Verifies the per-radio factory default lookup (rxMeterCalOffsetDefaultFor)

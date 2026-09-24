@@ -19,6 +19,7 @@
 // =================================================================
 
 #include <QtTest/QtTest>
+#include <QPointer>
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
@@ -292,6 +293,43 @@ private slots:
         QCOMPARE(first->anfEnabled(), firstAnf);
         QCOMPARE(first->apfEnabled(), firstApf);
         QCOMPARE(first->amsqThresh(), firstAm);
+    }
+
+    // DSP > NB/SNB follows the active slice, and removing the slice it is
+    // bound to while the page is open leaves nothing pointing at it: a later
+    // change reaches the slice that is active then, not the removed one.
+    void noiseBlankerPageSurvivesRemovingItsSlice()
+    {
+        RadioModel model;
+        SliceModel* first = ensureSlice(model);
+        QVERIFY(first != nullptr);
+        const int second = model.addSlice();
+        QVERIFY(second >= 0);
+        model.setActiveSlice(second);
+        SliceModel* bound = model.activeSlice();
+        QVERIFY(bound != nullptr && bound != first);
+        bound->setNb1Threshold(77);
+
+        NbSnbSetupPage page(&model);
+        auto* thresh = page.findChild<QSlider*>(QStringLiteral("nb1ThresholdSlider"));
+        QVERIFY(thresh != nullptr);
+        QCOMPARE(thresh->value(), 77);
+        thresh->setValue(88);
+        QCOMPARE(bound->nb1Threshold(), 88);
+        bound->setNb1Threshold(99);        // a change made elsewhere shows
+        QCOMPARE(thresh->value(), 99);
+
+        QPointer<SliceModel> gone(bound);
+        model.removeSlice(bound->sliceIndex());
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(gone.isNull());
+        SliceModel* now = model.activeSlice();
+        thresh->setValue(123);             // must not touch the removed slice
+        if (now) {
+            QCOMPARE(now->nb1Threshold(), 123);
+        } else {
+            QVERIFY(!thresh->isEnabledTo(&page));
+        }
     }
 
     // Appearance > Meter Styles: the S-meter group is the S-meter's own

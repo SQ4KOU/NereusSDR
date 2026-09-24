@@ -687,8 +687,9 @@ public:
     // "hardware/oc/pennyExtCtrl" that nothing read; PennyLaneController
     // reads per-MAC "hardware/<mac>/penny/extCtrlEnabled". Copies the
     // global value to every saved radio that has no value of its own, then
-    // removes the global key (kept only while no radio is saved, so the
-    // next launch can still carry it over), so a radio added later starts
+    // removes the global key (kept while no radio is saved, or while a
+    // manual radio is saved without its real MAC, so a later launch can
+    // still carry it over), so a radio added later starts
     // at Thetis's default (True) instead of the old global value.
     // Same shape as migrateLegacyN2adrFilter. Idempotent.
     static void migrateLegacyPennyExtCtrl(AppSettings& s);

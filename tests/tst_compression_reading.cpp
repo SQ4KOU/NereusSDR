@@ -19,6 +19,8 @@
 #include "gui/meters/MeterItem.h"
 #include "gui/meters/MeterPoller.h"
 
+#include <QSignalSpy>
+
 #include <limits>
 #include <memory>
 
@@ -54,6 +56,22 @@ private slots:
         QCOMPARE(MeterPoller::compressionReading(-10.0), -10.0);
         QCOMPARE(MeterPoller::compressionReading(0.0), 0.0);
         QCOMPARE(MeterPoller::compressionReading(3.0), 3.0);
+    }
+
+    // The poller's own hand-out (what pollTxMeters() does with each raw
+    // WDSP reading) applies the floor to Compression only.
+    void pollerHandsOutTheFlooredReading()
+    {
+        MeterPoller poller;
+        QSignalSpy spy(&poller, &MeterPoller::txMeterReading);
+        poller.handOutTxReadingForTest(MeterBinding::TxComp, -400.0);
+        poller.handOutTxReadingForTest(MeterBinding::TxComp, -10.0);
+        poller.handOutTxReadingForTest(MeterBinding::TxAlc, -400.0);
+        QCOMPARE(spy.size(), 3);
+        QCOMPARE(spy.at(0).at(0).toInt(), MeterBinding::TxComp);
+        QCOMPARE(spy.at(0).at(1).toDouble(), -30.0);
+        QCOMPARE(spy.at(1).at(1).toDouble(), -10.0);
+        QCOMPARE(spy.at(2).at(1).toDouble(), -400.0);  // other readings unchanged
     }
 
     void containerBarAtRestProcOffAndCompressing()

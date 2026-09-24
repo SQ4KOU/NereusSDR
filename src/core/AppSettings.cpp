@@ -1423,22 +1423,35 @@ void AppSettings::migrateLegacyPennyExtCtrl(AppSettings& s)
 
     const QList<SavedRadio> radios = s.savedRadios();
     int migratedCount = 0;
+    int realRadios = 0;
+    bool placeholderRadios = false;
     for (const SavedRadio& r : radios) {
-        // A radio that already has its own value keeps it.
-        if (s.hardwareValue(r.info.macAddress, QString(kRadioKey)).isValid()) {
+        // A manual radio saved without its MAC (key manual-<ip>-<port>, empty
+        // macAddress) or under a MANUAL:<ip>:<port> placeholder has no key
+        // PennyLaneController will read once the real MAC is known. Leave it
+        // alone; the global stays so its real-MAC entry takes it later.
+        const QString& mac = r.info.macAddress;
+        if (mac.isEmpty() || mac.startsWith(QStringLiteral("MANUAL:"))) {
+            placeholderRadios = true;
             continue;
         }
-        s.setHardwareValue(r.info.macAddress, QString(kRadioKey), legacyValue);
+        ++realRadios;
+        // A radio that already has its own value keeps it.
+        if (s.hardwareValue(mac, QString(kRadioKey)).isValid()) {
+            continue;
+        }
+        s.setHardwareValue(mac, QString(kRadioKey), legacyValue);
         ++migratedCount;
     }
 
-    if (!radios.isEmpty()) {
+    if (realRadios > 0 && !placeholderRadios) {
         s.remove(QString(kLegacyKey));
         qDebug() << "Migrated legacy Penny Ext Control setting (" << legacyValue
                  << ") to" << migratedCount << "saved radio(s); legacy global removed";
     } else {
         qDebug() << "Legacy Penny Ext Control setting (" << legacyValue
-                 << "): no saved radios yet; legacy global kept for next launch";
+                 << "): no saved radio with a known MAC yet, or one still without it; "
+                    "legacy global kept for next launch";
     }
     s.save();
 }
