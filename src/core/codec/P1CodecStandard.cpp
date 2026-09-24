@@ -296,23 +296,34 @@ void P1CodecStandard::composeCcForBank(int bank, const CodecContext& ctx,
             quint64 freq = (rxIdx < ctx.activeRxCount)
                             ? ctx.rxFreqHz[rxIdx]
                             : ctx.txFreqHz;
-            // Plan Task 11: on the nddc == 5 boards (Orion class, AnvelinaPro3,
-            // RedPitaya) frame slots 3 and 4 are the PureSignal pair
-            // (MetisReadThreadMainLoop case 5, twist(spr, 3, 4, 1)), and Thetis
-            // tunes both to the TX frequency. From Thetis
-            // ChannelMaster/networkproto1.c:538-551 [v2.10.3.15]:
+            // Plan Task 11: the PureSignal pair's frame slots carry the TX
+            // frequency while PureSignal transmits. The pair rides slots 3 + 4
+            // on the nddc == 5 boards (Orion class, AnvelinaPro3, RedPitaya;
+            // MetisReadThreadMainLoop case 5, twist(spr, 3, 4, 1)) and slots
+            // 2 + 3 on the nddc == 4 Hermes class (case 4, twist(spr, 2, 3, 1)).
+            // From Thetis ChannelMaster/networkproto1.c:525-551 [v2.10.3.15]:
+            //   case 5: //RX3 VFO (DDC2)
+            //       // if Orion, DDC2 is RX2 frequency; else TX frequency for Hermes
             //   case 6: //RX4 VFO (DDC3)
-            //       C0 |= 0x0a;
             //       // DDC3 is TX frequency always
-            //       ddc_freq = prn->tx[0].frequency;
             //   case 7: //RX5 VFO (DDC4)
-            //       C0 |= 0x0c;
             //       // DDC4 is TX frequency for Orion2 TX with puresignal, otherwise not used, so make TX always
             //       ddc_freq = prn->tx[0].frequency;
-            // Kept to nddc == 5: on the nddc == 4 Hermes class slots 2 and 3
-            // (banks 5 and 6) still carry slices C and D in plain receive, a
-            // NereusSDR extension this task does not touch.
-            if ((bank == 6 || bank == 7) && ctx.p1PsNDdc == 5) {
+            //
+            // Deliberate divergence in plain receive: Thetis sends the TX
+            // frequency on those slots always; NereusSDR sends slices C and D's
+            // frequencies there (rxFreqHz, above) whenever PureSignal is not
+            // transmitting. The Hermes class has done this on banks 5 and 6
+            // since Phase 3F; the operator's ruling of 2026-09-24 gives the
+            // Orion class the same rule on banks 6 and 7, so these radios keep
+            // four receive streams on Protocol 1 (Thetis runs two). While
+            // PureSignal transmits the codec suspends slices C and D
+            // (applyDdcAssignment) and these slots go back to Thetis's value.
+            const bool psTransmit = ctx.mox && ctx.p1PuresignalRun;
+            const bool pairSlot =
+                   (ctx.p1PsNDdc == 5 && (bank == 6 || bank == 7))
+                || (ctx.p1PsNDdc == 4 && (bank == 5 || bank == 6));
+            if (psTransmit && pairSlot) {
                 freq = ctx.txFreqHz;
             }
             const quint32 hz = quint32(freq);
@@ -1323,11 +1334,14 @@ DdcAssignment P1CodecStandard::ddcAssignmentHermesIIClass(
 // Protocol 1 neither value reaches the wire.
 //
 // Phase 3F extension (NereusSDR): streams 2 and 3 ride slots 3 and 4 in
-// plain receive, the PureSignal pair's slots while the pair is not running.
-// Stream 4 has no slot (slot 1 is tied to RX1's frequency and the frame
-// carries five). PENDING the operator's ruling on the Orion-class bank 6/7
-// frequency (task-11-report.md): Thetis always tunes slots 3 and 4 to the TX
-// frequency.
+// plain receive, the PureSignal pair's slots while the pair is not running;
+// banks 6 and 7 tune them to slices C and D then, and to the TX frequency
+// while PureSignal transmits (composeCcForBank). That is the Hermes class's
+// rule on banks 5 and 6, given to the Orion class by the operator's ruling of
+// 2026-09-24 so these radios keep four receive streams on Protocol 1; Thetis
+// runs two and tunes slots 3 and 4 to the TX frequency always. There is no
+// stream 4 on Protocol 1 (BoardCapsTable::userDdcCountFor): slot 1 is tied
+// to RX1's frequency and the frame carries five slots.
 DdcAssignment P1CodecStandard::ddcAssignmentOrionClass(
     const CodecContext& ctx,
     const std::array<SliceConfig, 5>& slices,

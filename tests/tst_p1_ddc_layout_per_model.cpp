@@ -210,8 +210,8 @@ class TestP1DdcLayoutPerModel : public QObject {
 private slots:
     void layout_matches_thetis_data();
     void layout_matches_thetis();
-    void nddc5_banks_6_and_7_carry_the_tx_frequency_data();
-    void nddc5_banks_6_and_7_carry_the_tx_frequency();
+    void pair_slots_carry_the_tx_frequency_while_ps_transmits_data();
+    void pair_slots_carry_the_tx_frequency_while_ps_transmits();
 };
 
 void TestP1DdcLayoutPerModel::layout_matches_thetis_data()
@@ -281,49 +281,55 @@ void TestP1DdcLayoutPerModel::layout_matches_thetis()
     QCOMPARE(fromPs, actual);
 }
 
-// Slots 3 and 4 are the PureSignal pair on the nddc == 5 boards, and Thetis
-// tunes them to the TX frequency always. From Thetis ChannelMaster/
-// networkproto1.c:538-551 [v2.10.3.15]:
-//   case 6: //RX4 VFO (DDC3)       // DDC3 is TX frequency always
-//   case 7: //RX5 VFO (DDC4)       // DDC4 is TX frequency for Orion2 TX with
-//                                  // puresignal, otherwise not used, so make TX always
-// The Hermes class (nddc 4) keeps its bank 5 / 6 extension untouched.
-void TestP1DdcLayoutPerModel::nddc5_banks_6_and_7_carry_the_tx_frequency_data()
+// The PureSignal pair's slots carry the TX frequency while PureSignal
+// transmits (Thetis networkproto1.c:525-551 [v2.10.3.15]: banks 5-7 send
+// prn->tx[0].frequency for the pair), and follow slices C and D otherwise
+// (the operator's ruling of 2026-09-24: four streams on the Hermes and Orion
+// classes, a deliberate divergence from Thetis in plain receive). Pair slots:
+// 3 + 4 (banks 6, 7) on nddc 5; 2 + 3 (banks 5, 6) on nddc 4.
+void TestP1DdcLayoutPerModel::pair_slots_carry_the_tx_frequency_while_ps_transmits_data()
 {
     QTest::addColumn<int>("model");
     QTest::addColumn<int>("nddc");
-    QTest::addColumn<bool>("txOnSlots34");
-    QTest::newRow("ANAN7000D nddc5")    << int(HPSDRModel::ANAN7000D)    << 5 << true;
-    QTest::newRow("ANVELINAPRO3 nddc5") << int(HPSDRModel::ANVELINAPRO3) << 5 << true;
-    QTest::newRow("REDPITAYA nddc5")    << int(HPSDRModel::REDPITAYA)    << 5 << true;
-    QTest::newRow("HERMES nddc4")       << int(HPSDRModel::HERMES)       << 4 << false;
+    QTest::addColumn<int>("firstPairBank");
+    QTest::newRow("ANAN7000D")    << int(HPSDRModel::ANAN7000D)    << 5 << 6;
+    QTest::newRow("ANAN100D")     << int(HPSDRModel::ANAN100D)     << 5 << 6;
+    QTest::newRow("ANVELINAPRO3") << int(HPSDRModel::ANVELINAPRO3) << 5 << 6;
+    QTest::newRow("REDPITAYA")    << int(HPSDRModel::REDPITAYA)    << 5 << 6;
+    QTest::newRow("HERMES")       << int(HPSDRModel::HERMES)       << 4 << 5;
+    QTest::newRow("ANAN_G2E")     << int(HPSDRModel::ANAN_G2E)     << 4 << 5;
 }
 
-void TestP1DdcLayoutPerModel::nddc5_banks_6_and_7_carry_the_tx_frequency()
+void TestP1DdcLayoutPerModel::pair_slots_carry_the_tx_frequency_while_ps_transmits()
 {
     QFETCH(int, model);
     QFETCH(int, nddc);
-    QFETCH(bool, txOnSlots34);
+    QFETCH(int, firstPairBank);
     const auto codec = codecFor(static_cast<HPSDRModel>(model));
 
-    for (bool mox : {false, true}) {
+    struct State { bool mox; bool ps; };
+    for (const State st : {State{false, false}, State{true, false},
+                           State{false, true}, State{true, true}}) {
         CodecContext ctx{};
-        ctx.model         = static_cast<HPSDRModel>(model);
-        ctx.mox           = mox;
-        ctx.activeRxCount = 5;
-        ctx.p1PsNDdc      = nddc;
-        ctx.txFreqHz      = 14200000;
+        ctx.model           = static_cast<HPSDRModel>(model);
+        ctx.mox             = st.mox;
+        ctx.p1PuresignalRun = st.ps;
+        ctx.activeRxCount   = nddc;
+        ctx.p1PsNDdc        = nddc;
+        ctx.txFreqHz        = 14200000;
         for (int i = 0; i < 7; ++i) {
             ctx.rxFreqHz[i] = 7000000 + i * 10000;
         }
-        for (int bank : {6, 7}) {
+        const bool psTransmit = st.mox && st.ps;
+        for (int bank : {firstPairBank, firstPairBank + 1}) {
             quint8 out[5] = {};
             codec->composeCcForBank(bank, ctx, out);
             const quint32 hz = (quint32(out[1]) << 24) | (quint32(out[2]) << 16)
                              | (quint32(out[3]) << 8) | quint32(out[4]);
-            const quint32 want = txOnSlots34 ? 14200000u
-                                             : quint32(ctx.rxFreqHz[bank - 3]);
-            QCOMPARE(hz, want);
+            const quint32 want = psTransmit ? 14200000u
+                                            : quint32(ctx.rxFreqHz[bank - 3]);
+            QVERIFY2(hz == want, qPrintable(QStringLiteral("bank %1 mox %2 ps %3: %4, want %5")
+                     .arg(bank).arg(st.mox).arg(st.ps).arg(hz).arg(want)));
         }
     }
 }
