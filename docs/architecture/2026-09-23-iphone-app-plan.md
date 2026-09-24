@@ -1801,9 +1801,12 @@ list), pairing design §6.
   `src/core/session/StationLanCache.{h,cpp}` (a schema-1 datagram never overwrites
   schema-2 fields for the same key)
 - Create: `src/core/session/DnsSdAdvertiser.{h,cpp}` with backends
-  `DnsSdAdvertiserApple.cpp` (`dns_sd.h`), `DnsSdAdvertiserAvahi.cpp` (libavahi-client,
-  optional through `pkg-config avahi-client`, like the PipeWire bridge),
-  `DnsSdAdvertiserWindows.cpp` (`DnsServiceRegister`)
+  `DnsSdAdvertiserApple.cpp` (`dns_sd.h`, part of the system on macOS),
+  `DnsSdAdvertiserAvahi.cpp` (the Avahi daemon over D-Bus through Qt6::DBus, built when
+  `find_package(Qt6 COMPONENTS DBus)` finds it on Linux; no new package, since qt6-base
+  carries it and the Rock and Pi 4 builder image has no Avahi development package),
+  `DnsSdAdvertiserWindows.cpp` (`DnsServiceRegister` and its companions, loaded from
+  `dnsapi.dll` at run time, so nothing is linked)
 - Modify: `CMakeLists.txt`, `src/core/daemon/DaemonApp.cpp`
 - Modify: `tests/data/link/v1/media/` (a schema-2 announcement vector, a `schema` field
   in the `nrsc1` expect, and a vector for the Bonjour TXT record, which Task 16a
@@ -2450,6 +2453,8 @@ what to connect to) and put it in the brief.
     configuration file; (3) automatic only when exactly one radio is visible; (4)
     otherwise the station waits for a choice and says so. Announcement schema 2 and the
     Bonjour TXT gain `radio` (`connected`, `offline` or `waiting`).
+    The `radio` field appends to schema 2 (link section 14.1: schema 2 extends by
+    appending, and a reader ignores bytes after the fields it knows), not a schema 3.
   - Setup > This Core, in a remote window (the chosen mockup): the Core's identity with
     the key-backup line, its paired devices with Revoke and Add a device, and Change
     radio, which lists `stationRadios` and sends `station.selectRadio`; an older Core
