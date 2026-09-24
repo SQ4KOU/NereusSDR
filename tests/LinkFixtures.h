@@ -168,6 +168,9 @@ public:
     /// Task 16: schema 2, what a Core sends now: a claimed Core whose
     /// window was reopened, so it pairs by code.
     static NereusSDR::StationLanAnnouncement lanAnnouncement2();
+    /// Bytes a later writer might append to schema 2 (a field today's
+    /// reader does not know), for the lan-announcement-2-trailing vector.
+    static QByteArray lanAnnouncementTrailingBytes();
     /// `schema`, schema 1's fields, and for schema 2 `claimed`, `identity`
     /// (base64url of the 32 bytes, no padding), `label` and `pairing`
     /// ("click", "code" or "closed").

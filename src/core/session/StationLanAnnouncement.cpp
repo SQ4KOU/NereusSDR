@@ -288,7 +288,9 @@ std::optional<StationLanAnnouncement> decodeStationLanAnnouncement(const QByteAr
         setError(error, "Station LAN announcement is malformed.");
         return std::nullopt;
     }
-    if (offset != bytes.size()) {
+    // Schema 2 extends by appending (link document section 14.1): a reader
+    // ignores bytes after the fields it knows. Schema 1 stays exact.
+    if (schema == kStationLanAnnouncementSchema1 && offset != bytes.size()) {
         setError(error, "Station LAN announcement is malformed.");
         return std::nullopt;
     }

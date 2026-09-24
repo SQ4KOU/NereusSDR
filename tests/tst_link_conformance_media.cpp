@@ -204,8 +204,21 @@ QString matchWithin(const QJsonValue& expected, const QJsonValue& actual, double
     return LinkFixtures::match(expected, actual, &none, path);
 }
 
-QString checkAnnouncement(const QByteArray& bytes, const QJsonObject& expect)
+QString checkAnnouncement(const QByteArray& bytes, QJsonObject expect)
 {
+    // iPhone app Task 16: "ignoredTrailingBytes" N marks a schema-2 vector
+    // whose last N bytes are fields a reader does not know (section 14.1):
+    // they decode to the same fields, and the encoder writes the rest.
+    qsizetype trailing = 0;
+    if (expect.contains(QStringLiteral("ignoredTrailingBytes"))) {
+        const QJsonValue count = expect.take(QStringLiteral("ignoredTrailingBytes"));
+        const double n = count.toDouble(-1);
+        if (!count.isDouble() || n < 1 || n != std::floor(n) || n >= bytes.size()) {
+            return QStringLiteral("media expectation: ignoredTrailingBytes is not a count of "
+                                  "the vector's last bytes");
+        }
+        trailing = static_cast<qsizetype>(n);
+    }
     QString error;
     const std::optional<StationLanAnnouncement> decoded =
         decodeStationLanAnnouncement(bytes, &error);
@@ -222,7 +235,7 @@ QString checkAnnouncement(const QByteArray& bytes, const QJsonObject& expect)
     if (!LinkMediaVectors::fromJson(expect, &value, &error)) {
         return error;
     }
-    if (encodeStationLanAnnouncement(value, &error) != bytes) {
+    if (encodeStationLanAnnouncement(value, &error) != bytes.chopped(trailing)) {
         return QStringLiteral("the station's encoder no longer writes these bytes for this "
                               "announcement %1")
             .arg(error);
@@ -525,7 +538,8 @@ void TstLinkConformanceMedia::vectorsCoverThePlan()
           QStringLiteral("media-nsdc1-keyframe-after-loss"), QStringLiteral("media-opus-1"),
           QStringLiteral("media-opus-2"), QStringLiteral("media-opus-3"),
           QStringLiteral("media-opus-4"), QStringLiteral("media-lan-announcement"),
-          QStringLiteral("media-lan-announcement-2"), QStringLiteral("media-dnssd-txt"),
+          QStringLiteral("media-lan-announcement-2"),
+          QStringLiteral("media-lan-announcement-2-trailing"), QStringLiteral("media-dnssd-txt"),
           QStringLiteral("media-ps3d-frame")}) {
         QVERIFY2(m_vectors.contains(id), qPrintable(id));
     }
@@ -535,6 +549,17 @@ void TstLinkConformanceMedia::vectorsCoverThePlan()
                  .value(QStringLiteral("schema")).toInt(), 1);
     QCOMPARE(expectOf(m_vectors.value(QStringLiteral("media-lan-announcement-2")))
                  .value(QStringLiteral("schema")).toInt(), int(kStationLanAnnouncementSchema));
+    // Schema 2 extends by appending: the trailing vector is the schema-2
+    // vector with bytes after it, and decodes to the same fields.
+    const Vector extended = m_vectors.value(QStringLiteral("media-lan-announcement-2-trailing"));
+    const QByteArray known = m_vectors.value(QStringLiteral("media-lan-announcement-2")).bytes;
+    QVERIFY(extended.bytes.size() > known.size());
+    QCOMPARE(extended.bytes.left(known.size()), known);
+    QCOMPARE(expectOf(extended).value(QStringLiteral("ignoredTrailingBytes")).toInt(),
+             int(extended.bytes.size() - known.size()));
+    QJsonObject withoutMark = expectOf(extended);
+    withoutMark.remove(QStringLiteral("ignoredTrailingBytes"));
+    QCOMPARE(withoutMark, expectOf(m_vectors.value(QStringLiteral("media-lan-announcement-2"))));
     // The TXT vector is the station's encoder's output for the Core the
     // schema-2 announcement describes.
     QCOMPARE(m_vectors.value(QStringLiteral("media-dnssd-txt")).bytes,

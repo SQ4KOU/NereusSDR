@@ -34,7 +34,10 @@ inline constexpr int kStationLanIdentityBytes = 32;
 /// StationLabel: a callsign of up to 32 characters, '/', and a suffix of up
 /// to 32, so a label is never cut short.
 inline constexpr int kStationLanMaxLabelBytes = 65;
-/// The largest schema-2 datagram: both names and the label at their limits.
+/// The largest schema-2 datagram with today's fields: both names and the
+/// label at their limits. Schema 2 extends by appending fields, which a
+/// reader that does not know them ignores (link document section 14.1);
+/// every datagram still fits kStationLanMaxDatagramBytes.
 inline constexpr int kStationLanMaxSchema2DatagramBytes = 479;
 
 /// How the Core accepts a new device right now (the pairing window, link

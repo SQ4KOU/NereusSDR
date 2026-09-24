@@ -1958,8 +1958,9 @@ does (`DaemonApp::updateStationAnnouncement`):
   5000); a listener forgets a station it has not heard for 15 s
   (`kStationLanCacheTtlMs`);
 - a listener takes datagrams of at most 512 bytes
-  (`kStationLanMaxDatagramBytes`); a schema-2 datagram is at most 479
-  (`kStationLanMaxSchema2DatagramBytes`), so no field is ever cut short.
+  (`kStationLanMaxDatagramBytes`); with the fields below a schema-2
+  datagram is at most 479 (`kStationLanMaxSchema2DatagramBytes`), so no
+  field is ever cut short.
 
 A station sends schema 2 only (`kStationLanAnnouncementSchema`). A listener
 reads schema 1 and schema 2, so a Core from before schema 2 is still found.
@@ -1984,8 +1985,16 @@ The datagram is binary, in this order; schema 1 ends after the radio MAC:
 | Label | that many bytes | schema 2: ASCII letters, digits, `/`, `_` and `-` (a callsign of up to 32, `/`, a suffix of up to 32) |
 | Pairing | 1 byte | schema 2: 0 `closed`, 1 `click`, 2 `code` |
 
-A listener refuses a datagram with another magic, service or schema, any
-bytes left over, or a field that fails these rules. It dials
+**Schema 2 extends by appending.** A reader ignores any bytes after the
+schema-2 fields it knows. It still refuses a datagram that is too short
+for those fields, or larger than 512 bytes, and applies every other rule
+in this section. A writer only ever appends a new field after the last
+one, and each new field states the value a reader that never sees it
+assumes. Schema 1 does not extend: bytes after a schema-1 datagram's
+radio MAC are refused.
+
+A listener refuses a datagram with another magic, service or schema, a
+field that fails these rules, or, in schema 1, any bytes left over. It dials
 `wss://<source address>:<control port>`, with the IPv6 scope when the
 address is link-local, and pins the announced pin. It keeps one entry per
 endpoint (pin, source address and scope, interface, control port). A
@@ -1996,7 +2005,9 @@ state or pairing (`StationLanCache::ingest`).
 The conformance vectors `media/lan-announcement.bin` (schema 1) and
 `media/lan-announcement-2.bin` (schema 2) (section 16.4) are datagrams the
 station's own encoder wrote, with their decoded fields, `schema` among
-them, in the `.expect.json` beside each. `tst_link_conformance_media`
+them, in the `.expect.json` beside each. `media/lan-announcement-2-trailing.bin`
+is the schema-2 datagram with five bytes appended, as a later field would
+be; its expectation holds the same fields and `ignoredTrailingBytes` 5. `tst_link_conformance_media`
 decodes each and encodes the fields again, so a change to this layout
 fails there until the vectors, and this table, move with it.
 
@@ -2469,6 +2480,7 @@ processors; its vectors hold decoders to the reference PCM instead.
 | --- | --- | --- | --- |
 | `nrsc1` | `lan-announcement`: one schema-1 LAN announcement datagram, as a Core from before schema 2 sends it (section 14.1) | none | `schema` 1, `controlPort`, `fingerprint`, `coreName`, `radioName`, `radioMac`, `radioConnected`, exact |
 | `nrsc1` | `lan-announcement-2`: one schema-2 LAN announcement datagram, from a claimed Core whose pairing window was reopened (section 14.1) | none | `schema` 2, the fields above, `claimed` true, `identity` (base64url of the 32 bytes, no padding), `label` `KG4VCF/shack`, `pairing` `code`, exact |
+| `nrsc1` | `lan-announcement-2-trailing`: the `lan-announcement-2` datagram with five bytes appended after its known fields, which a reader ignores (section 14.1) | none | The same fields as `lan-announcement-2`, and `ignoredTrailingBytes` 5: the vector's last five bytes are not decoded, and the encoder writes the bytes before them, exact |
 | `dnssd-txt` | `dnssd-txt`: the Bonjour TXT record of the same Core (section 14.2) | none | `serviceType` `_nereus-station._tcp` and `txt`, the entries as strings (`v`, `id`, `claimed`, `pair`, `name`); the bytes are those entries in that order, exact |
 | `ps3d` | `ps3d-frame`: one PureSignal display chunk, eight points and four correction points | none | Every header field and the eight value lists; `tolerance` `{"absolute": 0}`, because the values travel as IEEE-754 binary64 |
 | `nsdc1` | `nsdc1-full`: frame 1, a keyframe | none | `disposition` `accepted`, `reason` `none`, `keyframe` (the header's keyframe flag), the context (`endpointId`, `contextGeneration`, `minDbm`, `maxDbm`), `encoderSequence`, `producerTimestamp`, `waterfallAdvance` and the reconstructed `traceDbm`, `waterfallDbm` and `wideDbm` rows; `tolerance` `{"dbm": 0.01}` |

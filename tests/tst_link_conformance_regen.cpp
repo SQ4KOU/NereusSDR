@@ -63,6 +63,7 @@ private slots:
     void initTestCase();
     void writeLanAnnouncement();
     void writeLanAnnouncement2();
+    void writeLanAnnouncement2Trailing();
     void writeDnsSdTxt();
     void writePs3dFrame();
     void writeNsdcFrames();
@@ -121,6 +122,22 @@ void TstLinkConformanceRegen::writeLanAnnouncement2()
     QVERIFY(write(QStringLiteral("lan-announcement-2"), bytes,
                   QJsonObject{{QStringLiteral("codec"), QStringLiteral("nrsc1")},
                               {QStringLiteral("expect"), LinkMediaVectors::toJson(value)}}));
+}
+
+// Schema 2 extends by appending: the same Core with bytes after its known
+// fields, which a reader ignores (link document section 14.1).
+void TstLinkConformanceRegen::writeLanAnnouncement2Trailing()
+{
+    const StationLanAnnouncement value = LinkMediaVectors::lanAnnouncement2();
+    QString error;
+    const QByteArray known = encodeStationLanAnnouncement(value, &error);
+    QVERIFY2(!known.isEmpty(), qPrintable(error));
+    const QByteArray trailing = LinkMediaVectors::lanAnnouncementTrailingBytes();
+    QJsonObject expect = LinkMediaVectors::toJson(value);
+    expect.insert(QStringLiteral("ignoredTrailingBytes"), int(trailing.size()));
+    QVERIFY(write(QStringLiteral("lan-announcement-2-trailing"), known + trailing,
+                  QJsonObject{{QStringLiteral("codec"), QStringLiteral("nrsc1")},
+                              {QStringLiteral("expect"), expect}}));
 }
 
 void TstLinkConformanceRegen::writeDnsSdTxt()

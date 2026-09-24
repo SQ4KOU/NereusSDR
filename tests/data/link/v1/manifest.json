@@ -98,6 +98,7 @@
         {"id": "session-verbs-notch", "file": "sessions/verbs-notch.json", "kind": "session", "requires": {"notchControlVersion": 1}},
         {"id": "media-lan-announcement", "file": "media/lan-announcement.bin", "kind": "media", "requires": {}},
         {"id": "media-lan-announcement-2", "file": "media/lan-announcement-2.bin", "kind": "media", "requires": {}},
+        {"id": "media-lan-announcement-2-trailing", "file": "media/lan-announcement-2-trailing.bin", "kind": "media", "requires": {}},
         {"id": "media-dnssd-txt", "file": "media/dnssd-txt.bin", "kind": "media", "requires": {}},
         {"id": "media-ps3d-frame", "file": "media/ps3d-frame.bin", "kind": "media", "requires": {"psDisplayVersion": 1}},
         {"id": "media-nsdc1-full", "file": "media/nsdc1-full.bin", "kind": "media", "requires": {"remoteMediaVersion": 1}},

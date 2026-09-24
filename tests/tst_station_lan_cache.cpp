@@ -222,7 +222,19 @@ private slots:
         QVERIFY(!decodeStationLanAnnouncement(invalid, &error));
         QCOMPARE(error, QStringLiteral("Station LAN announcement has an invalid label."));
         QVERIFY(!decodeStationLanAnnouncement(encoded.chopped(1), &error));
-        QVERIFY(!decodeStationLanAnnouncement(encoded + '\x00', &error));
+        // Schema 2 extends by appending: bytes after the known fields are
+        // ignored, up to the datagram bound.
+        const auto extended = decodeStationLanAnnouncement(encoded + QByteArray("\x01\x02\x03", 3), &error);
+        QVERIFY2(extended, qPrintable(error));
+        QCOMPARE(*extended, source);
+        QVERIFY(decodeStationLanAnnouncement(
+            encoded + QByteArray(kStationLanMaxDatagramBytes - encoded.size(), '\x7f'), &error));
+        QVERIFY(!decodeStationLanAnnouncement(
+            encoded + QByteArray(kStationLanMaxDatagramBytes - encoded.size() + 1, '\x7f'), &error));
+        QCOMPARE(error, QStringLiteral("Station LAN announcement is too large."));
+        // Schema 1 stays exact.
+        QVERIFY(!decodeStationLanAnnouncement(wire(value()) + '\x00', &error));
+        QCOMPARE(error, QStringLiteral("Station LAN announcement is malformed."));
         invalid = encoded;
         invalid[4] = '\x01'; // schema 1 with a schema-2 tail: bytes left over
         QVERIFY(!decodeStationLanAnnouncement(invalid, &error));

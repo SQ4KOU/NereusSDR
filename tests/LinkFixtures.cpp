@@ -1339,6 +1339,12 @@ StationLanAnnouncement LinkMediaVectors::lanAnnouncement2()
     return value;
 }
 
+QByteArray LinkMediaVectors::lanAnnouncementTrailingBytes()
+{
+    // Shaped like a future field: a tag, a length and three bytes.
+    return QByteArray("\x07\x03\x61\x62\x63", 5);
+}
+
 QJsonObject LinkMediaVectors::toJson(const StationLanAnnouncement& value)
 {
     QJsonObject json{
