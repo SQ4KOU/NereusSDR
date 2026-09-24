@@ -102,6 +102,40 @@ library from source, it also writes `deepfilternet-crates.txt` here with
 its version, its licence expression and its licence and notice files,
 copied byte for byte.
 
+## Opus model data
+
+The RADE build of Opus downloads its LPCNet, FARGAN and other neural
+network model data as `opus_data-4ed9445b96698bad25d852e912b41495ddfa30c8dbc8a55f9cde5826ed793453.tar.gz`
+from media.xiph.org (`dnn/download_model.sh`, called by `autogen.sh` at
+Opus 940d4e5a) and compiles the data files it holds into the library.
+The archive holds model files and generated C sources, with no licence
+file, and the generated C sources carry no notice. Neither
+`dnn/download_model.sh` nor `dnn/download_model.bat` says anything about
+a licence. The upstream statements nearest to the data are these.
+
+Opus `README` at 940d4e5a:
+
+      The Opus format and this implementation of it are subject to the royalty-
+    free patent and copyright licenses specified in the file COPYING.
+
+and, in its "Deep Learning and Opus" section:
+
+    The license behind Opus or the intellectual property position of Opus does
+    not change with Opus 1.5.
+
+Opus `dnn/README.md` at 940d4e5a:
+
+    The BSD licensed software is written in C and Python/Keras. For training, a GTX 1080 Ti or better is recommended.
+
+Opus `dnn/torch/fargan/README.md` at 940d4e5a:
+
+    Implementation of FARGAN, a low-complexity neural vocoder. Pre-trained models
+    are provided as C code in the dnn/ directory with the corresponding model in
+    dnn/models/ directory (name starts with fargan_). If you don't want to train
+    a new FARGAN model, you can skip straight to the Inference section.
+
+No upstream statement names a licence for the model data itself.
+
 Per-file attribution for ported code lives in the source-file headers
 and is indexed in `docs/attribution/THETIS-PROVENANCE.md`,
 `docs/attribution/aethersdr-reconciliation.md`, and
