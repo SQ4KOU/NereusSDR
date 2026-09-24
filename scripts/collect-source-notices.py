@@ -14,7 +14,9 @@ For one library it:
      header they include from the library's own tree;
   2. extracts each notice block: a comment (or run of adjacent comments)
      holding a copyright line, from that line to the end of the comment,
-     byte for byte;
+     byte for byte. Comments NereusSDR wrote (modification histories, port
+     notes, NereusSDR-original file headers: any comment naming NereusSDR
+     or KG4VCF) are left out, so the file holds upstream notices only;
   3. drops blocks the library's licence text already carries: every
      copyright line in the block appears in the text, and the rest of the
      block is either in the text or holds no licence terms;
@@ -89,34 +91,66 @@ def read_source(path: Path) -> str:
         return fh.read()
 
 
-def _comment_spans(text: str) -> list[tuple[int, int]]:
-    """(start, end) of every C/C++ comment, adjacent comments merged.
+def _comment_groups(text: str) -> list[list[tuple[int, int]]]:
+    """Every run of adjacent C/C++ comments, as a list of comment units.
 
-    Adjacent means only whitespace between them. String and character
-    literals are matched first so a "/*" inside one opens no comment.
+    A unit is one block comment, or a run of line comments with no blank
+    line between them. Units in a run have only whitespace between them.
+    String and character literals are matched first so a "/*" inside one
+    opens no comment.
     """
-    spans = [(m.start(), m.end()) for m in _TOKEN_RE.finditer(text)
-             if m.group(0).startswith("/")]
-
-    merged: list[tuple[int, int]] = []
-    for start, end in spans:
-        if merged and text[merged[-1][1]:start].strip() == "":
-            merged[-1] = (merged[-1][0], end)
+    units: list[tuple[int, int]] = []
+    for match in _TOKEN_RE.finditer(text):
+        if not match.group(0).startswith("/"):
+            continue
+        start, end = match.start(), match.end()
+        if (units and match.group(0).startswith("//")
+                and text[units[-1][0]:units[-1][0] + 2] == "//"
+                and text[units[-1][1]:start].strip() == ""
+                and text[units[-1][1]:start].count("\n") <= 1):
+            units[-1] = (units[-1][0], end)
         else:
-            merged.append((start, end))
-    return merged
+            units.append((start, end))
+
+    groups: list[list[tuple[int, int]]] = []
+    for unit in units:
+        if groups and text[groups[-1][-1][1]:unit[0]].strip() == "":
+            groups[-1].append(unit)
+        else:
+            groups.append([unit])
+    return groups
+
+
+def is_nereussdr_comment(comment: str) -> bool:
+    """True for a comment NereusSDR wrote: a modification history, a port
+    note, a NereusSDR-original file header. Upstream code never names
+    NereusSDR or its maintainer's callsign."""
+    return "NereusSDR" in comment or "KG4VCF" in comment
 
 
 def extract_blocks(text: str) -> list[str]:
-    """Every notice block in a source file, byte for byte."""
+    """Every upstream notice block in a source file, byte for byte.
+
+    Comments NereusSDR wrote are left out: a run of comments is cut at
+    each of them, and the pieces either side are read separately.
+    """
     blocks: list[str] = []
-    for start, end in _comment_spans(text):
-        comment = text[start:end]
-        match = _COPYRIGHT_RE.search(comment)
-        if not match:
-            continue
-        line_start = comment.rfind("\n", 0, match.start()) + 1
-        blocks.append(comment[line_start:])
+    for group in _comment_groups(text):
+        pieces: list[list[tuple[int, int]]] = [[]]
+        for start, end in group:
+            if is_nereussdr_comment(text[start:end]):
+                pieces.append([])
+            else:
+                pieces[-1].append((start, end))
+        for piece in pieces:
+            if not piece:
+                continue
+            comment = text[piece[0][0]:piece[-1][1]]
+            match = _COPYRIGHT_RE.search(comment)
+            if not match:
+                continue
+            line_start = comment.rfind("\n", 0, match.start()) + 1
+            blocks.append(comment[line_start:])
     return blocks
 
 

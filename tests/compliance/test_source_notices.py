@@ -72,6 +72,41 @@ def test_comment_opener_inside_a_string_is_ignored():
     assert sn.extract_blocks(text) == []
 
 
+def test_nereussdr_modification_history_is_left_out():
+    # The WDSP layout: upstream header, the upstream dual-licensing
+    # statement right under it, a NereusSDR modification history after a
+    # blank line, then another upstream header straight after that.
+    upstream = ("/*  cfcomp.c\n\nCopyright (C) 2017, 2021 Warren Pratt, NR0V\n\n"
+                "This program is free software; you can redistribute it.\n*/\n"
+                "//\n"
+                "// Dual-Licensing Statement (Richard Samphire MW0LGE)\n"
+                "// reserves the right to license his code under other terms.\n")
+    history = ("\n"
+               "//\n"
+               "// =============================================================\n"
+               "// Modification history (NereusSDR):\n"
+               "//   2026-04-30 - Synced from Thetis. J.J. Boyd (KG4VCF).\n"
+               "// =============================================================\n")
+    second = "/* Copyright (C) 2025 Warren Pratt, NR0V */\n"
+    text = upstream + history + second + "\n#include \"comm.h\"\n"
+    blocks = sn.extract_blocks(text)
+    assert blocks == [
+        "Copyright (C) 2017, 2021 Warren Pratt, NR0V\n\n"
+        "This program is free software; you can redistribute it.\n*/\n"
+        "//\n"
+        "// Dual-Licensing Statement (Richard Samphire MW0LGE)\n"
+        "// reserves the right to license his code under other terms.",
+        "/* Copyright (C) 2025 Warren Pratt, NR0V */",
+    ]
+    assert not any("NereusSDR" in b or "KG4VCF" in b for b in blocks)
+
+
+def test_nereussdr_original_file_header_is_left_out():
+    text = ("/*\n * Copyright (C) 2026 J.J. Boyd, KG4VCF (NereusSDR-original glue)\n"
+            " * GPL-3.0-or-later.\n */\nint x;\n")
+    assert sn.extract_blocks(text) == []
+
+
 # --------------------------------------------------------------------------
 # Carried by the licence text or not
 

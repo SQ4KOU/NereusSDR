@@ -90,7 +90,9 @@ their top-level licence text does not: other holders, other years or
 other licences. Each `<library>-notices.txt` file lists those notices,
 each distinct notice once and exactly as the source file writes it, with
 the files it appears in. They cover the files NereusSDR compiles into its
-programs. `scripts/collect-source-notices.py <library>` writes them;
+programs, and hold upstream notices only: comments NereusSDR itself wrote
+in those files (modification histories, port notes, the headers of
+NereusSDR's own glue files) are left out. `scripts/collect-source-notices.py <library>` writes them;
 rerun it after a vendor update. libspecbleach has no such file: its source
 files carry only the notice `libspecbleach.txt` and `LGPLv2.1.txt` already
 hold. The DeepFilterNet header NereusSDR compiles carries no notice.
