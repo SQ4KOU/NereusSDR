@@ -72,6 +72,10 @@
 //                 chkAntiVoxSource at setup.designer.cs:44646-44657
 //                 [v2.10.3.13]; see commit message for rationale.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 fix wave: setHpsdrModel clamps the stored tune
+//                 power (fixed and per band) to the new model's range on a
+//                 model holding a radio's transmit settings. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs (Thetis v2.10.3.13) ---
@@ -897,6 +901,22 @@ void TransmitModel::setTunePower(int watts)
     m_tunePower = clamped;
     persistOne(QStringLiteral("FixedTunePower"), QString::number(clamped));
     emit tunePowerChanged(clamped);
+}
+
+void TransmitModel::setHpsdrModel(HPSDRModel m)
+{
+    m_hpsdrModel = m;
+    // R-R3-46 fix wave: the tune-power ceiling follows the model (HL2
+    // 0..99, others 0..100; setTunePower / setTunePowerForBand). Only a
+    // model holding this radio's transmit settings re-clamps them; a remote
+    // window's are the Core's, which clamps its own.
+    if (m_persistMac.isEmpty()) {
+        return;
+    }
+    setTunePower(m_tunePower);
+    for (int i = 0; i < kBandCount; ++i) {
+        setTunePowerForBand(static_cast<Band>(i), m_tunePowerByBand[static_cast<std::size_t>(i)]);
+    }
 }
 
 void TransmitModel::setTxPostGenToneMag(double mag)

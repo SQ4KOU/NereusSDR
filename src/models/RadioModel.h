@@ -46,8 +46,9 @@
 //                 scheduleRemoteHardwareApply(), requestIoBoardProbe(). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-23 - R-R3-46 fix wave: ioBoardFacade(), the `ioBoard` object;
-//                 scheduleRemoteOcReload(). J.J. Boyd (KG4VCF), AI-assisted
-//                 via Anthropic Claude Code.
+//                 scheduleRemoteOcReload(); rxMeterOffsetDb() is 0 on a
+//                 Remote model. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-23 - R-R3-47 / R-R3-22: amplifierModel() and rfKitModel(), the
 //                 Power Genius and RF-Kit status objects. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -1921,6 +1922,9 @@ public:
     // applied to those exact reading types.  ADC_PK / ADC_AV / AGC_PK /
     // AGC_AV / AGC_GAIN do NOT take the offset (Thetis line 46831-46835
     // omit +offset for the same reason).
+    //
+    // R-R3-46: 0 on a Remote model; the Core's readings and spectrum frames
+    // already carry the Core's offset.
     double rxMeterOffsetDb() const;
 
 signals:

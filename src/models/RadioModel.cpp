@@ -99,11 +99,9 @@
 //                 restores its attenuator and preamp and sends them to the
 //                 radio (Thetis console.cs:17325 [v2.10.3.15]). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
-//   2026-09-23 - R-R3-46 fix wave: renamed followReceiveSliceWithStepAttenuator
-//                 / syncStepAttenuatorToReceiveSlice; the attenuator follows
-//                 slice A's receive band (Thetis rx1_band), the ATT-on-TX
-//                 value the transmit slice's band; the Core calls it too.
-//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 fix wave: attenuator follows slice A, ioBoard,
+//                 OC reload, torn load reads, remote meter offset 0. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3890,6 +3888,15 @@ void RadioModel::reportStationRetuneRejected(int sliceId, const QString& reason)
 // (planned next).  Power users can edit the key directly today.
 double RadioModel::rxMeterOffsetDb() const
 {
+    // R-R3-46 fix wave: a remote window's readings are already calibrated.
+    // The Core adds its own offset (its attenuator, preamp and meter cal)
+    // to the S-meter values its SliceMeterPump mirrors and to the spectrum
+    // frames it sends (DaemonMediaController), so the window adds none: its
+    // own controller would put a second offset on the spectrum and on Max
+    // Bin, which reads the window's spectrum.
+    if (m_role == Role::Remote) {
+        return 0.0;
+    }
     const HPSDRModel model = m_hardwareProfile.model;
 
     // Per-radio factory cal default + user override (AppSettings key

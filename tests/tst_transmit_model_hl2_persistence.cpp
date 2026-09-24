@@ -26,6 +26,7 @@
 #include <QtTest/QtTest>
 #include "models/TransmitModel.h"
 #include "core/HpsdrModel.h"
+#include "core/AppSettings.h"
 
 using NereusSDR::HPSDRModel;
 
@@ -82,6 +83,39 @@ private slots:
         m.setHpsdrModel(HPSDRModel::HERMESLITE);
         m.setTunePower(150);
         QCOMPARE(m.tunePower(), 99);
+    }
+
+    // R-R3-46 fix wave: PowerPage::applyHpsdrModel no longer lets its
+    // spinbox's range clamp write tune power back, so a model change must
+    // keep the stored value valid itself: 100 W stored on another radio is
+    // 99 (0 dB) on an HL2, saved for the radio. A model that holds no
+    // radio's transmit settings (a remote window's copy of the Core's) is
+    // left alone.
+    void modelChangeClampsTheStoredTunePower() {
+        const QString mac = QStringLiteral("02:00:00:00:75:01");
+        auto& s = NereusSDR::AppSettings::instance();
+        s.clearHardwareValues(mac);
+        NereusSDR::TransmitModel m;
+        m.setHpsdrModel(HPSDRModel::ANAN100);
+        m.loadFromSettings(mac);
+        m.setTunePower(100);
+        m.setTunePowerForBand(NereusSDR::Band::Band40m, 100);
+        QSignalSpy changed(&m, &NereusSDR::TransmitModel::tunePowerChanged);
+        m.setHpsdrModel(HPSDRModel::HERMESLITE);
+        QCOMPARE(m.tunePower(), 99);
+        QCOMPARE(changed.count(), 1);
+        QCOMPARE(s.value(QStringLiteral("hardware/%1/tx/FixedTunePower").arg(mac)).toString(),
+                 QStringLiteral("99"));
+        QCOMPARE(m.tunePowerForBand(NereusSDR::Band::Band40m), 99);
+        s.clearHardwareValues(mac);
+
+        NereusSDR::TransmitModel window;
+        window.setHpsdrModel(HPSDRModel::ANAN100);
+        window.setTunePower(100);
+        QSignalSpy untouched(&window, &NereusSDR::TransmitModel::tunePowerChanged);
+        window.setHpsdrModel(HPSDRModel::HERMESLITE);
+        QCOMPARE(window.tunePower(), 100);
+        QCOMPARE(untouched.count(), 0);
     }
 
     void nonHl2_setTunePower_global_clamps_to_100() {
