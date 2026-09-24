@@ -18,6 +18,11 @@
 //                                    linkMajors read against the
 //                                    station's supported majors.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
+//                                    fixtures say which ends run them and
+//                                    each client step's role; placeholders
+//                                    in client messages.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -93,6 +98,14 @@ QString placeholderArgument(const QString& text, const QString& prefix)
     return text.startsWith(prefix) ? text.mid(prefix.size()) : QString();
 }
 
+// The placeholders of the link document's section 16.3, by their text.
+//   $any                 any value (the key must be present)
+//   $string[:<name>]     any string; with a name, also recorded
+//   $int[:<name>]        any whole number; with a name, also recorded
+//   $object              any JSON object
+//   $capture:<name>      any value, recorded
+//   $ref:<name>          equal to the value recorded under <name>
+//   $within:<t>:<v>      a number no further than <t> from <v>
 bool isPlaceholder(const QJsonValue& value)
 {
     if (!value.isString()) {
@@ -100,9 +113,35 @@ bool isPlaceholder(const QJsonValue& value)
     }
     const QString text = value.toString();
     return text == QStringLiteral("$any") || text == QStringLiteral("$string")
-        || text == QStringLiteral("$int")
+        || text == QStringLiteral("$int") || text == QStringLiteral("$object")
+        || (text.startsWith(QStringLiteral("$string:")) && text.size() > 8)
+        || (text.startsWith(QStringLiteral("$int:")) && text.size() > 5)
         || (text.startsWith(QStringLiteral("$capture:")) && text.size() > 9)
-        || (text.startsWith(QStringLiteral("$ref:")) && text.size() > 5);
+        || (text.startsWith(QStringLiteral("$ref:")) && text.size() > 5)
+        || text.startsWith(QStringLiteral("$within:"));
+}
+
+bool isWholeNumber(const QJsonValue& value)
+{
+    const double d = value.toDouble();
+    return value.isDouble() && std::isfinite(d)
+        && d == static_cast<double>(static_cast<qint64>(d));
+}
+
+// "$within:<tolerance>:<value>", both in JSON number syntax; false when
+// the text is not that.
+bool parseWithin(const QString& text, double* tolerance, double* centre)
+{
+    const QStringList parts = text.mid(8).split(QLatin1Char(':'));
+    if (parts.size() != 2) {
+        return false;
+    }
+    bool okTolerance = false;
+    bool okCentre = false;
+    *tolerance = parts.at(0).toDouble(&okTolerance);
+    *centre = parts.at(1).toDouble(&okCentre);
+    return okTolerance && okCentre && std::isfinite(*tolerance) && *tolerance >= 0.0
+        && std::isfinite(*centre);
 }
 
 QString expectKeys(const QJsonObject& object, const QStringList& required,
@@ -401,17 +440,44 @@ QString LinkFixtures::match(const QJsonValue& expected, const QJsonValue& actual
         if (text == QStringLiteral("$any")) {
             return QString();
         }
-        if (text == QStringLiteral("$string")) {
-            return actual.isString()
+        if (text == QStringLiteral("$object")) {
+            return actual.isObject()
                        ? QString()
-                       : QStringLiteral("%1: expected a string, got %2").arg(path, shown(actual));
+                       : QStringLiteral("%1: expected an object, got %2").arg(path, shown(actual));
         }
-        if (text == QStringLiteral("$int")) {
-            const double d = actual.toDouble();
-            return actual.isDouble() && d == static_cast<double>(static_cast<qint64>(d))
-                       ? QString()
-                       : QStringLiteral("%1: expected a whole number, got %2")
-                             .arg(path, shown(actual));
+        if (text == QStringLiteral("$string") || text.startsWith(QStringLiteral("$string:"))) {
+            if (!actual.isString()) {
+                return QStringLiteral("%1: expected a string, got %2").arg(path, shown(actual));
+            }
+            const QString name = placeholderArgument(text, QStringLiteral("$string:"));
+            if (!name.isEmpty()) {
+                captures->insert(name, actual);
+            }
+            return QString();
+        }
+        if (text == QStringLiteral("$int") || text.startsWith(QStringLiteral("$int:"))) {
+            if (!isWholeNumber(actual)) {
+                return QStringLiteral("%1: expected a whole number, got %2")
+                    .arg(path, shown(actual));
+            }
+            const QString name = placeholderArgument(text, QStringLiteral("$int:"));
+            if (!name.isEmpty()) {
+                captures->insert(name, actual);
+            }
+            return QString();
+        }
+        if (text.startsWith(QStringLiteral("$within:"))) {
+            double tolerance = 0.0;
+            double centre = 0.0;
+            if (!parseWithin(text, &tolerance, &centre)) {
+                return QStringLiteral("%1: %2 is not $within:<tolerance>:<value>").arg(path, text);
+            }
+            if (!actual.isDouble() || std::abs(actual.toDouble() - centre) > tolerance) {
+                return QStringLiteral("%1: expected a number within %2 of %3, got %4")
+                    .arg(path, QString::number(tolerance, 'g', 17),
+                         QString::number(centre, 'g', 17), shown(actual));
+            }
+            return QString();
         }
         const QString capture = placeholderArgument(text, QStringLiteral("$capture:"));
         if (!capture.isEmpty()) {
@@ -487,27 +553,47 @@ QString LinkFixtures::match(const QJsonValue& expected, const QJsonValue& actual
                                     .arg(path, shown(expected), shown(actual));
 }
 
-QJsonValue LinkFixtures::substitute(const QJsonValue& value, const Captures& captures,
-                                    QString* error)
+QJsonValue LinkFixtures::substitute(const QJsonValue& value, Captures* captures,
+                                    int* counter, QString* error)
 {
     if (isPlaceholder(value)) {
-        const QString ref = placeholderArgument(value.toString(), QStringLiteral("$ref:"));
+        const QString text = value.toString();
+        if (text == QStringLiteral("$string") || text.startsWith(QStringLiteral("$string:"))) {
+            const QJsonValue filled(QStringLiteral("conformance"));
+            const QString name = placeholderArgument(text, QStringLiteral("$string:"));
+            if (!name.isEmpty()) {
+                captures->insert(name, filled);
+            }
+            return filled;
+        }
+        if (text == QStringLiteral("$int")) {
+            return QJsonValue(0);
+        }
+        const QString counted = placeholderArgument(text, QStringLiteral("$int:"));
+        if (!counted.isEmpty()) {
+            const QJsonValue filled(++*counter);
+            captures->insert(counted, filled);
+            return filled;
+        }
+        if (text == QStringLiteral("$object")) {
+            return QJsonObject{};
+        }
+        const QString ref = placeholderArgument(text, QStringLiteral("$ref:"));
         if (ref.isEmpty()) {
-            *error = QStringLiteral("%1 cannot be sent; only $ref:<name> can")
-                         .arg(value.toString());
+            *error = QStringLiteral("%1 cannot stand in a client message").arg(text);
             return {};
         }
-        if (!captures.contains(ref)) {
+        if (!captures->contains(ref)) {
             *error = QStringLiteral("$ref:%1 names nothing captured").arg(ref);
             return {};
         }
-        return captures.value(ref);
+        return captures->value(ref);
     }
     if (value.isObject()) {
         QJsonObject out;
         const QJsonObject in = value.toObject();
         for (auto it = in.constBegin(); it != in.constEnd(); ++it) {
-            out.insert(it.key(), substitute(it.value(), captures, error));
+            out.insert(it.key(), substitute(it.value(), captures, counter, error));
             if (!error->isEmpty()) {
                 return {};
             }
@@ -517,7 +603,7 @@ QJsonValue LinkFixtures::substitute(const QJsonValue& value, const Captures& cap
     if (value.isArray()) {
         QJsonArray out;
         for (const QJsonValue& element : value.toArray()) {
-            out.append(substitute(element, captures, error));
+            out.append(substitute(element, captures, counter, error));
             if (!error->isEmpty()) {
                 return {};
             }
@@ -572,13 +658,109 @@ QString LinkFixtures::runControl(const QJsonObject& fixture)
     return QString();
 }
 
-QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& server,
-                                 LoopbackTransport& transport)
+bool LinkFixtures::runsOn(const QJsonObject& fixture, const QString& end)
 {
-    QString problem = expectKeys(fixture, {QStringLiteral("stationSetup"), QStringLiteral("steps")},
+    for (const QJsonValue& value : fixture.value(QStringLiteral("runs")).toArray()) {
+        if (value.toString() == end) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
+{
+    QString problem = expectKeys(fixture,
+                                 {QStringLiteral("runs"), QStringLiteral("stationSetup"),
+                                  QStringLiteral("steps")},
                                  {}, QStringLiteral("session fixture"));
     if (!problem.isEmpty()) {
         return problem;
+    }
+    const QJsonValue runs = fixture.value(QStringLiteral("runs"));
+    QSet<QString> ends;
+    for (const QJsonValue& value : runs.toArray()) {
+        const QString end = value.toString();
+        if ((end != QStringLiteral("station") && end != QStringLiteral("app"))
+            || ends.contains(end)) {
+            ends.clear();
+            break;
+        }
+        ends.insert(end);
+    }
+    if (!runs.isArray() || ends.isEmpty() || ends.size() != runs.toArray().size()) {
+        return QStringLiteral("session fixture: runs must list \"station\" and/or \"app\", "
+                              "each once");
+    }
+    if (!fixture.value(QStringLiteral("stationSetup")).isObject()) {
+        return QStringLiteral("session fixture: stationSetup must be an object");
+    }
+    const QJsonArray steps = fixture.value(QStringLiteral("steps")).toArray();
+    if (steps.isEmpty()) {
+        return QStringLiteral("session fixture: no steps");
+    }
+    for (int index = 0; index < steps.size(); ++index) {
+        const QString where = QStringLiteral("step %1").arg(index);
+        if (!steps.at(index).isObject()) {
+            return where + QStringLiteral(": not an object");
+        }
+        const QJsonObject step = steps.at(index).toObject();
+        if (step.contains(QStringLiteral("from"))) {
+            const QString from = step.value(QStringLiteral("from")).toString();
+            if (from == QStringLiteral("client")) {
+                problem = expectKeys(step,
+                                     {QStringLiteral("from"), QStringLiteral("role"),
+                                      QStringLiteral("message")},
+                                     {}, where);
+                const QString role = step.value(QStringLiteral("role")).toString();
+                if (problem.isEmpty() && role != QStringLiteral("behaviour")
+                    && role != QStringLiteral("scripted")) {
+                    problem = where + QStringLiteral(": role must be \"behaviour\" or "
+                                                     "\"scripted\"");
+                }
+            } else if (from == QStringLiteral("station")) {
+                problem = expectKeys(step, {QStringLiteral("from"), QStringLiteral("message")},
+                                     {}, where);
+            } else {
+                problem = where + QStringLiteral(": from must be \"station\" or \"client\"");
+            }
+            if (problem.isEmpty() && !step.value(QStringLiteral("message")).isObject()) {
+                problem = where + QStringLiteral(": message must be an object");
+            }
+        } else if (step.contains(QStringLiteral("advanceMs"))) {
+            problem = expectKeys(step, {QStringLiteral("advanceMs")}, {}, where);
+            const double ms = step.value(QStringLiteral("advanceMs")).toDouble(-1.0);
+            if (problem.isEmpty()
+                && (ms < 0.0 || ms != static_cast<double>(static_cast<qint64>(ms)))) {
+                problem = where + QStringLiteral(": advanceMs must be a whole number of at "
+                                                 "least 0");
+            }
+        } else if (step.contains(QStringLiteral("expectClosed"))) {
+            problem = expectKeys(step, {QStringLiteral("expectClosed")}, {}, where);
+            if (problem.isEmpty()) {
+                problem = expectKeys(step.value(QStringLiteral("expectClosed")).toObject(),
+                                     {QStringLiteral("retryable")}, {},
+                                     where + QStringLiteral(" expectClosed"));
+            }
+        } else {
+            problem = where + QStringLiteral(": not a message, advanceMs or expectClosed step");
+        }
+        if (!problem.isEmpty()) {
+            return problem;
+        }
+    }
+    return QString();
+}
+
+QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& server,
+                                 LoopbackTransport& transport)
+{
+    QString problem = checkSessionFormat(fixture);
+    if (!problem.isEmpty()) {
+        return problem;
+    }
+    if (!runsOn(fixture, QStringLiteral("station"))) {
+        return QStringLiteral("session fixture: \"runs\" does not name the station");
     }
     const QJsonObject setup = fixture.value(QStringLiteral("stationSetup")).toObject();
     const QJsonArray steps = fixture.value(QStringLiteral("steps")).toArray();
@@ -600,6 +782,7 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
 
     Captures captures;
     captures.insert(QStringLiteral("token"), server.token());
+    int counter = 0;
     VirtualClock clock(&server);
     int consumed = 0;
     bool lastRetryable = false;
@@ -643,11 +826,6 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
         const QJsonObject step = steps.at(index).toObject();
 
         if (step.contains(QStringLiteral("from"))) {
-            problem = expectKeys(step, {QStringLiteral("from"), QStringLiteral("message")}, {},
-                                 QStringLiteral("step %1").arg(index));
-            if (!problem.isEmpty()) {
-                return problem;
-            }
             const QString from = step.value(QStringLiteral("from")).toString();
             const QJsonValue message = step.value(QStringLiteral("message"));
             if (!message.isObject()) {
@@ -655,7 +833,9 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
             }
             if (from == QStringLiteral("client")) {
                 QString error;
-                const QJsonValue sent = substitute(message, captures, &error);
+                // Behaviour or scripted, the station's runner sends the
+                // message itself, placeholders filled (section 16.3).
+                const QJsonValue sent = substitute(message, &captures, &counter, &error);
                 if (!error.isEmpty()) {
                     return QStringLiteral("%1: %2").arg(describe(index), error);
                 }

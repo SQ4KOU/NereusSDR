@@ -12,16 +12,21 @@
 //   manifest.json   {"linkMajors":[1],"fixtures":[{"id","file","kind",
 //                   "requires"}]}
 //   control/*.json  {"from":"station"|"client","wire":{...},"decodes":bool}
-//   sessions/*.json {"stationSetup":{...},"steps":[...]}, a step being
-//                   {"from","message"}, {"advanceMs":N} or
+//   sessions/*.json {"runs":["station","app"],"stationSetup":{...},
+//                   "steps":[...]}, a step being {"from":"station",
+//                   "message"}, {"from":"client","role":"behaviour"|
+//                   "scripted","message"}, {"advanceMs":N} or
 //                   {"expectClosed":{"retryable":bool}}
 //   media/*.bin     one packet as it travels, with *.expect.json
 //                   {"codec":...,"expect":{...}}; "after" in expect names
 //                   the vectors a fresh decoder takes first
 //
 // This file holds what every station runner shares: the loader, the
-// placeholder matcher ("$any", "$string", "$int", "$capture:<name>",
-// "$ref:<name>"), the control fixture check and the session script player.
+// placeholder matcher and filler ("$any", "$string[:<name>]",
+// "$int[:<name>]", "$object", "$capture:<name>", "$ref:<name>",
+// "$within:<t>:<v>"; section 16.1 says where each may stand and how a
+// sender fills it), the control fixture check and the session script
+// player.
 // Building the station a session fixture describes (its stationSetup) is
 // the session test's own job, because it needs the fake radio.
 //
@@ -37,6 +42,11 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
 //                                    linkMajors read against the
 //                                    station's supported majors.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
+//                                    fixtures say which ends run them and
+//                                    each client step's role; placeholders
+//                                    in client messages.
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -106,11 +116,22 @@ public:
     static QString match(const QJsonValue& expected, const QJsonValue& actual,
                          Captures* captures, const QString& path = QStringLiteral("$"));
 
-    /// A message to inject, with every "$ref:<name>" replaced by its
-    /// recorded value. Any other placeholder is an error: a runner cannot
-    /// invent a value to send.
-    static QJsonValue substitute(const QJsonValue& value, const Captures& captures,
+    /// A client message to send, placeholders filled as the link
+    /// document's section 16.3 says both runners fill them: "$string" and
+    /// "$string:<name>" with "conformance", "$int" with 0, "$int:<name>"
+    /// with the next whole number of `counter` (1 first in each fixture),
+    /// "$object" with {}, "$ref:<name>" with the recorded value. Named ones
+    /// are recorded into `captures`. Any other placeholder is an error.
+    static QJsonValue substitute(const QJsonValue& value, Captures* captures, int* counter,
                                  QString* error);
+
+    /// The session fixture's shape (section 16.1): "runs", "stationSetup"
+    /// and "steps", a client step's "role", each step's keys. Empty when it
+    /// holds.
+    static QString checkSessionFormat(const QJsonObject& fixture);
+
+    /// Whether the fixture's "runs" names `end` ("station" or "app").
+    static bool runsOn(const QJsonObject& fixture, const QString& end);
 
     /// Decodes `wire` with the station's codec (SessionMessages::decode);
     /// when `decodes` is true, encodes the result again and compares the

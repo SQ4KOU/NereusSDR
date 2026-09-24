@@ -56,6 +56,11 @@
 //                                    receive-only station at once; only
 //                                    the slices' readings are waited for.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
+//                                    fixtures say which ends run them and
+//                                    each client step's role; placeholders
+//                                    in client messages.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -69,6 +74,7 @@
 #include <QSet>
 #include <QTemporaryDir>
 
+#include <functional>
 #include <memory>
 
 #include "core/AppSettings.h"
@@ -82,6 +88,7 @@
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationServer.h"
+#include "core/settings/SettingsScope.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -258,6 +265,205 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
     return QString();
 }
 
+// A placeholder text of the link document's section 16.3.
+bool isPlaceholderText(const QJsonValue& value)
+{
+    return value.isString() && value.toString().startsWith(QLatin1Char('$'));
+}
+
+// Every string value at any depth under `value`, with its path.
+void collectStrings(const QJsonValue& value, const QString& path,
+                    QList<QPair<QString, QString>>* out)
+{
+    if (value.isString()) {
+        out->append({path, value.toString()});
+    } else if (value.isObject()) {
+        const QJsonObject o = value.toObject();
+        for (auto it = o.constBegin(); it != o.constEnd(); ++it) {
+            collectStrings(it.value(), path + QLatin1Char('.') + it.key(), out);
+        }
+    } else if (value.isArray()) {
+        const QJsonArray a = value.toArray();
+        for (int i = 0; i < a.size(); ++i) {
+            collectStrings(a.at(i), QStringLiteral("%1[%2]").arg(path).arg(i), out);
+        }
+    }
+}
+
+// Why a fixture marked for the app holds something a conformant client
+// could not send, or an app runner could not play (section 16.3); empty
+// when it holds none. `surface` is surface.json.
+QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture,
+                                   const QJsonObject& surface)
+{
+    QStringList problems;
+    const auto fail = [&problems, &id](int step, const QString& why) {
+        problems.append(QStringLiteral("%1 step %2: %3").arg(id).arg(step).arg(why));
+    };
+    QHash<QString, QJsonObject> verbs;
+    for (const QJsonValue& v : surface.value(QStringLiteral("commands")).toArray()) {
+        verbs.insert(v.toObject().value(QStringLiteral("verb")).toString(), v.toObject());
+    }
+    const QJsonObject classes = surface.value(QStringLiteral("mirrorClasses")).toObject();
+    const QSet<QString> clientKinds{
+        QStringLiteral("hello"),          QStringLiteral("auth.request"),
+        QStringLiteral("command.invoke"), QStringLiteral("media.control"),
+        QStringLiteral("property.write"), QStringLiteral("settings.write"),
+        QStringLiteral("settings.remove")};
+    QHash<QString, QString> classOfKey;
+    QHash<QString, double> capabilities;
+    int agreedMinor = -1;
+    const QJsonArray steps = fixture.value(QStringLiteral("steps")).toArray();
+    for (int index = 0; index < steps.size(); ++index) {
+        const QJsonObject step = steps.at(index).toObject();
+        const QJsonObject message = step.value(QStringLiteral("message")).toObject();
+        const QString type = message.value(QStringLiteral("type")).toString();
+        const QString from = step.value(QStringLiteral("from")).toString();
+        if (from == QStringLiteral("station")) {
+            // What an app runner sends its client: nothing it cannot fill.
+            QList<QPair<QString, QString>> strings;
+            collectStrings(message, QStringLiteral("$"), &strings);
+            for (const auto& [path, text] : strings) {
+                const bool summarised =
+                    text == QStringLiteral("$any")
+                    && ((type == QStringLiteral("schema") && path == QStringLiteral("$.fields"))
+                        || (type == QStringLiteral("object.create")
+                            && path == QStringLiteral("$.properties")));
+                if (text.startsWith(QStringLiteral("$capture:"))
+                    || (text == QStringLiteral("$any") && !summarised)
+                    || text == QStringLiteral("$object")) {
+                    fail(index, QStringLiteral("%1 is %2, which an app runner cannot send")
+                                    .arg(path, text));
+                }
+            }
+            if (type == QStringLiteral("object.create")) {
+                classOfKey.insert(message.value(QStringLiteral("key")).toString(),
+                                  message.value(QStringLiteral("class")).toString());
+            }
+            if ((type == QStringLiteral("schema") || type == QStringLiteral("object.create"))
+                && !classes.contains(message.value(QStringLiteral("class")).toString())) {
+                fail(index, QStringLiteral("class not in mirrorClasses, so no stand-in"));
+            }
+            if (type == QStringLiteral("capabilities")) {
+                capabilities.clear();
+                for (const QJsonValue& p : message.value(QStringLiteral("properties")).toArray()) {
+                    capabilities.insert(p.toObject().value(QStringLiteral("name")).toString(),
+                                        p.toObject().value(QStringLiteral("value")).toDouble());
+                }
+            }
+            continue;
+        }
+        if (from != QStringLiteral("client")) {
+            continue;
+        }
+        const QString role = step.value(QStringLiteral("role")).toString();
+        if ((type == QStringLiteral("hello") || type == QStringLiteral("auth.request"))
+            && role != QStringLiteral("behaviour")) {
+            fail(index, QStringLiteral("the client makes its own %1; it cannot be scripted")
+                            .arg(type));
+        }
+        if (role != QStringLiteral("behaviour")) {
+            continue;
+        }
+        if (!clientKinds.contains(type)) {
+            fail(index, QStringLiteral("a client never sends %1").arg(type));
+            continue;
+        }
+        if (type == QStringLiteral("hello")) {
+            const QJsonValue majors = message.value(QStringLiteral("majors"));
+            const int major = message.value(QStringLiteral("major")).toInt(-1);
+            bool listed = false;
+            for (const QJsonValue& m : majors.toArray()) {
+                listed = listed || m.toInt() == major;
+            }
+            if (!majors.isArray() || !listed) {
+                fail(index, QStringLiteral("hello must carry majors, naming its major"));
+            }
+            if (!message.contains(QStringLiteral("features"))) {
+                fail(index, QStringLiteral("hello must carry features"));
+            }
+            if (message.value(QStringLiteral("peer")) != QJsonValue(QStringLiteral("$string"))
+                || message.value(QStringLiteral("settingsSchema"))
+                       != QJsonValue(QStringLiteral("$int"))) {
+                fail(index, QStringLiteral("peer and settingsSchema are the app's own: "
+                                           "$string and $int"));
+            }
+            agreedMinor = message.value(QStringLiteral("minor")).toInt();
+        } else if (type == QStringLiteral("auth.request")) {
+            const QString token = message.value(QStringLiteral("token")).toString();
+            if (token != QStringLiteral("$ref:token") && token != QStringLiteral("$string")) {
+                fail(index, QStringLiteral("token must be $ref:token or $string"));
+            }
+        } else if (type == QStringLiteral("command.invoke")) {
+            if (!message.value(QStringLiteral("id")).toString().startsWith(QStringLiteral("$int:"))) {
+                fail(index, QStringLiteral("id is the app's own: $int:<name>"));
+            }
+            const QString verb = message.value(QStringLiteral("verb")).toString();
+            if (!verbs.contains(verb)) {
+                fail(index, QStringLiteral("%1 is not a verb").arg(verb));
+                continue;
+            }
+            const QJsonObject spec = verbs.value(verb);
+            const QJsonArray declared = spec.value(QStringLiteral("arguments")).toArray();
+            const QJsonArray args = message.value(QStringLiteral("args")).toArray();
+            bool fits = declared.size() == args.size();
+            for (int i = 0; fits && i < args.size(); ++i) {
+                fits = args.at(i).toObject().value(QStringLiteral("name"))
+                           == declared.at(i).toObject().value(QStringLiteral("name"))
+                    && args.at(i).toObject().value(QStringLiteral("kind"))
+                           == declared.at(i).toObject().value(QStringLiteral("kind"));
+            }
+            if (!fits) {
+                fail(index, QStringLiteral("%1's arguments are not the ones it takes").arg(verb));
+            }
+            const QString capability = spec.value(QStringLiteral("capability")).toString();
+            const double version = spec.value(QStringLiteral("capabilityVersion")).toDouble();
+            if (!capability.isEmpty() && capabilities.value(capability, 0.0) < version) {
+                fail(index, QStringLiteral("%1 was not advertised (%2 %3 needed)")
+                                .arg(verb, capability).arg(version));
+            }
+            if (agreedMinor < spec.value(QStringLiteral("minMinor")).toInt()) {
+                fail(index, QStringLiteral("%1 needs a newer minor").arg(verb));
+            }
+        } else if (type == QStringLiteral("property.write")) {
+            if (!message.value(QStringLiteral("writeId")).toString().startsWith(
+                    QStringLiteral("$int:"))) {
+                fail(index, QStringLiteral("writeId is the app's own: $int:<name>"));
+            }
+            const QString cls = classOfKey.value(message.value(QStringLiteral("key")).toString());
+            QHash<QString, QJsonObject> fields;
+            for (const QJsonValue& f : classes.value(cls).toObject()
+                                            .value(QStringLiteral("properties")).toArray()) {
+                fields.insert(f.toObject().value(QStringLiteral("name")).toString(), f.toObject());
+            }
+            for (const QJsonValue& p : message.value(QStringLiteral("properties")).toArray()) {
+                const QJsonObject entry = p.toObject();
+                const QJsonObject field =
+                    fields.value(entry.value(QStringLiteral("name")).toString());
+                if (field.isEmpty()
+                    || field.value(QStringLiteral("direction")) == QJsonValue(QStringLiteral("outbound"))
+                    || field.value(QStringLiteral("kind")) != entry.value(QStringLiteral("kind"))
+                    || field.value(QStringLiteral("ordinal")) != entry.value(QStringLiteral("ordinal"))) {
+                    fail(index, QStringLiteral("%1 is not a property a client may write")
+                                    .arg(entry.value(QStringLiteral("name")).toString()));
+                }
+            }
+        } else if (type == QStringLiteral("settings.write")
+                   || type == QStringLiteral("settings.remove")) {
+            const QString key = message.value(QStringLiteral("key")).toString();
+            if (classifySettingsKey(key) != SettingsScope::Station) {
+                fail(index, QStringLiteral("%1 is not a Core setting").arg(key));
+            }
+            if (type == QStringLiteral("settings.write")
+                && !message.value(QStringLiteral("origin")).toString().startsWith(
+                    QStringLiteral("$string:"))) {
+                fail(index, QStringLiteral("origin is the app's own: $string:<name>"));
+            }
+        }
+    }
+    return problems;
+}
+
 void writeTrace(const QString& id, const LoopbackTransport& client)
 {
     const QByteArray directory = qgetenv("NEREUS_LINK_TRACE_DIR");
@@ -287,6 +493,9 @@ private slots:
     void sessionFixtures_data();
     void sessionFixtures();
     void everyVerbIsInvokedRightAndWrong();
+    void everyFixtureRunsOnTheStation();
+    void appFixturesHoldOnlyWhatAConformantClientSends();
+    void theConformanceCheckCatchesWhatAnAppCannotSend();
     void refusalsOfOutboundWritesArePlain();
     void alteredFixturesFailReadably();
 
@@ -442,6 +651,117 @@ void TstLinkConformanceSession::everyVerbIsInvokedRightAndWrong()
                      qPrintable(verb + QStringLiteral(" is never invoked with a wrong name")));
         }
     }
+}
+
+void TstLinkConformanceSession::everyFixtureRunsOnTheStation()
+{
+    // The station's runner plays every fixture (section 16.3), and each
+    // fixture's shape is the format's.
+    for (const LinkFixtures::Entry& entry :
+         LinkFixtures::entries(m_manifest, QStringLiteral("session"))) {
+        const QJsonObject o = fixture(entry.id);
+        const QString problem = LinkFixtures::checkSessionFormat(o);
+        QVERIFY2(problem.isEmpty(), qPrintable(entry.id + QStringLiteral(": ") + problem));
+        QVERIFY2(LinkFixtures::runsOn(o, QStringLiteral("station")), qPrintable(entry.id));
+    }
+}
+
+void TstLinkConformanceSession::appFixturesHoldOnlyWhatAConformantClientSends()
+{
+    QString error;
+    const QJsonObject surface = LinkFixtures::readObject(
+        QDir(LinkFixtures::dataDirectory()).filePath(QStringLiteral("surface.json")), &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QStringList problems;
+    int forTheApp = 0;
+    for (const LinkFixtures::Entry& entry :
+         LinkFixtures::entries(m_manifest, QStringLiteral("session"))) {
+        const QJsonObject o = fixture(entry.id);
+        if (!LinkFixtures::runsOn(o, QStringLiteral("app"))) {
+            continue;
+        }
+        ++forTheApp;
+        problems.append(appConformanceProblems(entry.id, o, surface));
+    }
+    QVERIFY2(forTheApp >= 20, qPrintable(QString::number(forTheApp)));
+    QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QLatin1Char('\n'))));
+}
+
+void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
+{
+    QString error;
+    const QJsonObject surface = LinkFixtures::readObject(
+        QDir(LinkFixtures::dataDirectory()).filePath(QStringLiteral("surface.json")), &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    const QJsonObject base = fixture(QStringLiteral("session-property-write"));
+    QVERIFY(!base.isEmpty());
+    QVERIFY(appConformanceProblems(QStringLiteral("base"), base, surface).isEmpty());
+
+    // Each alteration an app could not produce is named.
+    const auto altered = [&base](const std::function<void(QJsonObject&)>& change, int* at) {
+        QJsonObject o = base;
+        QJsonArray steps = o.value(QStringLiteral("steps")).toArray();
+        for (int i = 0; i < steps.size(); ++i) {
+            QJsonObject step = steps.at(i).toObject();
+            if (step.value(QStringLiteral("role")).toString() != QStringLiteral("behaviour")) {
+                continue;
+            }
+            QJsonObject message = step.value(QStringLiteral("message")).toObject();
+            const QJsonObject before = message;
+            change(message);
+            if (message != before) {
+                step.insert(QStringLiteral("message"), message);
+                steps.replace(i, step);
+                *at = i;
+                break;
+            }
+        }
+        o.insert(QStringLiteral("steps"), steps);
+        return o;
+    };
+    int at = -1;
+    // An older app's hello, without majors or features.
+    QStringList p = appConformanceProblems(QStringLiteral("x"), altered([](QJsonObject& m) {
+        if (m.value(QStringLiteral("type")).toString() == QStringLiteral("hello")) {
+            m.remove(QStringLiteral("majors"));
+            m.remove(QStringLiteral("features"));
+        }
+    }, &at), surface);
+    QVERIFY2(p.join(QLatin1Char('|')).contains(QStringLiteral("majors")), qPrintable(p.join('|')));
+    // A pinned peer name.
+    p = appConformanceProblems(QStringLiteral("x"), altered([](QJsonObject& m) {
+        if (m.value(QStringLiteral("type")).toString() == QStringLiteral("hello")) {
+            m.insert(QStringLiteral("peer"), QStringLiteral("NereusSDR iPhone"));
+        }
+    }, &at), surface);
+    QVERIFY2(p.join(QLatin1Char('|')).contains(QStringLiteral("peer")), qPrintable(p.join('|')));
+    // A literal write id.
+    p = appConformanceProblems(QStringLiteral("x"), altered([](QJsonObject& m) {
+        if (m.value(QStringLiteral("type")).toString() == QStringLiteral("property.write")) {
+            m.insert(QStringLiteral("writeId"), 2);
+        }
+    }, &at), surface);
+    QVERIFY2(p.join(QLatin1Char('|')).contains(QStringLiteral("writeId")), qPrintable(p.join('|')));
+    // A write to a property the Core sets itself.
+    p = appConformanceProblems(QStringLiteral("x"), altered([](QJsonObject& m) {
+        if (m.value(QStringLiteral("type")).toString() == QStringLiteral("property.write")) {
+            m.insert(QStringLiteral("properties"),
+                     QJsonArray{QJsonObject{{QStringLiteral("ordinal"), 15},
+                                            {QStringLiteral("name"), QStringLiteral("signalStrengthDbm")},
+                                            {QStringLiteral("kind"), QStringLiteral("f64")},
+                                            {QStringLiteral("value"), -50.0}}});
+        }
+    }, &at), surface);
+    QVERIFY2(p.join(QLatin1Char('|')).contains(QStringLiteral("signalStrengthDbm")),
+             qPrintable(p.join('|')));
+    // A message kind a client never sends, as behaviour.
+    p = appConformanceProblems(QStringLiteral("x"), altered([](QJsonObject& m) {
+        if (m.value(QStringLiteral("type")).toString() == QStringLiteral("auth.request")) {
+            m = QJsonObject{{QStringLiteral("type"), QStringLiteral("conformance.unknown")}};
+        }
+    }, &at), surface);
+    QVERIFY2(p.join(QLatin1Char('|')).contains(QStringLiteral("never sends")),
+             qPrintable(p.join('|')));
 }
 
 void TstLinkConformanceSession::refusalsOfOutboundWritesArePlain()

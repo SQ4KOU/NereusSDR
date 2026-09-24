@@ -1,9 +1,10 @@
 {
+    "runs": ["station", "app"],
     "stationSetup": {"radio": "static", "slices": 1},
     "steps": [
         {"from": "station", "message": {"features": {}, "major": 1, "majors": [1], "minor": 11, "peer": "nereusd", "settingsSchema": 0, "type": "hello"}},
-        {"from": "client", "message": {"type": "hello", "major": 1, "minor": 11, "settingsSchema": 0, "peer": "NereusSDR iPhone"}},
-        {"from": "client", "message": {"type": "auth.request", "token": "not-the-station-token"}},
+        {"from": "client", "role": "behaviour", "message": {"type": "hello", "major": 1, "minor": 11, "settingsSchema": "$int", "peer": "$string", "majors": [1], "features": "$object"}},
+        {"from": "client", "role": "behaviour", "message": {"type": "auth.request", "token": "$string"}},
         {"from": "station", "message": {"accepted": false, "reason": "The Core did not accept this app's pairing token. Check the token saved for this Core.", "retryable": false, "type": "auth.result"}},
         {"expectClosed": {"retryable": false}}
     ]

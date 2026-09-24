@@ -1509,20 +1509,43 @@ files against its own client.
   `control/`, `sessions/` and `media/` is listed once; a media entry names
   its `.bin`, and its `.expect.json` sits beside it.
 - `control/*.json`: `{"from":"station"|"client","wire":{<the exact message>},"decodes":true|false}`.
-- `sessions/*.json`: `{"stationSetup":{<the fake radio model and settings>},"steps":[<steps>]}`,
-  where a step is `{"from":"station"|"client","message":{<a message>}}`,
+- `sessions/*.json`:
+  `{"runs":[<ends>],"stationSetup":{<the fake radio model and settings>},"steps":[<steps>]}`.
+  `runs` names the ends that run the fixture, each once: `"station"` (the
+  station's runner, which runs every fixture) and `"app"` (an app's
+  runner, section 16.3). A step is one of
+  `{"from":"station","message":{<a message>}}`,
+  `{"from":"client","role":"behaviour"|"scripted","message":{<a message>}}`,
   `{"advanceMs":N}` or `{"expectClosed":{"retryable":true|false}}`.
+  No other key is allowed at either level.
 - `media/*.bin` with `*.expect.json`: the bytes of one packet exactly as
   it travels, and `{"codec":<codec>,"expect":{<decoded values>}}`, where
   `<codec>` is `nsdc1`, `ps3d`, `opus` or `nrsc1` (the LAN announcement of
   section 14). `expect` may hold `"after": ["<fixture id>", ...]` for a
   codec whose decoder keeps state (section 16.4).
 
-Expected messages may hold placeholders: `"$any"` (any value, the key must
-be present), `"$string"`, `"$int"` (a whole number), `"$capture:<name>"`
-(records the value) and `"$ref:<name>"` (must equal a recorded value).
-Objects must have the same keys and arrays the same length; numbers
-compare by value, so `1` and `1.0` are equal.
+A message in a fixture may hold placeholders in place of a value. Each is
+a JSON string:
+
+| Placeholder | Matches | Station message | Client message |
+| --- | --- | --- | --- |
+| `"$any"` | any value; the key must be present | yes | no |
+| `"$string"` | any string | yes | yes, filled with `"conformance"` |
+| `"$string:<name>"` | any string, recorded under `<name>` | yes | yes, filled with `"conformance"` and recorded |
+| `"$int"` | any whole number | yes | yes, filled with `0` |
+| `"$int:<name>"` | any whole number, recorded under `<name>` | yes | yes, filled with the next number of the fixture's counter (1 first, then 2, ...) and recorded |
+| `"$object"` | any JSON object | no | yes, filled with `{}` |
+| `"$capture:<name>"` | any value, recorded under `<name>` | yes | no |
+| `"$ref:<name>"` | the value recorded under `<name>`, compared the same way | yes | yes, filled with the recorded value |
+| `"$within:<t>:<v>"` | a number no further than `<t>` from `<v>` (both in JSON number syntax, `<t>` at least 0) | yes | no |
+
+Matching is by value: objects must have the same keys and arrays the same
+length; numbers compare by value, so `1` and `1.0` are equal. A name is
+recorded once per fixture run; a later placeholder with the same name
+records it again. `token` is recorded before the first step (section
+16.3). Where a message is sent rather than matched, "filled" is the value
+the sender puts in the placeholder's place; both runners fill the same way,
+so what one records the other records too.
 
 ### 16.2 Control fixtures
 
@@ -1551,26 +1574,92 @@ records them under `limits`.
 
 ### 16.3 Session fixtures
 
-The station's player builds the station `stationSetup` describes, opens a
-client connection to it over an in-process transport, and walks the
-steps. It sends each client message and matches each station message
-against the next one the station sent, in arrival order. The app's runner
-does the reverse: it sends the station's messages to its client and
-matches what the client sends.
+A session fixture is a script of one connection between a station and a
+client. Two runners play it, one from each end.
+
+- **The station's runner** builds the station `stationSetup` describes,
+  opens a client connection to it over an in-process transport, and walks
+  the steps. It sends each client message, placeholders filled (section
+  16.1), whatever its role, and matches each station message against the
+  next one the station sent, in arrival order. It runs every fixture.
+- **An app's runner** runs the fixtures whose `runs` names `"app"`. It
+  plays the station: it gives its client each station message, filled as
+  below, and holds the client to the client steps by role. It ignores
+  `stationSetup`, which only says how the station's runner builds its
+  station.
+
+**Roles.** Every client step has a `role`:
+
+- `"behaviour"`: the client under test must produce this message. An
+  app's runner drives its client to it (connect, invoke this verb with
+  these arguments, write this property) and matches what the client sends
+  against the step, placeholders allowed; the placeholders' names record
+  what the client chose (its ids, its `origin`), and the station messages
+  that follow refer to them with `$ref`. The client must send each
+  behaviour message in order and nothing else while the steps run; a
+  runner may set its client up to do nothing on its own beyond the
+  connect sequence.
+- `"scripted"`: a message a conformant client never sends (an unknown
+  kind or verb, a verb with an argument renamed, a write to a property the
+  station sets itself or to one that does not exist, a write without a
+  `writeId`, an operator-local setting, an older app's `hello`). An app's
+  runner does not wait for its client: it fills the message's placeholders
+  as the station's runner does, records their names, and goes on, so the
+  station's answers that follow are given to the client as if the client
+  had sent the message. They hold the client to handling an answer to
+  something it did not send.
+
+**Which fixtures run on the app.** A fixture whose client behaviour no
+app can adopt runs on the station only (`"runs": ["station"]`): an older
+app's `hello` (`major-refused`, `lower-minor`), made-up majors or features
+(`version-*`), a client that answers no ping (`heartbeat-missed`) or never
+sends its token (`connect-deadline`), and the lockout and preemption,
+which need other clients (`lockout`, `preempted`). Their client steps are
+all `scripted`. `tst_link_conformance_session` checks that a fixture
+marked for the app holds nothing a conformant client could not send, and
+nothing an app's runner could not send its client:
+
+- its `hello` and `auth.request` are behaviour: the `hello` has `majors`
+  (naming its `major`) and `features`, with `peer`
+  `"$string"` and `settingsSchema` `"$int"`; the token is `"$ref:token"`
+  or, for a refused token, `"$string"`;
+- a behaviour `command.invoke` has `id` `"$int:<name>"`, a verb from
+  `commands` with exactly its arguments, names and kinds in order, and
+  its gating capability advertised in the last `capabilities` message
+  before it at the version `commands` gives, at an agreed minor of at
+  least the verb's `minMinor`;
+- a behaviour `property.write` has `writeId` `"$int:<name>"` and writes
+  only properties of the object's class (from `mirrorClasses`, the class
+  named by the key's `object.create`) that are not outbound, with their
+  ordinals and kinds;
+- a behaviour `settings.write` or `settings.remove` names a station-scoped
+  key (section 8), and a write's `origin` is `"$string:<name>"`;
+- a behaviour message is of a kind a client sends (section 16.2);
+- a station message holds no `"$capture:<name>"` and no `"$object"`, and
+  `"$any"` only as a summarised snapshot (below).
+
+**Filling a station message (an app's runner).** An app's runner sends
+its client each station message with `"$string"` as `""`, `"$int"` as `0`,
+`"$ref:<name>"` as the recorded value and `"$within:<t>:<v>"` as `<v>`.
 
 - **The token.** `"$ref:token"` in a client message is the station's
-  token. The player reads it from the station at run time; no fixture
-  holds a token.
+  token. The station's runner reads it from the station at run time; an
+  app's runner gives its client a token of its own choosing and records it
+  as `token` before the first step. No fixture holds a token.
 - **Time.** Time moves only through `{"advanceMs":N}`. The station's
-  player keeps a virtual clock over the station's own timers (the connect
+  runner keeps a virtual clock over the station's own timers (the connect
   deadline, the heartbeat and the 50 ms delta flush) and fires each when
   its virtual time comes. A `delta` that waits for the flush follows an
-  `{"advanceMs":50}` step. No runner sleeps.
-- **Closing.** `{"expectClosed":{"retryable":R}}` holds when the station
-  has closed the connection, every message it sent before closing is
-  listed in the steps, and `R` equals `retryable` of the last
+  `{"advanceMs":50}` step. An app's runner moves its client's own clock by
+  the same amount, if the client keeps one. No runner sleeps.
+- **Closing.** `{"expectClosed":{"retryable":R}}` holds, on the station,
+  when the station has closed the connection, every message it sent before
+  closing is listed in the steps, and `R` equals `retryable` of the last
   `session.end` or `auth.result` it sent. An authentication refusal sends
-  `auth.result` and closes with no `session.end` (section 12.4).
+  `auth.result` and closes with no `session.end` (section 12.4). An app's
+  runner closes the connection there (close code 1000); the client must
+  send nothing after it, and must not reconnect on its own when `R` is
+  false.
 - **The end.** A fixture that does not end in `expectClosed` ends with the
   connection open. Messages the station sends after the last step are not
   checked: on `connect-connectable` the radio keeps sending deltas.
@@ -1580,12 +1669,17 @@ matches what the client sends.
   heartbeat intervals with the link up; `heartbeat-missed` has a client
   that never answers, and the station ends the session on the third
   interval, `retryable` true (section 12.1).
-- **Summarised snapshots.** Outside `connect-connectable`, a `schema`
-  message's `fields` and an `object.create` message's `properties` are
-  `"$any"`: `connect-connectable` and `surface.json`'s `mirrorClasses`
-  hold their content, and a fixture about something else does not repeat
-  it. An end that plays the station's side sends, for such a message, the
-  class's fields from `mirrorClasses` and one entry of each field's kind.
+- **Summarised snapshots.** Outside `connect-connectable` (and where a
+  fixture needs a value from it, as `verbs-nnr` needs `dspAssets`'
+  revision), a `schema` message's `fields` and an `object.create`
+  message's `properties` are `"$any"`: `connect-connectable` and
+  `surface.json`'s `mirrorClasses` hold their content. An app's runner
+  sends, in their place, the class's properties from `mirrorClasses`: for
+  `fields`, each as `{"ordinal","name","kind"}`; for `properties`, each as
+  `{"kind","name","ordinal","value"}` with this stand-in value by kind:
+  `bool` `false`, `i64` `0`, `f64` `0`, `utf8` `""`, and `enum` the first
+  of its `enumValues`. The client must accept the stand-ins; the steps that
+  follow do not depend on them.
 
 `stationSetup` holds:
 
