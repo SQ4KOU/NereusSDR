@@ -403,8 +403,8 @@ order as the station tasks they consume land, except for the first usable build 
 **The first usable build: listening first (JJ, 2026-09-24).** The first build on JJ's
 iPhone connects to the Pi 4 Core with the Hermes Lite 2 over the Pi's public IPv6
 address, pairs by code, shows the band and plays the sound. The phone tasks on that path
-run first, in this order, as the station tasks they need land: 51, 15, 52, 53, 54a,
-55a, 56a, then the check on his iPhone, 56b. Their station path is Part C (12 to 16) in
+run first, in this order, as the station tasks they need land: 51, 55a (which needs no
+station work), 15, 52, 53, 54a, 56a, then the check on his iPhone, 56b. Their station path is Part C (12 to 16) in
 integration, then 19 and 20; the Core/GUI session puts the build on the Pi 4 with JJ's
 go-ahead, and JJ reads the pairing code there himself. Finding Cores by Bonjour (16a)
 joins the path when its station half is in. The transmit and remote halves (54, 55, 56,
@@ -4584,13 +4584,14 @@ D11), spec §5.2 item 2 (the tab bar as the board draws it), JJ's listening-firs
 **Interfaces:**
 - Consumes: `BandView`, `BandGeometry` (Task 52), the flags, markers and gestures (Task
   53), `MirrorStore`, `SettingsProxyClient` and `CommandClient` (Task 9), `AppModel` (Task
-  51).
+  51), `AudioSessionController` and `RouteMenu` (Task 55a).
 - Produces:
   - `MainScreen`: the toolbar left to right: RX panel, speaker mute, Slice A, Pan 1,
     Display, the link dot with its round-trip time (the TX panel's button arrives with
     Task 54); the band edge to edge with zoom at the bottom right of the waterfall; the
     RX panel with AF gain, AGC, filter presets, the noise buttons and squelch, each
-    writing to its owner and showing the Core's value.
+    writing to its owner and showing the Core's value; the speaker button mutes on a tap
+    and opens Task 55a's `RouteMenu` on press and hold, without leaving the band.
   - The tab bar as the board draws it: NereusSDR's flat bar and its own glyphs (the
     panadapter trace, the RX/TX box, the wrench, the radio, the gear), in place of the
     system's floating bar and symbols that Task 51's shell uses. If iOS 27 makes that
@@ -4609,7 +4610,8 @@ D11), spec §5.2 item 2 (the tab bar as the board draws it), JJ's listening-firs
 **Verification:** UI: the simulator test run and screenshots.
 `ios/scripts/generate-project.sh && xcodebuild -project ios/NereusSDR.xcodeproj -scheme NereusSDR -destination 'platform=iOS Simulator,name=iPhone 17' test`.
 
-**Execution note (advisory):** opus. Requires Tasks 51, 52 and 53. On the listening path.
+**Execution note (advisory):** opus. Requires Tasks 51, 52, 53 and 55a. On the listening
+path.
 
 - [ ] **Step 1:** The main screen, the toolbar and the RX panel with tests.
 - [ ] **Step 2:** The tab bar as drawn, and the screenshots.
@@ -4716,20 +4718,21 @@ and 10, JJ's listening-first order (2026-09-24).
 - Create: `ios/NereusApp/Tests/AudioSessionControllerTests.swift`
 
 **Interfaces:**
-- Consumes: `AudioPlaybackCore` and `MediaControlClient` (Task 11), `MainScreen`'s
-  speaker button (Task 54a).
+- Consumes: `AudioPlaybackCore` and `MediaControlClient` (Task 11), `AppModel` (Task 51).
 - Produces: `AudioSessionController` configuring `.playAndRecord` with
   `.defaultToSpeaker` and `.allowBluetoothA2DP` (not `.allowBluetooth`, so AirPods stay in
   high-quality output), mode `.default` (no voice processing), the same category Task 55's
   microphone uses, so routes don't change when transmit arrives; playback through
-  `AudioPlaybackCore` on the chosen route; interruption handling for playback; the route
-  menu on press and hold of the speaker button.
+  `AudioPlaybackCore` on the chosen route; interruption handling for playback;
+  `RouteMenu`, the view the band's speaker button opens on press and hold (Task 54a puts
+  it on the button).
 
 **Acceptance:**
 - An interruption (the test posts `AVAudioSession.interruptionNotification`) with
   `.began` pauses playback and `.ended` resumes it.
-- Pressing and holding the speaker button opens the route menu (speaker, earpiece,
-  AirPods) without leaving the band; the choice changes the output route.
+- `RouteMenu` lists the speaker, the earpiece and AirPods when connected, marks the
+  current one, and a choice changes the output route (tested against the session
+  controller's route policy).
 - Sound keeps playing with the app in the background and with the phone locked (the
   audio background mode Task 51 declared); the lock-screen card is Task 64's.
 - The session never brings up the microphone question itself: Task 56a's flow asks it
@@ -4739,7 +4742,8 @@ and 10, JJ's listening-first order (2026-09-24).
 **Verification:** unit tests of the session policy on the simulator; device (JJ, in
 Task 56b): the speaker, the earpiece and AirPods, and sound while locked.
 
-**Execution note (advisory):** opus. Requires Tasks 11, 51 and 54a. On the listening path.
+**Execution note (advisory):** opus. Requires Tasks 11 and 51. On the listening path; it
+can run before Task 54a, which puts the route menu on the speaker button.
 
 - [ ] **Step 1:** The session controller, playback and interruptions with tests.
 - [ ] **Step 2:** The route menu.
