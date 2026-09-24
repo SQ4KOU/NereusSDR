@@ -599,9 +599,12 @@ void TstStationHandshakeDeadline::coreDetachesAGuiThatNeverSendsItsHelloWithOneL
     QCOMPARE(mediaStarted.count(), 0);
     QVERIFY(!server.hasAuthenticatedSession());
     // Told why, and retryable: a GUI that does come back gets a new chance.
-    const QList<QByteArray> kinds = guiEnd->receivedKinds();
-    QVERIFY2(kinds.contains(QByteArrayLiteral("session.end")),
-             qPrintable(QString::fromUtf8(kinds.join(','))));
+    // dropPeer() forgets the peer at once, but the loopback delivers the
+    // session.end on a queued call, so wait for it rather than read the
+    // kinds the moment the peer count reaches zero.
+    QTRY_VERIFY2_WITH_TIMEOUT(guiEnd->receivedKinds().contains(QByteArrayLiteral("session.end")),
+                              qPrintable(QString::fromUtf8(guiEnd->receivedKinds().join(','))),
+                              3000);
 
     QStringList aboutThePeer;
     for (const CapturedLine& line : std::as_const(lines)) {
