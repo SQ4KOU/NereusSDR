@@ -361,3 +361,53 @@ licence check.
 **Execution note (advisory):** opus.
 
 - [ ] **Step 1:** Each item, test, commit.
+
+## Task 11: Every Protocol 1 radio gets Thetis's receiver layout for its own model
+
+**Requirements:** Phase 3F design section 16.3.2 (the PS4 defect); the 3M-4 PureSignal work; the
+source-first rule. Found by the post-checkpoint review (its C1): `P1CodecStandard::applyDdcAssignment`
+ports only Thetis's Hermes-class branch, yet the codec selector hands it every Protocol 1 model
+except the HL2, the Anvelina Pro 3 and the RedPitaya (`P1RadioConnection.cpp:2310-2316`). The
+same codec's `psDdcConfig` already splits by model (Hermes class, HermesII class, G2 class), so
+the two halves of one codec disagree for the ANAN-10E, the ANAN-100B and the Orion/G2-class
+radios on Protocol 1.
+
+**Consumes:** the fix wave after the post-checkpoint review, which gives slice B a receiver
+under PureSignal transmit on the four Hermes-class models only (HERMES, ANAN10, ANAN100,
+ANAN_G2E) and leaves it unassigned on every other model. This task replaces that stopgap
+with the full per-model port.
+
+**Source first:** Thetis `console.cs` `UpdateDDCs` (every Protocol 1 branch: Hermes class,
+ANAN10E/ANAN100B, and the Orion case shared by ANAN100D, ANAN200D, ORIONMKII, ANAN7000D,
+ANAN8000D, ANAN_G2, ANAN_G2_1K, ANVELINAPRO3 and REDPITAYA) and `GetDDC` (their Protocol 1
+cases); `ChannelMaster/networkproto1.c` `MetisReadThreadMainLoop` (the slot pairing for nddc
+2, 4 and 5). Where mi0bot-Thetis differs for a non-HL2 model, cite both and say which one the
+port follows and why.
+
+**Files:** Modify `src/core/codec/P1CodecStandard.cpp` and `.h`; `P1CodecAnvelinaPro3.cpp` and
+`P1CodecRedPitaya.cpp` if they must reach the Orion-class assignment; `CodecContext.h` if the
+model has to travel there. Tests: a table-driven assignment test (new, or inside
+`tst_p1_codec_standard`); the P1 wire baseline if bytes change. The Phase 3F design doc's
+section 16.3.2 gains the per-model table.
+
+**Acceptance:**
+- An audit table first, in the report: for each model the codec serves and each combination of
+  PureSignal armed, diversity, MOX and RX2 enabled, Thetis's values beside NereusSDR's: the
+  P1 DDC config, enabled and synced DDCs, rates, ADC controls, the DDC under each user
+  stream, the PureSignal pair and nDdc. Mismatches marked.
+- `applyDdcAssignment` then gives Thetis's values for every row, cited with author tags.
+  `psDdcConfig` and `applyDdcAssignment` agree on the PureSignal pair for every model.
+- The table test covers every model and combination, with its expected values taken from
+  Thetis (cited), and fails on today's code for every mismatch the audit found.
+- The read loop's slot pairing agrees with the stream mapping for nddc 2, 4 and 5, so no user
+  stream ever carries the PureSignal pair.
+- A wire byte change updates the P1 baseline in its own commit, with the reason.
+- If a mismatch cannot be settled from the sources (a model whose Protocol 1 firmware Thetis
+  treats differently from its enum), stop and report NEEDS_CONTEXT with both readings.
+
+**Verification:** transmit-coupled; tests first. Bench pending for any Protocol 1 radio of
+these families; the operator's HL2 has its own codec and is not affected.
+
+**Execution note (advisory):** opus. After Task 7.
+
+- [ ] **Step 1:** The audit table, the table test, the port, commit.
