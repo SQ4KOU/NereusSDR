@@ -365,7 +365,15 @@ The phone session's controller:
 - [ ] Before Task 51, JJ installs Xcode 27 (this Mac runs macOS 27, which Xcode 26 does not
       support), runs `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` and
       `xcodebuild -runFirstLaunch`, and installs the iOS 27 platform; the controller installs
-      XcodeGen with `brew install xcodegen`.
+      XcodeGen with `brew install xcodegen`. (Done 2026-09-24: Xcode 27.0, the iOS 27.0
+      simulator runtime and the iPhone 17 simulator are installed.)
+- [ ] Before Task 51's device step, JJ signs Xcode into his Apple developer account
+      (Xcode Settings, Accounts), turns on Developer Mode on his iPhone (and on the iPad
+      before Task 67) and connects each once. Automatic signing then registers
+      `com.boydsoftprez.NereusSDR.ios` with the Push to Talk and push notification
+      capabilities its entitlements declare, which Task 65's device experiment also
+      needs; Task 69 only confirms them on the App Store record. The controller never
+      handles the account's credentials.
 
 The Core/GUI session's controller:
 
