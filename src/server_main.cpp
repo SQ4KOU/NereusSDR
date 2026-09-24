@@ -113,6 +113,10 @@
 //               reset) sent to the running Core over its control socket
 //               (iPhone app Task 17, R-IOS-08). J.J. Boyd (KG4VCF), with AI
 //               assistance via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R2-M6): console commands report
+//               an unreadable or invalid configuration file. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/AppSettings.h"
@@ -130,6 +134,7 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QFileInfo>
 #include <QMetaObject>
 #include <QTimer>
 #include <csignal>
@@ -237,6 +242,25 @@ int main(int argc, char* argv[])
         QString commandCfgErr;
         const NereusSDR::DaemonConfig commandCfg =
             NereusSDR::DaemonConfig::fromFile(parser.value(cfgOpt), &commandCfgErr);
+        // Part C fix wave (R2-M6): a configuration file that is there but
+        // cannot be read (sudo left off, say), or one the Core itself would
+        // refuse to start with, is reported, not left to look like "No Core
+        // answered" from the wrong socket. An absent file is what a bare
+        // nereusd runs with too: defaults, on both sides.
+        if (!commandCfgErr.isEmpty() && QFileInfo::exists(parser.value(cfgOpt))) {
+            print(stderr, QStringLiteral("Could not read the configuration file %1, so the Core "
+                                         "cannot be found. Run the command with sudo, or name "
+                                         "another file with --config.")
+                              .arg(parser.value(cfgOpt)));
+            return 2;
+        }
+        QString commandCfgInvalid;
+        if (!commandCfg.validate(&commandCfgInvalid)) {
+            print(stderr, QStringLiteral("The configuration file %1 is not valid, so the Core "
+                                         "does not start with it: %2")
+                              .arg(parser.value(cfgOpt), commandCfgInvalid));
+            return 2;
+        }
         QStringList args = commandWords;
         if (parser.isSet(unclaimedOpt)) {
             args << QStringLiteral("--unclaimed");

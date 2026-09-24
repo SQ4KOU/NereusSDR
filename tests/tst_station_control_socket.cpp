@@ -40,6 +40,10 @@
 //               lasts 10 minutes, five burned codes in a row close any window,
 //               and reopening starts afresh. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R2-M6): console commands report
+//               an unreadable or invalid configuration file. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QtTest>
@@ -849,6 +853,42 @@ private slots:
         // The command words are checked before anything else.
         QCOMPARE(command({QStringLiteral("--config"), noConfig, QStringLiteral("sideways")}, &out),
                  2);
+
+        // Part C fix wave (R2-M6): a configuration file the Core would not
+        // start with is reported, not "No Core answered".
+        const QString invalid = configDir.filePath(QStringLiteral("invalid.conf"));
+        {
+            QFile file(invalid);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write("radio_mac = not a mac\n");
+        }
+        QCOMPARE(command({QStringLiteral("--config"), invalid, QStringLiteral("--profile"),
+                          AppSettings::profileOverride(), QStringLiteral("status")},
+                         &out),
+                 2);
+        QVERIFY2(out.contains(QStringLiteral("is not valid")), qPrintable(out));
+        QVERIFY(!out.contains(QStringLiteral("No Core answered")));
+        // One that is there but cannot be read says so, and how to fix it.
+#ifndef Q_OS_WIN
+        const QString unreadable = configDir.filePath(QStringLiteral("unreadable.conf"));
+        {
+            QFile file(unreadable);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write("remote_port = 47910\n");
+        }
+        QVERIFY(QFile::setPermissions(unreadable, QFileDevice::WriteOwner));
+        QFile probe(unreadable);
+        if (!probe.open(QIODevice::ReadOnly)) {  // running as root reads it anyway
+            QCOMPARE(command({QStringLiteral("--config"), unreadable, QStringLiteral("--profile"),
+                              AppSettings::profileOverride(), QStringLiteral("status")},
+                             &out),
+                     2);
+            QVERIFY2(out.contains(QStringLiteral("Could not read the configuration file")),
+                     qPrintable(out));
+            QVERIFY(out.contains(QStringLiteral("sudo")));
+        }
+        QFile::setPermissions(unreadable, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+#endif
     }
 };
 
