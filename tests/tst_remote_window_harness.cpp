@@ -722,6 +722,35 @@ private slots:
         QCOMPARE(h.acceptedConnections(), 1);
     }
 
+    // R-R3-17 / R-R3-21: a fresh remote window's first connect tells the
+    // operator nothing about edits that did not stick, because it made
+    // none. Building the window's own models (the band plan in particular)
+    // must not count as a change made while the link was down.
+    void freshWindowFirstConnectRaisesNoOfflineEditWarning()
+    {
+        RemoteWindowHarness h;
+        // A Core that has run before holds its band plan choice and its TCI
+        // settings, as every real Core profile does.
+        AppSettings& core = h.stationSettings();
+        core.setValue(QStringLiteral("BandPlanName"), QStringLiteral("ARRL (US)"));
+        core.setValue(QStringLiteral("TciEmulateExpertSDR3Protocol"), QStringLiteral("True"));
+        core.setValue(QStringLiteral("TciEmulateSunSDR2Pro"), QStringLiteral("True"));
+        core.setValue(QStringLiteral("TciSliceAGain"), QStringLiteral("-6"));
+        core.setValue(QStringLiteral("TciTxGain"), QStringLiteral("-3"));
+        QVERIFY(h.start());
+        QTest::qWait(kSettleMs);
+        QVERIFY2(h.proxy().droppedWhileOffline().isEmpty(),
+                 qPrintable(QStringList(h.proxy().droppedWhileOffline().cbegin(),
+                                        h.proxy().droppedWhileOffline().cend())
+                                .join(QStringLiteral(", "))));
+        QSignalSpy superseded(&h.proxy(), &SettingsProxy::offlineEditsSuperseded);
+
+        QVERIFY(connectFromRadioMenu(h));
+        QTest::qWait(kSettleMs);
+        QCOMPARE(superseded.size(), 0);
+        QCOMPARE(h.acceptedConnections(), 1);
+    }
+
     // R-R3-21: a capability change from the Core re-gates the window on the
     // live session.
     void capabilityChangeRegatesWithoutReconnect()

@@ -13,6 +13,10 @@
 // Modification history (NereusSDR):
 //   2026-05-10 — Phase 3J-1 Task 2.1 by J.J. Boyd (KG4VCF);
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-23 — R3 Setup fix wave (R-R3-17, R-R3-21) by J.J. Boyd
+//                (KG4VCF): the compat-flag seed is left to the computer
+//                that owns the keys. AI-assisted transformation via
+//                Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -36,6 +40,7 @@
 #include "RxChannel.h"
 #include "TxChannel.h"
 #include "AppSettings.h"  // Phase 18: TciIqSwap + TciAlwaysStreamIq flags
+#include "settings/ISettingsBackend.h"  // R3 Setup fix wave: seed only keys this computer owns
 
 // Phase 16 Task 16.3 (sub-commit b): WDSP RESAMPLEF lifecycle.
 // resample.h declares create_resampleF / destroy_resampleF / xresampleF, and
@@ -108,17 +113,25 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     //
     // Idempotent: only seeds when key is absent; explicit user "False"
     // setting (toggled off in UI) is respected.
+    //
+    // R3 Setup fix wave (R-R3-17 / R-R3-21): a remote window does not own
+    // these keys; the Core does, and seeds them itself. Before the Core's
+    // settings arrive contains() is false for every one of its keys, so
+    // seeding here counted as an edit made while the link was down and,
+    // on the first connect, as one that "did not stick".
     {
         auto& s = AppSettings::instance();
+        const ISettingsBackend* const remote = s.remoteBackend();
+        const auto seedIfAbsent = [&s, remote](const QString& key) {
+            if ((remote != nullptr && remote->handlesKey(key)) || s.contains(key)) {
+                return false;
+            }
+            s.setValue(key, QStringLiteral("True"));
+            return true;
+        };
         bool seeded = false;
-        if (!s.contains(QStringLiteral("TciEmulateExpertSDR3Protocol"))) {
-            s.setValue(QStringLiteral("TciEmulateExpertSDR3Protocol"), QStringLiteral("True"));
-            seeded = true;
-        }
-        if (!s.contains(QStringLiteral("TciEmulateSunSDR2Pro"))) {
-            s.setValue(QStringLiteral("TciEmulateSunSDR2Pro"), QStringLiteral("True"));
-            seeded = true;
-        }
+        seeded = seedIfAbsent(QStringLiteral("TciEmulateExpertSDR3Protocol")) || seeded;
+        seeded = seedIfAbsent(QStringLiteral("TciEmulateSunSDR2Pro")) || seeded;
         if (seeded) {
             qCInfo(lcTci) << "TciServer: seeded TCI compat-flag defaults "
                              "(ExpertSDR3 + SunSDR2PRO emulation) — required for "
