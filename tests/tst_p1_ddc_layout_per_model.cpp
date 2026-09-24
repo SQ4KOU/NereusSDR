@@ -210,6 +210,8 @@ class TestP1DdcLayoutPerModel : public QObject {
 private slots:
     void layout_matches_thetis_data();
     void layout_matches_thetis();
+    void slices_c_and_d_use_the_pair_slots_only_in_plain_receive_data();
+    void slices_c_and_d_use_the_pair_slots_only_in_plain_receive();
     void pair_slots_carry_the_tx_frequency_while_ps_transmits_data();
     void pair_slots_carry_the_tx_frequency_while_ps_transmits();
 };
@@ -279,6 +281,60 @@ void TestP1DdcLayoutPerModel::layout_matches_thetis()
                                     cfg.psFbDdc, cfg.txMonDdc, a.p1Diversity,
                                     cfg.p1RxCount, cfg.nDdc);
     QCOMPARE(fromPs, actual);
+}
+
+// Slices C and D (streams 2 and 3) take the PureSignal pair's slots in
+// plain receive only (the operator's ruling of 2026-09-24: four streams on
+// Protocol 1): slots 3 + 4 on the Orion class, 2 + 3 on the Hermes class. They
+// suspend while PureSignal transmits (the pair) and under diversity. Stream 4
+// never gets a slot on Protocol 1, and HermesII has no room for either. Before
+// this, Orion slices D and E were routed by position onto slots 3 and 4.
+void TestP1DdcLayoutPerModel::slices_c_and_d_use_the_pair_slots_only_in_plain_receive_data()
+{
+    QTest::addColumn<int>("model");
+    QTest::addColumn<int>("slotC");
+    QTest::addColumn<int>("slotD");
+    QTest::newRow("ANAN7000D")    << int(HPSDRModel::ANAN7000D)    << 3 << 4;
+    QTest::newRow("ANAN100D")     << int(HPSDRModel::ANAN100D)     << 3 << 4;
+    QTest::newRow("ANAN_G2")      << int(HPSDRModel::ANAN_G2)      << 3 << 4;
+    QTest::newRow("ANVELINAPRO3") << int(HPSDRModel::ANVELINAPRO3) << 3 << 4;
+    QTest::newRow("REDPITAYA")    << int(HPSDRModel::REDPITAYA)    << 3 << 4;
+    QTest::newRow("HERMES")       << int(HPSDRModel::HERMES)       << 2 << 3;
+    QTest::newRow("ANAN_G2E")     << int(HPSDRModel::ANAN_G2E)     << 2 << 3;
+    QTest::newRow("ANAN10E")      << int(HPSDRModel::ANAN10E)      << -1 << -1;
+}
+
+void TestP1DdcLayoutPerModel::slices_c_and_d_use_the_pair_slots_only_in_plain_receive()
+{
+    QFETCH(int, model);
+    QFETCH(int, slotC);
+    QFETCH(int, slotD);
+    const auto codec = codecFor(static_cast<HPSDRModel>(model));
+
+    struct State { bool ps; bool div; bool mox; bool plain; };
+    const State states[] = {
+        {false, false, false, true}, {false, false, true, true},
+        {true,  false, false, true}, {true,  false, true, false},
+        {false, true,  false, false}, {true, true, true, false},
+    };
+    for (const State& st : states) {
+        CodecContext ctx{};
+        ctx.model = static_cast<HPSDRModel>(model);
+        ctx.puresignalRun = st.ps;
+        ctx.diversity = st.div;
+        ctx.mox = st.mox;
+        std::array<SliceConfig, 5> streams{};
+        for (int i = 0; i < 5; ++i) {
+            streams[i].live = true;
+            streams[i].sampleRateHz = R1;
+        }
+        const DdcAssignment a = codec->applyDdcAssignment(ctx, streams);
+        const QString where = QStringLiteral("ps %1 div %2 mox %3")
+                                  .arg(st.ps).arg(st.div).arg(st.mox);
+        QVERIFY2(a.streamDdc[2] == (st.plain ? slotC : -1), qPrintable(where));
+        QVERIFY2(a.streamDdc[3] == (st.plain ? slotD : -1), qPrintable(where));
+        QVERIFY2(a.streamDdc[4] == -1, qPrintable(where));
+    }
 }
 
 // The PureSignal pair's slots carry the TX frequency while PureSignal

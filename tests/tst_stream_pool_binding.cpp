@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <numbers>
 #include <vector>
 #include "core/DdcAssignment.h"
@@ -21,7 +22,10 @@
 #include "core/RxChannel.h"
 #include "core/SampleRateCatalog.h"
 #include "core/WdspEngine.h"
+#include "core/codec/P1CodecAnvelinaPro3.h"
+#include "core/codec/P1CodecHl2.h"
 #include "core/codec/P1CodecRedPitaya.h"
+#include "core/codec/P1CodecStandard.h"
 #include "core/codec/P2CodecHermes.h"
 #include "core/codec/P2CodecSaturn.h"
 #include "models/RadioModel.h"
@@ -376,30 +380,153 @@ private slots:
         QCOMPARE(hl2.userStreamCount(), 2);
     }
 
-    void protocol1_leaves_receiver_routing_auto_assigned()
+    // Plan Task 11: Protocol 1 routes each stream by the codec's FRAME SLOT
+    // (RadioModel::publishDdcAssignment no longer excludes Protocol 1).
+    //
+    // Issue #263 guard: AnvelinaPro3 and RedPitaya used to publish stream 0
+    // on "DDC2", and routing by that dropped every EP6 packet. They now
+    // publish slot 0 for slice A and slot 2 for slice B (Thetis GetDDC,
+    // Protocol 1 OrionMKII: rx1 = 0; rx2 = 2), and each slice gets the
+    // packets of its own slot. Slot 1 carries slice A's frequency on these
+    // boards (bank 3, nddc 5) and must reach no receiver.
+    void protocol1_routes_by_frame_slot_data()
     {
+        QTest::addColumn<QString>("codecName");
+        QTest::addColumn<int>("streams");
+        QTest::addColumn<int>("slotA");
+        QTest::addColumn<int>("slotB");
+        QTest::addColumn<int>("deadSlot");
+        QTest::newRow("AnvelinaPro3") << QStringLiteral("ap3")  << 4 << 0 << 2 << 1;
+        QTest::newRow("RedPitaya")    << QStringLiteral("rp")   << 4 << 0 << 2 << 1;
+        QTest::newRow("Hermes")       << QStringLiteral("std")  << 4 << 0 << 1 << 2;
+        QTest::newRow("HL2")          << QStringLiteral("hl2")  << 2 << 0 << 1 << 2;
+    }
+
+    void protocol1_routes_by_frame_slot()
+    {
+        QFETCH(QString, codecName);
+        QFETCH(int, streams);
+        QFETCH(int, slotA);
+        QFETCH(int, slotB);
+        QFETCH(int, deadSlot);
+
+        std::unique_ptr<IP1Codec> codec;
+        if (codecName == QLatin1String("ap3"))      { codec = std::make_unique<P1CodecAnvelinaPro3>(); }
+        else if (codecName == QLatin1String("rp"))  { codec = std::make_unique<P1CodecRedPitaya>(); }
+        else if (codecName == QLatin1String("hl2")) { codec = std::make_unique<P1CodecHl2>(); }
+        else                                        { codec = std::make_unique<P1CodecStandard>(); }
+
         RadioModel model;
-        // RedPitaya used to publish stream 0 on "DDC2" (UpdateDDCs's
-        // Protocol 2-style number), which a P1 board routing by that number
-        // would have looked for in frame slot 2 (issue #263). Plan Task 11:
-        // every P1 codec now publishes Protocol 1 frame slots, and RX1 is
-        // slot 0 on RedPitaya (GetDDC Protocol 1 OrionMKII: rx1 = 0).
-        P1CodecRedPitaya codec;
-        model.receiverManager()->setP1Codec(&codec);
-        model.configureStreamPool(5, 5, 192000);
-        for (int st = 0; st < 5; ++st) {
+        model.receiverManager()->setP1Codec(codec.get());
+        model.configureStreamPool(streams, 5, 192000);
+        for (int st = 0; st < streams; ++st) {
             model.receiverManager()->createReceiver();
         }
 
         const int a = model.addSlice();
         model.slices().at(a)->setFrequency(14200000.0);
+        const int b = model.addSlice();
+        model.slices().at(b)->setFrequency(7100000.0);  // outside A's window: own stream
+        const int streamA = model.slices().at(a)->streamIndex();
+        const int streamB = model.slices().at(b)->streamIndex();
+        QCOMPARE(streamA, 0);
+        QCOMPARE(streamB, 1);
 
-        QCOMPARE(model.ddcForStream(0), 0);
-        QCOMPARE(model.slices().at(a)->ddcIndex(), 0);
+        QCOMPARE(model.ddcForStream(streamA), slotA);
+        QCOMPARE(model.ddcForStream(streamB), slotB);
+        ReceiverManager* rm = model.receiverManager();
+        QCOMPARE(rm->receiverConfig(streamA).hardwareRx, slotA);
+        QCOMPARE(rm->receiverConfig(streamB).hardwareRx, slotB);
 
-        // Protocol 1 routing is still rebuildHardwareMapping's sequential
-        // auto-assign: the codec's slot is not yet a routing key here.
-        QCOMPARE(model.receiverManager()->ddcIndex(0), 0);
+        QSignalSpy spy(rm, &ReceiverManager::iqDataForReceiver);
+        const QVector<float> iq(64, 0.25f);
+        rm->feedIqData(slotA, iq);
+        rm->feedIqData(slotB, iq);
+        rm->feedIqData(deadSlot, iq);
+        QCOMPARE(spy.count(), 2);
+        QCOMPARE(spy.at(0).at(0).toInt(), streamA);
+        QCOMPARE(spy.at(1).at(0).toInt(), streamB);
+    }
+
+    // The HL2 keeps today's routing in every state it supports (plan Task 11,
+    // operator's condition): each active stream's slot equals what the old
+    // sequential auto-assign gave (nth active receiver -> slot n), for
+    // PureSignal off / armed / transmitting, with and without MOX, and with
+    // one to five slices sharing its two streams. The one accepted
+    // difference: slice B alone after slice A is removed keeps slot 1.
+    void hl2_routing_matches_today_in_every_state()
+    {
+        P1CodecHl2 codec;
+        RadioModel model;
+        model.receiverManager()->setP1Codec(&codec);
+        model.configureStreamPool(2, 5, 192000);
+        model.receiverManager()->createReceiver();
+        model.receiverManager()->createReceiver();
+
+        // Five slices sharing the HL2's two streams: A, C, E on 20 m, B, D on 40 m.
+        const double freqs[5] = {14200000.0, 7100000.0, 14210000.0, 7110000.0, 14220000.0};
+        QVector<int> ids;
+        for (double f : freqs) {
+            const int id = model.addSlice();
+            QVERIFY(id >= 0);
+            model.slices().at(id)->setFrequency(f);
+            ids.append(id);
+        }
+        for (int i = 0; i < 5; ++i) {
+            QCOMPARE(model.slices().at(ids[i])->streamIndex(), (i % 2 == 0) ? 0 : 1);
+        }
+
+        ReceiverManager* rm = model.receiverManager();
+        struct State { bool mox; bool ps; };
+        const State states[] = {{false, false}, {true, false}, {false, true}, {true, true}};
+        for (const State& st : states) {
+            CodecContext ctx{};
+            ctx.model = HPSDRModel::HERMESLITE;
+            ctx.mox = st.mox;
+            ctx.puresignalRun = st.ps;
+            std::array<SliceConfig, 5> streams{};
+            streams[0].live = true;
+            streams[0].sampleRateHz = 192000;
+            streams[1].live = true;
+            streams[1].sampleRateHz = 192000;
+            const DdcAssignment asg = codec.applyDdcAssignment(ctx, streams);
+            model.publishDdcAssignmentForTest(asg);
+
+            // Today's sequential answer: slot = position among active streams.
+            int nth = 0;
+            for (int s = 0; s < 2; ++s) {
+                if (asg.streamDdc[s] < 0) {
+                    QCOMPARE(rm->receiverConfig(s).active, false);
+                    continue;
+                }
+                QVERIFY2(rm->receiverConfig(s).active,
+                         qPrintable(QStringLiteral("mox %1 ps %2 stream %3").arg(st.mox).arg(st.ps).arg(s)));
+                QCOMPARE(rm->receiverConfig(s).hardwareRx, nth);
+                ++nth;
+            }
+            // PureSignal transmitting: slice B's stream is suspended, A stays
+            // on slot 0 (mi0bot GetDDC rx1 = 0; the pair rides slots 2 + 3).
+            if (st.mox && st.ps) {
+                QCOMPARE(asg.streamDdc[1], -1);
+                QCOMPARE(asg.psFwdDdc, 2);
+                QCOMPARE(asg.psRevDdc, 3);
+            }
+        }
+
+        // The accepted difference: A's slices removed, B's stream alone keeps
+        // slot 1 (sequential would have moved it to slot 0).
+        model.removeSlice(ids[0]);
+        model.removeSlice(ids[2]);
+        model.removeSlice(ids[4]);
+        CodecContext ctx{};
+        ctx.model = HPSDRModel::HERMESLITE;
+        std::array<SliceConfig, 5> streams{};
+        streams[1].live = true;
+        streams[1].sampleRateHz = 192000;
+        model.publishDdcAssignmentForTest(codec.applyDdcAssignment(ctx, streams));
+        QCOMPARE(rm->receiverConfig(0).active, false);
+        QCOMPARE(rm->receiverConfig(1).active, true);
+        QCOMPARE(rm->receiverConfig(1).hardwareRx, 1);
     }
 
     void widening_a_stream_rate_admits_a_previously_excluded_slice()

@@ -19899,30 +19899,26 @@ void RadioModel::publishDdcAssignment(const NereusSDR::DdcAssignment& assignment
     // an already-active receiver; for an inactive one the activation
     // reconcile below re-runs it, so the mapping is live either way.
     //
-    // PROTOCOL 1 IS EXCLUDED, and this is not an optimisation. The codec's
-    // DDC number is the ReceiverManager routing key on Protocol 2 only:
-    // P2RadioConnection emits iqDataReceived keyed by the real DDC index
-    // (P2RadioConnection.cpp:2736 + :2809), but Protocol 1 packs the ACTIVE
-    // receivers sequentially into the EP6 frame and emits their frame-slot
-    // index (P1RadioConnection.cpp:2999-3007). Publishing DDC numbers onto a
-    // P1 receiver would route stream 0 to hw index 2 on Anvelina Pro 3 /
-    // RedPitaya and drop every EP6 packet: the exact regression recorded in
-    // connectToRadio's "P1 radios deliver samples on hardware receiver index
-    // 0" comment (issue #263). The sequential auto-assign that
-    // rebuildHardwareMapping already performs IS the correct P1 answer,
-    // because nth-active-receiver maps to nth frame slot by construction.
-    // The slice-level publish below still carries the codec's DDC number on
-    // P1: that is the wire-level truth, just not a routing key.
-    const bool protocol1 =
-        (qobject_cast<NereusSDR::P1RadioConnection*>(m_connection) != nullptr)
-        || (m_connection == nullptr && m_receiverManager
-            && m_receiverManager->p1Codec() != nullptr);
-
-    // Idle streams are skipped rather than cleared to -1: -1 restores the
-    // auto-assign fallback that caused the drop in the first place, and a
-    // deactivated receiver is excluded from m_hwToLogical anyway, so the
-    // last-known explicit DDC is the safer thing to leave behind.
-    if (m_receiverManager && !protocol1) {
+    // Both protocols route by the codec's number (plan Task 11). On
+    // Protocol 2 it is the DDC index P2RadioConnection emits with
+    // iqDataReceived. On Protocol 1 it is the FRAME SLOT: the index of the
+    // receiver inside the EP6 frame, which P1RadioConnection emits with
+    // iqDataReceived, and every Protocol 1 codec now publishes that
+    // (Thetis GetDDC's Protocol 1 numbering: Hermes A 0 / B 1, HermesII
+    // A 0 / B 1, Orion class and RedPitaya A 0 / B 2, slices C and D on the
+    // PureSignal pair's slots in plain receive).
+    //
+    // Protocol 1 used to be excluded here and left to rebuildHardwareMapping's
+    // sequential auto-assign (nth active receiver -> slot n). That was right
+    // only while the codecs published Protocol 2-style DDC numbers: AnvelinaPro3
+    // and RedPitaya put stream 0 on "DDC2", and routing by that dropped every
+    // EP6 packet (issue #263). It was wrong for the Orion class: slice B went
+    // to slot 1, which the radio tunes to slice A's frequency (bank 3, nddc 5),
+    // instead of slot 2; and slices D and E landed on the PureSignal pair's
+    // slots by position. Routing by frame slot fixes both, and keeps the HL2's
+    // routing except in one state: slice B alone after slice A is removed
+    // reads slot 1 (its own DDC, tuned to its own frequency), not slot 0.
+    if (m_receiverManager) {
         const int streams = std::min(m_streamAllocator.streamCount(), 5);
         for (int st = 0; st < streams; ++st) {
             const int ddc = assignment.streamDdc[st];
