@@ -3107,10 +3107,8 @@ private slots:
         combo->setCurrentIndex(4);
         QCOMPARE(slice->vaxChannel(), 4);
         QCOMPARE(stored.constLast(), (std::pair<int, int>{0, 4}));
-        // The IQ channel combo stays off: there is no I/Q for VAX.
-        auto* iqCombo = host.findChild<QComboBox*>(QStringLiteral("vaxIqCombo"));
-        QVERIFY(iqCombo != nullptr);
-        QVERIFY(!iqCombo->isEnabled());
+        // The IQ channel combo was removed (R-R3-49): not built remotely either.
+        QVERIFY(host.findChild<QComboBox*>(QStringLiteral("vaxIqCombo")) == nullptr);
 
         // Never the Core's key.
         QVERIFY(!AppSettings::instance().contains(QStringLiteral("Slice0/VaxChannel")));

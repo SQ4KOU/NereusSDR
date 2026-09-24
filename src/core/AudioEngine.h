@@ -766,19 +766,6 @@ public:
     void setDspSampleRate(int rate);
     void setDspBlockSize(int blockSize);
 
-    // Sub-Phase 12 Task 12.4 — VAC feedback-loop tuning (per addendum §2.4).
-    // The four fields map to Thetis IVAC feedback tuning knobs. Persists to
-    // audio/VacFeedback/<channel>/{Gain,SlewTimeMs,PropRing,FfRing}.
-    // Live-apply is deferred to Phase 3M IVAC port.
-    // TODO(sub-phase-12-vac-feedback-live-apply): wire into IVAC engine.
-    struct VacFeedbackParams {
-        float gain      = 1.0f;
-        int   slewTimeMs = 5;
-        int   propRing   = 2;
-        int   ffRing     = 2;
-    };
-    void setVacFeedbackParams(int channel, const VacFeedbackParams& params);
-
     // Sub-Phase 12 Task 12.4 — Reset all audio settings (addendum §2.5).
     // Clears all audio/* keys from AppSettings, preserving
     // slice/<N>/VaxChannel and tx/OwnerSlot. Then rebuilds buses from

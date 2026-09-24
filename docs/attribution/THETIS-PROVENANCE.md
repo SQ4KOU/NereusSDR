@@ -200,8 +200,6 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/gui/meters/DataOutItem.cpp | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | clsDataOutItem implementation; pairs with DataOutItem.h |
 | src/gui/meters/DialItem.cpp | Project Files/Source/Console/MeterManager.cs | 15399+; 33750-33899 | port | thetis-samphire | clsDialDisplay, renderDialDisplay |
 | src/gui/meters/DialItem.h | Project Files/Source/Console/MeterManager.cs | 15399+ | port | thetis-samphire | clsDialDisplay |
-| src/gui/meters/DiscordButtonItem.h | Project Files/Source/Console/MeterManager.cs | 11983+ | port | thetis-samphire | clsDiscordButtonBox |
-| src/gui/meters/DiscordButtonItem.cpp | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | clsDiscordButtonItem implementation; pairs with DiscordButtonItem.h |
 | src/gui/meters/FadeCoverItem.cpp | Project Files/Source/Console/MeterManager.cs | 7665+; 36292; 7887-7888; 1900 | port | thetis-samphire | clsFadeCover, renderFadeCover, FadeOnRx/Tx |
 | src/gui/meters/FadeCoverItem.h | Project Files/Source/Console/MeterManager.cs | 7665+; 1900 | port | thetis-samphire | clsFadeCover, FadeOnRx/Tx |
 | src/gui/meters/FilterButtonItem.cpp | Project Files/Source/Console/MeterManager.cs | 7674+ | port | thetis-samphire | clsFilterButtonBox |
@@ -274,8 +272,6 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/gui/setup/hardware/BandwidthMonitorTab.cpp | Project Files/Source/ChannelMaster/bandwidth_monitor.h | full | port | thetis-samphire | Qt sub-tab around Samphire's C byte-accounting API; wires static controls only — live feed deferred to Phase 3L |
 | src/gui/setup/hardware/BandwidthMonitorTab.h | Project Files/Source/ChannelMaster/bandwidth_monitor.h | full | port | thetis-samphire | sub-tab declaration; pairs with BandwidthMonitorTab.cpp |
 | src/gui/setup/hardware/AntennaAlexTab.h | Project Files/Source/Console/setup.cs; Project Files/Source/Console/setup.designer.cs | 13393; 2892-2898; 23385-23395 | port | thetis-samphire | InitAlexAntTables() + per-band row structure; refactored as tcAlexControl parent |
-| src/gui/setup/hardware/DiversityTab.cpp | Project Files/Source/Console/DiversityForm.cs | full | port | thetis-samphire | |
-| src/gui/setup/hardware/DiversityTab.h | Project Files/Source/Console/DiversityForm.cs | 1216; 1228 | port | thetis-samphire | chkLockAngle, chkLockR |
 | src/gui/setup/hardware/OcOutputsHfTab.cpp | Project Files/Source/Console/setup.designer.cs | 13658-13670+ (tpOCHFControl + nested groupboxes for chkPenOCrcv/xmit, grpTransmitPinActionHF, grpUSBBCD, grpExtPAControlHF) | port | thetis-samphire | OC Outputs HF sub-sub-tab UI — RX/TX 14×7 matrix + pin actions + USB BCD + ext PA + master toggles + live OC pin state stubs |
 | src/gui/setup/hardware/OcOutputsHfTab.h | Project Files/Source/Console/setup.designer.cs | 13658-13670+ | port | thetis-samphire | header mirrors OcOutputsHfTab.cpp |
 | src/gui/setup/hardware/OcOutputsTab.cpp | Project Files/Source/Console/setup.designer.cs | tpOCHFControl + tpOCSWLControl (tcOCOutputs parent) | port | thetis-samphire | Parent QTabWidget hosting OC Outputs HF and SWL sub-sub-tabs; routes state via OcMatrix |

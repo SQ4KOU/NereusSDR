@@ -14,6 +14,8 @@
 #include <QtTest/QtTest>
 #include <QSignalSpy>
 #include <QComboBox>
+#include <QLabel>
+#include <QPushButton>
 
 #include "core/AppSettings.h"
 #include "gui/SpectrumOverlayPanel.h"
@@ -29,7 +31,7 @@ private:
     // SpectrumOverlayPanel parents its flyouts to `parentWidget()` (the
     // host SpectrumWidget in production — a bare QWidget in these tests).
     // Give it a host parent and search from there so findChild reaches the
-    // combo's setObjectName("vaxCombo") / ("vaxIqCombo") in buildVaxFlyout.
+    // combo's setObjectName("vaxCombo") in buildVaxFlyout.
     struct PanelHarness {
         QWidget host;
         SpectrumOverlayPanel* panel{nullptr};
@@ -40,10 +42,6 @@ private:
 
     QComboBox* vaxCombo(PanelHarness& h) {
         return h.host.findChild<QComboBox*>(QStringLiteral("vaxCombo"));
-    }
-
-    QComboBox* vaxIqCombo(PanelHarness& h) {
-        return h.host.findChild<QComboBox*>(QStringLiteral("vaxIqCombo"));
     }
 
     QComboBox* rxAntennaCombo(PanelHarness& h) {
@@ -140,19 +138,26 @@ private slots:
         QCOMPARE(spy.at(0).at(0).toInt(), 2);
     }
 
-    // ── 5. IQ Ch combo stays disabled (feature-flagged) ────────────────
-    void iqComboRemainsDisabled() {
+    // ── 5. Removed controls are gone (R-R3-49) ─────────────────────────
+    // The operator removed the RF Gain slider, the WNB button and the
+    // IQ channel combo from the overlay: none is built at all.
+    void removedControlsAreGone() {
         RadioModel radio;
         radio.addSlice();
 
         PanelHarness h;
         h.panel->setRadioModel(&radio);
 
-        QComboBox* iq = vaxIqCombo(h);
-        QVERIFY(iq);
-        QVERIFY(!iq->isEnabled());
-        QVERIFY(iq->toolTip().contains("not available yet",
-                                       Qt::CaseInsensitive));
+        QVERIFY(h.host.findChild<QComboBox*>(QStringLiteral("vaxIqCombo")) == nullptr);
+        for (QLabel* l : h.host.findChildren<QLabel*>()) {
+            QVERIFY2(l->text() != QStringLiteral("RF Gain:"), "RF Gain slider label still built");
+            QVERIFY2(l->text() != QStringLiteral("IQ Ch"), "IQ channel label still built");
+        }
+        for (QPushButton* b : h.host.findChildren<QPushButton*>()) {
+            QVERIFY2(b->text() != QStringLiteral("WNB"), "WNB button still built");
+            QVERIFY2(!b->toolTip().contains(QStringLiteral("RF gain"), Qt::CaseInsensitive),
+                     "a button still offers RF gain");
+        }
     }
 
     // ── 6. Removing slice 0 disables the combo; replacing it rebinds ───

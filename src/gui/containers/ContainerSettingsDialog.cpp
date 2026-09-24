@@ -15,6 +15,9 @@
 //                 listed until the voice recorder is built; one already in a
 //                 container is kept. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Discord control, its factory entries and its
+//                 editor are removed. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -137,7 +140,6 @@ mw0lge@grange-lane.co.uk
 #include "meter_property_editors/TuneStepButtonItemEditor.h"
 #include "meter_property_editors/OtherButtonItemEditor.h"
 #include "meter_property_editors/VoiceRecordPlayItemEditor.h"
-#include "meter_property_editors/DiscordButtonItemEditor.h"
 #include "ContainerWidget.h"
 #include "../meters/MeterWidget.h"
 #include "../meters/MeterItem.h"
@@ -167,7 +169,6 @@ mw0lge@grange-lane.co.uk
 #include "../meters/OtherButtonItem.h"
 #include "../meters/VoiceRecordPlayItem.h"
 #include "../UnbuiltFeatures.h"
-#include "../meters/DiscordButtonItem.h"
 #include "../meters/VfoDisplayItem.h"
 #include "../meters/ClockItem.h"
 #include "../meters/ClickBoxItem.h"
@@ -1157,7 +1158,6 @@ void ContainerSettingsDialog::onAddItem()
     // R-R3-49: not offered until the voice recorder is built.
     UnbuiltFeatures::hideUnlessBuilt(voiceAction, UnbuiltFeature::Voice);
     controlsMenu->addAction(QStringLiteral("VFO Display"),       this, [this]{ addNewItem(QStringLiteral("VFO")); });
-    controlsMenu->addAction(QStringLiteral("Discord Buttons"),   this, [this]{ addNewItem(QStringLiteral("DISCORDBTNS")); });
 
     // --- Display ---
     QMenu* displayMenu = menu->addMenu(QStringLiteral("Display"));
@@ -1368,8 +1368,6 @@ MeterItem* ContainerSettingsDialog::createDefaultItem(const QString& typeTag)
         return new OtherButtonItem();
     } else if (typeTag == QLatin1String("VOICERECPLAY")) {
         return new VoiceRecordPlayItem();
-    } else if (typeTag == QLatin1String("DISCORDBTNS")) {
-        return new DiscordButtonItem();
     } else if (typeTag == QLatin1String("VFO")) {
         return new VfoDisplayItem();
     } else if (typeTag == QLatin1String("CLOCK")) {
@@ -1501,10 +1499,6 @@ MeterItem* ContainerSettingsDialog::createItemFromSerialized(const QString& data
         VoiceRecordPlayItem* item = new VoiceRecordPlayItem();
         if (item->deserialize(data)) { return item; }
         delete item;
-    } else if (typeTag == QLatin1String("DISCORDBTNS")) {
-        DiscordButtonItem* item = new DiscordButtonItem();
-        if (item->deserialize(data)) { return item; }
-        delete item;
     } else if (typeTag == QLatin1String("VFO")) {
         VfoDisplayItem* item = new VfoDisplayItem();
         if (item->deserialize(data)) { return item; }
@@ -1561,7 +1555,6 @@ QString ContainerSettingsDialog::typeTagDisplayName(const QString& tag)
         { QStringLiteral("TUNESTEPBTNS"),  QStringLiteral("Tune Step Buttons") },
         { QStringLiteral("OTHERBTNS"),     QStringLiteral("Other Buttons") },
         { QStringLiteral("VOICERECPLAY"),  QStringLiteral("Voice Rec/Play") },
-        { QStringLiteral("DISCORDBTNS"),   QStringLiteral("Discord Buttons") },
         { QStringLiteral("VFO"),           QStringLiteral("VFO Display") },
         { QStringLiteral("CLOCK"),         QStringLiteral("Clock") },
         { QStringLiteral("CLICKBOX"),      QStringLiteral("Click Box") },
@@ -2322,7 +2315,6 @@ QWidget* ContainerSettingsDialog::buildTypeSpecificEditor(MeterItem* item)
     else if (typeTag == QLatin1String("TUNESTEPBUTTON")) ed = new TuneStepButtonItemEditor(this);
     else if (typeTag == QLatin1String("OTHERBUTTON"))    ed = new OtherButtonItemEditor(this);
     else if (typeTag == QLatin1String("VOICERECPLAY"))   ed = new VoiceRecordPlayItemEditor(this);
-    else if (typeTag == QLatin1String("DISCORDBUTTON"))  ed = new DiscordButtonItemEditor(this);
 
     if (ed) {
         ed->setItem(item);

@@ -24,8 +24,25 @@
 #include <QCheckBox>
 #include <QRadioButton>
 #include <QScopeGuard>
+#include <QTabWidget>
 
 using namespace NereusSDR;
+
+namespace {
+// R-R3-49: the Diversity tab was removed; no tab of any tab strip on the
+// page carries the name, on any board.
+bool hasTabTitled(const QWidget& page, const QString& title)
+{
+    for (const QTabWidget* tabs : page.findChildren<QTabWidget*>()) {
+        for (int i = 0; i < tabs->count(); ++i) {
+            if (tabs->tabText(i) == title) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+} // namespace
 
 class TestHardwarePageGating : public QObject {
     Q_OBJECT
@@ -62,7 +79,7 @@ private slots:
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Xvtr));
         // Setup → Hardware → PureSignal tab retired in Phase 3M-4 Task 14;
         // no Tab::PureSignal enum value to assert against any more.
-        QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Diversity));
+        QVERIFY(!hasTabTitled(page, QStringLiteral("Diversity")));
         // Calibration tab is always visible after IA reshape Phase 5 —
         // PA-specific groups moved to PA → Watt Meter, so the per-board
         // hasPaProfile gate at the parent-tab level was dropped.
@@ -146,7 +163,7 @@ private slots:
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::OcOutputs));
         // Setup → Hardware → PureSignal tab retired in Phase 3M-4 Task 14;
         // PsForm at Tools > PureSignal is the entire PS control surface.
-        QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Diversity));
+        QVERIFY(!hasTabTitled(page, QStringLiteral("Diversity")));
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Calibration));
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Hl2IoBoard));
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::BandwidthMonitor));
@@ -170,7 +187,7 @@ private slots:
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::OcOutputs));
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Xvtr));
         // Setup → Hardware → PureSignal tab retired in Phase 3M-4 Task 14.
-        QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Diversity));
+        QVERIFY(!hasTabTitled(page, QStringLiteral("Diversity")));
         // Calibration tab is always visible after IA reshape Phase 5 —
         // PA-specific groups moved to PA → Watt Meter, so the per-board
         // hasPaProfile gate at the parent-tab level was dropped. Atlas
@@ -193,7 +210,7 @@ private slots:
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::AntennaAlex));
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::OcOutputs));
         // Setup → Hardware → PureSignal tab retired in Phase 3M-4 Task 14.
-        QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Diversity));
+        QVERIFY(!hasTabTitled(page, QStringLiteral("Diversity")));
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Calibration));
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Hl2IoBoard));
     }

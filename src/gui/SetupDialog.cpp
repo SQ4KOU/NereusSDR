@@ -108,6 +108,11 @@
 //                 with no pages is not shown, so selectPage() finds none of
 //                 them. J.J. Boyd (KG4VCF), with AI-assisted implementation
 //                 via Anthropic Claude Code.
+//   2026-09-24: R-R3-49 / R-R3-21. RX2 Display and Gradients are removed;
+//                 Logging & Performance, left with only hidden logging
+//                 groups, is registered only once logging is built. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -1268,7 +1273,6 @@ void SetupDialog::buildTree()
         return multimeterPage;
     });
 
-    registerPage(display, "RX2 Display", SetupScope::ThisComputer, [this] { return new Rx2DisplayPage(m_model); });
     registerPage(display, "TX Display", SetupScope::Mixed,  [this] { return new TxDisplayPage(m_model);  });
 
     // 3D Stacked-Trace Spectrum Plan Task 15: mirrors the Task 13 overlay
@@ -1336,8 +1340,6 @@ void SetupDialog::buildTree()
                 this, &SetupDialog::sMeterPeakDecayChanged);
         return page;
     });
-    registerPage(appearance, "Gradients", SetupScope::ThisComputer,
-                 [this] { return new GradientsPage(m_model); });
     if (UnbuiltFeatures::isBuilt(UnbuiltFeature::Skins)) {
         registerPage(appearance, "Skins", SetupScope::ThisComputer,
                      [this] { return new SkinsPage(m_model); });
@@ -1463,8 +1465,13 @@ void SetupDialog::buildTree()
         registerPage(diagnostics, "Hardware Tests", SetupScope::Core,
                      [] { return new DiagHardwareTestsPage; });
     }
-    registerPage(diagnostics, "Logging & Performance", SetupScope::ThisComputer,
-                 [] { return new DiagLoggingPage; });
+    // R-R3-49: with its Performance checkboxes removed, this page holds only
+    // the logging groups, hidden until logging is built. A page with nothing
+    // to show is not registered, so neither the tree nor selectPage() finds it.
+    if (UnbuiltFeatures::isBuilt(UnbuiltFeature::Logging)) {
+        registerPage(diagnostics, "Logging & Performance", SetupScope::ThisComputer,
+                     [] { return new DiagLoggingPage; });
+    }
 
     tick("Diagnostics");
 

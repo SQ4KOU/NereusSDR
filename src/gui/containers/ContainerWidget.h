@@ -306,7 +306,6 @@ signals:
     void otherButtonClicked(int buttonId);
     void macroTriggered(int macroIndex);
     void voiceAction(int action);
-    void discordAction(int action);
     void frequencyChangeRequested(int64_t deltaHz);
 
 public:

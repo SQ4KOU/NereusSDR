@@ -14,6 +14,10 @@
 //                 (the Voice Rec/Play control) is kept and saved but not
 //                 drawn and takes no clicks. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Discord control was removed; a saved one is
+//                 dropped on load with one log line and the rest of the
+//                 container loads. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -81,7 +85,6 @@ mw0lge@grange-lane.co.uk
 #include "TuneStepButtonItem.h"
 #include "OtherButtonItem.h"
 #include "VoiceRecordPlayItem.h"
-#include "DiscordButtonItem.h"
 #include "VfoDisplayItem.h"
 #include "ClockItem.h"
 #include "ClickBoxItem.h"
@@ -328,7 +331,11 @@ bool MeterWidget::deserializeItems(const QString& data)
         } else if (type == QStringLiteral("VOICERECPLAY")) {
             item = new VoiceRecordPlayItem();
         } else if (type == QStringLiteral("DISCORDBTNS")) {
-            item = new DiscordButtonItem();
+            // R-R3-49: the Discord control was removed. A saved one is
+            // dropped here; the rest of the container loads normally.
+            qCInfo(lcMeter) << "Dropped a saved Discord control from a container:"
+                               " that control has been removed";
+            continue;
         } else if (type == QStringLiteral("VFO")) {
             item = new VfoDisplayItem();
         } else if (type == QStringLiteral("CLOCK")) {

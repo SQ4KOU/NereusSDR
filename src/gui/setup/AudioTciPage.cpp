@@ -11,6 +11,10 @@
 //
 // Phase 24 Task 24.2 (2026-05-10): Written by J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+//
+// 2026-09-24: R-R3-49 by J.J. Boyd (KG4VCF), with AI-assisted
+// implementation via Anthropic Claude Code. The Slice B rate control is
+// removed; nothing read its setting.
 // =================================================================
 
 #include "AudioTciPage.h"
@@ -46,8 +50,9 @@ void AudioTciPage::buildUI()
 
 // ---------------------------------------------------------------------------
 // Group 1: Output Sample Rate per Slice
-// AppSettings: TciSliceA_OutputSampleRate (default 48000),
-//              TciSliceB_OutputSampleRate (default 48000).
+// AppSettings: TciSliceA_OutputSampleRate (default 48000). The Slice B
+// rate control is removed (R-R3-49); a saved TciSliceB_OutputSampleRate
+// stays in the settings file.
 // Slices C/D not exposed via TCI in Phase 3J-1 per design doc Section 1.2.
 // ---------------------------------------------------------------------------
 void AudioTciPage::buildSampleRateGroup()
@@ -83,27 +88,6 @@ void AudioTciPage::buildSampleRateGroup()
         AppSettings::instance().setValue(QStringLiteral("TciSliceA_OutputSampleRate"), text);
     });
     form->addRow(tr("Slice A rate:"), m_sliceARateCombo);
-
-    // Slice B
-    m_sliceBRateCombo = new QComboBox(group);
-    m_sliceBRateCombo->setStyleSheet(QString::fromLatin1(Style::kComboStyle));
-    for (int i = 0; kRates[i] != nullptr; ++i) {
-        m_sliceBRateCombo->addItem(QString::fromLatin1(kRates[i]));
-    }
-    m_sliceBRateCombo->setToolTip(
-        tr("Output sample rate for the Slice B TCI audio stream (24000/48000/96000/192000 Hz). "
-           "Higher rates require more CPU and network bandwidth."));
-    {
-        const QString saved = s.value(
-            QStringLiteral("TciSliceB_OutputSampleRate"),
-            QStringLiteral("48000")).toString();
-        const int idx = m_sliceBRateCombo->findText(saved);
-        m_sliceBRateCombo->setCurrentIndex(idx >= 0 ? idx : m_sliceBRateCombo->findText(QStringLiteral("48000")));
-    }
-    connect(m_sliceBRateCombo, &QComboBox::currentTextChanged, this, [](const QString& text) {
-        AppSettings::instance().setValue(QStringLiteral("TciSliceB_OutputSampleRate"), text);
-    });
-    form->addRow(tr("Slice B rate:"), m_sliceBRateCombo);
 
     // Slices C/D not exposed: informational note
     auto* noteLabel = new QLabel(

@@ -367,48 +367,6 @@ void MeterStylesPage::buildUI()
 }
 
 // ---------------------------------------------------------------------------
-// GradientsPage
-// ---------------------------------------------------------------------------
-
-GradientsPage::GradientsPage(RadioModel* model, QWidget* parent)
-    : SetupPage(QStringLiteral("Gradients"), model, parent)
-{
-    buildUI();
-}
-
-void GradientsPage::buildUI()
-{
-    NereusSDR::Style::applyDarkPageStyle(this);
-
-    // --- Section: Waterfall Gradient ---
-    auto* gradGroup = new QGroupBox(QStringLiteral("Waterfall Gradient"), this);
-    auto* gradForm  = new QFormLayout(gradGroup);
-    gradForm->setSpacing(6);
-
-    m_gradientEditorLabel = new QLabel(
-        QStringLiteral("(Gradient editor — not yet implemented)"), gradGroup);
-    m_gradientEditorLabel->setStyleSheet(QStringLiteral(
-        "QLabel { color: #607080; font-style: italic;"
-        " background: #1a2a3a; border: 1px solid #203040;"
-        " border-radius: 3px; padding: 8px; }"));
-    m_gradientEditorLabel->setMinimumHeight(60);
-    m_gradientEditorLabel->setEnabled(false);
-    m_gradientEditorLabel->setAlignment(Qt::AlignCenter);
-    gradForm->addRow(QStringLiteral("Editor:"), m_gradientEditorLabel);
-
-    m_presetCombo = new QComboBox(gradGroup);
-    m_presetCombo->addItems({QStringLiteral("Enhanced"), QStringLiteral("Grayscale"),
-                             QStringLiteral("Spectrum"), QStringLiteral("Fire"),
-                             QStringLiteral("Ice")});
-    m_presetCombo->setEnabled(false);  // NYI
-    m_presetCombo->setToolTip(QStringLiteral("Waterfall gradient preset — not yet implemented"));
-    gradForm->addRow(QStringLiteral("Preset:"), m_presetCombo);
-
-    contentLayout()->addWidget(gradGroup);
-    contentLayout()->addStretch();
-}
-
-// ---------------------------------------------------------------------------
 // SkinsPage
 // ---------------------------------------------------------------------------
 

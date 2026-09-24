@@ -114,6 +114,11 @@
 //                                    swatches keep their names as labels
 //                                    meanwhile. AI tooling: Anthropic
 //                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49: the Display tab's Auto
+//                                    background toggle is removed; a
+//                                    saved IsSpotsOverrideToAuto...
+//                                    value stays in the file. AI
+//                                    tooling: Anthropic Claude Code.
 
 #include "SpotHubDialog.h"
 
@@ -2489,7 +2494,7 @@ void SpotHubDialog::buildSpotListTab(QTabWidget* tabs)
 // (verbatim port): all knobs from AetherSDR
 // src/gui/SpotSettingsDialog.cpp:38-292 [@0cd4559] (Spots /
 // Memories toggles + Levels / Position / Font Size / Spot Lifetime
-// sliders + Override Colors / Override Background + Auto +
+// sliders + Override Colors / Override Background +
 // swatches + BG Opacity slider). Every knob change writes to the
 // upstream AppSettings keys (`SpotSettingsDialog.cpp:22-37
 // [@0cd4559]`) and emits settingsChanged() so MainWindow can
@@ -2593,7 +2598,6 @@ void SpotHubDialog::buildDisplayTab(QTabWidget* tabs)
     bool memoriesEnabled    = s.value("IsMemorySpotsEnabled", "False").toString() == "True";
     bool overrideColors     = s.value("IsSpotsOverrideColorsEnabled", "False").toString() == "True";
     bool overrideBg         = s.value("IsSpotsOverrideBackgroundColorsEnabled", "True").toString() == "True";
-    bool overrideBgAutoMode = s.value("IsSpotsOverrideToAutoBackgroundColorEnabled", "True").toString() == "True";
     int  levelsVal   = s.value("SpotsMaxLevel", 3).toInt();
     int  positionVal = s.value("SpotsStartingHeightPercentage", 50).toInt();
     int  fontSizeVal = s.value("SpotFontSize", 16).toInt();
@@ -2813,8 +2817,8 @@ void SpotHubDialog::buildDisplayTab(QTabWidget* tabs)
     colorRow->addStretch();
     grid->addLayout(colorRow, row++, 1);
 
-    // Override Background + Auto + swatch. Upstream :212-252
-    // [@0cd4559].
+    // Override Background + swatch. Upstream :212-252
+    // [@0cd4559]. The upstream Auto toggle is removed (R-R3-49).
     grid->addWidget(new QLabel("Override Background:"), row, 0);
     auto* bgRow = new QHBoxLayout;
     auto* overrideBgToggle = new QPushButton("Enabled");
@@ -2823,22 +2827,11 @@ void SpotHubDialog::buildDisplayTab(QTabWidget* tabs)
     overrideBgToggle->setChecked(overrideBg);
     overrideBgToggle->setFixedWidth(70);
     overrideBgToggle->setStyleSheet(kToggleStyle);
-    auto* overrideBgAutoToggle = new QPushButton("Auto");
-    overrideBgAutoToggle->setObjectName("displayOverrideBgAutoToggle");
-    overrideBgAutoToggle->setCheckable(true);
-    overrideBgAutoToggle->setChecked(overrideBgAutoMode);
-    overrideBgAutoToggle->setFixedWidth(50);
-    overrideBgAutoToggle->setStyleSheet(kToggleStyle);
     connect(overrideBgToggle, &QPushButton::toggled, this,
             [save](bool on) {
         save("IsSpotsOverrideBackgroundColorsEnabled", on ? "True" : "False");
     });
-    connect(overrideBgAutoToggle, &QPushButton::toggled, this,
-            [save](bool on) {
-        save("IsSpotsOverrideToAutoBackgroundColorEnabled", on ? "True" : "False");
-    });
     bgRow->addWidget(overrideBgToggle);
-    bgRow->addWidget(overrideBgAutoToggle);
 
     auto* bgColorSwatch = new QPushButton;
     bgColorSwatch->setObjectName("displayBgColorSwatch");

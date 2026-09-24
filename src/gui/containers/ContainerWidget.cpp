@@ -64,7 +64,6 @@ mw0lge@grange-lane.co.uk
 #include "gui/meters/TuneStepButtonItem.h"
 #include "gui/meters/OtherButtonItem.h"
 #include "gui/meters/VoiceRecordPlayItem.h"
-#include "gui/meters/DiscordButtonItem.h"
 #include "gui/meters/VfoDisplayItem.h"
 
 #include <QUuid>
@@ -750,9 +749,6 @@ void ContainerWidget::wireInteractiveItem(MeterItem* item)
     } else if (auto* voice = qobject_cast<VoiceRecordPlayItem*>(item)) {
         connect(voice, &VoiceRecordPlayItem::voiceAction,
                 this, &ContainerWidget::voiceAction);
-    } else if (auto* discord = qobject_cast<DiscordButtonItem*>(item)) {
-        connect(discord, &DiscordButtonItem::discordAction,
-                this, &ContainerWidget::discordAction);
     } else if (auto* vfo = qobject_cast<VfoDisplayItem*>(item)) {
         connect(vfo, &VfoDisplayItem::frequencyChangeRequested,
                 this, &ContainerWidget::frequencyChangeRequested);

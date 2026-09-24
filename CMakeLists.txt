@@ -1380,7 +1380,6 @@ set(GUI_SOURCES
     src/gui/containers/meter_property_editors/TuneStepButtonItemEditor.cpp
     src/gui/containers/meter_property_editors/OtherButtonItemEditor.cpp
     src/gui/containers/meter_property_editors/VoiceRecordPlayItemEditor.cpp
-    src/gui/containers/meter_property_editors/DiscordButtonItemEditor.cpp
     src/gui/meters/MeterWidget.cpp
     src/gui/meters/MeterItem.cpp
     src/gui/meters/ItemGroup.cpp
@@ -1405,7 +1404,6 @@ set(GUI_SOURCES
     src/gui/meters/TuneStepButtonItem.cpp
     src/gui/meters/OtherButtonItem.cpp
     src/gui/meters/VoiceRecordPlayItem.cpp
-    src/gui/meters/DiscordButtonItem.cpp
     src/gui/meters/VfoDisplayItem.cpp
     src/gui/meters/ClockItem.cpp
     src/gui/meters/ClickBoxItem.cpp
@@ -1431,7 +1429,6 @@ set(GUI_SOURCES
     src/gui/setup/hardware/OcOutputsHfTab.cpp
     src/gui/setup/hardware/OcOutputsSwlTab.cpp
     src/gui/setup/hardware/XvtrTab.cpp
-    src/gui/setup/hardware/DiversityTab.cpp
     src/gui/setup/hardware/CalibrationTab.cpp
     src/gui/setup/hardware/PaCalibrationGroup.cpp
     src/gui/setup/hardware/Hl2IoBoardTab.cpp

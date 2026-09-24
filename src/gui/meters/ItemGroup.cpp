@@ -15,6 +15,9 @@
 //                 isNoMeterReading rule and a real reading below the bar's
 //                 range stays a number. J.J. Boyd (KG4VCF), with AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: the Discord control was removed; a saved one in a
+//                 group is dropped on load with one log line. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -81,11 +84,12 @@ mw0lge@grange-lane.co.uk
 #include "TuneStepButtonItem.h"
 #include "OtherButtonItem.h"
 #include "VoiceRecordPlayItem.h"
-#include "DiscordButtonItem.h"
 #include "VfoDisplayItem.h"
 #include "ClockItem.h"
 #include "ClickBoxItem.h"
 #include "DataOutItem.h"
+
+#include "core/LogCategories.h"
 
 #include <QStringList>
 #include <QtAlgorithms>
@@ -350,8 +354,9 @@ ItemGroup* ItemGroup::deserialize(const QString& data, QObject* parent)
             auto* item = new VoiceRecordPlayItem(group);
             if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }
         } else if (typeTag == QLatin1String("DISCORDBTNS")) {
-            auto* item = new DiscordButtonItem(group);
-            if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }
+            // R-R3-49: the Discord control was removed; a saved one is dropped.
+            qCInfo(lcMeter) << "Dropped a saved Discord control from a meter group:"
+                               " that control has been removed";
         } else if (typeTag == QLatin1String("VFO")) {
             auto* item = new VfoDisplayItem(group);
             if (item->deserialize(itemData)) { group->addItem(item); } else { delete item; }

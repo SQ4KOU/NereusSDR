@@ -61,6 +61,7 @@
 #include <QSpinBox>
 #include <QLabel>
 #include <QStackedWidget>
+#include <QTabWidget>
 #include <QLoggingCategory>
 #include <QMenu>
 #include <QMessageBox>
@@ -1227,8 +1228,12 @@ private slots:
         const BoardCapabilities& saturn = BoardCapsTable::forBoard(HPSDRHW::Saturn);
         QCOMPARE(hardware->isTabVisibleForTest(HardwarePage::Tab::AntennaAlex),
                  saturn.hasAlexFilters);
-        QCOMPARE(hardware->isTabVisibleForTest(HardwarePage::Tab::Diversity),
-                 saturn.hasDiversityReceiver);
+        // R-R3-49: the Diversity tab was removed, remote as well as local.
+        for (const QTabWidget* tabs : hardware->findChildren<QTabWidget*>()) {
+            for (int i = 0; i < tabs->count(); ++i) {
+                QVERIFY(tabs->tabText(i) != QStringLiteral("Diversity"));
+            }
+        }
         QVERIFY(!hardware->isTabVisibleForTest(HardwarePage::Tab::Hl2Options));
         QCOMPARE(hardware->tabTextForTest(HardwarePage::Tab::OcOutputs),
                  QStringLiteral("OC Outputs"));

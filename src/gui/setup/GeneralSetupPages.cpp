@@ -52,9 +52,6 @@ StartupPrefsPage::StartupPrefsPage(RadioModel* model, QWidget* parent)
         s.save();
     });
 
-    auto* restoreFreq = addLabeledToggle(QStringLiteral("Restore last frequency on connect"));
-    markNyi(restoreFreq, QStringLiteral("Phase 3E"));
-
     // R-R3-21: the operator identity the Spot Hub Settings tab edits
     // (User/Callsign, User/GridSquare and the copies each spot source reads).
     auto* callsign = addLabeledEdit(QStringLiteral("Callsign"),
@@ -103,24 +100,6 @@ StartupPrefsPage::StartupPrefsPage(RadioModel* model, QWidget* parent)
     connect(gridSquare, &QLineEdit::editingFinished, this, commitIdentity);
     m_callsignEdit = callsign;
     m_gridEdit = gridSquare;
-
-    // Section: Application
-    addSection(QStringLiteral("Application"));
-
-    auto* splash = addLabeledToggle(QStringLiteral("Show splash screen at startup"));
-    markNyi(splash, QStringLiteral("Phase 3N"));
-
-    auto* checkUpdates = addLabeledToggle(QStringLiteral("Check for updates on startup"));
-    markNyi(checkUpdates, QStringLiteral("Phase 3N"));
-
-    auto* regenWisdom = addLabeledButton(QStringLiteral("FFTW Wisdom"),
-                                         QStringLiteral("Regenerate"));
-    markNyi(regenWisdom, QStringLiteral("Phase 3C"));
-
-    auto* priority = addLabeledCombo(QStringLiteral("Process Priority"),
-        {QStringLiteral("Normal"), QStringLiteral("Above Normal"),
-         QStringLiteral("High"), QStringLiteral("Realtime")});
-    markNyi(priority, QStringLiteral("future"));
 }
 
 void StartupPrefsPage::setStationSettingsAvailable(bool available, const QString& reason)

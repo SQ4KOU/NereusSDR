@@ -79,7 +79,6 @@ class RadioInfoTab;
 class AntennaAlexTab;
 class OcOutputsTab;
 class XvtrTab;
-class DiversityTab;
 class CalibrationTab;
 class Hl2IoBoardTab;
 class Hl2OptionsTab;
@@ -100,7 +99,7 @@ public:
 #ifdef NEREUS_BUILD_TESTS
     enum class Tab {
         RadioInfo, AntennaAlex, OcOutputs, Xvtr,
-        Diversity, Calibration, Hl2Options, Hl2IoBoard, BandwidthMonitor
+        Calibration, Hl2Options, Hl2IoBoard, BandwidthMonitor
     };
     bool isTabVisibleForTest(Tab t) const;
     QString tabTextForTest(Tab t) const;
@@ -166,7 +165,6 @@ private:
     AntennaAlexTab*      m_antennaAlexTab{nullptr};
     OcOutputsTab*        m_ocOutputsTab{nullptr};
     XvtrTab*             m_xvtrTab{nullptr};
-    DiversityTab*        m_diversityTab{nullptr};
     CalibrationTab*      m_paCalTab{nullptr};
     Hl2OptionsTab*       m_hl2OptionsTab{nullptr};
     Hl2IoBoardTab*       m_hl2IoTab{nullptr};
@@ -176,7 +174,6 @@ private:
     int m_antennaAlexIdx{-1};
     int m_ocOutputsIdx{-1};
     int m_xvtrIdx{-1};
-    int m_diversityIdx{-1};
     int m_paCalIdx{-1};
     int m_hl2OptionsIdx{-1};
     int m_hl2IoIdx{-1};

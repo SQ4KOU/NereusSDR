@@ -19,9 +19,19 @@
 //   - A saved container holding a Voice Rec/Play control loads, does not
 //     show or list it, does not offer a new one, and saves it back.
 //
+// R3 unfinished controls, Task 2 (R-R3-49, R-R3-21): the controls the
+// operator removed are built in no window, local or remote; the values
+// users saved for them stay in the settings file; a saved Discord control
+// is dropped on load with one log line; and no Setup page or category with
+// nothing to show is offered or found (Logging & Performance, once its
+// Performance checkboxes went).
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, Task 1.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, Task 2.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
 // =================================================================
@@ -47,6 +57,13 @@
 #include <QStackedWidget>
 #include <QTabWidget>
 #include <QTreeWidget>
+#include <QAbstractItemView>
+#include <QAbstractSlider>
+#include <QAbstractSpinBox>
+#include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QScrollBar>
+#include <QTextEdit>
 #include <QWidget>
 
 #include <functional>
@@ -60,6 +77,7 @@
 #include "gui/NetworkDiagnosticsDialog.h"
 #include "gui/SetupDialog.h"
 #include "gui/SpectrumWidget.h"
+#include "gui/SpectrumOverlayPanel.h"
 #include "gui/SpotHubDialog.h"
 #include "gui/UnbuiltFeatures.h"
 #include "gui/applets/PhoneCwApplet.h"
@@ -67,6 +85,7 @@
 #include "gui/containers/ContainerManager.h"
 #include "gui/containers/ContainerSettingsDialog.h"
 #include "gui/containers/ContainerWidget.h"
+#include "gui/meters/ItemGroup.h"
 #include "gui/meters/MeterWidget.h"
 #include "gui/meters/MeterItem.h"
 #include "gui/meters/VoiceRecordPlayItem.h"
@@ -150,6 +169,66 @@ bool actionShown(const QWidget* root, const QString& text)
         if (action->text() == text && action->isVisible()) { return true; }
     }
     return false;
+}
+
+// R-R3-49 removals: true when anything under `root` carries this text at
+// all, shown or hidden (a removed control is not built, not merely hidden).
+bool textBuilt(const QWidget* root, const QString& text)
+{
+    if (root == nullptr) { return false; }
+    for (const QLabel* label : root->findChildren<QLabel*>()) {
+        if (label->text() == text) { return true; }
+    }
+    for (const QAbstractButton* button : root->findChildren<QAbstractButton*>()) {
+        if (button->text() == text) { return true; }
+    }
+    for (const QGroupBox* group : root->findChildren<QGroupBox*>()) {
+        if (group->title() == text) { return true; }
+    }
+    for (const QTabWidget* tabs : root->findChildren<QTabWidget*>()) {
+        for (int i = 0; i < tabs->count(); ++i) {
+            if (tabs->tabText(i) == text) { return true; }
+        }
+    }
+    for (const QAction* action : root->findChildren<QAction*>()) {
+        if (action->text() == text) { return true; }
+    }
+    return false;
+}
+
+// True when a Setup page shows something besides its title: a control, a
+// group, a view or a line of text. A page with none of these is empty.
+bool pageHasShownContent(const QWidget* page, const QString& title)
+{
+    for (const QWidget* w : page->findChildren<QWidget*>()) {
+        if (!shownWithin(w, page)) { continue; }
+        if (qobject_cast<const QScrollBar*>(w) != nullptr) { continue; }
+        if (const auto* label = qobject_cast<const QLabel*>(w)) {
+            if (label->text() != title && !label->text().isEmpty()) { return true; }
+            continue;
+        }
+        if (qobject_cast<const QAbstractButton*>(w) || qobject_cast<const QComboBox*>(w)
+            || qobject_cast<const QAbstractSpinBox*>(w) || qobject_cast<const QAbstractSlider*>(w)
+            || qobject_cast<const QLineEdit*>(w) || qobject_cast<const QTextEdit*>(w)
+            || qobject_cast<const QPlainTextEdit*>(w) || qobject_cast<const QGroupBox*>(w)
+            || qobject_cast<const QTabWidget*>(w)
+            || (qobject_cast<const QAbstractItemView*>(w) != nullptr)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A captured log line, for the Discord drop's one line.
+QStringList& capturedLog()
+{
+    static QStringList lines;
+    return lines;
+}
+
+void captureLog(QtMsgType type, const QMessageLogContext&, const QString& message)
+{
+    capturedLog() << QStringLiteral("%1 %2").arg(int(type)).arg(message);
 }
 
 // Everything the surface checks build, once each, for one set of marks in
@@ -813,6 +892,297 @@ private slots:
             QVERIFY(meter->serializeItems().contains(QStringLiteral("VOICERECPLAY")));
             mgr.saveState();
         }
+    }
+
+    // R-R3-49 (Task 2): the controls the operator removed are built in no
+    // window, local or remote.
+    void removedControlsAppearInNoWindow()
+    {
+        GuiSessionCoordinator sessions;
+        for (bool remote : {false, true}) {
+            const QString where = remote ? QStringLiteral("remote: ") : QStringLiteral("local: ");
+            Hosts hosts(sessions, remote);
+            MainWindow* window = hosts.window();
+            QVERIFY(window != nullptr);
+            QStringList found;
+            const auto check = [&found](const QString& what, bool present) {
+                if (present) { found << what; }
+            };
+
+            // View > Dark Theme, Tools > Macro Buttons.
+            check(QStringLiteral("menu Dark Theme"), textBuilt(window, QStringLiteral("&Dark Theme")));
+            check(QStringLiteral("menu Macro Buttons"),
+                  textBuilt(window, QStringLiteral("Macro &Buttons...")));
+
+            // Pan overlay: RF Gain, WNB, IQ channel (the flyouts are the
+            // spectrum's children; search the whole window).
+            QVERIFY(!window->findChildren<SpectrumOverlayPanel*>().isEmpty());
+            check(QStringLiteral("overlay RF Gain"), textBuilt(window, QStringLiteral("RF Gain:")));
+            check(QStringLiteral("overlay WNB"), textBuilt(window, QStringLiteral("WNB")));
+            check(QStringLiteral("overlay IQ Ch"), textBuilt(window, QStringLiteral("IQ Ch")));
+            check(QStringLiteral("overlay IQ combo"),
+                  window->findChild<QComboBox*>(QStringLiteral("vaxIqCombo")) != nullptr);
+
+            // Setup: every page built, then nothing removed anywhere in it.
+            SetupDialog* setup = hosts.setup();
+            QVERIFY(setup != nullptr);
+            setup->realizeAllPagesForTest();
+            for (const QString& page : {QStringLiteral("RX2 Display"), QStringLiteral("Gradients")}) {
+                check(QStringLiteral("Setup page ") + page, hosts.pageRegistered(page));
+            }
+            for (const QString& text : {
+                     // Startup & Preferences, all but auto-connect, callsign, grid.
+                     QStringLiteral("Restore last frequency on connect"),
+                     QStringLiteral("Application"),
+                     QStringLiteral("Show splash screen at startup"),
+                     QStringLiteral("Check for updates on startup"),
+                     QStringLiteral("FFTW Wisdom"), QStringLiteral("Regenerate"),
+                     QStringLiteral("Process Priority"),
+                     // RX2 Display, Gradients.
+                     QStringLiteral("RX2 Spectrum"), QStringLiteral("RX2 Waterfall"),
+                     QStringLiteral("Waterfall Gradient"),
+                     // Hardware: Radio Info RX2 rate, Diversity tab.
+                     QStringLiteral("RX2 sample rate (Hz):"), QStringLiteral("Diversity"),
+                     // Audio > Advanced VAX feedback tuning.
+                     QStringLiteral("VAC Feedback-Loop Tuning"), QStringLiteral("Target VAX Channel"),
+                     // Diagnostics Performance checkboxes.
+                     QStringLiteral("Performance"),
+                     QStringLiteral("Warn when spectrum render delay exceeds threshold"),
+                     QStringLiteral("Warn on long pixel-fetch operations"),
+                     QStringLiteral("Purge FFT buffers periodically (debugging)"),
+                     // Audio > TCI Slice B rate.
+                     QStringLiteral("Slice B rate:")}) {
+                check(QStringLiteral("Setup ") + text, textBuilt(setup, text));
+            }
+            // The three Startup & Preferences controls that work stay.
+            QVERIFY(hosts.page(QStringLiteral("Startup & Preferences"))
+                        ->findChild<QWidget*>(QStringLiteral("startupAutoConnect")) != nullptr);
+
+            // Spot Hub: the automatic background colour option.
+            QVERIFY(hosts.spotHub() != nullptr);
+            check(QStringLiteral("Spot Hub auto background"),
+                  hosts.spotHub()->findChild<QPushButton*>(
+                      QStringLiteral("displayOverrideBgAutoToggle")) != nullptr);
+
+            // Containers: no Discord control offered.
+            check(QStringLiteral("container Add Discord Buttons"),
+                  textBuilt(hosts.containerDialog(), QStringLiteral("Discord Buttons")));
+
+            QVERIFY2(found.isEmpty(), qPrintable(where + found.join(QStringLiteral("; "))));
+        }
+        QVERIFY(sessions.replace({}, false));
+    }
+
+    // Removed is not migrated: what users saved for removed controls stays
+    // in the settings file after a start (every Setup page and the Spot Hub
+    // built) and a save.
+    void savedValuesOfRemovedControlsSurviveAStartAndASave()
+    {
+        const QString mac = QStringLiteral("AA:BB:CC:DD:EE:49");
+        const QMap<QString, QString> seeded = {
+            {QStringLiteral("audio/VacFeedback/1/Gain"), QStringLiteral("1.2500")},
+            {QStringLiteral("audio/VacFeedback/1/SlewTimeMs"), QStringLiteral("9")},
+            {QStringLiteral("audio/VacFeedback/2/PropRing"), QStringLiteral("4")},
+            {QStringLiteral("audio/VacFeedback/3/FfRing"), QStringLiteral("6")},
+            {QStringLiteral("DiagnosticsSpecWarningLedRenderDelay"), QStringLiteral("True")},
+            {QStringLiteral("DiagnosticsSpecWarningLedGetPixels"), QStringLiteral("True")},
+            {QStringLiteral("DiagnosticsPurgeBuffers"), QStringLiteral("True")},
+            {QStringLiteral("IsSpotsOverrideToAutoBackgroundColorEnabled"), QStringLiteral("False")},
+            {QStringLiteral("TciSliceB_OutputSampleRate"), QStringLiteral("96000")},
+        };
+        const QMap<QString, QString> seededHardware = {
+            {QStringLiteral("diversity/enabled"), QStringLiteral("true")},
+            {QStringLiteral("diversity/referenceAdc"), QStringLiteral("1")},
+            {QStringLiteral("diversity/phaseDeg"), QStringLiteral("45")},
+            {QStringLiteral("diversity/gainDb"), QStringLiteral("-12")},
+        };
+        auto& settings = AppSettings::instance();
+        for (auto it = seeded.constBegin(); it != seeded.constEnd(); ++it) {
+            settings.setValue(it.key(), it.value());
+        }
+        for (auto it = seededHardware.constBegin(); it != seededHardware.constEnd(); ++it) {
+            settings.setHardwareValue(mac, it.key(), it.value());
+        }
+        QVERIFY(settings.save());
+
+        {
+            GuiSessionCoordinator sessions;
+            Hosts hosts(sessions, false);
+            QVERIFY(hosts.window() != nullptr);
+            SetupDialog* setup = hosts.setup();
+            QVERIFY(setup != nullptr);
+            setup->realizeAllPagesForTest();
+            QVERIFY(hosts.spotHub() != nullptr);
+            QCoreApplication::processEvents();
+            QVERIFY(settings.save());
+            QVERIFY(sessions.replace({}, false));
+        }
+        QVERIFY(settings.save());
+
+        AppSettings reread(settings.filePath());
+        reread.load();
+        for (auto it = seeded.constBegin(); it != seeded.constEnd(); ++it) {
+            QCOMPARE(reread.value(it.key()).toString(), it.value());
+        }
+        for (auto it = seededHardware.constBegin(); it != seededHardware.constEnd(); ++it) {
+            QCOMPARE(reread.hardwareValue(mac, it.key()).toString(), it.value());
+        }
+    }
+
+    // A saved container holding a Discord control loads without error and
+    // without it, logs one line, and the rest of it loads and saves.
+    void savedDiscordControlIsDroppedOnLoad()
+    {
+        const auto clearContainers = [] {
+            auto& s = AppSettings::instance();
+            for (const QString& k : s.allKeys()) {
+                if (k.startsWith(QStringLiteral("Container"))) { s.remove(k); }
+            }
+        };
+        clearContainers();
+        const auto cleanupKeys = qScopeGuard(clearContainers);
+        const QString discordLine = QStringLiteral("DISCORDBTNS|0|0.5|1|0.2|0|10|3");
+
+        QWidget dockParent;
+        QSplitter splitter;
+        QString savedId;
+        {
+            ContainerManager mgr(&dockParent, &splitter);
+            ContainerWidget* c = mgr.createContainer(1, DockMode::Floating);
+            QVERIFY(c);
+            savedId = c->id();
+            auto* meter = new MeterWidget();
+            c->setContent(meter);
+            auto* first = new TextItem();
+            first->setLabel(QStringLiteral("before"));
+            auto* second = new TextItem();
+            second->setLabel(QStringLiteral("after"));
+            meter->addItem(first);
+            meter->addItem(second);
+            mgr.saveState();
+        }
+        // The Discord control sits between the two, as a saved container
+        // from before the removal would hold it.
+        auto& s = AppSettings::instance();
+        const QString key = QStringLiteral("ContainerItems_%1").arg(savedId);
+        QStringList lines = s.value(key).toString().split(QLatin1Char('\n'));
+        QCOMPARE(lines.size(), 2);
+        lines.insert(1, discordLine);
+        s.setValue(key, lines.join(QLatin1Char('\n')));
+
+        capturedLog().clear();
+        const QtMessageHandler previous = qInstallMessageHandler(captureLog);
+        {
+            ContainerManager mgr(&dockParent, &splitter);
+            mgr.restoreState();
+            qInstallMessageHandler(previous);
+            ContainerWidget* c = mgr.container(savedId);
+            QVERIFY(c != nullptr);
+            auto* meter = qobject_cast<MeterWidget*>(c->content());
+            QVERIFY(meter != nullptr);
+            QCOMPARE(meter->items().size(), 2);
+            QVERIFY(!meter->serializeItems().contains(QStringLiteral("DISCORDBTNS")));
+            mgr.saveState();
+        }
+        qInstallMessageHandler(previous);
+        const QStringList discordLines = capturedLog().filter(QStringLiteral("Discord"));
+        QCOMPARE(discordLines.size(), 1);
+        QVERIFY2(discordLines.first().startsWith(QStringLiteral("%1 ").arg(int(QtInfoMsg))),
+                 qPrintable(discordLines.first()));
+        QVERIFY2(capturedLog().filter(QStringLiteral("%1 ").arg(int(QtCriticalMsg))).isEmpty(),
+                 qPrintable(capturedLog().join(QStringLiteral(" | "))));
+        const QStringList saved = s.value(key).toString().split(QLatin1Char('\n'));
+        QCOMPARE(saved.size(), 2);
+
+        // A meter group holding one drops it the same way.
+        capturedLog().clear();
+        TextItem groupText;
+        const QString group = QStringList{QStringLiteral("GROUP"), QStringLiteral("g"),
+                                          QStringLiteral("0"), QStringLiteral("0"),
+                                          QStringLiteral("1"), QStringLiteral("1"),
+                                          QStringLiteral("2"), discordLine,
+                                          groupText.serialize()}
+                                  .join(QLatin1Char('\n'));
+        qInstallMessageHandler(captureLog);
+        std::unique_ptr<ItemGroup> loaded(ItemGroup::deserialize(group));
+        qInstallMessageHandler(previous);
+        QVERIFY(loaded != nullptr);
+        QCOMPARE(loaded->items().size(), 1);
+        QCOMPARE(capturedLog().filter(QStringLiteral("Discord")).size(), 1);
+    }
+
+    // An emptied Setup page is not offered: Logging & Performance, once its
+    // Performance checkboxes went, holds only the logging groups, hidden
+    // until logging is built. It is not in the tree, selectPage() does not
+    // find it, and no registered page or category is empty, local or remote.
+    void emptiedSetupPageIsNotShownOrFound()
+    {
+        const QString logging = QStringLiteral("Logging & Performance");
+        GuiSessionCoordinator sessions;
+        for (bool remote : {false, true}) {
+            const QString where = remote ? QStringLiteral("remote: ") : QStringLiteral("local: ");
+            Hosts hosts(sessions, remote);
+            SetupDialog* setup = hosts.setup();
+            QVERIFY(setup != nullptr);
+            QVERIFY2(!hosts.pageRegistered(logging), qPrintable(where + logging));
+            QVERIFY(hosts.categoryShown(QStringLiteral("Diagnostics")));
+
+            auto* tree = setup->findChild<QTreeWidget*>();
+            QVERIFY(tree != nullptr);
+            for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+                QVERIFY2((*it)->text(0) != logging, qPrintable(where + logging));
+            }
+            QTreeWidgetItem* before = tree->currentItem();
+            setup->selectPage(logging);
+            QCOMPARE(tree->currentItem(), before);
+
+            // No category without pages.
+            for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                QVERIFY2(tree->topLevelItem(i)->childCount() > 0,
+                         qPrintable(where + tree->topLevelItem(i)->text(0)));
+            }
+
+            // No page the tree offers has nothing to show. (A leaf or a
+            // category the tree hides, such as PA without a radio that has
+            // one, is not offered.)
+            QStringList empty;
+            int offered = 0;
+            for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                QTreeWidgetItem* category = tree->topLevelItem(i);
+                if (category->isHidden()) { continue; }
+                for (int j = 0; j < category->childCount(); ++j) {
+                    QTreeWidgetItem* leaf = category->child(j);
+                    if (leaf->isHidden()) { continue; }
+                    const QVariant index = leaf->data(0, Qt::UserRole);
+                    QVERIFY(index.isValid());
+                    QWidget* page = setup->realizePageAtForTest(index.toInt());
+                    // A Core page in a remote window before the Core's
+                    // settings arrive is a stand-in under the dialog's
+                    // reason line, not an empty page.
+                    if (page != nullptr
+                        && page->objectName() == QStringLiteral("setupStationPlaceholder")) {
+                        continue;
+                    }
+                    ++offered;
+                    if (page == nullptr || !pageHasShownContent(page, leaf->text(0))) {
+                        empty << category->text(0) + QStringLiteral(" > ") + leaf->text(0);
+                    }
+                }
+            }
+            QVERIFY(offered > 10);
+            QVERIFY2(empty.isEmpty(), qPrintable(where + empty.join(QStringLiteral("; "))));
+        }
+
+        // Once logging is built, the page is offered again with its groups.
+        UnbuiltFeatures::setBuiltForTest(F::Logging, true);
+        {
+            Hosts hosts(sessions, false);
+            QWidget* page = hosts.page(logging);
+            QVERIFY(page != nullptr);
+            QVERIFY(pageHasShownContent(page, logging));
+        }
+        UnbuiltFeatures::resetForTest();
+        QVERIFY(sessions.replace({}, false));
     }
 };
 

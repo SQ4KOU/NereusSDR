@@ -7222,14 +7222,6 @@ void MainWindow::buildMenuBar()
 
     viewMenu->addSeparator();
 
-    m_darkThemeAction = viewMenu->addAction(QStringLiteral("&Dark Theme"));
-    m_darkThemeAction->setCheckable(true);
-    m_darkThemeAction->setChecked(true);
-    m_darkThemeAction->setToolTip(QStringLiteral("Toggle dark theme (NYI — Phase X)"));
-    connect(m_darkThemeAction, &QAction::toggled, this, [](bool /*on*/) {
-        qCDebug(lcConnection) << "Dark Theme toggle NYI";
-    });
-
     {
         QAction* minimalAction = viewMenu->addAction(QStringLiteral("&Minimal Mode"));
         minimalAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
@@ -7943,11 +7935,6 @@ void MainWindow::buildMenuBar()
         midiAction->setToolTip(QStringLiteral("NYI — Phase X"));
         // R-R3-49: hidden until MIDI control is built.
         UnbuiltFeatures::hideUnlessBuilt(midiAction, UnbuiltFeature::Midi);
-    }
-    {
-        QAction* macroAction = toolsMenu->addAction(QStringLiteral("Macro &Buttons..."));
-        macroAction->setEnabled(false);
-        macroAction->setToolTip(QStringLiteral("NYI — Phase X"));
     }
 
     toolsMenu->addSeparator();

@@ -109,7 +109,6 @@ private:
     QLabel*      m_macLabel{nullptr};
     QLabel*      m_ipLabel{nullptr};
     QComboBox*   m_sampleRateRx1Combo{nullptr};
-    QComboBox*   m_sampleRateRx2Combo{nullptr};   // disabled in PR #35; activates with Phase 3F multi-panadapter.
     QFrame*      m_reconnectBanner{nullptr};
     QLabel*      m_reconnectBannerLabel{nullptr};
     int          m_activeWireRate{0}; // last rate reported via wireSampleRateChanged
