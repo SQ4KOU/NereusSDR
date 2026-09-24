@@ -418,6 +418,15 @@ private slots:
             QCOMPARE(reason,
                      QStringLiteral("Enter an address the device can use on your network."));
         }
+        // Rework part 6: a gateway at the subnet's broadcast (or network)
+        // address is refused too.
+        for (const char* gateway : {"192.168.1.255", "192.168.1.0"}) {
+            QCOMPARE(StationDeviceSettings::networkProblem(
+                         false, QStringLiteral("192.168.1.50"), QStringLiteral("255.255.255.0"),
+                         QString::fromLatin1(gateway)),
+                     QStringLiteral("Enter a gateway on the same network as the address, "
+                                    "or leave it empty."));
+        }
         QVERIFY(StationDeviceSettings::networkProblem(false, QStringLiteral("10.0.0.0"),
                                                       QStringLiteral("255.255.255.254"),
                                                       QString()).isEmpty());   // /31 link

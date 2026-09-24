@@ -14,7 +14,11 @@
 //                                    Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  A fixed setting refuses a /32 netmask and
 //                                    the subnet's network and broadcast
-//                                    addresses (R-R3-47).
+//                                    addresses (R-R3-47). AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  A gateway at the subnet's network or
+//                                    broadcast address is refused (R-R3-47).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  A request with no answer times out
 //                                    (R-R3-47), on a monotonic clock.
 //                                    AI-assisted via Anthropic Claude Code.
@@ -142,7 +146,11 @@ QString StationDeviceSettings::networkProblem(bool dhcp, const QString& inputAdd
     }
     if (!gateway.isEmpty()) {
         const quint32 gw = QHostAddress(gateway).toIPv4Address();
-        if ((gw & mask) != (ip & mask) || gw == ip) {
+        // Rework part 6: nor at the subnet's network or broadcast address
+        // (except on a /31 link).
+        const bool gwNetworkOrBroadcast = !pointToPoint
+            && ((gw & ~mask) == 0 || (gw | mask) == 0xFFFFFFFFu);
+        if ((gw & mask) != (ip & mask) || gw == ip || gwNetworkOrBroadcast) {
             return QStringLiteral("Enter a gateway on the same network as the address, "
                                   "or leave it empty.");
         }
