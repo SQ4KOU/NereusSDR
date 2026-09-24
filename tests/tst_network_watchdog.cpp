@@ -262,17 +262,43 @@ private slots:
         QVERIFY(connection.isWatchdogEnabled());
     }
 
-    void p1StartAndStopPacketsDoNotCarryTheSetting()
+    void p1StartAndStopDatagramsDoNotCarryTheSetting_data()
+    {
+        QTest::addColumn<bool>("watchdogOn");
+        QTest::newRow("on") << true;
+        QTest::newRow("off") << false;
+    }
+
+    void p1StartAndStopDatagramsDoNotCarryTheSetting()
     {
         // Thetis networkproto1.c:50 and 85: 0x01 to start, 0x00 to stop,
-        // whatever the setting.
-        P1RadioConnection connection;
-        connection.setWatchdogEnabled(false);
-        QCOMPARE(int(quint8(connection.metisStartPacketForTest(false)[3])), 0x01);
-        QCOMPARE(int(quint8(connection.metisStopPacketForTest()[3])), 0x00);
-        connection.setWatchdogEnabled(true);
-        QCOMPARE(int(quint8(connection.metisStartPacketForTest(false)[3])), 0x01);
-        QCOMPARE(int(quint8(connection.metisStopPacketForTest()[3])), 0x00);
+        // whatever the setting. Asserted on the datagrams the fake radio
+        // received, not on a copy composed for the test.
+        QFETCH(bool, watchdogOn);
+        P1FakeRadio fake;
+        fake.start();
+        std::unique_ptr<P1RadioConnection> conn = bringP1Up(fake, watchdogOn);
+        QVERIFY(conn != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(fake.isRunning(), 2000);
+        conn->disconnect();
+        QTRY_VERIFY_WITH_TIMEOUT(fake.metisStopCount() >= 1, 2000);
+
+        QByteArray start(64, '\0');
+        start[0] = char(0xEF);
+        start[1] = char(0xFE);
+        start[2] = char(0x04);
+        QByteArray stop = start;
+        start[3] = char(0x01);
+        stop[3] = char(0x00);
+        const QList<QByteArray>& received = fake.metisCommandsReceived();
+        QVERIFY(!received.isEmpty());
+        int starts = 0;
+        for (const QByteArray& datagram : received) {
+            QVERIFY(datagram == start || datagram == stop);
+            starts += datagram == start ? 1 : 0;
+        }
+        QVERIFY(starts >= 1);
+        QCOMPARE(received.last(), stop);
     }
 
     void p1LossIsDeclaredAfterTheWaitWithTheWatchdogOn()

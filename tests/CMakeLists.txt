@@ -2508,10 +2508,11 @@ target_compile_definitions(tst_p1_drive_level_wire PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3M-1a Task E.5 (R-R3-49): P1 RUNSTOP byte 3 snapshot ───────────────
 # The Network Watchdog setting does not change the start/stop packet: byte 3
-# stays 0x01 / 0x02 / 0x00 whatever it says, as Thetis sends
-# (networkproto1.c:50, 85 [v2.10.3.15]). The P1 wait it controls is covered
-# by tst_network_watchdog.
-nereus_add_test(tst_p1_watchdog_wire)
+# stays 0x01 / 0x00 whatever it says, as Thetis sends
+# (networkproto1.c:50, 85 [v2.10.3.15]), read from the datagrams a loopback
+# P1FakeRadio receives. The P1 wait it controls is covered by
+# tst_network_watchdog.
+nereus_add_test(tst_p1_watchdog_wire fakes/P1FakeRadio.cpp)
 target_compile_definitions(tst_p1_watchdog_wire PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3M-1a Task E.6: P2 sendTxIq wire-byte snapshot ─────────────────────

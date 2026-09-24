@@ -24,75 +24,132 @@
 //   pkt[3] = 0x01 start IQ only, 0x02 start IQ + mic, 0x00 stop
 //   pkt[4..63] = 0x00 (padding)
 //
+// The checks read the datagrams a loopback P1FakeRadio receives from a
+// connected P1RadioConnection, not a copy of the packet composed for the
+// test, so they see what actually goes on the wire.
+//
 // Modification history (NereusSDR):
 //   2026-09-24: R-R3-49, the setting no longer changes byte 3 (Thetis
 //               parity), by J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-24: R-R3-49 fix wave: assert on the datagrams received by the
+//               loopback fake, by J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 #include <QtTest/QtTest>
+
+#include <QElapsedTimer>
+
+#include <memory>
+
+#include "core/HpsdrModel.h"
 #include "core/P1RadioConnection.h"
+#include "fakes/P1FakeRadio.h"
 
 using namespace NereusSDR;
+using NereusSDR::Test::P1FakeRadio;
+
+namespace {
+
+RadioInfo p1Info(const P1FakeRadio& fake)
+{
+    RadioInfo info;
+    info.address = fake.localAddress();
+    info.port = fake.localPort();
+    info.boardType = HPSDRHW::HermesLite;
+    info.protocol = ProtocolVersion::Protocol1;
+    info.firmwareVersion = 72;
+    info.macAddress = QStringLiteral("aa:bb:cc:49:00:02");
+    return info;
+}
+
+// Bring a P1 link up against the fake, retrying if the connect deadline
+// tears an attempt down on a loaded machine (as tst_network_watchdog does).
+std::unique_ptr<P1RadioConnection> bringUp(const P1FakeRadio& fake, bool watchdogOn)
+{
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        auto conn = std::make_unique<P1RadioConnection>();
+        conn->init();
+        conn->setWatchdogEnabled(watchdogOn);
+        conn->connectToRadio(p1Info(fake));
+        QElapsedTimer waited;
+        waited.start();
+        while (waited.elapsed() < 3000) {
+            if (conn->state() == ConnectionState::Connected) {
+                return conn;
+            }
+            if (conn->state() == ConnectionState::Disconnected) {
+                break;
+            }
+            QTest::qWait(10);
+        }
+    }
+    return nullptr;
+}
+
+// The exact 64-byte RUNSTOP packet: EF FE 04 <cmd>, then zeros
+// (networkproto1.c:45 memset, 47-50 [v2.10.3.15]).
+QByteArray runStop(quint8 cmd)
+{
+    QByteArray pkt(64, '\0');
+    pkt[0] = char(0xEF);
+    pkt[1] = char(0xFE);
+    pkt[2] = char(0x04);
+    pkt[3] = char(cmd);
+    return pkt;
+}
+
+// Connect with the setting given, change it while connected, disconnect,
+// and return every start/stop datagram the fake received.
+QList<QByteArray> runStopDatagrams(bool watchdogOn)
+{
+    P1FakeRadio fake;
+    fake.start();
+    std::unique_ptr<P1RadioConnection> conn = bringUp(fake, watchdogOn);
+    if (!conn || !QTest::qWaitFor([&fake] { return fake.isRunning(); }, 2000)) {
+        return {};
+    }
+    conn->setWatchdogEnabled(!watchdogOn);
+    conn->disconnect();
+    QTest::qWaitFor([&fake] { return fake.metisStopCount() >= 1; }, 2000);
+    return fake.metisCommandsReceived();
+}
+
+} // namespace
 
 class TestP1WatchdogWire : public QObject {
     Q_OBJECT
 private slots:
 
-    // Default (watchdog on): start 0x01, stop 0x00.
-    void defaultState_startIs0x01_stopIs0x00() {
-        P1RadioConnection conn;
-        QVERIFY(conn.isWatchdogEnabled());
-        const QByteArray start = conn.metisStartPacketForTest(false);
-        QCOMPARE(start.size(), 64);
-        QCOMPARE(int(quint8(start[3])), 0x01);
-        const QByteArray stop = conn.metisStopPacketForTest();
-        QCOMPARE(stop.size(), 64);
-        QCOMPARE(int(quint8(stop[3])), 0x00);
+    // The start datagram is EF FE 04 01 and 60 zeros, and the stop datagram
+    // EF FE 04 00 and 60 zeros, with the watchdog on or off and when it is
+    // changed while connected (networkproto1.c:50, 85 [v2.10.3.15]). Bit 7
+    // of byte 3 (the HL2 gateware's watchdog_disable) is never set.
+    void runStopDatagramsIgnoreTheSetting_data()
+    {
+        QTest::addColumn<bool>("watchdogOn");
+        QTest::newRow("on at connect") << true;
+        QTest::newRow("off at connect") << false;
     }
 
-    // Watchdog off: the same bytes (networkproto1.c:50, 85).
-    void watchdogOff_startAndStopUnchanged() {
-        P1RadioConnection conn;
-        conn.setWatchdogEnabled(false);
-        QVERIFY(!conn.isWatchdogEnabled());
-        QCOMPARE(int(quint8(conn.metisStartPacketForTest(false)[3])), 0x01);
-        QCOMPARE(int(quint8(conn.metisStartPacketForTest(true)[3])), 0x02);
-        QCOMPARE(int(quint8(conn.metisStopPacketForTest()[3])), 0x00);
-    }
-
-    // Round trip: on, off, on: byte 3 never changes.
-    void roundTrip_byte3NeverChanges() {
-        P1RadioConnection conn;
-        for (bool on : {true, false, true, false}) {
-            conn.setWatchdogEnabled(on);
-            QCOMPARE(conn.isWatchdogEnabled(), on);
-            QCOMPARE(int(quint8(conn.metisStartPacketForTest(false)[3])), 0x01);
-            QCOMPARE(int(quint8(conn.metisStopPacketForTest()[3])), 0x00);
+    void runStopDatagramsIgnoreTheSetting()
+    {
+        QFETCH(bool, watchdogOn);
+        const QList<QByteArray> received = runStopDatagrams(watchdogOn);
+        QVERIFY2(!received.isEmpty(), "the link did not come up against the fake");
+        const QByteArray start = runStop(0x01);
+        const QByteArray stop = runStop(0x00);
+        int starts = 0;
+        for (const QByteArray& datagram : received) {
+            QCOMPARE(datagram.size(), 64);
+            QCOMPARE(int(quint8(datagram[3])) & 0x80, 0);
+            QVERIFY2(datagram == start || datagram == stop,
+                     qPrintable(QString::fromLatin1(datagram.toHex(' '))));
+            starts += datagram == start ? 1 : 0;
         }
-    }
-
-    // Header bytes are always correct (networkproto1.c:47-49).
-    void packetHeader_isAlwaysCorrect() {
-        P1RadioConnection conn;
-        conn.setWatchdogEnabled(false);
-        for (const QByteArray& pkt : {conn.metisStartPacketForTest(false),
-                                      conn.metisStopPacketForTest()}) {
-            QCOMPARE(quint8(pkt[0]), quint8(0xEF));
-            QCOMPARE(quint8(pkt[1]), quint8(0xFE));
-            QCOMPARE(quint8(pkt[2]), quint8(0x04));
-        }
-    }
-
-    // Padding bytes 4..63 are always zero (networkproto1.c:45 memset).
-    void paddingBytes_areAllZero() {
-        P1RadioConnection conn;
-        conn.setWatchdogEnabled(false);
-        const QByteArray pkt = conn.metisStartPacketForTest(false);
-        QCOMPARE(pkt.size(), 64);
-        for (int i = 4; i < 64; ++i) {
-            QCOMPARE(int(quint8(pkt[i])), 0);
-        }
+        QVERIFY(starts >= 1);
+        QCOMPARE(received.last(), stop);
     }
 };
 
-QTEST_APPLESS_MAIN(TestP1WatchdogWire)
+QTEST_GUILESS_MAIN(TestP1WatchdogWire)
 #include "tst_p1_watchdog_wire.moc"

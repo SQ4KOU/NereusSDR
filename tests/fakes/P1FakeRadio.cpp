@@ -182,6 +182,7 @@ void P1FakeRadio::handleMetisCommand(const QByteArray& pkt,
                                       quint16 port)
 {
     if (pkt.size() < 4) { return; }
+    m_metisCommands.append(pkt);
     const quint8 cmd = static_cast<quint8>(pkt[3]);
     if (cmd == 0x01 || cmd == 0x02 || cmd == 0x03) {
         // Start streaming — remember client address
