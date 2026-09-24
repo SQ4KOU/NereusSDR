@@ -62,6 +62,7 @@
 #include <QVector>
 
 #include "core/session/media/DisplayCodec.h"
+#include "core/session/media/DisplayExtras.h"
 #include "core/session/media/OpusAudioCodec.h"
 
 namespace NereusSDR {
@@ -208,6 +209,25 @@ public:
     static QJsonObject toJson(const NereusSDR::DisplayCodecDecodeResult& result);
     static QString nsdcDispositionName(NereusSDR::DisplayCodecDisposition disposition);
     static QString nsdcReasonName(NereusSDR::DisplayCodecReason reason);
+
+    /// iPhone app Task 20: the display extras vectors (codec "nsdx1"). The
+    /// endpoint context they decode against (endpoint 1, generation 1,
+    /// -140..-40 dBm, 32 trace samples), a datagram with every section and
+    /// one with the noise floor alone.
+    static NereusSDR::DisplayCodecContext nsdxContext();
+    static NereusSDR::DisplayExtrasFrame nsdxFrame();
+    static NereusSDR::DisplayExtrasFrame nsdxNoiseFloorFrame();
+    /// The full datagram with an unknown section bit (0x10) set.
+    static QByteArray nsdxUnknownSection(const QByteArray& full);
+    /// A context as a vector names it: endpointId, contextGeneration,
+    /// minDbm, maxDbm, traceSamples.
+    static QJsonObject toJson(const NereusSDR::DisplayCodecContext& context);
+    static bool fromJson(const QJsonObject& json, NereusSDR::DisplayCodecContext* context,
+                         QString* error);
+    /// A decode result as the vector's expectation holds it: accepted and
+    /// reason by name, then the datagram's fields when it was accepted.
+    static QJsonObject toJson(const NereusSDR::DisplayExtrasDecodeResult& result);
+    static QString nsdxReasonName(NereusSDR::DisplayExtrasReason reason);
 
     /// The Opus vectors: RTP synchronisation source, first sequence and
     /// first timestamp, and packet `index`'s stereo input, interleaved

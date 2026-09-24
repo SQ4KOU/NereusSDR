@@ -33,6 +33,9 @@
 //                                    three NSDC vectors both malformed and
 //                                    refused. AI-assisted transformation
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 20 (R-IOS-27): the
+//                                    NSDX display extras vectors.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -49,6 +52,7 @@
 #include "core/session/StationLanAnnouncement.h"
 #include "core/session/DnsSdAdvertiser.h"
 #include "core/session/media/DisplayCodec.h"
+#include "core/session/media/DisplayExtras.h"
 #include "core/session/media/OpusAudioCodec.h"
 
 #include "LinkFixtures.h"
@@ -67,6 +71,7 @@ private slots:
     void writeDnsSdTxt();
     void writePs3dFrame();
     void writeNsdcFrames();
+    void writeNsdxDatagrams();
     void writeOpusPackets();
 
 private:
@@ -221,6 +226,39 @@ void TstLinkConformanceRegen::writeNsdcFrames()
                   expectation({full, lost}, LinkMediaVectors::nsdcBadBlockCountKeyframe(keyframe),
                               {QStringLiteral("media-nsdc1-full"),
                                QStringLiteral("media-nsdc1-delta-after-loss")})));
+}
+
+void TstLinkConformanceRegen::writeNsdxDatagrams()
+{
+    // The display extras datagram (display extras v1) is stateless: each
+    // vector decodes on its own against the context its expectation names.
+    const DisplayCodecContext context = LinkMediaVectors::nsdxContext();
+    const QByteArray full = encodeDisplayExtras(LinkMediaVectors::nsdxFrame(), context);
+    const QByteArray floor = encodeDisplayExtras(LinkMediaVectors::nsdxNoiseFloorFrame(), context);
+    QVERIFY(!full.isEmpty() && !floor.isEmpty());
+    DisplayCodecContext newer = context;
+    newer.contextGeneration = 2;
+
+    const auto expectation = [](const QByteArray& bytes, const DisplayCodecContext& against) {
+        const DisplayExtrasDecodeResult result = decodeDisplayExtras(bytes, against);
+        QJsonObject expect = LinkMediaVectors::toJson(result);
+        expect.insert(QStringLiteral("context"), LinkMediaVectors::toJson(against));
+        if (result.accepted) {
+            expect.insert(QStringLiteral("tolerance"),
+                          QJsonObject{{QStringLiteral("dbm"), 0.01}});
+        }
+        return QJsonObject{{QStringLiteral("codec"), QStringLiteral("nsdx1")},
+                           {QStringLiteral("expect"), expect}};
+    };
+    QVERIFY(write(QStringLiteral("nsdx1-full"), full, expectation(full, context)));
+    QVERIFY(write(QStringLiteral("nsdx1-noise-floor"), floor, expectation(floor, context)));
+    QVERIFY(write(QStringLiteral("nsdx1-other-generation"), full, expectation(full, newer)));
+    const QByteArray unknown = LinkMediaVectors::nsdxUnknownSection(full);
+    QVERIFY(write(QStringLiteral("nsdx1-unknown-section"), unknown,
+                  expectation(unknown, context)));
+    const QByteArray truncated = full.chopped(1);
+    QVERIFY(write(QStringLiteral("nsdx1-truncated"), truncated,
+                  expectation(truncated, context)));
 }
 
 void TstLinkConformanceRegen::writeOpusPackets()

@@ -207,6 +207,10 @@
 //                                    changes in the Core's settings.
 //                                    AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 20 (R-IOS-27):
+//                                    displayExtrasVersion 1 last in the
+//                                    minor-11 block. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1171,6 +1175,12 @@ StationCatalog* StationServer::catalog() const
 int StationServer::stationCatalogVersion() const
 {
     return 1;
+}
+
+int StationServer::displayExtrasVersion() const
+{
+    // The extras travel on the media display channel, so they come with it.
+    return m_mediaEnabled ? 1 : 0;
 }
 
 int StationServer::deviceAdminVersion() const
@@ -3204,6 +3214,16 @@ bool StationServer::spectrumGrantAvailable() const
         && it->agreedMinor >= kRemoteSpectrumGrantSessionProtocolMinor;
 }
 
+bool StationServer::displayExtrasAvailable() const
+{
+    // Advertised in the minor-11 capabilities block only, so only a peer
+    // that agreed minor 11 was told it may ask.
+    const auto it = m_peers.constFind(m_session);
+    return mediaAvailable() && it != m_peers.cend()
+        && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && displayExtrasVersion() >= 1;
+}
+
 void StationServer::setDisplayBudgetForReasonPeersOnly(bool reasonPeersOnly)
 {
     m_displayBudgetForReasonPeersOnly = reasonPeersOnly;
@@ -3363,8 +3383,10 @@ StationCapabilities StationServer::buildCapabilities() const
             caps.deviceAdminVersion = deviceAdminVersion();
             // iPhone app Task 14: pairing and the pairing window, last.
             caps.pairingVersion = pairingVersion();
-            // iPhone app Task 19: the catalogue, last.
+            // iPhone app Task 19: the catalogue.
             caps.stationCatalogVersion = stationCatalogVersion();
+            // iPhone app Task 20: display extras, last.
+            caps.displayExtrasVersion = displayExtrasVersion();
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();

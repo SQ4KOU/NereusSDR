@@ -741,7 +741,9 @@ private slots:
                                    // iPhone app Task 14: pairing.
                                    "pairingVersion",
                                    // iPhone app Task 19: the catalogue.
-                                   "stationCatalogVersion"});
+                                   "stationCatalogVersion",
+                                   // iPhone app Task 20: display extras.
+                                   "displayExtrasVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -781,7 +783,8 @@ private slots:
                                            QByteArrayLiteral("stationIdentityVersion"),
                                            QByteArrayLiteral("deviceAdminVersion"),
                                            QByteArrayLiteral("pairingVersion"),
-                                           QByteArrayLiteral("stationCatalogVersion")}) {
+                                           QByteArrayLiteral("stationCatalogVersion"),
+                                           QByteArrayLiteral("displayExtrasVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

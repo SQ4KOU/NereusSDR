@@ -4904,6 +4904,13 @@ nereus_add_test(tst_peak_blob_detector)
 # alone, as nereusd does, to prove they stand without the GUI.
 nereus_add_test(tst_display_followers CORE_ONLY)
 
+# iPhone app Task 20 (R-IOS-27): display extras. The Core's extras against
+# the desktop's SpectrumWidget for one recorded sequence, the NSDX datagram,
+# the subscription fields, and an endpoint through a real session.
+nereus_add_test(tst_display_extras
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+
 # ── Task 2.3: Spectrum Defaults overlay group + decimation wire-up ──────────
 # Tests for SpectrumWidget overlay setters (ShowMHzOnCursor / ShowBinWidth /
 # ShowNoiseFloor / DispNormalize / ShowPeakValueOverlay) and FFTEngine

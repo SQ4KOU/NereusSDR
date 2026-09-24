@@ -23,6 +23,11 @@
 //                 Anthropic Claude Code. The logic is unchanged; state that
 //                 lived in SpectrumWidget members lives in the classes
 //                 below, and the clock is passed in.
+//   2026-09-24 — NoiseFloorFastAttackTrigger: the desktop's fast-attack
+//                 triggers (a band change, a 0.5 MHz jump, a MOX edge) for
+//                 the Core's display extras (iPhone app Task 20). J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 // --- From display.cs ---
@@ -195,6 +200,27 @@ bool NoiseFloorFollower::process(const QVector<float>& src, int fps, qint64 nowM
         }
     }
     return false;
+}
+
+bool NoiseFloorFastAttackTrigger::observe(double frequencyHz, int band, bool mox)
+{
+    if (!m_primed) {
+        m_primed = true;
+        m_lastHz = frequencyHz;
+        m_band = band;
+        m_mox = mox;
+        return false;
+    }
+    // A band change, a jump of more than 0.5 MHz, and either MOX edge,
+    // as MainWindow connects PanadapterModel::bandChanged,
+    // SliceModel::frequencyChanged and TransmitModel::moxChanged.
+    const bool fire = band != m_band
+        || std::abs(m_lastHz - frequencyHz) > kFrequencyJumpHz
+        || mox != m_mox;
+    m_lastHz = frequencyHz;
+    m_band = band;
+    m_mox = mox;
+    return fire;
 }
 
 // ── Waterfall levels ────────────────────────────────────────────────────

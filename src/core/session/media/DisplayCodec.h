@@ -65,6 +65,23 @@ struct DisplayCodecDecodeResult {
     DisplayCodecFrame frame;
 };
 
+/// One NSDC v1 plane of absolute blocks only (a keyframe plane): the plane
+/// prefix, then blocks of 128 samples or fewer, each value quantised to
+/// [minDbm, maxDbm] as a frame's rows are. The display extras datagram
+/// carries the active peak hold row this way (display extras v1). Empty for
+/// a length outside 1..kMaxSamplesPerPlane, a sample that is not finite, or
+/// an interval that is not finite and increasing.
+QByteArray encodeDisplayCodecAbsolutePlane(const QVector<float>& samplesDbm,
+                                           float minDbm, float maxDbm);
+
+/// Reads such a plane of exactly `length` samples from `bytes` at `offset`
+/// and advances `offset` past it. A residual block is malformed here: there
+/// is no history to apply it to. False, with `offset` and `samplesDbm`
+/// untouched, for anything malformed or truncated.
+bool decodeDisplayCodecAbsolutePlane(const QByteArray& bytes, int& offset, int length,
+                                     float minDbm, float maxDbm,
+                                     QVector<float>& samplesDbm);
+
 /// Stateful sender. Its history is exactly the quantised reconstruction a
 /// receiver obtains, which keeps temporal residuals and dead-zone error bound
 /// honest across a long delta chain.

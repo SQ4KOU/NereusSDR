@@ -92,6 +92,9 @@
 //   2026-09-24 - iPhone app Task 19 (R-IOS-06): stationCatalogVersion,
 //                last in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 20 (R-IOS-27): displayExtrasVersion,
+//                last in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -202,6 +205,13 @@ struct StationCapabilities {
     /// an app draws its controls from). Sent last in the same minor-11
     /// block.
     int stationCatalogVersion = 0;
+    /// iPhone app Task 20 (R-IOS-27): 1 means a spectrum subscription may
+    /// ask the Core for display extras (peak blobs, the active peak hold
+    /// row, the noise floor, the waterfall's levels) and for normalise,
+    /// calibration and averaging applied at the Core; the Core then sends
+    /// an NSDX datagram beside each NSDC frame (display extras v1). Sent
+    /// last in the same minor-11 block, after stationCatalogVersion.
+    int displayExtrasVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

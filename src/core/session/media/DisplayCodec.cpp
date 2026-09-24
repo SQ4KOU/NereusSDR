@@ -353,6 +353,53 @@ DisplayCodecDecodeResult result(DisplayCodecDisposition disposition, DisplayCode
 
 } // namespace
 
+QByteArray encodeDisplayCodecAbsolutePlane(const QVector<float>& samplesDbm,
+                                           float minDbm, float maxDbm)
+{
+    DisplayCodecContext context;
+    context.minDbm = minDbm;
+    context.maxDbm = maxDbm;
+    if (samplesDbm.isEmpty() || samplesDbm.size() > DisplayCodecEncoder::kMaxSamplesPerPlane
+        || !finite(minDbm) || !finite(maxDbm) || !(maxDbm > minDbm)
+        || !validInputPlane(samplesDbm, static_cast<quint16>(samplesDbm.size()))) {
+        return {};
+    }
+    QVector<quint8> values(samplesDbm.size());
+    for (int i = 0; i < samplesDbm.size(); ++i) {
+        values[i] = quantize(samplesDbm.at(i), context);
+    }
+    Writer writer;
+    writePlane(writer, values, nullptr, true);
+    return writer.take();
+}
+
+bool decodeDisplayCodecAbsolutePlane(const QByteArray& bytes, int& offset, int length,
+                                     float minDbm, float maxDbm,
+                                     QVector<float>& samplesDbm)
+{
+    if (offset < 0 || offset > bytes.size() || length <= 0
+        || length > DisplayCodecEncoder::kMaxSamplesPerPlane
+        || !finite(minDbm) || !finite(maxDbm) || !(maxDbm > minDbm)) {
+        return false;
+    }
+    Reader reader(bytes);
+    if (!reader.skip(offset)) { return false; }
+    int planeStart = 0;
+    if (!checkPlane(reader, length, true, planeStart)) { return false; }
+    QVector<quint8> values;
+    if (!applyPlane(bytes, planeStart, length, nullptr, values)) { return false; }
+    DisplayCodecContext context;
+    context.minDbm = minDbm;
+    context.maxDbm = maxDbm;
+    QVector<float> decoded(length);
+    for (int i = 0; i < length; ++i) {
+        decoded[i] = dequantize(values.at(i), context);
+    }
+    samplesDbm = std::move(decoded);
+    offset = reader.position();
+    return true;
+}
+
 DisplayCodecEncoder::DisplayCodecEncoder(int deadZone)
     : m_deadZone(std::clamp(deadZone, 0, 255))
 {

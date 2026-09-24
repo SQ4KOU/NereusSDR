@@ -24,6 +24,11 @@
 //                 Anthropic Claude Code. The logic is unchanged; state that
 //                 lived in SpectrumWidget members lives in the classes
 //                 below, and the clock is passed in.
+//   2026-09-24 — NoiseFloorFastAttackTrigger: the desktop's fast-attack
+//                 triggers (a band change, a 0.5 MHz jump, a MOX edge) for
+//                 the Core's display extras (iPhone app Task 20). J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 // --- From display.cs ---
@@ -155,6 +160,28 @@ private:
     int m_sensitivity {kDefaultSensitivity};
     bool m_fastAttack {false};
     qint64 m_lastFastAttackMs {0};
+};
+
+/// When a display's noise floor goes to fast attack, as the desktop's
+/// MainWindow wires it for its own pan: a band change, a tune of more than
+/// half a megahertz, and either edge of MOX. The Core runs it for an app's
+/// display from the slice's frequency and the MOX state it samples.
+class NoiseFloorFastAttackTrigger {
+public:
+    // From Thetis display.cs:910 [v2.10.3.15] OnCentreFrequencyChanged:
+    //   if (Math.Abs(oldFreq - newFreq) > 0.5) FastAttackNoiseFloorRX1 = true;
+    // (MHz there; the desktop's kFastAttackFreqJumpHz).
+    static constexpr double kFrequencyJumpHz = 500000.0;
+
+    /// Returns true when this observation fires fast attack. The first one
+    /// only records the state.
+    bool observe(double frequencyHz, int band, bool mox);
+
+private:
+    bool m_primed {false};
+    double m_lastHz {0.0};
+    int m_band {0};
+    bool m_mox {false};
 };
 
 // ── Waterfall levels ────────────────────────────────────────────────────

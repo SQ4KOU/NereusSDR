@@ -11,6 +11,7 @@
 #include "core/session/media/DaemonSpectrumSource.h"
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
+#include "core/session/media/DisplayExtras.h"
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/SpectrumEndpoint.h"
@@ -281,6 +282,11 @@ private:
     void promoteLatestPs3Frame();
     bool trySendPs3(MediaPeer* peer, quint64 epoch, qint64 nowNs);
     bool trySendSpectrum(MediaPeer* peer, quint64 epoch, qint64 nowNs);
+    /// iPhone app Task 20 (R-IOS-27): sends one endpoint's waiting NSDX
+    /// datagram, the extras of the frame it last sent. True when it tried.
+    bool trySendDisplayExtras(MediaPeer* peer, quint64 epoch, qint64 nowNs);
+    DisplayExtrasInputs displayExtrasInputs(const EndpointEntry& entry, double binWidthHz,
+                                            qint64 nowNs) const;
     void reconcileAudio();
     void stopAudioCapture();
     /// `reason` travels only in a disabled context, and only to a peer that
