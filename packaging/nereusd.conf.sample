@@ -76,8 +76,9 @@ remote_bind = 127.0.0.1
 # radio through it). Empty uses this machine's address on the radio's
 # network, found once the radio connects; until then only this machine is
 # accepted, and if the radio moves to another network they all move with
-# it. Set an address of this machine to choose another network, or 0.0.0.0
-# to accept every network. This machine itself is always accepted.
+# it. Set an address of this machine to choose another network, 0.0.0.0
+# to accept every IPv4 network, or :: to accept every IPv4 and IPv6
+# network. This machine itself is always accepted.
 # The older name station_tci_bind is still read when this one is empty.
 # The TCI server runs only while the TCI switch in a connected app is on,
 # and transmits for no app.
