@@ -369,11 +369,26 @@ private slots:
         QVERIFY(gauge != nullptr);
         QVERIFY2(gauge->isEnabled(), "the compression gauge is greyed");
         QVERIFY(model->meterPoller() != nullptr);
-        QVERIFY2(QMetaObject::invokeMethod(model->meterPoller(), "txMeterReading",
-                                           Q_ARG(int, MeterBinding::TxComp),
-                                           Q_ARG(double, -9.0)),
-                 "the meter poller hands out no transmit readings");
-        QCOMPARE(gauge->value(), -9.0);
+        QVERIFY2(!gauge->isReversed(), "the compression gauge is drawn reversed");
+        // At rest: an empty gauge.
+        QCOMPARE(gauge->filledFraction(), 0.0);
+        const auto feed = [model](double raw) {
+            // What pollTxMeters() hands out for a raw TXA_COMP_AV value.
+            return QMetaObject::invokeMethod(model->meterPoller(), "txMeterReading",
+                                             Q_ARG(int, MeterBinding::TxComp),
+                                             Q_ARG(double, MeterPoller::compressionReading(raw)));
+        };
+        // PROC off: WDSP's -400 reads -30; the gauge stays empty.
+        QVERIFY2(feed(-400.0), "the meter poller hands out no transmit readings");
+        QCOMPARE(gauge->filledFraction(), 0.0);
+        // A -10 dB compressed level fills 15 of the 25 dB face.
+        QVERIFY(feed(-10.0));
+        QCOMPARE(gauge->value(), -10.0);
+        QVERIFY(qAbs(gauge->filledFraction() - 0.6) < 1e-9);
+        // Receive empties it again.
+        tx.setMox(true);
+        tx.setMox(false);
+        QCOMPARE(gauge->filledFraction(), 0.0);
 
         // Mic profile: the MicProfileManager list, and a pick applies it.
         auto* profile = childByAccessibleName<QComboBox>(applet, QStringLiteral("Microphone profile"));

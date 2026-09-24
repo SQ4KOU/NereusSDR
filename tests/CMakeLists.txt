@@ -2538,6 +2538,9 @@ nereus_add_test(tst_remote_meter_poller)
 # R-R3-13: every numeric container meter item shows no reading (-400 dBm
 # sentinel or non-finite) as "--" and a real -140 dBm floor as a number.
 nereus_add_test(tst_meter_item_no_reading)
+# R-R3-21: the Compression reading's Thetis floor, the container bar and
+# the Phone/CW gauge mapping (reversed gauges: maximum is empty).
+nereus_add_test(tst_compression_reading)
 
 # ── RX meter cal offset port (Thetis-faithful) ───────────────────────────────
 # Verifies the per-radio factory default lookup (rxMeterCalOffsetDefaultFor)

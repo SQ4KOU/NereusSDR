@@ -133,7 +133,8 @@ public:
 public slots:
     /// R-R3-21: the transmit compression reading, in dB, as the meters'
     /// Compression bar receives it (MeterPoller's TxComp binding while
-    /// transmitting). MainWindow feeds it; receive clears it to 0.
+    /// transmitting), max(-30, TXA_COMP_AV). MainWindow feeds it; receive
+    /// puts it back to the -30 floor, an empty gauge.
     void setCompressionReading(double dB);
 
 public:

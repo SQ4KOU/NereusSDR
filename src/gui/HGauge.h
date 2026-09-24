@@ -25,6 +25,13 @@ public:
     // PureSignalApplet wiring tests).
     double value() const noexcept { return m_value; }
 
+    // The drawn fill, as a fraction of the bar width in [0, 1]. Normal
+    // gauges fill from the left with (value - min) / range. Reversed gauges
+    // (R-R3-21) map as AetherSDR's HGauge does: the maximum is empty and the
+    // minimum is a full bar, filled from the right.
+    double filledFraction() const noexcept;
+    bool isReversed() const noexcept { return m_reversed; }
+
     QSize sizeHint() const override { return {200, 30}; }
     QSize minimumSizeHint() const override { return {100, 26}; }
 

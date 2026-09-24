@@ -82,6 +82,7 @@
 
 #include "PhoneCwApplet.h"
 #include "gui/HGauge.h"
+#include "gui/meters/MeterPoller.h"
 #include "gui/ComboStyle.h"
 #include "gui/widgets/DexpPeakMeter.h"
 #include "NyiOverlay.h"
@@ -273,12 +274,16 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
     vbox->addWidget(m_levelGauge);
 
     // ── Control 2: Compression gauge ─────────────────────────────────────────
-    // HGauge(-25, 0, redStart=1, reversed=true)
-    // Ticks: -25/-20/-15/-10/-5/0
+    // HGauge(-25, 0, redStart=1), ticks -25/-20/-15/-10/-5/0.
+    // R-R3-21: a normal (not reversed) gauge. It shows the meters'
+    // Compression reading, max(-30, TXA_COMP_AV) (Thetis console.cs:46979
+    // [v2.10.3.15]), the compressed level in dB: empty at -25 and below
+    // (at rest, PROC off), fuller as the level rises. AetherSDR's reversed
+    // face (PhoneCwApplet.cpp:928-933 [@1e0718ad]) takes a compression
+    // amount from the radio, which this reading is not.
     m_compGauge = new HGauge(page);
     m_compGauge->setRange(-25.0, 0.0);
     m_compGauge->setRedStart(1.0);
-    m_compGauge->setReversed(true);
     m_compGauge->setTitle(QStringLiteral("Compression"));
     m_compGauge->setTickLabels({QStringLiteral("-25dB"), QStringLiteral("-20"),
                                  QStringLiteral("-15"),   QStringLiteral("-10"),
@@ -286,7 +291,7 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
     m_compGauge->setAccessibleName(QStringLiteral("Compression gauge"));
     m_compGauge->setToolTip(QStringLiteral(
         "Speech compression while transmitting, as the Compression meter shows it"));
-    m_compGauge->setValue(0.0);
+    m_compGauge->setValue(-25.0);  // empty until a transmit reading arrives
     vbox->addWidget(m_compGauge);
     vbox->addSpacing(4);
 
@@ -1167,9 +1172,10 @@ void PhoneCwApplet::wireControls()
 
     // ── #2 Compression gauge: back to none on receive (R-R3-21) ─────────────
     // MainWindow feeds setCompressionReading() from the meter poller while
-    // transmitting; the poller stops the transmit readings on receive.
+    // transmitting; the poller stops the transmit readings on receive, so
+    // receive puts the gauge back to the reading's floor (empty).
     connect(&tx, &TransmitModel::moxChanged, this, [this](bool on) {
-        if (!on) { setCompressionReading(0.0); }
+        if (!on) { setCompressionReading(MeterBinding::kTxCompFloorDb); }
     });
 
     // ── #1 Mic level gauge ────────────────────────────────────────────────────
@@ -1332,8 +1338,10 @@ void PhoneCwApplet::updateTransmitControlAvailability()
 void PhoneCwApplet::setCompressionReading(double dB)
 {
     if (!m_compGauge) { return; }
-    // Gauge range -25..0 dB (AetherSDR PhoneCwApplet layout).
-    const double v = std::isfinite(dB) ? std::clamp(dB, -25.0, 0.0) : 0.0;
+    // Gauge range -25..0 dB (AetherSDR PhoneCwApplet layout). The reading
+    // is floored at -30 by the poller; anything at or below -25, and a
+    // non-finite value, draws an empty gauge.
+    const double v = std::isfinite(dB) ? std::clamp(dB, -25.0, 0.0) : -25.0;
     m_compGauge->setValue(v);
 }
 
