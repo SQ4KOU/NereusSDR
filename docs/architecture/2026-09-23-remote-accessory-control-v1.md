@@ -429,13 +429,22 @@ computer (127.0.0.1), so apps there reach it.
 It transmits for no app until remote transmit: the init burst says
 `receive_only:true` and `tx_enable:<rx>,false`; `trx:<rx>,true` touches no
 MOX, takes no transmit audio lock and is answered `trx:<rx>,false`; transmit
-audio frames are dropped. A listener that cannot start (another program
-holds the port) is retried while the switch is on, after 1, 2, 5 and 10
-seconds and then every 30 seconds; a new `setStationTci` tries at once.
-Meanwhile `error` reads "The station's TCI server cannot use port <port>
-right now; another program may be using it. The Core keeps trying." and
-the Core logs one line when it starts failing and one when it listens
-again, not one per try. Nor does it let an app change the Core's
+audio frames are dropped. The Core listens on the station address and on
+its own computer separately: what binds is kept and served, and an
+address another program holds is retried while the switch is on, after
+1, 2, 5 and 10 seconds and then every 30 seconds, without stopping the
+server (a new `setStationTci` tries at once). `listening` is true while
+any address serves, `stationAddress` names the station address only
+while it serves, and `error` names the blocked one: "Another program on
+the Core's computer is using port <port>, so apps there cannot reach the
+station's TCI server. The Core keeps trying." or "Another program is
+using port <port> at the station address <address>, so devices at the
+station cannot reach the station's TCI server. The Core keeps trying."
+(both: "... on the Core's computer and at the station address <address>,
+so the station's TCI server cannot start. ..."). The RF-Kit keeps band
+follow while the station address serves. The Core logs one line when an
+address is first blocked and one when every address serves again, not
+one per try. Nor does it let an app change the Core's
 transmit configuration: `tx_profile_ex:<name>`, `xit_enable:<rx>,<bool>`
 and `xit_offset:<rx>,<hz>` change nothing, are not broadcast, and are
 answered to the asking app with the value the Core keeps (queries answer
@@ -1181,7 +1190,10 @@ rewrite the fixtures, and update this document in the same commit.
   another window (the whole change at once, in the wire's property
   order), no window server on the Core's computer while connected, the
   Core retrying a listener that could not start with its plain reason,
-  and the TCI page's line. `tst_remote_peripherals`: on the Core's
+  the station network served while a third program holds the port on the
+  Core's computer (the RF-Kit's band follow up, the reason naming the
+  blocked address, that computer taken on the next retry with no stop
+  and start), and the TCI page's line. `tst_remote_peripherals`: on the Core's
   computer the window runs none, the phone turns the Core's switch on,
   the Core serves apps on its computer and on a station address, and the
   TCI page shows the Core's switch and port.

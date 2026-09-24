@@ -15,6 +15,7 @@
 // station network. No radio, amplifier or real Core is contacted.
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
+#include <QNetworkInterface>
 #include <QTcpServer>
 #include <QWebSocket>
 
@@ -558,11 +559,73 @@ private slots:
         QVERIFY(controller.setEnabled(true, port, &reason));
         QVERIFY(state.enabled());
         QVERIFY(!state.listening());
-        QCOMPARE(state.error(), StationTciController::cannotListenReason(port));
+        QCOMPARE(state.error(), StationTciController::blockedReason(
+                                    port, {QHostAddress(QHostAddress::LocalHost)}));
         QVERIFY(OperatorWording::isPlain(state.error()));
         blocker.close();
         QTRY_VERIFY_WITH_TIMEOUT(state.listening(), 5000);
         QVERIFY(state.error().isEmpty());
+        QVERIFY(controller.setEnabled(false, port, &reason));
+    }
+
+    // Rework part 3 (R-R3-48): the Core binds the station address and this
+    // computer separately. A third program holds the port on this computer:
+    // the station network is still served (the RF-Kit's band follow keeps
+    // working), the object says which address is blocked, in plain words;
+    // when the program lets go, the Core takes this computer too on its
+    // next retry, with no stop and start of the server.
+    void stationNetworkServedWhileThisComputerIsBlocked()
+    {
+        QString stationAddress;
+        for (const QHostAddress& address : QNetworkInterface::allAddresses()) {
+            if (address.protocol() == QAbstractSocket::IPv4Protocol && !address.isLoopback()) {
+                stationAddress = address.toString();
+                break;
+            }
+        }
+        if (stationAddress.isEmpty()) {
+            QSKIP("No non-loopback IPv4 address on this computer to stand in for the station.");
+        }
+        QTcpServer blocker;
+        QVERIFY(blocker.listen(QHostAddress::LocalHost, 0));
+        const quint16 port = blocker.serverPort();
+        RadioModel model;
+        StationTciModel state;
+        StationTciController controller(&model, &state);
+        controller.setBindOverride(stationAddress);
+        QSignalSpy starts(controller.server(), &TciServer::serverStarted);
+        QSignalSpy stops(controller.server(), &TciServer::serverStopped);
+        QString reason;
+        QVERIFY(controller.setEnabled(true, port, &reason));
+        QVERIFY(state.listening());
+        QCOMPARE(state.stationAddress(), stationAddress);
+        QCOMPARE(state.error(), StationTciController::blockedReason(
+                                    port, {QHostAddress(QHostAddress::LocalHost)}));
+        QVERIFY(OperatorWording::isPlain(state.error()));
+        // The RF-Kit's band follow is up on the station address.
+        RfKitModel rfKit;
+        RfKitModel::StationConnectionState ampState;
+        ampState.configuredHost = stationAddress;
+        ampState.configuredPort = 8080;
+        rfKit.setStationConnectionState(ampState);
+        RfKitBandFollow follow(&rfKit);
+        follow.setServer(controller.server());
+        QTRY_VERIFY(rfKit.bandFollow() != BandFollow::Off);
+        QCOMPARE(rfKit.bandFollowAddress(), stationAddress);
+        QWebSocket device;
+        QStringList frames;
+        connect(&device, &QWebSocket::textMessageReceived, &device,
+                [&frames](const QString& text) { frames.append(text); });
+        device.open(QUrl(QStringLiteral("ws://%1:%2").arg(stationAddress).arg(port)));
+        QTRY_VERIFY(frames.join(QString()).contains(QStringLiteral("receive_only:true;")));
+        device.close();
+
+        blocker.close();
+        QTRY_VERIFY_WITH_TIMEOUT(controller.server()->listenAddresses().contains(
+                                     QHostAddress(QHostAddress::LocalHost)), 5000);
+        QTRY_VERIFY(state.error().isEmpty());
+        QCOMPARE(starts.count(), 1);
+        QCOMPARE(stops.count(), 0);
         QVERIFY(controller.setEnabled(false, port, &reason));
     }
 

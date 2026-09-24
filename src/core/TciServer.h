@@ -174,6 +174,10 @@ public:
     bool start(const QList<QHostAddress>& bindAddresses, quint16 port);
     // The addresses this server listens on (empty while stopped).
     QList<QHostAddress> listenAddresses() const;
+    /// Rework part 3 (R-R3-48): while running, also listen on `address`
+    /// (the running port), without restarting; false when it cannot (the
+    /// server keeps what it has).
+    bool addListener(const QHostAddress& address);
 
     // Stop the server and disconnect all clients.
     void stop();
@@ -259,6 +263,8 @@ signals:
 
     // Emitted after stop() completes and all clients have been disconnected.
     void serverStopped();
+    /// A listener was added while running (addListener).
+    void listenersChanged();
 
     // Emitted when a new TCI client connects.
     void clientConnected(QWebSocket* socket);

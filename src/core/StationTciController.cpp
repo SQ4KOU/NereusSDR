@@ -3,6 +3,9 @@
 // 2026-09-24: R-R3-48 follow-up: a listener that cannot start is retried
 // with a bounded backoff and a plain reason. J.J. Boyd (KG4VCF), AI-assisted
 // via Anthropic Claude Code.
+// 2026-09-24: R-R3-48 rework: the station address and this computer bound
+// separately; only the blocked one retried, named in the reason. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/StationTciController.h"
 
 #include "core/AppSettings.h"
@@ -57,10 +60,32 @@ StationTciController::~StationTciController()
 }
 
 // static
-QString StationTciController::cannotListenReason(quint16 port)
+QString StationTciController::blockedReason(quint16 port, const QList<QHostAddress>& blocked)
 {
-    return QStringLiteral("The station's TCI server cannot use port %1 right now; another "
-                          "program may be using it. The Core keeps trying.").arg(port);
+    bool thisComputer = false;
+    QStringList stationAddresses;
+    for (const QHostAddress& address : blocked) {
+        if (address.isLoopback() || address == QHostAddress(QHostAddress::AnyIPv4)
+            || address == QHostAddress(QHostAddress::AnyIPv6)
+            || address == QHostAddress(QHostAddress::Any)) {
+            thisComputer = true;
+        } else {
+            stationAddresses.append(address.toString());
+        }
+    }
+    if (thisComputer && stationAddresses.isEmpty()) {
+        return QStringLiteral("Another program on the Core's computer is using port %1, so "
+                              "apps there cannot reach the station's TCI server. The Core keeps "
+                              "trying.").arg(port);
+    }
+    if (!thisComputer) {
+        return QStringLiteral("Another program is using port %1 at the station address %2, so "
+                              "devices at the station cannot reach the station's TCI server. "
+                              "The Core keeps trying.").arg(port).arg(stationAddresses.join(QStringLiteral(", ")));
+    }
+    return QStringLiteral("Another program is using port %1 on the Core's computer and at the "
+                          "station address %2, so the station's TCI server cannot start. The "
+                          "Core keeps trying.").arg(port).arg(stationAddresses.join(QStringLiteral(", ")));
 }
 
 void StationTciController::resetRetry()
@@ -156,34 +181,54 @@ void StationTciController::apply()
             m_server->stop();
         }
         m_listening.clear();
+        m_wanted.clear();
+        m_blocked.clear();
         m_error.clear();
         publish();
         return;
     }
     const QList<QHostAddress> wanted = wantedAddresses();
-    if (m_server->isRunning() && m_server->port() == m_port && wanted == m_listening) {
-        publish();
-        return;
+    if (m_server->isRunning() && m_server->port() == m_port && wanted == m_wanted) {
+        if (m_blocked.isEmpty()) {
+            publish();
+            return;
+        }
+        // Retry only what another program held; what bound keeps serving.
+    } else {
+        if (m_server->isRunning()) {
+            m_server->stop();
+        }
+        m_wanted = wanted;
+        m_blocked = wanted;
+        m_error.clear();
     }
-    if (m_server->isRunning()) {
-        m_server->stop();
+    const QList<QHostAddress> before = m_listening;
+    QList<QHostAddress> stillBlocked;
+    for (const QHostAddress& address : std::as_const(m_blocked)) {
+        const bool bound = m_server->isRunning() ? m_server->addListener(address)
+                                                 : m_server->start(address, m_port);
+        if (!bound) {
+            stillBlocked.append(address);
+        }
     }
-    m_error.clear();
-    if (m_server->start(wanted, m_port)) {
-        m_listening = wanted;
+    m_blocked = stillBlocked;
+    m_listening = m_server->isRunning() ? m_server->listenAddresses() : QList<QHostAddress>{};
+    if (m_listening != before && !m_listening.isEmpty()) {
+        qCInfo(lcTci) << "Station TCI server listening on" << m_listening << "port" << m_port;
+    }
+    if (m_blocked.isEmpty()) {
         resetRetry();
-        qCInfo(lcTci) << (m_failing ? "Station TCI server listening again on"
-                                    : "Station TCI server listening on")
-                      << wanted << "port" << m_port;
+        if (m_failing) {
+            qCInfo(lcTci) << "Station TCI server listening on every station address again";
+        }
         m_failing = false;
         m_server->setQuietListenAttempts(false);
     } else {
-        m_listening.clear();
         const int delay = kRetryDelaysMs[qMin(m_retryStep, int(std::size(kRetryDelaysMs)) - 1)];
         ++m_retryStep;
         if (!m_failing) {
             // One line when it starts failing; the tries stay quiet.
-            qCWarning(lcTci) << "Station TCI server could not listen on" << wanted
+            qCWarning(lcTci) << "Station TCI server could not listen on" << m_blocked
                              << "port" << m_port << m_error << "; retrying";
             m_failing = true;
             m_server->setQuietListenAttempts(true);
@@ -211,7 +256,9 @@ void StationTciController::publish()
             break;
         }
     }
-    state.error = state.listening || !m_failing ? QString() : cannotListenReason(m_port);
+    // Which address is blocked, if any, in plain words; the station address
+    // above says which one serves the station.
+    state.error = m_blocked.isEmpty() ? QString() : blockedReason(m_port, m_blocked);
     m_model->setState(state);
 }
 

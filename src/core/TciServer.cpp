@@ -35,7 +35,8 @@
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-48 follow-up: quiet listen attempts while the Core
 //                retries its station listener; the main listener goes
-//                through deleteLater, not raw delete. J.J. Boyd (KG4VCF),
+//                through deleteLater, not raw delete; addListener adds an
+//                address to a running server (rework). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
@@ -1317,6 +1318,32 @@ bool TciServer::start(const QList<QHostAddress>& bindAddresses, quint16 port)
                           << bindAddresses.at(i).toString() << "port" << boundPort;
         }
     }
+    return true;
+}
+
+bool TciServer::addListener(const QHostAddress& address)
+{
+    if (!m_server) {
+        return false;
+    }
+    const quint16 port = m_server->serverPort();
+    auto* extra = new QWebSocketServer(QStringLiteral("NereusSDR-TCI"),
+                                       QWebSocketServer::NonSecureMode, this);
+    if (!extra->listen(address, port)) {
+        if (m_quietListenAttempts) {
+            qCDebug(lcTci) << "TciServer: failed to listen on" << address.toString()
+                           << "port" << port << extra->errorString();
+        } else {
+            qCWarning(lcTci) << "TciServer: failed to listen on" << address.toString()
+                             << "port" << port << extra->errorString();
+        }
+        extra->deleteLater();   // Qt ownership; it never listened
+        return false;
+    }
+    connect(extra, &QWebSocketServer::newConnection, this, &TciServer::onNewConnection);
+    m_extraServers.append(extra);
+    qCInfo(lcTci) << "TciServer: also listening on" << address.toString() << "port" << port;
+    emit listenersChanged();
     return true;
 }
 
