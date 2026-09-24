@@ -386,7 +386,7 @@ change shows as surface drift and as a change to this table.
 | `remoteRfKitControlVersion` | 3 |
 | `stationTciVersion` | 1 |
 | `accessoryDataVersion` | 1 |
-| `remoteTgxlControlVersion` | 2 |
+| `remoteTgxlControlVersion` | 3 |
 
 <!-- /surface -->
 
@@ -419,7 +419,9 @@ When a feature is off, its version is 0:
   Genius's (the `accessorySettings` object and the device settings
   commands, section 9.1); `remoteTgxlControlVersion` 2 adds the Tuner
   Genius's antenna, operate and bypass (`setTgxlAntenna`,
-  `setTgxlOperate`, `setTgxlBypass`, section 9.1);
+  `setTgxlOperate`, `setTgxlBypass`, section 9.1), and 3 has
+  `setTgxlOperate` with `on` true put the tuner in operate whole (bypass
+  off and operate on, from the one command);
   `remoteRfKitControlVersion` 3 adds `resetRfKitError`, the RF-Kit
   amplifier's Reset amp error. `remoteTgxlControlVersion` is the last
   capabilities entry.

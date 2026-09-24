@@ -82,6 +82,9 @@
 //                                    operate and bypass requests
 //                                    (remoteTgxlControlVersion 2).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 fix wave: tgxlOperateAppliesWhole
+//                                    (remoteTgxlControlVersion 3).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -264,6 +267,11 @@ public:
     { return { false, tgxlControlUnavailableReason() }; }
     virtual CommandOutcome requestTgxlBypass(bool)
     { return { false, tgxlControlUnavailableReason() }; }
+    /// R-R3-49 fix wave (remoteTgxlControlVersion 3): requestTgxlOperate(true)
+    /// puts the tuner in OPERATE whole (bypass off and operate on, applied
+    /// by the Core as one command), so STANDBY to OPERATE is one request.
+    /// False below 3: the window sends bypass off, then operate on.
+    virtual bool tgxlOperateAppliesWhole() const { return false; }
     static QString tgxlControlUnavailableReason()
     { return QStringLiteral("This Core does not let this app switch the Tuner Genius. Updating the Core may help."); }
     static QString pgxlDeviceSettingsUnavailableReason()

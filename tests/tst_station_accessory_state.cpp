@@ -22,6 +22,8 @@
 // 2026-09-24: R-R3-49 / R-R3-47: remoteTgxlControlVersion 2 and the Tuner
 // Genius's antenna, operate and bypass refusals on the wire. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-49 fix wave: remoteTgxlControlVersion 3. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QFile>
 #include <QJsonArray>
@@ -683,8 +685,9 @@ private slots:
         // with the amp's own settings (Task 6).
         QCOMPARE(caps.remotePgxlControlVersion, 3);
         // R-R3-47: the Tuner Genius's own settings (Task 6); 2 with its
-        // antenna, operate and bypass (R-R3-49).
-        QCOMPARE(caps.remoteTgxlControlVersion, 2);
+        // antenna, operate and bypass (R-R3-49); 3 when setTgxlOperate on
+        // puts the tuner in OPERATE whole (R-R3-49 fix wave).
+        QCOMPARE(caps.remoteTgxlControlVersion, 3);
         // R-R3-47: 2 once the Core's RF-Kit commands are offered (Task 3).
         QCOMPARE(caps.remoteRfKitControlVersion, 3);   // I4: Reset amp error
         // R-R3-47: the accessory records and settings (Task 4).

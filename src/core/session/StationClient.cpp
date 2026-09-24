@@ -118,6 +118,9 @@
 //   2026-09-24 - R-R3-49 fix wave: the radio's `transmitting` applied as
 //                plain state. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 fix wave: tgxlOperateAppliesWhole
+//                (remoteTgxlControlVersion 3). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -3540,6 +3543,12 @@ bool StationClient::tgxlControlAvailable() const
 {
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.remoteTgxlControlVersion >= 2;
+}
+
+bool StationClient::tgxlOperateAppliesWhole() const
+{
+    // R-R3-49 fix wave: a Core at 3 applies setTgxlOperate on whole.
+    return tgxlControlAvailable() && m_capabilities.remoteTgxlControlVersion >= 3;
 }
 
 bool StationClient::stationTciAvailable() const

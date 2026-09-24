@@ -233,7 +233,7 @@
         {
             "kind": "i64",
             "name": "remoteTgxlControlVersion",
-            "value": 2
+            "value": 3
         }
     ],
     "commands": [

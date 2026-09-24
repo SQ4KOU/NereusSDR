@@ -156,6 +156,33 @@ public:
     }
 
     bool remoteTgxlConfigAvailable() const override { return available; }
+
+    // R-R3-49: the Tuner Genius switches (remoteTgxlControlVersion 2, and
+    // 3 when the Core applies OPERATE whole). Each request is recorded.
+    bool tgxlControl{false};
+    bool tgxlWhole{false};
+    QStringList tgxlRequests;
+    bool tgxlControlAvailable() const override { return tgxlControl; }
+    bool tgxlOperateAppliesWhole() const override { return tgxlControl && tgxlWhole; }
+    CommandOutcome requestTgxlAntenna(int port) override
+    {
+        if (!tgxlControl) { return IStationLink::requestTgxlAntenna(port); }
+        tgxlRequests.append(QStringLiteral("antenna %1").arg(port));
+        return {true, {}};
+    }
+    CommandOutcome requestTgxlOperate(bool on) override
+    {
+        if (!tgxlControl) { return IStationLink::requestTgxlOperate(on); }
+        tgxlRequests.append(QStringLiteral("operate %1").arg(on ? 1 : 0));
+        return {true, {}};
+    }
+    CommandOutcome requestTgxlBypass(bool on) override
+    {
+        if (!tgxlControl) { return IStationLink::requestTgxlBypass(on); }
+        tgxlRequests.append(QStringLiteral("bypass %1").arg(on ? 1 : 0));
+        return {true, {}};
+    }
+
     CommandOutcome requestFourO3AEnabled(bool enabled) override
     {
         ++fourO3ACalls;
@@ -476,6 +503,7 @@ private slots:
     void ampAppletRefusalShownOnTheAppletIsNotToasted();
     void remoteWindowSwitchesTheTunerThroughTheCore();
     void olderCoreLeavesTheTunerSwitchesGreyed();
+    void operateFromStandbyIsOneRequestOnACoreThatAppliesItWhole();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -3310,12 +3338,17 @@ void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
     QTRY_COMPARE(window.tunerModel()->antennaA(), 3);
 
     // OPERATE from STANDBY: bypass off, then operate on, as a local click.
+    // This Core (remoteTgxlControlVersion 3) takes it as one setTgxlOperate
+    // and sends both lines itself, so bypass=0 reaches the tuner once.
+    QVERIFY(cw.client.tgxlOperateAppliesWhole());
     const int operateMark = tuner.commands.size();
     QCOMPARE(applet.operateButtonForTesting()->text(), QStringLiteral("STANDBY"));
     applet.operateButtonForTesting()->click();
     const int bypassOff = tuner.waitFor(QStringLiteral("bypass=0"), operateMark);
     const int operateOn = tuner.waitFor(QStringLiteral("operate=1"), operateMark);
     QVERIFY(bypassOff >= 0 && operateOn > bypassOff);
+    QTest::qWait(100);
+    QCOMPARE(tuner.commands.mid(operateMark).count(QStringLiteral("bypass=0")), 1);
     QCOMPARE(applet.operateButtonForTesting()->text(), QStringLiteral("STANDBY"));
     tuner.send(QStringLiteral("S0|state operate=1 bypass=0"));
     QTRY_COMPARE(applet.operateButtonForTesting()->text(), QStringLiteral("OPERATE"));
@@ -3410,6 +3443,34 @@ void RemotePeripheralsTest::olderCoreLeavesTheTunerSwitchesGreyed()
     QCOMPARE(outcome.reason, IStationLink::tgxlControlUnavailableReason());
     QVERIFY(OperatorWording::isPlain(outcome.reason));
     model.detachStation();
+}
+
+// R-R3-49 fix wave: from STANDBY, one OPERATE click is one setTgxlOperate
+// on a Core that applies it whole (remoteTgxlControlVersion 3), and bypass
+// off then operate on for a Core at 2. The other steps of the cycle are
+// one request either way.
+void RemotePeripheralsTest::operateFromStandbyIsOneRequestOnACoreThatAppliesItWhole()
+{
+    for (const bool whole : {true, false}) {
+        RadioModel model(RadioModel::Role::Remote);
+        RecordingTgxlLink link;
+        link.linkReady = true;
+        link.tgxlControl = true;
+        link.tgxlWhole = whole;
+        model.attachStation(&link);
+        TunerApplet applet(&model, model.tunerModel());
+        applet.setTransmitPermitted(
+            false, QStringLiteral("Remote transmit controls are not available from this Core yet."));
+        model.reportStationLinkStateChanged();
+        QVERIFY(applet.operateButtonForTesting()->isEnabled());
+        QVERIFY(!model.tunerModel()->isOperate());
+        applet.operateButtonForTesting()->click();
+        const QStringList expected = whole
+            ? QStringList{QStringLiteral("operate 1")}
+            : QStringList{QStringLiteral("bypass 0"), QStringLiteral("operate 1")};
+        QCOMPARE(link.tgxlRequests, expected);
+        model.detachStation();
+    }
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

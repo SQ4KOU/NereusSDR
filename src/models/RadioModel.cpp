@@ -183,6 +183,9 @@
 //                while MoxController is not back in Rx (the TX to RX
 //                handover). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-24 - R-R3-49 fix wave: setTgxlOperateForStation(true) sends
+//                bypass=0 then operate=1 (remoteTgxlControlVersion 3).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3775,6 +3778,17 @@ bool RadioModel::setTgxlAntennaForStation(int port, QString* reason)
 bool RadioModel::setTgxlOperateForStation(bool on, QString* reason)
 {
     if (!stationTgxlControlAllowed(reason)) { return false; }
+    // remoteTgxlControlVersion 3: "on" puts the tuner in OPERATE whole, the
+    // two lines a local STANDBY to OPERATE click sends (TunerApplet::
+    // cycleOperateState, from AetherSDR's). The tuner takes operate and
+    // bypass as separate lines (TunerModel::setOperate / setBypass send
+    // "operate=N" and "bypass=N", AetherSDR TunerModel.cpp [@0cd4559]);
+    // the Core sends both here, back to back after the one check above,
+    // with no turn of the event loop between them, so no key can land
+    // between the two and leave the tuner half-changed.
+    if (on) {
+        m_tunerModel->setBypass(false);
+    }
     m_tunerModel->setOperate(on);
     return true;
 }

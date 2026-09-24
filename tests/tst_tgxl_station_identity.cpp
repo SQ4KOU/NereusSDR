@@ -11,6 +11,9 @@
 // 2026-09-24: R-R3-49 fix wave: also refused while the Core's MoxController
 // is keyed by a hardware PTT or the two-tone test, and through its TX to RX
 // handover. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-49 fix wave: OPERATE on sends bypass=0 then operate=1
+// from one command (remoteTgxlControlVersion 3). J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -715,8 +718,20 @@ private slots:
         QVERIFY(model.receiveOnlyStationPolicy());
         QVERIFY(model.setTgxlAntennaForStation(2, &reason));
         QTRY_VERIFY(sentLine(QStringLiteral("activate ant=2")));
+        // OPERATE whole (remoteTgxlControlVersion 3): bypass off, then
+        // operate on, both from the one command.
+        const int operateMark = frames.count();
         QVERIFY(model.setTgxlOperateForStation(true, &reason));
         QTRY_VERIFY(sentLine(QStringLiteral("operate=1")));
+        {
+            QStringList sinceMark;
+            for (int i = operateMark; i < frames.count(); ++i) {
+                const QString frame = frames.at(i).first().toString();
+                sinceMark.append(frame.mid(frame.indexOf(QLatin1Char('|')) + 1));
+            }
+            QCOMPARE(sinceMark, (QStringList{QStringLiteral("bypass=0"),
+                                             QStringLiteral("operate=1")}));
+        }
         QVERIFY(model.setTgxlBypassForStation(true, &reason));
         QTRY_VERIFY(sentLine(QStringLiteral("bypass=1")));
         QVERIFY(model.setTgxlOperateForStation(false, &reason));

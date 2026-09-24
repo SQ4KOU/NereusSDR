@@ -511,6 +511,7 @@ public:
     bool pgxlDeviceSettingsAvailable() const override;
     bool tgxlDeviceSettingsAvailable() const override;
     bool tgxlControlAvailable() const override;
+    bool tgxlOperateAppliesWhole() const override;
     bool stationTciAvailable() const override;
     bool coreServesTciOnThisComputer() const override;
     int coreStationTciStored() const override;

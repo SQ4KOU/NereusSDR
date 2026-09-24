@@ -35,6 +35,8 @@
 //   2026-09-24  R-R3-49 fix wave by J.J. Boyd (KG4VCF), with AI-assisted
 //                 transformation via Anthropic Claude Code. "On the air"
 //                 reads the Core's real MOX (the radio's `transmitting`).
+//                 STANDBY to OPERATE is one request on a Core at
+//                 remoteTgxlControlVersion 3.
 // =================================================================
 
 #include "TunerApplet.h"
@@ -780,7 +782,13 @@ void TunerApplet::cycleOperateState()
         setOperate(false);
     } else {
         // Currently STANDBY -> go to OPERATE
-        setBypass(false);
+        // R-R3-49 fix wave: a Core at remoteTgxlControlVersion 3 applies
+        // setTgxlOperate on whole (bypass off, then operate on, one
+        // command), so a key between two requests cannot leave the tuner
+        // half-changed. An older Core gets the two requests as before.
+        if (!link || !link->tgxlOperateAppliesWhole()) {
+            setBypass(false);
+        }
         setOperate(true);
     }
 }

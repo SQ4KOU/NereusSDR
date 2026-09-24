@@ -167,6 +167,10 @@
 //                                    (the Tuner Genius's antenna, operate
 //                                    and bypass verbs).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 fix wave: remoteTgxlControlVersion 3
+//                                    (setTgxlOperate on puts the tuner in
+//                                    OPERATE whole).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2253,7 +2257,9 @@ int StationServer::tgxlControlVersion() const
 {
     // 2: the tuner's antenna, operate and bypass (setTgxlAntenna,
     // setTgxlOperate, setTgxlBypass), R-R3-49 / R-R3-47.
-    return accessoryStatusVersion() >= 1 ? 2 : 0;
+    // 3: setTgxlOperate on puts the tuner in OPERATE whole (bypass off and
+    // operate on, one command), R-R3-49 fix wave.
+    return accessoryStatusVersion() >= 1 ? 3 : 0;
 }
 
 int StationServer::rfKitControlVersion() const
