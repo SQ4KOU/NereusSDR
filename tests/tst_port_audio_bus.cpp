@@ -2,17 +2,60 @@
 #include "core/audio/PortAudioBus.h"
 #include <portaudio.h>
 
+#include <QStandardPaths>
+
 #include <cmath>
 
 using namespace NereusSDR;
 
+namespace {
+
+// R-R3-21: a test run never initialises PortAudio (it probes every ALSA
+// PCM on Linux and walks CoreAudio on macOS) and never opens a real audio
+// device. The cases below that need one run only when a developer opts in
+// on their own machine:
+//
+//     NEREUS_TEST_REAL_AUDIO_DEVICES=1 ./tests/tst_port_audio_bus
+//
+// With the variable set, this test leaves test mode, initialises
+// PortAudio and opens this computer's real output and input devices (on
+// macOS the input case may ask for microphone access).
+// Without it those cases skip and say how to run them.
+bool realDevicesOptedIn()
+{
+    return qEnvironmentVariable("NEREUS_TEST_REAL_AUDIO_DEVICES") == QStringLiteral("1");
+}
+
+constexpr const char* kRealDevicesSkip =
+    "Opens real audio devices: set NEREUS_TEST_REAL_AUDIO_DEVICES=1 to run";
+
+} // namespace
+
 class TstPortAudioBus : public QObject {
     Q_OBJECT
+private:
+    bool m_paInitialized{false};
+
 private slots:
-    // R-R3-21: a test run never initialises PortAudio (it probes every
-    // ALSA PCM on Linux and walks CoreAudio on macOS), so this test no
-    // longer calls Pa_Initialize / Pa_Terminate. The cases that need a real
-    // device skip, as they already did on a runner without one.
+    void initTestCase() {
+        if (!realDevicesOptedIn()) {
+            return;
+        }
+        // Opted in: leave test mode so PortAudioBus stops barring PortAudio,
+        // and own its lifetime here as the application does.
+        QStandardPaths::setTestModeEnabled(false);
+        QVERIFY(!PortAudioBus::portAudioBarredForTestRun());
+        const PaError err = Pa_Initialize();
+        QVERIFY2(err == paNoError, Pa_GetErrorText(err));
+        m_paInitialized = true;
+    }
+
+    void cleanupTestCase() {
+        if (m_paInitialized) {
+            Pa_Terminate();
+            m_paInitialized = false;
+        }
+    }
 
     void constructsClosed() {
         PortAudioBus bus;
@@ -20,6 +63,7 @@ private slots:
     }
 
     void openSucceedsOnDefaultDevice() {
+        if (!realDevicesOptedIn()) { QSKIP(kRealDevicesSkip); }
         PortAudioBus bus;
         AudioFormat f;
         // 2026-05-12 (PR #238 follow-up): CI runner has no output
@@ -37,6 +81,7 @@ private slots:
     }
 
     void negotiatedFormatReflectsDevice() {
+        if (!realDevicesOptedIn()) { QSKIP(kRealDevicesSkip); }
         PortAudioBus bus;
         AudioFormat f;
         f.sampleRate = 48000;
@@ -47,6 +92,7 @@ private slots:
     }
 
     void backendNameIdentifiesAPI() {
+        if (!realDevicesOptedIn()) { QSKIP(kRealDevicesSkip); }
         PortAudioBus bus;
         // 2026-05-12 (PR #238 follow-up): same headless-CI caveat as
         // openSucceedsOnDefaultDevice — the backend name is only
@@ -64,6 +110,9 @@ private slots:
     // R-R3-21: in a test run the device lists are empty and PortAudio is
     // never asked.
     void deviceListsAreEmptyInATestRun() {
+        if (realDevicesOptedIn()) {
+            QSKIP("Real audio devices opted in: this run is not a test run");
+        }
         QVERIFY(PortAudioBus::portAudioBarredForTestRun());
         QVERIFY(PortAudioBus::hostApis().isEmpty());
         QVERIFY(PortAudioBus::outputDevicesFor(0).isEmpty());
@@ -71,6 +120,7 @@ private slots:
     }
 
     void openInputSucceedsOnDefaultDevice() {
+        if (!realDevicesOptedIn()) { QSKIP(kRealDevicesSkip); }
         PortAudioBus bus;
         PortAudioConfig cfg;
         cfg.direction = AudioDirection::Input;
@@ -91,6 +141,7 @@ private slots:
     // and verify the bus opens — previously open() always called
     // Pa_GetDefaultOutputDevice() and ignored the configured name.
     void openHonorsConfiguredDeviceName() {
+        if (!realDevicesOptedIn()) { QSKIP(kRealDevicesSkip); }
         const auto apis = PortAudioBus::hostApis();
         if (apis.isEmpty()) { QSKIP("No PortAudio host APIs on test host"); }
 
@@ -121,6 +172,7 @@ private slots:
     // without a configured ALSA default, that final fallback is the only
     // thing that keeps audio reaching the user.
     void openFallsBackWhenNameMissing() {
+        if (!realDevicesOptedIn()) { QSKIP(kRealDevicesSkip); }
         PortAudioBus bus;
         PortAudioConfig cfg;
         cfg.direction  = AudioDirection::Output;
@@ -141,6 +193,7 @@ private slots:
     // device, a stereo request must not end up on a mono device — even
     // if a mono device was enumerated first.
     void openFallbackRespectsChannelCapacity() {
+        if (!realDevicesOptedIn()) { QSKIP(kRealDevicesSkip); }
         // Find any stereo-capable output; skip if the host has none.
         const auto apis = PortAudioBus::hostApis();
         bool hasStereoOutput = false;
