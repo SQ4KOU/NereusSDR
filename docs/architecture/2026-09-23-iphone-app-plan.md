@@ -399,7 +399,13 @@ networking that could expose or strand the station, or the transmit boundary): 4
 14, 17, 18, 25, 26, 27, 27a, 28, 28a, 29, 29a, 30, 31, 32, 33, 34, 35, 36, 37, 38, 41, 42, 45, 47, 48,
 54, 64, 65. JJ decides whether any of them gets one. For the six phone tasks among them
 (27a, 28a, 29a, 54, 64, 65) he decided on 2026-09-24: each gets its own independent
-review as soon as it is finished.
+review as soon as it is finished. For the station tasks he decided the same day, through
+the Core/GUI session: one independent review per group, each when its group finishes:
+identity and pairing (12, 13, 14, 16, 17, 18); remote access (26 to 29); remote
+transmit's safety net (30 to 38, before any real on-air test); the takeover question and
+the transmit-coupled accessory commands (41, 42). The other flagged station tasks (25,
+45, 47, 48) fall under their part's end review; Task 4 was reviewed with the rest of
+Part A.
 
 ---
 
