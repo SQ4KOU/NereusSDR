@@ -4,6 +4,7 @@ Each test builds a small fixture tree (a README with a licence table and a
 sources table, a licence folder, a third_party/ directory and a CMake file)
 and runs the script on it with --root.
 """
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -82,6 +83,38 @@ def test_fetch_name_without_row_fails(tmp_path):
     assert "cmake/Extra.cmake" in out
     # The commented-out name in CMakeLists.txt is not reported.
     assert "not_a_real_one" not in out
+
+
+def test_multi_line_declaration_without_row_fails(tmp_path):
+    # The name on the line after the opening parenthesis, as the zlib,
+    # portaudio, libspecbleach and rnnoise declarations are written.
+    root = _make_tree(tmp_path)
+    cmake_dir = root / "cmake"
+    cmake_dir.mkdir()
+    (cmake_dir / "Multi.cmake").write_text(
+        "FetchContent_Declare(\n"
+        "    newlib_upstream\n"
+        "    GIT_REPOSITORY https://example.invalid/newlib.git\n"
+        ")\n"
+        "ExternalProject_Add(   # a comment after the parenthesis\n"
+        "\n"
+        "    other_build\n"
+        "    URL https://example.invalid/other.zip)\n",
+        encoding="utf-8")
+    code, out = _run(root)
+    assert code == 1
+    assert "FetchContent_Declare newlib_upstream (cmake/Multi.cmake)" in out
+    assert "ExternalProject_Add other_build (cmake/Multi.cmake)" in out
+
+
+def test_multi_line_declarations_in_the_real_tree_are_found():
+    spec = importlib.util.spec_from_file_location("check_licences", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    names = {name for _, name, _ in module.find_fetch_names(REPO)}
+    for multi_line in ("zlib", "portaudio", "libspecbleach_upstream",
+                       "rnnoise_upstream"):
+        assert multi_line in names
 
 
 def test_named_file_missing_fails(tmp_path):

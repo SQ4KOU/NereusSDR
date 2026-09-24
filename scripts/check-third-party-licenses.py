@@ -16,7 +16,8 @@ The check fails, printing one line per problem, when:
 
   1. a directory under third_party/ has no sources row naming it;
   2. a FetchContent_Declare or ExternalProject_Add name in a CMake file
-     has no sources row naming it;
+     has no sources row naming it (the name may sit on a later line than
+     the opening parenthesis);
   3. a file a row names is missing from the folder (or a sources row
      names no notice file at all);
   4. a text file in the folder is named by no row.
@@ -125,10 +126,11 @@ def find_fetch_names(root: Path) -> list[tuple[str, str, Path]]:
                 text = entry.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            for line in text.splitlines():
-                code = line.split("#", 1)[0]
-                for match in _FETCH_RE.finditer(code):
-                    found.append((match.group(1), match.group(2), entry))
+            # Strip comments line by line, then match over the whole file:
+            # a declaration's name is often on the line after its "(".
+            code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+            for match in _FETCH_RE.finditer(code):
+                found.append((match.group(1), match.group(2), entry))
     return found
 
 
