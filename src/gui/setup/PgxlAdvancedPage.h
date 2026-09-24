@@ -96,9 +96,10 @@ public:
     { m_confirmForTesting = std::move(ask); }
     /// The Network section's warning in a local window.
     static QString networkWarningText();
-    /// M4: the Network section's warning and the question before Apply in
-    /// a remote window, in plain words that are true there (no Scan LAN).
-    static QString remoteNetworkWarningText();
+    /// M4 / operator decision 2026-09-24: the question before Apply
+    /// Network Settings, asked in local and remote windows alike (and the
+    /// remote Network section's warning), in plain words true in both.
+    static QString networkQuestionText();
 
 private slots:
     void onPgxlConnected();

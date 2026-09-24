@@ -647,16 +647,15 @@ Answers (`<device>` is "Power Genius" or "Tuner Genius"):
 Reboot, and sends nothing without a yes. Save & Reboot asks the local
 window's own question, word for word ("Sending `save` will persist your
 configuration to flash and reboot the PGXL. ...", titled "Save & Reboot
-PGXL" or "Save & Reboot TGXL"). A local window applies network settings
-without a dialog; a remote window, which may be far from the station, asks,
-titled "Apply Network Settings", in words that are true there (its Network
-section shows the same words): "The Power Genius will switch to these
-network settings. If the Core cannot reach it afterwards, enter its new
-address for the Power Genius on the Peripherals page and connect again."
-(or the Tuner Genius). The local page's warning names Scan LAN, which a
-remote window does not offer, so it is not used there. Whether a local
-window should ask too is the operator's decision (queued). The iPhone app
-asks the remote window's question. Before asking, either window checks the
+PGXL" or "Save & Reboot TGXL"). Before new network settings, local and
+remote windows alike (operator decision of 2026-09-24) ask, titled "Apply
+Network Settings", in words true in both: "The Power Genius will switch to
+these network settings. If NereusSDR cannot reach it afterwards, enter its
+new address for the Power Genius on the Peripherals page and connect
+again." (or the Tuner Genius); nothing is sent, local or remote, without a
+yes. A remote window's Network section shows the same words; the local
+page's section keeps its own warning, which names Scan LAN (not offered in
+a remote window). The iPhone app asks the same question. Before asking, either window checks the
 setting as the Core does (see Refusals) and shows the reason instead.
 
 ## The 4O3A and RF-Kit fields on the `radio` object

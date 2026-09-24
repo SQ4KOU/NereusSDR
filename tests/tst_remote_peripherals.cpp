@@ -397,6 +397,7 @@ private slots:
     void coresStoredSwitchWinsOverTheLink();
     void connectRuleReadsTheCurrentCore();
     void tciPortIsSentWhenEditingFinishes();
+    void localPagesAskBeforeNetworkSettings();
     // R-R3-47 / R-R3-22
     void remoteWindowShowsTheCoresRecords();
     void remoteWindowChangesTheInterlockOnTheCore();
@@ -2056,6 +2057,11 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     QVERIFY(localAmp.listen());
     RadioModel local;
     PgxlAdvancedPage localPage(&local);
+    QStringList localAsked;   // the local page asks the same question
+    localPage.setConfirmationForTesting([&](const QString& title, const QString& text) {
+        localAsked.append(title + QLatin1Char('|') + text);
+        return true;
+    });
 
     LoopbackTransport* stationEnd = cw.connect(this);
     QTRY_VERIFY(cw.client.pgxlDeviceSettingsAvailable());
@@ -2163,16 +2169,19 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     // bias twice, once per radio button).
     QCOMPARE(amp.commands.mid(remoteMark).count(QStringLiteral("setup bias=a")), 1);
     // The remote page asked first (M4: in words true in a remote window,
-    // with no Scan LAN, which a remote window does not offer).
-    for (const QString& text : {PgxlAdvancedPage::remoteNetworkWarningText(),
-                                TgxlAdvancedPage::remoteNetworkWarningText()}) {
+    // with no Scan LAN, which a remote window does not offer), and the
+    // local page asked the same (operator decision 2026-09-24).
+    for (const QString& text : {PgxlAdvancedPage::networkQuestionText(),
+                                TgxlAdvancedPage::networkQuestionText()}) {
         QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
         QVERIFY(!text.contains(QStringLiteral("Scan LAN")));
         QVERIFY(!text.contains(QStringLiteral("host")));
     }
     QCOMPARE(asked, (QStringList{
-        QStringLiteral("Apply Network Settings|") + PgxlAdvancedPage::remoteNetworkWarningText(),
+        QStringLiteral("Apply Network Settings|") + PgxlAdvancedPage::networkQuestionText(),
         QStringLiteral("Save & Reboot PGXL|") + PgxlSaveRebootDialog::message()}));
+    QCOMPARE(localAsked, QStringList{QStringLiteral("Apply Network Settings|")
+                                     + PgxlAdvancedPage::networkQuestionText()});
 
     // ---- A no sends nothing.
     yes = false;
@@ -2287,6 +2296,11 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
     QVERIFY(localTuner.listen());
     RadioModel local;
     TgxlAdvancedPage localPage(&local);
+    QStringList localAsked;   // the local page asks the same question
+    localPage.setConfirmationForTesting([&](const QString& title, const QString& text) {
+        localAsked.append(title + QLatin1Char('|') + text);
+        return true;
+    });
 
     LoopbackTransport* stationEnd = cw.connect(this);
     QTRY_VERIFY(cw.client.tgxlDeviceSettingsAvailable());
@@ -2364,7 +2378,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
     QCOMPARE(localTuner.settingsCommands(localMark), expected);
     QCOMPARE(tuner.settingsCommands(remoteMark), expected);
     QCOMPARE(asked, (QStringList{
-        QStringLiteral("Apply Network Settings|") + TgxlAdvancedPage::remoteNetworkWarningText(),
+        QStringLiteral("Apply Network Settings|") + TgxlAdvancedPage::networkQuestionText(),
         QStringLiteral("Save & Reboot TGXL|") + PgxlSaveRebootDialog::message()}));
 
     // A no sends nothing.
@@ -2732,6 +2746,76 @@ void RemotePeripheralsTest::tciPortIsSentWhenEditingFinishes()
     QTest::keyClick(spin, Qt::Key_Return);
     QTRY_COMPARE(sent.count(), 1);
     QCOMPARE(sent.first().at(1).toUInt(), 50002u);
+    AppSettings::instance().clear();
+}
+
+// Operator decision 2026-09-24 (R-R3-47, R-R3-22): a local window's Power
+// Genius and Tuner Genius pages ask the same plain question before
+// applying network settings as the remote pages; a no sends nothing, a yes
+// sends the same ifconf line as before.
+void RemotePeripheralsTest::localPagesAskBeforeNetworkSettings()
+{
+    AppSettings::instance().clear();
+    const QString ifconf = QStringLiteral("ifconf address=192.168.1.50 netmask=255.255.255.0 "
+                                          "gateway=192.168.1.1 dhcp=false");
+    const auto fill = [](auto& page) {
+        page.dhcpCheckForTesting()->setChecked(false);
+        page.ipEditForTesting()->setText(QStringLiteral("192.168.1.50"));
+        page.netmaskEditForTesting()->setText(QStringLiteral("255.255.255.0"));
+        page.gatewayEditForTesting()->setText(QStringLiteral("192.168.1.1"));
+    };
+    {
+        FakeGenius amp;
+        QVERIFY(amp.listen());
+        RadioModel local;
+        PgxlAdvancedPage page(&local);
+        bool yes = false;
+        QStringList asked;
+        page.setConfirmationForTesting([&](const QString& title, const QString& text) {
+            asked.append(title + QLatin1Char('|') + text);
+            return yes;
+        });
+        local.pgxlConnection()->connectToPgxl(QStringLiteral("127.0.0.1"), amp.port());
+        QVERIFY(amp.accept());
+        amp.send(QStringLiteral("V3.8.9"));
+        QVERIFY(amp.waitFor(QStringLiteral("ifconf read")) >= 0);
+        fill(page);
+        const int mark = amp.commands.size();
+        page.applyNetworkButtonForTesting()->click();
+        QTest::qWait(100);
+        QCOMPARE(amp.settingsCommands(mark), QStringList{});
+        QCOMPARE(asked, QStringList{QStringLiteral("Apply Network Settings|")
+                                    + PgxlAdvancedPage::networkQuestionText()});
+        yes = true;
+        page.applyNetworkButtonForTesting()->click();
+        QVERIFY(amp.waitFor(ifconf, mark) >= 0);
+    }
+    {
+        FakeGenius tuner;
+        QVERIFY(tuner.listen());
+        RadioModel local;
+        TgxlAdvancedPage page(&local);
+        bool yes = false;
+        QStringList asked;
+        page.setConfirmationForTesting([&](const QString& title, const QString& text) {
+            asked.append(title + QLatin1Char('|') + text);
+            return yes;
+        });
+        local.tgxlConnection()->connectToTgxl(QStringLiteral("127.0.0.1"), tuner.port());
+        QVERIFY(tuner.accept());
+        tuner.send(QStringLiteral("V1.2.17"));
+        QVERIFY(tuner.waitFor(QStringLiteral("ifconf read")) >= 0);
+        fill(page);
+        const int mark = tuner.commands.size();
+        page.applyNetworkButtonForTesting()->click();
+        QTest::qWait(100);
+        QCOMPARE(tuner.settingsCommands(mark), QStringList{});
+        QCOMPARE(asked, QStringList{QStringLiteral("Apply Network Settings|")
+                                    + TgxlAdvancedPage::networkQuestionText()});
+        yes = true;
+        page.applyNetworkButtonForTesting()->click();
+        QVERIFY(tuner.waitFor(ifconf, mark) >= 0);
+    }
     AppSettings::instance().clear();
 }
 

@@ -43,6 +43,11 @@
 //                                    in words true there; only this
 //                                    device's refusals reload the page.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: a local window asks
+//                                    the same plain question as a remote one
+//                                    before applying network settings
+//                                    (operator decision 2026-09-24).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "PgxlAdvancedPage.h"
@@ -463,7 +468,7 @@ void PgxlAdvancedPage::buildNetworkSection(QVBoxLayout* topLay)
     lay->addLayout(form);
 
     // M4: a remote window's words (no Scan LAN there); local unchanged.
-    auto* warnLabel = new QLabel(isRemote() ? remoteNetworkWarningText() : networkWarningText());
+    auto* warnLabel = new QLabel(isRemote() ? networkQuestionText() : networkWarningText());
     warnLabel->setWordWrap(true);
     warnLabel->setStyleSheet(QStringLiteral("color: #e8c01e;"));
     lay->addWidget(warnLabel);
@@ -861,9 +866,9 @@ bool PgxlAdvancedPage::confirmRemote(const QString& title, const QString& text)
     return box.clickedButton() == apply;
 }
 
-QString PgxlAdvancedPage::remoteNetworkWarningText()
+QString PgxlAdvancedPage::networkQuestionText()
 {
-    return QStringLiteral("The Power Genius will switch to these network settings. If the Core "
+    return QStringLiteral("The Power Genius will switch to these network settings. If NereusSDR "
                           "cannot reach it afterwards, enter its new address for the "
                           "Power Genius on the Peripherals page and connect again.");
 }
@@ -1308,7 +1313,7 @@ void PgxlAdvancedPage::onApplyIfconf()
         // Core's network, so the window asks first, in the Network
         // section's own words; nothing is sent without a yes.
         if (!confirmRemote(QStringLiteral("Apply Network Settings"),
-                           remoteNetworkWarningText())) {
+                           networkQuestionText())) {
             return;
         }
         IStationLink* link = m_model->stationLink();
@@ -1330,6 +1335,12 @@ void PgxlAdvancedPage::onApplyIfconf()
         return;
     }
     if (!m_model->pgxlConnection()->isConnected()) {
+        return;
+    }
+    // Operator decision 2026-09-24: a local window asks the same question
+    // before new network settings as a remote one; nothing is sent
+    // without a yes.
+    if (!confirmRemote(QStringLiteral("Apply Network Settings"), networkQuestionText())) {
         return;
     }
     m_model->pgxlConnection()->writeIfconf(
