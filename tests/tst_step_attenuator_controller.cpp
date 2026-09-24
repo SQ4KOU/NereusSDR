@@ -10,6 +10,9 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23: band restore to the radio cases (R-R3-46, R-R3-11), by
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -67,9 +70,54 @@
 #include <QSignalSpy>
 
 #include "core/AppSettings.h"
+#include "core/RadioConnection.h"
 #include "core/StepAttenuatorController.h"
+#include "models/Band.h"
 
 using namespace NereusSDR;
+
+namespace {
+
+// R-R3-46: records the attenuator and preamp values sent to the radio.
+class RecordingConnection final : public RadioConnection {
+    Q_OBJECT
+public:
+    explicit RecordingConnection(QObject* parent = nullptr)
+        : RadioConnection(parent)
+    {
+        setState(ConnectionState::Connected);
+    }
+
+    QList<int> attenuator;
+    QList<bool> preamp;
+
+    void init() override {}
+    void connectToRadio(const NereusSDR::RadioInfo&) override {}
+    void disconnect() override {}
+    void setReceiverFrequency(int, quint64) override {}
+    void setTxFrequency(quint64) override {}
+    void setActiveReceiverCount(int) override {}
+    void setSampleRate(int) override {}
+    void setAttenuator(int dB) override { attenuator.append(dB); }
+    void setPreamp(bool on) override { preamp.append(on); }
+    void setTxDrive(int) override {}
+    void sendTxIq(const float*, int) override {}
+    void setWatchdogEnabled(bool) override {}
+    void setAntennaRouting(AntennaRouting) override {}
+    void setMox(bool) override {}
+    void setTrxRelay(bool) override {}
+    void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
+    void setMicTipRing(bool) override {}
+    void setMicBias(bool) override {}
+    void setLineInGain(int) override {}
+    void setUserDigOut(quint8) override {}
+    void setPuresignalRun(bool) override {}
+    void setMicPTTDisabled(bool) override {}
+    void setMicXlr(bool) override {}
+};
+
+} // namespace
 
 class TestStepAttenuatorController : public QObject {
     Q_OBJECT
@@ -602,6 +650,332 @@ private slots:
         QCOMPARE(ctrl.stepAttEnabled(), true);
         QVERIFY2(enableSpy.count() >= 1,
             "loadSettings must emit stepAttEnabledChanged even on fresh MAC");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // R-R3-46: every setting has a change signal, once per real change, so
+    // the Core's mirrored `stepAtt` object can follow all of them.
+    // ─────────────────────────────────────────────────────────────────────
+    void everySettingSignalsItsChangeOnce()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+
+        QSignalSpy mode(&ctrl, &StepAttenuatorController::autoAttModeChanged);
+        ctrl.setAutoAttMode(AutoAttMode::Adaptive);
+        ctrl.setAutoAttMode(AutoAttMode::Adaptive);
+        QCOMPARE(mode.count(), 1);
+        QCOMPARE(mode.last().at(0).value<AutoAttMode>(), AutoAttMode::Adaptive);
+
+        // A radio without per-step calibration (the Hermes Lite 2) settles
+        // Adaptive to Classic, and says so with the same signal.
+        ctrl.setHasStepAttenuatorCal(false);
+        ctrl.setAutoAttMode(AutoAttMode::Adaptive);
+        QCOMPARE(ctrl.autoAttMode(), AutoAttMode::Classic);
+        QCOMPARE(mode.count(), 2);
+
+        QSignalSpy undo(&ctrl, &StepAttenuatorController::autoAttUndoChanged);
+        ctrl.setAutoAttUndo(true);
+        ctrl.setAutoAttUndo(true);
+        QCOMPARE(undo.count(), 1);
+
+        QSignalSpy delay(&ctrl, &StepAttenuatorController::autoUndoDelayChanged);
+        ctrl.setAutoUndoDelaySec(9);
+        ctrl.setAutoUndoDelaySec(9);
+        QCOMPARE(delay.count(), 1);
+        QCOMPARE(delay.last().at(0).toInt(), 9);
+
+        QSignalSpy hold(&ctrl, &StepAttenuatorController::autoAttHoldChanged);
+        ctrl.setAutoAttHoldSeconds(4.0);
+        ctrl.setAutoAttHoldSeconds(4.0);
+        QCOMPARE(hold.count(), 1);
+        QCOMPARE(hold.last().at(0).toInt(), 4000);
+        QCOMPARE(ctrl.adaptiveHoldMs(), 4000);
+
+        QSignalSpy range(&ctrl, &StepAttenuatorController::attenuationRangeChanged);
+        ctrl.setMaxAttenuation(61);
+        ctrl.setMaxAttenuation(61);
+        ctrl.setMinAttenuation(-28);
+        QCOMPARE(range.count(), 2);
+        QCOMPARE(range.last().at(0).toInt(), -28);
+        QCOMPARE(range.last().at(1).toInt(), 61);
+
+        QSignalSpy rx1(&ctrl, &StepAttenuatorController::rx1PreampChanged);
+        ctrl.setRx1Preamp(true);
+        ctrl.setRx1Preamp(true);
+        QCOMPARE(rx1.count(), 1);
+        QVERIFY(ctrl.rx1Preamp());
+
+        QSignalSpy reloaded(&ctrl, &StepAttenuatorController::settingsReloaded);
+        ctrl.loadSettings(QStringLiteral("aa:bb:cc:de:ad:46"));
+        QCOMPARE(reloaded.count(), 1);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // R-R3-46 / R-R3-11: the Core saves an operator change shortly after it
+    // is made. Off by default, so a local window keeps today's teardown-only
+    // save; auto-attenuate's own moves never schedule one.
+    // ─────────────────────────────────────────────────────────────────────
+    void debouncedSaveWritesTheBandAfterAnOperatorChange()
+    {
+        auto& s = AppSettings::instance();
+        const QString mac = QStringLiteral("aa:bb:cc:de:ad:47");
+        const QString bandKey = QStringLiteral("options/stepAtt/rx1Band/")
+                                + bandKeyName(Band::Band40m);
+
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBand(Band::Band40m);
+        ctrl.loadSettings(mac);
+        // Start from known settings whatever an earlier run saved.
+        ctrl.setAutoAttUndo(false);
+        ctrl.setAutoAttEnabled(false);
+
+        // Default: nothing scheduled.
+        ctrl.setAttenuation(11);
+        QVERIFY(!ctrl.savePending());
+
+        ctrl.setDebouncedSaveEnabled(true);
+        ctrl.setAttenuation(20);
+        QVERIFY(ctrl.savePending());
+        QTRY_VERIFY(!ctrl.savePending());
+        QCOMPARE(s.hardwareValue(mac, bandKey).toInt(), 20);
+        QCOMPARE(s.hardwareValue(mac, QStringLiteral("options/stepAtt/rx1Value")).toInt(), 20);
+
+        // Every other operator setting schedules one too.
+        ctrl.setAutoAttUndo(true);
+        QVERIFY(ctrl.savePending());
+        ctrl.flushPendingSave();
+        QVERIFY(!ctrl.savePending());
+        QCOMPARE(s.hardwareValue(mac, QStringLiteral("options/autoAtt/rx1Undo")).toString(),
+                 QStringLiteral("True"));
+
+        // Auto-attenuate's bump is not an operator change.
+        ctrl.setAutoAttEnabled(true);
+        ctrl.flushPendingSave();
+        for (int i = 0; i < 5; ++i) {
+            ctrl.onAdcOverflow(0);
+            ctrl.tick();
+        }
+        QVERIFY(ctrl.autoAttApplied());
+        QVERIFY(ctrl.attenuatorDb() > 20);
+        QVERIFY(!ctrl.savePending());
+
+        // An unloaded controller never schedules.
+        ctrl.markSettingsUnloaded();
+        ctrl.setAutoAttUndo(false);
+        QVERIFY(!ctrl.savePending());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // R-R3-46: a band change restores that band's attenuation and preamp
+    // and, with setBandRestoreToRadio(true) (the Core and a local window),
+    // sends them to the radio, as Thetis's RX1Band setter does
+    // (console.cs:17325 [v2.10.3.15]). A band never visited keeps the
+    // current setting and sends nothing.
+    // ─────────────────────────────────────────────────────────────────────
+    void bandChangeRestoresAndSendsTheBandsValues()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        // The band memory is a loaded radio's (R-R3-46 fix wave).
+        const QString mac = QStringLiteral("aa:bb:cc:de:ad:10");
+        AppSettings::instance().clearHardwareValues(mac);
+        ctrl.loadSettings(mac);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        ctrl.setBandRestoreToRadio(true);
+
+        ctrl.setBand(Band::Band20m);
+        ctrl.setAttenuation(0);
+        ctrl.setPreampMode(PreampMode::Off);
+        ctrl.setBand(Band::Band40m);
+        ctrl.setAttenuation(20);
+        ctrl.setPreampMode(PreampMode::On);
+
+        radio.attenuator.clear();
+        radio.preamp.clear();
+        ctrl.setBand(Band::Band20m);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+        QCOMPARE(ctrl.preampMode(), PreampMode::Off);
+        QCOMPARE(radio.attenuator, QList<int>{0});
+        QCOMPARE(radio.preamp, QList<bool>{false});
+
+        radio.attenuator.clear();
+        radio.preamp.clear();
+        ctrl.setBand(Band::Band40m);
+        QCOMPARE(radio.attenuator, QList<int>{20});
+        QCOMPARE(radio.preamp, QList<bool>{true});
+
+        // Never visited: the current setting stays and nothing is sent.
+        radio.attenuator.clear();
+        radio.preamp.clear();
+        ctrl.setBand(Band::Band17m);
+        QCOMPARE(ctrl.attenuatorDb(), 20);
+        QCOMPARE(ctrl.preampMode(), PreampMode::On);
+        QVERIFY(radio.attenuator.isEmpty());
+        QVERIFY(radio.preamp.isEmpty());
+        ctrl.setRadioConnection(nullptr);
+    }
+
+    // Off (the default), a restored value is shown, not sent.
+    void bandRestoreIsNotSentWhenOff()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        const QString mac = QStringLiteral("aa:bb:cc:de:ad:11");
+        AppSettings::instance().clearHardwareValues(mac);
+        ctrl.loadSettings(mac);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        QVERIFY(!ctrl.bandRestoreToRadio());
+
+        ctrl.setBand(Band::Band20m);
+        ctrl.setAttenuation(0);
+        ctrl.setBand(Band::Band40m);
+        ctrl.setAttenuation(20);
+        radio.attenuator.clear();
+        radio.preamp.clear();
+        ctrl.setBand(Band::Band20m);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+        QVERIFY(radio.attenuator.isEmpty());
+        QVERIFY(radio.preamp.isEmpty());
+        ctrl.setRadioConnection(nullptr);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // R-R3-46 fix wave (review Known 3). A controller that switches radios
+    // starts the new radio with that radio's own band memory: nothing of
+    // the previous radio's is restored on it or saved under its MAC.
+    // ─────────────────────────────────────────────────────────────────────
+    void switchingRadiosDropsThePreviousRadiosBandMemory()
+    {
+        const QString g2 = QStringLiteral("aa:bb:cc:de:ad:20");
+        const QString hl2 = QStringLiteral("aa:bb:cc:de:ad:21");
+        auto& s = AppSettings::instance();
+        s.clearHardwareValues(g2);
+        s.clearHardwareValues(hl2);
+
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setMaxAttenuation(61);
+        ctrl.loadSettings(g2);
+        ctrl.setBand(Band::Band40m);
+        ctrl.setAttenuation(45);
+        ctrl.setBand(Band::Band20m);   // 40 m remembers 45 dB on the G2
+        ctrl.setAttenuation(10);
+        ctrl.saveSettings(g2);
+
+        // The HL2: -28..31 dB, nothing saved yet.
+        ctrl.setMinAttenuation(-28);
+        ctrl.setMaxAttenuation(31);
+        ctrl.loadSettings(hl2);
+        const int start = ctrl.attenuatorDb();
+        ctrl.setBand(Band::Band40m);   // never used on the HL2
+        QCOMPARE(ctrl.attenuatorDb(), start);
+        ctrl.saveSettings(hl2);
+        QVERIFY(s.hardwareValue(hl2, QStringLiteral("options/stepAtt/rx1Band/40m")).toString()
+                != QStringLiteral("45"));
+        s.clearHardwareValues(g2);
+        s.clearHardwareValues(hl2);
+    }
+
+    // Before a radio's settings are loaded the values are the starting
+    // defaults; a band change then stores nothing as the band left's memory
+    // (it used to become the general-coverage band's).
+    void bandChangeBeforeLoadStoresNoMemory()
+    {
+        const QString mac = QStringLiteral("aa:bb:cc:de:ad:22");
+        auto& s = AppSettings::instance();
+        s.clearHardwareValues(mac);
+
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+        ctrl.setBand(Band::Band40m);   // leaves GEN before any radio loads
+        ctrl.loadSettings(mac);
+        ctrl.setAttenuation(20);
+        ctrl.setBand(Band::GEN);       // never used on this radio
+        QCOMPARE(ctrl.attenuatorDb(), 20);
+        ctrl.saveSettings(mac);
+        s.clearHardwareValues(mac);
+    }
+
+    // A restored value stays within the radio's range, as the radio clamps
+    // it, both on a band change and when the settings load.
+    void restoredAttenuationStaysWithinTheRadiosRange()
+    {
+        const QString mac = QStringLiteral("aa:bb:cc:de:ad:23");
+        auto& s = AppSettings::instance();
+        s.clearHardwareValues(mac);
+        s.setHardwareValue(mac, QStringLiteral("options/stepAtt/rx1Band/40m"),
+                           QStringLiteral("45"));
+        s.setHardwareValue(mac, QStringLiteral("options/stepAtt/rx1Band/20m"),
+                           QStringLiteral("45"));
+
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setMinAttenuation(-28);
+        ctrl.setMaxAttenuation(31);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        ctrl.setBandRestoreToRadio(true);
+        ctrl.setBand(Band::Band20m);
+        ctrl.loadSettings(mac);
+        QCOMPARE(ctrl.attenuatorDb(), 31);
+
+        radio.attenuator.clear();
+        ctrl.setBand(Band::Band10m);
+        ctrl.setAttenuation(5);
+        radio.attenuator.clear();
+        ctrl.setBand(Band::Band40m);
+        QCOMPARE(ctrl.attenuatorDb(), 31);
+        QCOMPARE(radio.attenuator, QList<int>{31});
+        ctrl.setRadioConnection(nullptr);
+        s.clearHardwareValues(mac);
+    }
+
+    // R-R3-46 follow-up item 3. On a switch to another radio the window
+    // connects the new radio and selects the band before it loads the new
+    // radio's settings. Between the old radio's teardown and that load a
+    // band change must neither restore the old radio's band memory nor
+    // send it to the new radio.
+    void switchingRadiosSendsNothingBeforeTheNewRadioLoads()
+    {
+        const QString oldRadio = QStringLiteral("aa:bb:cc:de:ad:30");
+        const QString newRadio = QStringLiteral("aa:bb:cc:de:ad:31");
+        auto& s = AppSettings::instance();
+        s.clearHardwareValues(oldRadio);
+        s.clearHardwareValues(newRadio);
+
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBandRestoreToRadio(true);
+        RecordingConnection oldConn;
+        ctrl.setRadioConnection(&oldConn);
+        ctrl.loadSettings(oldRadio);
+        ctrl.setBand(Band::Band40m);
+        ctrl.setAttenuation(20);
+        ctrl.setBand(Band::Band20m);
+        ctrl.setAttenuation(0);
+        // Teardown of the old radio (RadioModel::teardownConnection).
+        ctrl.saveSettings(oldRadio);
+        ctrl.markSettingsUnloaded();
+
+        // The new radio's connect order (MainWindow): connection, band, load.
+        RecordingConnection newConn;
+        ctrl.setRadioConnection(&newConn);
+        ctrl.setBand(Band::Band40m);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+        QVERIFY(newConn.attenuator.isEmpty());
+        QVERIFY(newConn.preamp.isEmpty());
+        ctrl.loadSettings(newRadio);
+        ctrl.setBand(Band::Band20m);
+        ctrl.setBand(Band::Band40m);
+        QVERIFY(!newConn.attenuator.contains(20));
+        ctrl.setRadioConnection(nullptr);
+        s.clearHardwareValues(oldRadio);
+        s.clearHardwareValues(newRadio);
     }
 };
 

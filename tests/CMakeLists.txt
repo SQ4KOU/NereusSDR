@@ -136,7 +136,13 @@ function(nereus_add_test name)
     # platform cannot provide (native menu bar, Retina pixel ratio, a
     # Cocoa view, GPU rendering). It keeps the native platform even when
     # NEREUS_TESTS_OFFSCREEN is ON and gets the `native-window` label.
-    cmake_parse_arguments(_nat "NATIVE_WINDOW" "" "EXTRA_LABELS" ${ARGN})
+    #
+    # CORE_ONLY links NereusCore alone, the way nereusd does, instead of
+    # NereusSDRLib. Use it for a test that must prove the Core stands on
+    # its own on every platform: macOS keeps every linked dylib loaded, so
+    # a test linked to NereusSDRLib there cannot see what GCC's default
+    # --as-needed drops on Linux (R-R3-10).
+    cmake_parse_arguments(_nat "NATIVE_WINDOW;CORE_ONLY" "" "EXTRA_LABELS" ${ARGN})
     set(_extra_sources ${_nat_UNPARSED_ARGUMENTS})
 
     # Sharding gate — when this test's hash bucket doesn't match the
@@ -189,7 +195,11 @@ function(nereus_add_test name)
     # this file from a global property each nereus_add_test() call
     # appends to.
     add_executable(${name} EXCLUDE_FROM_ALL ${name}.cpp $<TARGET_OBJECTS:nereus_test_sandbox> ${_extra_sources})
-    target_link_libraries(${name} PRIVATE NereusSDRLib Qt6::Test)
+    if(_nat_CORE_ONLY)
+        target_link_libraries(${name} PRIVATE NereusCore Qt6::Test)
+    else()
+        target_link_libraries(${name} PRIVATE NereusSDRLib Qt6::Test)
+    endif()
     set_property(GLOBAL APPEND PROPERTY NEREUS_ALL_TESTS ${name})
 
     # Reuse the NereusCore precompiled header (CMakeLists.txt §PCH).
@@ -248,6 +258,36 @@ function(nereus_add_test name)
         endif()
     endif()
 
+    # Each test gets its own settings location (R-R3-21). TestSandboxInit.cpp
+    # puts every test binary in QStandardPaths test mode, but test mode is one
+    # shared directory under $HOME (~/.qttest/config on Linux,
+    # ~/.qttest/Library/Preferences on macOS), so every test that uses
+    # AppSettings::instance() without its own profile wrote the same
+    # NereusSDR/NereusSDR.settings. Two tests that save, clear and reload it
+    # overwrote each other when ctest ran them side by side:
+    # tst_nnr_settings and tst_ps3_settings_persistence failed 23 of 150
+    # runs that way on Linux (47 of 150 on macOS). Test mode derives that
+    # directory from the home directory: $HOME on Linux, and on macOS
+    # NSHomeDirectory(), which ignores $HOME and follows CFFIXED_USER_HOME
+    # instead. A per-test home therefore gives each test its own settings
+    # file. A test that sets its own profile (AppSettings::setProfileOverride)
+    # keeps it, now under its own home; a child process a test starts
+    # inherits the same environment, so a test and the daemon it spawns
+    # still share one file. Two cases keep the shared location: Windows,
+    # whose test mode resolves the directory from the known-folder API that
+    # no environment variable redirects, and NATIVE_WINDOW tests on macOS,
+    # where CFFIXED_USER_HOME would also hide the operator's appearance and
+    # locale preferences from the native platform those tests exist to use.
+    if(NOT WIN32)
+        set(_test_home "${CMAKE_CURRENT_BINARY_DIR}/test-home/${name}")
+        file(MAKE_DIRECTORY "${_test_home}")
+        set_property(TEST ${name} APPEND PROPERTY ENVIRONMENT "HOME=${_test_home}")
+        if(APPLE AND NOT _nat_NATIVE_WINDOW)
+            set_property(TEST ${name} APPEND PROPERTY ENVIRONMENT
+                "CFFIXED_USER_HOME=${_test_home}")
+        endif()
+    endif()
+
     # Per-label build aggregates, so `ctest -L core` has a matching
     # `tests_core` target that actually builds what it is about to run.
     #
@@ -301,6 +341,16 @@ if(TARGET wdsp_static)
         # R-R3-41: linux_port.c's thread-start hook fires once per channel
         # worker and flush thread, on that thread, with its kind and channel.
         nereus_add_test(tst_wdsp_thread_hook EXTRA_LABELS core)
+        # R-R3-40, R-R3-37: a real receive channel at the Core's settings,
+        # fed in real time, reads its load as busy time over wall time: a
+        # frame-like load (one long block in 12) reads its CPU share and
+        # never trips the NNR step-back; a real overload still does. Needs
+        # the thread-start hook for the worker's CPU clock, so not on
+        # Windows. Real time, about 45 s. RUN_SERIAL (R-R3-40): it measures
+        # the worker's real processor time, so ctest never runs it beside
+        # another test that would take that processor away.
+        nereus_add_test(tst_receiver_dsp_load_frames EXTRA_LABELS core)
+        set_tests_properties(tst_receiver_dsp_load_frames PROPERTIES RUN_SERIAL TRUE)
     endif()
     nereus_add_test(tst_wdsp210_cfc_compat WdspCfcProbe.c EXTRA_LABELS core)
     set_source_files_properties(WdspCfcProbe.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -2265,7 +2315,12 @@ nereus_add_test(tst_antenna_labels)
 #   - setActivePlan() emits planChanged, ignores unknown names
 #   - segments() / spots() reflect the active plan
 #   - Default plan after loadPlans() is "ARRL (US)" (no AppSettings key)
-nereus_add_test(tst_bandplan_manager)
+# R-R3-10 / R-R3-21: CORE_ONLY, so the test is the Core-only program nereusd
+# is. It proves the band plans come from NereusCore (the GUI resources are
+# absent) and that the loaded set is byte-for-byte resources/bandplans.
+nereus_add_test(tst_bandplan_manager CORE_ONLY)
+target_compile_definitions(tst_bandplan_manager PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── Phase 3G RX Epic sub-epic E: waterfall scrollback math helpers ──────────
 # Pure-arithmetic checks for the capacity-clamp + age→row formulas used by
@@ -5948,8 +6003,17 @@ nereus_add_test(tst_tgxl_connection_ping)
 nereus_add_test(tst_tgxl_connection_reconnect)
 nereus_add_test(tst_tgxl_connection_identity)
 nereus_add_test(tst_tgxl_station_identity)
-nereus_add_test(tst_station_accessory_state)
-nereus_add_test(tst_remote_peripherals)
+# R-R3-47 / R-R3-22: the Core's `amplifier` and `rfkit` status objects, the
+# one Power Genius gauge conversion, and the accessory control document's
+# fixtures (tests/fixtures/accessories, read through NEREUS_SOURCE_DIR).
+nereus_add_test(tst_station_accessory_state
+    fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_station_accessory_state PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# R-R3-47: a remote window's Power Genius and RF-Kit applets read the Core's
+# objects over the in-process loopback.
+nereus_add_test(tst_remote_peripherals
+    fakes/LoopbackTransport.cpp)
 
 # Task 59: auto-reconnect exponential backoff (1/2/5/10/30/60 s, cap at 60 s).
 # Test: backoffSequence verifies 8 calls to testForceDisconnect() produce
@@ -7061,6 +7125,21 @@ nereus_add_test(tst_session_transport_telemetry
 nereus_add_test(tst_station_session
     fakes/LoopbackTransport.cpp)
 
+# R-R3-46 / R-R3-11 / R-R3-13: the Core's step attenuator and preamp as the
+# mirrored `stepAtt` object, end to end: a DaemonApp Core on a primed board
+# with a fake radio connection, a StationServer, and a remote window over the
+# in-process loopback. A window's edit reaches the radio and is saved for its
+# band; each radio's range and settle reasons; a Core band change and ADC
+# overload reach the window.
+nereus_add_test(tst_remote_step_attenuator
+    fakes/LoopbackTransport.cpp)
+
+# R-R3-46 / R-R3-11: with a local radio each band remembers its attenuator
+# and preamp, as through the Core: a local RadioModel's transmit slice feeds
+# the step attenuator controller its band and mode, and a band change
+# restores and sends that band's values to a fake radio connection.
+nereus_add_test(tst_local_step_attenuator_band_restore)
+
 # R-R3-16/17: a connect that never finishes setting up gives up and retries.
 # The GUI's handshake deadline against a silent Core, a Core blocked past the
 # deadline that recovers, the Core Connections status and Cancel, and Core's
@@ -7117,9 +7196,12 @@ nereus_add_test(tst_remote_audio_clock)
 # the cost is the coverage itself: shortening either hour weakens the drift
 # gate. Measured 2026-09-22 on the M5 Max: 116 s alone (load 7.3), 212 s in a
 # full -j6 run (load 18.8 at start, 8.7 at end). PROCESSORS 2 makes a -jN run
-# start one fewer neighbour while this single-threaded loop runs; TIMEOUT 400
-# is about twice the loaded measurement.
-set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 400 PROCESSORS 2)
+# start one fewer neighbour while this single-threaded loop runs.
+# R-R3-21: each hour is its own data row, so QtTest's 300 s watchdog bounds
+# one hour, not both; on a Linux aarch64 host both hours took 347 s alone
+# and were aborted by that watchdog, and 267 s at the end of a full run.
+# TIMEOUT 700 is about twice the slowest (Linux, alone) measurement.
+set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 700 PROCESSORS 2)
 nereus_add_test(tst_daemon_audio_session fakes/LoopbackTransport.cpp)
 # R-R3-06/07/09: the 48 kHz mixed-audio contract through live radio rate,
 # mode, band and slice-count changes, on a RadioModel genuinely connected to

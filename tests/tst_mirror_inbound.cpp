@@ -55,6 +55,8 @@
 #include "core/session/MirrorSchema.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StateMirror.h"
+#include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TunerModel.h"
@@ -125,6 +127,71 @@ private slots:
 
         QVERIFY2(result.accepted, qPrintable(result.reason));
         QCOMPARE(slice.nbMode(), NbMode::NB);
+    }
+
+    // ── R-R3-46: the Core's step attenuator (`stepAtt`) ─────────────────────
+
+    // An operator setting lands through the Core's controller, clamped to
+    // its range; the facade says why when it kept another value.
+    void stepAttWriteLandsThroughTheCoresController()
+    {
+        StepAttenuatorController controller;
+        controller.setTickTimerEnabled(false);
+        controller.setMaxAttenuation(61);
+        StepAttenuatorFacade facade(nullptr);
+        facade.bindController(&controller);
+        StateMirror mirror;
+        QVERIFY(mirror.watch("stepAtt", &facade));
+
+        MirrorApplyResult result =
+            mirror.applyInbound("stepAtt", "attenuationDb", QVariant(qlonglong(45)));
+        QVERIFY2(result.accepted, qPrintable(result.reason));
+        QCOMPARE(controller.attenuatorDb(), 45);
+        QVERIFY(facade.settleReason("attenuationDb").isEmpty());
+
+        result = mirror.applyInbound("stepAtt", "attenuationDb", QVariant(qlonglong(70)));
+        QVERIFY2(result.accepted, qPrintable(result.reason));
+        QCOMPARE(controller.attenuatorDb(), 61);
+        QCOMPARE(facade.attenuationDb(), 61);
+        QCOMPARE(facade.settleReason("attenuationDb"),
+                 QStringLiteral("This radio's attenuator goes from 0 to 61 dB."));
+
+        result = mirror.applyInbound("stepAtt", "autoAttEnabled", QVariant(true));
+        QVERIFY2(result.accepted, qPrintable(result.reason));
+        QVERIFY(controller.autoAttEnabled());
+        result = mirror.applyInbound("stepAtt", "autoAttUndoDelayMs", QVariant(qlonglong(2500)));
+        QVERIFY2(result.accepted, qPrintable(result.reason));
+        QCOMPARE(controller.autoUndoDelaySec(), 3);
+        QCOMPARE(facade.autoAttUndoDelayMs(), 3000);
+        QVERIFY(!facade.settleReason("autoAttUndoDelayMs").isEmpty());
+    }
+
+    // What the Core reports (its range, auto-attenuate's own state, the
+    // overload readings, ADC sharing) is never written from outside.
+    void stepAttCoreReportedPropertiesAreRefused()
+    {
+        StepAttenuatorController controller;
+        controller.setTickTimerEnabled(false);
+        StepAttenuatorFacade facade(nullptr);
+        facade.bindController(&controller);
+        StateMirror mirror;
+        QVERIFY(mirror.watch("stepAtt", &facade));
+
+        for (const char* name : { "minDb", "maxDb", "overloadAdc0", "overloadAdc1" }) {
+            const MirrorApplyResult result =
+                mirror.applyInbound("stepAtt", name, QVariant(qlonglong(99)));
+            QVERIFY2(!result.accepted, name);
+        }
+        for (const char* name : { "autoAttApplied", "adcLinked" }) {
+            const MirrorApplyResult result = mirror.applyInbound("stepAtt", name, QVariant(true));
+            QVERIFY2(!result.accepted, name);
+        }
+        QCOMPARE(controller.maxAttenuation(), 31);
+        QCOMPARE(facade.maxDb(), 31);
+        QCOMPARE(facade.overloadAdc0(), 0);
+        QVERIFY(!facade.autoAttApplied());
+        // Bound, the facade takes no reported value from outside either.
+        QVERIFY(!facade.applyRemoteProperty("maxDb", QVariant(99)));
     }
 
     // ── The seven writable-but-Outbound properties ──────────────────────────

@@ -74,6 +74,16 @@ boydsoftprez@gmail.com
 // finished, and raises a per-interval maximum that one periodic reader takes
 // and resets (TakeChannelDspIntervalMaxBlockUs).
 //
+// A reader turns two reads into a load as busy time over wall time: the
+// change in busyNs + currentBlockNs over the change in readNs, the time of
+// the clock read that gave currentBlockNs. That sum must be one instant's
+// value, so the worker brackets its two changes to it (publishing a block's
+// start; adding a finished block to busyNs and clearing the start) with a
+// sequence count, and GetChannelDspLoad reads the pair again if the count
+// was odd or moved. Without that, a read that fell between the worker adding
+// a block and clearing its start would count the block twice, and one that
+// fell the other way would count it not at all.
+//
 // Portability: Windows uses only Interlocked*, QueryPerformanceCounter and
 // SwitchToThread, which WDSP already relies on (the load counters use
 // InterlockedExchangeAdd64, InterlockedExchange64 and
@@ -107,6 +117,18 @@ boydsoftprez@gmail.com
 //   2026-09-23 - Test-only WDSPGetTestLastWorkerExitWaitUs added by J.J.
 //                 Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code (R-R3-39).
+//   2026-09-23 - Read time (readNs) from the clock read behind
+//                 currentBlockNs, busyNs and the block in progress read as
+//                 one consistent pair (load_seq), and the test-only
+//                 periodic delay (WDSPSetTestPeriodicDelayUs) added by J.J.
+//                 Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code (R-R3-40, R-R3-37).
+//   2026-09-23 - GetChannelDspLoad returns 1 when no attempt found the pair
+//                 at rest (the read may be torn; the caller skips it), and
+//                 the test-only WDSPSetTestHoldLoadPair added by J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code (R-R3-40). 2026-09-24: the hold is a flag the
+//                 reader checks, steady whatever the worker does.
 // =================================================================
 
 #include "comm.h"
@@ -137,6 +159,15 @@ static volatile long dsp_waiters[MAX_CHANNELS];
 static volatile long test_block_delay_us[MAX_CHANNELS];
 // Test-only busy-wait inside a processed block, microseconds; 0 = off.
 static volatile long test_process_delay_us[MAX_CHANNELS];
+// Test-only busy-wait inside every Nth processed block: microseconds and N
+// (0 = off). The count is the worker's own.
+static volatile long test_periodic_delay_us[MAX_CHANNELS];
+static volatile long test_periodic_every[MAX_CHANNELS];
+static long test_periodic_count[MAX_CHANNELS];
+
+// Test-only: 1 while WDSPSetTestHoldLoadPair holds the channel's load pair
+// open, so every read of it finds a change in progress.
+static volatile long test_load_pair_held[MAX_CHANNELS];
 
 // Times each channel's worker has left its loop.
 static volatile long worker_exits[MAX_CHANNELS];
@@ -162,6 +193,13 @@ static volatile long long load_interval_max_us[MAX_CHANNELS];
 // When the worker acquired csDSP for its current block, 0 while it is not
 // inside a block. Written by the worker, read by GetChannelDspLoad.
 static volatile long long block_start_ns[MAX_CHANNELS];
+// Odd while the worker is changing load_busy_ns or block_start_ns; each
+// change adds 2. GetChannelDspLoad reads the pair again when it moved.
+static volatile long long load_seq[MAX_CHANNELS];
+// Most times GetChannelDspLoad reads the pair before it takes what it has.
+// The worker's changes are a few instructions long, so a second read almost
+// always succeeds.
+static const int kLoadReadAttempts = 64;
 
 static int64_t dsplock_now_us (void)
 {
@@ -252,6 +290,16 @@ static long long load_read64 (volatile long long* source)
 	return InterlockedCompareExchange64 (source, 0, 0);
 #else
 	return __atomic_load_n (source, __ATOMIC_ACQUIRE);
+#endif
+}
+
+// Worker only: opens (odd) or closes (even) a change to the busy/start pair.
+static void load_seq_step (int channel)
+{
+#ifdef _WIN32
+	InterlockedIncrement64 (&load_seq[channel]);
+#else
+	__atomic_fetch_add (&load_seq[channel], 1, __ATOMIC_ACQ_REL);
 #endif
 }
 
@@ -395,11 +443,25 @@ static void test_block_delay (int channel)
 	test_busy_wait_us (load_test_block_delay (channel));
 }
 
+static long load_relaxed32 (volatile long* source)
+{
+#ifdef _WIN32
+	return *source;
+#else
+	return __atomic_load_n (source, __ATOMIC_RELAXED);
+#endif
+}
+
 void WdspWorkerTestProcessDelay (int channel)
 {
 	if (valid_channel (channel))
 	{
+		const long every = load_relaxed32 (&test_periodic_every[channel]);
 		test_busy_wait_us (load_test_process_delay (channel));
+		if (every > 0 && ++test_periodic_count[channel] % every == 0)
+		{
+			test_busy_wait_us (load_relaxed32 (&test_periodic_delay_us[channel]));
+		}
 	}
 }
 
@@ -434,7 +496,9 @@ void WdspWorkerEnter (int channel)
 		{
 			InterlockedExchange (&load_block_period_us[channel], period_us);
 		}
+		load_seq_step (channel);
 		load_store64 (&block_start_ns[channel], (long long)dsplock_now_ns ());
+		load_seq_step (channel);
 		test_block_delay (channel);
 	}
 }
@@ -445,7 +509,11 @@ static void record_block (int channel)
 	const int64_t elapsed_ns = dsplock_now_ns () - (int64_t)block_start_ns[channel];
 	const long long elapsed_us = (long long)(elapsed_ns / 1000);
 	const long period_us = load_block_period_us[channel];
+	// The block moves from "in progress" to busyNs as one change.
+	load_seq_step (channel);
 	load_add64 (&load_busy_ns[channel], (long long)elapsed_ns);
+	load_store64 (&block_start_ns[channel], 0);
+	load_seq_step (channel);
 	if (period_us > 0 && elapsed_us > period_us)
 	{
 		load_add64 (&load_late_blocks[channel], 1);
@@ -456,7 +524,6 @@ static void record_block (int channel)
 	}
 	load_max64 (&load_interval_max_us[channel], elapsed_us);
 	load_add64 (&load_blocks[channel], 1);
-	load_store64 (&block_start_ns[channel], 0);
 }
 
 void WdspWorkerLeave (int channel)
@@ -547,6 +614,17 @@ void WDSPSetTestProcessDelayUs (int channel, int microseconds)
 }
 
 PORT
+void WDSPSetTestPeriodicDelayUs (int channel, int microseconds, int everyBlocks)
+{
+	if (!valid_channel (channel))
+	{
+		return;
+	}
+	InterlockedExchange (&test_periodic_delay_us[channel], microseconds > 0 ? (long)microseconds : 0L);
+	InterlockedExchange (&test_periodic_every[channel], everyBlocks > 0 ? (long)everyBlocks : 0L);
+}
+
+PORT
 int GetChannelDspLoad (int channel, WdspChannelLoad* out)
 {
 	if (!valid_channel (channel) || out == 0)
@@ -556,16 +634,58 @@ int GetChannelDspLoad (int channel, WdspChannelLoad* out)
 	// blocks first: the worker bumps it last, so every block it counts has
 	// already been added to the other fields.
 	out->blocks = load_read64 (&load_blocks[channel]);
-	out->busyNs = load_read64 (&load_busy_ns[channel]);
 	out->lateBlocks = load_read64 (&load_late_blocks[channel]);
 	out->maxBlockUs = load_read64 (&load_max_block_us[channel]);
 	out->blockPeriodUs = (int)load_read32 (&load_block_period_us[channel]);
 	{
-		const long long start = load_read64 (&block_start_ns[channel]);
-		const long long elapsed = start != 0 ? (long long)dsplock_now_ns () - start : 0;
-		out->currentBlockNs = elapsed > 0 ? elapsed : 0;
+		// busyNs and the block in progress as one instant's pair (load_seq).
+		// One clock read, taken while the pair is known to hold, gives both
+		// the block's time so far and the read time, so busyNs +
+		// currentBlockNs is the busy time up to readNs.
+		long long busy = 0, start = 0, now_ns = 0;
+		int attempt;
+		for (attempt = 0; attempt < kLoadReadAttempts; ++attempt)
+		{
+			const long long before = load_read64 (&load_seq[channel]);
+			busy = load_read64 (&load_busy_ns[channel]);
+			start = load_read64 (&block_start_ns[channel]);
+			now_ns = (long long)dsplock_now_ns ();
+			// A test hold (WDSPSetTestHoldLoadPair) makes every attempt
+			// find the pair changing, steadily, whatever the worker does.
+			if ((before & 1) == 0 && load_read64 (&load_seq[channel]) == before
+				&& load_read32 (&test_load_pair_held[channel]) == 0)
+			{
+				break;
+			}
+		}
+		out->busyNs = busy;
+		{
+			const long long elapsed = start != 0 ? now_ns - start : 0;
+			out->currentBlockNs = elapsed > 0 ? elapsed : 0;
+		}
+		out->readNs = now_ns;
+		// The worker kept the pair moving for every attempt: the last one
+		// may be torn (a block counted twice or not at all), so the caller
+		// is told to skip this read rather than measure with it.
+		if (attempt == kLoadReadAttempts)
+		{
+			return 1;
+		}
 	}
 	return 0;
+}
+
+PORT
+void WDSPSetTestHoldLoadPair (int channel, int hold)
+{
+	if (!valid_channel (channel))
+	{
+		return;
+	}
+	// Read by GetChannelDspLoad only; the worker's sequence is untouched, so
+	// the hold is steady (a parity trick on load_seq was not: the worker's
+	// own steps briefly made it even again).
+	InterlockedExchange (&test_load_pair_held[channel], hold ? 1L : 0L);
 }
 
 PORT

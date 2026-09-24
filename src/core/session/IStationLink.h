@@ -55,6 +55,11 @@
 //                                    daemon at all. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: whether the Core
+//                                    reports its Power Genius and RF-Kit
+//                                    to this app, and whether the link to
+//                                    the Core is up. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -123,11 +128,26 @@ public:
     /// station capability.
     virtual bool remoteTgxlConfigAvailable() const { return false; }
     virtual bool remoteFourO3AControlAvailable() const { return false; }
+    /// R-R3-47 / R-R3-22: the link to the Core is up and its first state has
+    /// arrived. False while connecting and after the Core is lost, when a
+    /// window's copy of the Core's readings is stale.
+    virtual bool stationLinkReady() const { return false; }
+    /// R-R3-47 / R-R3-22: the Core reports its Power Genius XL (the
+    /// `amplifier` object) and its RF-Kit RF2K-S (the `rfkit` object) to
+    /// this app. Both false on an older Core or link.
+    virtual bool remoteAmplifierStatusAvailable() const { return false; }
+    virtual bool remoteRfKitStatusAvailable() const { return false; }
     virtual CommandOutcome requestApplyNnrModels(quint32)
     { return { false, QStringLiteral("NNR model application is not supported by this station link.") }; }
     virtual bool nnrControlAvailable() const { return false; }
     virtual CommandOutcome requestNnrDiagnostics(int, int, int)
     { return { false, QStringLiteral("NNR diagnostics are not supported by this station link.") }; }
+
+    // R-R3-46 (radioHardwareVersion 2): ask the Core to probe its radio's
+    // HL2 I/O board. The default refuses, for links that did not negotiate
+    // the Core's hardware settings.
+    virtual CommandOutcome requestIoBoardProbe()
+    { return { false, QStringLiteral("This Core cannot probe its radio's I/O board for this app.") }; }
 };
 
 } // namespace NereusSDR

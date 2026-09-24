@@ -19,6 +19,12 @@
 //                transaction log + state-machine viz + bandwidth mini are
 //                pure NereusSDR diagnostic surfaces (mi0bot doesn't expose
 //                them in the Thetis UI).
+//   2026-09-23 - R-R3-46: a remote restore leaves the Core's matrix;
+//                 Probe goes through RadioModel (the Core's verb remotely). J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-46: the N2ADR switch applies only its receive half
+//                without the transmit permission, and its tooltip says so.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/setup.cs ---
@@ -954,9 +960,45 @@ void Hl2IoBoardTab::applyN2adrMatrix(bool checked)
 {
     if (!m_model) { return; }
     OcMatrix& oc = m_model->ocMatrixMutable();
-    applyN2adrPreset(oc, checked);
+    // R-R3-46: without the transmit permission (a remote window) only the
+    // receive half applies, as the Core applies it; the transmit pins stay
+    // the Core's and none is saved from here.
+    if (m_transmitPermitted) {
+        applyN2adrPreset(oc, checked);
+    } else {
+        applyN2adrPresetReceiveOnly(oc, checked);
+    }
     // Persist whichever state we just composed (cleared or populated).
     oc.save();
+}
+
+void Hl2IoBoardTab::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    Q_UNUSED(reason);  // the switch stays usable: its receive half applies
+    m_transmitPermitted = permitted;
+    // Say so on the switch: without transmit it moves only the receive
+    // filters (applyN2adrMatrix).
+    if (m_n2adrFilter) {
+        static const char* const kOwnTip = "nereusN2adrOwnToolTip";
+        if (!m_n2adrFilter->property(kOwnTip).isValid()) {
+            m_n2adrFilter->setProperty(kOwnTip, m_n2adrFilter->toolTip());
+        }
+        const QString own = m_n2adrFilter->property(kOwnTip).toString();
+        const QString note = receiveOnlyN2adrNote();
+        m_n2adrFilter->setToolTip(permitted ? own
+                                            : (own.isEmpty() ? note : own + QLatin1Char('\n') + note));
+    }
+}
+
+QString Hl2IoBoardTab::receiveOnlyN2adrNote()
+{
+    return tr("In a remote window this switches the receive filters only; the transmit "
+              "filters follow once remote transmit is available.");
+}
+
+QString Hl2IoBoardTab::n2adrToolTipForTest() const
+{
+    return m_n2adrFilter ? m_n2adrFilter->toolTip() : QString();
 }
 
 void Hl2IoBoardTab::onProbeClicked()
@@ -965,17 +1007,26 @@ void Hl2IoBoardTab::onProbeClicked()
     // FW minor) on the IoBoardHl2 queue.  Wire encoder drains them on the
     // next ep2 frames; responses populate IoBoardHl2 register state and
     // setDetected.  Noop on non-HL2 boards or before connect.
-    bool issued = false;
-    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_model->connection())) {
-        p1->requestIoBoardProbe();
-        issued = true;
-    }
+    //
+    // R-R3-46: RadioModel makes the same P1 call locally; in a remote
+    // window it asks the Core, whose radio the board is on.
+    const bool remote = m_model && !m_model->ownsLocalDsp();
+    const RadioModel::IoBoardProbeOutcome outcome =
+        m_model ? m_model->requestIoBoardProbe() : RadioModel::IoBoardProbeOutcome{};
+    const bool issued = outcome.sent;
 
+    QString result;
+    if (!remote) {
+        result = issued ? QStringLiteral("(3 reads enqueued)")
+                        : QStringLiteral("(no P1 connection — skipped)");
+    } else {
+        result = issued ? QStringLiteral("(asked the Core)")
+                        : QStringLiteral("(not sent: %1)").arg(outcome.reason);
+    }
     appendI2cLogEntry(
         QStringLiteral("[%1] *** User-initiated probe %2 ***")
             .arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss.zzz")))
-            .arg(issued ? QStringLiteral("(3 reads enqueued)")
-                        : QStringLiteral("(no P1 connection — skipped)")));
+            .arg(result));
     m_lastProbeLabel->setText(
         QStringLiteral("Last probe: %1")
             .arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss"))));
@@ -1052,6 +1103,12 @@ void Hl2IoBoardTab::restoreSettings(const QMap<QString, QVariant>& settings)
     }
     if (!keyPresent) {
         return;  // matrix already reconciled at connect-time; do not wipe.
+    }
+    // R-R3-46: a remote window shows the Core's matrix, which the Core
+    // reconciled at its own connect. Rewriting it here would send the
+    // Core a write just for opening Setup.
+    if (m_model && !m_model->ownsLocalDsp()) {
+        return;
     }
     applyN2adrMatrix(checked);
 }

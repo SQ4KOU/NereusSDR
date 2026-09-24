@@ -110,73 +110,24 @@
 // out-of-range Station value written over the wire today reaches
 // AppSettings with nothing between the socket and the applied state.
 //
-// FOUR key shapes get a targeted bounds check anyway. The fourth is
-// SwrProtectionLimit (whole-branch review, Minor 7): Station-scoped,
-// reaching SwrProtectionController::setLimit(), which stores without
-// clamping, while the only UI that writes it is a QDoubleSpinBox pinned
-// to 1.0..5.0. Bounded to that same 1.0..5.0 in .cpp, so the wire cannot
+// One key gets a targeted bounds check anyway: SwrProtectionLimit
+// (whole-branch review, Minor 7): Station-scoped, reaching
+// SwrProtectionController::setLimit(), which stores without clamping,
+// while the only UI that writes it is a QDoubleSpinBox pinned to
+// 1.0..5.0. Bounded to that same 1.0..5.0 in .cpp, so the wire cannot
 // express a limit the operator's own control cannot -- an authenticated
 // client could otherwise park it at 99 (protection effectively off after
 // the next daemon start) or below 1.0 (unreachable, so the gate trips
-// permanently). That one is a flat range compare and needs none of the
-// union machinery the other three do.
+// permanently).
 //
-// The other three get a targeted, UNIONED bounds check (.cpp,
-// stepAttenuatorKeyFamily() / stepAttenuatorUnionRange()):
-// options/stepAtt/rx1Value, options/stepAtt/rx1Band/<band> and
-// options/stepAtt/txBand/<band>. Every live writer of the three fields
-// saveSettings() persists under these keys was traced (task report,
-// "Exhaustive writer audit", fix round 3) -- not just the most obvious
-// one, which is the mistake that reopened this finding twice:
-// StepAttenuatorController::setAttenuation() (StepAttenuatorController.cpp:
-// 208-219, m_attDb), setTxAttenuationForBand() (:305-316, m_txAttByBand[])
-// AND setAttOnTxValue() (:349-374, m_txAttByBand[] -- a SECOND,
-// independent writer of the same field, called from PureSignal's AutoAtt
-// path, PureSignal.cpp:1600-1616) all clamp on every LIVE write path,
-// while StepAttenuatorController::loadSettings() (:1052-1148), the path
-// that reads them back off disk, applies no clamp to any of the three --
-// so a value written straight to the settings store, which is exactly
-// what an inbound remote write does, reaches RF-relevant state
-// (m_attDb / m_bandState[].attDb / m_txAttByBand[]) completely unclamped
-// until incidental correction. rx1Band/<band> and txBand/<band> are not
-// a cosmetic addition: loadSettings() reads rx1Value FIRST, then
-// OVERWRITES m_attDb with the current band's rx1Band/<band> entry if one
-// exists (:1093-1114) -- fix round 1's rx1Value-only check gated a value
-// a same-load-path sibling key silently superseded, leaving the real
-// bypass open under the exact key the finding named.
-//
-// The bound is a UNION, not a per-board range, because this class has no
-// MAC-to-board-type resolution to narrow it with -- and a union in this
-// direction must never reject a value legitimate on ANY board (erring
-// permissive is correct: a check whose job is to stop hostile/garbage
-// values must not also reject a real operator setting). Fix round 1's
-// union was wrong in exactly that unsafe direction on the CEILING: it was
-// derived by grepping the literal ".attenuator =" table in
-// BoardCapabilities.cpp, which captures every board's STATIC range but
-// completely misses BoardCapsTable::stepAttMaxDb(hw, alexPresent)
-// (BoardCapabilities.cpp:1394-1428) -- the function that WIDENS it: Atlas,
-// Hermes, HermesII, Angelia and Orion reach 61 dB with an Alex filter
-// board present (Thetis parity, GeneralOptionsPage.cpp:538-541 against
-// setup.cs:15773-15786; wired live at RxApplet.cpp:1573-1578, the exact
-// call shape stepAttenuatorUnionRange() mirrors). Fix round 2 corrected
-// the ceiling but introduced the SAME class of error on the TX FLOOR: it
-// hardcoded 0 for the TX family, derived from setTxAttenuationForBand()
-// alone, missing that setAttOnTxValue() -- the PureSignal AutoAtt write
-// path -- deliberately bypasses that 0 floor to let HL2's negative range
-// through. Fix round 3 removed the per-family floor split entirely: all
-// three families now use the SAME union minimum, which is what the full
-// writer trace shows is actually correct for TX too (every board's
-// m_minAttDb <= 0 and m_maxAttDb >= 31, so the two TX writers' ranges,
-// [0, m_maxAttDb] and [m_minAttDb, 31], are never disjoint and their
-// union is exactly [m_minAttDb, m_maxAttDb] -- identical to RX, for
-// every board, not a coincidence). The corrected union ([-28, 61] as of
-// this writing, but see the .cpp for why it is COMPUTED, not hardcoded,
-// so it cannot drift out of sync with BoardCapabilities.cpp the way the
-// grep-derived one did) still rejects genuinely out-of-range values (the
-// existing test suite's own scoped-to-one-key proof uses a 9-digit
-// sample rate on an unrelated key, which this check was never meant to
-// catch in the first place; a value like 999 or -999 on a step-attenuator
-// key IS still rejected).
+// The step attenuator keys (options/stepAtt/rx1Value, rx1Band/<band>,
+// txBand/<band>) used to get a unioned bounds check here too (fix rounds
+// 1-3). R-R3-46 / R-R3-11 made every options/stepAtt, options/autoAtt and
+// options/preamp key the Core's own (isModelOwnedDspSettingsKey), refused
+// before any value is read whatever it is, so that check could no longer
+// be reached and was removed (R3 remote radio hardware plan, Task 3). A
+// window changes those values through the `stepAtt` object, where the
+// Core's controller applies its own radio's range.
 //
 // Every other un-gated numeric Station value (per-band preamp, sample
 // rate catalogue entries not already checked by resolveSampleRate, etc.)
@@ -235,10 +186,18 @@
 //                                    spinbox's 1.0..5.0. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the step
+//                                    attenuator range check removed; its
+//                                    keys are refused earlier as the
+//                                    Core's own. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QMap>
 #include <QObject>
+
+#include <functional>
 #include <QString>
 #include <QVariant>
 
@@ -320,6 +279,22 @@ public:
     SettingsApplyResult applyInboundWrite(const QString& key, const QVariant& value,
                                           const QString& originTag);
 
+    /// R-R3-46: the MAC of the radio the Core is connected to now, asked
+    /// at every write. With a provider set, a hardware/<mac>/ write (or
+    /// remove, otherRadioRefusal()) for any other MAC, or for any MAC while
+    /// no radio is connected, is refused: the Core applies hardware
+    /// settings for its own radio only. hardware/oc/ is a literal segment,
+    /// not a MAC, and is never refused here. Without a provider (older
+    /// callers and fixtures) nothing is checked.
+    void setConnectedMacProvider(std::function<QString()> provider)
+    {
+        m_connectedMac = std::move(provider);
+    }
+
+    /// The plain reason a write or remove of `key` is refused because it
+    /// names another radio, or an empty string when it does not.
+    QString otherRadioRefusal(const QString& key) const;
+
 signals:
     /// One Station-key change worth telling every connected client
     /// about: either a genuine local/daemon-side change (originTag
@@ -359,6 +334,8 @@ private:
     void onLocalAppSettingsChange(const QString& key);
 
     AppSettings& m_appSettings;
+
+    std::function<QString()> m_connectedMac;
 
     /// True for the duration of one applyInboundWrite() call. Checked
     /// first in onLocalAppSettingsChange(), before that method does

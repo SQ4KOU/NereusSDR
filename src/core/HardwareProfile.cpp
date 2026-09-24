@@ -16,6 +16,9 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23: profileForStation() added for remote windows (R-R3-46),
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  clsHardwareSpecific.cs
@@ -248,6 +251,26 @@ HPSDRModel defaultModelForBoard(HPSDRHW board)
     }
 
     return HPSDRModel::HERMES;
+}
+
+// R-R3-46: NereusSDR-original (no Thetis equivalent: Thetis always has the
+// radio in hand). See the header comment.
+HardwareProfile profileForStation(HPSDRHW board, HPSDRModel reportedModel)
+{
+    if (board == HPSDRHW::Unknown) {
+        HardwareProfile p;
+        p.model          = HPSDRModel::FIRST;
+        p.effectiveBoard = HPSDRHW::Unknown;
+        p.caps           = &BoardCapsTable::forBoard(HPSDRHW::Unknown);
+        return p;
+    }
+    if (reportedModel != HPSDRModel::FIRST && reportedModel != HPSDRModel::LAST) {
+        HardwareProfile reported = profileForModel(reportedModel);
+        if (reported.caps != nullptr && reported.caps->board == board) {
+            return reported;
+        }
+    }
+    return profileForModel(defaultModelForBoard(board));
 }
 
 // From Thetis NetworkIO.cs:164-171

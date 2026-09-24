@@ -61,6 +61,15 @@
 //                                    descriptor. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46: the Core's radio model,
+//                                    protocol and address. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22:
+//                                    remotePgxlControlVersion and
+//                                    remoteRfKitControlVersion, in the same
+//                                    minor-11 block. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -84,6 +93,39 @@ struct StationCapabilities {
     QString firmwareVersion;  ///< RadioModel::version()
     QString macAddress;       ///< The connected radio's MAC, per-MAC settings scope
     HPSDRHW board = HPSDRHW::Unknown;
+
+    // ---- The Core's radio (R-R3-46) ----
+    // Sent only to a peer that negotiated kRadioIdentitySessionProtocolMinor
+    // (radioIdentityEntries true); an older app receives exactly the
+    // descriptor it was built for. Absent (an older Core) reads as the
+    // defaults below, which a window treats as "the Core did not say".
+    //
+    // The three travel together: fromUpdates() sets radioIdentityEntries
+    // when it sees any of them.
+    bool radioIdentityEntries = false;
+    /// The Core's own HardwareProfile model (an operator's model choice
+    /// included), so a window resolves ANAN-8000DLE and ANAN-G2 1K rather
+    /// than the first model on their board. FIRST: not reported, or a
+    /// value this build does not know.
+    HPSDRModel hpsdrModel = HPSDRModel::FIRST;
+    /// ProtocolVersion as an integer: 1 or 2. 0: not reported.
+    int radioProtocol = 0;
+    /// The radio's LAN address as the Core sees it. Empty: not reported.
+    QString radioAddress;
+    /// R-R3-46 / R-R3-11: 1 means the Core mirrors its step attenuator and
+    /// preamp as the `stepAtt` object and applies a window's edits to it
+    /// through its own controller (2 will add the hardware settings). Sent
+    /// last in the same block as the three above, so only at minor 11. 0: a
+    /// window keeps today's behaviour and does not write `stepAtt`.
+    int radioHardwareVersion = 0;
+    /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
+    /// status as the read-only `amplifier` object. Sent after
+    /// radioHardwareVersion in the same minor-11 block. 0: a window shows
+    /// no Power Genius readings from this Core.
+    int remotePgxlControlVersion = 0;
+    /// R-R3-47 / R-R3-22: 1 means the Core mirrors its RF-Kit RF2K-S status
+    /// as the read-only `rfkit` object. Sent last in the same block.
+    int remoteRfKitControlVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

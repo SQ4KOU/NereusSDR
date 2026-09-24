@@ -347,12 +347,20 @@ ctest --test-dir /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSD
 - Produces:
   ```c
   typedef struct { long long blocks; long long busyNs; long long lateBlocks;
-                   long long maxBlockUs; int blockPeriodUs; } WdspChannelLoad;
+                   long long maxBlockUs; int blockPeriodUs;
+                   long long currentBlockNs; long long readNs; } WdspChannelLoad;
   PORT int GetChannelDspLoad (int channel, WdspChannelLoad* out); /* 0 = ok */
   ```
-  and in NereusSDR a per-receiver snapshot `{ double load; /* mean block time
-  / block period over the last interval; 1.0 = cannot keep up */ qint64
-  lateBlocks; qint64 maxBlockUs; qint64 inputDelayMs; qint64 droppedInputMs; }`
+  and in NereusSDR a per-receiver snapshot `{ double load; /* busy time over
+  wall time between two reads: the change in busyNs + currentBlockNs over the
+  change in readNs; 1.0 = the worker never left its blocks, cannot keep up */
+  qint64 lateBlocks; /* diagnostic only, not overload */ qint64 maxBlockUs;
+  qint64 inputDelayMs; qint64 droppedInputMs; }`
+  (Amended 2026-09-23 by the receiver load reading hotfix,
+  `2026-09-23-r3-receiver-load-hotfix-plan.md`: the load was mean block time /
+  block period, raised to a block's time so far / block period whenever a
+  sample landed inside a late block, which read frame-based noise reduction
+  as overload.)
   reachable from RadioModel by slice ID (exact C++ names are the
   implementer's; record them in the report for Tasks 6 and 7).
 

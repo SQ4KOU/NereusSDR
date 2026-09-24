@@ -231,8 +231,9 @@ private:
     void rebuildStalePages();
 
     // The open dialog that belongs to `page` (the page is in its QObject
-    // parent chain), or nullptr.
-    QDialog* openDialogOwnedBy(const QWidget* page) const;
+    // parent chain), or nullptr. The active modal counts even when it is
+    // not a QDialog (a QMessageBox subclass is, a modal QWidget is not).
+    QWidget* openDialogOwnedBy(const QWidget* page) const;
 
     // Clears the cross-page pointers that point into a page about to be
     // replaced; the page's factory sets them again.
@@ -277,7 +278,7 @@ private:
     // R3 Setup fix wave (I1): a rebuild waited for a page's own dialog; it
     // runs when that dialog is destroyed or the next page is shown.
     bool            m_rebuildPostponed = false;
-    QSet<QDialog*>  m_rebuildWaitsFor;
+    QSet<QWidget*>  m_rebuildWaitsFor;
 
     std::vector<PageEntry> m_pages;
 

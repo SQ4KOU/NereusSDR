@@ -14,6 +14,10 @@
 //                 while a remote window does not have the Core's settings.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 / R-R3-21: in a remote window the Step Attenuator
+//                 and Auto Attenuate groups follow the Core's `stepAtt`
+//                 object. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -73,6 +77,7 @@ class QLabel;
 namespace NereusSDR {
 
 class StepAttenuatorController;
+class StepAttenuatorFacade;
 struct RadioInfo;
 
 class GeneralOptionsPage : public SetupPage {
@@ -135,7 +140,15 @@ private:
     // own loadSettings) doesn't surface stale defaults.
     void initFromController();
 
+    // R-R3-46 / R-R3-21: a remote window's groups show and write the Core's
+    // `stepAtt` object (m_ctrl stays null there), enabled while the Core
+    // takes the window's edits.
+    void connectFacade();
+    void syncFromFacade();
+    void applyRadioHardwareAvailability();
+
     StepAttenuatorController* m_ctrl{nullptr};
+    StepAttenuatorFacade* m_stepAtt{nullptr};
 
     // Hardware Configuration group
     // From Thetis setup.designer.cs:8045-8396 [v2.10.3.13] (tpGeneralHardware)

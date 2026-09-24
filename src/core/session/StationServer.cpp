@@ -53,12 +53,48 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-45: headphonesMixVersion 1 with
 //                                    media. AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46: hpsdrModel, radioProtocol and
+//                                    radioAddress for a peer at minor 11.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the `stepAtt`
+//                                    object and radioHardwareVersion 1 for a
+//                                    peer at minor 11, its settle reasons,
+//                                    and the plain refusal of raw attenuator
+//                                    and preamp settings. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46: radioHardwareVersion 2 with
+//                                    the `alexAntennas` object, the
+//                                    hardware apply step after a settings
+//                                    write, and hardware/<mac>/ writes
+//                                    refused for any radio but the
+//                                    connected one. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the read-only
+//                                    `amplifier` and `rfkit` objects with
+//                                    remotePgxlControlVersion 1 and
+//                                    remoteRfKitControlVersion 1 for a peer
+//                                    at minor 11, and the plain refusal of a
+//                                    write to either. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 fix wave: a receive-only Core
+//                                    refuses raw writes and removes of the
+//                                    transmit-side hardware keys
+//                                    (isTransmitHardwareKey). AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 fix wave: radioHardwareVersion
+//                                    3, the read-only `ioBoard` object.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-46 follow-up: the Alex TX
+//                                    low-pass table and master TX switches
+//                                    and OC hot switching are transmit keys.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
+#include "core/HardwareProfile.h"
 #include "core/dsp/NnrSettings.h"
 #include "core/security/CertificateStore.h"
 #include "core/security/TokenStore.h"
@@ -74,10 +110,15 @@
 #include "core/dsp/DspAssetService.h"
 #include "PureSignalSessionFacade.h"
 #include "core/PureSignal.h"
+#include "core/StepAttenuatorFacade.h"
+#include "core/accessories/AlexAntennaFacade.h"
+#include "core/IoBoardHl2Facade.h"
 #include <QScopeGuard>
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#include "models/AmplifierModel.h"
+#include "models/RfKitModel.h"
 #include "models/TunerModel.h"
 
 #include <QLoggingCategory>
@@ -190,6 +231,61 @@ bool fitNnrLimitToPeer(SessionMessage& message, quint16 agreedMinor)
     return worthSendingAfterNnrFit(message);
 }
 
+// R-R3-46: the Core's step attenuator and preamp, mirrored for a peer that
+// negotiated kRadioIdentitySessionProtocolMinor. An older peer never sees
+// the object, so the burst it receives is exactly the one it was built for.
+constexpr const char* kStepAttKey = "stepAtt";
+
+bool isStepAttMessage(const SessionMessage& message)
+{
+    return message.objectKey == kStepAttKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "StepAttenuatorFacade");
+}
+
+// R-R3-46 (radioHardwareVersion 2): the Core's Alex antenna settings, for a
+// peer at kRadioIdentitySessionProtocolMinor, from a Core that also applies
+// Hardware Config writes (scheduleRemoteHardwareApply).
+constexpr const char* kAlexAntennasKey = "alexAntennas";
+
+bool isAlexAntennasMessage(const SessionMessage& message)
+{
+    return message.objectKey == kAlexAntennasKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "AlexAntennaFacade");
+}
+
+// R-R3-46 (radioHardwareVersion 3): the Core's HL2 I/O board, read-only,
+// for a peer at kRadioIdentitySessionProtocolMinor.
+constexpr const char* kIoBoardKey = "ioBoard";
+
+bool isIoBoardMessage(const SessionMessage& message)
+{
+    return message.objectKey == kIoBoardKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "IoBoardHl2Facade");
+}
+
+// R-R3-47 / R-R3-22: the Core's Power Genius XL and RF-Kit RF2K-S status,
+// read-only, for a peer at kRadioIdentitySessionProtocolMinor on a Core
+// that owns its accessories. An older peer never sees either object.
+constexpr const char* kAmplifierKey = "amplifier";
+constexpr const char* kRfKitKey = "rfkit";
+
+bool isAmplifierMessage(const SessionMessage& message)
+{
+    return message.objectKey == kAmplifierKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "AmplifierModel");
+}
+
+bool isRfKitMessage(const SessionMessage& message)
+{
+    return message.objectKey == kRfKitKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "RfKitModel");
+}
+
 // The one reason a receive-only Core gives for every transmit
 // configuration write it refuses: direct TransmitModel property writes and
 // the DSP > Options TX settings keys alike (R-R3-21).
@@ -203,6 +299,86 @@ bool isTransmitDspOptionsKey(const QString& key)
 {
     return key.startsWith(QLatin1String("DspOptions"))
         && key.endsWith(QLatin1String("Tx"));
+}
+
+// R-R3-46 / R-R3-21: the transmit side of the Hardware Config and PA pages.
+// Since the Core's hardware apply step reloads oc/, cal/ and hl2/ into its
+// live controllers (RadioModel::scheduleRemoteHardwareApply), a raw write
+// of one of these would reach the radio's transmit path, so a receive-only
+// Core refuses them as it refuses TransmitModel writes. Covered:
+//   hardware/<mac>/oc/tx/...            OC transmit pins (OcMatrix)
+//   hardware/<mac>/oc/actions/...       OC pin transmit actions (OcMatrix)
+//   hardware/<mac>/cal/{txDisplayOffset,paSens,paOffset}  (CalibrationController)
+//   hardware/<mac>/paCalibration/...    PA forward-power table (CalibrationController)
+//                                       and the Calibration tab's own copies of
+//                                       its transmit fields (paCalibration/cal/...)
+//   hardware/<mac>/hl2/{pttHangMs,txLatencyMs}            (Hl2OptionsModel)
+//   hardware/<mac>/tx/...               TransmitModel, User Dig Out, mic profiles
+//   hardware/<mac>/pa/...               PA profiles (PaProfileManager)
+//   hardware/<mac>/powerByBand/..., tunePowerByBand/...   (TransmitModel)
+//   any .../oc/extPa/...                the external PA group (OcOutputsHfTab)
+//   any .../oc/allowHotSwitching        OC lines switching while transmitting
+//   any .../alex/master/{hpfBypassOnTx,hpfBypassOnPs,disable6mLnaOnTx}
+//   any .../alex/lpf/...                the Alex TX low-pass table
+//                                       (AntennaAlexAlex1Tab, its own keys and
+//                                       the Hardware page's copies)
+bool isTransmitHardwareKey(const QString& rawKey)
+{
+    const QString key = rawKey.toLower();
+    if (!key.startsWith(QLatin1String("hardware/"))) {
+        return false;
+    }
+    const QStringList parts = key.split(QLatin1Char('/'));
+    for (int i = 1; i + 1 < parts.size(); ++i) {
+        const QString& here = parts[i];
+        const QString& next = parts[i + 1];
+        if (here == QLatin1String("oc")
+            && (next == QLatin1String("extpa") || next == QLatin1String("allowhotswitching"))) {
+            return true;
+        }
+        if (here == QLatin1String("alex") && next == QLatin1String("lpf")) {
+            return true;
+        }
+        if (here == QLatin1String("alex") && next == QLatin1String("master") && i + 2 < parts.size()) {
+            const QString& field = parts[i + 2];
+            if (field == QLatin1String("hpfbypassontx") || field == QLatin1String("hpfbypassonps")
+                || field == QLatin1String("disable6mlnaontx")) {
+                return true;
+            }
+        }
+    }
+    if (parts.size() < 4) {
+        return false;
+    }
+    const QString& area = parts[2];
+    const QString& item = parts[3];
+    if (area == QLatin1String("oc")) {
+        return item == QLatin1String("tx") || item == QLatin1String("actions");
+    }
+    if (area == QLatin1String("cal")) {
+        return item == QLatin1String("txdisplayoffset") || item == QLatin1String("pasens")
+            || item == QLatin1String("paoffset");
+    }
+    if (area == QLatin1String("pacalibration")) {
+        if (item != QLatin1String("cal")) {
+            return true;
+        }
+        const QString field = parts.size() > 4 ? parts[4] : QString();
+        return field == QLatin1String("txdisplayoffset") || field == QLatin1String("pasens")
+            || field == QLatin1String("paoffset") || field == QLatin1String("padefaultrestored")
+            || field == QLatin1String("logvoltsamps");
+    }
+    if (area == QLatin1String("hl2")) {
+        return item == QLatin1String("ptthangms") || item == QLatin1String("txlatencyms");
+    }
+    return area == QLatin1String("tx") || area == QLatin1String("pa")
+        || area == QLatin1String("powerbyband") || area == QLatin1String("tunepowerbyband");
+}
+
+// Every settings key a receive-only Core refuses as transmit configuration.
+bool isReceiveOnlyRefusedKey(const QString& key)
+{
+    return isTransmitDspOptionsKey(key) || isTransmitHardwareKey(key);
 }
 
 QByteArray panKey(int index)
@@ -331,6 +507,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_registry = new ObjectRegistry(radioModel, m_mirror, this);
     m_dispatcher = new SessionCommandDispatcher(radioModel, this);
     m_settingsServer = new SettingsProxyServer(settings, this);
+    // R-R3-46: the Core applies hardware settings for its connected radio
+    // only; a write naming any other radio's MAC is refused.
+    if (radioModel) {
+        m_settingsServer->setConnectedMacProvider([model = QPointer<RadioModel>(radioModel)] {
+            return model ? model->currentRadioMac() : QString();
+        });
+    }
 
     // Outbound: everything the daemon has to say goes to whichever
     // transport currently holds the session, and to nothing at all when
@@ -1088,11 +1271,25 @@ void StationServer::buildMirror()
     // older app has no object for this key; it records the schema as skew
     // and drops the object and its deltas, as with any newer object.
     m_mirror->watch("notches", m_radioModel->notchModel());
+    // R-R3-46 (radioHardwareVersion 1): the Core's step attenuator and
+    // preamp. Sent only to a peer at minor 11 (sendToSession).
+    m_mirror->watch(QByteArray(kStepAttKey), m_radioModel->stepAttFacade());
+    // R-R3-46 (radioHardwareVersion 2): the Core's Alex antenna settings.
+    // Sent only to a peer at minor 11 (sendToSession).
+    m_mirror->watch(QByteArray(kAlexAntennasKey), m_radioModel->alexAntennaFacade());
+    // R-R3-46 (radioHardwareVersion 3): the Core's HL2 I/O board, read-only.
+    // Sent only to a peer at minor 11 (sendToSession).
+    m_mirror->watch(QByteArray(kIoBoardKey), m_radioModel->ioBoardFacade());
     m_mirror->watch("pureSignal", m_radioModel->pureSignalFacade());
     m_mirror->watch(QByteArray(kTransmitKey), &m_radioModel->transmitModel());
     if (m_radioModel->tunerModel() != nullptr) {
         m_mirror->watch(QByteArray(kTunerKey), m_radioModel->tunerModel());
     }
+    // R-R3-47 / R-R3-22 (remotePgxlControlVersion 1,
+    // remoteRfKitControlVersion 1): the Core's amplifier and RF-Kit status.
+    // Sent only to a peer at minor 11 (sendToSession).
+    m_mirror->watch(QByteArray(kAmplifierKey), m_radioModel->amplifierModel());
+    m_mirror->watch(QByteArray(kRfKitKey), m_radioModel->rfKitModel());
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
     for (int i = 0; i < pans.size(); ++i) {
         m_mirror->watch(panKey(i), pans.at(i));
@@ -1175,6 +1372,33 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     }
     QHash<QByteArray, QString> refusals;
     const bool negotiated = m_peers.value(transport).agreedMinor >= kDspControlSessionProtocolMinor;
+    // R-R3-46: only a peer that was offered the object may change it, and
+    // only while the Core's controller is behind it.
+    const bool stepAttWrite = message.objectKey == kStepAttKey;
+    const bool alexWrite = message.objectKey == kAlexAntennasKey;
+    QString stepAttRefusal;
+    if (stepAttWrite
+        && m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+        stepAttRefusal =
+            QStringLiteral("Update this app to change the radio's attenuator on this Core.");
+    } else if (stepAttWrite
+               && (m_radioModel.isNull() || !m_radioModel->stepAttFacade()->isBound())) {
+        stepAttRefusal = QStringLiteral("The Core has no attenuator ready.");
+    } else if (alexWrite
+               && m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+        stepAttRefusal =
+            QStringLiteral("Update this app to change the radio's antennas on this Core.");
+    } else if (alexWrite && radioHardwareVersion() < 2) {
+        stepAttRefusal = QStringLiteral("The Core has no antenna settings ready.");
+    } else if (message.objectKey == kIoBoardKey) {
+        // R-R3-46: the I/O board's readings are the Core's to report.
+        stepAttRefusal = IoBoardHl2Facade::readOnlyReason();
+    } else if (message.objectKey == kAmplifierKey) {
+        // R-R3-47: the amp's readings are the Core's to report.
+        stepAttRefusal = AmplifierModel::readOnlyReason();
+    } else if (message.objectKey == kRfKitKey) {
+        stepAttRefusal = RfKitModel::readOnlyReason();
+    }
     const bool receiveOnlyTransmitWrite = message.objectKey == QByteArray(kTransmitKey)
         && !m_radioModel.isNull() && m_radioModel->receiveOnlyStationPolicy();
     QSet<QByteArray> requested;
@@ -1191,6 +1415,10 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         }
         if (receiveOnlyTransmitWrite) {
             refusals.insert(update.name, QString::fromLatin1(kReceiveOnlyTransmitReason));
+            continue;
+        }
+        if (!stepAttRefusal.isEmpty()) {
+            refusals.insert(update.name, stepAttRefusal);
             continue;
         }
         if (!negotiated && (message.objectKey == "pureSignalSettings"
@@ -1228,7 +1456,16 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         }
         result.reason = refusals.value(update.name);
         if (result.reason.isEmpty() && (!result.hasValue || result.value.value != update.value)) {
-            result.reason = QStringLiteral("The station retained the returned value after validating this edit.");
+            // R-R3-46: the attenuator says in plain words why it kept
+            // another value (its range, what this radio offers).
+            if (stepAttWrite && !m_radioModel.isNull()) {
+                result.reason = m_radioModel->stepAttFacade()->settleReason(update.name);
+            } else if (alexWrite && !m_radioModel.isNull()) {
+                result.reason = m_radioModel->alexAntennaFacade()->settleReason(update.name);
+            }
+            if (result.reason.isEmpty()) {
+                result.reason = QStringLiteral("The station retained the returned value after validating this edit.");
+            }
         }
         result.accepted = result.reason.isEmpty();
         results.append(result);
@@ -1250,7 +1487,10 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             corrections.append(value);
         }
     }
-    if (!corrections.isEmpty()) {
+    // An older peer was never offered `stepAtt`; it gets nothing back for it.
+    const bool olderStepAttPeer = (stepAttWrite || alexWrite)
+        && m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor;
+    if (!corrections.isEmpty() && !olderStepAttPeer) {
         // A write's side effects can change nnrLimit (turning NNR off or
         // choosing a model clears it), so they are fitted to this peer too.
         SessionMessage delta = SessionMessages::delta(message.objectKey, corrections);
@@ -1269,8 +1509,9 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
     const QString key = QString::fromUtf8(message.objectKey);
     // A receive-only Core refuses DSP > Options TX writes exactly as it
     // refuses direct TransmitModel writes (handlePropertyWrite above), and
-    // hands back its own value so the remote combo settles on it.
-    if (isTransmitDspOptionsKey(key) && !m_radioModel.isNull()
+    // hands back its own value so the remote combo settles on it. R-R3-46:
+    // so it does for the transmit side of Hardware Config and the PA pages.
+    if (isReceiveOnlyRefusedKey(key) && !m_radioModel.isNull()
         && m_radioModel->receiveOnlyStationPolicy()) {
         const QString reason = QString::fromLatin1(kReceiveOnlyTransmitReason);
         const QVariant restored = m_settings.value(key);
@@ -1291,9 +1532,12 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
         return;
     }
     // R-R3-21: a DSP > Options RX setting takes effect now, not at the next
-    // mode change. RadioModel ignores every other key.
+    // mode change. R-R3-46: a Hardware Config setting reaches the Core's
+    // own controllers (the radio, and their later saves) now too. RadioModel
+    // ignores every other key.
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteDspOptionsApply(key);
+        m_radioModel->scheduleRemoteHardwareApply(key);
     }
 }
 
@@ -1306,7 +1550,10 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
             key.compare(QLatin1String("Nr3ModelPath"), Qt::CaseInsensitive) == 0;
         // R-R3-21: the notch keys, like Nr3ModelPath, carry their own plain
         // reason; every other model-owned key keeps its existing wire string.
-        const bool plainReason = nr3Path || isModelOwnedNotchSettingsKey(key);
+        // R-R3-46: so do the step attenuator and preamp keys.
+        const bool plainReason = nr3Path || isModelOwnedNotchSettingsKey(key)
+            || isModelOwnedStepAttenuatorSettingsKey(key)
+            || isModelOwnedAlexAntennaSettingsKey(key);
         sendToSession(SessionMessages::settingsReject(key, value.isValid(), value.toString(),
             plainReason ? modelOwnedSettingsRefusal(key)
                     : QStringLiteral("Use the validated DSP controls to change these settings.")));
@@ -1315,7 +1562,8 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
     // A remove would reset a DSP > Options TX setting to its default, so a
     // receive-only Core refuses it exactly as it refuses a write to the same
     // key (handleSettingsWrite above) and hands back its own value (R-R3-21).
-    if (isTransmitDspOptionsKey(key) && !m_radioModel.isNull()
+    // R-R3-46: the same for a transmit-side hardware key.
+    if (isReceiveOnlyRefusedKey(key) && !m_radioModel.isNull()
         && m_radioModel->receiveOnlyStationPolicy()) {
         const QString reason = QString::fromLatin1(kReceiveOnlyTransmitReason);
         const QVariant restored = m_settings.value(key);
@@ -1335,11 +1583,21 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
         qCWarning(lcStation) << "Refused remote settings remove of non-station key" << key;
         return;
     }
+    // R-R3-46: as for a write, only the connected radio's hardware keys.
+    if (const QString refusal = m_settingsServer->otherRadioRefusal(key); !refusal.isEmpty()) {
+        const QVariant value = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings remove" << key << ":" << refusal;
+        sendToSession(SessionMessages::settingsReject(key, value.isValid(), value.toString(),
+                                                      refusal));
+        return;
+    }
     m_settings.remove(key);
     // R-R3-21: removing a DSP > Options RX setting returns it to its
-    // default, which takes effect now as a write does.
+    // default, which takes effect now as a write does. R-R3-46: so does a
+    // Hardware Config setting.
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteDspOptionsApply(key);
+        m_radioModel->scheduleRemoteHardwareApply(key);
     }
 }
 
@@ -1365,6 +1623,27 @@ void StationServer::sendToSession(const SessionMessage& message)
         const auto peer = m_peers.constFind(m_session);
         const quint16 minor = peer != m_peers.cend() ? peer->agreedMinor
                                                      : kSessionProtocolMinor;
+        // A Core without its controller behind the object does not offer
+        // it (radioHardwareVersion 0), so it does not send it either.
+        if (isStepAttMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor || radioHardwareVersion() < 1)) {
+            return;
+        }
+        if (isAlexAntennasMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor || radioHardwareVersion() < 2)) {
+            return;
+        }
+        if (isIoBoardMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor || radioHardwareVersion() < 3)) {
+            return;
+        }
+        // R-R3-47: a Core that does not own its accessories does not offer
+        // the amplifier and RF-Kit objects, so it does not send them either.
+        if ((isAmplifierMessage(message) || isRfKitMessage(message))
+            && (minor < kRadioIdentitySessionProtocolMinor
+                || accessoryStatusVersion() < 1)) {
+            return;
+        }
         if (!needsNnrFit(message, minor)) {
             // Most messages carry no NNR field: send them as they are.
             if (worthSendingAfterNnrFit(message)) {
@@ -1549,6 +1828,24 @@ void StationServer::setSustainableSliceLimit(int slices)
     m_sustainableSliceLimit = slices;
 }
 
+int StationServer::accessoryStatusVersion() const
+{
+    return !m_radioModel.isNull() && m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
+}
+
+int StationServer::radioHardwareVersion() const
+{
+    if (m_radioModel.isNull() || !m_radioModel->stepAttFacade()->isBound()) {
+        return 0;
+    }
+    if (!m_radioModel->alexAntennaFacade()->isBound()) {
+        return 1;
+    }
+    // 3: the `ioBoard` object and the per-band antenna verb
+    // (setAlexRxAntenna), R-R3-46 fix wave.
+    return m_radioModel->ioBoardFacade()->isBound() ? 3 : 2;
+}
+
 StationCapabilities StationServer::buildCapabilities() const
 {
     StationCapabilities caps;
@@ -1565,6 +1862,37 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.macAddress = m_radioModel->currentRadioMac();
     caps.board = board.board;
     caps.radioConnected = m_radioModel->isConnected();
+
+    // R-R3-46: which radio, how the Core talks to it, and where it is, for a
+    // window that negotiated them; an older one gets today's descriptor.
+    // The model is the Core's own profile (an operator's model choice
+    // included). With no radio yet the profile has no row and the model is
+    // not reported; with no radio ever selected neither is the rest.
+    {
+        const auto peer = m_peers.constFind(m_session);
+        if (peer != m_peers.cend()
+            && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor) {
+            caps.radioIdentityEntries = true;
+            // R-R3-46 / R-R3-11: 1 once the Core's controller is behind the
+            // `stepAtt` object (DaemonApp binds it before the server starts);
+            // 2 once its Alex antennas are behind `alexAntennas` too, with
+            // the hardware apply step and the I/O board probe; 3 with the
+            // read-only `ioBoard` object and the per-band antenna verb.
+            caps.radioHardwareVersion = radioHardwareVersion();
+            // R-R3-47 / R-R3-22: 1 on a Core that owns its accessories: the
+            // read-only `amplifier` and `rfkit` objects.
+            caps.remotePgxlControlVersion = accessoryStatusVersion();
+            caps.remoteRfKitControlVersion = accessoryStatusVersion();
+            const HardwareProfile& profile = m_radioModel->hardwareProfile();
+            caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
+            const RadioInfo& radio = m_radioModel->currentRadioInfo();
+            if (!radio.macAddress.isEmpty()) {
+                caps.radioProtocol = static_cast<int>(radio.protocol);
+                caps.radioAddress = radio.address.isNull() ? QString()
+                                                           : radio.address.toString();
+            }
+        }
+    }
 
     caps.boardMaxSlices = board.maxSlices > 0 ? board.maxSlices : 1;
     caps.userDdcCount = board.userDdcCount;

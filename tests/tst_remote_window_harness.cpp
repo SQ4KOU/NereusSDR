@@ -28,6 +28,14 @@
 //                                    opens on a disconnected window.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 remote radio hardware plan, Task 3
+//                                    (R-R3-46, R-R3-21): the window's
+//                                    attenuator, preamp, auto-attenuate
+//                                    and overload controls use the Core's
+//                                    `stepAtt` object; an older Core
+//                                    leaves them disabled with its
+//                                    reason. AI-assisted transformation
+//                                    via Anthropic Claude Code.
 //   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio plan, Task 4
 //                                    (R-R3-42): a Core's stored TCI values
 //                                    are ignored. AI-assisted
@@ -39,11 +47,18 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
+#include <QRadioButton>
+#include <QScopeGuard>
 #include <QComboBox>
+#include <QGraphicsOpacityEffect>
+#include <QGroupBox>
+#include <QSpinBox>
 #include <QLabel>
 #include <QStackedWidget>
 #include <QLoggingCategory>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
 #include <QSignalSpy>
@@ -54,15 +69,31 @@
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/BoardCapabilities.h"
+#include "core/SkuUiProfile.h"
+#include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
 #include "gui/MainWindow.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/RemoteConnectionController.h"
 #include "gui/SetupDialog.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/TitleBar.h"
 #include "gui/applets/RadeApplet.h"
+#include "gui/applets/RxApplet.h"
 #include "gui/setup/DeviceCard.h"
+#include "gui/setup/GeneralOptionsPage.h"
+#include "core/IoBoardHl2.h"
+#include "gui/setup/HardwarePage.h"
+#include "gui/setup/hardware/Hl2IoBoardTab.h"
+#include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
+#include "gui/setup/hardware/OcOutputsHfTab.h"
+#include "core/accessories/AlexAntennaFacade.h"
+#include "core/accessories/AlexController.h"
+#include "core/RadioDiscovery.h"
+#include "gui/widgets/VfoWidget.h"
 #include "gui/widgets/StationBlock.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -195,6 +226,53 @@ QComboBox* deviceCardBufferCombo(DeviceCard* card)
 }
 
 const QString kStationReason = QStringLiteral("Connect to the Core to change these.");
+
+// R-R3-46: triggers Radio > Protocol Info and returns the text of the
+// dialog it opens (closing it), or an empty string when none opened.
+QString protocolInfoText(RemoteWindowHarness& h)
+{
+    QAction* info = h.menuAction(QStringLiteral("&Radio"), QStringLiteral("&Protocol Info"));
+    if (!info || !info->isEnabled()) { return {}; }
+    QString text;
+    QTimer poll;
+    poll.setInterval(10);
+    QObject::connect(&poll, &QTimer::timeout, &poll, [&] {
+        auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+        if (!box) { return; }
+        poll.stop();
+        text = box->text();
+        box->accept();
+    });
+    poll.start();
+    info->trigger();
+    poll.stop();
+    return text;
+}
+
+QStringList preampLabelsFor(HPSDRHW board)
+{
+    const BoardCapabilities& caps = BoardCapsTable::forBoard(board);
+    QStringList labels;
+    for (const auto& item : BoardCapsTable::preampItemsForBoard(board, caps.hasAlexFilters)) {
+        labels.append(QString::fromLatin1(item.label));
+    }
+    return labels;
+}
+
+StationCapabilities coreRadio(RemoteWindowHarness& h, HPSDRHW board, HPSDRModel model,
+                              const QString& mac)
+{
+    StationCapabilities caps = h.server().buildCapabilities();
+    caps.board = board;
+    caps.macAddress = mac;
+    caps.radioConnected = true;
+    caps.firmwareVersion = QStringLiteral("27");
+    caps.radioIdentityEntries = true;
+    caps.hpsdrModel = model;
+    caps.radioProtocol = 2;
+    caps.radioAddress = QStringLiteral("192.168.1.50");
+    return caps;
+}
 
 QStringList sliceIds(const RadioModel& model)
 {
@@ -815,9 +893,16 @@ private slots:
         QCOMPARE(h.proxy().droppedWhileOffline(), heldBefore);
 
         QSignalSpy superseded(&h.proxy(), &SettingsProxy::offlineEditsSuperseded);
+        // R-R3-46 (carried): the gap between Connect and the snapshot. An
+        // edit dropped after the check above (while the link came back)
+        // would show as a key the Core's snapshot contradicts.
         QVERIFY(connectFromRadioMenu(h));
         QTest::qWait(kSettleMs);
         QCOMPARE(superseded.size(), 0);
+        const QSet<QString> contradicted = h.proxy().keysContradictedByLastSnapshot();
+        QVERIFY2(contradicted.isEmpty(),
+                 qPrintable(QStringList(contradicted.cbegin(), contradicted.cend())
+                                .join(QStringLiteral(", "))));
         QCOMPARE(h.acceptedConnections(), 2);
     }
 
@@ -854,6 +939,329 @@ private slots:
         QVERIFY(!AppSettings::instance().contains(QStringLiteral("TciSliceAGain")));
         QVERIFY(!AppSettings::instance().contains(QStringLiteral("TciTxGain")));
         QVERIFY(!h.proxy().handlesKey(QStringLiteral("TciSliceAGain")));
+    }
+
+    // R-R3-46 / R-R3-21: a Core whose controller stands behind its
+    // `stepAtt` object (radioHardwareVersion 1). The window's RX applet row
+    // and Setup's Step Attenuator and Auto Attenuate groups are enabled and
+    // show the Core's settled values; a change made in either round-trips
+    // through the Core's controller; a change on the Core reaches both; the
+    // overload alarm lights on the Core's overload report.
+    void attenuatorControlsUseTheCoresObject()
+    {
+        StepAttenuatorController coreAtt;
+        coreAtt.setTickTimerEnabled(false);
+        coreAtt.setStepAttEnabled(true);
+        coreAtt.setAttenuation(12);
+        RemoteWindowHarness h;
+        h.station().setStepAttController(&coreAtt);
+        QVERIFY(h.start());
+        QVERIFY(connectFromRadioMenu(h));
+        QVERIFY(h.client()->remoteRadioHardwareAvailable());
+
+        auto* rx = h.window()->findChild<RxApplet*>();
+        QVERIFY(rx);
+        auto* att = rx->findChild<QWidget*>(QStringLiteral("RxAttenuatorStack"));
+        QVERIFY(att);
+        auto* spin = att->findChild<QSpinBox*>();
+        QVERIFY(spin);
+        QTRY_VERIFY(att->isEnabled());
+        QVERIFY(att->toolTip().isEmpty());
+        QTRY_COMPARE(spin->value(), 12);
+        QCOMPARE(spin->maximum(), coreAtt.maxAttenuation());
+        QCOMPARE(rx->attLabelTextForTest(), QStringLiteral("S-ATT"));
+
+        // The window's change reaches the Core's controller.
+        spin->setValue(18);
+        QTRY_COMPARE(coreAtt.attenuatorDb(), 18);
+
+        // Setup > General > Options shows the Core's values too.
+        SetupDialog* dialog = openSettings(h);
+        QVERIFY(dialog);
+        dialog->selectPage(QStringLiteral("Options"));
+        GeneralOptionsPage* page = nullptr;
+        QTRY_VERIFY((page = dialog->findChild<GeneralOptionsPage*>()) != nullptr);
+        auto* stepGroup = page->findChild<QGroupBox*>(QStringLiteral("grpStepAttenuator"));
+        auto* autoGroup = page->findChild<QGroupBox*>(QStringLiteral("grpAutoAttRx1"));
+        QVERIFY(stepGroup && autoGroup);
+        QVERIFY(stepGroup->isEnabled());
+        QVERIFY(autoGroup->isEnabled());
+        auto* pageSpin = stepGroup->findChild<QSpinBox*>();
+        QVERIFY(pageSpin);
+        QCOMPARE(pageSpin->value(), 18);
+
+        // A change on the Core reaches both.
+        coreAtt.setAttenuation(7);
+        QTRY_COMPARE(spin->value(), 7);
+        QTRY_COMPARE(pageSpin->value(), 7);
+
+        // Auto-attenuate, from Setup, round-trips through the Core.
+        QCheckBox* autoEnable = nullptr;
+        for (QCheckBox* box : autoGroup->findChildren<QCheckBox*>()) {
+            if (box->text() == QStringLiteral("Enable")) { autoEnable = box; }
+        }
+        QVERIFY(autoEnable);
+        QVERIFY(!coreAtt.autoAttEnabled());
+        autoEnable->click();
+        QTRY_VERIFY(coreAtt.autoAttEnabled());
+        QTRY_COMPARE(rx->attLabelTextForTest(), QStringLiteral("A-ATT"));
+
+        // The preamp: turning the step attenuator off on the Core shows the
+        // combo, and the window's choice reaches the Core.
+        coreAtt.setStepAttEnabled(false);
+        QTRY_COMPARE(rx->attLabelTextForTest(), QStringLiteral("ATT"));
+        auto* combo = att->findChild<QComboBox*>();
+        QVERIFY(combo);
+        if (combo->count() > 1) {
+            const int other = combo->currentIndex() == 0 ? 1 : 0;
+            combo->setCurrentIndex(other);
+            QTRY_COMPARE(static_cast<int>(coreAtt.preampMode()), combo->itemData(other).toInt());
+        }
+
+        // The overload alarm lights on the Core's report.
+        auto* badge = h.window()->findChild<QWidget*>(QStringLiteral("adcOvlBadge"));
+        QVERIFY(badge);
+        const auto opacity = [badge] {
+            auto* fx = qobject_cast<QGraphicsOpacityEffect*>(badge->graphicsEffect());
+            return fx ? fx->opacity() : 1.0;
+        };
+        QVERIFY(opacity() < 0.5);
+        coreAtt.onAdcOverflow(0);
+        coreAtt.tick();
+        QTRY_COMPARE(opacity(), 1.0);
+        QVERIFY(badge->toolTip().contains(QStringLiteral("ADC0: overload")));
+
+        h.station().setStepAttController(nullptr);
+    }
+
+    // R-R3-46: Hardware Config in a window connected to a Core that offers
+    // it (radioHardwareVersion 2). The tabs are live and show the Core's
+    // radio; an RX antenna change reaches the Core's own AlexController;
+    // an OC receive pin reaches the Core's settings for that radio and the
+    // Core reloads its matrix; the transmit fields wait for remote transmit.
+    void hardwareConfigReceiveSettingsReachTheCore()
+    {
+        StepAttenuatorController coreAtt;
+        coreAtt.setTickTimerEnabled(false);
+        RemoteWindowHarness h;
+        h.station().setStepAttController(&coreAtt);
+        const auto unbind = qScopeGuard([&h] { h.station().setStepAttController(nullptr); });
+        const QString mac = QStringLiteral("AA:BB:CC:DD:EE:53");
+        RadioInfo radio;
+        radio.macAddress = mac;
+        radio.boardType = HPSDRHW::Saturn;
+        h.station().setLastRadioInfoForTest(radio);
+        QStringList reloads;
+        h.station().setHardwareApplyObserverForTest(
+            [&reloads](const QString& name) { reloads << name; });
+        QVERIFY(h.start());
+        QVERIFY(connectFromRadioMenu(h));
+        QVERIFY(h.client()->remoteHardwareConfigAvailable());
+        QTRY_COMPARE(h.remoteModel()->currentRadioInfo().macAddress, mac);
+
+        SetupDialog* dialog = openSettings(h);
+        QVERIFY(dialog);
+        QWidget* const page = showSetupLeaf(dialog, QStringLiteral("Hardware Config"));
+        auto* hardware = qobject_cast<HardwarePage*>(page);
+        QVERIFY(hardware);
+        QVERIFY(hardware->isEnabled());
+        QTRY_VERIFY(hardware->remoteEditsAvailableForTest());
+        QVERIFY(hardware->findChild<QTabWidget*>()->isEnabled());
+
+        // RX antenna: the Core's controller changes.
+        auto* antennas = hardware->findChild<AntennaAlexAntennaControlTab*>();
+        QVERIFY(antennas);
+        QVERIFY(!antennas->txGridForTest()->isEnabled());
+        QRadioButton* const ant2 = antennas->rxButtonForTest(Band::Band40m, 2);
+        QVERIFY(ant2 && ant2->isEnabled());
+        ant2->click();
+        QTRY_COMPARE(h.station().alexController().rxAnt(Band::Band40m), 2);
+        QTRY_VERIFY(ant2->isChecked());
+
+        // OC receive pin: the Core's settings for its radio, and a reload.
+        auto* hf = hardware->findChild<OcOutputsHfTab*>();
+        QVERIFY(hf);
+        QCheckBox* pin = nullptr;
+        for (QCheckBox* box : hf->findChildren<QCheckBox*>()) {
+            if (box->toolTip() == QStringLiteral("RX OC pin 4, band 20m")) { pin = box; }
+        }
+        QVERIFY(pin && pin->isEnabled());
+        pin->click();
+        const QString key = QStringLiteral("hardware/%1/oc/rx/20m/pin4").arg(mac);
+        QTRY_COMPARE(h.stationSettings().value(key).toString(), QStringLiteral("True"));
+        QTRY_VERIFY(reloads.contains(QStringLiteral("oc")));
+
+        // R-R3-46 fix wave (radioHardwareVersion 3): the HL2 I/O board tab
+        // shows the Core's board, whose readings arrive on the Core after a
+        // probe.
+        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 3);
+        auto* ioTab = hardware->findChild<Hl2IoBoardTab*>();
+        QVERIFY(ioTab);
+        const auto statusText = [ioTab]() {
+            for (QLabel* label : ioTab->findChildren<QLabel*>()) {
+                if (label->text().startsWith(QStringLiteral("mi0bot custom I/O board"))) {
+                    return label->text();
+                }
+            }
+            return QString();
+        };
+        QCOMPARE(statusText(), QStringLiteral("mi0bot custom I/O board (0x41): Not detected"));
+        IoBoardHl2& coreBoard = h.station().ioBoardMutable();
+        coreBoard.setRegisterValue(IoBoardHl2::Register::REG_FIRMWARE_MAJOR, 0x02);
+        coreBoard.setHardwareVersion(IoBoardHl2::kHardwareVersion1);
+        coreBoard.setDetected(true);
+        QTRY_COMPARE(statusText(), QStringLiteral("mi0bot custom I/O board (0x41): Active"));
+    }
+
+    // R-R3-46 / R-R3-21: a Core that does not offer its attenuator
+    // (radioHardwareVersion 0) leaves the window's rows disabled, with the
+    // plain reason through OperatorReasonText, and a click changes nothing.
+    void olderCoreLeavesAttenuatorControlsDisabledWithAReason()
+    {
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        QVERIFY(connectFromRadioMenu(h));
+        QVERIFY(!h.client()->remoteRadioHardwareAvailable());
+        const QString reason =
+            OperatorReasonText::forDisplay(h.client()->radioHardwareUnavailableReason());
+        QVERIFY(!reason.isEmpty());
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+
+        auto* rx = h.window()->findChild<RxApplet*>();
+        QVERIFY(rx);
+        auto* att = rx->findChild<QWidget*>(QStringLiteral("RxAttenuatorStack"));
+        QVERIFY(att);
+        QTRY_COMPARE(att->toolTip(), reason);
+        QVERIFY(!att->isEnabled());
+
+        SetupDialog* dialog = openSettings(h);
+        QVERIFY(dialog);
+        dialog->selectPage(QStringLiteral("Options"));
+        GeneralOptionsPage* page = nullptr;
+        QTRY_VERIFY((page = dialog->findChild<GeneralOptionsPage*>()) != nullptr);
+        for (const char* name : {"grpStepAttenuator", "grpAutoAttRx1"}) {
+            auto* group = page->findChild<QGroupBox*>(QLatin1String(name));
+            QVERIFY2(group, name);
+            QVERIFY2(!group->isEnabled(), name);
+            QCOMPARE(group->toolTip(), reason);
+        }
+    }
+
+    // R-R3-46: the window follows the Core's radio. A Saturn ANAN-G2 1K
+    // brings its preamp items and attenuator range to the RX applet, its
+    // antenna labels to the VFO flag and its tabs to Hardware Config;
+    // Protocol Info shows P2 and the radio's address; a Core whose radio is
+    // offline gives Unknown, not Hermes; an older Core still shows what it
+    // has.
+    void windowFollowsTheCoresRadio()
+    {
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        QVERIFY(connectFromRadioMenu(h));
+        RadioModel* const windowModel = h.remoteModel();
+        QVERIFY(windowModel);
+        auto* rx = h.window()->findChild<RxApplet*>();
+        QVERIFY(rx);
+
+        // First a radio whose items and range differ from the G2 1K's.
+        h.pushCapabilities(coreRadio(h, HPSDRHW::Angelia, HPSDRModel::ANAN100D,
+                                     QStringLiteral("AA:BB:CC:DD:EE:10")));
+        QTRY_COMPARE(rx->preampComboLabelsForTest(), preampLabelsFor(HPSDRHW::Angelia));
+        const int angeliaMax = BoardCapsTable::stepAttMaxDb(
+            HPSDRHW::Angelia, BoardCapsTable::forBoard(HPSDRHW::Angelia).hasAlexFilters);
+        QCOMPARE(rx->stepAttMaxForTest(), angeliaMax);
+        QVERIFY(preampLabelsFor(HPSDRHW::Angelia) != preampLabelsFor(HPSDRHW::Saturn));
+
+        h.pushCapabilities(coreRadio(h, HPSDRHW::Saturn, HPSDRModel::ANAN_G2_1K,
+                                     QStringLiteral("AA:BB:CC:DD:EE:46")));
+        QTRY_COMPARE(rx->preampComboLabelsForTest(), preampLabelsFor(HPSDRHW::Saturn));
+        const int saturnMax = BoardCapsTable::stepAttMaxDb(
+            HPSDRHW::Saturn, BoardCapsTable::forBoard(HPSDRHW::Saturn).hasAlexFilters);
+        QVERIFY(saturnMax != angeliaMax);
+        QCOMPARE(rx->stepAttMaxForTest(), saturnMax);
+        QCOMPARE(rx->stepAttMinForTest(),
+                 BoardCapsTable::forBoard(HPSDRHW::Saturn).attenuator.minDb);
+        QCOMPARE(windowModel->hardwareProfile().model, HPSDRModel::ANAN_G2_1K);
+
+        const auto expectedLabels = [](HPSDRModel sku) {
+            const auto labels = skuUiProfileFor(sku).rxOnlyLabels;
+            return QStringList(labels.cbegin(), labels.cend());
+        };
+        const QList<VfoWidget*> flags = h.window()->findChildren<VfoWidget*>();
+        QVERIFY(!flags.isEmpty());
+        for (VfoWidget* flag : flags) {
+            QCOMPARE(flag->rxOnlyAntennaLabelsForTest(), expectedLabels(HPSDRModel::ANAN_G2_1K));
+        }
+        QVERIFY(expectedLabels(HPSDRModel::ANAN_G2_1K) != expectedLabels(HPSDRModel::HERMES));
+
+        // Hardware Config shows the Saturn's tabs, then follows a change.
+        SetupDialog* dialog = openSettings(h);
+        QVERIFY(dialog);
+        QVERIFY(showSetupLeaf(dialog, QStringLiteral("Hardware Config")));
+        auto* hardware = dialog->findChild<HardwarePage*>();
+        QVERIFY(hardware);
+        const BoardCapabilities& saturn = BoardCapsTable::forBoard(HPSDRHW::Saturn);
+        QCOMPARE(hardware->isTabVisibleForTest(HardwarePage::Tab::AntennaAlex),
+                 saturn.hasAlexFilters);
+        QCOMPARE(hardware->isTabVisibleForTest(HardwarePage::Tab::Diversity),
+                 saturn.hasDiversityReceiver);
+        QVERIFY(!hardware->isTabVisibleForTest(HardwarePage::Tab::Hl2Options));
+        QCOMPARE(hardware->tabTextForTest(HardwarePage::Tab::OcOutputs),
+                 QStringLiteral("OC Outputs"));
+        StationCapabilities hl2 = coreRadio(h, HPSDRHW::HermesLite, HPSDRModel::HERMESLITE,
+                                            QStringLiteral("AA:BB:CC:DD:EE:02"));
+        hl2.radioProtocol = 1;
+        h.pushCapabilities(hl2);
+        QTRY_VERIFY(hardware->isTabVisibleForTest(HardwarePage::Tab::Hl2Options));
+        QCOMPARE(hardware->tabTextForTest(HardwarePage::Tab::OcOutputs),
+                 QStringLiteral("Hermes Lite Control"));
+        dialog->close();
+
+        // Protocol Info shows the Core's radio.
+        h.pushCapabilities(coreRadio(h, HPSDRHW::Saturn, HPSDRModel::ANAN_G2_1K,
+                                     QStringLiteral("AA:BB:CC:DD:EE:46")));
+        QTRY_COMPARE(windowModel->currentRadioInfo().macAddress,
+                     QStringLiteral("AA:BB:CC:DD:EE:46"));
+        QAction* info = h.menuAction(QStringLiteral("&Radio"), QStringLiteral("&Protocol Info"));
+        QVERIFY(info);
+        QVERIFY(info->isEnabled());
+        QVERIFY(OperatorWording::isPlain(info->toolTip()));
+        const QString shown = protocolInfoText(h);
+        QVERIFY2(shown.contains(QStringLiteral("Protocol: P2")), qPrintable(shown));
+        QVERIFY2(shown.contains(QStringLiteral("192.168.1.50")), qPrintable(shown));
+        QVERIFY2(shown.contains(QStringLiteral("AA:BB:CC:DD:EE:46")), qPrintable(shown));
+        QVERIFY2(shown.contains(QStringLiteral("Firmware: 27")), qPrintable(shown));
+
+        // A Core whose radio is offline: Unknown, never Hermes.
+        StationCapabilities offline = h.server().buildCapabilities();
+        offline.board = HPSDRHW::Unknown;
+        offline.macAddress.clear();
+        offline.radioConnected = false;
+        offline.radioIdentityEntries = true;
+        offline.hpsdrModel = HPSDRModel::FIRST;
+        offline.radioProtocol = 0;
+        offline.radioAddress.clear();
+        h.pushCapabilities(offline);
+        QTRY_COMPARE(h.client()->capabilities().board, HPSDRHW::Unknown);
+        QCOMPARE(windowModel->hardwareProfile().model, HPSDRModel::FIRST);
+        QCOMPARE(windowModel->boardCapabilities().board, HPSDRHW::Unknown);
+
+        // An older Core (none of the three entries): Protocol Info shows
+        // what it has and says what it does not.
+        StationCapabilities older = coreRadio(h, HPSDRHW::Saturn, HPSDRModel::FIRST,
+                                              QStringLiteral("AA:BB:CC:DD:EE:46"));
+        older.radioIdentityEntries = false;
+        older.radioProtocol = 0;
+        older.radioAddress.clear();
+        h.pushCapabilities(older);
+        QTRY_COMPARE(windowModel->hardwareProfile().model, HPSDRModel::ANAN_G2);
+        QVERIFY(info->isEnabled());
+        const QString partial = protocolInfoText(h);
+        QVERIFY2(partial.contains(QStringLiteral("AA:BB:CC:DD:EE:46")), qPrintable(partial));
+        QVERIFY2(partial.contains(QStringLiteral("not reported by the Core")),
+                 qPrintable(partial));
+        QVERIFY(OperatorWording::isPlain(QStringLiteral("not reported by the Core")));
+        QVERIFY(h.client()->isHandshakeComplete());
     }
 
     // R-R3-21: a capability change from the Core re-gates the window on the

@@ -869,6 +869,7 @@ set(CORE_SOURCES
     src/core/NoiseFloorTracker.cpp
     src/core/ClarityController.cpp
     src/core/StepAttenuatorController.cpp
+    src/core/StepAttenuatorFacade.cpp
     src/core/CalibrationController.cpp
     src/core/PaCalProfile.cpp
     src/core/PaGainProfile.cpp
@@ -881,9 +882,11 @@ set(CORE_SOURCES
     src/core/SettingsHygiene.cpp
     src/core/Hl2OptionsModel.cpp
     src/core/IoBoardHl2.cpp
+    src/core/IoBoardHl2Facade.cpp
     src/core/HermesLiteBandwidthMonitor.cpp
     src/core/ModelPaths.cpp
     src/core/accessories/AlexController.cpp
+    src/core/accessories/AlexAntennaFacade.cpp
     src/core/accessories/ApolloController.cpp
     src/core/accessories/N2adrPreset.cpp
     src/core/accessories/PennyLaneController.cpp
@@ -924,6 +927,7 @@ set(CORE_SOURCES
     src/core/DxccColorProvider.cpp
     # Phase 3P-II PGXL/TGXL accessories
     src/core/PgxlConnection.cpp
+    src/core/PgxlStatusGauges.cpp
     src/core/TgxlConnection.cpp
     src/core/StationTgxlController.cpp
     # Phase 3P-III RF-Kit RF2K-S amplifier
@@ -933,6 +937,9 @@ set(CORE_SOURCES
     src/core/ConnectionDiagnostics.cpp
     # Phase 3P-II TGXL tuner model
     src/models/TunerModel.cpp
+    # R-R3-47: the Core's Power Genius and RF-Kit status objects
+    src/models/AmplifierModel.cpp
+    src/models/RfKitModel.cpp
     # Phase 3P-II Phase 4 (Advanced UI + helpers)
     src/core/FaultLog.cpp
     src/core/TuneMemoryStore.cpp
@@ -1493,6 +1500,17 @@ set(GUI_SOURCES
 # --------------------------------------------------------------------------
 qt_add_resources(RESOURCES resources.qrc)
 
+# R-R3-10 / R-R3-21: the band plans belong to the Core, not the GUI.
+# BandPlanManager (a NereusCore source, called from RadioModel) reads
+# :/bandplans, so the files are compiled into NereusCore. While they sat in
+# resources.qrc on NereusSDRLib, any program that used only Core symbols
+# (nereusd, and tst_bandplan_manager once GCC's default --as-needed dropped
+# the unused GUI library) loaded no band plans at all. The app still sees
+# the same five files: it loads NereusCore too. BandPlanManager.cpp also
+# calls Q_INIT_RESOURCE(bandplans) so the resource stays reachable from a
+# Core-only link of any kind.
+qt_add_resources(CORE_RESOURCES resources/bandplans.qrc)
+
 # --------------------------------------------------------------------------
 # App icon (per-platform) — from main (PR #11)
 # --------------------------------------------------------------------------
@@ -1526,6 +1544,7 @@ endif()
 add_library(NereusCore SHARED
     ${CORE_SOURCES}
     ${MODEL_SOURCES}
+    ${CORE_RESOURCES}
 )
 
 add_library(NereusSDRLib SHARED
@@ -1562,6 +1581,7 @@ if(NEREUSSDR_LTO_AVAILABLE)
     add_library(NereusCore_LTO OBJECT
         ${CORE_SOURCES}
         ${MODEL_SOURCES}
+        ${CORE_RESOURCES}
     )
     add_library(NereusGui_LTO OBJECT
         ${GUI_SOURCES}

@@ -61,6 +61,16 @@
 //                 move, setActive, delete) for remote windows, and a
 //                 remote window's add routed as a request.
 //                 NereusSDR-original; no Thetis logic.
+//   2026-09-23 : R-R3-46 / R-R3-11 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The step attenuator facade
+//                 (`stepAtt`), bound to the controller on a Local model.
+//                 NereusSDR-original; no Thetis logic.
+//   2026-09-23 : R-R3-47 / R-R3-22 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The Power Genius and RF-Kit status
+//                 objects (`amplifier`, `rfkit`), bound on a Local model;
+//                 the Power Genius dBm and return-loss conversions shared
+//                 with them through PgxlStatusGauges. NereusSDR-original;
+//                 no Thetis logic.
 //   2026-09-23 : R-R3-44 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code. A remote window's slices keep their VAX
 //                 channel through setRemoteVaxChannelStore(), never the
@@ -95,6 +105,17 @@
 //                 propagation to TransmitModel::setStepAttenuatorController
 //                 inside RadioModel::setStepAttController.  J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: the `alexAntennas` object, the Core's
+//                 hardware apply step and the I/O board probe request. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 / R-R3-11: followTxSliceWithStepAttenuator and
+//                 syncStepAttenuatorToTxSlice: with a local radio each band
+//                 restores its attenuator and preamp and sends them to the
+//                 radio (Thetis console.cs:17325 [v2.10.3.15]). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 fix wave: attenuator follows slice A, ioBoard,
+//                 OC reload, torn load reads, remote meter offset 0. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -321,6 +342,9 @@ warren@wpratt.com
 #include "models/PureSignalSettings.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/session/PureSignalSessionFacade.h"
+#include "core/StepAttenuatorFacade.h"
+#include "core/accessories/AlexAntennaFacade.h"
+#include "core/IoBoardHl2Facade.h"
 #include "core/PureSignal.h"
 #include "core/PsFeedbackChannel.h"
 #include "core/StepAttenuatorController.h"
@@ -406,10 +430,14 @@ warren@wpratt.com
 // line PGXL sends so we can design the response layer in a follow-up.
 #include "core/SmartSdrApiListener.h"
 #include "core/StationTgxlController.h"
+#include "core/PgxlStatusGauges.h"
+#include "models/AmplifierModel.h"
+#include "models/RfKitModel.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <tuple>
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -652,6 +680,23 @@ RadioModel::RadioModel(Role role, QObject* parent)
     }
     m_pureSignalSettings = new PureSignalSettings(this);
     m_pureSignalFacade = new PureSignalSessionFacade(this, nullptr, this);
+    m_stepAttFacade = new StepAttenuatorFacade(this, this);
+    // R-R3-46 (radioHardwareVersion 2): the Alex antenna settings as one
+    // mirrored object. A Local model (the Core, or a local window) binds it
+    // to its own controller; a Remote model holds the Core's values.
+    m_alexAntennaFacade = new AlexAntennaFacade(this);
+    if (role == Role::Local) {
+        m_alexAntennaFacade->bindController(&m_alexController);
+    }
+    // R-R3-46 (radioHardwareVersion 3): the HL2 I/O board, read-only. The
+    // Core follows its own board; a remote window writes the Core's values
+    // into its board, which Setup's HL2 I/O board tab shows.
+    m_ioBoardFacade = new IoBoardHl2Facade(this);
+    if (role == Role::Local) {
+        m_ioBoardFacade->bindBoard(&m_ioBoard);
+    } else {
+        m_ioBoardFacade->setTargetBoard(&m_ioBoard);
+    }
     if (role == Role::Local) {
         m_pureSignalSettings->load(AppSettings::instance().lastConnected());
         connect(m_pureSignalSettings, &PureSignalSettings::configurationChanged, this, [this]() {
@@ -1299,6 +1344,24 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // RfKit_ManualIp / RfKit_ManualPort from per-MAC peripherals scope at
     // that point).
     m_rfKitConnection = std::make_unique<Rf2ksConnection>(this);
+
+    // R-R3-47 / R-R3-22: the Power Genius and RF-Kit status the Core mirrors
+    // as `amplifier` and `rfkit`. A Local model (the Core, a local window)
+    // follows its own connections and the station's switches for them; a
+    // Remote model's objects hold only what the Core sends and never touch
+    // this computer's accessory connections.
+    m_amplifierModel = new AmplifierModel(this);
+    m_rfKitModel = new RfKitModel(this);
+    if (m_role == Role::Local) {
+        m_amplifierModel->bindConnection(m_pgxlConnection);
+        m_rfKitModel->bindConnection(m_rfKitConnection.get());
+        m_amplifierModel->setAccessoryEnabled(fourO3AEnabled());
+        m_rfKitModel->setAccessoryEnabled(rfKitEnabled());
+        connect(this, &RadioModel::fourO3AEnabledChanged,
+                m_amplifierModel, &AmplifierModel::setAccessoryEnabled);
+        connect(this, &RadioModel::rfKitEnabledChanged,
+                m_rfKitModel, &RfKitModel::setAccessoryEnabled);
+    }
 
     // Per-radio peripherals refactor (2026-05-26): the ctor-time RF-Kit
     // auto-connect from globals was removed.  The lifecycle now runs in
@@ -2390,6 +2453,12 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // same callstack inside onConnectionStateChanged).
     connect(this, &RadioModel::currentRadioChanged, this,
             [this](const NereusSDR::RadioInfo& info) {
+        // R-R3-46: a remote model emits this for the Core's radio too. Its
+        // transmit slice is the Core's, mirrored; restoring a saved one here
+        // would hand off a slice the Core never moved.
+        if (m_role == Role::Remote) {
+            return;
+        }
         if (m_txSliceArbiter) {
             m_txSliceArbiter->setMacAddress(info.macAddress);
             m_txSliceArbiter->load();
@@ -2861,6 +2930,12 @@ void RadioModel::setStepAttController(StepAttenuatorController* c)
     // false unconditionally per Phase 3A).
     m_stepAttController = c;
     m_transmitModel.setStepAttenuatorController(c);
+    // R-R3-46: the mirrored `stepAtt` object follows the Core's controller.
+    // A Remote model's facade holds the Core's values instead, so a remote
+    // window's own (radio-less) controller is never bound to it.
+    if (m_role == Role::Local) {
+        m_stepAttFacade->bindController(c);
+    }
 
     // 2026-05-22 spectrum-calibration fix: rxMeterOffsetDb() depends on
     // the StepAttenuatorController state (preamp mode + step-att enable +
@@ -2890,6 +2965,90 @@ void RadioModel::setStepAttController(StepAttenuatorController* c)
         // Initial emit so subscribers seed their cache with the current
         // value rather than waiting for the first controller change.
         recompute();
+    }
+}
+
+// R-R3-46 / R-R3-11: each band remembers its attenuator and preamp, with a
+// local radio and on the Core (DaemonApp calls this too). The attenuator
+// belongs to the receive ADC, so its band is the receive band of slice A
+// (slice 0), the RX1 equivalent; the ATT-on-TX value and the CW check on
+// MOX follow the transmit-bound slice's band and mode, as Thetis keeps
+// _tx_band and the TX DSP mode apart from rx1_band. Re-fed on every band or
+// mode change of either slice and when the transmit binding moves.
+// StepAttenuatorController::setBand saves the old band's values, restores
+// the new band's and (setBandRestoreToRadio) sends them to the radio.
+// From Thetis console.cs:17325 [v2.10.3.15] (RX1Band setter):
+//   SetupForm.ATTOnTX = getTXstepAttenuatorForBand(_tx_band); //[2.10.3.6]MW0LGE att_fixes
+//   RX1PreampMode = rx1_preamp_by_band[(int)rx1_band];
+//   RX1AttenuatorData = getRX1stepAttenuatorForBand(rx1_band);
+//   //[2.10.3.6]MW0LGE this tmp is needed because RX1AGCMode causes an update to the setup form
+// From Thetis console.cs:29612-29616 [v2.10.3.15] (MOX, the CW check reads
+// the transmit DSP mode):
+//   //MW0LGE [2.9.0.7] added option to always apply 31 att from setup form when not in ps
+//   int txAtt = getTXstepAttenuatorForBand(_tx_band);
+//   ... (radio.GetDSPTX(0).CurrentDSPMode == DSPMode.CWL ||
+//        radio.GetDSPTX(0).CurrentDSPMode == DSPMode.CWU)) txAtt = 31; // reset when PS is OFF or in CW mode
+namespace {
+// Slice A: the receiver whose band the step attenuator follows (Thetis RX1).
+constexpr int kStepAttReceiveSliceId = 0;
+} // namespace
+
+void RadioModel::followReceiveSliceWithStepAttenuator()
+{
+    // A remote window's values are the Core's: the Core restores and sends.
+    if (m_role != Role::Local || !m_stepAttController || m_stepAttFollowsSlices) {
+        return;
+    }
+    m_stepAttFollowsSlices = true;
+    m_stepAttController->setBandRestoreToRadio(true);
+
+    auto wireSlice = [this](SliceModel* slice) {
+        if (!slice) {
+            return;
+        }
+        const auto drives = [this, slice] {
+            return slice->sliceIndex() == kStepAttReceiveSliceId || slice == txBoundSlice();
+        };
+        connect(slice, &SliceModel::bandChanged, this, [this, drives](Band) {
+            if (drives()) {
+                syncStepAttenuatorToReceiveSlice();
+            }
+        });
+        connect(slice, &SliceModel::dspModeChanged, this, [this, drives](DSPMode) {
+            if (drives()) {
+                syncStepAttenuatorToReceiveSlice();
+            }
+        });
+    };
+    for (SliceModel* const slice : m_slices) {
+        wireSlice(slice);
+    }
+    connect(this, &RadioModel::sliceAdded, this, [this, wireSlice](int index) {
+        wireSlice(sliceById(index));
+        if (index == kStepAttReceiveSliceId) {
+            syncStepAttenuatorToReceiveSlice();
+        }
+    });
+    if (m_txSliceArbiter) {
+        connect(m_txSliceArbiter, &TxSliceArbiter::txBoundSliceChanged, this,
+                [this](int, int) { syncStepAttenuatorToReceiveSlice(); });
+    }
+    syncStepAttenuatorToReceiveSlice();
+}
+
+void RadioModel::syncStepAttenuatorToReceiveSlice()
+{
+    if (m_role != Role::Local || !m_stepAttController) {
+        return;
+    }
+    // Receive band first: setBand also resets the transmit band, which the
+    // transmit-bound slice then sets.
+    if (SliceModel* const receive = sliceById(kStepAttReceiveSliceId)) {
+        m_stepAttController->setBand(receive->band());
+    }
+    if (SliceModel* const tx = txBoundSlice()) {
+        m_stepAttController->setTxBand(tx->band());
+        m_stepAttController->setCurrentDspMode(tx->dspMode());
     }
 }
 
@@ -3557,19 +3716,47 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
     m_model = caps.radioModelName;
     m_version = caps.firmwareVersion;
 
+    // R-R3-46: what a listener of currentRadioChanged would see differently.
+    const auto identityOf = [this]() {
+        return std::make_tuple(m_lastRadioInfo.macAddress, m_lastRadioInfo.boardType,
+                               m_lastRadioInfo.name, m_lastRadioInfo.firmwareVersion,
+                               m_lastRadioInfo.protocol, m_lastRadioInfo.address,
+                               m_hardwareProfile.model, m_hardwareProfile.effectiveBoard,
+                               m_hardwareProfile.caps);
+    };
+    const auto identityBefore = identityOf();
+
     // The MAC is what scopes every hardware/<mac>/ settings read, so it has
     // to be the STATION's radio rather than anything this client saw.
     m_lastRadioInfo.macAddress = caps.macAddress;
     m_lastRadioInfo.boardType = caps.board;
     m_lastRadioInfo.name = caps.stationName;
+    // R-R3-46: the rest of the stored radio info, so Protocol Info, Radio
+    // Info and every currentRadioChanged listener read the Core's radio.
+    // The Core sends its firmware as the number a local connect shows.
+    bool firmwareOk = false;
+    const int firmware = caps.firmwareVersion.trimmed().toInt(&firmwareOk);
+    m_lastRadioInfo.firmwareVersion = firmwareOk && firmware > 0 ? firmware : 0;
+    if (caps.radioProtocol == 2) {
+        m_lastRadioInfo.protocol = ProtocolVersion::Protocol2;
+    } else {
+        // 1, or not reported: RadioInfo's own default.
+        m_lastRadioInfo.protocol = ProtocolVersion::Protocol1;
+    }
+    m_lastRadioInfo.address = caps.radioAddress.isEmpty()
+        ? QHostAddress() : QHostAddress(caps.radioAddress);
 
     // Board type drives boardCapabilities(), which 14 GUI sites read for
-    // slider ranges, antenna counts and preamp tables. Routed through the
-    // same profileForModel(defaultModelForBoard(...)) pair connectToRadio()
-    // uses, so a remote client resolves the identical HardwareProfile a
-    // local one would for the same board.
-    m_hardwareProfile = ::NereusSDR::profileForModel(
-        ::NereusSDR::defaultModelForBoard(caps.board));
+    // slider ranges, antenna counts and preamp tables. R-R3-46: the Core's
+    // own model wins when it matches the board (an ANAN-8000DLE or ANAN-G2
+    // 1K keeps its row); otherwise the same defaultModelForBoard() a local
+    // connect uses picks it; and a Core with no radio (Unknown board) gives
+    // Unknown, never Hermes.
+    m_hardwareProfile = ::NereusSDR::profileForStation(caps.board, caps.hpsdrModel);
+    // As a local connect does before its currentRadioChanged: display units
+    // and clamps that depend on the model (HL2) read it from here.
+    m_transmitModel.setHpsdrModel(m_hardwareProfile.model);
+    const bool identityMoved = identityOf() != identityBefore;
 
     m_stationMaxSlices = caps.effectiveMaxSlices > 0 ? caps.effectiveMaxSlices : 1;
     m_stationUserDdcCount = caps.userDdcCount;
@@ -3584,6 +3771,15 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
     // sites the stale ones.
     setConnectionState(caps.radioConnected ? ConnectionState::Connected
                                            : ConnectionState::Disconnected);
+
+    // R-R3-46: then the radio itself, once per change of identity, as a
+    // local connect emits it after Connected with the profile already set.
+    // Every listener reads the settled profile and state. A resent
+    // descriptor for the same radio (a slice-limit change, a transmit
+    // permission) wakes nothing.
+    if (identityMoved) {
+        emit currentRadioChanged(m_lastRadioInfo);
+    }
 }
 
 void RadioModel::setStationConnectionState(ConnectionState s)
@@ -3706,6 +3902,15 @@ void RadioModel::reportStationRetuneRejected(int sliceId, const QString& reason)
 // (planned next).  Power users can edit the key directly today.
 double RadioModel::rxMeterOffsetDb() const
 {
+    // R-R3-46 fix wave: a remote window's readings are already calibrated.
+    // The Core adds its own offset (its attenuator, preamp and meter cal)
+    // to the S-meter values its SliceMeterPump mirrors and to the spectrum
+    // frames it sends (DaemonMediaController), so the window adds none: its
+    // own controller would put a second offset on the spectrum and on Max
+    // Bin, which reads the window's spectrum.
+    if (m_role == Role::Remote) {
+        return 0.0;
+    }
     const HPSDRModel model = m_hardwareProfile.model;
 
     // Per-radio factory cal default + user override (AppSettings key
@@ -5960,7 +6165,12 @@ void RadioModel::sampleReceiverDspLoad()
             reading.lifetimeMaxBlockUs = counters.maxBlockUs;
             reading.blockPeriodUs      = counters.blockPeriodUs;
             reading.currentBlockNs     = counters.currentBlockNs;
-            reading.intervalMaxBlockUs = channel->takeDspIntervalMaxBlockUs();
+            reading.readNs             = counters.readNs;
+            reading.consistent         = counters.consistent;
+            // A read the sampler skips leaves the interval's longest block
+            // for the next one.
+            reading.intervalMaxBlockUs =
+                counters.consistent ? channel->takeDspIntervalMaxBlockUs() : 0;
             if (m_dspWorker) {
                 const RxDspWorker::InputDelayStats input =
                     m_dspWorker->inputDelayStatsForSlice(sliceId, slice->streamIndex());
@@ -17324,6 +17534,190 @@ void RadioModel::flushRemoteDspOptionsApply()
     }
 }
 
+// ---------------------------------------------------------------------------
+// R-R3-46: scheduleRemoteHardwareApply / flushRemoteHardwareApply
+//
+// A Hardware Config write from a remote window lands in the Core's
+// AppSettings through StationServer. The controllers that hold hardware
+// settings in memory (the OC pin matrix, the calibration controller, the
+// HL2 options) read their keys only when the radio connects, so without
+// this the radio would not change until the next connect, and a later
+// save of the stale in-memory copy would overwrite the window's change.
+// This reloads each such controller from the saved keys; the N2ADR switch
+// re-runs the same preset the connect path runs. What is applied is
+// unchanged; only the moment is new, as with the DSP > Options apply.
+//
+// NereusSDR-original infrastructure; no Thetis source ported here.
+// ---------------------------------------------------------------------------
+
+// Coalescing window for remote hardware writes. One OC pin click in a
+// window saves the whole matrix (OcMatrix::save writes every band and pin),
+// so a burst of keys should cost one reload. Same window as the DSP >
+// Options apply above.
+static constexpr int kHardwareApplyCoalesceMs = 50;
+
+void RadioModel::scheduleRemoteHardwareApply(const QString& key)
+{
+    if (!ownsLocalDsp()) {
+        return;
+    }
+    const QString mac = currentRadioMac();
+    if (mac.isEmpty()) {
+        return;
+    }
+    const QString prefix = QStringLiteral("hardware/%1/").arg(mac);
+    if (!key.startsWith(prefix, Qt::CaseInsensitive)) {
+        return;
+    }
+    const QString rest = key.mid(prefix.size());
+    QString reload;
+    if (rest.startsWith(QLatin1String("oc/"))) {
+        reload = QStringLiteral("oc");
+    } else if (rest == QLatin1String("hl2IoBoard/n2adrFilter")) {
+        reload = QStringLiteral("n2adr");
+    } else if (rest.startsWith(QLatin1String("cal/"))) {
+        reload = QStringLiteral("cal");
+    } else if (rest.startsWith(QLatin1String("hl2/"))) {
+        reload = QStringLiteral("hl2");
+    } else {
+        return;
+    }
+    m_pendingHardwareReloads.insert(reload);
+
+    if (m_hardwareApplyTimer == nullptr) {
+        m_hardwareApplyTimer = new QTimer(this);
+        m_hardwareApplyTimer->setSingleShot(true);
+        connect(m_hardwareApplyTimer, &QTimer::timeout,
+                this, &RadioModel::flushRemoteHardwareApply);
+    }
+    // Trailing edge from the first key of a burst (see the DSP > Options
+    // apply above).
+    if (!m_hardwareApplyTimer->isActive()) {
+        m_hardwareApplyTimer->start(kHardwareApplyCoalesceMs);
+    }
+}
+
+void RadioModel::flushRemoteHardwareApply()
+{
+    if (m_pendingHardwareReloads.isEmpty()) {
+        return;
+    }
+    const QSet<QString> reloads = m_pendingHardwareReloads;
+    m_pendingHardwareReloads.clear();
+    const QString mac = currentRadioMac();
+    if (mac.isEmpty()) {
+        return;
+    }
+    const auto observe = [this](const QString& name) {
+        if (m_hardwareApplyObserverForTest) {
+            m_hardwareApplyObserverForTest(name);
+        }
+    };
+
+    // The OC pin matrix first, so an N2ADR switch in the same burst lands
+    // on top of the pins the window saved, as it does in the window.
+    if (reloads.contains(QStringLiteral("oc"))) {
+        m_ocMatrix.setMacAddress(mac);
+        m_ocMatrix.load();
+        observe(QStringLiteral("oc"));
+    }
+    // The same reconcile the connect path runs (see connectToRadio):
+    // the N2ADR switch on the Core's HL2 fills or clears the filter-board
+    // pins, and the matrix is saved as the connect path saves it.
+    if (reloads.contains(QStringLiteral("n2adr")) && boardCapabilities().hasIoBoardHl2) {
+        const bool n2adrOn = AppSettings::instance()
+                                 .hardwareValue(mac, QStringLiteral("hl2IoBoard/n2adrFilter"),
+                                                QStringLiteral("True"))
+                                 .toString() == QStringLiteral("True");
+        m_ocMatrix.setMacAddress(mac);
+        // R-R3-46 / R-R3-21: the preset also sets every transmit OC pin.
+        // A receive-only Core refuses a window's transmit pins
+        // (StationServer), so from a window it applies only the receive
+        // half: the operator's receive filtering follows the switch, the
+        // transmit pins stay as they were.
+        if (receiveOnlyStationPolicy()) {
+            applyN2adrPresetReceiveOnly(m_ocMatrix, n2adrOn);
+        } else {
+            applyN2adrPreset(m_ocMatrix, n2adrOn);
+        }
+        m_ocMatrix.save();
+        observe(QStringLiteral("n2adr"));
+    }
+    // The P2 codec reads effectiveFreqCorrectionFactor() for every
+    // high-priority command, so the reloaded factor goes out with the next.
+    if (reloads.contains(QStringLiteral("cal"))) {
+        m_calController.setMacAddress(mac);
+        m_calController.load();
+        // As the connect path does: a radio whose PA forward-power table
+        // was never saved gets its board's factory table, so a reload does
+        // not leave the Core without one.
+        // Source: Thetis console.cs:6691-6724 CalibratedPAPower [v2.10.3.13]
+        if (m_calController.paCalProfile().boardClass == PaCalBoardClass::None) {
+            m_calController.setPaCalProfile(
+                PaCalProfile::defaults(paCalBoardClassFor(m_hardwareProfile.model)));
+        }
+        observe(QStringLiteral("cal"));
+    }
+    if (reloads.contains(QStringLiteral("hl2"))) {
+        m_hl2Options.setMacAddress(mac);
+        m_hl2Options.load();
+        observe(QStringLiteral("hl2"));
+    }
+}
+
+// R-R3-46: a remote window keeps a copy of the Core's OC pin matrix
+// (OcOutputsTab, the SWL tab and the N2ADR switch read and save it). It
+// was loaded only when the Core's radio changed, and OcMatrix::save writes
+// every cell that differs from the store, so after the Core changed a pin
+// (another window, the N2ADR preset) the window's next click sent its stale
+// cells back and reverted the Core. The window now reloads the copy when a
+// key of the Core's radio's OC matrix arrives, once per burst.
+void RadioModel::scheduleRemoteOcReload(const QString& key)
+{
+    if (ownsLocalDsp()) {
+        return;
+    }
+    // The Core's radio, as its capabilities named it (a remote model has
+    // no connection of its own).
+    const QString mac = m_lastRadioInfo.macAddress;
+    if (mac.isEmpty()
+        || !key.startsWith(QStringLiteral("hardware/%1/oc/").arg(mac), Qt::CaseInsensitive)) {
+        return;
+    }
+    if (m_remoteOcReloadTimer == nullptr) {
+        m_remoteOcReloadTimer = new QTimer(this);
+        m_remoteOcReloadTimer->setSingleShot(true);
+        connect(m_remoteOcReloadTimer, &QTimer::timeout, this, [this]() {
+            const QString current = m_lastRadioInfo.macAddress;
+            if (current.isEmpty()) {
+                return;
+            }
+            m_ocMatrix.setMacAddress(current);
+            m_ocMatrix.load();
+        });
+    }
+    if (!m_remoteOcReloadTimer->isActive()) {
+        m_remoteOcReloadTimer->start(kHardwareApplyCoalesceMs);
+    }
+}
+
+RadioModel::IoBoardProbeOutcome RadioModel::requestIoBoardProbe()
+{
+    if (m_role == Role::Remote) {
+        if (m_station == nullptr) {
+            return {false, QStringLiteral("Connect to the Core to probe the I/O board.")};
+        }
+        const IStationLink::CommandOutcome outcome = m_station->requestIoBoardProbe();
+        return {outcome.sent, outcome.reason};
+    }
+    // The same call Setup's Probe button makes on a local radio.
+    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+        p1->requestIoBoardProbe();
+        return {true, {}};
+    }
+    return {false, QStringLiteral("The radio is not connected, so there is no I/O board to probe.")};
+}
+
 // Phase 3Q Sub-PR-4 D.3 — Segment hover tooltip.
 // Jitter / packet-loss / audio-backend rows omitted until those metrics
 // have real sources — no NYI placeholders per the "no NYI" rule.
@@ -17393,11 +17787,7 @@ void RadioModel::onPgxlStatus(const QMap<QString, QString>& kvs)
     // 2. Operate-state parse.
     if (kvs.contains(QStringLiteral("state"))) {
         const QString& st = kvs.value(QStringLiteral("state"));
-        const bool nowOperate =
-            (st == QStringLiteral("IDLE")        ||
-             st == QStringLiteral("OPERATE")     ||
-             st == QStringLiteral("TRANSMIT_A")  ||
-             st == QStringLiteral("TRANSMIT_B"));
+        const bool nowOperate = pgxlStateIsOperate(st);
         // Surface PGXL state edges in the log so the autotune
         // standby/restore cycle and the TX-engagement (OPERATE ->
         // TRANSMIT_A) handshake are visible without a debugger.
@@ -17434,18 +17824,10 @@ void RadioModel::onPgxlStatus(const QMap<QString, QString>& kvs)
             const float fwdDbm   = kvs.value(QStringLiteral("fwd")).toFloat();
             const float rlDbWire = kvs.value(QStringLiteral("swr")).toFloat();
             const float temp     = kvs.value(QStringLiteral("temp")).toFloat();
-            const float fwdW     = std::pow(10.0f, fwdDbm / 10.0f) / 1000.0f;
-            float swrRatio;
-            if (rlDbWire >= 0.0f) {
-                // RL >= 0 dB is physically open/short or measurement
-                // glitch; cap to 99 for display.
-                swrRatio = 99.0f;
-            } else {
-                const float gamma = std::pow(10.0f, rlDbWire / 20.0f);
-                swrRatio = (gamma >= 0.999f)
-                    ? 99.0f
-                    : (1.0f + gamma) / (1.0f - gamma);
-            }
+            // R-R3-47: the one Power Genius conversion (PgxlStatusGauges);
+            // RL >= 0 dB (open/short or a glitch) still caps at 99.
+            const float fwdW     = pgxlDbmToWatts(fwdDbm);
+            const float swrRatio = pgxlReturnLossToSwr(rlDbWire);
             FaultEvent ev{
                 QDateTime::currentMSecsSinceEpoch(),
                 st,
@@ -17467,16 +17849,9 @@ void RadioModel::onPgxlStatus(const QMap<QString, QString>& kvs)
     if (hasFwd && hasSwr) {
         const float dbm      = kvs.value(QStringLiteral("peakfwd")).toFloat();
         const float rlDbWire = kvs.value(QStringLiteral("swr")).toFloat();
-        const float watts    = std::pow(10.0f, dbm / 10.0f) / 1000.0f;
-        float ratio;
-        if (rlDbWire >= 0.0f) {
-            ratio = 99.0f;  // RL=0 -> infinite SWR; cap for display
-        } else {
-            const float gamma = std::pow(10.0f, rlDbWire / 20.0f);
-            ratio = (gamma >= 0.999f)
-                ? 99.0f
-                : (1.0f + gamma) / (1.0f - gamma);
-        }
+        // R-R3-47: the one Power Genius conversion (PgxlStatusGauges).
+        const float watts    = pgxlDbmToWatts(dbm);
+        const float ratio    = pgxlReturnLossToSwr(rlDbWire);
         emit ampMetersChanged(watts, ratio);
     }
 }

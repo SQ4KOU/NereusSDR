@@ -45,6 +45,27 @@
 //                                    NotchModel mirrors a notchControlVersion
 //                                    Core's list and sends notch.* requests.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the window holds a
+//                                    radioHardwareVersion Core's `stepAtt`
+//                                    object; its edits pass an edit gate.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-21: why the window's
+//                                    attenuator edits cannot reach the
+//                                    Core, for the window's controls.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: the `alexAntennas` object at
+//                 radioHardwareVersion 2, its edit gate and reason, and the
+//                 requestIoBoardProbe verb. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-47 / R-R3-22: the Core's read-only `amplifier` and
+//                 `rfkit` objects, applied as plain state, and whether they
+//                 are live. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-23 - R-R3-46 fix wave (radioHardwareVersion 3): the read-only
+//                 `ioBoard` object, one band's antenna at a time
+//                 (setAlexRxAntenna), and the window's OC pin matrix copy
+//                 reloaded when the Core's OC settings arrive. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -55,12 +76,17 @@
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionTransport.h"
 #include "core/settings/SettingsProxy.h"
+#include "models/AmplifierModel.h"
 #include "models/NotchModel.h"
+#include "models/RfKitModel.h"
 #include "models/PanadapterModel.h"
 #include "models/PureSignalSettings.h"
 #include "core/dsp/DspAssetService.h"
 #include "DspCommandValues.h"
 #include "PureSignalSessionFacade.h"
+#include "core/StepAttenuatorFacade.h"
+#include "core/accessories/AlexAntennaFacade.h"
+#include "core/IoBoardHl2Facade.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -1561,6 +1587,91 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         }
     }
 
+    // R-R3-46 / R-R3-11: a Core with radioHardwareVersion 1 mirrors its step
+    // attenuator and preamp as `stepAtt` and applies the window's edits
+    // through its own controller. The window's edits pass only while that
+    // holds; against an older Core the key is not registered, so its object
+    // (if any) is dropped and nothing is sent.
+    if (StepAttenuatorFacade* stepAtt = m_radioModel->stepAttFacade()) {
+        stepAtt->setEditGate([self](QString* reason) {
+            const bool allowed = self
+                && (self->m_applyingInbound || self->remoteRadioHardwareAvailable());
+            if (!allowed && reason) {
+                *reason = self ? self->radioHardwareUnavailableReason()
+                               : QStringLiteral("Connect to the Core to change the attenuator "
+                                                "and preamp.");
+            }
+            return allowed;
+        });
+        if (m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+            && m_capabilities.radioHardwareVersion >= 1) {
+            m_objects.insert("stepAtt", stepAtt);
+            watchForOutbound("stepAtt", stepAtt);
+        } else {
+            m_objects.remove("stepAtt");
+            m_outboundMirror->unwatch("stepAtt");
+        }
+    }
+
+    // R-R3-46: a Core with radioHardwareVersion 2 mirrors its Alex antenna
+    // settings as `alexAntennas` and applies the window's receive edits
+    // through its own AlexController. Same gate shape as `stepAtt`.
+    if (AlexAntennaFacade* alex = m_radioModel->alexAntennaFacade()) {
+        alex->setEditGate([self](QString* reason) {
+            const bool allowed = self
+                && (self->m_applyingInbound || self->remoteHardwareConfigAvailable());
+            if (!allowed && reason) {
+                *reason = self ? self->hardwareConfigUnavailableReason()
+                               : QStringLiteral("Connect to the Core to change the radio's "
+                                                "hardware settings.");
+            }
+            return allowed;
+        });
+        if (m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+            && m_capabilities.radioHardwareVersion >= 2) {
+            m_objects.insert("alexAntennas", alex);
+            watchForOutbound("alexAntennas", alex);
+        } else {
+            m_objects.remove("alexAntennas");
+            m_outboundMirror->unwatch("alexAntennas");
+        }
+        // R-R3-46 fix wave (radioHardwareVersion 3): one band's antenna at a
+        // time, so a list built before the Core changed another band cannot
+        // put that band back. A version 2 Core gets today's whole list.
+        if (m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+            && m_capabilities.radioHardwareVersion >= 3) {
+            alex->setBandEditSender([self](Band band, int antenna, bool rxOnly, QString* reason) {
+                if (!self) {
+                    return false;
+                }
+                const CommandOutcome outcome = self->requestAlexRxAntenna(band, antenna, rxOnly);
+                if (!outcome.sent && reason) {
+                    *reason = outcome.reason;
+                }
+                return outcome.sent;
+            });
+        } else {
+            alex->setBandEditSender({});
+        }
+    }
+
+    // R-R3-46 fix wave (radioHardwareVersion 3): the Core's HL2 I/O board,
+    // read-only; its values go into the window's own board, which Setup's
+    // HL2 I/O board tab shows.
+    if (IoBoardHl2Facade* ioBoard = m_radioModel->ioBoardFacade()) {
+        if (m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+            && m_capabilities.radioHardwareVersion >= 3) {
+            m_objects.insert("ioBoard", ioBoard);
+            watchForOutbound("ioBoard", ioBoard);
+        } else {
+            m_objects.remove("ioBoard");
+            m_outboundMirror->unwatch("ioBoard");
+            // Follow-up item 5: the window's board shows no Core's board
+            // it cannot follow (a previous Core's readings would stay).
+            ioBoard->clearRemoteValues();
+        }
+    }
+
     const QByteArray transmitKey(kTransmitKey);
     m_objects.insert(transmitKey, &m_radioModel->transmitModel());
     watchForOutbound(transmitKey, &m_radioModel->transmitModel());
@@ -1569,6 +1680,33 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         const QByteArray tunerKey(kTunerKey);
         m_objects.insert(tunerKey, m_radioModel->tunerModel());
         watchForOutbound(tunerKey, m_radioModel->tunerModel());
+    }
+
+    // R-R3-47 / R-R3-22: the Core's Power Genius and RF-Kit status, read
+    // only. Registered against a Core that offers them; otherwise the key
+    // is not held and an object for it is dropped as skew. Nothing on
+    // either is ever written back.
+    const struct {
+        const char* key;
+        QObject* object;
+        bool offered;
+    } accessories[] = {
+        { "amplifier", m_radioModel->amplifierModel(),
+          m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+              && m_capabilities.remotePgxlControlVersion >= 1 },
+        { "rfkit", m_radioModel->rfKitModel(),
+          m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+              && m_capabilities.remoteRfKitControlVersion >= 1 },
+    };
+    for (const auto& accessory : accessories) {
+        const QByteArray key(accessory.key);
+        if (accessory.object != nullptr && accessory.offered) {
+            m_objects.insert(key, accessory.object);
+            watchForOutbound(key, accessory.object);
+        } else {
+            m_objects.remove(key);
+            m_outboundMirror->unwatch(key);
+        }
     }
 
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
@@ -1596,6 +1734,13 @@ void StationClient::handleSettingsSnapshot(const SessionMessage& message)
 
     const bool firstSnapshot = !m_settingsProxy->hasReceivedSnapshot();
     m_settingsProxy->applySnapshot(data);
+    // R-R3-46: the window's copy of the Core's OC pin matrix follows the
+    // Core's settings (RadioModel::scheduleRemoteOcReload, coalesced).
+    if (!m_radioModel.isNull()) {
+        for (auto it = data.constBegin(); it != data.constEnd(); ++it) {
+            m_radioModel->scheduleRemoteOcReload(it.key());
+        }
+    }
 
     // Ready only NOW, never earlier. SliceModel, NotchModel,
     // FilterPresetStore and TciServer all do contains()-then-seed against
@@ -1637,12 +1782,18 @@ void StationClient::handleSettingsValue(const SessionMessage& message)
     // sent a real entry holding "" for a removal and this method cached
     // it, so the client reported contains() true and value(key, default)
     // "" for a key the station did not have.
+    const QString key = QString::fromUtf8(message.objectKey);
     if (message.updates.isEmpty()) {
-        m_settingsProxy->applyRemoteRemoval(QString::fromUtf8(message.objectKey));
-        return;
+        m_settingsProxy->applyRemoteRemoval(key);
+    } else {
+        m_settingsProxy->applyRemoteValue(key, message.updates.first().value,
+                                          message.originTag);
     }
-    m_settingsProxy->applyRemoteValue(QString::fromUtf8(message.objectKey),
-                                      message.updates.first().value, message.originTag);
+    // R-R3-46: a changed cell of the Core's OC pin matrix reloads the
+    // window's copy, so its next save cannot send a stale cell back.
+    if (!m_radioModel.isNull()) {
+        m_radioModel->scheduleRemoteOcReload(key);
+    }
 }
 
 void StationClient::handleSettingsReject(const SessionMessage& message)
@@ -1656,6 +1807,10 @@ void StationClient::handleSettingsReject(const SessionMessage& message)
     const QVariant restored =
         message.updates.isEmpty() ? QVariant() : message.updates.first().value;
     m_settingsProxy->applyRejection(QString::fromUtf8(message.objectKey), restored);
+    // R-R3-46: a refused OC cell settles the window's copy on the Core's.
+    if (!m_radioModel.isNull()) {
+        m_radioModel->scheduleRemoteOcReload(QString::fromUtf8(message.objectKey));
+    }
     if (!message.reason.isEmpty() && m_radioModel) {
         m_radioModel->reportStationSliceCommandRejected(message.reason);
     }
@@ -2160,6 +2315,18 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
         auto* notches = qobject_cast<NotchModel*>(target);
         return notches && notches->applyRemoteProperty(propertyName, native);
     }
+    if (className == "StepAttenuatorFacade") {
+        auto* stepAtt = qobject_cast<StepAttenuatorFacade*>(target);
+        return stepAtt && stepAtt->applyRemoteProperty(propertyName, native);
+    }
+    if (className == "AlexAntennaFacade") {
+        auto* alex = qobject_cast<AlexAntennaFacade*>(target);
+        return alex && alex->applyRemoteProperty(propertyName, native);
+    }
+    if (className == "IoBoardHl2Facade") {
+        auto* ioBoard = qobject_cast<IoBoardHl2Facade*>(target);
+        return ioBoard && ioBoard->applyRemoteProperty(propertyName, native);
+    }
     if (className == "PureSignalSettings") {
         auto* settings = qobject_cast<PureSignalSettings*>(target);
         return settings && settings->applyStationDiagnostic(propertyName, native);
@@ -2167,6 +2334,15 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
     if (className == "TunerModel") {
         auto* tuner = qobject_cast<TunerModel*>(target);
         return tuner != nullptr && tuner->applyStationValue(propertyName, native);
+    }
+    // R-R3-47 / R-R3-22: plain state applies; never a command to an amp.
+    if (className == "AmplifierModel") {
+        auto* amp = qobject_cast<AmplifierModel*>(target);
+        return amp != nullptr && amp->applyStationValue(propertyName, native);
+    }
+    if (className == "RfKitModel") {
+        auto* rfKit = qobject_cast<RfKitModel*>(target);
+        return rfKit != nullptr && rfKit->applyStationValue(propertyName, native);
     }
     if (className != "SliceModel") {
         return false;
@@ -2524,6 +2700,63 @@ bool StationClient::remoteNotchControlAvailable() const
         && m_capabilities.notchControlVersion >= 1;
 }
 
+bool StationClient::remoteRadioHardwareAvailable() const
+{
+    return propertyResultsAvailable() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.radioHardwareVersion >= 1;
+}
+
+QString StationClient::radioHardwareUnavailableReason() const
+{
+    if (remoteRadioHardwareAvailable()) {
+        return {};
+    }
+    if (!m_handshakeComplete) {
+        return QStringLiteral("Connect to the Core to change the attenuator and preamp.");
+    }
+    return QStringLiteral("This Core cannot change its radio's attenuator for this "
+                          "app. Updating the Core may help.");
+}
+
+bool StationClient::remoteHardwareConfigAvailable() const
+{
+    return propertyResultsAvailable() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.radioHardwareVersion >= 2;
+}
+
+QString StationClient::hardwareConfigUnavailableReason() const
+{
+    if (remoteHardwareConfigAvailable()) {
+        return {};
+    }
+    if (!m_handshakeComplete) {
+        return QStringLiteral("Connect to the Core to change the radio's hardware settings.");
+    }
+    return QStringLiteral("This Core cannot change its radio's hardware settings for this "
+                          "app. Updating the Core may help.");
+}
+
+StationClient::CommandOutcome StationClient::requestAlexRxAntenna(Band band, int antenna,
+                                                                  bool rxOnly)
+{
+    if (!remoteHardwareConfigAvailable() || m_capabilities.radioHardwareVersion < 3) {
+        return {false, hardwareConfigUnavailableReason()};
+    }
+    return sendCommand("setAlexRxAntenna", -1,
+                       { intArgument("band", static_cast<int>(band)),
+                         intArgument("antenna", antenna), boolArgument("rxOnly", rxOnly) },
+                       QStringLiteral("the antenna change"));
+}
+
+StationClient::CommandOutcome StationClient::requestIoBoardProbe()
+{
+    if (!remoteHardwareConfigAvailable()) {
+        return {false, hardwareConfigUnavailableReason()};
+    }
+    return sendCommand("requestIoBoardProbe", -1, {},
+                       QStringLiteral("the I/O board probe"));
+}
+
 bool StationClient::nnrControlAvailable() const
 {
     return propertyResultsAvailable() && m_capabilities.nnrVersion > 0;
@@ -2641,6 +2874,13 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         } else {
             m_radioModel->reportStationSliceCommandRejected(reason);
         }
+        // R-R3-46 fix wave: a refused band antenna leaves the window's
+        // values as the Core's; the Setup tab that showed the click re-reads.
+        if (pending.verb == "setAlexRxAntenna") {
+            if (AlexAntennaFacade* alex = m_radioModel->alexAntennaFacade()) {
+                alex->reportBandEditRefused();
+            }
+        }
     }
 
     const bool isCtunCommand = pending.verb == "requestStreamCtunPinned"
@@ -2718,6 +2958,24 @@ bool StationClient::remoteTgxlConfigAvailable() const
         && m_transport && m_transport->isOpen()
         && m_agreedMinor >= kRemoteTgxlConfigSessionProtocolMinor
         && m_capabilities.remoteTgxlConfigVersion >= 1;
+}
+
+bool StationClient::stationLinkReady() const
+{
+    return m_sessionActive && m_authenticated && m_handshakeComplete
+        && m_transport && m_transport->isOpen();
+}
+
+bool StationClient::remoteAmplifierStatusAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remotePgxlControlVersion >= 1;
+}
+
+bool StationClient::remoteRfKitStatusAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remoteRfKitControlVersion >= 1;
 }
 
 bool StationClient::remoteFourO3AControlAvailable() const

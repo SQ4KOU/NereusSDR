@@ -224,6 +224,10 @@ private:
     void refreshPanGrantStatus(const QString& panId);
     PanDisplayState perPanRefusalStatus(const QString& panId) const;
     void refreshCtunState();
+    // R-R3-18/19: a C-Tune centre gesture from one pan, at most one request
+    // in flight per stream, never a zoom on a stream other receivers share.
+    void requestCentreFromGesture(quint32 endpointId, double centreHz);
+    void finishCentreRequest(int sliceId, quint64 streamEpoch, bool accepted);
     void receiveControl(const QJsonObject& payload, quint32 epoch);
     void receiveDisplay(const QByteArray& packet);
     void reportDisplayDrops();

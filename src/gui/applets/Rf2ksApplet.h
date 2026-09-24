@@ -4,6 +4,10 @@
 //   2026-05-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude.
 //   Layout patterns from src/gui/applets/AmpApplet.{h,cpp} (which is
 //   an AetherSDR port). The RF-Kit-specific content is original.
+//   2026-09-23  R-R3-47 / R-R3-22: the header, gauges and strip read the
+//   RadioModel's RfKitModel (the Core's `rfkit` object in a remote
+//   window), with a stale line when a remote window loses the Core.
+//   J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 #include "AppletWidget.h"
@@ -20,6 +24,7 @@ namespace NereusSDR {
 
 class HGauge;
 class RadioModel;
+class RfKitModel;
 
 // Rf2ksApplet -- RF-Kit RF2K-S power amplifier control applet.
 //
@@ -47,7 +52,8 @@ public:
 
     QString appletId()    const override { return QStringLiteral("RfKit"); }
     QString appletTitle() const override { return QStringLiteral("RF-Kit RF2K-S"); }
-    void    syncFromModel() override {}
+    // R-R3-47: fills the header, gauges and strip from the RfKitModel.
+    void    syncFromModel() override { syncFromRfKit(); }
 
     // Test seams (Section A - Task 7).
     QString deviceLabelTextForTesting()    const;
@@ -71,6 +77,10 @@ public:
     bool    tuneButtonIsEnabledForTesting()            const;
     bool    bypassButtonIsEnabledForTesting()          const;
     QString tuneButtonTooltipForTesting()              const;
+    // Test seams (R-R3-47).
+    bool    connectedStateForTesting()                 const { return m_connected; }
+    bool    staleIndicatorVisibleForTesting()          const;
+    QString staleIndicatorTextForTesting()             const;
 
 signals:
     // Emitted when the user clicks the OPERATE/STANDBY toggle button.
@@ -103,6 +113,12 @@ public slots:
 protected:
     void contextMenuEvent(QContextMenuEvent* ev) override;
 
+private slots:
+    // R-R3-47: the RfKitModel's readings into the header, gauges and strip.
+    void syncFromRfKit();
+    // R-R3-47: a remote window says when its readings are not live.
+    void updateStationState();
+
 private:
     QMenu* buildContextMenu(QObject* menuParent);
     bool   isRemoteModel() const;
@@ -127,6 +143,11 @@ private:
     QLabel*                  m_tunerStatusLabel{nullptr};
     QPushButton*             m_tuneBtn{nullptr};
     QPushButton*             m_bypassBtn{nullptr};
+
+    // R-R3-47: the readings this applet shows, and a remote window's line
+    // saying they are stale (Core lost) or not offered (older Core).
+    RfKitModel* m_rfKit{nullptr};
+    QLabel*     m_staleLabel{nullptr};
 };
 
 } // namespace NereusSDR

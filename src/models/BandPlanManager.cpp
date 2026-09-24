@@ -17,6 +17,14 @@
 //                                    BandPlanName only when it changes.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 Linux suite fixes (R-R3-10,
+//                                    R-R3-21): the band-plan files are a
+//                                    NereusCore resource, initialised
+//                                    here, so a Core-only program
+//                                    (nereusd) loads them; loadPlans()
+//                                    logs how many it found. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 
 #include "BandPlanManager.h"
 
@@ -29,6 +37,16 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
+
+// R-R3-10 / R-R3-21: the band plans are compiled into NereusCore from
+// resources/bandplans.qrc (CMakeLists.txt). Q_INIT_RESOURCE must sit
+// outside any namespace; calling it from the loader ties the resource to
+// the code that reads it, so no Core-only link can leave it out.
+// Registering an already-registered resource is a no-op in Qt.
+static void initBandPlanResources()
+{
+    Q_INIT_RESOURCE(bandplans);
+}
 
 namespace NereusSDR {
 
@@ -46,6 +64,8 @@ void BandPlanManager::loadPlans()
 {
     m_plans.clear();
 
+    initBandPlanResources();
+
     QDir resDir(":/bandplans");
     const auto entries = resDir.entryList({"*.json"}, QDir::Files, QDir::Name);
     for (const auto& filename : entries) {
@@ -53,6 +73,11 @@ void BandPlanManager::loadPlans()
         if (loadPlanFromJson(":/bandplans/" + filename, plan)) {
             m_plans.append(std::move(plan));
         }
+    }
+    if (m_plans.isEmpty()) {
+        qCWarning(lcBandPlan) << "loadPlans: no band plans found in :/bandplans";
+    } else {
+        qCInfo(lcBandPlan) << "loadPlans: loaded" << m_plans.size() << "band plans";
     }
 
     // Activate the persisted plan, defaulting to "ARRL (US)" on first launch.

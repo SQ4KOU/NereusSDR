@@ -17,6 +17,16 @@
 //               ceiling reaches only apps that know the budget reason
 //               (R-R3-08, R-R3-37, R-R3-40), by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23: the Core's attenuator range is the one the local RX applet
+//               uses (BoardCapsTable::stepAttMaxDb, so a board with Alex
+//               reaches 61 dB), and its controller saves a change shortly
+//               after it is made and sends a band's restored attenuation
+//               to the radio (R-R3-46, R-R3-11), by J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23: the step attenuator uses RadioModel's feed (slice A's
+//               receive band, as Thetis rx1_band) instead of a copy of it
+//               (R-R3-46, R-R3-11), by J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 //   2026-09-23: R-R3-44: nereusd publishes no VAX devices on the Core
 //               host (VAX belongs to the remote window's computer), by
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
@@ -35,6 +45,7 @@
 #include "core/FFTRouter.h"
 #include "core/LogCategories.h"
 #include "core/MoxController.h"
+#include "core/BoardCapabilities.h"
 #include "core/StepAttenuatorController.h"
 #include "core/TxSliceArbiter.h"
 #include "core/WdspEngine.h"
@@ -145,6 +156,12 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     m_radioModel->setReceiveOnlyStationPolicy(true);
     m_radioModel->enableStationAccessoryIdentity();
     m_stepAttController = std::make_unique<StepAttenuatorController>();
+    // R-R3-46 / R-R3-11: a change from a remote window is on disk shortly
+    // after the Core applies it, not only when the Core stops.
+    m_stepAttController->setDebouncedSaveEnabled(true);
+    // R-R3-46: a band change on the Core sends that band's attenuation and
+    // preamp to the radio, so the radio runs what every window shows.
+    m_stepAttController->setBandRestoreToRadio(true);
     m_radioModel->setStepAttController(m_stepAttController.get());
     m_stepAttController->setReceiverManager(m_radioModel->receiverManager());
     if (MoxController* const mox = m_radioModel->moxController()) {
@@ -360,22 +377,11 @@ void DaemonApp::configureStepAttenuatorController(const QString& mac)
         return;
     }
 
-    for (SliceModel* const slice : m_radioModel->slices()) {
-        wireStepAttenuatorSlice(slice);
-    }
-    connect(m_radioModel.get(), &RadioModel::sliceAdded, this,
-            [this](int index) {
-        if (!m_radioModel) {
-            return;
-        }
-        if (SliceModel* const slice = m_radioModel->sliceById(index)) {
-            wireStepAttenuatorSlice(slice);
-        }
-    });
-    if (TxSliceArbiter* const arbiter = m_radioModel->txSliceArbiter()) {
-        connect(arbiter, &TxSliceArbiter::txBoundSliceChanged, this,
-                [this](int, int) { syncStepAttenuatorBandAndMode(); });
-    }
+    // R-R3-46: the same feed a local window uses (RadioModel::
+    // followReceiveSliceWithStepAttenuator): slice A's receive band for the
+    // attenuator and preamp memory, the transmit slice's band and mode for
+    // ATT-on-TX, on every change of either and when the binding moves.
+    m_radioModel->followReceiveSliceWithStepAttenuator();
 
     m_stepAttControllerConfigured = true;
     applyStepAttenuatorConnection(mac);
@@ -389,46 +395,21 @@ void DaemonApp::applyStepAttenuatorConnection(const QString& mac)
 
     const auto& caps = m_radioModel->boardCapabilities();
     m_stepAttController->setMinAttenuation(caps.attenuator.minDb);
-    m_stepAttController->setMaxAttenuation(caps.attenuator.maxDb);
+    // R-R3-46: the same ceiling the local RX applet gives this board
+    // (RxApplet.cpp, BoardCapsTable::stepAttMaxDb): 61 dB on Atlas, Hermes,
+    // Hermes II, Angelia and Orion with Alex filters, the board row's own
+    // maximum otherwise (31 dB; the Hermes Lite 2 keeps -28..31 dB).
+    m_stepAttController->setMaxAttenuation(
+        BoardCapsTable::stepAttMaxDb(caps.board, caps.hasAlexFilters));
     m_stepAttController->setHasStepAttenuatorCal(caps.hasStepAttenuatorCal);
     m_stepAttController->setIsHpsdrBoard(caps.board == HPSDRHW::Atlas);
     m_stepAttController->setRadioConnection(m_radioModel->connection());
 
     // Select the current band before loading, because loadSettings restores
     // the per-band RX attenuation and preamp slot for m_currentBand.
-    syncStepAttenuatorBandAndMode();
+    m_radioModel->syncStepAttenuatorToReceiveSlice();
     if (!mac.isEmpty()) {
         m_stepAttController->loadSettings(mac);
-    }
-}
-
-void DaemonApp::wireStepAttenuatorSlice(SliceModel* slice)
-{
-    if (!slice) {
-        return;
-    }
-    connect(slice, &SliceModel::bandChanged, this,
-            [this, slice](Band) {
-        if (m_radioModel && slice == m_radioModel->txBoundSlice()) {
-            syncStepAttenuatorBandAndMode();
-        }
-    });
-    connect(slice, &SliceModel::dspModeChanged, this,
-            [this, slice](DSPMode) {
-        if (m_radioModel && slice == m_radioModel->txBoundSlice()) {
-            syncStepAttenuatorBandAndMode();
-        }
-    });
-}
-
-void DaemonApp::syncStepAttenuatorBandAndMode()
-{
-    if (!m_radioModel || !m_stepAttController) {
-        return;
-    }
-    if (SliceModel* const slice = m_radioModel->txBoundSlice()) {
-        m_stepAttController->setBand(slice->band());
-        m_stepAttController->setCurrentDspMode(slice->dspMode());
     }
 }
 

@@ -204,6 +204,18 @@
 //                 Later the same day: kWdspThreadWorkerExit, the hook's
 //                 report of a worker about to end, so a finished worker is
 //                 forgotten before its thread ID can be reused.
+//   2026-09-23  WdspChannelLoad::readNs and the WDSPSetTestPeriodicDelayUs
+//                 declaration added by J.J. Boyd (KG4VCF) so a receiver's
+//                 load reads busy time over wall time (R-R3-40, R-R3-37).
+//                 NereusSDR-original reader field and test seam exported
+//                 from third_party/wdsp/src/dsplock.c; no Thetis
+//                 counterpart. AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-09-23  GetChannelDspLoad's return 1 (a read that may be torn) and
+//                 the WDSPSetTestHoldLoadPair declaration added by J.J. Boyd
+//                 (KG4VCF) (R-R3-40). NereusSDR-original, exported from
+//                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -375,6 +387,17 @@ void WDSPSetTestBlockDelayUs(int channel, int microseconds);
 // work. 0 (the default) turns it off. Never call it in production code.
 void WDSPSetTestProcessDelayUs(int channel, int microseconds);
 
+// Test-only (NereusSDR dsplock.c): like WDSPSetTestProcessDelayUs, but the
+// busy-wait runs only in every everyBlocks-th processed block, like a stage
+// that works in frames longer than one block. 0 for either value turns it
+// off. Never call it in production code.
+void WDSPSetTestPeriodicDelayUs(int channel, int microseconds, int everyBlocks);
+
+// Test-only (NereusSDR dsplock.c): while hold is nonzero, every
+// GetChannelDspLoad read of the channel finds its load pair changing and
+// returns 1; hold 0 releases it. Never call it in production code.
+void WDSPSetTestHoldLoadPair(int channel, int hold);
+
 // Test-only (NereusSDR dsplock.c): how long, in microseconds, the channel's
 // latest teardown waited for its worker to leave its loop (that wait alone,
 // not the rest of the teardown); -1 for an invalid channel. Never call it in
@@ -390,9 +413,13 @@ int WDSPGetTestWorkerExitCount(int channel);
 // layout as WdspChannelLoad in third_party/wdsp/src/dsplock.h. Every field
 // only grows except blockPeriodUs, the block period (dsp_size / dsp_rate) of
 // the worker's latest or current block, 0 before its first block, and
-// currentBlockNs, how long the block in progress has run (0 between blocks). Returns 0 on success,
-// -1 for an invalid channel or a null out. The guard lets a file include
-// both this header and dsplock.h.
+// currentBlockNs, how long the block in progress has run (0 between blocks),
+// and readNs, when the read was taken (the clock read that gave
+// currentBlockNs). busyNs + currentBlockNs is the worker's time inside blocks
+// up to readNs, one instant's value. Returns 0 on success, -1 for an invalid
+// channel or a null out, and 1 when the worker kept that pair changing
+// through every attempt (the read may be torn; skip it). The guard lets a
+// file include both this header and dsplock.h.
 #ifndef NEREUS_WDSP_CHANNEL_LOAD_DEFINED
 #define NEREUS_WDSP_CHANNEL_LOAD_DEFINED
 typedef struct {
@@ -402,6 +429,7 @@ typedef struct {
     long long maxBlockUs;   // longest single block
     int       blockPeriodUs;
     long long currentBlockNs; // block in progress so far; 0 between blocks
+    long long readNs;         // when this read was taken (monotonic clock)
 } WdspChannelLoad;
 #endif
 

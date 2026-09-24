@@ -534,6 +534,13 @@ public slots:
     // Phase 3P-I-b T9 — BYPS button visibility gates on both caps.hasRxBypassRelay
     // AND SkuUiProfile.hasRxBypassUi (ANAN10/ANAN8000D/G2/G2_1K etc. suppress).
     void setHpsdrSku(NereusSDR::HPSDRModel sku);
+    // R-R3-46 test seam: the RX-only antenna labels the antenna menu uses
+    // (empty until setHpsdrSku has run).
+    QStringList rxOnlyAntennaLabelsForTest() const {
+        return m_popupSku ? QStringList(m_popupSku->rxOnlyLabels.cbegin(),
+                                        m_popupSku->rxOnlyLabels.cend())
+                          : QStringList();
+    }
 
     // Phase 3P-I-b T9 — reflect AlexController::rxOutOnTx state into the BYPS button.
     void setRxBypassActive(bool on);

@@ -14,6 +14,8 @@
 // Modification history (NereusSDR):
 //   2026-09-23 - Created by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//                 Later the same day: the load it judges is busy time over
+//                 wall time (R-R3-40); thresholds and timings unchanged.
 // =================================================================
 
 #pragma once
@@ -33,8 +35,9 @@ public:
     // The governor judges every receiver this often (the load sampler's
     // interval, ReceiverDspLoadSampler::kSampleIntervalMs).
     static constexpr int kNnrCheckIntervalMs = 500;
-    // A receiver running NNR steps back one level when its DSP load (block
-    // time / block period), averaged over kNnrStepDownHoldMs, is at least
+    // A receiver running NNR steps back one level when its DSP load (the
+    // share of wall time its worker spent inside blocks,
+    // ReceiverDspLoad::load), averaged over kNnrStepDownHoldMs, is at least
     // this. 1.0 is real time; 0.90 leaves the worker 10% headroom.
     static constexpr double kNnrStepDownLoad = 0.90;
     static constexpr qint64 kNnrStepDownHoldMs = 2000;

@@ -19,6 +19,9 @@
 //   2026-09-23 - R-R3-21 / R-R3-09: the TNF page's row commit sends a
 //                 remote window's centre and width to the Core as one move.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: the CW sidetone row reads the Core's radio
+//                 at build in a remote window. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1790,6 +1793,15 @@ CwSetupPage::CwSetupPage(RadioModel* model, QWidget* parent)
         if (model->isConnected() && model->connection()) {
             const auto& caps = NereusSDR::BoardCapsTable::forBoard(
                 model->connection()->radioInfo().boardType);
+            setHasSidetoneGenerator(caps.hasSidetoneGenerator);
+        } else if (!model->ownsLocalDsp()
+                   && !model->currentRadioInfo().macAddress.isEmpty()) {
+            // R-R3-46 (carried): a remote window has no connection of its
+            // own; the Core's radio, once known, is the model's stored
+            // radio info, and currentRadioChanged fired before this page
+            // was built.
+            const auto& caps = NereusSDR::BoardCapsTable::forBoard(
+                model->currentRadioInfo().boardType);
             setHasSidetoneGenerator(caps.hasSidetoneGenerator);
         }
     }

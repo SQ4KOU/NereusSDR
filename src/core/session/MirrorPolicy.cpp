@@ -17,6 +17,22 @@
 //                                    Bidirectional. AI-assisted
 //                                    implementation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the Core's step
+//                                    attenuator and preamp (`stepAtt`).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: AlexAntennaFacade directions. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 fix wave: IoBoardHl2Facade, all Outbound. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-47 / R-R3-22: AmplifierModel and RfKitModel, all
+//                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-24 - R-R3-45: SliceModel outputRoute is Outbound until the
+//                 headphones plan's remote window task makes it two-way.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Merge: lane B's headphones Task 2 makes outputRoute
+//                 two-way; the Outbound entry is removed. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -282,7 +298,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitModel", "antiVoxRun", MirrorDirection::Bidirectional },
     { "TransmitModel", "paSettingsBypass", MirrorDirection::Bidirectional },
 
-    // ---- TunerModel (13 entries) ----
+    // ---- TunerModel (21 entries) ----
     { "TunerModel", "relayC1", MirrorDirection::Outbound },
     { "TunerModel", "relayL", MirrorDirection::Outbound },
     { "TunerModel", "relayC2", MirrorDirection::Outbound },
@@ -335,6 +351,90 @@ const MirrorPolicy::Entry kEntries[] = {
     { "NotchModel", "globalEnabled", MirrorDirection::Bidirectional },
     { "NotchModel", "autoIncrease", MirrorDirection::Bidirectional },
 
+    // R-R3-46 / R-R3-11 (radioHardwareVersion 1): the Core's step
+    // attenuator and preamp. The operator settings are two-way; the Core
+    // applies each through its own controller and answers with the value it
+    // kept. The range, auto-attenuate's own state, the overload readings and
+    // ADC sharing are the Core's to report.
+    { "StepAttenuatorFacade", "enabled", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "attenuationDb", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "preampMode", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "rx1Preamp", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "autoAttEnabled", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "autoAttMode", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "autoAttUndo", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "autoAttUndoDelayMs", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "autoAttHoldMs", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "minDb", MirrorDirection::Outbound },
+    { "StepAttenuatorFacade", "maxDb", MirrorDirection::Outbound },
+    { "StepAttenuatorFacade", "autoAttApplied", MirrorDirection::Outbound },
+    { "StepAttenuatorFacade", "overloadAdc0", MirrorDirection::Outbound },
+    { "StepAttenuatorFacade", "overloadAdc1", MirrorDirection::Outbound },
+    { "StepAttenuatorFacade", "adcLinked", MirrorDirection::Outbound },
+
+    // R-R3-46 (radioHardwareVersion 2): the Core's Alex antenna settings.
+    // The receive settings are two-way; the Core applies each through its
+    // own AlexController and answers with the value it kept. The transmit
+    // antennas and relays are the Core's to report until remote transmit.
+    { "AlexAntennaFacade", "rxAntennas", MirrorDirection::Bidirectional },
+    { "AlexAntennaFacade", "rxOnlyAntennas", MirrorDirection::Bidirectional },
+    { "AlexAntennaFacade", "useTxAntennaForRx", MirrorDirection::Bidirectional },
+    { "AlexAntennaFacade", "txAntennas", MirrorDirection::Outbound },
+    { "AlexAntennaFacade", "blockTxAnt2", MirrorDirection::Outbound },
+    { "AlexAntennaFacade", "blockTxAnt3", MirrorDirection::Outbound },
+    { "AlexAntennaFacade", "rxOutOnTx", MirrorDirection::Outbound },
+    { "AlexAntennaFacade", "ext1OutOnTx", MirrorDirection::Outbound },
+    { "AlexAntennaFacade", "ext2OutOnTx", MirrorDirection::Outbound },
+    { "AlexAntennaFacade", "rxOutOverride", MirrorDirection::Outbound },
+
+    // R-R3-46 (radioHardwareVersion 3): the Core's HL2 I/O board, as the
+    // Core reads it; a window asks for a probe with a command.
+    { "IoBoardHl2Facade", "detected", MirrorDirection::Outbound },
+    { "IoBoardHl2Facade", "hardwareVersion", MirrorDirection::Outbound },
+    { "IoBoardHl2Facade", "registers", MirrorDirection::Outbound },
+
+    // R-R3-47 / R-R3-22 (remotePgxlControlVersion 1): the Core's Power
+    // Genius XL status. Every property is the Core's to report; a window
+    // connects, configures and operates the amp only through commands.
+    { "AmplifierModel", "connectionPhase", MirrorDirection::Outbound },
+    { "AmplifierModel", "configuredHost", MirrorDirection::Outbound },
+    { "AmplifierModel", "configuredPort", MirrorDirection::Outbound },
+    { "AmplifierModel", "connectionError", MirrorDirection::Outbound },
+    { "AmplifierModel", "deviceModel", MirrorDirection::Outbound },
+    { "AmplifierModel", "deviceSerial", MirrorDirection::Outbound },
+    { "AmplifierModel", "deviceVersion", MirrorDirection::Outbound },
+    { "AmplifierModel", "deviceNickname", MirrorDirection::Outbound },
+    { "AmplifierModel", "present", MirrorDirection::Outbound },
+    { "AmplifierModel", "state", MirrorDirection::Outbound },
+    { "AmplifierModel", "deviceState", MirrorDirection::Outbound },
+    { "AmplifierModel", "operate", MirrorDirection::Outbound },
+    { "AmplifierModel", "transmitting", MirrorDirection::Outbound },
+    { "AmplifierModel", "forwardPowerW", MirrorDirection::Outbound },
+    { "AmplifierModel", "swr", MirrorDirection::Outbound },
+    { "AmplifierModel", "temperatureC", MirrorDirection::Outbound },
+    { "AmplifierModel", "mainsVoltageV", MirrorDirection::Outbound },
+    { "AmplifierModel", "drainCurrentA", MirrorDirection::Outbound },
+    { "AmplifierModel", "efficiencyText", MirrorDirection::Outbound },
+
+    // R-R3-47 / R-R3-22 (remoteRfKitControlVersion 1): the Core's RF-Kit
+    // RF2K-S status, read-only for the same reason.
+    { "RfKitModel", "connectionPhase", MirrorDirection::Outbound },
+    { "RfKitModel", "configuredHost", MirrorDirection::Outbound },
+    { "RfKitModel", "configuredPort", MirrorDirection::Outbound },
+    { "RfKitModel", "connectionError", MirrorDirection::Outbound },
+    { "RfKitModel", "deviceModel", MirrorDirection::Outbound },
+    { "RfKitModel", "deviceSerial", MirrorDirection::Outbound },
+    { "RfKitModel", "deviceVersion", MirrorDirection::Outbound },
+    { "RfKitModel", "deviceNickname", MirrorDirection::Outbound },
+    { "RfKitModel", "present", MirrorDirection::Outbound },
+    { "RfKitModel", "operate", MirrorDirection::Outbound },
+    { "RfKitModel", "forwardPowerW", MirrorDirection::Outbound },
+    { "RfKitModel", "reflectedPowerW", MirrorDirection::Outbound },
+    { "RfKitModel", "swr", MirrorDirection::Outbound },
+    { "RfKitModel", "temperatureC", MirrorDirection::Outbound },
+    { "RfKitModel", "voltageV", MirrorDirection::Outbound },
+    { "RfKitModel", "currentA", MirrorDirection::Outbound },
+
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "runCalibrationProcessing", MirrorDirection::Bidirectional },
@@ -347,7 +447,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (5 entries) ----
+    // ---- RadioModel (19 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },

@@ -37,6 +37,7 @@
 #include "gui/MainWindow.h"
 #include "gui/RemoteConnectionController.h"
 #include "models/RadioModel.h"
+#include "fakes/MainWindowTestSettings.h"
 
 using namespace NereusSDR;
 
@@ -162,7 +163,7 @@ void TestGuiConnectionController::init()
 {
     QVERIFY(!AppSettings::instance().remoteBackend());
     AppSettings::instance().clear();
-    AppSettings::instance().setValue(QStringLiteral("audio/FirstRunComplete"), QStringLiteral("True"));
+    Test::markAudioFirstRunDone();
     QVERIFY(AppSettings::instance().save());
     RadioDiscovery::clearHoldOffForTest();
     RadioDiscovery discovery;

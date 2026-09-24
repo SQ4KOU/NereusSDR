@@ -541,13 +541,9 @@ private slots:
         QCOMPARE(first->reason, DisplayBudgetReason::CoreBusy);
         QCOMPARE(first->limits, stepFrom(accepted, 4));
 
-        // A late block restarts the calm hold.
-        QVERIFY(feed(governor, base + 15'000, base + 20'000,
+        // A long input wait restarts the calm hold.
+        QVERIFY(feed(governor, base + 15'000, base + 20'500,
                      [](qint64 t) { return loadReading(t, 0.5); }).isEmpty());
-        DisplayLoadReading late = loadReading(base + 20'500, 0.5);
-        late.lateBlocks = 1;
-        QVERIFY(!step(governor, late));
-        // So does a long input wait.
         DisplayLoadReading waiting = loadReading(base + 21'000, 0.5);
         waiting.highestInputDelayMs = DisplayLoadGovernor::kCalmInputDelayMs;
         QVERIFY(!step(governor, waiting));
@@ -565,6 +561,40 @@ private slots:
         // At the ceiling a calm Core publishes nothing.
         QVERIFY(feed(governor, base + 32'000, base + 80'000,
                      [](qint64 t) { return loadReading(t, 0.1); }).isEmpty());
+    }
+
+    // Late blocks are not overload: frame-based noise reduction makes one
+    // long block in twelve at the default buffer as a normal part of its
+    // work, so a calm load with late blocks in every interval must still
+    // give the display back.
+    void lateBlocksWithACalmLoadLetTheDisplayRecover()
+    {
+        const DisplayBudgetLimits ceiling = DisplayLoadGovernor::computedCeiling();
+        DisplayLoadGovernor governor(ceiling);
+        // One relieving step at 2 s, kept once it settles on a calm load.
+        QCOMPARE(feed(governor, 0, 2'000, [](qint64 t) { return loadReading(t, 0.9); }).size(),
+                 1);
+        QCOMPARE(governor.steps(), 1);
+        const qint64 settled = 2'000 + DisplayLoadGovernor::kSettleMs;
+        const auto frames = [](qint64 t) {
+            DisplayLoadReading reading = loadReading(t, 0.5);
+            reading.lateBlocks = 31;
+            return reading;
+        };
+        QVERIFY(feed(governor, 2'500, settled, frames).isEmpty());
+        QVERIFY(!governor.settling());
+        QCOMPARE(governor.steps(), 1);
+
+        // Calm, late blocks and all, for the calm hold: the step is undone.
+        const QList<DisplayLoadDecision> restored =
+            feed(governor, settled + 500, settled + 500 + DisplayLoadGovernor::kCalmHoldMs, frames);
+        QCOMPARE(restored.size(), 1);
+        QCOMPARE(restored.first().reason, DisplayBudgetReason::None);
+        QCOMPARE(restored.first().limits.applicationBytesPerSecond,
+                 ceiling.applicationBytesPerSecond);
+        QCOMPARE(restored.first().limits.spectrumSampleUnitsPerSecond,
+                 ceiling.spectrumSampleUnitsPerSecond);
+        QCOMPARE(governor.steps(), 0);
     }
 
     void resetReturnsToTheCeilingOnce()

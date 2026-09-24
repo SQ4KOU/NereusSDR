@@ -1,6 +1,15 @@
 // no-port-check: NereusSDR-original. Remote TGXL Peripherals UI coverage.
+// 2026-09-23: R-R3-47 / R-R3-22: the Power Genius and RF-Kit applets read
+// the Core's `amplifier` and `rfkit` objects in a remote window (filled on
+// attach, updated, false and zero shown, stale on Core loss, no accessory
+// socket opened) and the same objects in-process in a local window. J.J.
+// Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include <QtTest>
+
+#include <QTemporaryDir>
+#include <cmath>
+#include <memory>
 
 #include <QLabel>
 #include <QLineEdit>
@@ -12,16 +21,29 @@
 #include "core/PgxlConnection.h"
 #include "core/TgxlConnection.h"
 #include "core/SmartSdrApiListener.h"
+#include "core/AppSettings.h"
+#include "core/Rf2ksConnection.h"
 #include "core/session/IStationLink.h"
+#include "core/session/SessionMessages.h"
+#include "core/session/StationClient.h"
+#include "core/session/StationServer.h"
+#include "core/settings/SettingsProxy.h"
+#include "gui/applets/AmpApplet.h"
+#include "gui/applets/Rf2ksApplet.h"
 #include "gui/setup/CatNetworkSetupPages.h"
 #include "gui/setup/FourO3APage.h"
 #include "gui/setup/PgxlAdvancedPage.h"
 #include "gui/setup/TgxlAdvancedPage.h"
 #include "gui/SetupDialog.h"
+#include "models/AmplifierModel.h"
 #include "models/RadioModel.h"
+#include "models/RfKitModel.h"
 #include "models/TunerModel.h"
 
+#include "fakes/LoopbackTransport.h"
+
 using namespace NereusSDR;
+using NereusSDR::Test::LoopbackTransport;
 
 namespace {
 
@@ -65,7 +87,49 @@ public:
         return fourO3AOutcome;
     }
     bool remoteFourO3AControlAvailable() const override { return fourO3AAvailable; }
+
+    // R-R3-47: the link's state for the amplifier and RF-Kit readings.
+    bool linkReady{false};
+    bool amplifierStatus{false};
+    bool rfKitStatus{false};
+    bool stationLinkReady() const override { return linkReady; }
+    bool remoteAmplifierStatusAvailable() const override { return amplifierStatus; }
+    bool remoteRfKitStatusAvailable() const override { return rfKitStatus; }
 };
+
+// Status lines and REST replies as the repository's parser tests carry
+// them (tst_pgxl_connection_parse, tst_rf2ks_connection_parse); the
+// transmit frame uses the same keys, 60 dBm (1000 W) and -24.5 dB (1.13).
+QMap<QString, QString> pgxlFrame(const char* line)
+{
+    QMap<QString, QString> kvs;
+    const QString body = QString::fromLatin1(line);
+    for (const QString& part : body.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+        const int eq = part.indexOf(QLatin1Char('='));
+        if (eq > 0) {
+            kvs.insert(part.left(eq), part.mid(eq + 1));
+        }
+    }
+    return kvs;
+}
+constexpr const char* kOperate = "state=OPERATE temp=42.5 vac=240 fwd=1480.0 swr=2.1";
+constexpr const char* kTransmit = "state=TRANSMIT_A peakfwd=60.0 swr=-24.5 id=22.5";
+constexpr const char* kStandby = "state=STANDBY peakfwd=60.0 swr=-24.5 id=0.0";
+constexpr const char* kRfKitPower =
+    R"({"temperature":{"value":27.0,"unit":"°C"},"voltage":{"value":52.7,"unit":"V"},"current":{"value":0.0,"unit":"A"},"forward":{"value":850,"max_value":1200,"unit":"W"},"reflected":{"value":3,"max_value":20,"unit":"W"},"swr":{"value":1.4,"max_value":2.1,"unit":""}})";
+constexpr const char* kRfKitIdle =
+    R"({"temperature":{"value":0.0,"unit":"°C"},"voltage":{"value":0.0,"unit":"V"},"current":{"value":0.0,"unit":"A"},"forward":{"value":0,"max_value":0,"unit":"W"},"reflected":{"value":0,"max_value":0,"unit":"W"},"swr":{"value":1.0,"max_value":1.0,"unit":""}})";
+
+RfKitPowerSnapshot rfKitPower(int forwardW, float swr, float tempC, float volts, float amps)
+{
+    RfKitPowerSnapshot snap;
+    snap.forwardW = forwardW;
+    snap.swr = swr;
+    snap.temperatureC = tempC;
+    snap.voltageV = volts;
+    snap.currentA = amps;
+    return snap;
+}
 
 TunerModel::StationConnectionState state(TunerModel::ConnectionPhase phase,
                                          const QString& host = {},
@@ -91,6 +155,9 @@ private slots:
     void remoteParentPageExposesOnlyStationBackedControls();
     void remoteMasterShowsPendingAndRefusalWithoutLocalActivation();
     void coreTunerErrorsAreShownInUserWords();
+    void remoteAmpAndRfKitAppletsFollowTheCore();
+    void remoteAppletsSayWhyReadingsAreNotLive();
+    void localAppletsShowTheSameValuesAsBefore();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -328,6 +395,186 @@ void RemotePeripheralsTest::coreTunerErrorsAreShownInUserWords()
     model.tunerModel()->setStationConnectionState(
         state(TunerModel::ConnectionPhase::Error, {}, 0, {}));
     QCOMPARE(status->text(), QStringLiteral("Error: The reason is in the log."));
+}
+
+// R-R3-47 / R-R3-22: a remote window's Power Genius and RF-Kit applets read
+// the Core's objects over the in-process loopback: filled on attach,
+// updated, false and zero shown as they are, stale when the Core is lost,
+// and no accessory socket or request from this window.
+void RemotePeripheralsTest::remoteAmpAndRfKitAppletsFollowTheCore()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    RadioModel station;
+    station.enableStationAccessoryIdentity();
+    station.amplifierModel()->applyStatusFrame(pgxlFrame(kOperate));
+    station.rfKitModel()->applyInfo(QStringLiteral("RF2K-S"), QStringLiteral("G200C267"),
+                                    QStringLiteral("KG4VCF"));
+    station.rfKitModel()->applyPower(rfKitPower(850, 1.4f, 27.0f, 52.7f, 0.0f));
+    station.rfKitModel()->applyOperateMode(QStringLiteral("OPERATE"));
+    TunerModel::StationConnectionState up;
+    up.configuredHost = QStringLiteral("192.0.2.41");
+    up.configuredPort = 8080;
+    up.phase = TunerModel::ConnectionPhase::Connected;
+    up.deviceModel = QStringLiteral("RF2K-S");
+    up.deviceVersion = QStringLiteral("G200C267");
+    up.deviceNickname = QStringLiteral("KG4VCF");
+    station.rfKitModel()->setStationConnectionState(up);
+    station.rfKitModel()->applyPower(rfKitPower(850, 1.4f, 27.0f, 52.7f, 0.0f));
+    AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
+    StationServer server(&station, stationSettings, dir.path());
+
+    RadioModel window(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&window, &proxy);
+    AmpApplet amp(&window);
+    Rf2ksApplet rfKit(&window);
+    QSignalSpy pgxlFrames(window.pgxlConnection(), &PgxlConnection::testFrameWrittenForTesting);
+
+    // Not attached yet: nothing live to show.
+    QVERIFY(amp.staleIndicatorVisibleForTesting());
+    QVERIFY(rfKit.staleIndicatorVisibleForTesting());
+    QVERIFY(!amp.operateButtonShownForTesting());
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QVERIFY(completed.wait(5000) || !completed.isEmpty());
+    QVERIFY(client.remoteAmplifierStatusAvailable());
+    QVERIFY(client.remoteRfKitStatusAvailable());
+
+    // Filled on attach.
+    QTRY_COMPARE(amp.tempGaugeValueForTesting(), 42.5);
+    QVERIFY(amp.operateButtonShownForTesting());
+    QCOMPARE(amp.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
+    QCOMPARE(amp.powerLabelTextForTesting(), QStringLiteral("Volts: 240V\u00A0\u00A0Amps: 0.0A"));
+    QCOMPARE(amp.fwdGaugeValueForTesting(), 0.0);
+    QVERIFY(!amp.staleIndicatorVisibleForTesting());
+    QTRY_COMPARE(rfKit.fwdGaugeValueForTesting(), 850);
+    QVERIFY(rfKit.connectedStateForTesting());
+    QCOMPARE(rfKit.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
+    QCOMPARE(rfKit.nicknameLabelTextForTesting(), QStringLiteral("KG4VCF  G200C267"));
+    QCOMPARE(rfKit.telemetryStripTextForTesting(),
+             QStringLiteral("Fwd 850 W  SWR 1.40  53 V  0.0 A"));
+    QVERIFY(!rfKit.staleIndicatorVisibleForTesting());
+
+    // Updated as the Core's amps report.
+    station.amplifierModel()->applyStatusFrame(pgxlFrame(kTransmit));
+    QTRY_VERIFY(std::abs(amp.fwdGaugeValueForTesting() - 1000.0) < 1e-3);
+    QVERIFY(std::abs(amp.swrGaugeValueForTesting() - 1.12668) < 1e-4);
+    QCOMPARE(amp.powerLabelTextForTesting(), QStringLiteral("Volts: 240V\u00A0\u00A0Amps: 22.5A"));
+
+    // False and zero, shown as they are.
+    station.amplifierModel()->applyStatusFrame(pgxlFrame(kStandby));
+    station.rfKitModel()->applyOperateMode(QStringLiteral("STANDBY"));
+    station.rfKitModel()->applyPower(rfKitPower(0, 1.0f, 0.0f, 0.0f, 0.0f));
+    QTRY_COMPARE(amp.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
+    QTRY_COMPARE(amp.fwdGaugeValueForTesting(), 0.0);
+    QCOMPARE(amp.swrGaugeValueForTesting(), 1.0);
+    QCOMPARE(amp.powerLabelTextForTesting(), QStringLiteral("Volts: 240V\u00A0\u00A0Amps: 0.0A"));
+    QTRY_COMPARE(rfKit.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
+    QTRY_COMPARE(rfKit.fwdGaugeValueForTesting(), 0);
+    QCOMPARE(rfKit.telemetryStripTextForTesting(),
+             QStringLiteral("Fwd 0 W  SWR 1.00  0 V  0.0 A"));
+
+    // The Core is lost: the last readings stay, marked stale.
+    stationEnd->closeLink(QStringLiteral("test: Core lost"));
+    QTRY_VERIFY(amp.staleIndicatorVisibleForTesting());
+    QTRY_VERIFY(rfKit.staleIndicatorVisibleForTesting());
+    QCOMPARE(amp.staleIndicatorTextForTesting(),
+             QStringLiteral("Core disconnected. Power Genius readings are stale."));
+    QCOMPARE(rfKit.staleIndicatorTextForTesting(),
+             QStringLiteral("Core disconnected. RF-Kit readings are stale."));
+    QVERIFY(OperatorWording::isPlain(amp.staleIndicatorTextForTesting()));
+    QVERIFY(OperatorWording::isPlain(rfKit.staleIndicatorTextForTesting()));
+    QCOMPARE(amp.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
+
+    // The window opened no accessory connection of its own.
+    QCOMPARE(pgxlFrames.count(), 0);
+    QVERIFY(!window.pgxlConnection()->isConnected());
+    QVERIFY(!window.rfKitConnection()->isConnected());
+    QCOMPARE(window.rfKitConnection()->testInFlightReplyCount(), 0);
+    QVERIFY(!window.rfKitConnection()->testPollActive());
+    QCOMPARE(window.rfKitConnection()->pollsSucceeded() + window.rfKitConnection()->pollsFailed(), 0);
+}
+
+// R-R3-47: with the link up but an older Core, the applets say the Core
+// does not report the amp; every line is in user words.
+void RemotePeripheralsTest::remoteAppletsSayWhyReadingsAreNotLive()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    RecordingTgxlLink link;
+    model.attachStation(&link);
+    AmpApplet amp(&model);
+    Rf2ksApplet rfKit(&model);
+    QVERIFY(amp.staleIndicatorVisibleForTesting());
+    QVERIFY(amp.staleIndicatorTextForTesting().contains(QStringLiteral("stale")));
+
+    link.linkReady = true;
+    model.reportStationLinkStateChanged();
+    QCOMPARE(amp.staleIndicatorTextForTesting(),
+             QStringLiteral("This Core does not report its Power Genius to this app. "
+                            "Updating the Core may help."));
+    QCOMPARE(rfKit.staleIndicatorTextForTesting(),
+             QStringLiteral("This Core does not report its RF-Kit amplifier to this app. "
+                            "Updating the Core may help."));
+    for (const QString& text : {amp.staleIndicatorTextForTesting(),
+                                rfKit.staleIndicatorTextForTesting(),
+                                AmplifierModel::readOnlyReason(),
+                                RfKitModel::readOnlyReason()}) {
+        QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+    }
+
+    link.amplifierStatus = true;
+    link.rfKitStatus = true;
+    model.reportStationLinkStateChanged();
+    QVERIFY(!amp.staleIndicatorVisibleForTesting());
+    QVERIFY(!rfKit.staleIndicatorVisibleForTesting());
+}
+
+// R-R3-47: a local window shows what it showed before, now through the
+// same AmplifierModel and RfKitModel the Core mirrors, fed by this
+// computer's own connections. No stale line locally.
+void RemotePeripheralsTest::localAppletsShowTheSameValuesAsBefore()
+{
+    RadioModel model;
+    AmpApplet amp(&model);
+    Rf2ksApplet rfKit(&model);
+    QVERIFY(!amp.staleIndicatorVisibleForTesting());
+    QVERIFY(!rfKit.staleIndicatorVisibleForTesting());
+    QVERIFY(!amp.operateButtonShownForTesting());
+
+    PgxlConnection* pgxl = model.pgxlConnection();
+    pgxl->injectLineForTesting(QStringLiteral("R1|0|") + QString::fromLatin1(kOperate));
+    QCOMPARE(amp.tempGaugeValueForTesting(), 42.5);
+    QCOMPARE(amp.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
+    QCOMPARE(amp.fwdGaugeValueForTesting(), 0.0);  // latched peak not shown
+    pgxl->injectLineForTesting(QStringLiteral("S0|status ") + QString::fromLatin1(kTransmit));
+    QVERIFY(std::abs(amp.fwdGaugeValueForTesting() - 1000.0) < 1e-3);
+    QVERIFY(std::abs(amp.swrGaugeValueForTesting() - 1.12668) < 1e-4);
+    QCOMPARE(amp.powerLabelTextForTesting(), QStringLiteral("Volts: 240V\u00A0\u00A0Amps: 22.5A"));
+    pgxl->injectLineForTesting(QStringLiteral("S0|status ") + QString::fromLatin1(kStandby));
+    QCOMPARE(amp.fwdGaugeValueForTesting(), 0.0);
+    QCOMPARE(amp.swrGaugeValueForTesting(), 1.0);
+    QCOMPARE(amp.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
+    pgxl->injectLineForTesting(QStringLiteral("R2|0|nickname=ShackAmp fan=auto meffa=off led=65"));
+    QCOMPARE(amp.meffLabelTextForTesting(), QStringLiteral("MEffA:\u00A0\u00A0\u00A0off"));
+
+    Rf2ksConnection* conn = model.rfKitConnection();
+    conn->injectJsonForTesting(QStringLiteral("/power"), kRfKitPower);
+    conn->injectJsonForTesting(QStringLiteral("/operate-mode"), R"({"operate_mode":"OPERATE"})");
+    QCOMPARE(rfKit.fwdGaugeValueForTesting(), 850);
+    QVERIFY(std::abs(rfKit.swrGaugeValueForTesting() - 1.4f) < 1e-4f);
+    QCOMPARE(rfKit.tempGaugeValueForTesting(), 27.0f);
+    QCOMPARE(rfKit.telemetryStripTextForTesting(),
+             QStringLiteral("Fwd 850 W  SWR 1.40  53 V  0.0 A"));
+    QCOMPARE(rfKit.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
+    conn->injectJsonForTesting(QStringLiteral("/power"), kRfKitIdle);
+    QCOMPARE(rfKit.fwdGaugeValueForTesting(), 0);
+    QVERIFY(!rfKit.staleIndicatorVisibleForTesting());
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

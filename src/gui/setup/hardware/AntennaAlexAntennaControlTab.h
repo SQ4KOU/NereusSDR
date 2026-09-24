@@ -15,6 +15,9 @@
 //                Claude Code. Sub-sub-tab under Hardware → Antenna/ALEX.
 //                Per-band antenna assignment + Block-TX safety; backed
 //                by AlexController model (Phase 3P-F Task 1).
+//   2026-09-23 - R-R3-46: remote window source and transmit
+//                 permission. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -99,6 +102,7 @@ namespace NereusSDR {
 
 class RadioModel;
 class AlexController;
+class AlexAntennaFacade;
 struct RadioInfo;
 
 // AntennaAlexAntennaControlTab — "Antenna Control" sub-sub-tab under Hardware → Antenna/ALEX.
@@ -126,6 +130,21 @@ public:
     // Expose a test accessor so unit tests can verify the controller reference.
     AlexController& controller();
 
+    // R-R3-46: the transmit half (TX antenna grid, Block-TX switches and the
+    // four TX relay switches) follows the transmit permission with its
+    // reason; the receive half stays live. Always permitted locally.
+    void setTransmitPermitted(bool permitted, const QString& reason);
+
+#ifdef NEREUS_BUILD_TESTS
+    QRadioButton* rxButtonForTest(Band band, int ant) const;
+    QRadioButton* rxOnlyButtonForTest(Band band, int ant) const;
+    QRadioButton* txButtonForTest(Band band, int ant) const;
+    QCheckBox* useTxAntForRxForTest() const { return m_chkUseTxAntForRx; }
+    QCheckBox* blockTxAnt2ForTest() const { return m_blockTxAnt2; }
+    QCheckBox* rxOutOnTxForTest() const { return m_chkRxOutOnTx; }
+    QWidget* txGridForTest() const { return m_txGridGroup; }
+#endif
+
 private slots:
     void onAntennaChanged(NereusSDR::Band band);
     void onBlockTxChanged();
@@ -145,9 +164,31 @@ private:
     void syncRxRow(int row);
     // Update TX radio button enabled states for blocked ports.
     void updateTxBlockedStates();
+    // R-R3-46: re-read every row and switch (a remote window's source is the
+    // Core's `alexAntennas` object).
+    void syncAllFromSource();
+
+    // Where the tab reads its values: the window's own AlexController
+    // locally, the Core's `alexAntennas` object in a remote window.
+    int txAntOf(Band band) const;
+    int rxAntOf(Band band) const;
+    int rxOnlyAntOf(Band band) const;
+    bool blockTxAnt2Now() const;
+    bool blockTxAnt3Now() const;
+    bool rxOutOnTxNow() const;
+    bool ext1OutOnTxNow() const;
+    bool ext2OutOnTxNow() const;
+    bool rxOutOverrideNow() const;
+    bool useTxAntForRxNow() const;
 
     RadioModel*      m_model{nullptr};
     AlexController*  m_alex{nullptr};
+    // R-R3-46: a remote window's source and sink for the receive settings
+    // (nullptr locally).
+    AlexAntennaFacade* m_remoteAlex{nullptr};
+
+    QWidget* m_txGridGroup{nullptr};
+    QWidget* m_blockTxFrame{nullptr};
 
     // Block-TX safety strip
     QCheckBox* m_blockTxAnt2{nullptr};

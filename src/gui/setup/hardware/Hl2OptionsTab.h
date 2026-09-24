@@ -46,6 +46,9 @@
 //                doc problem statement (table row 2).
 //                J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: the TX buffer latency and PTT hang follow the
+//                transmit permission. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -115,7 +118,13 @@ public:
     void populate(const RadioInfo& info, const BoardCapabilities& caps);
     void restoreSettings(const QMap<QString, QVariant>& settings);
 
+    // R-R3-46: the TX buffer latency and PTT hang are transmit settings;
+    // they follow the transmit permission with its reason. Always permitted
+    // locally.
+    void setTransmitPermitted(bool permitted, const QString& reason);
+
 #ifdef NEREUS_BUILD_TESTS
+    bool   transmitTimingsEnabledForTest() const;
     // Test seams — read the underlying state without depending on the
     // QWidget show/hide cycle.
     bool   swapAudioChannelsCheckedForTest() const;

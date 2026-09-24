@@ -300,43 +300,52 @@ private slots:
         QCOMPARE(matcher.stats().underflows, 0);
     }
 
+    // One simulated hour per data row (R-R3-21). QtTest's watchdog bounds
+    // each row, not the whole function, at 300 s; both hours in one row
+    // took 347 s on a Linux aarch64 host and were aborted mid-hour.
+    void adaptiveClockStaysBoundedAtPlusAndMinus500Ppm_data()
+    {
+        QTest::addColumn<int>("ppm");
+        QTest::newRow("-500 ppm") << -500;
+        QTest::newRow("+500 ppm") << 500;
+    }
+
     void adaptiveClockStaysBoundedAtPlusAndMinus500Ppm()
     {
 #ifndef HAVE_WDSP
         QSKIP("WDSP is disabled");
 #else
-        for (const int ppm : {-500, 500}) {
-            const ClockRun run = runOneHourAtPpm(ppm);
-            QVERIFY(run.valid);
-            QCOMPARE(run.stats.underflows, 0);
-            QCOMPARE(run.stats.overflows, 0);
-            QCOMPARE(run.stats.ringCapacityFrames, kRingFrames);
-            QVERIFY(run.stats.ringFillFrames >= 0);
-            QVERIFY(run.stats.ringFillFrames <= run.stats.ringCapacityFrames);
-            QVERIFY(run.postStartupFrames > 0);
+        QFETCH(int, ppm);
+        const ClockRun run = runOneHourAtPpm(ppm);
+        QVERIFY(run.valid);
+        QCOMPARE(run.stats.underflows, 0);
+        QCOMPARE(run.stats.overflows, 0);
+        QCOMPARE(run.stats.ringCapacityFrames, kRingFrames);
+        QVERIFY(run.stats.ringFillFrames >= 0);
+        QVERIFY(run.stats.ringFillFrames <= run.stats.ringCapacityFrames);
+        QVERIFY(run.postStartupFrames > 0);
 
-            // The staged 64-frame calls expose WDSP's native call cadence.
-            // Its instantaneous ratio follows the two carry phases, so its
-            // final sign is not a reliable clock-direction measurement. The
-            // nonzero observed deviation verifies that force == 0 left the
-            // existing feedback active; zero under/overflows above verify it
-            // absorbed both independent clock drifts without repair.
-            QVERIFY(run.maximumRatioDeviation > 0.00001);
+        // The staged 64-frame calls expose WDSP's native call cadence.
+        // Its instantaneous ratio follows the two carry phases, so its
+        // final sign is not a reliable clock-direction measurement. The
+        // nonzero observed deviation verifies that force == 0 left the
+        // existing feedback active; zero under/overflows above verify it
+        // absorbed both independent clock drifts without repair.
+        QVERIFY(run.maximumRatioDeviation > 0.00001);
 
-            const double leftRms = std::sqrt(run.leftSquareSum / run.postStartupFrames);
-            const double rightRms = std::sqrt(run.rightSquareSum / run.postStartupFrames);
-            const double normalizedCrossCorrelation = run.crossProductSum
-                / std::sqrt(run.leftSquareSum * run.rightSquareSum);
-            QVERIFY(leftRms > 0.05 && leftRms < 0.30);
-            QVERIFY(rightRms > 0.05 && rightRms < 0.30);
-            QVERIFY(std::abs(normalizedCrossCorrelation) < 0.10);
+        const double leftRms = std::sqrt(run.leftSquareSum / run.postStartupFrames);
+        const double rightRms = std::sqrt(run.rightSquareSum / run.postStartupFrames);
+        const double normalizedCrossCorrelation = run.crossProductSum
+            / std::sqrt(run.leftSquareSum * run.rightSquareSum);
+        QVERIFY(leftRms > 0.05 && leftRms < 0.30);
+        QVERIFY(rightRms > 0.05 && rightRms < 0.30);
+        QVERIFY(std::abs(normalizedCrossCorrelation) < 0.10);
 
-            // The 1703 Hz, 0.2-amplitude channel has the largest normal
-            // sample-to-sample slope: 2A sin(pi*f/48000) is about 0.0445.
-            // 0.08 permits normal filter interpolation while rejecting a
-            // post-startup discontinuity or periodic repair splice.
-            QVERIFY(run.maximumPostStartupAdjacentDelta < 0.08);
-        }
+        // The 1703 Hz, 0.2-amplitude channel has the largest normal
+        // sample-to-sample slope: 2A sin(pi*f/48000) is about 0.0445.
+        // 0.08 permits normal filter interpolation while rejecting a
+        // post-startup discontinuity or periodic repair splice.
+        QVERIFY(run.maximumPostStartupAdjacentDelta < 0.08);
 #endif
     }
 };

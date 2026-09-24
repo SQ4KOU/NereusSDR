@@ -2,6 +2,7 @@
 #include <QtTest/QtTest>
 #include <QSignalSpy>
 #include "core/accessories/AlexController.h"
+#include "core/accessories/AlexAntennaFacade.h"
 #include "models/Band.h"
 #include "core/AppSettings.h"
 
@@ -296,6 +297,108 @@ private slots:
         QCOMPARE(a2.txAnt(Band::Band20m), 3);
         QCOMPARE(a2.rxOnlyAnt(Band::Band40m), 3);
         QVERIFY(a2.blockTxAnt2());
+    }
+    // ── R-R3-46: the mirrored `alexAntennas` object ─────────────────────────
+
+    // Bound (the Core, a local window): receive edits go through the
+    // controller, per band, and the object shows what the controller keeps.
+    void facade_bound_applies_receive_edits_through_the_controller() {
+        AlexController a;
+        AlexAntennaFacade f;
+        f.bindController(&a);
+        QVERIFY(f.isBound());
+        QCOMPARE(f.rxAntennas(), QStringLiteral("1,1,1,1,1,1,1,1,1,1,1,1,1,1"));
+        QCOMPARE(f.rxOnlyAntennas(), QStringLiteral("0,0,0,0,0,0,0,0,0,0,0,0,0,0"));
+
+        QSignalSpy changed(&a, &AlexController::antennaChanged);
+        f.setRxAnt(Band::Band40m, 2);
+        QCOMPARE(a.rxAnt(Band::Band40m), 2);
+        QCOMPARE(a.rxAnt(Band::Band20m), 1);
+        QCOMPARE(changed.count(), 1);  // only the band that changed
+        QCOMPARE(f.rxAnt(Band::Band40m), 2);
+        QVERIFY(f.settleReason("rxAntennas").isEmpty());
+
+        f.setRxOnlyAnt(Band::Band20m, 3);
+        QCOMPARE(a.rxOnlyAnt(Band::Band20m), 3);
+        QCOMPARE(f.rxOnlyAnt(Band::Band20m), 3);
+
+        f.setUseTxAntennaForRx(true);
+        QVERIFY(a.useTxAntForRx());
+        QVERIFY(f.useTxAntennaForRx());
+    }
+
+    // A value the controller cannot take settles with a plain reason.
+    void facade_bound_settles_out_of_range_with_a_reason() {
+        AlexController a;
+        AlexAntennaFacade f;
+        f.bindController(&a);
+        f.setRxAntennas(QStringLiteral("5,1,1,1,1,1,1,1,1,1,1,1,1,1"));
+        QCOMPARE(a.rxAnt(Band::Band160m), 3);
+        QCOMPARE(f.settleReason("rxAntennas"), QStringLiteral("Antennas are numbered 1 to 3."));
+
+        f.setRxAntennas(QStringLiteral("2,2"));
+        QCOMPARE(a.rxAnt(Band::Band160m), 3);  // a short list changes nothing
+        QCOMPARE(f.settleReason("rxAntennas"),
+                 QStringLiteral("The Core keeps one antenna for each of its 14 bands."));
+
+        f.setRxOnlyAntennas(QStringLiteral("-1,0,0,0,0,0,0,0,0,0,0,0,0,0"));
+        QCOMPARE(a.rxOnlyAnt(Band::Band160m), 0);
+        QCOMPARE(f.settleReason("rxOnlyAntennas"),
+                 QStringLiteral("The receive-only input is none or 1 to 3."));
+    }
+
+    // The transmit settings are reported as the controller holds them.
+    void facade_bound_reports_the_transmit_settings() {
+        AlexController a;
+        AlexAntennaFacade f;
+        f.bindController(&a);
+        QSignalSpy tx(&f, &AlexAntennaFacade::txAntennasChanged);
+        a.setTxAnt(Band::Band20m, 3);
+        QCOMPARE(tx.count(), 1);
+        QCOMPARE(f.txAnt(Band::Band20m), 3);
+        a.setBlockTxAnt2(true);
+        QVERIFY(f.blockTxAnt2());
+        a.setExt1OutOnTx(true);
+        QVERIFY(f.ext1OutOnTx());
+        a.setRxOutOverride(true);
+        QVERIFY(f.rxOutOverride());
+    }
+
+    // Unbound (a remote window): the gate may refuse an edit, with its
+    // reason, and nothing changes; the Core's transmit values arrive as
+    // reported properties, and only those.
+    void facade_unbound_follows_the_gate_and_the_cores_values() {
+        AlexAntennaFacade f;
+        QVERIFY(!f.isBound());
+        bool allow = false;
+        f.setEditGate([&allow](QString* reason) {
+            if (!allow && reason) {
+                *reason = QStringLiteral("Connect to the Core to change the radio's hardware settings.");
+            }
+            return allow;
+        });
+        QSignalSpy refused(&f, &AlexAntennaFacade::editRejected);
+        QSignalSpy rx(&f, &AlexAntennaFacade::rxAntennasChanged);
+        f.setRxAnt(Band::Band40m, 2);
+        QCOMPARE(refused.count(), 1);
+        QCOMPARE(rx.count(), 0);
+        QCOMPARE(f.rxAnt(Band::Band40m), 1);
+
+        allow = true;
+        f.setRxAnt(Band::Band40m, 2);
+        QCOMPARE(rx.count(), 1);
+        QCOMPARE(f.rxAnt(Band::Band40m), 2);
+
+        QVERIFY(f.applyRemoteProperty("txAntennas",
+                                      QStringLiteral("2,2,2,2,2,2,2,2,2,2,2,2,2,3")));
+        QCOMPARE(f.txAnt(Band::XVTR), 3);
+        QVERIFY(f.applyRemoteProperty("blockTxAnt3", true));
+        QVERIFY(f.blockTxAnt3());
+        QVERIFY(!f.applyRemoteProperty("rxAntennas", QStringLiteral("3,3")));
+
+        AlexController a;
+        f.bindController(&a);
+        QVERIFY(!f.applyRemoteProperty("txAntennas", QStringLiteral("1,1")));
     }
 };
 

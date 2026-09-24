@@ -106,6 +106,35 @@ private slots:
         QCOMPARE(reader.cl2FreqMHz(), 50);
     }
 
+    void save_writes_only_changed_keys()
+    {
+        // R-R3-46. Every setter saves. In a remote window those writes go
+        // to the Core, which refuses the transmit timings on a receive-only
+        // station, so a receive option change writes only its own key.
+        const QString mac = QStringLiteral("aa:bb:cc:dd:ee:fe");
+        auto& s = AppSettings::instance();
+        s.clearHardwareValues(mac);
+
+        Hl2OptionsModel m;
+        m.setMacAddress(mac);
+        m.load();
+        m.setSwapAudioChannels(true);
+        QCOMPARE(s.hardwareValue(mac, QStringLiteral("hl2/swapAudioChannels")).toString(),
+                 QStringLiteral("True"));
+        QVERIFY(!s.contains(QStringLiteral("hardware/%1/hl2/pttHangMs").arg(mac)));
+        QVERIFY(!s.contains(QStringLiteral("hardware/%1/hl2/txLatencyMs").arg(mac)));
+        QVERIFY(!s.contains(QStringLiteral("hardware/%1/hl2/cl2FreqMHz").arg(mac)));
+
+        m.setPttHangMs(20);
+        Hl2OptionsModel reader;
+        reader.setMacAddress(mac);
+        reader.load();
+        QVERIFY(reader.swapAudioChannels());
+        QCOMPARE(reader.pttHangMs(), 20);
+        QCOMPARE(reader.txLatencyMs(), Hl2OptionsModel::kDefaultTxLatencyMs);
+        s.clearHardwareValues(mac);
+    }
+
     // ── Hl2OptionsTab construction ──────────────────────────────────────────
 
     void tab_construction_does_not_crash()

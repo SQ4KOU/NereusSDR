@@ -258,3 +258,47 @@ on the radio live; flagged for the batch review's attention.
   tests.
 - [ ] **Step 2:** HardwarePage through the Core, transmit gating, sample rate,
   Probe; commit.
+
+## Task 5: Each band remembers its attenuator and preamp, local and remote
+
+**Requirements:** R-R3-46, R-R3-11.
+
+**Spec:** operator decision of 2026-09-23 ("each band should remember what was used there
+before"): a band change restores that band's last attenuator and preamp, with a local
+radio and through the Core, as Thetis does (console.cs:17325 [v2.10.3.15]). Today the
+Core restores and sends them (DaemonApp::syncStepAttenuatorBandAndMode, Task 2's
+`setBandRestoreToRadio(true)`), while nothing local calls
+`StepAttenuatorController::setBand`, so a local band change never restores them.
+
+**Files:**
+- Modify: the local wiring that owns the `StepAttenuatorController` in a local window
+  (`src/gui/MainWindow.cpp` or `src/models/RadioModel.cpp`, wherever the controller is
+  created for a local radio): feed it the transmit-bound slice's band and mode on
+  connect and on every band or mode change of that slice, exactly as
+  `DaemonApp::syncStepAttenuatorBandAndMode` does on the Core, and turn on
+  `setBandRestoreToRadio(true)` for local radios
+- Test: `tests/tst_step_attenuator_controller.cpp` and a local wiring case (extend the
+  test that builds a local RadioModel with a fake connection, or add one)
+
+**Acceptance:**
+- Local radio: 20 dB set on 40 m, then a change to 20 m where 0 dB was last used: the
+  attenuator reads 0 dB and 0 dB reaches the radio (the fake connection); back to 40 m:
+  20 dB is restored and sent. The preamp setting follows the same way.
+- A band never visited keeps the current setting, as the controller does today.
+- The per-band memory survives a restart for that radio (the existing per-radio saving).
+- A remote window is unchanged (the Core already restores and sends).
+- The test for the local restore fails before the change.
+
+**Final review ruling (fix wave, item 2):** the band the attenuator follows is the
+receive band of slice A (slice 0, Thetis `rx1_band`), locally and on the Core, not the
+transmit-bound slice's; the ATT-on-TX value and the CW check on MOX follow the transmit
+slice's band and mode (Thetis `_tx_band` and the TX DSP mode). The feed is
+`RadioModel::followReceiveSliceWithStepAttenuator`, which the Core also calls.
+
+**Verification:** `tst_step_attenuator_controller` and the local wiring test, built and
+run by exact name. Hardware (pending, operator checkpoint): band changes on the G2 and the
+HL2, locally and through the Rock.
+
+**Execution note (advisory):** opus (small). After Task 4.
+
+- [ ] **Step 1:** Local band and mode feed, restore to radio, tests; commit.

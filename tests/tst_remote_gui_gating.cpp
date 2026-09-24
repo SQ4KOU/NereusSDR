@@ -80,6 +80,15 @@
 //                 with a plain reason in a remote session. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-23 -- R-R3-46 / R-R3-10: with the Core's radio known, the PA
+//                 pages are shown and follow the transmit permission.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
+//   2026-09-23 -- R-R3-46 / R-R3-21: the attenuator rows show and write
+//                 the Core's `stepAtt` object while the Core takes the
+//                 window's edits, and give the object's plain reason
+//                 otherwise. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 //   2026-09-23 -- R3 receiver audio plan, Task 4 (R-R3-42): Audio > TCI
 //                 and TCI Server work in a remote window. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
@@ -132,12 +141,16 @@
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/BoardCapabilities.h"
+#include "core/HpsdrModel.h"
 #include "core/MicProfileManager.h"
 #include "core/MoxController.h"
 #include "core/RadioDiscovery.h"
+#include "core/StepAttenuatorFacade.h"
 #include "core/WdspTypes.h"
 #include "core/session/RemoteStationOptions.h"
 #include "core/session/SessionTransport.h"
+#include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/ISettingsBackend.h"
@@ -146,6 +159,7 @@
 #include "gui/ConnectionPanel.h"
 #include "gui/GuiSessionCoordinator.h"
 #include "gui/MainWindow.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/SetupDialog.h"
 #include "gui/StationStartupSelection.h"
 #include "gui/SpectrumOverlayPanel.h"
@@ -165,12 +179,19 @@
 #include "gui/setup/DspOptionsPage.h"
 #include "gui/setup/DspSetupPages.h"
 #include "gui/setup/GeneralOptionsPage.h"
+#include "gui/setup/HardwarePage.h"
+#include "gui/setup/hardware/Hl2OptionsTab.h"
+#include "gui/setup/TransmitSetupPages.h"
+#include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
+#include "core/accessories/AlexAntennaFacade.h"
+#include "models/TransmitModel.h"
 #include "gui/widgets/MeterSlider.h"
 #include "gui/widgets/VaxChannelSelector.h"
 #include "gui/widgets/VfoWidget.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#include "fakes/MainWindowTestSettings.h"
 
 using namespace NereusSDR;
 
@@ -2321,9 +2342,10 @@ private slots:
     // ====================================================================
     // R-R3-21: Setup leaves declared unavailable in a remote session.
     //
-    // Hardware Config and DDC Routing act on this computer's own radio
-    // connection: on a remote model currentRadioChanged never fires, so
-    // HardwarePage never learns a MAC and drops every edit. RF-Kit
+    // DDC Routing changes the radio's hardware settings (a placeholder
+    // locally too), which a remote window cannot do yet. Hardware Config
+    // is no longer declared (R-R3-46: remoteHardwareConfigFollowsTheCore).
+    // RF-Kit
     // connects this computer's own amplifier socket. None reaches local
     // DSP, so the resource audit does not catch them; they are declared.
     // ====================================================================
@@ -2331,8 +2353,6 @@ private slots:
     {
         QTest::addColumn<QString>("label");
         QTest::addColumn<QString>("reasonWord");
-        QTest::newRow("Hardware Config") << QStringLiteral("Hardware Config")
-                                         << QStringLiteral("hardware");
         QTest::newRow("DDC Routing") << QStringLiteral("DDC Routing")
                                      << QStringLiteral("hardware");
         QTest::newRow("RF-Kit") << QStringLiteral("RF-Kit") << QStringLiteral("Amplifier");
@@ -2383,6 +2403,300 @@ private slots:
                     QStringLiteral("setupLocalUnavailable"))->isHidden());
     }
 
+    // ====================================================================
+    // R-R3-46: Hardware Config in a remote window.
+    // ====================================================================
+
+    // The page is not declared unavailable any more. It shows the Core's
+    // radio; against a Core that does not offer Hardware Config its tabs
+    // are disabled with the reason above them; with it they are live, and
+    // the transmit fields follow the transmit permission with its reason.
+    void remoteHardwareConfigFollowsTheCore()
+    {
+        SettingsProxy proxy;
+        AppSettings::instance().setRemoteBackend(&proxy);
+        RadioModel remote(RadioModel::Role::Remote);
+        StationCapabilities caps;
+        caps.macAddress = QStringLiteral("AA:BB:CC:DD:EE:47");
+        caps.board = HPSDRHW::Angelia;
+        caps.radioConnected = true;
+        caps.radioIdentityEntries = true;
+        caps.hpsdrModel = HPSDRModel::ANAN100D;
+        caps.radioProtocol = 1;
+        remote.applyStationCapabilities(caps);
+        AlexAntennaFacade* alex = remote.alexAntennaFacade();
+        const QString olderCore = QStringLiteral(
+            "This Core cannot change its radio's hardware settings for this app. "
+            "Updating the Core may help.");
+        QVERIFY(OperatorWording::isPlain(olderCore));
+        alex->setWindowAvailability(false, olderCore);
+
+        SetupDialog dialog(&remote);
+        connectDialog(proxy, dialog);
+        QTreeWidgetItem* const leaf = setupLeaf(dialog, QStringLiteral("Hardware Config"));
+        QVERIFY(leaf != nullptr);
+        QVERIFY(leaf->toolTip(0).isEmpty());
+        dialog.selectPage(QStringLiteral("Hardware Config"));
+        QWidget* const page = dialog.realizedPageForTest(QStringLiteral("Hardware Config"));
+        QVERIFY(page != nullptr);
+        QVERIFY(page->isEnabled());  // not the local-DSP gate, not declared
+        auto* hardware = qobject_cast<HardwarePage*>(page);
+        QVERIFY(hardware != nullptr);
+        auto* tabs = hardware->findChild<QTabWidget*>();
+        auto* notice = hardware->findChild<QLabel*>(QStringLiteral("hardwareConfigUnavailable"));
+        QVERIFY(tabs && notice);
+        QVERIFY(!tabs->isEnabled());
+        QCOMPARE(tabs->toolTip(), olderCore);
+        QVERIFY(!notice->isHidden());
+        QCOMPARE(notice->text(), olderCore);
+        QVERIFY(!hardware->remoteEditsAvailableForTest());
+
+        alex->setWindowAvailability(true, {});
+        QVERIFY(tabs->isEnabled());
+        QVERIFY(notice->isHidden());
+
+        // Transmit fields: disabled with the transmit reason; the receive
+        // fields beside them stay live.
+        const QString transmitReason = QStringLiteral(
+            "Remote transmit controls are not available from this Core yet.");
+        auto* antennas = hardware->findChild<AntennaAlexAntennaControlTab*>();
+        QVERIFY(antennas != nullptr);
+        QVERIFY(!antennas->txGridForTest()->isEnabled());
+        QCOMPARE(antennas->txGridForTest()->toolTip(), transmitReason);
+        QVERIFY(!antennas->blockTxAnt2ForTest()->isEnabled());
+        QVERIFY(!antennas->rxOutOnTxForTest()->isEnabled());
+        QVERIFY(antennas->useTxAntForRxForTest()->isEnabled());
+        QVERIFY(antennas->rxButtonForTest(Band::Band40m, 2)->isEnabled());
+        const auto group = [hardware](const QString& title) -> QGroupBox* {
+            for (QGroupBox* box : hardware->findChildren<QGroupBox*>()) {
+                if (box->title() == title) { return box; }
+            }
+            return nullptr;
+        };
+        for (const QString& title : {QStringLiteral("TX OC Pins per Band"),
+                                     QStringLiteral("TX Pin Action mapping"),
+                                     QStringLiteral("External PA control"),
+                                     QStringLiteral("User Dig Out"),
+                                     QStringLiteral("TX Display Cal"),
+                                     QStringLiteral("Volts/Amps Calibration")}) {
+            QGroupBox* box = group(title);
+            QVERIFY2(box != nullptr, qPrintable(title));
+            QVERIFY2(!box->isEnabled(), qPrintable(title));
+            QCOMPARE(box->toolTip(), transmitReason);
+        }
+        for (const QString& title : {QStringLiteral("RX OC Pins per Band"),
+                                     QStringLiteral("HPSDR Freq Cal Diagnostic"),
+                                     QStringLiteral("USB BCD output")}) {
+            QGroupBox* box = group(title);
+            QVERIFY2(box != nullptr, qPrintable(title));
+            QVERIFY2(box->isEnabled(), qPrintable(title));
+        }
+        // The HL2's TX buffer latency and PTT hang are transmit settings
+        // too (a receive-only Core refuses their keys).
+        auto* hl2Options = hardware->findChild<Hl2OptionsTab*>();
+        QVERIFY(hl2Options != nullptr);
+        QVERIFY(!hl2Options->transmitTimingsEnabledForTest());
+        // Follow-up item 4: OC hot switching and the Alex TX master switches.
+        const auto check = [hardware](const QString& text) -> QCheckBox* {
+            for (QCheckBox* box : hardware->findChildren<QCheckBox*>()) {
+                if (box->text() == text) { return box; }
+            }
+            return nullptr;
+        };
+        const QStringList transmitChecks{QStringLiteral("Allow hot switching"),
+                                         QStringLiteral("HPF Bypass on TX"),
+                                         QStringLiteral("HPF Bypass on PureSignal feedback"),
+                                         QStringLiteral("Disable 6m LNA on TX")};
+        for (const QString& text : transmitChecks) {
+            QCheckBox* box = check(text);
+            QVERIFY2(box != nullptr, qPrintable(text));
+            QVERIFY2(!box->isEnabled(), qPrintable(text));
+            QCOMPARE(box->toolTip(), transmitReason);
+        }
+
+        // A Core that permits transmit lifts it.
+        dialog.setTransmitPermitted(true);
+        QVERIFY(hl2Options->transmitTimingsEnabledForTest());
+        for (const QString& text : transmitChecks) {
+            QVERIFY2(check(text)->isEnabled(), qPrintable(text));
+        }
+        QVERIFY(antennas->txGridForTest()->isEnabled());
+        QVERIFY(group(QStringLiteral("User Dig Out"))->isEnabled());
+        QVERIFY(group(QStringLiteral("TX Display Cal"))->toolTip().isEmpty());
+
+        // Local direct mode: everything live, no notice.
+        AppSettings::instance().setRemoteBackend(nullptr);
+        RadioModel local;
+        local.setBoardForTest(HPSDRHW::Angelia);
+        SetupDialog localDialog(&local);
+        localDialog.selectPage(QStringLiteral("Hardware Config"));
+        auto* localHardware = qobject_cast<HardwarePage*>(
+            localDialog.realizedPageForTest(QStringLiteral("Hardware Config")));
+        QVERIFY(localHardware != nullptr);
+        QVERIFY(localHardware->findChild<QTabWidget*>()->isEnabled());
+        QVERIFY(localHardware->findChild<QLabel*>(
+                    QStringLiteral("hardwareConfigUnavailable"))->isHidden());
+        auto* localAntennas = localHardware->findChild<AntennaAlexAntennaControlTab*>();
+        QVERIFY(localAntennas->txGridForTest()->isEnabled());
+        QVERIFY(localAntennas->blockTxAnt2ForTest()->isEnabled());
+        QVERIFY(localHardware->findChild<Hl2OptionsTab*>()->transmitTimingsEnabledForTest());
+    }
+
+    // R-R3-46 (carried from the remote window Setup re-review): with the
+    // Core's radio known and its settings ready, building every Core and
+    // Mixed page outside the local-DSP gate sends the Core no write and no
+    // remove. Hardware Config is built with a Core HL2 whose N2ADR switch is
+    // saved (its restore used to rewrite the OC matrix).
+    void buildingCoreAndMixedPagesSendsTheCoreNothing()
+    {
+        SettingsProxy proxy;
+        AppSettings::instance().setRemoteBackend(&proxy);
+        RadioModel remote(RadioModel::Role::Remote);
+        const QString mac = QStringLiteral("AA:BB:CC:DD:EE:48");
+        StationCapabilities caps;
+        caps.macAddress = mac;
+        caps.board = HPSDRHW::HermesLite;
+        caps.radioConnected = true;
+        caps.radioIdentityEntries = true;
+        caps.hpsdrModel = HPSDRModel::HERMESLITE;
+        caps.radioProtocol = 1;
+        remote.applyStationCapabilities(caps);
+        remote.alexAntennaFacade()->setWindowAvailability(true, {});
+        remote.stepAttFacade()->setWindowAvailability(true, {});
+
+        SetupDialog dialog(&remote);
+        connectDialog(proxy, dialog, {
+            {QStringLiteral("hardware/%1/hl2IoBoard/n2adrFilter").arg(mac), QStringLiteral("True")},
+            {QStringLiteral("hardware/%1/radioInfo/sampleRate").arg(mac), QStringLiteral("96000")},
+            {QStringLiteral("hardware/%1/oc/rx/40m/pin3").arg(mac), QStringLiteral("True")},
+            {QStringLiteral("hardware/%1/cal/freqFactor").arg(mac), QStringLiteral("1.000001")},
+        });
+        QVERIFY(proxy.ready());
+        QSignalSpy writes(&proxy, &SettingsProxy::outboundWriteRequested);
+        QSignalSpy removes(&proxy, &SettingsProxy::outboundRemoveRequested);
+
+        QStringList offenders;
+        int built = 0;
+        const QStringList labels = dialog.pageLabelsForTest();
+        for (int i = 0; i < dialog.registeredPageCountForTest(); ++i) {
+            if (dialog.pageScopeAtForTest(i) == SetupScope::ThisComputer) {
+                continue;
+            }
+            const int writesBefore = writes.size() + removes.size();
+            const int handOutsBefore = remote.localDspHandOutCount();
+            QWidget* const page = dialog.realizePageAtForTest(i);
+            QCoreApplication::processEvents();
+            if (page == nullptr || remote.localDspHandOutCount() > handOutsBefore) {
+                continue;  // the local-DSP gate's pages are outside this sweep
+            }
+            ++built;
+            if (writes.size() + removes.size() > writesBefore) {
+                QStringList keys;
+                for (int w = writesBefore; w < writes.size(); ++w) {
+                    keys << writes.at(w).at(0).toString();
+                }
+                offenders << QStringLiteral("%1 (%2)").arg(labels.at(i), keys.join(QStringLiteral(", ")));
+            }
+        }
+        QVERIFY(built >= 20);
+        QVERIFY2(offenders.isEmpty(), qPrintable(offenders.join(QStringLiteral("; "))));
+        QVERIFY(dialog.isPageRealizedForTest(QStringLiteral("Hardware Config")));
+        QCOMPARE(writes.size(), 0);
+        QCOMPARE(removes.size(), 0);
+    }
+
+    // R-R3-46 (carried): a page's modal window that is not a QDialog still
+    // holds the page's rebuild back until it goes.
+    void setupPageIsNotRebuiltUnderItsOwnModalWindow()
+    {
+        SettingsProxy proxy;
+        AppSettings::instance().setRemoteBackend(&proxy);
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        connectDialog(proxy, dialog, {{QStringLiteral("Region"), QStringLiteral("Japan")}});
+        const int index = dialog.registerPageForTest(
+            QStringLiteral("Modal owner"), SetupScope::Core, [] { return new QWidget; });
+        dialog.show();
+        QPointer<QWidget> page = dialog.realizePageAtForTest(index);
+        QVERIFY(page);
+
+        auto* modal = new QWidget(page, Qt::Window);
+        modal->setWindowModality(Qt::ApplicationModal);
+        modal->show();
+        QTRY_COMPARE(QApplication::activeModalWidget(), modal);
+        proxy.applySnapshot({{QStringLiteral("Region"), QStringLiteral("Italy")}});
+        QTest::qWait(100);  // the snapshot's queued rebuild has had its turn
+        QVERIFY(!page.isNull());
+        QCOMPARE(dialog.realizedPageForTest(QStringLiteral("Modal owner")), page.data());
+
+        delete modal;
+        QTRY_VERIFY(page.isNull());
+        QVERIFY(dialog.realizedPageForTest(QStringLiteral("Modal owner")) != nullptr);
+    }
+
+    // R-R3-46 (carried): a dialog the page keeps after it closes (hidden,
+    // never destroyed) runs the postponed rebuild when it closes.
+    void keptPageDialogRunsThePostponedRebuildWhenItCloses()
+    {
+        SettingsProxy proxy;
+        AppSettings::instance().setRemoteBackend(&proxy);
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        connectDialog(proxy, dialog, {{QStringLiteral("Region"), QStringLiteral("Japan")}});
+        const int index = dialog.registerPageForTest(
+            QStringLiteral("Dialog owner"), SetupScope::Core, [] { return new QWidget; });
+        dialog.show();
+        QPointer<QWidget> page = dialog.realizePageAtForTest(index);
+        QVERIFY(page);
+
+        QPointer<QDialog> kept = new QDialog(page);
+        kept->open();
+        QTRY_VERIFY(kept->isVisible());
+        proxy.applySnapshot({{QStringLiteral("Region"), QStringLiteral("Italy")}});
+        QTest::qWait(100);
+        QVERIFY(!page.isNull());
+
+        kept->accept();  // hidden, not destroyed; the page is not shown again
+        QTRY_VERIFY(page.isNull());
+        QVERIFY(dialog.realizedPageForTest(QStringLiteral("Dialog owner")) != nullptr);
+    }
+
+    // R-R3-46 (carried): a radio-model change narrows the tune-power
+    // spinbox's range. The clamp must not write tune power.
+    void powerPageRadioChangeDoesNotWriteTunePower()
+    {
+        RadioModel local;
+        TransmitModel& tx = local.transmitModel();
+        tx.setTunePower(50);
+        QCOMPARE(tx.tunePower(), 50);
+        PowerPage page(&local);
+        auto* spin = page.findChild<QDoubleSpinBox*>(QStringLiteral("udTXTunePower"));
+        QVERIFY(spin != nullptr);
+        QCOMPARE(spin->value(), 50.0);
+        QSignalSpy written(&tx, &TransmitModel::tunePowerChanged);
+        page.applyHpsdrModel(HPSDRModel::HERMESLITE);  // range becomes -16.5 .. 0 dB
+        QCOMPARE(written.count(), 0);
+        QCOMPARE(tx.tunePower(), 50);
+    }
+
+    // R-R3-46 (carried): the DSP > CW page's sidetone row, built after the
+    // Core's radio is known, shows that radio's answer at once.
+    void cwSidetoneRowReadsTheCoresRadioAtBuild()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        QVERIFY(BoardCapsTable::forBoard(HPSDRHW::HermesLite).hasSidetoneGenerator);
+        StationCapabilities caps;
+        caps.macAddress = QStringLiteral("AA:BB:CC:DD:EE:49");
+        caps.board = HPSDRHW::HermesLite;
+        caps.radioConnected = true;
+        caps.radioIdentityEntries = true;
+        caps.hpsdrModel = HPSDRModel::HERMESLITE;
+        caps.radioProtocol = 1;
+        remote.applyStationCapabilities(caps);
+        CwSetupPage page(&remote);
+        QVERIFY(page.sidetoneRowVisibleForTest());
+    }
+
     // The PA category is not shown in a remote session: a remote model has
     // no hardware profile, so its capabilities are the Unknown board's and
     // hasPaProfile is false (SetupDialog::applyPaVisibility). The inventory
@@ -2403,9 +2717,85 @@ private slots:
         QVERIFY(pa->isHidden());
     }
 
+    // R-R3-46 / R-R3-10: with the Core's radio known (a Saturn ANAN-G2 1K,
+    // which has PA settings) the PA pages are shown, and each follows the
+    // transmit permission with its reason until remote transmit.
+    void remotePaPagesFollowTheTransmitPermission()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        StationCapabilities caps;
+        caps.stationName = QStringLiteral("Bench G2 1K");
+        caps.macAddress = QStringLiteral("AA:BB:CC:DD:EE:46");
+        caps.board = HPSDRHW::Saturn;
+        caps.radioConnected = true;
+        caps.radioIdentityEntries = true;
+        caps.hpsdrModel = HPSDRModel::ANAN_G2_1K;
+        caps.radioProtocol = 2;
+        remote.applyStationCapabilities(caps);
+        QCOMPARE(remote.hardwareProfile().model, HPSDRModel::ANAN_G2_1K);
+        QVERIFY(remote.boardCapabilities().hasPaProfile);
+
+        SetupDialog dialog(&remote);
+        auto* tree = dialog.findChild<QTreeWidget*>();
+        QVERIFY(tree != nullptr);
+        QTreeWidgetItem* pa = nullptr;
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+            if (tree->topLevelItem(i)->text(0) == QStringLiteral("PA")) {
+                pa = tree->topLevelItem(i);
+            }
+        }
+        QVERIFY(pa != nullptr);
+        QVERIFY(!pa->isHidden());
+
+        const QString transmitReason = QStringLiteral(
+            "Remote transmit controls are not available from this Core yet.");
+        auto* const notice = dialog.findChild<QLabel*>(
+            QStringLiteral("setupTransmitUnavailable"));
+        QVERIFY(notice != nullptr);
+        for (const QString& label : {QStringLiteral("PA Gain"), QStringLiteral("Watt Meter"),
+                                     QStringLiteral("PA Values")}) {
+            QTreeWidgetItem* const leaf = setupLeaf(dialog, label);
+            QVERIFY2(leaf != nullptr, qPrintable(label));
+            QVERIFY2(!leaf->isHidden(), qPrintable(label));
+            QCOMPARE(leaf->toolTip(0), transmitReason);
+            QVERIFY(OperatorWording::isPlain(leaf->toolTip(0)));
+            dialog.selectPage(label);
+            QWidget* const page = dialog.realizedPageForTest(label);
+            QVERIFY2(page != nullptr, qPrintable(label));
+            QVERIFY2(!page->isEnabled(), qPrintable(label));
+            QCOMPARE(page->toolTip(), transmitReason);
+            QVERIFY2(!notice->isHidden(), qPrintable(label));
+            QCOMPARE(notice->text(), transmitReason);
+        }
+
+        // A Core that permits transmit lifts the transmit reason.
+        dialog.setTransmitPermitted(true);
+        for (const QString& label : {QStringLiteral("PA Gain"), QStringLiteral("Watt Meter"),
+                                     QStringLiteral("PA Values")}) {
+            QVERIFY2(setupLeaf(dialog, label)->toolTip(0) != transmitReason, qPrintable(label));
+        }
+
+        // Local direct mode: the same radio's PA pages are live, no reason.
+        RadioModel local;
+        local.setHpsdrModelForTest(HPSDRModel::ANAN_G2_1K);
+        SetupDialog localDialog(&local);
+        for (const QString& label : {QStringLiteral("PA Gain"), QStringLiteral("Watt Meter"),
+                                     QStringLiteral("PA Values")}) {
+            QTreeWidgetItem* const leaf = setupLeaf(localDialog, label);
+            QVERIFY2(leaf != nullptr, qPrintable(label));
+            QVERIFY2(leaf->toolTip(0).isEmpty(), qPrintable(label));
+            localDialog.selectPage(label);
+            QWidget* const page = localDialog.realizedPageForTest(label);
+            QVERIFY2(page != nullptr, qPrintable(label));
+            QVERIFY2(page->isEnabled(), qPrintable(label));
+        }
+        QVERIFY(localDialog.findChild<QLabel*>(
+                    QStringLiteral("setupTransmitUnavailable"))->isHidden());
+    }
+
     // General > Options keeps its Region and Options groups; only the two
-    // attenuator groups, which drive the unwired local step attenuator,
-    // are unavailable.
+    // attenuator groups, which write the Core's attenuator, are unavailable
+    // while no Core takes this window's edits.
     void remoteGeneralOptionsDisablesOnlyTheAttenuatorGroups()
     {
         RadioModel remote(RadioModel::Role::Remote);
@@ -2486,6 +2876,102 @@ private slots:
         QVERIFY(localAtt != nullptr);
         QVERIFY(localAtt->isEnabled());
         QVERIFY(localAtt->toolTip().isEmpty());
+    }
+
+    // R-R3-46 / R-R3-21: with a Core that takes this window's attenuator
+    // edits, the RX applet's row and Setup's two groups are enabled, show
+    // the Core's values and write the Core's `stepAtt` object. An older
+    // Core's plain reason (through OperatorReasonText) disables them again.
+    void remoteAttenuatorRowsFollowTheCoresObject()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        RxApplet applet(nullptr, &remote);
+        GeneralOptionsPage page(&remote);
+        StepAttenuatorFacade* stepAtt = remote.stepAttFacade();
+        QVERIFY(stepAtt != nullptr);
+        QVERIFY(!stepAtt->isBound());
+        auto* att = applet.findChild<QWidget*>(QStringLiteral("RxAttenuatorStack"));
+        auto* spin = att->findChild<QSpinBox*>();
+        auto* combo = att->findChild<QComboBox*>();
+        auto* stepGroup = page.findChild<QGroupBox*>(QStringLiteral("grpStepAttenuator"));
+        auto* autoGroup = page.findChild<QGroupBox*>(QStringLiteral("grpAutoAttRx1"));
+        QVERIFY(att && spin && combo && stepGroup && autoGroup);
+
+        // An older Core: the rows stay disabled with its reason, in user words.
+        const QString older = OperatorReasonText::forDisplay(QStringLiteral(
+            "This Core cannot change its radio's attenuator for this app. Updating the Core may "
+            "help."));
+        QVERIFY(OperatorWording::isPlain(older));
+        stepAtt->setWindowAvailability(false, older);
+        for (QWidget* w : {static_cast<QWidget*>(att), static_cast<QWidget*>(stepGroup),
+                           static_cast<QWidget*>(autoGroup)}) {
+            QVERIFY(!w->isEnabled());
+            QCOMPARE(w->toolTip(), older);
+        }
+
+        // A supporting Core: its values arrive, then the rows open.
+        stepAtt->applyRemoteProperty("minDb", 0);
+        stepAtt->applyRemoteProperty("maxDb", 61);
+        stepAtt->setEnabled(true);
+        stepAtt->setAttenuationDb(20);
+        stepAtt->setAutoAttUndoDelayMs(7000);
+        stepAtt->setWindowAvailability(true, QString());
+        for (QWidget* w : {static_cast<QWidget*>(att), static_cast<QWidget*>(stepGroup),
+                           static_cast<QWidget*>(autoGroup)}) {
+            QVERIFY(w->isEnabled());
+            QVERIFY(w->toolTip().isEmpty());
+        }
+        QCOMPARE(applet.attLabelTextForTest(), QStringLiteral("S-ATT"));
+        QCOMPARE(spin->maximum(), 61);
+        QCOMPARE(spin->value(), 20);
+        QCheckBox* pageStepEnable = nullptr;
+        for (QCheckBox* box : stepGroup->findChildren<QCheckBox*>()) {
+            if (box->text() == QStringLiteral("RX1 Enable")) { pageStepEnable = box; }
+        }
+        QVERIFY(pageStepEnable != nullptr);
+        QVERIFY(pageStepEnable->isChecked());
+        const QList<QSpinBox*> pageSpins = stepGroup->findChildren<QSpinBox*>();
+        QVERIFY(!pageSpins.isEmpty());
+        QCOMPARE(pageSpins.first()->value(), 20);
+        QCOMPARE(pageSpins.first()->maximum(), 61);
+
+        // The Core moves: every row follows.
+        stepAtt->setAttenuationDb(33);
+        QCOMPARE(spin->value(), 33);
+        QCOMPARE(pageSpins.first()->value(), 33);
+
+        // The window's edits go to the Core's object.
+        spin->setValue(12);
+        QCOMPARE(stepAtt->attenuationDb(), 12);
+        QCOMPARE(pageSpins.first()->value(), 12);
+        pageSpins.first()->setValue(15);
+        QCOMPARE(stepAtt->attenuationDb(), 15);
+        QCOMPARE(spin->value(), 15);
+        stepAtt->setEnabled(false);
+        QCOMPARE(applet.attLabelTextForTest(), QStringLiteral("ATT"));
+        if (combo->count() > 1) {
+            combo->setCurrentIndex(1);
+            QCOMPARE(stepAtt->preampMode(), combo->itemData(1).toInt());
+        }
+        QCheckBox* autoEnable = nullptr;
+        for (QCheckBox* box : autoGroup->findChildren<QCheckBox*>()) {
+            if (box->text() == QStringLiteral("Enable")) { autoEnable = box; }
+        }
+        QVERIFY(autoEnable != nullptr);
+        autoEnable->click();
+        QVERIFY(stepAtt->autoAttEnabled());
+        QCOMPARE(applet.attLabelTextForTest(), QStringLiteral("ATT"));
+        auto* hold = autoGroup->findChild<QSpinBox*>();
+        QVERIFY(hold != nullptr);
+        QCOMPARE(hold->value(), 7);
+        hold->setValue(9);
+        QCOMPARE(stepAtt->autoAttUndoDelayMs(), 9000);
+
+        // The link goes: the rows close again, with the reason they are given.
+        stepAtt->setWindowAvailability(false, older);
+        QVERIFY(!att->isEnabled());
+        QVERIFY(!stepGroup->isEnabled());
+        QCOMPARE(att->toolTip(), older);
     }
 
     // The RX applet's XIT row offsets the transmit frequency, so it takes
@@ -3089,8 +3575,7 @@ private slots:
         // The arrangement tst_gui_session_coordinator makes first: no VAX
         // first-run dialog, and no discovery broadcast from the local
         // windows onto the LAN.
-        AppSettings::instance().setValue(QStringLiteral("audio/FirstRunComplete"),
-                                         QStringLiteral("True"));
+        Test::markAudioFirstRunDone();
         RadioDiscovery::clearHoldOffForTest();
         {
             RadioDiscovery discovery;
@@ -3282,8 +3767,7 @@ private slots:
     void localWindowDisconnectStillOpensConnections()
     {
         QFETCH(bool, pickerManaged);
-        AppSettings::instance().setValue(QStringLiteral("audio/FirstRunComplete"),
-                                         QStringLiteral("True"));
+        Test::markAudioFirstRunDone();
         RadioDiscovery::clearHoldOffForTest();
         {
             RadioDiscovery discovery;
@@ -3347,6 +3831,11 @@ private slots:
         // Migrated settings, so the remote window's StationClient does not
         // warn that CoreInit has not run (as the Tools menu case above).
         AppSettings::instance().ensureSettingsAtVersion(6);
+        // The local window below spins the event loop; on Linux with no
+        // audio backend the modal Linux audio first-run dialog would block
+        // it (R-R3-21). audio/FirstRunComplete stays unset, so the VAX
+        // first-run check this case is about still runs.
+        Test::suppressLinuxAudioFirstRun();
         {
             SettingsProxy proxy;
             AppSettings::instance().setRemoteBackend(&proxy);

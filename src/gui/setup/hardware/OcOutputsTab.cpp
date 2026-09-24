@@ -21,6 +21,9 @@
 //                checkboxes wired to TransmitModel::userDigOut, gated on
 //                BoardCapabilities::hasPennyLane. J.J. Boyd (KG4VCF), with
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: User Dig Out and the HF / SWL transmit
+//                 fields follow the transmit permission. J.J. Boyd (KG4VCF), AI-
+//                 assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -62,6 +65,7 @@
 //============================================================================================//
 
 #include "OcOutputsTab.h"
+#include "HardwareTransmitGate.h"
 #include "OcOutputsHfTab.h"
 #include "OcOutputsSwlTab.h"
 
@@ -183,6 +187,19 @@ void OcOutputsTab::restoreSettings(const QMap<QString, QVariant>& /*settings*/)
     // OcMatrix owns all OC state under hardware/<mac>/oc/... via AppSettings.
     // populate() already called load(), so nothing to do here.
     // This stub satisfies the HardwarePage API contract.
+}
+
+// ── Transmit permission (R-R3-46) ────────────────────────────────────────────
+
+void OcOutputsTab::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    HardwareTransmitGate::apply(m_userDigOutGroup, permitted, reason);
+    if (m_hfTab) {
+        m_hfTab->setTransmitPermitted(permitted, reason);
+    }
+    if (m_swlTab) {
+        m_swlTab->setTransmitPermitted(permitted, reason);
+    }
 }
 
 // ── User Dig Out group (P1 full-parity §4.3) ────────────────────────────────

@@ -90,6 +90,36 @@ new priority, not a substitution for the full plan.
    reachability guidance and documentation. Basic usable selection is step 2,
    rather than being held for this final phase.
 
+**Built after R4, by operator decision (2026-09-23).** NereusSDR keeps its own design: a
+Thetis feature is ported when it fits and serves operators, and features built around
+Thetis's VFO A/B or RX1/RX2 structure are not forced in. R3 finishes the remote Core
+working the way local NereusSDR does, plus cleanup. These features the operator chose to
+build come after R5 and R4, each ported as it fits; until then their controls are hidden
+(the unfinished controls plan). Their build choices and scout notes are in the
+controller's notes (`questions-for-jj-2026-09-23.md`, "BUILD CHOICES RESULTS";
+`unfinished-controls-scout-*.md`):
+- Receive equalizer in one window with transmit (global across receivers, its own
+  setting, with Thetis's bandwidth control for receive and transmit).
+- Synchronous AM options and the DC block (per slice; DC block on after the AGC by
+  default).
+- Container macro buttons (open and close containers, send MMIO messages) and spectrum
+  averaging on and off.
+- Local connection history, the logging controls, local network diagnostics.
+- Meter peak hold, text hold in the number readouts, digital delay and history band,
+  starting at Thetis's values.
+- Mute VAX during transmit on another slice (on by default), local and remote.
+- WSJT-X spot filters (starting ticked) and the RBN rate limit (RBN spots only).
+- RADE callsigns decoded and sent in FreeDV's format with the "TX ending" tail (never
+  keyed more than 1 s after release), then FreeDV decodes to PSK Reporter (mode FREEDV,
+  the Core uploads with a remote radio).
+- TCI settings: rate limit per slice (milliseconds, 100 by default), CW to CWU, TX
+  channel, sensor interval default, the three receiver 2 VFO options starting at
+  today's messages, stream channels.
+- The CW peak filter's bandwidth and gain, the AM maximum squelch tail, FM deviation
+  and de-emphasis.
+- DXCC spot colouring end to end (a switch and a log import; the country table already
+  loads).
+
 The matching selector Core/GUI checkpoint `c28e1565` is installed. Its full
 desktop suite passed 738/738, the fresh native build passed, and the GUI
 authenticated and received audio/spectrum. Actual IPv4 LAN announcements
@@ -189,6 +219,7 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-46 | A remote window controls the Core's radio hardware the way a local window controls its own. The Core tells the window which radio it has; the attenuator, preamp, auto-attenuate, overload indication, receive antennas, OC receive pins, the HL2 filter board, calibration and the receive sample rate are applied by the Core live and saved there. Transmit-side hardware follows the transmit permission until remote transmit. |
 | R-R3-47 | Station accessories (Power Genius XL, Tuner Genius XL, RF-Kit RF2K-S) connect to the Core only. The Core checks each device's identity before admitting it, keeps it connected, follows the band, records its faults, and relays status, meters and faults to every client; clients change connection settings and the interlock policy through documented, versioned session commands, so the desktop remote window and the iPhone app are thin clients of one API. Transmit-coupled accessory actions wait for remote transmit. |
 | R-R3-48 | The Core serves TCI on the station network for station devices such as the RF-Kit, switched by the same TCI switch and port as the app and remembered on the Core; transmit requests over it are refused until remote transmit. |
+| R-R3-49 | Every control a user can see does what its label says. A control whose feature is not built yet is hidden in local and remote windows through one list that names each unbuilt feature, and appears when its feature is built. Controls the operator chose to remove are gone; values users saved for them stay in the settings file. |
 
 The September 21 user request explicitly adds banner telemetry restoration and
 the current Aether telemetry graph port. Upstream was fetched from

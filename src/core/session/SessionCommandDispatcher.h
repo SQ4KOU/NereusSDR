@@ -167,6 +167,10 @@ private:
     void handleConfigureTgxl(const NereusSDR::SessionMessage& invoke);
     void handleDisconnectTgxl(const NereusSDR::SessionMessage& invoke);
     void handleSetFourO3AEnabled(const NereusSDR::SessionMessage& invoke);
+    void handleRequestIoBoardProbe(const NereusSDR::SessionMessage& invoke);
+    // R-R3-46 fix wave (radioHardwareVersion 3): one band's RX or RX-only
+    // antenna, applied through the Core's AlexAntennaFacade.
+    void handleSetAlexRxAntenna(const NereusSDR::SessionMessage& invoke);
     // nnr.setDiagnostics, nnr.resetTuning and (R-R3-40, minor 11)
     // nnr.tryAgain, each addressed to one slice ID.
     void handleNnrAction(const NereusSDR::SessionMessage& invoke);

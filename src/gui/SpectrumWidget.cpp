@@ -142,6 +142,7 @@
 #include <QCoreApplication>
 #include <QEvent>
 #include <QDesktopServices>
+#include <QScopedValueRollback>
 #include <QGuiApplication>
 #include <QHoverEvent>
 #include <QLabel>
@@ -9657,7 +9658,10 @@ void SpectrumWidget::wheelEvent(QWheelEvent* event)
         newBw = std::clamp(newBw, 1000.0, maxZoomOutBandwidthHz());
         // Recenter on VFO when zooming
         applyViewWindow(m_vfoHz, newBw);
-        emit centerChanged(m_centerHz);
+        {
+            const QScopedValueRollback<bool> zooming(m_wheelZoomRecentring, true);
+            emit centerChanged(m_centerHz);
+        }
         emit bandwidthChangeRequested(newBw);
         updateVfoPositions();
         // This path writes m_bandwidthHz directly instead of going through
@@ -11497,6 +11501,13 @@ void SpectrumWidget::recenterOnVfo()
 #else
     update();
 #endif
+}
+
+void SpectrumWidget::endPanDrag()
+{
+    if (!m_draggingPan) { return; }
+    m_draggingPan = false;
+    setCursor(Qt::CrossCursor);
 }
 
 void SpectrumWidget::applyRemoteCtunState(bool available, bool pinned)

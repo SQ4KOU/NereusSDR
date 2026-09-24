@@ -66,6 +66,7 @@
 #include <QVariant>
 #include <QWidget>
 
+class QLabel;
 class QTabWidget;
 
 namespace NereusSDR {
@@ -103,7 +104,14 @@ public:
     };
     bool isTabVisibleForTest(Tab t) const;
     QString tabTextForTest(Tab t) const;
+    QWidget* tabWidgetForTest(Tab t) const;
+    bool remoteEditsAvailableForTest() const;
 #endif
+
+    // R-R3-46: the transmit fields of each tab (TX antennas, relays,
+    // external PA, User Dig Out, the PA's current calibration) follow the
+    // transmit permission with its reason; the rest of the page stays live.
+    void setTransmitPermitted(bool permitted, const QString& reason) override;
 
 signals:
     // Phase 3M-4 Task 11: pass-through for the IMD-warning-gated HPF Bypass
@@ -133,8 +141,16 @@ private:
     static QMap<QString, QVariant> filterPrefix(const QMap<QString, QVariant>& map,
                                                  const QString& prefix);
 
+    // R-R3-46: a remote window's edits reach the Core only while it offers
+    // Hardware Config (radioHardwareVersion 2); otherwise the tabs are
+    // disabled with the reason, shown above them.
+    void applyRemoteAvailability();
+    bool remoteEditsAvailable() const;
+
     RadioModel*  m_model{nullptr};
     QTabWidget*  m_tabs{nullptr};
+    bool         m_remote{false};
+    QLabel*      m_remoteNotice{nullptr};
 
     // MAC address of the currently displayed radio; empty if none.
     QString      m_currentMac;

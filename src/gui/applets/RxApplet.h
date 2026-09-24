@@ -16,6 +16,9 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-09-23 - R-R3-46 / R-R3-21: in a remote window the attenuator row
+//                 follows the Core's `stepAtt` object. J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -235,6 +238,9 @@ public:
     // Test-only: returns the item count in the preamp combo at construction.
     // Phase 3P-C Step 3: verifies per-board populate from BoardCapabilities.
     int preampComboItemCountForTest() const;
+    // R-R3-46: the preamp items shown, and the S-ATT minimum.
+    QStringList preampComboLabelsForTest() const;
+    int stepAttMinForTest() const;
 
     // Test-only: returns antenna number (1/2/3) shown by each button.
     // Phase 3P-F Task 4: verifies per-band wiring to AlexController.
@@ -268,6 +274,21 @@ private:
     // Phase 3P-F Task 4: read AlexController per-band assignments and push
     // them into SliceModel so the antenna buttons reflect the active band.
     void populateAntennaButtons(NereusSDR::Band band);
+    // R-R3-46: preamp items and S-ATT range for the Core's board (remote).
+    void rebuildPreampAndAttRangeForBoard(NereusSDR::HPSDRHW board, bool alexFilters,
+                                          int minDb);
+    // R-R3-46 / R-R3-21: a remote window's ATT/S-ATT row, preamp combo and
+    // RX1 preamp toggle follow the Core's `stepAtt` object and write to it.
+    void wireRemoteStepAtt();
+    // Enables the row while the Core takes its edits; otherwise disables it
+    // with the plain reason the object carries.
+    void applyRemoteStepAttAvailability();
+    // Shows the object's values in the row (signals blocked).
+    void showRemoteStepAttValues();
+    // Builds the RX1 preamp toggle (dual-ADC boards) into the OVL row once;
+    // later calls return the existing one. R-R3-46: a remote window learns
+    // its board only when the Core's radio arrives, so it builds it then.
+    void ensureRx1PreampToggle();
 
     static QString formatFilterWidth(int low, int high);
 

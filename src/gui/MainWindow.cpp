@@ -19,6 +19,11 @@
 //                 slice flag learns why a receiver on the headphones is
 //                 silent on the Core's side. AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-47 / R-R3-22: the Power Genius
+//                 gauge conversion moved to the Core side
+//                 (PgxlStatusGauges); AmpApplet and Rf2ksApplet read
+//                 RadioModel's AmplifierModel and RfKitModel. AI-assisted
+//                 via Anthropic Claude Code.
 //   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-45: every slice flag learns
 //                 whether a headphones output is open, so a receiver on
 //                 the headphones with none set up says why it is silent.
@@ -58,6 +63,19 @@
 //                 passband Shift-click, and the RADE applet for its
 //                 profile combo and Reset vocoder. AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-46: Radio > Protocol Info shows
+//                 the Core's radio in a remote window. AI-assisted
+//                 implementation via Anthropic Claude Code.
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-46 / R-R3-21: a remote window's
+//                 attenuator controls follow the Core's `stepAtt` object
+//                 while the Core offers it, the Core's refusals of an
+//                 attenuator edit are shown in user words, and the
+//                 overload alarm lights on the Core's overload report.
+//                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-46 / R-R3-11: with a local
+//                 radio each band remembers its attenuator and preamp; the
+//                 controller follows the transmit slice's band and mode.
+//                 AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-44: a remote window opens this
 //                 computer's VAX outputs and feeds them from the Core's
 //                 receiver streams (RemoteVaxRouter); the VAX applet's TX
@@ -75,6 +93,9 @@
 //                 src/gui/TitleBar.{h,cpp}. AetherSDR has no per-file
 //                 headers; project-level citation per docs/attribution/
 //                 HOW-TO-PORT.md rule 6.
+//   2026-09-23 - R-R3-46: Hardware Config availability pushed to the
+//                 `alexAntennas` object; antenna refusals shown as toasts. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -336,6 +357,10 @@ warren@wpratt.com
 #include "core/NbFamily.h"
 #include "core/ClarityController.h"
 #include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
+#include "core/accessories/AlexAntennaFacade.h"
+
+#include <array>
 #include "core/MoxController.h"  // 3M-1a G.1: F.2 connect (hardwareFlipped → onMoxHardwareFlipped)
 #include "core/NoiseFloorTracker.h"
 #include "core/BoardCapabilities.h"
@@ -1263,6 +1288,31 @@ void MainWindow::ensureRemoteSession()
                 if (!text.isEmpty()) {
                     showToast(text, ToastSeverity::Warning, 5000);
                 }
+            });
+        }
+
+        // R-R3-46 / R-R3-21: an attenuator edit the Core kept at another
+        // value (its radio's range, a mode the radio does not offer), or
+        // that this window could not send, says why in user words.
+        connect(m_stationClient, &StationClient::propertyWriteCompleted, this,
+                [this](const QByteArray& objectKey, const QByteArray&, quint32,
+                       bool accepted, const QString& reason) {
+            // R-R3-46: so does an antenna edit (Setup > Hardware Config).
+            if ((objectKey == "stepAtt" || objectKey == "alexAntennas") && !accepted
+                && !reason.isEmpty()) {
+                showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
+            }
+        });
+        if (StepAttenuatorFacade* stepAtt = m_radioModel->stepAttFacade()) {
+            connect(stepAtt, &StepAttenuatorFacade::editRejected, this,
+                    [this](const QString& reason) {
+                showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
+            });
+        }
+        if (AlexAntennaFacade* alex = m_radioModel->alexAntennaFacade()) {
+            connect(alex, &AlexAntennaFacade::editRejected, this,
+                    [this](const QString& reason) {
+                showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
             });
         }
 
@@ -4399,6 +4449,12 @@ void MainWindow::buildUI()
     // --- Phase 3G-13: Step attenuator + ADC overload ---
     m_stepAttController = new StepAttenuatorController(this);
     m_radioModel->setStepAttController(m_stepAttController);
+    // R-R3-46 / R-R3-11: each band remembers its attenuator and preamp with
+    // a local radio, as through the Core: the controller follows slice A's
+    // receive band (Thetis rx1_band) and the transmit slice's band and mode
+    // for ATT-on-TX, and sends a band's restored values to the radio. A
+    // remote window is not wired (the Core does it).
+    m_radioModel->followReceiveSliceWithStepAttenuator();
 
     // 3M-1a G.1 / F.2: MoxController::hardwareFlipped → StepAttenuatorController.
     // Both objects are now live; RadioModel owns MoxController, MainWindow owns
@@ -6457,36 +6513,16 @@ void MainWindow::populateDefaultMeter()
         // Connection -> applet data flow.
         Rf2ksConnection* rfKitConn = m_radioModel->rfKitConnection();
         if (rfKitConn) {
-            connect(rfKitConn, &Rf2ksConnection::powerUpdated,
-                    m_rfKitApplet, &Rf2ksApplet::setPower);
+            // R-R3-47 / R-R3-22: power, OPERATE, the connection dot and
+            // the name and version come from RadioModel's RfKitModel, which
+            // Rf2ksApplet reads itself (the Core's `rfkit` object in a
+            // remote window). The tuner and antenna rows stay wired here.
             connect(rfKitConn, &Rf2ksConnection::tunerUpdated,
                     m_rfKitApplet, &Rf2ksApplet::setTuner);
             connect(rfKitConn, &Rf2ksConnection::antennasUpdated,
                     m_rfKitApplet, &Rf2ksApplet::setAntennas);
             connect(rfKitConn, &Rf2ksConnection::activeAntennaUpdated,
                     m_rfKitApplet, &Rf2ksApplet::setActiveAntenna);
-            connect(rfKitConn, &Rf2ksConnection::operateModeUpdated,
-                    m_rfKitApplet, &Rf2ksApplet::setOperateMode);
-            connect(rfKitConn, &Rf2ksConnection::connected,
-                    this, [this]() {
-                if (m_rfKitApplet) {
-                    m_rfKitApplet->setConnectedState(true);
-                }
-            });
-            connect(rfKitConn, &Rf2ksConnection::disconnected,
-                    this, [this]() {
-                if (m_rfKitApplet) {
-                    m_rfKitApplet->setConnectedState(false);
-                }
-            });
-            connect(rfKitConn, &Rf2ksConnection::infoUpdated,
-                    this, [this](const QString& /*deviceName*/,
-                                 const QString& softwareVersion,
-                                 const QString& nicknameFromAmp) {
-                if (m_rfKitApplet) {
-                    m_rfKitApplet->setNicknameAndVersion(nicknameFromAmp, softwareVersion);
-                }
-            });
 
             // Applet -> connection (antenna click, operate toggle).
             connect(m_rfKitApplet, &Rf2ksApplet::antennaRequested,
@@ -6922,10 +6958,17 @@ void MainWindow::buildMenuBar()
             // Remote-daemon R2: isConnected() is storage-backed and true on
             // a remote client, whose connection() is permanently null, so
             // the second half of this test is load-bearing and not merely
-            // defensive. applyRemoteRoleGating() disables this QAction on a
-            // remote model, which masks the crash today -- but the mask is
-            // an enablement, and QAction::trigger() ignores enablement.
-            // The gate is not the guard.
+            // defensive. A remote model never reaches it (the branch just
+            // below), and applyRemoteRoleGating() only enables this QAction
+            // once the Core has described its radio -- but QAction::trigger()
+            // ignores enablement. The gate is not the guard.
+            if (!m_radioModel->ownsLocalDsp()) {
+                // R-R3-46: a remote window shows the Core's radio, from
+                // what the Core reported. Same five lines as local mode;
+                // anything an older Core does not report says so.
+                showCoreRadioInfo();
+                return;
+            }
             if (!m_radioModel->isConnected() || !m_radioModel->connection()) {
                 return;
             }
@@ -8724,8 +8767,9 @@ void MainWindow::buildStatusBar()
         // group's own required width (finding routed from Task A6).
     });
 
-    connect(m_stepAttController, &StepAttenuatorController::overloadStatusChanged,
-            this, [this](int /*adc*/, OverloadLevel /*level*/) {
+    // R-R3-46 / R-R3-21: the alarm for a set of per-ADC levels, from this
+    // window's controller (local) or the Core's report (remote, below).
+    const auto showAdcOverload = [this](const std::array<OverloadLevel, 3>& levels) {
         // Thetis adc_names table — console.cs:21323 [@501e3f5]
         static const char* const kAdcNames[3] = { "ADC0", "ADC1", "ADC2" };
 
@@ -8737,7 +8781,7 @@ void MainWindow::buildStatusBar()
         QString shownAdcs;
         QString tip;
         for (int i = 0; i < 3; ++i) {
-            const OverloadLevel lvl = m_stepAttController->overloadLevel(i);
+            const OverloadLevel lvl = levels[static_cast<std::size_t>(i)];
             if (lvl == OverloadLevel::None) { continue; }
             if (lvl == OverloadLevel::Red) { anyRed = true; }
             if (!shownAdcs.isEmpty()) { shownAdcs += QStringLiteral("/"); }
@@ -8767,7 +8811,31 @@ void MainWindow::buildStatusBar()
         // Restart auto-hide — Thetis: _warningTimer.Stop(); .Start();
         // (ucInfoBar.cs:927+932 [@501e3f5]).
         m_adcOvlHideTimer->start();
+    };
+    connect(m_stepAttController, &StepAttenuatorController::overloadStatusChanged,
+            this, [this, showAdcOverload](int /*adc*/, OverloadLevel /*level*/) {
+        showAdcOverload({m_stepAttController->overloadLevel(0),
+                         m_stepAttController->overloadLevel(1),
+                         m_stepAttController->overloadLevel(2)});
     });
+    // A remote window's controller has no radio. The alarm follows the
+    // Core's overload report instead: the `stepAtt` object's ADC0 and ADC1
+    // levels (0 none, 1 yellow, 2 red), which change when the Core's own
+    // levels do, as the controller's signal above does.
+    if (!m_radioModel->ownsLocalDsp()) {
+        if (StepAttenuatorFacade* stepAtt = m_radioModel->stepAttFacade()) {
+            const auto fromWire = [](int level) {
+                return level >= 2 ? OverloadLevel::Red
+                     : level == 1 ? OverloadLevel::Yellow : OverloadLevel::None;
+            };
+            const auto fromCore = [stepAtt, fromWire, showAdcOverload](int) {
+                showAdcOverload({fromWire(stepAtt->overloadAdc0()),
+                                 fromWire(stepAtt->overloadAdc1()), OverloadLevel::None});
+            };
+            connect(stepAtt, &StepAttenuatorFacade::overloadAdc0Changed, this, fromCore);
+            connect(stepAtt, &StepAttenuatorFacade::overloadAdc1Changed, this, fromCore);
+        }
+    }
 
     // ── sub-PR-8: Canonical TX StatusBadge ───────────────────────────────
     // Solid red (Variant::Tx) when MoxController emits moxStateChanged(true).
@@ -10494,16 +10562,66 @@ void MainWindow::applyRemoteRoleGating()
                 : tr("Unavailable: this window was started for one Core with "
                      "--station, so the radio list cannot change it."));
     }
-    // Protocol Info dereferences connection()->radioInfo() unguarded, so it
-    // is not merely useless here, it is a crash.
-    if (m_actProtocolInfo != nullptr) {
-        m_actProtocolInfo->setEnabled(false);
-        // Fix round 1: was the one gated action with no explanation while
-        // the other three carried one.
-        m_actProtocolInfo->setToolTip(
-            tr("Unavailable: the radio's details are on the Core, "
-               "not in this window."));
+    // R-R3-46 / R-R3-21: the attenuator, preamp and auto-attenuate
+    // controls (RX applet, Setup > General > Options) follow the Core's
+    // `stepAtt` object; they are usable only while the Core takes this
+    // window's edits, and otherwise say why in user words.
+    if (StepAttenuatorFacade* stepAtt = m_radioModel->stepAttFacade()) {
+        const bool hardware = m_stationClient != nullptr
+            && m_stationClient->remoteRadioHardwareAvailable();
+        stepAtt->setWindowAvailability(hardware, hardware ? QString()
+            : m_stationClient != nullptr
+                ? OperatorReasonText::forDisplay(m_stationClient->radioHardwareUnavailableReason())
+                : tr("Connect to the Core to change the attenuator and preamp."));
     }
+    // R-R3-46: Setup > Hardware Config's receive settings go through the
+    // Core when it offers them (radioHardwareVersion 2); the page follows
+    // this and otherwise says why in user words.
+    if (AlexAntennaFacade* alex = m_radioModel->alexAntennaFacade()) {
+        const bool hardwareConfig = m_stationClient != nullptr
+            && m_stationClient->remoteHardwareConfigAvailable();
+        alex->setWindowAvailability(hardwareConfig, hardwareConfig ? QString()
+            : m_stationClient != nullptr
+                ? OperatorReasonText::forDisplay(m_stationClient->hardwareConfigUnavailableReason())
+                : tr("Connect to the Core to change the radio's hardware settings."));
+    }
+    // R-R3-46: Protocol Info shows the Core's radio (showCoreRadioInfo(),
+    // never connection(), which a remote model does not have) once the
+    // Core has described it.
+    if (m_actProtocolInfo != nullptr) {
+        const bool described = m_stationClient != nullptr
+            && m_stationClient->isHandshakeComplete();
+        m_actProtocolInfo->setEnabled(described);
+        m_actProtocolInfo->setToolTip(described
+            ? tr("Show the Core's radio: its name, firmware, MAC and network address")
+            : tr("Unavailable until this window is connected to the Core."));
+    }
+}
+
+// R-R3-46: Radio > Protocol Info in a remote window. The radio is the Core's,
+// as its capabilities describe it; the lines match local mode's dialog.
+void MainWindow::showCoreRadioInfo()
+{
+    if (m_radioModel == nullptr || m_stationClient == nullptr
+        || !m_stationClient->isHandshakeComplete()) {
+        return;
+    }
+    const StationCapabilities& caps = m_stationClient->capabilities();
+    const RadioInfo& info = m_radioModel->currentRadioInfo();
+    const QString notReported = tr("not reported by the Core");
+    const QString name = !caps.stationName.isEmpty() ? caps.stationName
+        : (!m_radioModel->model().isEmpty() ? m_radioModel->model() : notReported);
+    const QString proto = caps.radioProtocol == 2 ? QStringLiteral("P2")
+        : caps.radioProtocol == 1 ? QStringLiteral("P1") : notReported;
+    const QString firmware = info.firmwareVersion > 0
+        ? QString::number(info.firmwareVersion)
+        : (!caps.firmwareVersion.isEmpty() ? caps.firmwareVersion : notReported);
+    const QString mac = info.macAddress.isEmpty() ? notReported : info.macAddress;
+    const QString address = info.address.isNull() ? notReported : info.address.toString();
+    const QString msg =
+        QStringLiteral("Radio:    %1\nProtocol: %2\nFirmware: %3\nMAC:      %4\nIP:       %5")
+            .arg(name, proto, firmware, mac, address);
+    QMessageBox::information(this, QStringLiteral("Protocol Info"), msg);
 }
 
 // Phase 3Q Sub-PR-4 D.2 — right-click context menu on the TitleBar
@@ -11298,6 +11416,10 @@ void MainWindow::onConnectionStateChanged()
             // persisted "Adaptive" string is clamped to Classic when the
             // connected board lacks the feature.
             m_stepAttController->setHasStepAttenuatorCal(caps.hasStepAttenuatorCal);
+            // R-R3-46: select slice A's band first, because
+            // loadSettings restores the per-band slot for the current band
+            // (DaemonApp::applyStepAttenuatorConnection does the same).
+            m_radioModel->syncStepAttenuatorToReceiveSlice();
             m_stepAttController->loadSettings(conn->radioInfo().macAddress);
         } else if (m_pureSignalApplet) {
             m_pureSignalApplet->setVisible(m_stationClient
@@ -11366,80 +11488,15 @@ void MainWindow::onConnectionStateChanged()
                                 : QStringLiteral("operate=0"));
             });
 
-            connect(m_radioModel->pgxlConnection(),
-                    &PgxlConnection::statusUpdated,
-                    this, [this](const QMap<QString, QString>& kvs) {
-                if (kvs.contains(QStringLiteral("temp")))
-                    m_ampApplet->setTemp(kvs.value(QStringLiteral("temp")).toFloat());
-                if (kvs.contains(QStringLiteral("id")))
-                    m_ampApplet->setDrainCurrent(kvs.value(QStringLiteral("id")).toFloat());
-                if (kvs.contains(QStringLiteral("vac")))
-                    m_ampApplet->setMainsVoltage(kvs.value(QStringLiteral("vac")).toInt());
-                if (kvs.contains(QStringLiteral("state")))
-                    m_ampApplet->setState(kvs.value(QStringLiteral("state")));
-                if (kvs.contains(QStringLiteral("meffa")))
-                    m_ampApplet->setMeff(kvs.value(QStringLiteral("meffa")));
-
-                // 2026-05-22 bench fix: PGXL's `peakfwd` and `swr`
-                // status fields are HOLD values that latch the last TX
-                // peak and DO NOT decay back to 0 when the amp leaves
-                // TRANSMIT_A/B (PGXL's intent is "show the last QSO's
-                // peak on the front panel"). For our applet gauges we
-                // want the live keyed value during TX and a clean zero
-                // between cycles, so we gate the peakfwd / swr writes
-                // on the transmitting state. Without this gate the
-                // previous bench-fix at this site (which forced fwd=0
-                // / swr=1 when state changed to IDLE) was overwritten
-                // 30 ms later by the next status response carrying the
-                // stale latched peakfwd.
-                //
-                // Inferred transmitting state: if the status update
-                // includes state=, use it; otherwise fall back to the
-                // last cached state (m_ampApplet tracks it via
-                // setState).
-                bool transmitting = false;
-                if (kvs.contains(QStringLiteral("state"))) {
-                    const QString st = kvs.value(QStringLiteral("state"));
-                    transmitting =
-                        (st == QStringLiteral("TRANSMIT_A")
-                         || st == QStringLiteral("TRANSMIT_B"));
-                    if (!transmitting) {
-                        m_ampApplet->setFwdPower(0.0f);
-                        m_ampApplet->setSwr(1.0f);
-                    }
-                } else {
-                    transmitting = m_ampApplet->isTransmitting();
-                }
-
-                // 2026-05-20 bench fix: peakfwd is dBm (not watts) and swr
-                // is signed dB return loss (not an SWR ratio). Convert
-                // here so the AmpApplet gauges read the same numbers
-                // the SMeterWidget already gets via
-                // RadioModel::ampMetersChanged.
-                // 2026-05-22 bench fix: only forward the converted
-                // peakfwd / swr when the amp is actually transmitting;
-                // otherwise the stale latched peak would overwrite the
-                // zero set by the state-edge block above.
-                if (transmitting && kvs.contains(QStringLiteral("peakfwd"))) {
-                    const float dbm   = kvs.value(QStringLiteral("peakfwd")).toFloat();
-                    const float watts = std::pow(10.0f, dbm / 10.0f) / 1000.0f;
-                    m_ampApplet->setFwdPower(watts);
-                }
-                if (transmitting && kvs.contains(QStringLiteral("swr"))) {
-                    const float rlDbWire =
-                        kvs.value(QStringLiteral("swr")).toFloat();
-                    float ratio;
-                    if (rlDbWire >= 0.0f) {
-                        ratio = 99.0f;  // RL>=0 -> open/short, cap display
-                    } else {
-                        const float gamma = std::pow(10.0f, rlDbWire / 20.0f);
-                        ratio = (gamma >= 0.999f)
-                            ? 99.0f
-                            : (1.0f + gamma) / (1.0f - gamma);
-                    }
-                    m_ampApplet->setSwr(ratio);
-                }
-            });
+            // R-R3-47 / R-R3-22: the gauges no longer come from here. The
+            // Power Genius conversion (dBm peak forward power to W, signed
+            // return loss to an SWR ratio, the transmit-only gate on those
+            // two latched values, temperature, drain current, mains volts
+            // and the efficiency label) moved to the Core side as
+            // applyPgxlStatus() (src/core/PgxlStatusGauges.cpp), which feeds
+            // RadioModel's AmplifierModel; AmpApplet reads that model, here
+            // in-process and in a remote window as the Core's `amplifier`
+            // object.
 
             // Phase 3P-II Phase 4 Task 88: track PGXL connected state for the
             // context menu Disconnect/Reconnect label.

@@ -21,10 +21,18 @@
 //                 The reason is public so the RF-Kit applet shares it.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-23  R-R3-47 / R-R3-22: the gauges, labels and OPERATE state
+//                 read the RadioModel's AmplifierModel, which carries the
+//                 one Power Genius conversion (formerly MainWindow's), in
+//                 local and remote windows; a remote window shows a stale
+//                 line when it loses the Core. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "AmpApplet.h"
+#include "core/session/IStationLink.h"
 #include "gui/HGauge.h"
+#include "models/AmplifierModel.h"
 #include "models/RadioModel.h"
 
 #include <QContextMenuEvent>
@@ -154,6 +162,30 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
 
     vbox->addLayout(telRow);
 
+    // R-R3-47: a remote window's readings come from the Core; this line
+    // says when they are not live.
+    m_staleLabel = new QLabel(root);
+    m_staleLabel->setTextFormat(Qt::PlainText);
+    m_staleLabel->setWordWrap(true);
+    m_staleLabel->setStyleSheet(QStringLiteral("color: #d9a441; font-size: 10px;"));
+    m_staleLabel->setVisible(false);
+    vbox->addWidget(m_staleLabel);
+
+    // R-R3-47: the gauges follow the RadioModel's AmplifierModel: the
+    // Core's `amplifier` object in a remote window, the same object fed
+    // by this computer's own PgxlConnection in a local one.
+    if (m_model) {
+        m_amp = m_model->amplifierModel();
+        if (m_amp) {
+            connect(m_amp, &AmplifierModel::statusChanged,
+                    this, &AmpApplet::syncFromAmplifier);
+        }
+        connect(m_model, &RadioModel::stationLinkStateChanged,
+                this, &AmpApplet::updateStationState);
+        syncFromAmplifier();
+        updateStationState();
+    }
+
     // R-R3-21: OPERATE drives this computer's own PgxlConnection
     // (MainWindow's operateToggled handler), which a remote window never
     // connects: the amplifier sits at the station.
@@ -166,6 +198,65 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
 QString AmpApplet::remoteUnavailableReason()
 {
     return tr("Amplifier control is not available from a remote window yet.");
+}
+
+// R-R3-47: every reading the AmplifierModel holds, each time it changes.
+// Nothing is shown before the amp's first reading, as before; after it the
+// values are shown as they are, zeros and STANDBY included.
+void AmpApplet::syncFromAmplifier()
+{
+    if (!m_amp || !m_amp->present()) {
+        return;
+    }
+    setTemp(static_cast<float>(m_amp->temperatureC()));
+    setDrainCurrent(static_cast<float>(m_amp->drainCurrentA()));
+    setMainsVoltage(qRound(m_amp->mainsVoltageV()));
+    if (!m_amp->deviceState().isEmpty()) {
+        setState(m_amp->deviceState());
+    }
+    if (!m_amp->efficiencyText().isEmpty()) {
+        setMeff(m_amp->efficiencyText());
+    }
+    setFwdPower(static_cast<float>(m_amp->forwardPowerW()));
+    setSwr(static_cast<float>(m_amp->swr()));
+}
+
+void AmpApplet::updateStationState()
+{
+    if (!m_staleLabel) {
+        return;
+    }
+    if (!m_model || m_model->ownsLocalDsp()) {
+        m_staleLabel->setVisible(false);
+        return;
+    }
+    const IStationLink* link = m_model->stationLink();
+    if (!link || !link->stationLinkReady()) {
+        m_staleLabel->setText(tr("Core disconnected. Power Genius readings are stale."));
+        m_staleLabel->setVisible(true);
+    } else if (!link->remoteAmplifierStatusAvailable()) {
+        m_staleLabel->setText(tr("This Core does not report its Power Genius to this app. "
+                                 "Updating the Core may help."));
+        m_staleLabel->setVisible(true);
+    } else {
+        m_staleLabel->setVisible(false);
+    }
+}
+
+double AmpApplet::fwdGaugeValueForTesting() const { return m_fwdGauge->value(); }
+double AmpApplet::swrGaugeValueForTesting() const { return m_swrGauge->value(); }
+double AmpApplet::tempGaugeValueForTesting() const { return m_tempGauge->value(); }
+QString AmpApplet::powerLabelTextForTesting() const { return m_powerLabel->text(); }
+QString AmpApplet::meffLabelTextForTesting() const { return m_meffLabel->text(); }
+QString AmpApplet::operateButtonTextForTesting() const { return m_operateBtn->text(); }
+bool AmpApplet::operateButtonShownForTesting() const { return !m_operateBtn->isHidden(); }
+bool AmpApplet::staleIndicatorVisibleForTesting() const
+{
+    return m_staleLabel && !m_staleLabel->isHidden();
+}
+QString AmpApplet::staleIndicatorTextForTesting() const
+{
+    return m_staleLabel ? m_staleLabel->text() : QString();
 }
 
 // From AetherSDR src/gui/AmpApplet.cpp:79-82 [@0cd4559]

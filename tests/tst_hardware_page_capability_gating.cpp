@@ -14,6 +14,14 @@
 #include "core/BoardCapabilities.h"
 #include "core/RadioDiscovery.h"
 #include "models/RadioModel.h"
+#include "core/accessories/AlexAntennaFacade.h"
+#include "core/accessories/AlexController.h"
+#include "core/session/StationCapabilities.h"
+#include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
+#include "models/Band.h"
+
+#include <QCheckBox>
+#include <QRadioButton>
 
 using namespace NereusSDR;
 
@@ -165,6 +173,56 @@ private slots:
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Diversity));
         QVERIFY( page.isTabVisibleForTest(HardwarePage::Tab::Calibration));
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Hl2IoBoard));
+    }
+
+    // R-R3-46: in a remote window the Antenna Control grid shows the
+    // Core's antennas (its `alexAntennas` object) and a receive edit goes
+    // to that object, never to the window's own AlexController. A refused
+    // edit shows the Core's value again.
+    void remote_antenna_control_shows_and_writes_the_cores_antennas()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        StationCapabilities caps;
+        caps.macAddress = QStringLiteral("AA:BB:CC:DD:EE:51");
+        caps.board = HPSDRHW::Angelia;
+        caps.radioConnected = true;
+        caps.radioIdentityEntries = true;
+        caps.hpsdrModel = HPSDRModel::ANAN100D;
+        caps.radioProtocol = 1;
+        remote.applyStationCapabilities(caps);
+
+        AlexAntennaFacade* core = remote.alexAntennaFacade();
+        QVERIFY(!core->isBound());
+        core->setRxAntennas(QStringLiteral("1,1,1,2,1,1,1,1,1,1,1,1,1,1"));  // 40m on 2
+        QVERIFY(core->applyRemoteProperty("txAntennas",
+                                          QStringLiteral("1,1,1,1,1,3,1,1,1,1,1,1,1,1")));
+        QVERIFY(core->applyRemoteProperty("blockTxAnt2", true));
+        core->setWindowAvailability(true, {});  // the Core offers Hardware Config
+
+        HardwarePage page(&remote);
+        auto* ctl = page.findChild<AntennaAlexAntennaControlTab*>();
+        QVERIFY(ctl != nullptr);
+        QVERIFY(ctl->rxButtonForTest(Band::Band40m, 2)->isChecked());
+        QVERIFY(ctl->txButtonForTest(Band::Band20m, 3)->isChecked());
+        QVERIFY(ctl->blockTxAnt2ForTest()->isChecked());
+
+        ctl->rxButtonForTest(Band::Band40m, 3)->click();
+        QCOMPARE(core->rxAnt(Band::Band40m), 3);
+        QCOMPARE(remote.alexController().rxAnt(Band::Band40m), 1);  // not the window's own
+
+        core->setRxAntennas(QStringLiteral("1,2,1,3,1,1,1,1,1,1,1,1,1,1"));  // from the Core
+        QVERIFY(ctl->rxButtonForTest(Band::Band80m, 2)->isChecked());
+
+        core->setEditGate([](QString* reason) {
+            if (reason) { *reason = QStringLiteral("Connect to the Core to change the radio's hardware settings."); }
+            return false;
+        });
+        ctl->rxButtonForTest(Band::Band40m, 1)->click();
+        QCOMPARE(core->rxAnt(Band::Band40m), 3);
+        QVERIFY(ctl->rxButtonForTest(Band::Band40m, 3)->isChecked());
+        ctl->useTxAntForRxForTest()->click();
+        QVERIFY(!core->useTxAntennaForRx());
+        QVERIFY(!ctl->useTxAntForRxForTest()->isChecked());
     }
 };
 

@@ -235,6 +235,7 @@
 #include <QUrl>
 
 #include "core/session/IStationLink.h"
+#include "models/Band.h"
 #include "core/session/MirrorSchema.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StateMirror.h"
@@ -432,6 +433,10 @@ public:
     bool remoteCtunAvailable() const;
     bool remoteTgxlConfigAvailable() const override;
     bool remoteFourO3AControlAvailable() const override;
+    // R-R3-47 / R-R3-22: see IStationLink.
+    bool stationLinkReady() const override;
+    bool remoteAmplifierStatusAvailable() const override;
+    bool remoteRfKitStatusAvailable() const override;
     bool telemetryAvailable() const;
     std::optional<SessionTransportTelemetry> transportTelemetry() const;
     bool sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch);
@@ -541,6 +546,28 @@ public:
     // session that negotiated DSP control. The window's NotchModel mirrors
     // the Core's list and sends notch.* requests.
     bool remoteNotchControlAvailable() const;
+    // R-R3-46 / R-R3-11: the Core advertised radioHardwareVersion 1 on a
+    // session at minor 11 with property results. The window's `stepAtt`
+    // edits reach the Core's step attenuator and preamp.
+    bool remoteRadioHardwareAvailable() const;
+    /// Why the window's attenuator and preamp edits cannot reach the Core,
+    /// in plain words: not connected yet, or a Core that does not offer
+    /// them. Empty while remoteRadioHardwareAvailable().
+    QString radioHardwareUnavailableReason() const;
+    // R-R3-46: the Core advertised radioHardwareVersion 2 on a session at
+    // minor 11 with property results. Hardware Config's receive settings
+    // reach the Core (its `alexAntennas` object, the hardware apply step
+    // after a settings write, and the I/O board probe).
+    bool remoteHardwareConfigAvailable() const;
+    /// Why Hardware Config edits cannot reach the Core, in plain words.
+    /// Empty while remoteHardwareConfigAvailable().
+    QString hardwareConfigUnavailableReason() const;
+    /// Verb "requestIoBoardProbe": probe the Core's radio's HL2 I/O board.
+    CommandOutcome requestIoBoardProbe() override;
+    /// R-R3-46 fix wave (radioHardwareVersion 3). Verb "setAlexRxAntenna":
+    /// one band's RX antenna (rxOnly false, 1..3) or RX-only antenna
+    /// (rxOnly true, 0..3) on the Core.
+    CommandOutcome requestAlexRxAntenna(Band band, int antenna, bool rxOnly);
     CommandOutcome requestNnrDiagnostics(int sliceId, int testMode, int outputMode) override;
     /// R-R3-40: the station can clear a runtime NNR limit on request
     /// (negotiated minor 11 and NNR control).

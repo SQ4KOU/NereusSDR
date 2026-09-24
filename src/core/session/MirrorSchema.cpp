@@ -18,6 +18,16 @@
 //                                    layer that does not perform it.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the Core's step
+//                                    attenuator and preamp (`stepAtt`).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: AlexAntennaFacade mirrored. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 fix wave: IoBoardHl2Facade mirrored (`ioBoard`).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-47 / R-R3-22: AmplifierModel and RfKitModel mirrored
+//                 (`amplifier`, `rfkit`). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
@@ -61,6 +71,18 @@ const char* const kMirroredClasses[] = {
     "NereusSDR::PanadapterModel",
     // R-R3-21 / R-R3-09 (notchControlVersion 1): the Core's notch list.
     "NereusSDR::NotchModel",
+    // R-R3-46 (radioHardwareVersion 1): the Core's step attenuator and
+    // preamp.
+    "NereusSDR::StepAttenuatorFacade",
+    // R-R3-46 (radioHardwareVersion 2): the Core's Alex antenna settings.
+    "NereusSDR::AlexAntennaFacade",
+    // R-R3-46 (radioHardwareVersion 3): the Core's HL2 I/O board, read-only.
+    "NereusSDR::IoBoardHl2Facade",
+    // R-R3-47 / R-R3-22 (remotePgxlControlVersion 1 and
+    // remoteRfKitControlVersion 1): the Core's Power Genius XL and RF-Kit
+    // RF2K-S status, read-only.
+    "NereusSDR::AmplifierModel",
+    "NereusSDR::RfKitModel",
 };
 
 // Per-property exclusions, as (class, property).

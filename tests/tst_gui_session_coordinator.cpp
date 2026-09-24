@@ -24,6 +24,7 @@
 #include "models/NotchModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "fakes/MainWindowTestSettings.h"
 
 using namespace NereusSDR;
 
@@ -61,7 +62,7 @@ private slots:
     {
         QVERIFY(!AppSettings::instance().remoteBackend());
         AppSettings::instance().clear();
-        AppSettings::instance().setValue(QStringLiteral("audio/FirstRunComplete"), QStringLiteral("True"));
+        Test::markAudioFirstRunDone();
         QVERIFY(AppSettings::instance().save());
         RadioDiscovery::clearHoldOffForTest();
         RadioDiscovery discovery;
