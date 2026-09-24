@@ -31,7 +31,7 @@ bool ReceiverStopNotices::isReceiverStop(const QString& reason)
         || reason == QLatin1String("receiver-limit");
 }
 
-QString ReceiverStopNotices::toastFor(const QString& reason, qint64 nowMs)
+QString ReceiverStopNotices::toastFor(const QString& reason, int sliceId, qint64 nowMs)
 {
     // The window's own status already says these (the media link not up,
     // the radio offline), and an app that stopped asking caused its own.
@@ -40,11 +40,12 @@ QString ReceiverStopNotices::toastFor(const QString& reason, qint64 nowMs)
         || reason == QLatin1String("client-disabled")) {
         return {};
     }
-    const auto last = m_lastToastMs.constFind(reason);
+    const QString event = QString::number(sliceId) + QLatin1Char(':') + reason;
+    const auto last = m_lastToastMs.constFind(event);
     if (last != m_lastToastMs.constEnd() && nowMs - last.value() < kSameEventMs) {
         return {};
     }
-    m_lastToastMs.insert(reason, nowMs);
+    m_lastToastMs.insert(event, nowMs);
     return OperatorReasonText::forDisplay(reason);
 }
 

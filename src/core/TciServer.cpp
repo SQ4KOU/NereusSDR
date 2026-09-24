@@ -40,6 +40,7 @@
 #include "TciSensorManager.h"
 #include "LogCategories.h"
 #include "models/RadioModel.h"
+#include "core/meters/SliceMeterPump.h"
 #include "models/SliceModel.h"  // Phase 3J-1 closeout: SliceModel signal wireup for local broadcast.
 #include "models/NotchModel.h"  // TNF section 6.4: master notch enable broadcast.
 #include "models/TransmitModel.h"  // Phase 3J-1 closeout (review P2): MON / TUN broadcast wireup.
@@ -2078,7 +2079,9 @@ void TciServer::receiverAudioStopped(int sliceId, const QString& reason)
     // the TCI log window still show it.
     const bool quiet =
         reason == remoteAudioOffReasonToWire(RemoteAudioOffReason::MediaNotReady);
-    raiseOperatorNotice(QString(), reason, /*receiverStop=*/true, quiet);
+    const bool toast =
+        raiseOperatorNotice(QString(), reason, /*receiverStop=*/true, quiet, sliceId);
+    emit receiverStopNotice(sliceId, reason, toast);
     // R-R3-42 fix wave: the answer can come long after audio_start was
     // echoed (the media connection came up later). The apps must not keep
     // waiting on a stream that will never come.
@@ -2115,29 +2118,37 @@ double TciServer::remoteReceiverLevelDbm() const
     // console.cs:46828 [v2.10.3.13]), and the window mirrors it: the value
     // the window's own S-meter draws (MeterPoller::pollRemoteRxMeters).
     constexpr double kFloorDbm = -140.0;
-    // SliceMeterPump::kNoReadingDbm: the Core has no reading.
-    constexpr double kNoReadingDbm = -400.0;
     const SliceModel* slice = m_model ? m_model->sliceById(0) : nullptr;
     if (!slice) { return kFloorDbm; }
     const double dbm = slice->signalAverageDbm();
-    if (!std::isfinite(dbm) || dbm <= kNoReadingDbm) { return kFloorDbm; }
+    // The Core has no reading.
+    if (!std::isfinite(dbm) || dbm <= SliceMeterPump::kNoReadingDbm) { return kFloorDbm; }
     return dbm;
 }
 
-void TciServer::raiseOperatorNotice(const QString& peer, const QString& reason,
-                                    bool receiverStop, bool quiet)
+bool TciServer::raiseOperatorNotice(const QString& peer, const QString& reason,
+                                    bool receiverStop, bool quiet, int rx)
 {
-    // A repeat of the same reason within 30 s is logged and shown, but not
-    // toasted again: WSJT-X, for one, asks to transmit every period.
+    // A repeat of the same notice within 30 s is logged and shown, but not
+    // toasted again: WSJT-X, for one, asks to transmit every period. A
+    // receiver stop is the same notice only for the same receiver.
     constexpr qint64 kRepeatToastQuietMs = 30000;
-    const bool repeat = reason == m_noticeReason && m_noticeClock.isValid()
-        && m_noticeClock.elapsed() < kRepeatToastQuietMs;
+    if (!m_noticeClock.isValid()) {
+        m_noticeClock.start();
+    }
+    const qint64 nowMs = m_noticeClock.elapsed();
+    const QString key = QString::number(rx) + QLatin1Char(':') + reason;
+    const auto last = m_noticeToastAtMs.constFind(key);
+    const bool repeat = last != m_noticeToastAtMs.constEnd()
+        && nowMs - last.value() < kRepeatToastQuietMs;
     m_noticeReason = reason;
     m_noticeFromReceiverStop = receiverStop;
     if (!repeat) {
-        m_noticeClock.start();
+        m_noticeToastAtMs.insert(key, nowMs);
     }
-    emit operatorNotice(peer, reason, !repeat && !quiet);
+    const bool toast = !repeat && !quiet;
+    emit operatorNotice(peer, reason, toast);
+    return toast;
 }
 
 // ── onTextMessageReceived() ──────────────────────────────────────────────────
@@ -2199,14 +2210,6 @@ void TciServer::onTextMessageReceived(const QString& msg)
                     if (!session->audioStreamEnabled.contains(rx)) {
                         // The Core answered at once that it cannot send it
                         // (stopUnavailableReceiver): not told it started.
-                        return;
-                    }
-                    if (m_remoteUnavailable[rx]) {
-                        // This Core cannot send a receiver's audio: the app
-                        // is not told the stream started (the operator is,
-                        // through the notice receiverAudioStopped raised).
-                        handleAudioUnsubscribe(session, rx);
-                        updateRemoteReceiverDemand(rx);
                         return;
                     }
                 }

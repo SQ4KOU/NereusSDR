@@ -9,8 +9,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
-//   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio fix wave.
-//                                    AI-assisted transformation via
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio fix wave, and its
+//                                    follow-up (an event is reason plus
+//                                    slice). AI-assisted transformation via
 //                                    Anthropic Claude Code.
 // =================================================================
 
@@ -34,27 +35,39 @@ private slots:
     {
         ReceiverStopNotices notices;
         const QString reason = QStringLiteral("slice-removed");
-        const QString first = notices.toastFor(reason, 1000);    // TCI
-        const QString second = notices.toastFor(reason, 1003);   // VAX 1
-        const QString third = notices.toastFor(reason, 1004);    // VAX 2
+        const QString first = notices.toastFor(reason, 1, 1000);    // TCI
+        const QString second = notices.toastFor(reason, 1, 1003);   // VAX 1
+        const QString third = notices.toastFor(reason, 1, 1004);    // VAX 2
         QCOMPARE(first, OperatorReasonText::forDisplay(reason));
         QVERIFY2(OperatorWording::isPlain(first), qPrintable(first));
         QVERIFY(second.isEmpty());
         QVERIFY(third.isEmpty());
         // A later, separate stop is news again.
-        QCOMPARE(notices.toastFor(reason, 1000 + ReceiverStopNotices::kSameEventMs),
+        QCOMPARE(notices.toastFor(reason, 1, 1000 + ReceiverStopNotices::kSameEventMs),
                  OperatorReasonText::forDisplay(reason));
         // A different reason is a different event.
-        QVERIFY(!notices.toastFor(QStringLiteral("receiver-limit"), 1005).isEmpty());
+        QVERIFY(!notices.toastFor(QStringLiteral("receiver-limit"), 1, 1005).isEmpty());
+    }
+
+    // Two slices removed within the window are two events, two notices.
+    void twoSlicesStoppingAreTwoNotices()
+    {
+        ReceiverStopNotices notices;
+        const QString reason = QStringLiteral("slice-removed");
+        QVERIFY(!notices.toastFor(reason, 0, 1000).isEmpty());
+        QVERIFY(!notices.toastFor(reason, 1, 1500).isEmpty());
+        // Each still one notice across its consumers.
+        QVERIFY(notices.toastFor(reason, 0, 1600).isEmpty());
+        QVERIFY(notices.toastFor(reason, 1, 1700).isEmpty());
     }
 
     // What the window's own status already says raises no toast at all.
     void whatTheWindowShowsRaisesNone()
     {
         ReceiverStopNotices notices;
-        QVERIFY(notices.toastFor(QStringLiteral("radio-offline"), 0).isEmpty());
-        QVERIFY(notices.toastFor(QStringLiteral("media-not-ready"), 0).isEmpty());
-        QVERIFY(notices.toastFor(QStringLiteral("client-disabled"), 0).isEmpty());
+        QVERIFY(notices.toastFor(QStringLiteral("radio-offline"), 0, 0).isEmpty());
+        QVERIFY(notices.toastFor(QStringLiteral("media-not-ready"), 0, 0).isEmpty());
+        QVERIFY(notices.toastFor(QStringLiteral("client-disabled"), 0, 0).isEmpty());
     }
 
     void knowsTheReceiverStops()
@@ -70,11 +83,11 @@ private slots:
         // Every toast it can raise is in plain words.
         ReceiverStopNotices notices;
         for (const char* wire : {"encoder-unavailable", "slice-removed", "receiver-limit"}) {
-            const QString text = notices.toastFor(QString::fromLatin1(wire), 0);
+            const QString text = notices.toastFor(QString::fromLatin1(wire), 0, 0);
             QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
         }
         const QString older = notices.toastFor(
-            QString::fromLatin1(RemoteMediaController::kReceiverAudioUnavailableReason), 0);
+            QString::fromLatin1(RemoteMediaController::kReceiverAudioUnavailableReason), 0, 0);
         QVERIFY2(!older.isEmpty() && OperatorWording::isPlain(older), qPrintable(older));
     }
 };

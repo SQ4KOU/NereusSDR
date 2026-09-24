@@ -20,7 +20,10 @@
 // 192-frame chunks before the rate matcher. A chunk waits until every
 // slice still sending has one queued; a slice whose stream stopped, or
 // that has sent nothing for kQuietNs, counts as silence until its audio
-// flows again.
+// flows again. A slice that falls behind the others (a stall, then a
+// burst) keeps at most kMaxLagFrames more queued than the least-queued
+// slice; the oldest beyond that is dropped, so it cannot play late from
+// then on.
 //
 // A worker of its own (pump(), every 5 ms) moves the audio from the rings
 // through a rate matcher into the VAX output, topping the output's queue
@@ -47,6 +50,10 @@
 //   2026-09-23: R-R3-44 fix wave: a set of slices per channel, one hand-off
 //                 ring each, summed before the rate matcher. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23: R-R3-44 fix wave follow-up: stop reasons kept per slice;
+//                 a slice's lag behind the others capped at 85 ms; a slice
+//                 leaving no longer trims the others. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -102,6 +109,9 @@ struct RemoteVaxFeederStats {
     // was full.
     quint64 receivedFrames = 0;
     quint64 droppedFrames = 0;
+    // Frames dropped from a slice's ring to keep the slices in step (a
+    // slice lagging the others, or the backlog behind one that went quiet).
+    quint64 trimmedFrames = 0;
     quint64 writtenFrames = 0;
     // The rate matcher ran dry or over while the output was reading, and
     // was restarted: a gap the app heard (the Core's audio ran late or
@@ -144,6 +154,10 @@ public:
     static constexpr qint64 kNoReaderNs = 500'000'000;
     // No audio from the Core for this long: wait for it afresh.
     static constexpr qint64 kQuietNs = 250'000'000;
+    // How far one slice may run behind the others: 4096 frames, 85 ms at
+    // 48 kHz, the ring the local VAX mix keeps per slice
+    // (VaxChannelMixer::kRingFrames).
+    static constexpr int kMaxLagFrames = 4096;
 
     RemoteVaxFeeder(int channel, VaxOutputPort port, Clock clock = {});
     ~RemoteVaxFeeder() override;
@@ -173,8 +187,15 @@ public:
     /// GUI thread: records the reason; that slice counts as silence until
     /// its audio flows again.
     void receiverAudioStopped(int sliceId, const QString& reason) override;
-    /// The last stop reason for an assigned slice (a wire reason or a
-    /// sentence), empty once audio has flowed again since. GUI thread.
+    /// Why an assigned slice's stream stopped, per slice, oldest first:
+    /// each stays until that slice's audio flows again or it leaves the
+    /// channel. GUI thread.
+    struct Stop {
+        int sliceId = -1;
+        QString reason;   // a wire reason or a sentence
+    };
+    QList<Stop> stops() const;
+    /// The most recent of stops(), empty when there is none. GUI thread.
     QString lastStopReason() const;
 
     /// Runs pump() every kPumpIntervalNs on a thread of its own until
@@ -205,7 +226,16 @@ private:
         std::atomic<quint64> dropUntilBytes{0};
         // The Core stopped this slice's stream; silence until audio flows.
         std::atomic<bool> stopped{false};
+        // Frames this slot's slice delivered since it was assigned.
+        std::atomic<quint64> receivedFrames{0};
         std::unique_ptr<AudioRingSpsc<kHandoffBytes>> handoff;
+
+        // GUI thread: why the slice's stream stopped, the frames it had
+        // delivered then (the stop is news until it delivers more), and
+        // when (for the order of stops()).
+        QString stopReason;
+        quint64 stopAtFrames = 0;
+        quint64 stopOrder = 0;
 
         // Pump only.
         quint32 seenGeneration = 0;
@@ -222,6 +252,8 @@ private:
     void popHandoff(Source& source, void* into, std::size_t bytes);
     // A slice counted in the mix: sending, and heard within kQuietNs.
     bool isLive(const Source& source, qint64 now) const;
+    // Drops the oldest `frames` of a slice's ring and counts them.
+    void trimHandoff(Source& source, std::size_t frames);
     qint64 pausedNs() const;
     void restartMatcher();
     // Sums whole chunks from the live slices' rings into the matcher (or,
@@ -258,8 +290,8 @@ private:
 
     mutable std::mutex m_statsMutex;
     RemoteVaxFeederStats m_stats;
-    QString m_lastStopReason;  // GUI thread
-    quint64 m_stopAtFrames = 0;  // GUI thread: receivedFrames at the stop
+    quint64 m_stopCount = 0;  // GUI thread: orders the stops
+    quint64 m_trimmedFrames = 0;  // pump only
 
     std::mutex m_workerMutex;
     std::condition_variable m_workerWake;

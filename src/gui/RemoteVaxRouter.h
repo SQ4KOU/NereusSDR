@@ -22,9 +22,10 @@
 //   - Request and release run here, on the GUI thread, never from the
 //     feeders' block callbacks (RemoteMediaController's contract).
 //
-// A reason the Core's stream stopped for is raised once as notice(), in
-// its wire or sentence form (OperatorReasonText::forDisplay words it);
-// media-not-ready is not raised, being the link's own state.
+// A reason the Core's stream for one of the channel's slices stopped for
+// is raised once per slice as notice(), in its wire or sentence form
+// (OperatorReasonText::forDisplay words it); media-not-ready is not
+// raised, being the link's own state.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -33,6 +34,9 @@
 //   2026-09-23: R-R3-44 fix wave: every slice on a channel is asked for
 //                 and mixed, not only the lowest-numbered one. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23: R-R3-44 fix wave follow-up: each slice's stop is raised
+//                 once, naming the slice. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -40,6 +44,7 @@
 #include <QList>
 #include <QObject>
 #include <QPointer>
+#include <QSet>
 #include <QString>
 
 #include <array>
@@ -103,9 +108,9 @@ public:
     void refresh();
 
 signals:
-    /// A channel's stream stopped for `reason` (show it through
-    /// OperatorReasonText::forDisplay).
-    void notice(int channel, const QString& reason);
+    /// The stream of `sliceId` on a channel stopped for `reason` (show it
+    /// through OperatorReasonText::forDisplay).
+    void notice(int channel, int sliceId, const QString& reason);
 
 private:
     void storeChannel(int sliceId, int channel);
@@ -119,7 +124,8 @@ private:
     bool m_startWorkers{true};
     std::array<std::unique_ptr<RemoteVaxFeeder>, kChannels> m_feeders;
     std::array<QList<int>, kChannels> m_requested;
-    std::array<QString, kChannels> m_noticed;
+    // "slice:reason" for each stop already raised on the channel.
+    std::array<QSet<QString>, kChannels> m_noticed;
     QTimer* m_readerTimer{nullptr};
 };
 

@@ -245,13 +245,18 @@ void RemoteVaxRouter::refresh()
         }
 
         if (!m_requested[i].isEmpty()) {
-            const QString reason = feeder->lastStopReason();
-            if (reason != m_noticed[i]) {
-                m_noticed[i] = reason;
-                if (!reason.isEmpty() && reason != QLatin1String(kMediaNotReady)) {
-                    emit notice(channel, reason);
+            // Per slice: one slice's audio flowing says nothing about
+            // another's refusal (fix wave follow-up).
+            QSet<QString> current;
+            for (const RemoteVaxFeeder::Stop& stop : feeder->stops()) {
+                const QString key = QString::number(stop.sliceId) + QLatin1Char(':') + stop.reason;
+                current.insert(key);
+                if (!m_noticed[i].contains(key)
+                    && stop.reason != QLatin1String(kMediaNotReady)) {
+                    emit notice(channel, stop.sliceId, stop.reason);
                 }
             }
+            m_noticed[i] = current;
         }
     }
 }

@@ -529,6 +529,95 @@ private slots:
 #endif
     }
 
+    // Follow-up: a slice that falls behind (a stall, then a burst) is kept
+    // within kMaxLagFrames of the others instead of playing late for good.
+    void aLateSliceIsKeptInStep()
+    {
+#ifndef HAVE_WDSP
+        QSKIP("WDSP is disabled");
+#else
+        qint64 now = 0;
+        SimulatedVaxOutput output;
+        output.now = &now;
+        RemoteVaxFeeder feeder(1, output.port(), [&now] { return now; });
+        feeder.setSourceSlices({1, 3});
+        constexpr qint64 kMs = 1'000'000;
+        quint64 framesB = 0;
+        quint64 framesD = 0;
+        for (now = 0; now <= 12'000 * kMs; now += kMs) {
+            if (now % (40 * kMs) == 0) {
+                const std::vector<float> block = toneBlock(framesB, kOpusFrames, 1579.0, 0.10);
+                feeder.receiverAudioBlock(1, block.data(), kOpusFrames);
+                framesB += kOpusFrames;
+            }
+            // Slice D stalls from 5.0 s to 5.4 s, then the Core delivers
+            // everything it held at once.
+            const bool stalled = now >= 5'000 * kMs && now < 5'400 * kMs;
+            if (now % (40 * kMs) == 20 * kMs && !stalled) {
+                const int packets = now == 5'420 * kMs ? 11 : 1;
+                for (int p = 0; p < packets; ++p) {
+                    const std::vector<float> block = toneBlock(framesD, kOpusFrames, 617.0, 0.12);
+                    feeder.receiverAudioBlock(3, block.data(), kOpusFrames);
+                    framesD += kOpusFrames;
+                }
+            }
+            if (now % (5 * kMs) == 0) { feeder.pump(); }
+        }
+        const RemoteVaxFeederStats stats = feeder.stats();
+        QCOMPARE(stats.state, RemoteVaxFeederStats::State::Playing);
+        // No slice holds more than kMaxLagFrames (plus a packet in flight)
+        // beyond the others: slice D's burst was cut, not kept.
+        QVERIFY2(stats.handoffFrames <= RemoteVaxFeeder::kMaxLagFrames + 2 * kOpusFrames,
+                 qPrintable(QStringLiteral("handoff %1").arg(stats.handoffFrames)));
+        QVERIFY(stats.trimmedFrames > 0);
+        QCOMPARE(stats.receivedFrames, framesB + framesD);
+#endif
+    }
+
+    // Follow-up: a slice leaving the channel does not cut the backlog of
+    // the slices that stay (only a slice that went quiet does).
+    void aSliceLeavingDoesNotCutTheOthers()
+    {
+#ifndef HAVE_WDSP
+        QSKIP("WDSP is disabled");
+#else
+        qint64 now = 0;
+        SimulatedVaxOutput output;
+        output.now = &now;
+        RemoteVaxFeeder feeder(1, output.port(), [&now] { return now; });
+        feeder.setSourceSlices({1, 3});
+        constexpr qint64 kMs = 1'000'000;
+        quint64 framesB = 0;
+        quint64 framesD = 0;
+        for (now = 0; now <= 8'000 * kMs; now += kMs) {
+            if (now % (40 * kMs) == 0) {
+                // At 5 s slice B's Core sends three packets at once, so B
+                // has a backlog above 45 ms when slice D leaves right after.
+                const int packets = now == 5'000 * kMs ? 3 : 1;
+                for (int p = 0; p < packets; ++p) {
+                    const std::vector<float> block = toneBlock(framesB, kOpusFrames, 1579.0, 0.10);
+                    feeder.receiverAudioBlock(1, block.data(), kOpusFrames);
+                    framesB += kOpusFrames;
+                }
+            }
+            if (now % (40 * kMs) == 20 * kMs && now < 5'000 * kMs) {
+                const std::vector<float> block = toneBlock(framesD, kOpusFrames, 617.0, 0.12);
+                feeder.receiverAudioBlock(3, block.data(), kOpusFrames);
+                framesD += kOpusFrames;
+            }
+            if (now == 5'001 * kMs) {
+                // Slice D is taken off the channel (its stream was released).
+                feeder.setSourceSlices({1});
+            }
+            if (now % (5 * kMs) == 0) { feeder.pump(); }
+        }
+        QCOMPARE(feeder.sourceSlices(), QList<int>{1});
+        QCOMPARE(feeder.stats().state, RemoteVaxFeederStats::State::Playing);
+        QCOMPARE(feeder.stats().trimmedFrames, quint64(0));
+        QCOMPARE(feeder.stats().receivedFrames, framesB + framesD);
+#endif
+    }
+
     // An output nothing reads (a VAX device no app has open) is not a
     // fault: the feeder stops writing, raises nothing, and plays again as
     // soon as an app reads.
@@ -933,6 +1022,54 @@ private slots:
         AppSettings::instance().remove(RemoteVaxRouter::settingsKey(QStringLiteral("corekey3"), 2));
     }
 
+    // Follow-up: slice B joins VAX 1 with slice A already playing on it,
+    // and the Core refuses B. A's audio keeps flowing, and the refusal is
+    // still raised, naming B and B's reason.
+    void aRefusedSliceOnASharedChannelIsExplained()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.setConnectionStateForTest(ConnectionState::Connected);
+        AudioEngine* engine = remote.localAudioDevices();
+        engine->setVaxBusForTest(1, std::make_unique<CollectingBus>());
+        RemoteVaxRouter router(&remote, engine, QStringLiteral("corekey5"),
+                               [](int channel) {
+                                   VaxOutputPort port;
+                                   port.write = [](const float*, int) { return true; };
+                                   return std::make_unique<RemoteVaxFeeder>(channel, port);
+                               },
+                               /*startWorkers=*/false);
+        RemoteVaxRouter::ReceiverAudio source;
+        source.request = [](int, IReceiverPcmSink*) {};
+        source.release = [](int, IReceiverPcmSink*) {};
+        router.setReceiverAudio(source);
+        QSignalSpy notices(&router, &RemoteVaxRouter::notice);
+        QVERIFY(remote.addSliceWithStationId(0) >= 0);
+        QVERIFY(remote.addSliceWithStationId(1) >= 0);
+        remote.sliceById(0)->setVaxChannel(1);
+        RemoteVaxFeeder* feeder = router.feeder(1);
+        const std::vector<float> block = toneBlock(0, kOpusFrames, 1000.0, 0.1);
+        feeder->receiverAudioBlock(0, block.data(), kOpusFrames);
+        remote.sliceById(1)->setVaxChannel(1);
+        QCOMPARE(router.requestedSlices(1), (QList<int>{0, 1}));
+        // The Core refuses slice B; slice A's audio keeps arriving before
+        // the router next looks.
+        feeder->receiverAudioStopped(1, QStringLiteral("receiver-limit"));
+        for (int i = 0; i < 3; ++i) {
+            feeder->receiverAudioBlock(0, block.data(), kOpusFrames);
+        }
+        router.refresh();
+        QCOMPARE(notices.count(), 1);
+        QCOMPARE(notices.constFirst().at(0).toInt(), 1);
+        QCOMPARE(notices.constFirst().at(1).toInt(), 1);
+        QCOMPARE(notices.constFirst().at(2).toString(), QStringLiteral("receiver-limit"));
+        // Raised once.
+        router.refresh();
+        QCOMPARE(notices.count(), 1);
+        for (int slice = 0; slice < 2; ++slice) {
+            AppSettings::instance().remove(RemoteVaxRouter::settingsKey(QStringLiteral("corekey5"), slice));
+        }
+    }
+
     // End to end: slice B on VAX 1 in a remote window carries slice B at
     // the session's quality and at the level the Core's own VAX gives.
     void sliceBOnVax1PlaysAtTheLocalLevel_data()
@@ -1177,7 +1314,8 @@ private slots:
         QSignalSpy notices(&router, &RemoteVaxRouter::notice);
         h.remote.sliceById(h.sliceB)->setVaxChannel(1);
         QTRY_COMPARE_WITH_TIMEOUT(notices.count(), 1, 3000);
-        const QString reason = notices.constFirst().at(1).toString();
+        QCOMPARE(notices.constFirst().at(1).toInt(), h.sliceB);
+        const QString reason = notices.constFirst().at(2).toString();
         QCOMPARE(reason, QString::fromLatin1(RemoteMediaController::kReceiverAudioUnavailableReason));
         QVERIFY(OperatorWording::isPlain(OperatorReasonText::forDisplay(reason)));
         QTest::qWait(1500);

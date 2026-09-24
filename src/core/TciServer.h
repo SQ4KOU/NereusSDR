@@ -275,6 +275,10 @@ signals:
     // "media-not-ready" (the window says so already; audio returns by
     // itself).
     void operatorNotice(const QString& peer, const QString& reason, bool raiseToast);
+    // The same notice when it is about receiver `rx`'s audio stopping (a
+    // remote window), so one stop heard by several apps on this computer
+    // can be told once (ReceiverStopNotices).
+    void receiverStopNotice(int rx, const QString& reason, bool raiseToast);
     // The receiver audio the last notice was about is flowing again.
     void operatorNoticeCleared();
 
@@ -659,6 +663,9 @@ private:
 
     QString m_noticeReason;
     bool m_noticeFromReceiverStop{false};
+    // When each notice ("rx:reason", rx -1 when not about a receiver) was
+    // last toasted, on m_noticeClock.
+    QHash<QString, qint64> m_noticeToastAtMs;
     QElapsedTimer m_noticeClock;
 
     // Asks for, or releases, receiver `rx` to match whether any app
@@ -672,8 +679,10 @@ private:
     double remoteReceiverLevelDbm() const;
     // receiverStop: the notice is about a receiver's audio stopping, and
     // goes once that audio flows again. quiet: shown, never toasted.
-    void raiseOperatorNotice(const QString& peer, const QString& reason,
-                             bool receiverStop = false, bool quiet = false);
+    // rx: the receiver a receiver stop is about (-1 otherwise). Returns
+    // whether the notice asked for a toast.
+    bool raiseOperatorNotice(const QString& peer, const QString& reason,
+                             bool receiverStop = false, bool quiet = false, int rx = -1);
 };
 
 } // namespace NereusSDR

@@ -84,6 +84,7 @@ void RemoteVaxFeeder::setSourceSlices(const QList<int>& sliceIds)
                                         std::memory_order_release);
             source.sliceId.store(-1, std::memory_order_release);
             source.stopped.store(false, std::memory_order_release);
+            source.stopReason.clear();
             source.generation.fetch_add(1, std::memory_order_acq_rel);
         }
     }
@@ -98,13 +99,19 @@ void RemoteVaxFeeder::setSourceSlices(const QList<int>& sliceIds)
             source.dropUntilBytes.store(source.pushedBytes.load(std::memory_order_acquire),
                                         std::memory_order_release);
             source.stopped.store(false, std::memory_order_release);
+            source.stopReason.clear();
+            // Its previous slice was released before this: no block of it
+            // follows, so nothing races this reset.
+            source.receivedFrames.store(0, std::memory_order_release);
             source.sliceId.store(id, std::memory_order_release);
             source.generation.fetch_add(1, std::memory_order_acq_rel);
             break;
         }
     }
+    // A slice that stays keeps its stop: it is still news until its audio
+    // flows (fix wave follow-up; clearing every stop here, or letting
+    // another slice's audio clear it, hid a refusal for the slice joining).
     m_generation.fetch_add(1, std::memory_order_acq_rel);
-    m_lastStopReason.clear();
 }
 
 void RemoteVaxFeeder::setSourceSlice(int sliceId)
@@ -158,6 +165,7 @@ void RemoteVaxFeeder::receiverAudioBlock(int sliceId, const float* interleavedSt
     handoff.tryPushCopy(reinterpret_cast<const uint8_t*>(interleavedStereo), qint64(bytes));
     source->pushedBytes.fetch_add(quint64(bytes), std::memory_order_release);
     source->stopped.store(false, std::memory_order_release);
+    source->receivedFrames.fetch_add(quint64(frames), std::memory_order_release);
     m_receivedFrames.fetch_add(quint64(frames), std::memory_order_relaxed);
 }
 
@@ -168,16 +176,37 @@ void RemoteVaxFeeder::receiverAudioStopped(int sliceId, const QString& reason)
         return;
     }
     source->stopped.store(true, std::memory_order_release);
-    m_lastStopReason = reason;
-    m_stopAtFrames = m_receivedFrames.load(std::memory_order_relaxed);
+    source->stopReason = reason;
+    source->stopAtFrames = source->receivedFrames.load(std::memory_order_acquire);
+    source->stopOrder = ++m_stopCount;
+}
+
+QList<RemoteVaxFeeder::Stop> RemoteVaxFeeder::stops() const
+{
+    // Per slice: another slice's audio on the channel says nothing about
+    // this one's stop.
+    QList<std::pair<quint64, Stop>> ordered;
+    for (const Source& source : m_sources) {
+        const int id = source.sliceId.load(std::memory_order_acquire);
+        if (id < 0 || source.stopReason.isEmpty()
+            || source.receivedFrames.load(std::memory_order_acquire) > source.stopAtFrames) {
+            continue;
+        }
+        ordered.append({source.stopOrder, Stop{id, source.stopReason}});
+    }
+    std::sort(ordered.begin(), ordered.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    QList<Stop> result;
+    for (const auto& entry : ordered) {
+        result.append(entry.second);
+    }
+    return result;
 }
 
 QString RemoteVaxFeeder::lastStopReason() const
 {
-    if (m_receivedFrames.load(std::memory_order_relaxed) > m_stopAtFrames) {
-        return {};
-    }
-    return m_lastStopReason;
+    const QList<Stop> current = stops();
+    return current.isEmpty() ? QString() : current.constLast().reason;
 }
 
 void RemoteVaxFeeder::startWorker()
@@ -238,6 +267,14 @@ void RemoteVaxFeeder::popHandoff(Source& source, void* into, std::size_t bytes)
     source.poppedBytes += bytes;
 }
 
+void RemoteVaxFeeder::trimHandoff(Source& source, std::size_t frames)
+{
+    const std::size_t bytes = std::min(frames * kFrameBytes, source.handoff->usedBytes());
+    source.handoff->dropOldest(bytes);
+    source.poppedBytes += bytes;
+    m_trimmedFrames += bytes / kFrameBytes;
+}
+
 bool RemoteVaxFeeder::isLive(const Source& source, qint64 now) const
 {
     return source.sliceId.load(std::memory_order_acquire) >= 0 && source.heard
@@ -283,8 +320,13 @@ int RemoteVaxFeeder::drainHandoff(bool paced, qint64 now)
             ++live;
         } else {
             dropHandoff(source);
+            // Went quiet: still on the channel, not stopped by the Core,
+            // and silent past kQuietNs. A slice that left the channel (its
+            // slot freed) or that the Core stopped did not hold anyone up.
             wentQuiet = wentQuiet
-                || (source.wasLive && !source.stopped.load(std::memory_order_acquire));
+                || (source.wasLive && source.sliceId.load(std::memory_order_acquire) >= 0
+                    && !source.stopped.load(std::memory_order_acquire)
+                    && now - source.lastArrivalNs > kQuietNs);
         }
         source.wasLive = isNowLive;
     }
@@ -296,14 +338,32 @@ int RemoteVaxFeeder::drainHandoff(bool paced, qint64 now)
         // much has piled up behind it. Keep a quarter of the matcher's ring
         // (45 ms) and drop the rest, rather than overrun the matcher with
         // it; the matcher ran dry during the wait anyway.
-        constexpr std::size_t kKeepBytes = std::size_t(kMatcherRingFrames / 4) * kFrameBytes;
+        constexpr std::size_t kKeepFrames = std::size_t(kMatcherRingFrames / 4);
         for (Source& source : m_sources) {
             if (!source.wasLive) { continue; }
-            const std::size_t used = source.handoff->usedBytes();
-            if (used > kKeepBytes) {
-                const std::size_t excess = used - kKeepBytes;
-                source.handoff->dropOldest(excess);
-                source.poppedBytes += excess;
+            const std::size_t used = source.handoff->usedBytes() / kFrameBytes;
+            if (used > kKeepFrames) {
+                trimHandoff(source, used - kKeepFrames);
+            }
+        }
+    }
+    if (live > 1) {
+        // A slice that stalled and then burst would otherwise keep its
+        // backlog for good: every chunk takes equal frames from each slice,
+        // so it would play that much late from then on. Keep it at most
+        // kMaxLagFrames ahead of the least-queued slice, dropping the
+        // oldest, as the local VAX mix's per-slice ring does.
+        std::size_t least = std::numeric_limits<std::size_t>::max();
+        for (const Source& source : m_sources) {
+            if (source.wasLive) {
+                least = std::min(least, source.handoff->usedBytes() / kFrameBytes);
+            }
+        }
+        for (Source& source : m_sources) {
+            if (!source.wasLive) { continue; }
+            const std::size_t used = source.handoff->usedBytes() / kFrameBytes;
+            if (used > least + std::size_t(kMaxLagFrames)) {
+                trimHandoff(source, used - least - std::size_t(kMaxLagFrames));
             }
         }
     }
@@ -374,6 +434,7 @@ void RemoteVaxFeeder::pump()
                 source.poppedBytes += stale;
             }
             source.heard = false;
+            source.wasLive = false;
         }
         if (!continuing) {
             restartMatcher();
@@ -518,6 +579,7 @@ void RemoteVaxFeeder::publish(State state, int queuedFrames)
     stats.sourceSliceId = stats.sourceSliceIds.isEmpty() ? -1 : stats.sourceSliceIds.constFirst();
     stats.receivedFrames = m_receivedFrames.load(std::memory_order_relaxed);
     stats.droppedFrames = m_droppedFrames.load(std::memory_order_relaxed);
+    stats.trimmedFrames = m_trimmedFrames;
     stats.writtenFrames = m_writtenFrames;
     stats.restarts = m_restarts;
     stats.queuedFrames = std::max(0, queuedFrames);

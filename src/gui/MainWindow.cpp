@@ -578,20 +578,23 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
         connect(m_tciServer, &TciServer::operatorNotice, this,
                 [this](const QString& peer, const QString& reason, bool raiseToast) {
             qCInfo(lcConnection) << "TCI notice" << peer << ":" << reason;
-            if (!raiseToast) { return; }
-            if (ReceiverStopNotices::isReceiverStop(reason)) {
-                // R-R3-42 fix wave: a receiver's audio stopping is one
-                // notice for this computer, however many apps (TCI, VAX
-                // channels) hear that receiver.
-                const QString text =
-                    m_receiverStopNotices.toastFor(reason, QDateTime::currentMSecsSinceEpoch());
-                if (!text.isEmpty()) {
-                    showToast(text, ToastSeverity::Warning, 5000);
-                }
-                return;
-            }
+            // A receiver's audio stopping is toasted from
+            // receiverStopNotice below, which names the receiver.
+            if (!raiseToast || ReceiverStopNotices::isReceiverStop(reason)) { return; }
             showToast(tr("TCI: %1").arg(OperatorReasonText::forDisplay(reason)),
                       ToastSeverity::Warning, 5000);
+        });
+        // R-R3-42 fix wave: a receiver's audio stopping is one notice for
+        // this computer, however many apps (TCI, VAX channels) hear that
+        // receiver; the same reason for another receiver is another notice.
+        connect(m_tciServer, &TciServer::receiverStopNotice, this,
+                [this](int rx, const QString& reason, bool raiseToast) {
+            if (!raiseToast) { return; }
+            const QString text = m_receiverStopNotices.toastFor(
+                reason, rx, QDateTime::currentMSecsSinceEpoch());
+            if (!text.isEmpty()) {
+                showToast(text, ToastSeverity::Warning, 5000);
+            }
         });
         connect(m_tciServer, &TciServer::txAudioActiveClientChanged,
                 this, [this](QWebSocket* owner) {
@@ -1231,13 +1234,14 @@ void MainWindow::ensureRemoteSession()
             };
             m_remoteVax->setReceiverAudio(std::move(vaxSource));
             connect(m_remoteVax, &RemoteVaxRouter::notice, this,
-                    [this](int channel, const QString& reason) {
-                qCInfo(lcConnection) << "VAX" << channel << "notice:" << reason;
+                    [this](int channel, int sliceId, const QString& reason) {
+                qCInfo(lcConnection) << "VAX" << channel << "slice" << sliceId
+                                     << "notice:" << reason;
                 // R-R3-44 fix wave: one notice per stop, shared with TCI
                 // and the other VAX channels carrying the same receiver;
                 // none for what the window's own status already says.
-                const QString text =
-                    m_receiverStopNotices.toastFor(reason, QDateTime::currentMSecsSinceEpoch());
+                const QString text = m_receiverStopNotices.toastFor(
+                    reason, sliceId, QDateTime::currentMSecsSinceEpoch());
                 if (!text.isEmpty()) {
                     showToast(text, ToastSeverity::Warning, 5000);
                 }

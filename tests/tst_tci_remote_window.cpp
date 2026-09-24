@@ -542,6 +542,37 @@ private slots:
         tci.stop();
     }
 
+    // Follow-up: a stop is one notice per receiver. The same reason for
+    // the other receiver is its own notice; a repeat for the same receiver
+    // is not toasted again.
+    void aStopIsANoticePerReceiver()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        FakeReceiverSource core;
+        TciServer tci(&remote);
+        tci.setRemoteReceiverAudio(core.source());
+        QSignalSpy stops(&tci, &TciServer::receiverStopNotice);
+        QVERIFY(tci.start(0));
+        QWebSocket app;
+        QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+        QVERIFY(connectClient(app, tci.port()));
+        app.sendTextMessage(QStringLiteral("audio_start:0;"));
+        app.sendTextMessage(QStringLiteral("audio_start:1;"));
+        QTRY_VERIFY_WITH_TIMEOUT(tci.remoteReceiverRequested(0) && tci.remoteReceiverRequested(1), 3000);
+        core.sinks.value(0)->receiverAudioStopped(0, QStringLiteral("slice-removed"));
+        core.sinks.value(1)->receiverAudioStopped(1, QStringLiteral("slice-removed"));
+        core.sinks.value(0)->receiverAudioStopped(0, QStringLiteral("slice-removed"));
+        QCOMPARE(stops.count(), 3);
+        QCOMPARE(stops.at(0).at(0).toInt(), 0);
+        QVERIFY(stops.at(0).at(2).toBool());
+        QCOMPARE(stops.at(1).at(0).toInt(), 1);
+        QVERIFY(stops.at(1).at(2).toBool());
+        QCOMPARE(stops.at(2).at(0).toInt(), 0);
+        QVERIFY(!stops.at(2).at(2).toBool());
+        app.close();
+        tci.stop();
+    }
+
     // An older Core cannot send a receiver's audio: audio_start is not
     // echoed, nothing stays requested, and the operator hears why (in the
     // notice, never on the TCI wire).
