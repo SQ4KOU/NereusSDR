@@ -1800,7 +1800,7 @@ a JSON string:
 | `"$capture:<name>"` | any value, recorded under `<name>` | yes | no |
 | `"$ref:<name>"` | the value recorded under `<name>`, compared the same way | yes | yes, filled with the recorded value |
 | `"$within:<t>:<v>"` | a number no further than `<t>` from `<v>`; `<t>` and `<v>` are each exactly a JSON number (RFC 8259 section 6: no `+`, no leading `.`, no `inf` or `nan`, no spaces), `<t>` at least 0; any other text is a malformed fixture | yes | no |
-| `"$device:<case>"` | only as `auth.request`'s `device`, in a fixture for the station only | no | yes, by the station's runner: the device block (section 3.5) of the runner's own device, whose key it makes at run time, signing the transcript of the challenge recorded as `challenge`; `<case>` is `signed` (that transcript), `otherChallenge` (a challenge of the runner's own in its place) or `otherCertificate` (another certificate's SHA-256 in place of the station's) |
+| `"$device:<case>"` | only as `auth.request`'s `device` | no | yes, by the station's runner: the device block (section 3.5) of the runner's own device, whose key it makes at run time, signing the transcript of the challenge recorded as `challenge`; `<case>` is `signed` (that transcript), `otherChallenge` (a challenge of the runner's own in its place) or `otherCertificate` (another certificate's SHA-256 in place of the station's). An app's runner fills none: in a fixture for the app only `"$device:signed"` appears, in a behaviour step, and it is checked (section 16.3) |
 
 A number the station's DSP measures is written `"$within:<t>:<v>"`, with
 the tolerance stated, never `"$any"`; a counter whose value depends on
@@ -1910,10 +1910,16 @@ app can adopt runs on the station only (`"runs": ["station"]`): an older
 app's `hello` (`major-refused`, `lower-minor`), made-up majors or features
 (`version-*`), a client that answers no ping (`heartbeat-missed`) or never
 sends its token (`connect-deadline`), and the lockout and preemption,
-which need other clients (`lockout`, `preempted`), and the device sign-in
-and token refusals of a Core that has paired devices (`device-*`,
-`pairing-required`), whose device keys are the station runner's own.
-Their client steps are all `scripted`. `tst_link_conformance_session` checks that a fixture
+which need other clients (`lockout`, `preempted`), and the device proofs
+that fail (`device-other-challenge`, `device-other-certificate`), which
+hold the Core's verification to a block a conformant client never sends.
+Their client steps are all `scripted`. The device sign-in fixtures where
+the app is the thing under test run on both ends: `device-sign-in` (the
+app's device signs this connection's transcript and is admitted),
+`device-not-paired` (the app's well-formed sign-in is refused
+`deviceNotPaired` and the app handles the refusal and its code) and
+`pairing-required` (the app's token sign-in is refused `pairingRequired`,
+handled the same way). `tst_link_conformance_session` checks that a fixture
 marked for the app holds nothing a conformant client could not send, and
 nothing an app's runner could not send its client:
 
@@ -1921,7 +1927,9 @@ nothing an app's runner could not send its client:
   `"$majors"` (an app supporting its own major and the one before sends
   both, section 6.1) and `features` `"$object"`, with `peer`
   `"$string"` and `settingsSchema` `"$int"`; the token is `"$ref:token"`
-  or, for a refused token, `"$string"`;
+  or, for a refused token, `"$string"`; a device sign-in is `token` `""`
+  with `device` `"$device:signed"`, after a station `hello` whose
+  `challenge` is `"$capture:challenge"`;
 - a behaviour `command.invoke` has `id` `"$int:<name>:1:4294967295"` for
   the `nnr.*`, `ps3.*` and `dspAssets.*` verbs and
   `"$int:<name>:0:4294967295"` for the rest (section 9.1), a verb from
@@ -1940,18 +1948,39 @@ nothing an app's runner could not send its client:
 - a behaviour message is of a kind a client sends (section 16.2);
 - a scripted message holds no placeholder but `"$ref:token"`, and a
   scripted `id` or `writeId` is a literal from 1000 up;
-- a station message holds no `"$capture:<name>"`, `"$string:<name>"`,
+- a station message holds no `"$capture:<name>"` (except the station
+  `hello`'s `challenge` as `"$capture:challenge"`), `"$string:<name>"`,
   `"$int:<name>"` (ranged or not), `"$object"` or `"$majors"`, and
   `"$any"` only as a summarised snapshot (below); what an app's runner
   sends for each placeholder a station message may hold is defined
   below.
 
 **Filling a station message (an app's runner).** An app's runner sends
-its client each station message with `"$string"` as `""` (so the station
-`hello`'s `identity` and `challenge` reach an app's client as empty
-strings: the fixtures for the app sign in with the token, which does not
-read them), `"$int"` as `0`,
-`"$ref:<name>"` as the recorded value and `"$within:<t>:<v>"` as `<v>`.
+its client each station message with `"$string"` as `""`, `"$int"` as `0`,
+`"$ref:<name>"` as the recorded value and `"$within:<t>:<v>"` as `<v>`,
+except in the station `hello`:
+
+- `identity` is a test station identity the runner makes at run time (a
+  P-256 key, section 3.4): `publicKey` is its key and `certBinding` its
+  binding of the certificate SHA-256 the runner's transport reports to its
+  client for this connection, so a client that checks the binding before
+  signing finds it good.
+- `challenge` is 32 random bytes of the runner's own, base64url, new for
+  each run; written `"$capture:challenge"`, it is also recorded as
+  `challenge`.
+
+**The app's device (an app's runner).** In a behaviour `auth.request`,
+`"$device:signed"` is a check, not a fill: the block the app's client
+sent must be well formed (section 3.5), its `id` the fingerprint of its
+`publicKey`, a canonical P-256 key, and its `signature` must verify over
+this connection's transcript: the challenge recorded as `challenge`, the
+certificate SHA-256 the runner's transport reported, the test station
+identity's key and the block's own key. The runner accepts the app's key
+as paired: `stationSetup`'s `pairedDevice`, like the rest of
+`stationSetup`, means nothing to it, and the station messages that follow
+say whether the sign-in was admitted. For the station's runner,
+`"$device:<case>"` keeps its fill (section 16.1), whatever the step's
+role.
 
 - **The token.** `"$ref:token"` in a client message is the station's
   token. The station's runner reads it from the station at run time; an
@@ -2008,7 +2037,7 @@ read them), `"$int"` as `0`,
 | `preemptingClient` | `{"afterStep": i}`: a second client authenticates once step `i` is done | none |
 | `otherConnections` | other clients connected before this one, still connecting and sending nothing; 8 puts the station at its connection limit | 0 |
 | `token` | `"active"`: a Core upgraded from before paired devices, with a pairing token (made at run time) that `"$ref:token"` names; `"none"`: a new Core, without one (section 3.3) | `"active"` |
-| `pairedDevice` | the runner's own device (its key made at run time, the one `"$device:<case>"` signs with) is paired with the station before the client connects | false |
+| `pairedDevice` | the station runner's own device (its key made at run time, the one `"$device:<case>"` signs with) is paired with the station before the client connects; an app's runner ignores it, as it ignores all of `stationSetup`, and accepts its app's key | false |
 
 The station runner starts every fixture from an empty settings profile,
 and the bundled NR3 model files count as absent, so a fixture reads the
@@ -2018,9 +2047,9 @@ same on every machine.
 | --- | --- |
 | `connect-connectable` | The whole connect sequence to `snapshot.complete` on a connected radio with one slice, every message in full, except: PureSignal's `statusJson` (`"$string"`, it carries a capture time) and `displayGeneration` (`"$int"`, a counter whose value depends on timing), and the slice's `signalStrengthDbm`, `signalPeakDbm` and `signalAverageDbm`, which the receiver measures: `"$within:0.5:-399.02"`, within 0.5 dB, which leaves out the meter's no-reading value of -400 |
 | `wrong-token` | `auth.result` refused, `retryable` false, `code` `wrongToken`, then the close |
-| `pairing-required` | On a new Core (no token), a token sign-in is refused "This Core uses paired devices. Pair this device first.", `retryable` false, `code` `pairingRequired` |
-| `device-sign-in` | On a new Core, the paired device signs this connection's transcript (`"$capture:challenge"` from the `hello`, then `"$device:signed"`) and is admitted: the whole connect sequence to `snapshot.complete`, summarised |
-| `device-not-paired` | A well-formed device sign-in from a key the Core has not paired: `code` `deviceNotPaired`, then the close |
+| `pairing-required` | On a new Core (no token), a token sign-in is refused "This Core uses paired devices. Pair this device first.", `retryable` false, `code` `pairingRequired`; on the app, the app handles that refusal and does not reconnect |
+| `device-sign-in` | On a new Core, the paired device signs this connection's transcript (`"$capture:challenge"` from the `hello`, then `"$device:signed"`) and is admitted: the whole connect sequence to `snapshot.complete`, summarised; on the app, the app's own device signs and its block is checked |
+| `device-not-paired` | A well-formed device sign-in from a key the Core has not paired: `code` `deviceNotPaired`, then the close; on the app, the app's device signs, its block is checked, and the app handles the refusal |
 | `device-other-challenge`, `device-other-certificate` | The paired device signs another challenge, or another certificate: `code` `deviceProofFailed`, then the close |
 | `connection-limit` | With eight other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |

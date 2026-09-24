@@ -78,6 +78,12 @@
 //                                    "pairedDevice" for the device sign-in
 //                                    fixtures. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A (R-IOS-01,
+//                                    R-IOS-08): the app-fixture guard
+//                                    admits the Core hello's own
+//                                    challenge capture and a device
+//                                    sign-in as "$device:signed".
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -356,6 +362,10 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
     QHash<QString, QString> classOfKey;
     QHash<QString, double> capabilities;
     int agreedMinor = -1;
+    // Whether a station hello's challenge was "$capture:challenge", which
+    // an app's runner fills with a challenge of its own and records, so a
+    // later "$device:signed" has a transcript to be checked against.
+    bool challengeRecorded = false;
     const QJsonArray steps = fixture.value(QStringLiteral("steps")).toArray();
     for (int index = 0; index < steps.size(); ++index) {
         const QJsonObject step = steps.at(index).toObject();
@@ -372,6 +382,15 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
                     && ((type == QStringLiteral("schema") && path == QStringLiteral("$.fields"))
                         || (type == QStringLiteral("object.create")
                             && path == QStringLiteral("$.properties")));
+                // The one capture an app's runner makes: the challenge it
+                // puts in the Core's hello (section 16.3).
+                const bool ownChallenge = type == QStringLiteral("hello")
+                    && path == QStringLiteral("$.challenge")
+                    && text == QStringLiteral("$capture:challenge");
+                if (ownChallenge) {
+                    challengeRecorded = true;
+                    continue;
+                }
                 if (text.startsWith(QStringLiteral("$capture:"))
                     || text.startsWith(QStringLiteral("$string:"))
                     || text.startsWith(QStringLiteral("$int:"))
@@ -449,7 +468,21 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
             agreedMinor = message.value(QStringLiteral("minor")).toInt();
         } else if (type == QStringLiteral("auth.request")) {
             const QString token = message.value(QStringLiteral("token")).toString();
-            if (token != QStringLiteral("$ref:token") && token != QStringLiteral("$string")) {
+            if (message.contains(QStringLiteral("device"))) {
+                // A device sign-in (section 3.5): token "" and the app's own
+                // device block, which an app's runner checks against this
+                // connection's transcript, so the challenge must be its own.
+                if (message.value(QStringLiteral("device"))
+                        != QJsonValue(QStringLiteral("$device:signed"))
+                    || !message.value(QStringLiteral("token")).isString() || !token.isEmpty()) {
+                    fail(index, QStringLiteral("a device sign-in is token \"\" and device "
+                                               "\"$device:signed\""));
+                }
+                if (!challengeRecorded) {
+                    fail(index, QStringLiteral("$device:signed needs the Core's hello to carry "
+                                               "challenge \"$capture:challenge\""));
+                }
+            } else if (token != QStringLiteral("$ref:token") && token != QStringLiteral("$string")) {
                 fail(index, QStringLiteral("token must be $ref:token or $string"));
             }
         } else if (type == QStringLiteral("command.invoke")) {
@@ -1049,6 +1082,24 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
         setIn(step, QStringLiteral("retryable"), QStringLiteral("$int:n"));
     });
     QVERIFY2(found.contains(QStringLiteral("$int:n")), qPrintable(found));
+    // The Core's hello may capture its challenge as "challenge", and
+    // nothing else; a device sign-in is "$device:signed" with token "",
+    // after that capture.
+    const QString signIn = QStringLiteral("session-device-sign-in");
+    QCOMPARE(planted(signIn, 0, [](QJsonObject&) {}), QString());
+    found = planted(signIn, 0, [&setIn](QJsonObject& step) {
+        setIn(step, QStringLiteral("challenge"), QStringLiteral("$capture:other"));
+    });
+    QVERIFY2(found.contains(QStringLiteral("$capture:other")), qPrintable(found));
+    QVERIFY2(found.contains(QStringLiteral("needs the Core's hello")), qPrintable(found));
+    found = planted(signIn, 2, [&setIn](QJsonObject& step) {
+        setIn(step, QStringLiteral("device"), QStringLiteral("$device:otherChallenge"));
+    });
+    QVERIFY2(found.contains(QStringLiteral("a device sign-in is")), qPrintable(found));
+    found = planted(signIn, 2, [&setIn](QJsonObject& step) {
+        setIn(step, QStringLiteral("token"), QStringLiteral("$ref:token"));
+    });
+    QVERIFY2(found.contains(QStringLiteral("a device sign-in is")), qPrintable(found));
     // A verb with arguments it does not take, and one not advertised
     // (PureSignal's gate is psAlgorithmVersion equal to 3; 4 fails it).
     found = planted(ps3, 36, [&setIn](QJsonObject& step) {
