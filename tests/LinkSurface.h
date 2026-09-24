@@ -13,7 +13,9 @@
 //
 //   messageKinds  every SessionMessageKind by wire name, with the keys a
 //                 well-formed message must carry (probed through
-//                 SessionMessages::decode) and the keys it may carry
+//                 SessionMessages::decode), the keys it may carry and
+//                 each key's JSON type (tst_link_surface_manifest holds the
+//                 key sets to what SessionMessages::encode can write)
 //   capabilities  every entry StationCapabilities::toUpdates() emits for a
 //                 fully populated descriptor, in order, with its wire kind
 //                 and the value a live station with every feature on sends
@@ -43,6 +45,9 @@
 //                                    capability values. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
+//                                    each message key's JSON type.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QJsonObject>

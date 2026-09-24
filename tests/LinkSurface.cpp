@@ -27,6 +27,9 @@
 //                                    `majors` and `features`. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
+//                                    each message key's JSON type.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -193,6 +196,21 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
     return std::nullopt;
 }
 
+// A JSON value's type by the name the link document uses.
+QString jsonTypeName(const QJsonValue& value)
+{
+    switch (value.type()) {
+    case QJsonValue::Bool: return QStringLiteral("boolean");
+    case QJsonValue::Double: return QStringLiteral("number");
+    case QJsonValue::String: return QStringLiteral("string");
+    case QJsonValue::Array: return QStringLiteral("array");
+    case QJsonValue::Object: return QStringLiteral("object");
+    case QJsonValue::Null: return QStringLiteral("null");
+    case QJsonValue::Undefined: break;
+    }
+    return QStringLiteral("undefined");
+}
+
 QJsonObject captureMessageKinds()
 {
     QJsonObject kinds;
@@ -220,6 +238,12 @@ QJsonObject captureMessageKinds()
         }
         entry.insert(QStringLiteral("required"), sortedArray(required));
         entry.insert(QStringLiteral("optional"), sortedArray(optional));
+        // Each key's JSON type, as the encoder writes it.
+        QJsonObject types;
+        for (auto it = full.constBegin(); it != full.constEnd(); ++it) {
+            types.insert(it.key(), jsonTypeName(it.value()));
+        }
+        entry.insert(QStringLiteral("types"), types);
         kinds.insert(name, entry);
     }
     return kinds;

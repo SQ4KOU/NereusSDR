@@ -1458,7 +1458,11 @@
             "required": [
                 "token",
                 "type"
-            ]
+            ],
+            "types": {
+                "token": "string",
+                "type": "string"
+            }
         },
         "auth.result": {
             "optional": [
@@ -1468,7 +1472,13 @@
                 "accepted",
                 "reason",
                 "type"
-            ]
+            ],
+            "types": {
+                "accepted": "boolean",
+                "reason": "string",
+                "retryable": "boolean",
+                "type": "string"
+            }
         },
         "capabilities": {
             "optional": [
@@ -1476,7 +1486,11 @@
             "required": [
                 "properties",
                 "type"
-            ]
+            ],
+            "types": {
+                "properties": "array",
+                "type": "string"
+            }
         },
         "command.invoke": {
             "optional": [
@@ -1486,7 +1500,13 @@
                 "id",
                 "type",
                 "verb"
-            ]
+            ],
+            "types": {
+                "args": "array",
+                "id": "number",
+                "type": "string",
+                "verb": "string"
+            }
         },
         "command.result": {
             "optional": [
@@ -1499,7 +1519,16 @@
                 "reason",
                 "type",
                 "verb"
-            ]
+            ],
+            "types": {
+                "accepted": "boolean",
+                "affected": "array",
+                "id": "number",
+                "reason": "string",
+                "type": "string",
+                "values": "array",
+                "verb": "string"
+            }
         },
         "delta": {
             "optional": [
@@ -1508,7 +1537,12 @@
                 "key",
                 "properties",
                 "type"
-            ]
+            ],
+            "types": {
+                "key": "string",
+                "properties": "array",
+                "type": "string"
+            }
         },
         "hello": {
             "optional": [
@@ -1521,7 +1555,16 @@
                 "peer",
                 "settingsSchema",
                 "type"
-            ]
+            ],
+            "types": {
+                "features": "object",
+                "major": "number",
+                "majors": "array",
+                "minor": "number",
+                "peer": "string",
+                "settingsSchema": "number",
+                "type": "string"
+            }
         },
         "media.control": {
             "optional": [
@@ -1529,7 +1572,11 @@
             "required": [
                 "payload",
                 "type"
-            ]
+            ],
+            "types": {
+                "payload": "object",
+                "type": "string"
+            }
         },
         "object.create": {
             "optional": [
@@ -1539,7 +1586,13 @@
                 "key",
                 "properties",
                 "type"
-            ]
+            ],
+            "types": {
+                "class": "string",
+                "key": "string",
+                "properties": "array",
+                "type": "string"
+            }
         },
         "object.destroy": {
             "optional": [
@@ -1548,7 +1601,12 @@
                 "class",
                 "key",
                 "type"
-            ]
+            ],
+            "types": {
+                "class": "string",
+                "key": "string",
+                "type": "string"
+            }
         },
         "property.result": {
             "optional": [
@@ -1558,7 +1616,13 @@
                 "results",
                 "type",
                 "writeId"
-            ]
+            ],
+            "types": {
+                "key": "string",
+                "results": "array",
+                "type": "string",
+                "writeId": "number"
+            }
         },
         "property.write": {
             "optional": [
@@ -1568,7 +1632,13 @@
                 "key",
                 "properties",
                 "type"
-            ]
+            ],
+            "types": {
+                "key": "string",
+                "properties": "array",
+                "type": "string",
+                "writeId": "number"
+            }
         },
         "schema": {
             "optional": [
@@ -1577,7 +1647,12 @@
                 "class",
                 "fields",
                 "type"
-            ]
+            ],
+            "types": {
+                "class": "string",
+                "fields": "array",
+                "type": "string"
+            }
         },
         "session.end": {
             "optional": [
@@ -1586,7 +1661,12 @@
             "required": [
                 "reason",
                 "type"
-            ]
+            ],
+            "types": {
+                "reason": "string",
+                "retryable": "boolean",
+                "type": "string"
+            }
         },
         "settings.reject": {
             "optional": [
@@ -1596,7 +1676,13 @@
                 "key",
                 "properties",
                 "type"
-            ]
+            ],
+            "types": {
+                "key": "string",
+                "properties": "array",
+                "reason": "string",
+                "type": "string"
+            }
         },
         "settings.remove": {
             "optional": [
@@ -1605,7 +1691,12 @@
                 "key",
                 "properties",
                 "type"
-            ]
+            ],
+            "types": {
+                "key": "string",
+                "properties": "array",
+                "type": "string"
+            }
         },
         "settings.snapshot": {
             "optional": [
@@ -1613,7 +1704,11 @@
             "required": [
                 "properties",
                 "type"
-            ]
+            ],
+            "types": {
+                "properties": "array",
+                "type": "string"
+            }
         },
         "settings.value": {
             "optional": [
@@ -1623,7 +1718,13 @@
                 "origin",
                 "properties",
                 "type"
-            ]
+            ],
+            "types": {
+                "key": "string",
+                "origin": "string",
+                "properties": "array",
+                "type": "string"
+            }
         },
         "settings.write": {
             "optional": [
@@ -1633,14 +1734,23 @@
                 "origin",
                 "properties",
                 "type"
-            ]
+            ],
+            "types": {
+                "key": "string",
+                "origin": "string",
+                "properties": "array",
+                "type": "string"
+            }
         },
         "snapshot.complete": {
             "optional": [
             ],
             "required": [
                 "type"
-            ]
+            ],
+            "types": {
+                "type": "string"
+            }
         },
         "station.metrics.v1": {
             "optional": [
@@ -1648,7 +1758,11 @@
             "required": [
                 "payload",
                 "type"
-            ]
+            ],
+            "types": {
+                "payload": "object",
+                "type": "string"
+            }
         }
     },
     "mirrorClasses": {

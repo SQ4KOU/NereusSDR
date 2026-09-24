@@ -12,6 +12,8 @@
 // to the code that routes and validates:
 //
 //   - allKinds() against the SessionMessageKind declaration;
+//   - each kind's recorded keys against every key SessionMessages::encode
+//     can write for it, read from its source, conditional keys included;
 //   - verbSpecs() against the literals SessionCommandDispatcher.cpp routes
 //     on and the concrete verbs each prefix family's handler accepts, and
 //     against a live dispatch of every verb and of verbs it does not list;
@@ -29,12 +31,17 @@
 //                                    surface drift guard. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
+//                                    message keys held to the encoder's
+//                                    source; each key's JSON type.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 
 #include <QCoreApplication>
 #include <QFile>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -122,6 +129,142 @@ MirrorUpdate defaultArgument(const CommandArgumentSpec& spec)
     return {0, spec.name, spec.kind, QVariant()};
 }
 
+
+// The keys SessionMessages::encode can write for each kind, read from its
+// source (`encodeSource` is SessionMessages.cpp): every
+// o.insert(QStringLiteral("<key>"), ...) in the switch case(s) of that kind,
+// conditional ones included, plus the keys written before the switch for
+// every kind. An insert inside an if whose condition names kinds
+// (message.kind == SessionMessageKind::X) counts only for those kinds.
+// Kinds are keyed by their wire names, from kKindNames in the same source.
+QHash<QString, QSet<QString>> encoderKeys(const QString& encodeSource, QString* error)
+{
+    QHash<QString, QString> wireNameOf;
+    static const QRegularExpression kindName(
+        QString::fromLatin1(R"re(\{\s*SessionMessageKind::(\w+),\s*"([^"]+)"\s*\})re"));
+    QRegularExpressionMatchIterator names = kindName.globalMatch(encodeSource);
+    while (names.hasNext()) {
+        const QRegularExpressionMatch m = names.next();
+        wireNameOf.insert(m.captured(1), m.captured(2));
+    }
+    const qsizetype begin =
+        encodeSource.indexOf(QStringLiteral("QByteArray SessionMessages::encode("));
+    const qsizetype end = begin < 0 ? -1
+        : encodeSource.indexOf(QStringLiteral("const QByteArray wire ="), begin);
+    if (wireNameOf.isEmpty() || begin < 0 || end < 0) {
+        *error = QStringLiteral("SessionMessages::encode or kKindNames not found");
+        return {};
+    }
+    static const QRegularExpression caseLabel(
+        QString::fromLatin1(R"re(^\s*case\s+SessionMessageKind::(\w+)\s*:)re"));
+    static const QRegularExpression insert(
+        QString::fromLatin1(R"re(\bo\.insert\(\s*QStringLiteral\("([^"]+)"\))re"));
+    static const QRegularExpression kindTest(
+        QString::fromLatin1(R"re(message\.kind\s*==\s*SessionMessageKind::(\w+))re"));
+    QHash<QString, QSet<QString>> keys;
+    QSet<QString> everyKind;
+    QStringList group;          // The kinds of the case being read.
+    bool previousWasCase = false;
+    bool inSwitch = false;
+    int depth = 0;
+    struct Restriction {
+        int depth;
+        QStringList kinds;
+    };
+    QList<Restriction> restrictions;
+    QString pendingCondition;   // An if condition still being read.
+    const QStringList lines = encodeSource.mid(begin, end - begin).split(QLatin1Char('\n'));
+    for (const QString& line : lines) {
+        if (line.contains(QStringLiteral("switch (message.kind)"))) {
+            inSwitch = true;
+        }
+        const QRegularExpressionMatch label = caseLabel.match(line);
+        if (inSwitch && label.hasMatch()) {
+            if (!previousWasCase) {
+                group.clear();
+            }
+            group.append(wireNameOf.value(label.captured(1)));
+            previousWasCase = true;
+        } else if (!line.trimmed().isEmpty()) {
+            previousWasCase = false;
+        }
+        if (line.contains(QStringLiteral("if (")) || !pendingCondition.isEmpty()) {
+            pendingCondition += line;
+            if (line.contains(QLatin1Char('{'))) {
+                QStringList kinds;
+                QRegularExpressionMatchIterator it = kindTest.globalMatch(pendingCondition);
+                while (it.hasNext()) {
+                    kinds.append(wireNameOf.value(it.next().captured(1)));
+                }
+                if (!kinds.isEmpty()) {
+                    restrictions.append({depth + 1, kinds});
+                }
+                pendingCondition.clear();
+            } else if (line.trimmed().endsWith(QLatin1Char(';'))) {
+                pendingCondition.clear();
+            }
+        }
+        QRegularExpressionMatchIterator inserts = insert.globalMatch(line);
+        while (inserts.hasNext()) {
+            const QString key = inserts.next().captured(1);
+            if (!inSwitch) {
+                everyKind.insert(key);
+                continue;
+            }
+            QStringList kinds = group;
+            for (const Restriction& restriction : std::as_const(restrictions)) {
+                QStringList narrowed;
+                for (const QString& kind : std::as_const(kinds)) {
+                    if (restriction.kinds.contains(kind)) {
+                        narrowed.append(kind);
+                    }
+                }
+                kinds = narrowed;
+            }
+            for (const QString& kind : std::as_const(kinds)) {
+                keys[kind].insert(key);
+            }
+        }
+        depth += int(line.count(QLatin1Char('{'))) - int(line.count(QLatin1Char('}')));
+        while (!restrictions.isEmpty() && depth < restrictions.last().depth) {
+            restrictions.removeLast();
+        }
+    }
+    for (const QString& kind : wireNameOf) {
+        keys[kind].unite(everyKind);
+    }
+    return keys;
+}
+
+// Where the keys surface.json records for each kind (required and
+// optional) differ from what the encoder can write; empty when they agree.
+QStringList encoderKeyDrift(const QString& encodeSource, const QJsonObject& messageKinds)
+{
+    QString error;
+    const QHash<QString, QSet<QString>> written = encoderKeys(encodeSource, &error);
+    if (!error.isEmpty()) {
+        return {error};
+    }
+    QStringList drift;
+    for (auto it = messageKinds.constBegin(); it != messageKinds.constEnd(); ++it) {
+        const QJsonObject entry = it.value().toObject();
+        QSet<QString> recorded = stringSet(entry.value(QStringLiteral("required")).toArray());
+        recorded.unite(stringSet(entry.value(QStringLiteral("optional")).toArray()));
+        const QSet<QString> encoder = written.value(it.key());
+        for (const QString& key : encoder - recorded) {
+            drift.append(QStringLiteral("%1: the encoder can write \"%2\", which surface.json "
+                                        "does not record")
+                             .arg(it.key(), key));
+        }
+        for (const QString& key : recorded - encoder) {
+            drift.append(QStringLiteral("%1: surface.json records \"%2\", which the encoder "
+                                        "never writes")
+                             .arg(it.key(), key));
+        }
+    }
+    drift.sort();
+    return drift;
+}
 } // namespace
 
 class TstLinkSurfaceManifest : public QObject {
@@ -135,6 +278,8 @@ private slots:
     void captureRecordsNoErrors();
     void committedSurfaceMatchesTheCode();
     void driftGuardNamesEachKindOfChange();
+    void messageKeysAreWhatTheEncoderWrites();
+    void aKeyTheSampleNeverSetsIsStillCaught();
 
     void allKindsListsEveryEnumeratorInOrder();
     void mirroredClassesAreTheSchemaAllowlist();
@@ -311,6 +456,48 @@ void TstLinkSurfaceManifest::driftGuardNamesEachKindOfChange()
                      QStringLiteral("commands[addSlice].arguments[probe]: added")),
                  qPrintable(diff.first()));
     }
+}
+
+void TstLinkSurfaceManifest::messageKeysAreWhatTheEncoderWrites()
+{
+    // The capture learns a kind's keys from one sample message, so an
+    // optional key its sample never sets would not be recorded. The
+    // encoder's own source is the other half of the check: every key it can
+    // write for a kind is recorded for that kind, and nothing else is.
+    const QString source = readSource(QStringLiteral("src/core/session/SessionMessages.cpp"));
+    QVERIFY(!source.isEmpty());
+    const QJsonObject kinds = captured().value(QStringLiteral("messageKinds")).toObject();
+    const QStringList drift = encoderKeyDrift(source, kinds);
+    QVERIFY2(drift.isEmpty(), qPrintable(drift.join(QLatin1Char('\n'))));
+    // And the reading itself found the conditional keys it must.
+    QString error;
+    const QHash<QString, QSet<QString>> keys = encoderKeys(source, &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QVERIFY(keys.value(QStringLiteral("hello")).contains(QStringLiteral("majors")));
+    QVERIFY(keys.value(QStringLiteral("property.write")).contains(QStringLiteral("writeId")));
+    QVERIFY(keys.value(QStringLiteral("settings.reject")).contains(QStringLiteral("reason")));
+    QVERIFY(!keys.value(QStringLiteral("settings.write")).contains(QStringLiteral("reason")));
+    QVERIFY(keys.value(QStringLiteral("settings.value")).contains(QStringLiteral("origin")));
+    QVERIFY(!keys.value(QStringLiteral("settings.remove")).contains(QStringLiteral("origin")));
+}
+
+void TstLinkSurfaceManifest::aKeyTheSampleNeverSetsIsStillCaught()
+{
+    // A planted optional key, written only when a field no sample sets is
+    // present: the capture would not see it; the encoder's source does.
+    QString source = readSource(QStringLiteral("src/core/session/SessionMessages.cpp"));
+    const QString anchor = QStringLiteral("        if (message.featuresOnWire) {");
+    QVERIFY(source.contains(anchor));
+    source.replace(anchor,
+                   QStringLiteral("        if (!message.token.isEmpty()) {\n"
+                                  "            o.insert(QStringLiteral(\"plantedKey\"), 1);\n"
+                                  "        }\n")
+                       + anchor);
+    const QJsonObject kinds = captured().value(QStringLiteral("messageKinds")).toObject();
+    const QStringList drift = encoderKeyDrift(source, kinds);
+    QCOMPARE(drift, QStringList{QStringLiteral(
+                        "hello: the encoder can write \"plantedKey\", which surface.json does "
+                        "not record")});
 }
 
 void TstLinkSurfaceManifest::allKindsListsEveryEnumeratorInOrder()

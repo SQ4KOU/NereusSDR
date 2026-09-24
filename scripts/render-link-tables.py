@@ -99,9 +99,17 @@ def render_message_kinds(data):
     rows = []
     for kind in sorted(data):
         entry = data[kind]
-        expect_keys(entry, ("required", "optional"), f"messageKinds.{kind}")
-        rows.append((code(kind), code_list(entry["required"]), code_list(entry["optional"])))
-    return table(("Kind (`type`)", "Required keys", "Optional keys"), rows)
+        expect_keys(entry, ("required", "optional", "types"), f"messageKinds.{kind}")
+        types = entry["types"]
+        expect_keys(types, tuple(entry["required"]) + tuple(entry["optional"]),
+                    f"messageKinds.{kind}.types")
+
+        def typed(keys):
+            return ", ".join(f"{code(k)} ({types[k]})" for k in keys) if keys else "none"
+
+        rows.append((code(kind), typed(entry["required"]), typed(entry["optional"])))
+    return table(("Kind (`type`)", "Required keys (JSON type)", "Optional keys (JSON type)"),
+                 rows)
 
 
 def render_capabilities(data):
