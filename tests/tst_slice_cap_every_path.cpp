@@ -17,6 +17,10 @@
 // highest id first, and named in plain words on the receive-layout restore
 // status, so no slice is left looking configured with no channel.
 //
+// Follow-up (R-R3-34): a local window with no Core shows that closure too,
+// through the same receive-layout toast (ReceiveLayoutNotices) a remote
+// window uses.
+//
 // Covers: a local addSlice() at the cap returns -1, creates nothing and
 // emits the cap message; the session verb at the cap is refused with the
 // same plain reason and the Core creates nothing, both against a sized
@@ -47,6 +51,7 @@
 #undef private
 
 #include "core/session/ObjectRegistry.h"
+#include "gui/ReceiveLayoutNotices.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SessionMessages.h"
 #include "models/RadioModel.h"
@@ -365,6 +370,12 @@ private slots:
         // connects to a two-slice HermesII. Before the fix the extra slices
         // stayed, bound to a stream, with no WDSP channel behind their ids.
         QList<int> added;
+        // The local window's notice (MainWindow's local receive-layout
+        // connection): the same toast the remote window shows, fed from the
+        // same status signal.
+        ReceiveLayoutNotices notices;
+        QStringList toasts;
+        QObject receiver;
         double freqC = 0.0;
         double freqD = 0.0;
         DSPMode modeC = DSPMode::USB;
@@ -372,6 +383,15 @@ private slots:
         auto connected = ConnectableRadioModel::create(
             10000, RadioModel::Role::Local,
             [&](RadioModel& model) {
+                QObject::connect(&model, &RadioModel::receiveLayoutRestoreStatusChanged,
+                                 &receiver, [&] {
+                    const QString toast = notices.toastFor(
+                        model.receiveLayoutRestoreState(),
+                        model.receiveLayoutRestoreMessage(), /*viaCore*/ false);
+                    if (!toast.isEmpty()) {
+                        toasts.append(toast);
+                    }
+                });
                 for (int i = 0; i < 4; ++i) {
                     added.append(model.addSlice());
                 }
@@ -401,6 +421,24 @@ private slots:
             + QLatin1Char(' ') + closedSentence(QLatin1Char('D'), freqD, modeD);
         QCOMPARE(model.receiveLayoutRestoreState(), QStringLiteral("degraded"));
         QCOMPARE(model.receiveLayoutRestoreMessage(), expected);
+        // R-R3-34: the closure is not silent in a window with no Core. One
+        // toast, the message as written (no pointer to a Core panel).
+        QCOMPARE(toasts, QStringList{expected});
+    }
+
+    void receiveLayoutNoticeIsTheSameToastLocallyAndThroughACore()
+    {
+        const QString message = closedSentence(QLatin1Char('C'), 14'225'000.0, DSPMode::USB);
+        ReceiveLayoutNotices local;
+        QCOMPARE(local.toastFor(QStringLiteral("degraded"), message, false), message);
+        QVERIFY(local.toastFor(QStringLiteral("degraded"), message, false).isEmpty()); // once
+        QVERIFY(local.toastFor(QStringLiteral("pending"), QStringLiteral("x"), false).isEmpty());
+        QVERIFY(local.toastFor(QStringLiteral("accepted"), QString(), false).isEmpty());
+        QCOMPARE(local.toastFor(QStringLiteral("degraded"), message, false), message); // again
+        ReceiveLayoutNotices remote;
+        QCOMPARE(remote.toastFor(QStringLiteral("fallback"), message, true),
+                 message + QStringLiteral(" Details remain in Core connection."));
+        QVERIFY(OperatorWording::isPlain(message));
     }
 };
 
