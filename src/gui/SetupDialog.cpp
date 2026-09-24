@@ -429,6 +429,14 @@ void SetupDialog::setTciServer(NereusSDR::TciServer* server)
     }
 }
 
+void SetupDialog::setReceiverAudioCompressed(bool compressed)
+{
+    m_receiverAudioCompressed = compressed;
+    if (m_vaxPage) {
+        m_vaxPage->setReceiverAudioCompressed(compressed);
+    }
+}
+
 // ── Lazy page registry (issues #272 + #301) ───────────────────────────────────
 
 QTreeWidgetItem* SetupDialog::registerPage(QTreeWidgetItem* parent,
@@ -1163,7 +1171,13 @@ void SetupDialog::buildTree()
     // streams), and the page writes only this computer's audio/Vax* keys,
     // so it works in every window, connected or not.
     registerPage(audio, "VAX", SetupScope::ThisComputer,
-                 [this] { return wrapWithAudioBackendStrip(new AudioVaxPage(m_model)); });
+                 [this] {
+                     auto* vaxPage = new AudioVaxPage(m_model);
+                     // R-R3-43 / R-R3-44: the compressed-audio note's state.
+                     m_vaxPage = vaxPage;
+                     vaxPage->setReceiverAudioCompressed(m_receiverAudioCompressed);
+                     return wrapWithAudioBackendStrip(vaxPage);
+                 });
     // R-R3-42: Audio > TCI configures the TCI server that runs on this
     // computer, in a remote window as in a local one, and its keys are this
     // computer's (SettingsScope "Tci"). It reaches no local DSP (the backend

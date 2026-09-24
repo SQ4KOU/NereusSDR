@@ -199,6 +199,33 @@ QString remoteAudioQualityReasonText(RemoteAudioQualityReason reason)
     return {};
 }
 
+bool remoteReceiverAudioIsCompressed(const RemoteAudioStatus& status)
+{
+    if (status.state == RemoteAudioStatus::State::NotConnected) {
+        return false;
+    }
+    if (status.qualityReason) {
+        return true;  // Lossless chosen, Opus runs
+    }
+    bool anyRunning = false;
+    for (const RemoteReceiverAudioStatus& receiver : status.receivers) {
+        if (receiver.state == RemoteReceiverAudioStatus::State::Receiving
+            && receiver.runningProfile) {
+            if (*receiver.runningProfile == RemoteAudioProfile::Opus) {
+                return true;
+            }
+            anyRunning = true;
+        }
+    }
+    if (anyRunning) {
+        return false;
+    }
+    if (status.runningProfile) {
+        return *status.runningProfile == RemoteAudioProfile::Opus;
+    }
+    return status.chosenProfile == RemoteAudioProfile::Opus;
+}
+
 QString remoteAudioQualityText(const RemoteAudioStatus& status)
 {
     if (status.runningProfile) {

@@ -42,6 +42,12 @@
 //                says whether an app is reading the channel where the
 //                platform reports it. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24: R-R3-43 / R-R3-44 / R-R3-21: a plain note, shown in a
+//                remote window while the Core's receiver streams are Opus,
+//                that the weakest digital-mode signals may not decode and
+//                that Lossless avoids it (setReceiverAudioCompressed, pushed
+//                by MainWindow through SetupDialog). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/audio/VirtualCableDetector.h"
@@ -238,6 +244,14 @@ public:
         return nullptr;
     }
 
+    // R-R3-43 / R-R3-44: true while this is a remote window whose receiver
+    // streams (the ones feeding VAX) are Opus rather than lossless; shows
+    // the compressed-audio note. False (the default, and always in a local
+    // window) hides it. SetupDialog forwards MainWindow's live value.
+    void setReceiverAudioCompressed(bool compressed);
+    bool compressedAudioNoteShown() const;
+    QString compressedAudioNoteText() const;
+
 private:
     void buildPage();
     void wirePillFeedback();
@@ -246,6 +260,7 @@ private:
 
     AudioEngine*                m_engine{nullptr};
     QVector<VaxChannelCard*>    m_channelCards;  // index 0 = channel 1
+    QLabel*                     m_compressedNote{nullptr};
 
 protected:
     void showEvent(QShowEvent* event) override;

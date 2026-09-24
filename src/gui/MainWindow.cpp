@@ -120,6 +120,10 @@
 //                Core themselves; the handlers here act on this computer's
 //                own connections in a local window only. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-43 / R-R3-44 / R-R3-21: Setup > Audio > VAX is told
+//                live whether the Core's receiver streams are Opus, so it
+//                can say what that costs digital modes. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1290,6 +1294,14 @@ void MainWindow::ensureRemoteSession()
             qCWarning(lcConnection) << "Station media:" << reason;
             showToast(tr("Audio and display: %1").arg(OperatorReasonText::forDisplay(reason)),
                       ToastSeverity::Warning, 5000);
+        });
+        // R-R3-43 / R-R3-44: the VAX page's compressed-audio note follows
+        // the quality choice and its fallback while Setup is open.
+        connect(m_remoteMedia, &RemoteMediaController::audioStatusChanged, this, [this] {
+            const bool compressed = remoteReceiverAudioCompressed();
+            for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
+                dialog->setReceiverAudioCompressed(compressed);
+            }
         });
         connect(m_remoteMedia, &RemoteMediaController::recoveryRequested,
                 m_remoteConnection, &RemoteConnectionController::recoverMediaSession,
@@ -11153,6 +11165,7 @@ SetupDialog* MainWindow::createSetupDialog()
     dialog->setTransmitPermitted(transmitControlsPermitted(),
         tr("Remote transmit controls are not available from this Core yet."));
     dialog->setStationSettingsAvailable(stationSettingsAvailable(), stationSettingsReason());
+    dialog->setReceiverAudioCompressed(remoteReceiverAudioCompressed());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     wireSetupDialog(dialog);
     return dialog;
@@ -11176,6 +11189,14 @@ QString MainWindow::stationSettingsReason() const
         return tr("The Core has not sent its settings.");
     }
     return tr("Connect to the Core to change these.");
+}
+
+bool MainWindow::remoteReceiverAudioCompressed() const
+{
+    // Only a remote window has m_remoteMedia, and only a Core that sends
+    // receiver streams feeds VAX from it.
+    return m_remoteMedia != nullptr && m_remoteMedia->receiverAudioNegotiated()
+        && remoteReceiverAudioIsCompressed(m_remoteMedia->audioStatus());
 }
 
 bool MainWindow::transmitControlsPermitted() const

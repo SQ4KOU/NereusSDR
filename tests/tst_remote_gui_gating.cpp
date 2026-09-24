@@ -1680,6 +1680,36 @@ private slots:
         }
     }
 
+    // R-R3-43 / R-R3-44: SetupDialog carries MainWindow's live "receiver
+    // streams are Opus" value to Audio > VAX, before the page is built and
+    // after. A local window never gets it, so its note stays absent.
+    void remoteVaxPageSaysWhenReceiverAudioIsCompressed()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        dialog.setReceiverAudioCompressed(true);  // before the page exists
+        dialog.selectPage(QStringLiteral("VAX"));
+        QWidget* const page = dialog.realizedPageForTest(QStringLiteral("VAX"));
+        QVERIFY(page != nullptr);
+        auto* const note = page->findChild<QLabel*>(QStringLiteral("vaxCompressedAudioNote"));
+        QVERIFY(note != nullptr);
+        QVERIFY(!note->isHidden());
+        QVERIFY2(OperatorWording::isPlain(note->text()), qPrintable(note->text()));
+        dialog.setReceiverAudioCompressed(false);  // Lossless now runs
+        QVERIFY(note->isHidden());
+        dialog.setReceiverAudioCompressed(true);   // it fell back to Opus
+        QVERIFY(!note->isHidden());
+
+        RadioModel local;
+        SetupDialog localDialog(&local);
+        localDialog.selectPage(QStringLiteral("VAX"));
+        QWidget* const localPage = localDialog.realizedPageForTest(QStringLiteral("VAX"));
+        QVERIFY(localPage != nullptr);
+        auto* const localNote = localPage->findChild<QLabel*>(QStringLiteral("vaxCompressedAudioNote"));
+        QVERIFY(localNote != nullptr);
+        QVERIFY(localNote->isHidden());
+    }
+
     // R-R3-23: Audio > Devices in a remote window picks this computer's
     // speakers, headphones and microphone as it always has, whatever the
     // transmit permission. Nothing counted by the local-DSP audit is

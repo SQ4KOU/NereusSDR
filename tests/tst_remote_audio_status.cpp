@@ -533,6 +533,57 @@ private slots:
                  QStringLiteral("This connection could not set up lossless audio; staying on Opus."));
     }
 
+    // R-R3-43 / R-R3-44: whether the receiver streams feeding apps are
+    // Opus. They follow the one choice and its fallback: a running stream
+    // says what it runs; before one runs, what the Core runs for the
+    // speakers; before that, the choice. Lossless chosen but falling back
+    // is compressed whatever ran last. No media session: not compressed.
+    void receiverAudioCompressionFollowsChoiceAndFallback()
+    {
+        RemoteAudioStatus status;
+        QVERIFY(!remoteReceiverAudioIsCompressed(status));  // NotConnected
+
+        status.state = State::WaitingForAudio;
+        status.chosenProfile = RemoteAudioProfile::Opus;
+        QVERIFY(remoteReceiverAudioIsCompressed(status));
+        status.chosenProfile = RemoteAudioProfile::Lossless;
+        QVERIFY(!remoteReceiverAudioIsCompressed(status));
+
+        status.state = State::Playing;
+        status.runningProfile = RemoteAudioProfile::Lossless;
+        QVERIFY(!remoteReceiverAudioIsCompressed(status));
+        status.runningProfile = RemoteAudioProfile::Opus;
+        QVERIFY(remoteReceiverAudioIsCompressed(status));
+
+        // A running receiver stream wins over the speakers' profile.
+        RemoteReceiverAudioStatus receiver;
+        receiver.sliceId = 0;
+        receiver.state = RemoteReceiverAudioStatus::State::Receiving;
+        receiver.runningProfile = RemoteAudioProfile::Lossless;
+        status.receivers = {receiver};
+        QVERIFY(!remoteReceiverAudioIsCompressed(status));
+        receiver.runningProfile = RemoteAudioProfile::Opus;
+        status.receivers = {receiver};
+        QVERIFY(remoteReceiverAudioIsCompressed(status));
+
+        // A waiting or stopped stream says nothing; the speakers' does.
+        receiver.state = RemoteReceiverAudioStatus::State::Waiting;
+        receiver.runningProfile.reset();
+        status.receivers = {receiver};
+        status.runningProfile = RemoteAudioProfile::Lossless;
+        QVERIFY(!remoteReceiverAudioIsCompressed(status));
+
+        // Lossless chosen, the network could not carry it.
+        receiver.state = RemoteReceiverAudioStatus::State::Receiving;
+        receiver.runningProfile = RemoteAudioProfile::Lossless;
+        status.receivers = {receiver};
+        status.qualityReason = RemoteAudioQualityReason::NetworkTooSlow;
+        QVERIFY(remoteReceiverAudioIsCompressed(status));
+
+        status.state = State::NotConnected;
+        QVERIFY(!remoteReceiverAudioIsCompressed(status));
+    }
+
     // Everything the quality choice puts in front of the operator stays in
     // user words: no wire or engineering terms.
     void qualityWordingCarriesNoInternalTerms()

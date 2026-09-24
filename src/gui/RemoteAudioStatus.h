@@ -128,6 +128,13 @@ QString remoteAudioQualityReasonText(RemoteAudioQualityReason reason);
 /// The "Audio quality" value: the profile the Core runs, or, before it
 /// reports one, the choice with "(chosen)".
 QString remoteAudioQualityText(const RemoteAudioStatus& status);
+/// R-R3-43 / R-R3-44: whether the receiver streams that feed apps on this
+/// computer (VAX, TCI) are Opus rather than lossless. They follow the one
+/// quality choice and its fallback, so: false with no remote media; true
+/// when Lossless was chosen but Opus runs (qualityReason); otherwise what a
+/// running receiver stream uses, else what the Core runs for the speakers,
+/// else the choice itself.
+bool remoteReceiverAudioIsCompressed(const RemoteAudioStatus& status);
 
 /// The Core connection panel's "Remote audio" section, one line per item
 /// joined with '\n': headline, problem (only when status.problem is set),

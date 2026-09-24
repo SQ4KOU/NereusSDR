@@ -23,6 +23,12 @@
 // Anthropic Claude Code. The channel cards follow
 // AudioEngine::vaxBusOpenChanged (open state and "On" switch), so the page
 // matches a container's VAX toggle.
+//
+// 2026-09-24 (R-R3-43, R-R3-44, R-R3-21): J.J. Boyd (KG4VCF), AI-assisted
+// via Anthropic Claude Code. In a remote window whose receiver streams are
+// Opus, a plain note says the weakest digital-mode signals may not decode
+// and that Lossless avoids it; it follows the quality choice and its
+// fallback live (setReceiverAudioCompressed).
 // =================================================================
 
 #include "AudioVaxPage.h"
@@ -893,6 +899,23 @@ AudioVaxPage::AudioVaxPage(RadioModel* model, QWidget* parent)
     readerTimer->start();
 }
 
+void AudioVaxPage::setReceiverAudioCompressed(bool compressed)
+{
+    if (m_compressedNote) {
+        m_compressedNote->setVisible(compressed);
+    }
+}
+
+bool AudioVaxPage::compressedAudioNoteShown() const
+{
+    return m_compressedNote && !m_compressedNote->isHidden();
+}
+
+QString AudioVaxPage::compressedAudioNoteText() const
+{
+    return m_compressedNote ? m_compressedNote->text() : QString();
+}
+
 void AudioVaxPage::refreshReaders()
 {
     for (int i = 0; i < m_channelCards.size(); ++i) {
@@ -966,6 +989,25 @@ void AudioVaxPage::buildPage()
         QStringLiteral("QLabel { color: #607080; font-size: 11px; }"));
     subHeader->setWordWrap(true);
     insertBeforeStretch(subHeader);
+
+    // R-R3-43 / R-R3-44: in a remote window whose receiver streams are Opus,
+    // say what that costs digital modes and what avoids it. The measurement:
+    // 24 kbit/s Opus lost 12 of 180 FT8 decodes, all within about 2 dB of
+    // the decode limit; lossless lost none
+    // (docs/architecture/2026-09-20-remote-daemon-r3-verification/
+    // digital-modes-over-opus.md:156-178). Hidden until MainWindow says so.
+    m_compressedNote = new QLabel(
+        QStringLiteral(
+            "Receiver audio from the Core is compressed (Opus), so the weakest "
+            "digital-mode signals may not decode. Set Audio quality to Lossless "
+            "in Core connection if your network can carry it."),
+        this);
+    m_compressedNote->setObjectName(QStringLiteral("vaxCompressedAudioNote"));
+    m_compressedNote->setStyleSheet(
+        QStringLiteral("QLabel { color: #607080; font-size: 11px; }"));
+    m_compressedNote->setWordWrap(true);
+    m_compressedNote->setVisible(false);
+    insertBeforeStretch(m_compressedNote);
 
     // Four VAX channel cards (1–4).
     m_channelCards.reserve(4);

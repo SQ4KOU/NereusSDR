@@ -37,6 +37,7 @@
 #include "core/AudioDeviceConfig.h"
 #include "core/audio/VirtualCableDetector.h"
 #include "gui/setup/AudioVaxPage.h"
+#include "OperatorWording.h"
 
 using namespace NereusSDR;
 
@@ -587,6 +588,36 @@ private slots:
         card.bindDeviceNameForTest(cableName);
 
         QCOMPARE(card.currentDeviceName(), cableName);
+    }
+
+    // R-R3-43 / R-R3-44 / R-R3-21: the compressed-audio note. Absent by
+    // default (a local window, or lossless), shown while the receiver
+    // streams are Opus, hidden again when they are lossless. Plain words
+    // that name the cost and the Lossless choice; no cite inside.
+    void compressedAudioNoteFollowsTheReceiverStreams()
+    {
+        AudioVaxPage page(nullptr);
+        QVERIFY(!page.compressedAudioNoteShown());
+        auto* const note = page.findChild<QLabel*>(QStringLiteral("vaxCompressedAudioNote"));
+        QVERIFY(note != nullptr);
+        QVERIFY(note->isHidden());
+
+        page.setReceiverAudioCompressed(true);
+        QVERIFY(page.compressedAudioNoteShown());
+        QVERIFY(!note->isHidden());
+        page.setReceiverAudioCompressed(false);
+        QVERIFY(!page.compressedAudioNoteShown());
+        QVERIFY(note->isHidden());
+
+        const QString text = page.compressedAudioNoteText();
+        QCOMPARE(text, QStringLiteral(
+            "Receiver audio from the Core is compressed (Opus), so the weakest "
+            "digital-mode signals may not decode. Set Audio quality to Lossless "
+            "in Core connection if your network can carry it."));
+        QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+        QVERIFY(!text.contains(QChar(0x2014)));
+        QVERIFY(!text.contains(QLatin1String("docs/")));
+        QVERIFY(!text.contains(QLatin1String(".md")));
     }
 };
 
