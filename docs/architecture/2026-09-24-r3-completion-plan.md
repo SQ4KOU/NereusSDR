@@ -326,3 +326,44 @@ offscreen.
 **Execution note (advisory):** opus (mechanical but wide).
 
 - [ ] **Step 1:** Reword, tests, fixtures; commit.
+
+## Task 9: Small leftovers from the R3 work
+
+**Requirements:** R-R3-21, R-R3-23, R-R3-44.
+
+Findings recorded in the plans' ledgers on 2026-09-24 and not yet fixed; each is small
+and stands alone.
+
+**Files and acceptance (each its own commit):**
+1. Warnings from the new Xcode clang (clang 21): `src/models/Band.cpp`,
+   `src/models/BandDefaults.cpp`, `src/models/SpotModel.cpp`,
+   `tests/tst_p1_watchdog_wire.cpp`, and the linker's duplicate-library warning. Fix each
+   at its cause (no warning suppression); report the build's warning count before and
+   after.
+2. A test run must not touch real audio devices: `CaptureHelper.cpp:352` still calls
+   `Pa_Initialize` in the helper child `tst_capture_helper_process` runs. Bar it in a
+   test run through the same test-mode decision the engine uses, and give the helper a
+   test device list so the missing-device reason is still exercised.
+3. `tst_port_audio_bus`'s six real-device cases always skip now: make them an explicit
+   opt-in for a developer machine (an environment variable, documented in the test) or
+   remove them; say which.
+4. The log text moved in `AudioEngine.cpp` carries an em dash ("... audio subsystem will
+   be inert."): plain punctuation.
+5. `P1RadioConnection::metisStartPacketForTest` and `metisStopPacketForTest` have no users
+   since the tests read the fake's datagrams: remove them.
+6. `docs/architecture/phase3m-tx-epic-master-design.md:268` lists Thetis's Network
+   Watchdog tooltip as a parity row; update it to NereusSDR's tooltip and the deliberate
+   divergence (the radio's own safety timer always on, operator decision 2026-09-24).
+7. The Peripherals rows say "Connect" where the amp applets say "Reconnect" for the same
+   action: one word in both (read both surfaces' states; the applets' "Cancel" while
+   connecting stays).
+8. An amp applet's own refused request shows on the applet's line and is also toasted:
+   claim it the way the accessory pages do, so a refusal shown where it happened is not
+   repeated as a toast.
+
+**Verification:** the tests of every changed file by exact name, offscreen; the build's
+warning count.
+
+**Execution note (advisory):** opus (small items).
+
+- [ ] **Step 1:** Each item, its test where it is behaviour; commits.
