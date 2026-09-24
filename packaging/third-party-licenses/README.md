@@ -98,9 +98,11 @@ files carry only the notice `libspecbleach.txt` and `LGPLv2.1.txt` already
 hold. The DeepFilterNet header NereusSDR compiles carries no notice. The
 plog headers libdatachannel compiles carry no copyright notice, and
 libdatachannel's compiled files include no nlohmann json header. The
-fetched libraries' files are read from a built tree's
-`compile_commands.json`; zlib (Windows builds) and libASPL (the macOS
-audio driver) have not been surveyed yet.
+fetched libraries' files are the ones any supported platform compiles,
+read from each library's own CMake lists with NereusSDR's build options,
+so every machine writes the same file whichever platform built its tree;
+zlib (Windows builds) and libASPL (the macOS audio driver) have not been
+surveyed yet.
 
 DeepFilterNet's library is compiled from Rust crates, each under its own
 licence. When `setup-deepfilter.sh` or `setup-deepfilter.ps1` builds the
