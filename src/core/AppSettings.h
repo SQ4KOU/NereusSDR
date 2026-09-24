@@ -564,7 +564,10 @@ public:
     // PGXL/TGXL connection robustness (Phase 3P-II Phase 3, Tasks 58+59+60)
     // Wire formats from FlexRadio PowerGenius Ethernet API wiki spec (design §6.4).
     //   PGXL_KeepaliveSec   int     30    Cadence for keepalive status pokes.
-    //   PGXL_PingSec        int     10    Auto-ping interval (0 = disabled); used by Task 67+.
+    //   PGXL_PingSec        int     0     Auto-ping interval in seconds (0 = off, the
+    //                                     default: the Core and the desktop both leave
+    //                                     it off; the amp's reply to `ping` has never
+    //                                     been captured).
     //   PGXL_AutoReconnect  bool   "True" Enable exponential-backoff auto-reconnect on drop.
     //                                     Backoff sequence: 1/2/5/10/30/60 s (cap at 60 s).
     //
@@ -588,6 +591,7 @@ public:
     //   PGXL_DiscoveryModel     string "FLEX-6400"  Model string in the SmartSDR discovery beacon;
     //                                               must match a real Flex model for PGXL to
     //                                               accept the broadcast and populate its dropdown.
+    //   PGXL_PairModel          string "FLEX-8600M" Model passed to amplifierCreate when pairing.
     //
     // TGXL connection robustness (Phase 3P-II Phase 3, Task 60)
     // Wire formats from design §4.2.1 + §6.4 (4O3A TGXL Ethernet API).
@@ -601,9 +605,14 @@ public:
     // FaultLog ring buffer (Task 75). JSON arrays; newest entry first.
     //   PGXL_FaultHistory   string  ""    Up to 10 FaultEvent JSON objects.
     //   TGXL_FaultHistory   string  ""    Up to 10 FaultEvent JSON objects.
+    //   RfKit_FaultHistory  string  ""    Up to 10 FaultEvent JSON objects (R-R3-47).
     //   Each element: { "whenMs":<qint64>, "state":<str>,
     //                   "fwdAtFaultW":<float>, "swrAtFault":<float>,
-    //                   "tempAtFaultC":<float>, "likelyCause":<str> }
+    //                   "tempAtFaultC":<float>, "likelyCause":<str>,
+    //                   "device":<"pgxl"|"tgxl"|"rfkit">, "text":<plain words>,
+    //                   "detail":<the device's own words> }   (the last three R-R3-47)
+    //   On the Core these are written to disk within half a second of a
+    //   fault or a clear (StationAccessoryData), not only at a clean stop.
     //
     // TuneMemoryStore per-(antenna,band) relay cache (Task 76).
     //   TGXL_TuneMemory_Ant<N>_Band<M>  string  ""
@@ -632,6 +641,31 @@ public:
     //   PGXL_PowerCapEnabled  string  "False"  Soft-alert only; TX is not blocked.
     //   PGXL_PowerCapW        int     1500     Forward-power threshold (watts) for the
     //                                          toast; de-bounced per exceedance event.
+    //
+    // PgxlAdvancedPage identity + hardware, saved beside the amp's own setup
+    // commands (and by the Core for a window's request, R-R3-47 / R-R3-22).
+    //   PGXL_Nickname      string  ""        Operator-assigned nickname for the PGXL.
+    //   PGXL_BiasMode      string  "ClassAB" "ClassA" / "ClassAB".
+    //   PGXL_FanMode       string  "Auto"    "Auto" / "Quiet" / "Continuous".
+    //   PGXL_LedIntensity  int     75        Front-panel LED brightness, 0 to 100.
+    //
+    // Station accessory switches and addresses, per radio under
+    // hardware/<mac>/peripherals/ (R-R3-47; the Core's own on a headless Core).
+    //   FourO3A_Enabled    bool    "False"   The 4O3A (Power Genius, Tuner Genius) switch.
+    //   RfKit_Enabled      bool    "False"   The RF-Kit RF2K-S switch.
+    //   RfKit_ManualIp     string  ""        The RF2K-S address.
+    //   RfKit_ManualPort   int     8080      The RF2K-S REST port.
+    //
+    // RF-Kit RF2K-S (Phase 3P-III; station-wide, R-R3-47).
+    //   RfKit_AutoReconnect  bool    "True"  Retry after a lost connection.
+    //   RfKit_PollIntervalMs int     1000    REST poll cycle, 250 to 5000 ms. A remote
+    //                                        window's change reaches the Core's amp at
+    //                                        once (remoteRfKitControlVersion 3).
+    //   RfKit_Ant1_Label .. RfKit_Ant4_Label  string  ""  User-defined antenna names.
+    //
+    // The Core's station TCI server (R-R3-48), behind setStationTci.
+    //   StationTci_Enabled bool    "False"   Whether the station TCI server runs.
+    //   StationTci_Port    int     50001     Its port.
 
     void    setHardwareValue(const QString& mac, const QString& key, const QVariant& value);
     QVariant hardwareValue(const QString& mac, const QString& key,
