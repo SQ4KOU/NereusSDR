@@ -1030,7 +1030,8 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   amplifier setup to this app." and changes nothing. With
   `remoteRfKitControlVersion` 3 the page's automatic retry, poll interval
   and four antenna names show the Core's values (following another
-  window's change to them) and Save writes them as station settings; Reset amp error state sends `resetRfKitError`, and a
+  window's change to them, except a field the operator has changed and
+  not yet saved) and Save writes them as station settings; Reset amp error state sends `resetRfKitError`, and a
   refusal shows in the status line. Below 3 those controls are shown,
   unchangeable, with "This Core does not let this app change these
   settings. Updating the Core may help."

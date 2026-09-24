@@ -25,7 +25,8 @@
 //                 connection settings and antenna names as station
 //                 settings, Reset amp error through the Core
 //                 (remoteRfKitControlVersion 3); the page follows another
-//                 window's changes to them. J.J. Boyd (KG4VCF),
+//                 window's changes to them, except fields the operator
+//                 changed and has not saved. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -304,6 +305,15 @@ QWidget* RfKitPage::buildRf2ksTab()
                 refreshLiveStatus();
             }
         });
+        // Rework part 6: what the operator changes stays until Save.
+        connect(m_autoReconnect, &QCheckBox::toggled, this,
+                [this] { m_touchedAutoReconnect = true; });
+        connect(m_pollIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+                [this] { m_touchedPoll = true; });
+        for (int i = 0; i < 4; ++i) {
+            connect(m_antLabelEdits[i], &QLineEdit::textEdited, this,
+                    [this, i] { m_touchedLabel[i] = true; });
+        }
         refreshRemoteSettings();
     }
     return tab;
@@ -346,13 +356,13 @@ void RfKitPage::refreshRemoteSettings()
     if (available) {
         m_resetErrBtn->setToolTip(tr("Ask the Core to clear the amplifier's error."));
         auto& s = AppSettings::instance();
-        if (!m_autoReconnect->hasFocus()) {
+        if (!m_autoReconnect->hasFocus() && !m_touchedAutoReconnect) {
             const QSignalBlocker block(m_autoReconnect);
             m_autoReconnect->setChecked(
                 s.value(QStringLiteral("RfKit_AutoReconnect"), QStringLiteral("True"))
                     .toString() == QStringLiteral("True"));
         }
-        if (!m_pollIntervalSpin->hasFocus()) {
+        if (!m_pollIntervalSpin->hasFocus() && !m_touchedPoll) {
             const QSignalBlocker block(m_pollIntervalSpin);
             m_pollIntervalSpin->setValue(
                 s.value(QStringLiteral("RfKit_PollIntervalMs"), QStringLiteral("1000")).toInt());
@@ -360,7 +370,8 @@ void RfKitPage::refreshRemoteSettings()
         const QStringList labels = m_model->accessoryDataModel()
             ? m_model->accessoryDataModel()->rfkitAntennaLabels() : QStringList{};
         for (int i = 0; i < 4; ++i) {
-            if (m_antLabelEdits[i] && !m_antLabelEdits[i]->hasFocus() && i < labels.size()) {
+            if (m_antLabelEdits[i] && !m_antLabelEdits[i]->hasFocus() && !m_touchedLabel[i]
+                && i < labels.size()) {
                 m_antLabelEdits[i]->setText(labels.at(i));
             }
         }
@@ -461,7 +472,10 @@ void RfKitPage::saveRf2ksSettings()
         for (int i = 0; i < 4; ++i) {
             s.setValue(QStringLiteral("RfKit_Ant%1_Label").arg(i + 1),
                        m_antLabelEdits[i]->text());
+            m_touchedLabel[i] = false;
         }
+        m_touchedAutoReconnect = false;
+        m_touchedPoll = false;
         return;
     }
     // Per-radio peripherals refactor (2026-05-26): the three connection

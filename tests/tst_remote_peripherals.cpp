@@ -2570,6 +2570,19 @@ void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
     QTRY_COMPARE(page.pollIntervalForTesting()->value(), 3000);
     QTRY_VERIFY(page.autoReconnectForTesting()->isChecked());
 
+    // Rework part 6: an unsaved edit is not overwritten by the Core's
+    // settings; untouched fields still follow.
+    page.pollIntervalForTesting()->setValue(1234);
+    page.antennaLabelEditForTesting(2)->setText(QString());
+    QTest::keyClicks(page.antennaLabelEditForTesting(2), QStringLiteral("Wire"));
+    cw.stationSettings.setValue(QStringLiteral("RfKit_AutoReconnect"), QStringLiteral("False"));
+    cw.stationSettings.setValue(QStringLiteral("RfKit_PollIntervalMs"), QStringLiteral("4000"));
+    cw.stationSettings.setValue(QStringLiteral("RfKit_Ant2_Label"), QStringLiteral("Core"));
+    QTRY_VERIFY(!page.autoReconnectForTesting()->isChecked());
+    QTest::qWait(100);
+    QCOMPARE(page.pollIntervalForTesting()->value(), 1234);
+    QCOMPARE(page.antennaLabelEditForTesting(2)->text(), QStringLiteral("Wire"));
+
     // Nothing but reads and the reset reached the Core's amp; the window
     // opened no connection of its own.
     for (const QString& line : amp.lines) {
