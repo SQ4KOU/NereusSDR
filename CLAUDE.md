@@ -707,7 +707,10 @@ preferences. OpenHPSDR radios don't store per-slice state.
 1. **AetherSDR** — `https://github.com/ten9876/AetherSDR`
    * Architectural template: radio abstraction, state management, signal/slot patterns, GPU rendering, multi-pan layout
 2. **Thetis** — `https://github.com/ramdor/Thetis`
-   * Feature source: every Thetis capability must be accounted for and ported
+   * Feature source: when NereusSDR ports a Thetis feature, Thetis defines how it behaves.
+     Not every Thetis capability is ported: NereusSDR keeps its own design (slices, VAX,
+     the remote Core), and a Thetis feature comes in when it fits that design and serves
+     operators. Features built around Thetis's VFO A/B or RX1/RX2 structure are not forced in.
    * **Clone to `../Thetis/` relative to NereusSDR root**
 3. **WDSP** — `https://github.com/TAPR/OpenHPSDR-wdsp`
    * DSP engine: all signal processing functions
