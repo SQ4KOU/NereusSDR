@@ -15,9 +15,16 @@
 // check itself is proven on a control marked the old way, so a mark added
 // anywhere fails this test.
 //
+// Fix wave: roadmap wording too (a numbered phase, deferred, follow-up,
+// will appear here, will add), field placeholder text, tree, table and
+// list items, and the filter policy and container settings dialogs.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, Task 4.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, fix wave.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
 // =================================================================
@@ -36,9 +43,13 @@
 #include <QMenu>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QListWidget>
 #include <QTabWidget>
+#include <QTableWidget>
+#include <QTreeWidget>
 #include <QWidget>
 
+#include <functional>
 #include <memory>
 
 #include "core/AppSettings.h"
@@ -52,6 +63,12 @@
 #include "gui/SpotHubDialog.h"
 #include "gui/UnbuiltFeatures.h"
 #include "gui/applets/NyiOverlay.h"
+#include "gui/containers/ContainerSettingsDialog.h"
+#include "gui/containers/ContainerWidget.h"
+#include "gui/meters/MeterItem.h"
+#include "gui/meters/MeterWidget.h"
+#include "gui/meters/OtherButtonItem.h"
+#include "gui/widgets/FilterPolicyDialog.h"
 #include "gui/widgets/VfoWidget.h"
 #include "models/RadioModel.h"
 
@@ -122,6 +139,38 @@ QStringList textsOf(const QWidget* w)
         }
     } else if (const auto* menu = qobject_cast<const QMenu*>(w)) {
         texts << menu->title();
+    } else if (const auto* tree = qobject_cast<const QTreeWidget*>(w)) {
+        // Fix wave follow-up: every item's text and tooltip, every column.
+        std::function<void(const QTreeWidgetItem*)> walk = [&](const QTreeWidgetItem* item) {
+            for (int c = 0; c < item->columnCount(); ++c) {
+                texts << item->text(c) << item->toolTip(c) << item->statusTip(c);
+            }
+            for (int i = 0; i < item->childCount(); ++i) { walk(item->child(i)); }
+        };
+        if (const QTreeWidgetItem* header = tree->headerItem()) { walk(header); }
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) { walk(tree->topLevelItem(i)); }
+    } else if (const auto* table = qobject_cast<const QTableWidget*>(w)) {
+        for (int r = 0; r < table->rowCount(); ++r) {
+            for (int c = 0; c < table->columnCount(); ++c) {
+                if (const QTableWidgetItem* item = table->item(r, c)) {
+                    texts << item->text() << item->toolTip() << item->statusTip();
+                }
+            }
+        }
+        for (int c = 0; c < table->columnCount(); ++c) {
+            if (const QTableWidgetItem* item = table->horizontalHeaderItem(c)) {
+                texts << item->text() << item->toolTip();
+            }
+        }
+        for (int r = 0; r < table->rowCount(); ++r) {
+            if (const QTableWidgetItem* item = table->verticalHeaderItem(r)) {
+                texts << item->text() << item->toolTip();
+            }
+        }
+    } else if (const auto* list = qobject_cast<const QListWidget*>(w)) {
+        for (int i = 0; i < list->count(); ++i) {
+            texts << list->item(i)->text() << list->item(i)->toolTip();
+        }
     }
     return texts;
 }
@@ -183,6 +232,22 @@ QStringList marksInWindow(GuiSessionCoordinator& sessions, bool remote)
     QMetaObject::invokeMethod(window, "openSpotHub", Qt::DirectConnection);
     auto* netDiag = new NetworkDiagnosticsDialog(window->radioModel(), nullptr, window);
     Q_UNUSED(netDiag);
+
+    // Fix wave follow-up: the filter policy dialog (both chains) and a
+    // container's settings dialog with its Add menu opened.
+    auto* policy0 = new FilterPolicyDialog(0, window->radioModel(), window);
+    auto* policy1 = new FilterPolicyDialog(1, window->radioModel(), window);
+    Q_UNUSED(policy0);
+    Q_UNUSED(policy1);
+    auto* container = new ContainerWidget(window);
+    auto* meter = new MeterWidget();
+    meter->addItem(new TextItem());
+    meter->addItem(new OtherButtonItem());
+    container->setContent(meter);
+    auto* containerDialog = new ContainerSettingsDialog(container, window);
+    for (QPushButton* button : containerDialog->findChildren<QPushButton*>()) {
+        if (button->text() == QStringLiteral("+")) { button->click(); }
+    }
 
     auto flagHost = std::make_unique<SpectrumWidget>();
     flagHost->resize(1200, 500);
@@ -291,6 +356,30 @@ private slots:
                 QVERIFY2(!marksInApp().isEmpty(),
                          qPrintable(QStringLiteral("placeholder text: ") + text));
             }
+        }
+        // Fix wave follow-up: tree, table and list items, text and tooltip.
+        {
+            QTreeWidget tree;
+            auto* item = new QTreeWidgetItem(&tree, {QStringLiteral("Fine")});
+            item->setToolTip(0, QStringLiteral("Coming in Phase 3M"));
+            QVERIFY2(!marksInApp().isEmpty(), "a tree item's tooltip was not found");
+        }
+        {
+            QTreeWidget tree;
+            new QTreeWidgetItem(&tree, {QStringLiteral("Deferred")});
+            QVERIFY2(!marksInApp().isEmpty(), "a tree item's text was not found");
+        }
+        {
+            QTableWidget table(1, 1);
+            auto* item = new QTableWidgetItem(QStringLiteral("Fine"));
+            item->setToolTip(QStringLiteral("NYI"));
+            table.setItem(0, 0, item);
+            QVERIFY2(!marksInApp().isEmpty(), "a table item's tooltip was not found");
+        }
+        {
+            QTableWidget table(1, 1);
+            table.setItem(0, 0, new QTableWidgetItem(QStringLiteral("Rows will appear here")));
+            QVERIFY2(!marksInApp().isEmpty(), "a table item's text was not found");
         }
         QVERIFY(marksInApp().isEmpty());
     }
