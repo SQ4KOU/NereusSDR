@@ -1121,7 +1121,8 @@ media peer), R-IOS-01 (the media plane interoperates with the station's).
   `CMAKE_SYSTEM_NAME=iOS` and for macOS into static libraries, combine them with
   `xcodebuild -create-xcframework` into `ios/Frameworks/NereusWebRTC.xcframework`
   (built by a committed script, never committed as a binary), and reference it from a
-  `binaryTarget`. The fallback needs Xcode, so it waits for Task 51's prerequisite.
+  `binaryTarget`. The fallback needs Xcode, which is installed (Xcode 27, 2026-09-24), so it
+  runs within this task.
 
 **Verification:** networking between two processes on loopback: integration.
 `ios/scripts/interop-test.sh` passes; `ios/scripts/swift-test.sh` still passes.
