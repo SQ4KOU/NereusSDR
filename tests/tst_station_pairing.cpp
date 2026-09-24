@@ -23,7 +23,9 @@
 //     connection signed in with the old pairing token never receives it,
 //     in `pairingCode` or from pairing.open, even when its hello declares
 //     deviceAuth; the pairing verbs are refused to a window that does not;
-//   - a pairing connection cannot sign in.
+//   - a pairing connection cannot sign in;
+//   - the code's hash runs on a worker: the event loop keeps serving a
+//     paired device's session and a timer while it runs.
 //
 // Then the admit paths: one tap on an unclaimed Core and the right code
 // each add the device (the code's name and kind from the device's box),
@@ -53,6 +55,10 @@
 #include <QJsonObject>
 #include <QMutex>
 #include <QProcess>
+#include <QScopeGuard>
+#include <QSemaphore>
+#include <QThread>
+#include <QTimer>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
@@ -781,6 +787,86 @@ private slots:
                          "a log line holds a pairing code's words");
             }
         }
+    }
+
+    void theCodeIsHashedOffTheEventLoop()
+    {
+        // A pairing never stalls another device's session: the code's
+        // Argon2id hash runs on a worker while the Core's event loop keeps
+        // serving a paired device and a timer. The test holds the hash on
+        // the worker until it has seen both.
+        Core core;
+        Device paired;
+        QVERIFY(core.store().add(paired.record()));
+        core.window().reopen();
+        LoopbackTransport* session = core.deviceSession(paired);
+        QVERIFY(session != nullptr);
+
+        QSemaphore entered;
+        QSemaphore gate;
+        QThread* hashThread = nullptr;
+        core.server->setPairingHasherForTest([&](const QString& code) {
+            hashThread = QThread::currentThread();
+            entered.release();
+            // Bounded, so a hash run on the event loop fails the test
+            // below instead of hanging it.
+            static_cast<void>(gate.tryAcquire(1, 3000));
+            return SpakeExchange::storedData(code);
+        });
+        // Never leave the worker blocked, whatever fails below.
+        auto release = qScopeGuard([&gate]() { gate.release(); });
+
+        Device device;
+        LoopbackTransport* app = core.open();
+        LoopbackLink link(app);
+        DeviceSide side(device);
+        QVERIFY(side.greet(link));
+        QVERIFY(QTest::qWaitFor([&entered]() { return entered.available() > 0; }, 5000));
+        QVERIFY(core.server->isHashingPairingCodeForTest());
+        QVERIFY(hashThread != nullptr);
+        QVERIFY(hashThread != QThread::currentThread());
+
+        // The event loop serves while the hash is held: a timer ticks, and
+        // the paired device's request is answered.
+        int ticks = 0;
+        QTimer timer;
+        timer.setInterval(1);
+        QObject::connect(&timer, &QTimer::timeout, [&ticks]() { ++ticks; });
+        timer.start();
+        QVERIFY(QTest::qWaitFor([&ticks]() { return ticks >= 5; }, 5000));
+        const QJsonObject answer = core.invoke(session, "pairing.open");
+        QVERIFY(answer.value(QStringLiteral("accepted")).toBool());
+        QVERIFY(session->isOpen());
+        // And the pairing waits for its hash: no step 0 yet.
+        QVERIFY(ofType(app->received(), QStringLiteral("pair.spake")).isEmpty());
+
+        // Released, the hash comes back and the pairing completes.
+        release.dismiss();
+        gate.release();
+        const QString code = core.window().currentCode();
+        const QJsonObject step0 = link.next();
+        QCOMPARE(step0.value(QStringLiteral("type")).toString(), QStringLiteral("pair.spake"));
+        QCOMPARE(step0.value(QStringLiteral("step")).toInt(), 0);
+        QVERIFY(!core.server->isHashingPairingCodeForTest());
+        SpakeExchange exchange(SpakeExchange::Role::Device);
+        link.send(SessionMessages::pairSpake(
+            1, StationIdentity::toBase64Url(exchange.deviceStep1(
+                   StationIdentity::fromBase64Url(step0.value(QStringLiteral("data")).toString()),
+                   code))));
+        const QJsonObject step2 = link.next();
+        QCOMPARE(step2.value(QStringLiteral("step")).toInt(), 2);
+        link.send(SessionMessages::pairSpake(
+            3, StationIdentity::toBase64Url(exchange.deviceStep3(
+                   StationIdentity::fromBase64Url(step2.value(QStringLiteral("data")).toString())))));
+        const QJsonObject box{{QStringLiteral("publicKey"), device.publicKey()},
+                              {QStringLiteral("name"), device.name},
+                              {QStringLiteral("kind"), device.kind}};
+        link.send(SessionMessages::pairConfirm(StationIdentity::toBase64Url(
+            exchange.sealConfirmation(QJsonDocument(box).toJson(QJsonDocument::Compact)))));
+        QCOMPARE(link.next().value(QStringLiteral("type")).toString(),
+                 QStringLiteral("pair.confirm"));
+        QVERIFY(core.store().find(device.id()).has_value());
+        QVERIFY(session->isOpen());
     }
 
     void aTokenSignInNeverReceivesTheCode()

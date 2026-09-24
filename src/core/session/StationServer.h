@@ -219,6 +219,7 @@
 #include "core/session/StationCapabilities.h"
 
 QT_BEGIN_NAMESPACE
+class QThread;
 class QTimer;
 class QWebSocketServer;
 QT_END_NAMESPACE
@@ -472,6 +473,14 @@ public:
     /// relayed connection) is not. One tap pairs only from such an address.
     static bool isOnDirectNetwork(const QString& address);
 
+#ifdef NEREUS_BUILD_TESTS
+    /// Replaces the code's hash (SpakeExchange::storedData) so a test can
+    /// hold it on the worker and watch the event loop keep serving. Null
+    /// restores the real one.
+    void setPairingHasherForTest(std::function<QByteArray(const QString&)> hasher);
+    bool isHashingPairingCodeForTest() const;
+#endif
+
     /// See kDefaultAuthDeadlineMs. Values below 1 disable the deadline,
     /// which is logged as a warning rather than silently accepted.
     void setAuthDeadlineMs(int ms);
@@ -669,9 +678,14 @@ private:
     /// Sends pair.fail with `reason` and `retryAfterMs`, then ends the
     /// connection. A code the connection had taken is burned by dropPeer.
     void sendPairFail(SessionTransport* transport, const QString& reason, qint64 retryAfterMs);
-    /// The stored data for the window's current code (one Argon2id hash
-    /// per code, kept until the code changes); empty when there is none.
-    QByteArray pairingStoredData();
+    /// Hashes the window's current code (one Argon2id hash per code) on a
+    /// worker thread, never on this event loop; finishPairingHash() takes
+    /// the result back here, keeps it while the code is current, and sends
+    /// step 0 to the connections waiting for it.
+    void startPairingHash();
+    void finishPairingHash(quint64 serial, const QByteArray& stored);
+    /// Sends step 0 from the kept hash.
+    void beginCodeExchange(SessionTransport* transport);
     /// Signed in with a paired device's own key (not the old token): the
     /// only connections the pairing code is sent to.
     bool peerSeesPairingCode(SessionTransport* transport) const;
@@ -757,6 +771,11 @@ private:
     QByteArray m_pairingStored;
     quint64 m_pairingStoredSerial = 0;
     std::function<void(const QString&)> m_pairingConsole;
+    // The hash worker (one at a time), the code serial it hashes, and the
+    // hash itself (SpakeExchange::storedData; a test may hold it).
+    std::unique_ptr<QThread> m_pairingHashThread;
+    quint64 m_pairingHashSerial = 0;
+    std::function<QByteArray(const QString&)> m_pairingHasher;
 
     QWebSocketServer* m_wsServer = nullptr;
 

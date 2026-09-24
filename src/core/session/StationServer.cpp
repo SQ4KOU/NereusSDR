@@ -252,6 +252,7 @@
 #include <QSet>
 #include <QSslConfiguration>
 #include <QSslSocket>
+#include <QThread>
 #include <QTimer>
 #include <QWebSocket>
 #include <QWebSocketServer>
@@ -710,6 +711,8 @@ struct StationServer::PairingAttempt {
     quint64 codeSerial = 0;
     std::unique_ptr<SpakeExchange> exchange;
     int expecting = 1;
+    /// Waiting for the code's hash (a worker) before step 0 is sent.
+    bool awaitingHash = false;
     /// The window gave this exchange the code: from here the code is
     /// paired with or burned (dropPeer burns it unless `finished`).
     bool codeTaken = false;
@@ -756,6 +759,7 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // it follows a change of the device store first and the object then
     // counts the change once.
     m_pairingWindow = std::make_unique<PairingWindow>(*m_devices);
+    m_pairingHasher = &SpakeExchange::storedData;
     m_devicesFacade = std::make_unique<StationDevicesFacade>(
         *m_devices, *m_tokens, *m_identity, m_settings, nullptr, m_pairingWindow.get());
     connect(m_devices.get(), &DeviceStore::deviceRemoved, this, [this](const QByteArray& id) {
@@ -953,6 +957,11 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
 
 StationServer::~StationServer()
 {
+    // iPhone app Task 14: a pairing code being hashed finishes first; its
+    // result is dropped with this object.
+    if (m_pairingHashThread) {
+        m_pairingHashThread->wait();
+    }
     close();
 }
 
@@ -2028,21 +2037,108 @@ void StationServer::sendPairFail(SessionTransport* transport, const QString& rea
     dropPeer(transport, reason, false, /*retryable=*/false);
 }
 
-QByteArray StationServer::pairingStoredData()
+void StationServer::startPairingHash()
 {
+    // One hash at a time; a finished one for an old code starts the next.
+    if (m_pairingHashThread) {
+        return;
+    }
     const QString code = m_pairingWindow->currentCode();
     if (code.isEmpty()) {
-        return {};
+        return;
     }
     const quint64 serial = m_pairingWindow->codeSerial();
-    if (m_pairingStoredSerial != serial || m_pairingStored.isEmpty()) {
-        SpakeExchange::wipe(m_pairingStored);
-        // One Argon2id hash per code, on the first code-mode pairing.
-        m_pairingStored = SpakeExchange::storedData(code);
-        m_pairingStoredSerial = m_pairingStored.isEmpty() ? 0 : serial;
-    }
-    return m_pairingStored;
+    m_pairingHashSerial = serial;
+    auto result = std::make_shared<QByteArray>();
+    // The code and the hash cross to the worker and back only in memory,
+    // never in a log line; the worker's copy of the code is overwritten
+    // once it is hashed.
+    auto codeCopy = std::make_shared<QString>(code);
+    auto* worker = QThread::create([result, codeCopy, hasher = m_pairingHasher]() {
+        *result = hasher(*codeCopy);
+        codeCopy->fill(QChar(u'\0'));
+    });
+    worker->setObjectName(QStringLiteral("StationPairingHash"));
+    m_pairingHashThread.reset(worker);
+    connect(worker, &QThread::finished, this, [this, worker, serial, result]() {
+        if (m_pairingHashThread.get() != worker) {
+            return;
+        }
+        worker->wait();
+        m_pairingHashThread.reset();
+        finishPairingHash(serial, *result);
+        SpakeExchange::wipe(*result);
+    });
+    worker->start();
 }
+
+void StationServer::finishPairingHash(quint64 serial, const QByteArray& stored)
+{
+    // Kept only while its code is still the window's current one.
+    if (serial == m_pairingWindow->codeSerial() && !m_pairingWindow->currentCode().isEmpty()
+        && !stored.isEmpty()) {
+        SpakeExchange::wipe(m_pairingStored);
+        m_pairingStored = stored;
+        m_pairingStoredSerial = serial;
+    }
+    bool anotherNeeded = false;
+    const QList<SessionTransport*> transports = m_peers.keys();
+    for (SessionTransport* transport : transports) {
+        const auto it = m_peers.constFind(transport);
+        if (it == m_peers.cend() || !it->pairing || !it->pairing->awaitingHash) {
+            continue;
+        }
+        const std::shared_ptr<PairingAttempt> attempt = it->pairing;
+        if (attempt->codeSerial == m_pairingStoredSerial && !m_pairingStored.isEmpty()) {
+            attempt->awaitingHash = false;
+            beginCodeExchange(transport);
+        } else if (attempt->codeSerial != m_pairingWindow->codeSerial()) {
+            attempt->awaitingHash = false;
+            sendPairFail(transport,
+                         QStringLiteral("The pairing code changed. Enter the code the Core "
+                                        "shows now."),
+                         m_pairingWindow->retryAfterMs());
+        } else if (serial == attempt->codeSerial) {
+            // Its own code's hash came back empty.
+            attempt->awaitingHash = false;
+            sendPairFail(transport, QStringLiteral("This Core cannot pair new devices."), 0);
+        } else {
+            anotherNeeded = true;
+        }
+    }
+    if (anotherNeeded) {
+        startPairingHash();
+    }
+}
+
+void StationServer::beginCodeExchange(SessionTransport* transport)
+{
+    const auto it = m_peers.constFind(transport);
+    if (it == m_peers.cend() || !it->pairing) {
+        return;
+    }
+    const std::shared_ptr<PairingAttempt> attempt = it->pairing;
+    attempt->exchange = std::make_unique<SpakeExchange>(SpakeExchange::Role::Station);
+    const QByteArray step0 = attempt->exchange->stationStep0(m_pairingStored);
+    if (step0.isEmpty()) {
+        sendPairFail(transport, QStringLiteral("This Core cannot pair new devices."), 0);
+        return;
+    }
+    attempt->expecting = 1;
+    send(transport, SessionMessages::pairSpake(0, StationIdentity::toBase64Url(step0)));
+}
+
+#ifdef NEREUS_BUILD_TESTS
+void StationServer::setPairingHasherForTest(std::function<QByteArray(const QString&)> hasher)
+{
+    m_pairingHasher = hasher ? std::move(hasher) : &SpakeExchange::storedData;
+}
+
+bool StationServer::isHashingPairingCodeForTest() const
+{
+    return m_pairingHashThread != nullptr;
+}
+#endif
 
 void StationServer::handlePairStart(SessionTransport* transport, const SessionMessage& message)
 {
@@ -2150,23 +2246,23 @@ void StationServer::handlePairStart(SessionTransport* transport, const SessionMe
                      m_pairingWindow->retryAfterMs());
         return;
     }
-    const QByteArray stored = pairingStoredData();
-    if (stored.isEmpty()) {
+    if (m_pairingWindow->currentCode().isEmpty()) {
         sendPairFail(transport,
                      QStringLiteral("The Core is waiting before it shows a new pairing code. "
                                     "Try again when the new code appears."),
                      m_pairingWindow->retryAfterMs());
         return;
     }
-    attempt->codeSerial = m_pairingStoredSerial;
-    attempt->exchange = std::make_unique<SpakeExchange>(SpakeExchange::Role::Station);
-    const QByteArray step0 = attempt->exchange->stationStep0(stored);
-    if (step0.isEmpty()) {
-        sendPairFail(transport, QStringLiteral("This Core cannot pair new devices."), 0);
+    attempt->codeSerial = m_pairingWindow->codeSerial();
+    if (m_pairingStoredSerial == attempt->codeSerial && !m_pairingStored.isEmpty()) {
+        beginCodeExchange(transport);
         return;
     }
-    attempt->expecting = 1;
-    send(transport, SessionMessages::pairSpake(0, StationIdentity::toBase64Url(step0)));
+    // The code is hashed once (Argon2id) on a worker, never on this event
+    // loop, so no other device's session waits on it; step 0 follows when
+    // the hash is back (finishPairingHash).
+    attempt->awaitingHash = true;
+    startPairingHash();
 }
 
 void StationServer::handlePairSpake(SessionTransport* transport, const SessionMessage& message)
@@ -2177,7 +2273,7 @@ void StationServer::handlePairSpake(SessionTransport* transport, const SessionMe
     }
     const std::shared_ptr<PairingAttempt> attempt = it->pairing;
     if (!attempt || !attempt->codeMode || !attempt->exchange || attempt->finished
-        || message.pairStep != attempt->expecting) {
+        || attempt->awaitingHash || message.pairStep != attempt->expecting) {
         dropPeer(transport, QStringLiteral("This app sent a pairing step out of order."), true,
                  /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
         return;

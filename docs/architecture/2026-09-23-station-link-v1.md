@@ -325,7 +325,9 @@ Password hashing uses libsodium's default algorithm (Argon2id) with
 
 1. Station: `pair.spake` step 0, 36 bytes: the hash parameters and salt.
    The station hashes each code once, when the first code-mode pairing
-   asks for it.
+   asks for it, on a worker thread (`StationServer::startPairingHash`), so
+   the hash never holds up the Core's event loop or another device's
+   connection; step 0 goes out when the hash is back.
 2. Device: checks that step 0 names exactly those parameters
    (`crypto_spake_validate_public_data`) before it hashes the code, then
    sends step 1, 32 bytes. The station takes the code here.
