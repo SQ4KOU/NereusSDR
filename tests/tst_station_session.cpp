@@ -5355,7 +5355,21 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
     // and gets the `stepAtt` object and its changes. An app at minor 10 gets
     // neither: no entry, no schema, no object, no delta, so its burst is the
     // one it was built for; a write it sends anyway is refused in plain words.
-    const auto run = [this](quint16 minor, QList<QByteArray>* wires,
+    const auto aboutStepAtt = [](const QList<QByteArray>& wires) {
+        int count = 0;
+        for (const QByteArray& wire : wires) {
+            const SessionMessage m = decodeOrFail(wire);
+            if (m.kind == SessionMessageKind::PropertyResult) {
+                continue;
+            }
+            if (m.objectKey == "stepAtt"
+                || (m.kind == SessionMessageKind::Schema && m.className == "StepAttenuatorFacade")) {
+                ++count;
+            }
+        }
+        return count;
+    };
+    const auto run = [this, aboutStepAtt](quint16 minor, QList<QByteArray>* wires,
                             QList<SessionPropertyResult>* results) {
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("step-att.settings")));
@@ -5380,6 +5394,11 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
         [&] {
             QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("property.result")));
         }();
+        // The Core's deltas are flushed on their own timer and can land
+        // after the write's result; wait for them before reading the wire.
+        if (minor >= kRadioIdentitySessionProtocolMinor) {
+            [&] { QTRY_VERIFY(aboutStepAtt(peer->received()) >= 3); }();
+        }
         // Only the Core's own change happened; a refused write changed nothing.
         [&] { QCOMPARE(controller.attenuatorDb(), minor >= 11 ? 9 : 7); }();
         *wires = peer->received();
@@ -5390,20 +5409,6 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
             }
         }
         core->setStepAttController(nullptr);
-    };
-    const auto aboutStepAtt = [](const QList<QByteArray>& wires) {
-        int count = 0;
-        for (const QByteArray& wire : wires) {
-            const SessionMessage m = decodeOrFail(wire);
-            if (m.kind == SessionMessageKind::PropertyResult) {
-                continue;
-            }
-            if (m.objectKey == "stepAtt"
-                || (m.kind == SessionMessageKind::Schema && m.className == "StepAttenuatorFacade")) {
-                ++count;
-            }
-        }
-        return count;
     };
     const auto capabilitiesIn = [](const QList<QByteArray>& wires) {
         for (const QByteArray& wire : wires) {
