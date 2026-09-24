@@ -1911,7 +1911,8 @@ here).
   `src/core/daemon/StationControlSocket.{h,cpp}` (a local socket the daemon listens on),
   `src/core/daemon/StationControlCommands.{h,cpp}`
 - Modify: `src/server_main.cpp` (subcommands), `src/core/daemon/DaemonApp.cpp`,
-  `src/core/daemon/DaemonConfig.{h,cpp}` (`status_page`, `status_port`),
+  `src/core/daemon/DaemonConfig.{h,cpp}` (`status_page`, `status_port`,
+  `state_directory`),
   `packaging/nereusd.conf.sample`
 - Modify: `src/core/security/DeviceStore.{h,cpp}` (a reset moves a damaged device file
   aside and clears the devices)
@@ -1935,9 +1936,14 @@ here).
     design §4.2).
   - The control socket `QLocalServer` named `nereusd-control` in the daemon's state
     directory, owner-only (`QLocalServer::UserAccessOption`). Subcommands find the
-    socket from `--config` or `--profile`, never from `$HOME`. On a packaged Core, whose
-    unit uses `DynamicUser` and `StateDirectory` `/var/lib/nereusd` (mode 0700), the
-    console text says to run them with sudo.
+    socket from `--config` or `--profile`, never from `$HOME`. The state directory is
+    `nereusd.conf`'s `state_directory` when set, otherwise the profile's own directory;
+    only the socket lives there (the identity key and the device list stay in the
+    profile's directory). The packaged sample sets `state_directory = /var/lib/nereusd`
+    uncommented, so `sudo nereusd status` finds the socket through the default
+    `--config /etc/nereusd.conf`. On a packaged Core, whose unit uses `DynamicUser` and
+    `StateDirectory` `/var/lib/nereusd` (mode 0700), the console text says to run them
+    with sudo.
   - Subcommands of `nereusd` that talk to the running daemon and print its answer:
     `nereusd status`, `nereusd pairing show`, `nereusd pairing open`,
     `nereusd pairing close`, `nereusd devices`, `nereusd devices revoke <id>`,
@@ -1965,7 +1971,7 @@ here).
   nothing.
 - `nereusd token retire` is refused while no device is paired; once one is, it retires
   the token and ends token sessions as Task 13 does.
-- `tst_daemon_config` covers `status_page` and `status_port`.
+- `tst_daemon_config` covers `status_page`, `status_port` and `state_directory`.
 - A second user on the same machine cannot connect to the control socket (the test
   checks the socket's permissions).
 - `nereusd --config x --profile y` still runs the station exactly as before.
