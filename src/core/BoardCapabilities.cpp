@@ -16,6 +16,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 11: the Protocol 1
+//                 stream count per board row and protocol, by J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*  clsHardwareSpecific.cs
