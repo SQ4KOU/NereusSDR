@@ -4,7 +4,14 @@
 //
 // no-port-check: NereusSDR-original. Remote-daemon R3 Task 1.
 //
+// 2026-09-24: labelled `realtime` (fast-test-loop rules): each case does a
+// real encrypted loopback handshake inside a fixed 10 s wait, which misses at
+// load 20-30; a failed case prints the load average. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
+//
 // =================================================================
+
+#include "RealtimeTestLoad.h"
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
 #include "core/session/media/PcmAudioCodec.h"
@@ -145,6 +152,8 @@ class TestMediaTransport : public QObject {
     Q_OBJECT
 
 private slots:
+    void cleanup() { NereusSDR::RealtimeTestLoad::printLoadAverageIfFailed(); }
+
     // Observes a fresh child process, so its place in the list does not
     // matter and it can run any number of times.
     void sctpSettingsAppliedOnceBeforeFirstPeer();

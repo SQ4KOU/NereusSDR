@@ -7392,7 +7392,9 @@ nereus_add_test(tst_session_link_loss
 
 # Remote Daemon R3, Task 1: two live direct peers prove DTLS/SCTP display,
 # SRTP RTP, bounded signalling/media inputs, stop cancellation, and restart.
-nereus_add_test(tst_media_transport)
+# REALTIME (2026-09-24 checkpoint follow-up): each case does a real encrypted
+# loopback handshake inside a fixed 10 s wait, which misses at load 20-30.
+nereus_add_test(tst_media_transport REALTIME)
 
 # Remote Daemon R3, Task 1: strict connection-scoped signalling bridge and
 # live queued-control exchange over the encrypted media transport.
