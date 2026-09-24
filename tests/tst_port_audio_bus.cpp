@@ -9,12 +9,10 @@ using namespace NereusSDR;
 class TstPortAudioBus : public QObject {
     Q_OBJECT
 private slots:
-    void initTestCase() {
-        Pa_Initialize();
-    }
-    void cleanupTestCase() {
-        Pa_Terminate();
-    }
+    // R-R3-21: a test run never initialises PortAudio (it probes every
+    // ALSA PCM on Linux and walks CoreAudio on macOS), so this test no
+    // longer calls Pa_Initialize / Pa_Terminate. The cases that need a real
+    // device skip, as they already did on a runner without one.
 
     void constructsClosed() {
         PortAudioBus bus;
@@ -63,17 +61,13 @@ private slots:
         bus.close();
     }
 
-    void hostApisEnumerateNonEmpty() {
-        const auto apis = PortAudioBus::hostApis();
-        QVERIFY(!apis.isEmpty());
-    }
-
-    void outputDevicesEnumerateForFirstApi() {
-        const auto apis = PortAudioBus::hostApis();
-        QVERIFY(!apis.isEmpty());
-        const auto devices = PortAudioBus::outputDevicesFor(apis.first().index);
-        // Host system should have at least one output; skip if headless CI.
-        if (devices.isEmpty()) { QSKIP("No output devices on test host"); }
+    // R-R3-21: in a test run the device lists are empty and PortAudio is
+    // never asked.
+    void deviceListsAreEmptyInATestRun() {
+        QVERIFY(PortAudioBus::portAudioBarredForTestRun());
+        QVERIFY(PortAudioBus::hostApis().isEmpty());
+        QVERIFY(PortAudioBus::outputDevicesFor(0).isEmpty());
+        QVERIFY(PortAudioBus::inputDevicesFor(0).isEmpty());
     }
 
     void openInputSucceedsOnDefaultDevice() {

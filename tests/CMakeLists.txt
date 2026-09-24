@@ -1561,6 +1561,11 @@ nereus_add_test(tst_capture_helper_locator)
 nereus_add_test(tst_audio_engine_speakers_live_reconfig)
 target_compile_definitions(tst_audio_engine_speakers_live_reconfig PRIVATE NEREUS_BUILD_TESTS)
 
+# R-R3-21, R-R3-23: a test run never initialises PortAudio. An AudioEngine
+# and a RadioModel built in test mode make no Pa_Initialize or Pa_Terminate
+# call, and the PortAudio device lists come back empty.
+nereus_add_test(tst_audio_engine_no_portaudio)
+
 # ── Phase 3O Sub-Phase 12 Task 12.2 Step 0: MasterOutputWidget signal refresh ──
 # Verifies that speakersConfigChanged → onSpeakersConfigChanged syncs the widget's
 # device-name anchor without emitting outputDeviceChanged (sync-from-engine path,

@@ -195,7 +195,24 @@ AudioFormat toAudioFormat(const AudioDeviceConfig& cfg)
     return f;
 }
 
+// R-R3-21: process-wide Pa_Initialize / Pa_Terminate calls by any
+// AudioEngine, read by the test seam below.
+std::atomic<int> g_paInitializeCalls{0};
+std::atomic<int> g_paTerminateCalls{0};
+
 } // namespace
+
+#ifdef NEREUS_BUILD_TESTS
+int AudioEngine::paInitializeCallsForTest()
+{
+    return g_paInitializeCalls.load(std::memory_order_relaxed);
+}
+
+int AudioEngine::paTerminateCallsForTest()
+{
+    return g_paTerminateCalls.load(std::memory_order_relaxed);
+}
+#endif
 
 AudioEngine::AudioEngine(QObject* parent)
     : QObject(parent)
@@ -238,14 +255,29 @@ AudioEngine::AudioEngine(QObject* parent)
     // without a real audio subsystem will see Pa_Initialize fail; log and
     // continue — rxBlockReady / start() degrade to a safe no-op in that
     // case.
-    const PaError err = Pa_Initialize();
-    if (err != paNoError) {
-        qCWarning(lcAudio) << "Pa_Initialize failed:" << Pa_GetErrorText(err)
-                           << "— audio subsystem will be inert.";
+    //
+    // R-R3-21: a test run never initialises PortAudio. On Linux its ALSA
+    // host API opens every PCM to probe it, and on macOS it walks
+    // CoreAudio, so the device guard in makeBus alone still let a test
+    // touch the real audio devices. The device layer counts as ready
+    // anyway, so the device paths still reach makeBus, which hands out the
+    // test's fake devices or nothing (see setDeviceBusFactoryForTest).
+    if (PortAudioBus::portAudioBarredForTestRun()) {
         m_paInitialized = false;
+        m_deviceLayerReady = true;
+        qCInfo(lcAudio) << "PortAudio not initialized: test run";
     } else {
-        m_paInitialized = true;
-        qCInfo(lcAudio) << "PortAudio initialized:" << Pa_GetVersionText();
+        g_paInitializeCalls.fetch_add(1, std::memory_order_relaxed);
+        const PaError err = Pa_Initialize();
+        if (err != paNoError) {
+            qCWarning(lcAudio) << "Pa_Initialize failed:" << Pa_GetErrorText(err)
+                               << "— audio subsystem will be inert.";
+            m_paInitialized = false;
+        } else {
+            m_paInitialized = true;
+            qCInfo(lcAudio) << "PortAudio initialized:" << Pa_GetVersionText();
+        }
+        m_deviceLayerReady = m_paInitialized;
     }
 
     // Pre-register the TX-monitor mixer slot so txMonitorBlockReady's
@@ -326,6 +358,7 @@ AudioEngine::~AudioEngine()
         m_captureSupervisor->shutdown();
     }
     if (m_paInitialized) {
+        g_paTerminateCalls.fetch_add(1, std::memory_order_relaxed);
         Pa_Terminate();
         m_paInitialized = false;
     }
@@ -953,7 +986,7 @@ void AudioEngine::ensureSpeakersOpen()
     if (m_speakersBus && m_speakersBus->isOpen()) {
         return;
     }
-    if (!m_paInitialized) {
+    if (!m_deviceLayerReady) {
         return;
     }
 
@@ -1211,7 +1244,7 @@ void AudioEngine::setSpeakersConfig(const AudioDeviceConfig& cfg)
 
 void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
 {
-    if (!m_paInitialized) {
+    if (!m_deviceLayerReady) {
         return;
     }
 
@@ -1243,7 +1276,7 @@ void AudioEngine::applySpeakersConfig(const AudioDeviceConfig& cfg)
 void AudioEngine::setHeadphonesConfig(const AudioDeviceConfig& cfg)
 {
     m_headphonesConfig = cfg;
-    if (!m_paInitialized) {
+    if (!m_deviceLayerReady) {
         return;
     }
     // R-R3-45: the device opens only while the headphones are enabled.
@@ -1362,7 +1395,7 @@ void AudioEngine::setVaxConfig(int channel, const AudioDeviceConfig& cfg)
     }
 #endif
 
-    if (!m_paInitialized) {
+    if (!m_deviceLayerReady) {
         return;
     }
     m_vaxBus[idx] = makeBus(cfg, /*capture=*/false);
@@ -1410,7 +1443,7 @@ void AudioEngine::setVaxEnabled(int channel, bool on)
     // Windows lazy PortAudio fallback: enable with defaults if no explicit
     // setVaxConfig has been wired yet. Real config lands via the
     // VirtualCableDetector / Setup→Audio→VAX BYO UI in Sub-Phase 9.
-    if (!m_paInitialized) {
+    if (!m_deviceLayerReady) {
         return;
     }
     AudioDeviceConfig defaults;
