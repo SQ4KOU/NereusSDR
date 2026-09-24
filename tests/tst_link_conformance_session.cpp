@@ -63,6 +63,11 @@
 //                                    each client step's role; placeholders
 //                                    in client messages.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Lane B takes integration (R-IOS-01,
+//                                    R-R3-47): a verb's optional
+//                                    arguments may be left out of either
+//                                    leg's check (setPgxlHardware).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -461,13 +466,25 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
             const QJsonObject spec = verbs.value(verb);
             const QJsonArray declared = spec.value(QStringLiteral("arguments")).toArray();
             const QJsonArray args = message.value(QStringLiteral("args")).toArray();
-            bool fits = declared.size() == args.size();
-            for (int i = 0; fits && i < args.size(); ++i) {
-                fits = args.at(i).toObject().value(QStringLiteral("name"))
-                           == declared.at(i).toObject().value(QStringLiteral("name"))
-                    && args.at(i).toObject().value(QStringLiteral("kind"))
-                           == declared.at(i).toObject().value(QStringLiteral("kind"));
+            // The declared arguments in order, each with its kind; an
+            // optional one may be left out (setPgxlHardware takes one of
+            // its three), a required one may not.
+            bool fits = true;
+            int next = 0;
+            for (int d = 0; fits && d < declared.size(); ++d) {
+                const QJsonObject want = declared.at(d).toObject();
+                const bool present = next < args.size()
+                    && args.at(next).toObject().value(QStringLiteral("name"))
+                           == want.value(QStringLiteral("name"));
+                if (present) {
+                    fits = args.at(next).toObject().value(QStringLiteral("kind"))
+                        == want.value(QStringLiteral("kind"));
+                    ++next;
+                } else {
+                    fits = want.value(QStringLiteral("optional")).toBool();
+                }
             }
+            fits = fits && next == args.size() && (args.isEmpty() == declared.isEmpty());
             if (!fits) {
                 fail(index, QStringLiteral("%1's arguments are not the ones it takes").arg(verb));
             }
@@ -695,16 +712,34 @@ void TstLinkConformanceSession::everyVerbIsInvokedRightAndWrong()
                     continue;
                 }
                 QStringList declared;
+                QStringList required;
                 for (const CommandArgumentSpec& argument : spec.arguments) {
                     declared.append(QString::fromUtf8(argument.name));
+                    if (!argument.optional) {
+                        required.append(QString::fromUtf8(argument.name));
+                    }
                 }
                 bool unknownName = false;
                 for (const QString& name : names) {
                     unknownName = unknownName || !declared.contains(name);
                 }
+                // Its own arguments: every required one, optional ones as
+                // the verb takes them, in the declared order without
+                // repeats (setPgxlHardware takes one of its three). With
+                // no optional argument this is names == declared.
+                bool own = !unknownName && !names.isEmpty() == !declared.isEmpty();
+                qsizetype at = -1;
+                for (const QString& name : names) {
+                    const qsizetype found = declared.indexOf(name);
+                    own = own && found > at;
+                    at = found;
+                }
+                for (const QString& name : required) {
+                    own = own && names.contains(name);
+                }
                 if (unknownName) {
                     wrong.insert(verb);
-                } else if (names == declared) {
+                } else if (own) {
                     right.insert(verb);
                 }
             }

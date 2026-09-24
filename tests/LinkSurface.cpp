@@ -30,6 +30,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
 //                                    each message key's JSON type.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Lane B takes integration (R-IOS-01,
+//                                    R-R3-47): the `accessorySettings`
+//                                    class. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -80,6 +84,7 @@
 #include "core/session/media/SpectrumEndpoint.h"
 #include "core/settings/SettingsScope.h"
 #include "models/AccessoryDataModel.h"
+#include "models/AccessorySettingsModel.h"
 #include "models/AmplifierModel.h"
 #include "models/NotchModel.h"
 #include "models/PanadapterModel.h"
@@ -1199,7 +1204,8 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &AmplifierModel::staticMetaObject,
             &RfKitModel::staticMetaObject,
             &StationTciModel::staticMetaObject,
-            &AccessoryDataModel::staticMetaObject};
+            &AccessoryDataModel::staticMetaObject,
+            &AccessorySettingsModel::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

@@ -31,14 +31,12 @@
         {"from": "station", "message": {"class": "TunerModel", "key": "tuner", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"class": "SliceModel", "key": "slice:0", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"type": "snapshot.complete"}},
-        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "requestIoBoardProbe", "id": "$int:invoke29:0:4294967295", "args": []}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": "$ref:invoke29", "reason": "The radio is not connected, so there is no I/O board to probe.", "type": "command.result", "verb": "requestIoBoardProbe"}},
+        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "setAlexBpfMode", "id": "$int:invoke29:0:4294967295", "args": [{"ordinal": 0, "name": "chain", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "mode", "kind": "i64", "value": 1}]}},
+        {"from": "station", "message": {"accepted": true, "affected": [], "id": "$ref:invoke29", "reason": "", "type": "command.result", "verb": "setAlexBpfMode"}},
         {"advanceMs": 50},
-        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "setAlexRxAntenna", "id": "$int:invoke32:0:4294967295", "args": [{"ordinal": 0, "name": "band", "kind": "i64", "value": 3}, {"ordinal": 0, "name": "antenna", "kind": "i64", "value": 1}, {"ordinal": 0, "name": "rxOnly", "kind": "bool", "value": false}]}},
-        {"from": "station", "message": {"accepted": true, "affected": [], "id": "$ref:invoke32", "reason": "", "type": "command.result", "verb": "setAlexRxAntenna"}},
-        {"advanceMs": 50},
-        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "setAlexRxAntenna", "id": 1136, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "i64", "value": 3}, {"ordinal": 0, "name": "antenna", "kind": "i64", "value": 1}, {"ordinal": 0, "name": "rxOnly", "kind": "bool", "value": false}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 1136, "reason": "The Core could not read this request.", "type": "command.result", "verb": "setAlexRxAntenna"}},
+        {"from": "station", "message": {"key": "radio", "properties": [{"kind": "i64", "name": "rxFilter0Mode", "ordinal": 11, "value": 1}, {"kind": "i64", "name": "rxFilter0Effective", "ordinal": 12, "value": 0}, {"kind": "i64", "name": "rxFilter0Band", "ordinal": 13, "value": 5}, {"kind": "utf8", "name": "rxFilter0Reason", "ordinal": 14, "value": "20m (forced)"}, {"kind": "i64", "name": "rxFilter1Mode", "ordinal": 15, "value": 0}, {"kind": "i64", "name": "rxFilter1Effective", "ordinal": 16, "value": 0}, {"kind": "i64", "name": "rxFilter1Band", "ordinal": 17, "value": 5}, {"kind": "utf8", "name": "rxFilter1Reason", "ordinal": 18, "value": "20m (idle)"}], "type": "delta"}},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "setAlexBpfMode", "id": 1132, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "mode", "kind": "i64", "value": 1}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 1132, "reason": "The Core could not read this request.", "type": "command.result", "verb": "setAlexBpfMode"}},
         {"advanceMs": 50}
     ]
 }

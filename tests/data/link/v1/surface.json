@@ -208,17 +208,17 @@
         {
             "kind": "i64",
             "name": "radioHardwareVersion",
-            "value": 3
+            "value": 4
         },
         {
             "kind": "i64",
             "name": "remotePgxlControlVersion",
-            "value": 2
+            "value": 3
         },
         {
             "kind": "i64",
             "name": "remoteRfKitControlVersion",
-            "value": 2
+            "value": 3
         },
         {
             "kind": "i64",
@@ -228,6 +228,11 @@
         {
             "kind": "i64",
             "name": "accessoryDataVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "remoteTgxlControlVersion",
             "value": 1
         }
     ],
@@ -430,6 +435,143 @@
             "arguments": [
                 {
                     "kind": "utf8",
+                    "name": "name",
+                    "optional": false
+                }
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "setPgxlName"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "biasMode",
+                    "optional": true
+                },
+                {
+                    "kind": "utf8",
+                    "name": "fanMode",
+                    "optional": true
+                },
+                {
+                    "kind": "i64",
+                    "name": "ledIntensity",
+                    "optional": true
+                }
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "setPgxlHardware"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "dhcp",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "address",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "netmask",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "gateway",
+                    "optional": false
+                }
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "setPgxlNetwork"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "savePgxlSettings"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "readPgxlSettings"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "name",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "setTgxlName"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "dhcp",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "address",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "netmask",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "gateway",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "setTgxlNetwork"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "saveTgxlSettings"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "readTgxlSettings"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
                     "name": "host",
                     "optional": false
                 },
@@ -464,6 +606,14 @@
             "capabilityVersion": 2,
             "minMinor": 11,
             "verb": "setRfKitEnabled"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "resetRfKitError"
         },
         {
             "arguments": [
@@ -572,6 +722,24 @@
             "capabilityVersion": 3,
             "minMinor": 11,
             "verb": "setAlexRxAntenna"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "chain",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "mode",
+                    "optional": false
+                }
+            ],
+            "capability": "radioHardwareVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setAlexBpfMode"
         },
         {
             "arguments": [
@@ -2024,6 +2192,136 @@
                     "kind": "utf8",
                     "name": "rfkitAntenna4Label",
                     "ordinal": 41
+                }
+            ]
+        },
+        "AccessorySettingsModel": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "pgxlNickname",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "pgxlBiasMode",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "pgxlFanMode",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "pgxlLedIntensity",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "pgxlNetworkKnown",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "pgxlDhcp",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "pgxlAddress",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "pgxlNetmask",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "pgxlGateway",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "pgxlAnswer",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "pgxlAnswerAccepted",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "pgxlAnswerCount",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "tgxlNickname",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "tgxlNetworkKnown",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "tgxlDhcp",
+                    "ordinal": 14
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "tgxlAddress",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "tgxlNetmask",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "tgxlGateway",
+                    "ordinal": 17
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "tgxlAnswer",
+                    "ordinal": 18
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "tgxlAnswerAccepted",
+                    "ordinal": 19
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tgxlAnswerCount",
+                    "ordinal": 20
                 }
             ]
         },
@@ -4199,6 +4497,10 @@
             "key": "accessoryData"
         },
         {
+            "class": "AccessorySettingsModel",
+            "key": "accessorySettings"
+        },
+        {
             "class": "PanadapterModel",
             "key": "pan:<i>"
         },
@@ -4262,7 +4564,6 @@
             "DisableHfPa",
             "ExtendedTxAllowed",
             "PreventTxOnDifferentBandToRx",
-            "NetworkWatchdogEnabled",
             "RxOnly"
         ],
         "operatorLocalPrefixes": [
@@ -4302,7 +4603,8 @@
             "TxInhibitMonitorEnabled",
             "TxInhibitMonitorReversed",
             "WindBackPowerSwr",
-            "MultimeterDelayMs"
+            "MultimeterDelayMs",
+            "NetworkWatchdogEnabled"
         ],
         "stationPrefixes": [
             "hardware/",
