@@ -953,6 +953,25 @@ void TstLinkConformanceSession::alteredFixturesFailReadably()
     QVERIFY2(outside.contains(QStringLiteral("within 1 of -399.02")), qPrintable(outside));
     QVERIFY(!LinkFixtures::match(QStringLiteral("$within:1:-399.02"), QStringLiteral("x"), &none)
                  .isEmpty());
+    // connect-connectable's signal readings never admit the meter pump's
+    // no-reading value: a reading of -400 fails the fixture.
+    int readings = 0;
+    for (const QJsonValue& step :
+         fixture(QStringLiteral("session-connect-connectable")).value(QStringLiteral("steps")).toArray()) {
+        const QJsonObject message = step.toObject().value(QStringLiteral("message")).toObject();
+        if (!message.value(QStringLiteral("properties")).isArray()) {
+            continue;
+        }
+        for (const QJsonValue& p : message.value(QStringLiteral("properties")).toArray()) {
+            const QJsonValue value = p.toObject().value(QStringLiteral("value"));
+            if (value.toString().startsWith(QStringLiteral("$within:"))) {
+                ++readings;
+                QVERIFY2(!LinkFixtures::match(value, SliceMeterPump::kNoReadingDbm, &none).isEmpty(),
+                         qPrintable(value.toString()));
+            }
+        }
+    }
+    QCOMPARE(readings, 3);
 
     // A value the station sends, changed: the failure names the step, the
     // path inside the message and what the station really sent.

@@ -1721,7 +1721,7 @@ same on every machine.
 
 | Fixture | What it holds the station to |
 | --- | --- |
-| `connect-connectable` | The whole connect sequence to `snapshot.complete` on a connected radio with one slice, every message in full, except: PureSignal's `statusJson` (`"$string"`, it carries a capture time) and `displayGeneration` (`"$int"`, a counter whose value depends on timing), and the slice's `signalStrengthDbm`, `signalPeakDbm` and `signalAverageDbm`, which the receiver measures: `"$within:1:-399.02"`, within 1 dB |
+| `connect-connectable` | The whole connect sequence to `snapshot.complete` on a connected radio with one slice, every message in full, except: PureSignal's `statusJson` (`"$string"`, it carries a capture time) and `displayGeneration` (`"$int"`, a counter whose value depends on timing), and the slice's `signalStrengthDbm`, `signalPeakDbm` and `signalAverageDbm`, which the receiver measures: `"$within:0.5:-399.02"`, within 0.5 dB, which leaves out the meter's no-reading value of -400 |
 | `wrong-token` | `auth.result` refused, `retryable` false, then the close |
 | `connection-limit` | With eight other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
