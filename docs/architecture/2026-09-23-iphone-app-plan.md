@@ -4153,16 +4153,28 @@ two must never hold the radio at once; no two writers of one settings file).
   `src/main.cpp` (the handover before `AppSettings` loads), `src/gui/MainWindow.{h,cpp}`
   (runs `StationHost` on the desktop's own radio while the switch is on; quits through
   the handover)
-- Test: `tests/tst_station_host.cpp`, `tests/tst_station_handover.cpp`
+- Modify: `src/server_main.cpp` and `src/core/daemon/StationControlCommands.{h,cpp}`
+  (the `nereusd release` subcommand, beside Task 17's other subcommands)
+- Test: `tests/tst_station_host.cpp`, `tests/tst_station_handover.cpp`,
+  `tests/tst_station_control_socket.cpp`
 
 **Interfaces:**
-- Consumes: Tasks 12 to 17, 34 to 41, 47.
+- Consumes: Tasks 12 to 17 (the control socket `nereusd-control` and its subcommands,
+  Task 17), 33 (stopping transmission at once), 34 to 41, 47.
 - Produces:
   - `class StationHost : public QObject` with `StationHost(RadioModel*, const StationHostOptions&)`,
     `bool start()`, `void stop()`; the daemon and the desktop use the same class.
   - One station, whichever process runs it: the identity key, device list and settings
     live in the desktop's profile directory, and a `QLockFile` named `station.lock` there
     is held by whichever process runs the station, so only one ever does.
+  - The subcommand `nereusd release`, specified as Task 17's other subcommands are: it
+    talks to the running daemon through the owner-only control socket `nereusd-control`
+    (`QLocalServer::UserAccessOption`), which it finds from `--config` or `--profile`,
+    never from `$HOME`, and prints the daemon's answer. The daemon stops transmitting if
+    it was keyed (Task 33), saves, releases the radio and exits. On a packaged Core,
+    whose unit uses `DynamicUser` and `StateDirectory` `/var/lib/nereusd` (mode 0700),
+    the console text says to run it with sudo. Its printed text says "Core" and passes
+    `OperatorWording::isPlain`.
   - `StationHandover::reclaimFromBackground(int timeoutMs)`: at desktop start, before
     `AppSettings` loads, runs `nereusd release` through the control socket; the
     background station stops transmitting if it was, saves, releases the radio and exits;
@@ -4186,12 +4198,17 @@ two must never hold the radio at once; no two writers of one settings file).
 - At no moment do two processes hold `station.lock`, and a test that starts both at once
   shows the second waiting.
 - Quitting while keyed stops transmitting before anything else.
+- `nereusd release` against a daemon started in the test, finding its socket from
+  `--config` or `--profile`, stops transmitting first if keyed, saves, releases the
+  radio and exits, and prints the daemon's answer; a second user on the same machine
+  cannot reach the socket (the test checks its permissions); with no daemon running it
+  says so in plain words and changes nothing.
 - `nereusd` on a small computer behaves as before (the daemon's tests pass through
   `StationHost`).
 
 **Verification:** reachability of the station and the two-writer rule: invariant tests
 first; integration with two processes.
-`cmake --build build --target tst_station_host tst_station_handover nereusd && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_host|tst_station_handover)$' --output-on-failure`.
+`cmake --build build --target tst_station_host tst_station_handover tst_station_control_socket nereusd && QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^(tst_station_host|tst_station_handover|tst_station_control_socket)$' --output-on-failure`.
 Device (JJ, pending until observed): on his Mac with the ANAN-G2, quit and reopen
 NereusSDR while the phone listens; the phone drops for a few seconds each time and
 comes back on its own with transmit off.
@@ -4201,7 +4218,8 @@ radio connection and settings safety: flag for earlier review. Requires Task 47 
 Parts C, F and G.
 
 - [ ] **Step 1:** `StationHost`, with the daemon moved onto it and its tests passing.
-- [ ] **Step 2:** The desktop hosting it, the lock and the two-way handover.
+- [ ] **Step 2:** The desktop hosting it, the lock, `nereusd release` with its
+      control-socket tests, and the two-way handover.
 
 ## Task 49: The Remote Access page
 
