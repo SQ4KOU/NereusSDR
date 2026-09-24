@@ -1500,7 +1500,14 @@ files against its own client.
 - `manifest.json` lists the fixtures:
   `{"linkMajors":[1],"fixtures":[{"id":"<fixture id>","file":"<path under v1/>","kind":"control"|"session"|"media","requires":{"<feature>":<version>}}]}`.
   `requires` names the capability versions a fixture exercises, and is
-  `{}` for a fixture every major-1 station passes. `linkMajors` is the
+  `{}` for a fixture every major-1 station passes. Each version is a
+  minimum: a station passes the fixture's requirement when it advertises
+  that capability at the version named **or later**. A verb's own gate
+  can be stricter, and the fixture then holds a station to that gate too:
+  `session-verbs-ps3` requires `psAlgorithmVersion` 3, and the PureSignal
+  action verbs it invokes need `psAlgorithmVersion` **equal to** 3
+  (section 6.2), so a station advertising 4 meets the requirement but not
+  those verbs' gate. `linkMajors` is the
   link majors the suite covers, whole numbers from 1 to 65535, oldest
   first, without repeats; the station's runners check each against the
   majors the station supports (`LinkVersion::supportedMajors()`). Each runner runs its fixtures once per
@@ -1737,7 +1744,11 @@ is one packet as it travels.
 `expect` holds `"after": ["<fixture id>", ...]`, it first decodes each
 named vector's bytes, in order, on that same decoder, without checking
 their own expectations, then decodes the vector itself and compares only
-its own expectation. A vector without `after` decodes on a fresh decoder
+its own expectation. `after` is not followed further: a named vector's
+own `after` is not decoded first (it is not recursive), so a vector's
+`after` lists every packet before it, in order, that the decoder must
+have seen (`nsdc1-keyframe-after-loss` names `nsdc1-full` itself, not a
+vector that names it). A vector without `after` decodes on a fresh decoder
 alone. Loss is a packet left out of `after`: `nsdc1-keyframe-after-loss`
 is decoded after `nsdc1-full` only, with the delta that came between
 omitted. An `after` that names the vector itself, a missing vector, a
