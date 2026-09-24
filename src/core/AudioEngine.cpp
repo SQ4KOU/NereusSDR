@@ -19,6 +19,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-24 : R-R3-45 transmit monitor output by J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code. setTxMonitorOutput
+//                 picks the speakers or the headphones for MON;
+//                 txMonitorBlockReady builds MON into that sum only;
+//                 resetAudioSettings puts it back on the speakers.
 //   2026-09-24 : setVaxEnabled, setVaxConfig, openVaxOutputSlots,
 //                 resetAudioSettings and stop() emit vaxBusOpenChanged
 //                 (R-R3-49, R-R3-21) by J.J. Boyd (KG4VCF), AI-assisted via
@@ -276,7 +281,7 @@ AudioEngine::AudioEngine(QObject* parent)
         const PaError err = Pa_Initialize();
         if (err != paNoError) {
             qCWarning(lcAudio) << "Pa_Initialize failed:" << Pa_GetErrorText(err)
-                               << "— audio subsystem will be inert.";
+                               << "(the audio subsystem will be inert)";
             m_paInitialized = false;
         } else {
             m_paInitialized = true;
@@ -334,6 +339,13 @@ AudioEngine::AudioEngine(QObject* parent)
     m_headphonesEnabled = AppSettings::instance()
         .value(QStringLiteral("audio/Headphones/Enabled"), QStringLiteral("False"))
         .toString() == QStringLiteral("True");
+    // R-R3-45: where MON plays. Speakers unless the operator chose the
+    // headphones; this computer's setting, like the device choices.
+    m_txMonitorToHeadphones.store(
+        AppSettings::instance()
+            .value(QStringLiteral("audio/TxMonitor/Output"), QStringLiteral("Speakers"))
+            .toString() == QStringLiteral("Headphones"),
+        std::memory_order_release);
     // The supervisor needs an application object: its I/O thread runs an
     // event loop and its status reaches this thread through queued calls.
     // Every process that captures has one; an engine built without one
@@ -2586,6 +2598,25 @@ void AudioEngine::setTxMonitorVolume(float volume)
     emit txMonitorVolumeChanged(clamped);
 }
 
+// R-R3-45: the operator's MON output. The audio thread reads the atomic on
+// the next monitor block and hands it to MasterMixer::accumulate, which
+// ramps the slot out of one sum and into the other (the same crossfade a
+// receiver gets when its route changes), so a change mid-transmission has
+// no gap and no doubling. MON stays out of the anti-VOX mixer either way.
+void AudioEngine::setTxMonitorOutput(TxMonitorOutput output)
+{
+    const bool headphones = output == TxMonitorOutput::Headphones;
+    const bool prev =
+        m_txMonitorToHeadphones.exchange(headphones, std::memory_order_acq_rel);
+    if (prev == headphones) {
+        return;  // idempotent
+    }
+    AppSettings::instance().setValue(
+        QStringLiteral("audio/TxMonitor/Output"),
+        headphones ? QStringLiteral("Headphones") : QStringLiteral("Speakers"));
+    emit txMonitorOutputChanged(output);
+}
+
 // Plan: 3M-1b E.3. Pre-code review §4.3 + §4.4.
 //
 // Receives the TXA Sip1 siphon output from TxChannel::sip1OutputReady via
@@ -2633,7 +2664,13 @@ void AudioEngine::txMonitorBlockReady(const float* samples, int frames)
     // Accumulate into MasterMixer. The slot's gain (= m_txMonitorVolume)
     // was written by setTxMonitorVolume via setSliceGain and is read
     // atomically inside accumulate(). No separate multiply needed here.
-    m_masterMix.accumulate(kTxMonitorSlotId, stereoScratch.data(), frames);
+    //
+    // R-R3-45: the operator's MON output rides in as the route, so the
+    // mixer builds MON into the speakers sum or the headphones sum, never
+    // both. Only m_masterMix: MON is never in the anti-VOX reference.
+    m_masterMix.accumulate(kTxMonitorSlotId, stereoScratch.data(), frames,
+                           /*muted*/ false,
+                           m_txMonitorToHeadphones.load(std::memory_order_acquire));
 }
 
 void AudioEngine::setVaxRxGain(int channel, float gain)
@@ -2826,6 +2863,12 @@ void AudioEngine::resetAudioSettings()
     m_headphonesConfig = AudioDeviceConfig{};
     setHeadphonesEnabled(false);
     emit headphonesConfigChanged(AudioDeviceConfig{});
+    // R-R3-45: audio/TxMonitor/Output went too, so MON is back on the
+    // speakers. Not through setTxMonitorOutput(), which would write the
+    // key straight back.
+    if (m_txMonitorToHeadphones.exchange(false, std::memory_order_acq_rel)) {
+        emit txMonitorOutputChanged(TxMonitorOutput::Speakers);
+    }
 
     // Rebuild each VAX bus as well — previously we only emitted the config-
     // changed signal, but rxBlockReady kept pushing audio to whatever bus

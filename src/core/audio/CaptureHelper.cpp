@@ -133,6 +133,14 @@ namespace {
 namespace P = CaptureProtocol;
 using Clock = std::chrono::steady_clock;
 
+// R-R3-21: setCaptureHelperTestDevices. Written once before the helper
+// starts its threads, read only by the main thread's open().
+QStringList& testRunDevices()
+{
+    static QStringList names;
+    return names;
+}
+
 constexpr auto kPumpInterval = std::chrono::milliseconds(10);
 constexpr auto kInputLostAfter = std::chrono::milliseconds(500);
 // More queued parent commands than this is a misbehaving parent; the
@@ -348,6 +356,24 @@ private:
 
         sendStatus(P::HelperState::Opening);
 
+        // R-R3-21: a test run never initialises PortAudio or opens a real
+        // device, the same decision AudioEngine makes. The named device is
+        // looked up on the test's list (setCaptureHelperTestDevices), so a
+        // missing device still fails as one, with the bus's own words.
+        if (PortAudioBus::portAudioBarredForTestRun()) {
+            const QString name = m_device.deviceName.trimmed();
+            const QStringList& listed = testRunDevices();
+            if (name.isEmpty() ? listed.isEmpty() : !listed.contains(name)) {
+                sendFailure(P::FailReason::DeviceNotFound,
+                            name.isEmpty() ? QStringLiteral("No input device found")
+                                           : QStringLiteral("device-not-found: ") + name);
+            } else {
+                sendFailure(P::FailReason::OpenFailed,
+                            QStringLiteral("a test run opens no audio device"));
+            }
+            return;
+        }
+
         if (!m_paInitialized) {
             const PaError err = Pa_Initialize();
             if (err != paNoError) {
@@ -522,6 +548,11 @@ private:
 };
 
 } // namespace
+
+void setCaptureHelperTestDevices(const QStringList& names)
+{
+    testRunDevices() = names;
+}
 
 int runCaptureHelper(int argc, char** argv)
 {

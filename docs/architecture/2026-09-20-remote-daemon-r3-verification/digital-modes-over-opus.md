@@ -2,8 +2,11 @@
 
 How FT8 decodes when a receiver's audio reaches WSJT-X through the Core's
 receiver audio stream, at each audio quality setting, compared with the
-untouched audio. Measured 2026-09-23 on codex/lane-b (base f1115117). This
-is a measurement only: no product behaviour or setting changes with it.
+untouched audio. Measured 2026-09-23 on codex/lane-b (base f1115117), and
+confirmed 2026-09-24 with a fresh seed (see "Confirming run" below). The
+first run was a measurement only; the confirming run led to the operator's
+decision recorded under "Decision": receiver streams use Opus at 48 kbit/s
+whenever they are compressed.
 
 ## Scope of this run
 
@@ -42,11 +45,15 @@ same objects the Core and the app use; it does not restate the settings.
   bandwidth forced by `bandwidthForBitrate()` (`OpusAudioCodec.cpp:109`:
   24000 wideband, 48000 fullband), constrained VBR, complexity 10, in-band FEC
   off, DTX off. Frame 1920 samples, 40 ms (`OpusAudioCodec.h:23`).
-- Bitrate choice: `audio_bitrate` in nereusd.conf, 24000 default or 48000
-  (`src/core/daemon/DaemonConfig.h:116-117`), passed to every receiver stream
-  (`src/core/session/media/DaemonMediaController.cpp:1501`) and the main stream
-  (`DaemonMediaController.cpp:2622`); sender built at
-  `src/core/session/media/DaemonAudioSender.cpp:31`.
+- Bitrate choice, as measured on 2026-09-23: `audio_bitrate` in nereusd.conf,
+  24000 default or 48000 (`src/core/daemon/DaemonConfig.h:116-117`), passed to
+  every receiver stream (`src/core/session/media/DaemonMediaController.cpp:1501`)
+  and the main stream (`DaemonMediaController.cpp:2622`); sender built at
+  `src/core/session/media/DaemonAudioSender.cpp:31`. Since the decision below,
+  receiver streams no longer follow `audio_bitrate`: they use
+  `DaemonMediaController::kReceiverAudioOpusBitrate` (48000) whenever they are
+  compressed, and only the speakers' mix and the headphones mix follow
+  `audio_bitrate`.
 - Decoder (app): `src/core/session/media/RemoteAudioReceiver.cpp:362`
   (`OpusAudioDecoder`, `opus_decoder_create(48000, 2)` at
   `OpusAudioCodec.cpp:366`, `opus_decode_float` at `OpusAudioCodec.cpp:403`).
@@ -165,7 +172,7 @@ Other results:
 
 ## What the numbers suggest for the operator
 
-These are for the operator to decide; nothing here is built.
+Written after the first run, before any decision; kept as it was read then.
 
 - When the link carries lossless, digital modes lose nothing, which fits the
   choice that VAX and TCI streams follow the one Audio quality setting.
@@ -173,14 +180,89 @@ These are for the operator to decide; nothing here is built.
   2 dB of the decode limit. At 48 kbit/s it is close to measurement noise at
   this sample size; at 24 kbit/s it is larger, and largest on a crowded band
   (7 of the 14 files untouched decoded from -19 to -21 dB were lost).
-- Two possible decisions follow, neither made here: whether receiver streams
-  that feed apps should use 48 kbit/s when falling back to Opus even while
-  the speaker stream stays at 24 kbit/s; and whether the VAX page should say
-  that Opus can cost the weakest decodes.
+- Two possible decisions followed, neither made in the first run: whether
+  receiver streams that feed apps should use 48 kbit/s when falling back to
+  Opus even while the speaker stream stays at 24 kbit/s; and whether the VAX
+  page should say that Opus can cost the weakest decodes. Both were settled
+  after the confirming run; see "Decision (2026-09-24)".
 - Before either, a fuller run (20 signals per step, FST4 and Q65 included)
   would firm up the 24 versus 48 kbit/s difference; the command below does it.
 - Still pending at the operator checkpoint (hardware): a live side-by-side
   decode through a real Core and remote window.
+
+## Confirming run (2026-09-24)
+
+A second FT8 run with a fresh noise seed, to check the first run's order
+before deciding. Same tool, same arms, same three cases and the same codec
+profiles (`nereus-opus-bench-codec --describe` printed exactly the three
+lines above).
+
+- **Seed 20260924** (the first run used 20260923). WSJT-X 3.1.0 `jt9`.
+- **5 signals per SNR step**, SNR -10 to -24 dB, three cases: 225 files, 900
+  decodes. With 5 files per step, one file is 20 percentage points.
+- Output directory:
+  `/Users/j.j.boyd/.config/nereus/work/ft8-opus48-confirm-2026-09-24`
+  (`results.md`, `results.csv`, `summary.json`, `run.log`, `driver.log`).
+  Files only, no audio device opened. 230 s wall time; the Mac's load
+  average was 8.8 at the start and 10.8 at the end (`driver.log`), which
+  slows the run but does not change a decode (each file is decoded offline).
+
+Decodes of the sent message (out of 75 files per case):
+
+| Case | untouched | lossless | opus48 | opus24 |
+|---|---:|---:|---:|---:|
+| one signal, noise at -50.3 dBFS | 60 | 60 | 59 | 57 |
+| one signal, noise at -30 dBFS | 59 | 59 | 59 | 58 |
+| crowded band (ten other signals), noise at -50.3 dBFS | 58 | 58 | 57 | 49 |
+| total (225 files) | 177 | 177 | 175 | 164 |
+
+Per case:
+
+| Case | 50 % point, untouched / lossless / opus48 / opus24 (dB) | weakest decoded, same order (dB) |
+|---|---|---|
+| one signal, -50.3 dBFS | -21.5 / -21.5 / -21.2 / -20.8 | -22 / -22 / -22 / -23 |
+| one signal, -30 dBFS | -21.5 / -21.5 / -21.2 / -21.2 | -22 / -22 / -22 / -21 |
+| crowded band | -21.2 / -21.2 / -20.8 / -19.2 | -21 / -21 / -21 / -21 |
+
+Across all three cases, from `results.csv`:
+
+| | lossless | opus48 | opus24 |
+|---|---:|---:|---:|
+| decodes (untouched: 177) | 177 | 175 | 164 |
+| files lost that untouched decoded | 0 | 4 | 15 |
+| files gained that untouched missed | 0 | 2 | 2 |
+| mean change in jt9's reported SNR (decoded in both) | 0.0 dB | -0.1 dB | -0.9 dB |
+
+- Lossless again decoded exactly the files the untouched audio did.
+- The order is the first run's: untouched = lossless, then opus48 a
+  decode or two behind, then opus24 clearly behind. Opus 24 kbit/s is
+  worst on the crowded band (49 of 58: it lost files from -18 to -21 dB,
+  where opus48 lost one at -21 dB).
+- Every other signal in the crowded files decoded in every arm (750 in
+  each arm; opus48 751, one extra decode).
+
+## Decision (2026-09-24)
+
+The operator's decision, after this confirming run: **receiver streams (the
+per-receiver audio VAX and TCI apps get in a remote window) use Opus at 48
+kbit/s, fullband, whenever they are compressed**: when Opus is the audio
+quality choice, when the Core refuses lossless, and when lossless falls back
+to Opus after the window's link trial. The speakers' mix (and the
+headphones mix) keep the Core's own `audio_bitrate`, 24 kbit/s by default.
+Lossless, its link trial and its fallback trigger are unchanged.
+
+Built in the R3 completion plan, Task 7
+(`docs/architecture/2026-09-24-r3-completion-plan.md`):
+`DaemonMediaController::kReceiverAudioOpusBitrate`; each receiver stream's
+context reports its encoder, so the remote window's audio status reads
+"Receiving, Opus 48 kbit/s" from the Core's report. A window built before
+the change decodes 48 kbit/s streams unchanged (the decoder takes either
+rate and is never told one; the media offer is as before). The VAX page's
+note now says "a few of the weakest" digital-mode signals may not decode,
+true at 48 kbit/s and of an older Core at 24 kbit/s.
+
+Still pending at the operator checkpoint (hardware): a live side-by-side
+decode through a real Core and remote window.
 
 ## Reproduce
 

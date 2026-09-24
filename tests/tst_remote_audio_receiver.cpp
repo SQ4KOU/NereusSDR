@@ -1,5 +1,6 @@
 // no-port-check: NereusSDR-original remote audio receiver integration tests.
 #include <QtTest>
+#include "RealtimeTestLoad.h"
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QSignalSpy>
@@ -114,6 +115,9 @@ double blockRms(const QVector<float>& block)
 class TstRemoteAudioReceiver : public QObject {
     Q_OBJECT
 private slots:
+    // The load when a real-time case failed (R-R3-21, R-R3-40).
+    void cleanup() { NereusSDR::RealtimeTestLoad::printLoadAverageIfFailed(); }
+
     void speakerTrimMuteAndLifecycle()
     {
         AudioEngine engine;
@@ -1289,15 +1293,22 @@ private slots:
     // come out in stream order, paced by their arrival (the Core's clock),
     // and a lost packet is concealed (Opus) or silence (lossless). Nothing
     // asks for a restart.
+    // R-R3-43: a receiver stream's sink. The Core sends compressed receiver
+    // streams at 48 kbit/s fullband; the receiver is never told a rate, so a
+    // window built before that change plays them exactly as it plays 24
+    // kbit/s ("opus48" beside "opus").
     void pcmSinkPlaysInOrderWithoutASpeaker_data()
     {
         QTest::addColumn<bool>("lossless");
-        QTest::newRow("lossless") << true;
-        QTest::newRow("opus") << false;
+        QTest::addColumn<int>("opusBitrate");
+        QTest::newRow("lossless") << true << 0;
+        QTest::newRow("opus") << false << 24'000;
+        QTest::newRow("opus48") << false << 48'000;
     }
     void pcmSinkPlaysInOrderWithoutASpeaker()
     {
         QFETCH(bool, lossless);
+        QFETCH(int, opusBitrate);
         constexpr quint32 kSsrc = 0x4e520001;
         const int packets = lossless ? 60 : 12;
         const int lost = lossless ? 30 : 7;
@@ -1316,7 +1327,10 @@ private slots:
         const auto level = [lossless](int packet) {
             return lossless ? float(packet + 1) / 1024.0f : 0.02f * float(packet + 1);
         };
-        OpusAudioEncoder encoder;
+        OpusAudioCodecConfig codecConfig;
+        if (!lossless) { codecConfig.bitrate = opusBitrate; }
+        OpusAudioEncoder encoder(codecConfig);
+        QVERIFY(lossless || encoder.isReady());
         QList<QByteArray> wire;
         for (int packet = 0; packet < packets; ++packet) {
             if (lossless) {
@@ -1331,6 +1345,7 @@ private slots:
                 const auto encoded = encoder.encode(pcm, quint16(packet),
                                                     quint32(packet) * 1920u, kSsrc);
                 QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+                QCOMPARE(encoded.packetInfo.bandwidth, bandwidthForBitrate(opusBitrate));
                 wire.append(encoded.packet);
             }
             QVERIFY(!wire.constLast().isEmpty());

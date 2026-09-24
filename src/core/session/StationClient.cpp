@@ -107,6 +107,11 @@
 //   2026-09-24 - Lane B takes integration (R-IOS-01, R-R3-21): a refusal
 //                with no reason says the Core refused it. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R3 completion carry, review I1 (R-R3-21, R-R3-38,
+//                R-IOS-01): the stop message reads the Core's takeover and
+//                version reasons through SessionEndReasons, and a version
+//                this app refuses itself records the same end. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -115,6 +120,7 @@
 #include "core/FaultLog.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/ObjectRegistry.h"
+#include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
 #include "core/settings/SettingsProxy.h"
 #include "models/AmplifierModel.h"
@@ -267,6 +273,37 @@ bool isLocalNetworkAddress(const QString& host)
         }
     }
     return false;
+}
+
+// R-R3-38: reads a session end the Core marked not retryable into what the
+// window offers next. The link carries only a reason and the retryable
+// flag (station link section 12.4), so the two ends that need their own
+// buttons are told apart by the reason, worded and read in one place
+// (SessionEndReasons). OperatorReasonText words the same reasons for
+// display. Any other reason still ends the session and is not retried; the
+// window then shows it as a plain refusal with the Core's reason.
+StationEndReport stationEndReport(const QString& reason)
+{
+    StationEndReport report;
+    report.kind = StationEndReport::Kind::Refused;
+    report.reason = reason;
+
+    // Interim: session.end now also carries the end code; iPhone Task 18 switches this parse to it.
+    const SessionEndReasons::Parsed parsed = SessionEndReasons::parse(reason);
+    switch (parsed.kind) {
+    case SessionEndReasons::Parsed::Kind::TakenOver:
+        report.kind = StationEndReport::Kind::TakenOver;
+        report.takenOverBy = parsed.otherAppAddress;
+        break;
+    case SessionEndReasons::Parsed::Kind::VersionRefused:
+        report.kind = StationEndReport::Kind::VersionRefused;
+        report.coreMajor = parsed.coreMajor;
+        report.appMajor = parsed.appMajor;
+        break;
+    case SessionEndReasons::Parsed::Kind::Other:
+        break;
+    }
+    return report;
 }
 
 } // namespace
@@ -800,6 +837,9 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     transport->setParent(this);
     m_transport = transport;
     m_token = token;
+    // R-R3-38: a new link starts with no end recorded, so the report never
+    // describes an older one.
+    m_lastEndReport = StationEndReport{};
     m_pingsAwaitingPong = 0;
     m_linkUp = false;
     m_sessionActive = true;
@@ -1137,7 +1177,7 @@ void StationClient::setMaxMissedPongs(int misses)
 
 QString StationClient::handshakeDeadlineReason()
 {
-    return QStringLiteral("The station did not finish connecting.");
+    return QStringLiteral("The Core did not finish connecting.");
 }
 
 void StationClient::setHandshakeDeadlineMs(int ms)
@@ -1420,6 +1460,11 @@ void StationClient::onTransportText(const QByteArray& wire)
         qCWarning(lcStationClient) << "Station ended the session:" << message.reason
                                    << (message.retryable ? "(retryable)" : "(permanent)");
         m_lastError = message.reason;
+        // R-R3-38: an end that will not fix itself is what the window shows
+        // and offers buttons for; a retryable one retries as before.
+        if (!message.retryable) {
+            m_lastEndReport = stationEndReport(message.reason);
+        }
         // The station's own classification, not this end's guess at one
         // and not a match against its English prose. Every station-sent
         // refusal used to take disconnectFromStation()'s default of false,
@@ -1451,10 +1496,16 @@ void StationClient::handleHello(const SessionMessage& message)
     const std::optional<quint16> agreed =
         LinkVersion::agreeMajor(m_supportedMajors, message.supportedMajors);
     if (!agreed) {
-        m_lastError = LinkVersion::refusalText(message.supportedMajors, m_supportedMajors);
+        m_lastError =
+            SessionEndReasons::versionRefused(message.supportedMajors, m_supportedMajors);
         qCWarning(lcStationClient) << "No link major shared with the station (it supports"
                                    << message.supportedMajors << "; this client supports"
                                    << m_supportedMajors << "):" << m_lastError;
+        // R-R3-38: this app refused the Core, for good, for the same
+        // reason the Core would have refused it: the same end as the
+        // Core's refusal, so the window shows the same version notice
+        // whichever side finds the mismatch.
+        m_lastEndReport = stationEndReport(m_lastError);
         disconnectFromStation(m_lastError);
         return;
     }
@@ -3063,11 +3114,11 @@ StationClient::CommandOutcome StationClient::requestRfKitEnabled(bool enabled)
 StationClient::CommandOutcome StationClient::requestStationTci(bool enabled, quint16 port)
 {
     if (!stationTciAvailable()) {
-        return { false, QStringLiteral("This Core has no TCI server for the station.") };
+        return { false, QStringLiteral("This Core has no TCI server.") };
     }
     return sendCommand("setStationTci", -1,
                        { boolArgument("enabled", enabled), intArgument("port", port) },
-                       QStringLiteral("the station's TCI server switch"));
+                       QStringLiteral("the Core's TCI server switch"));
 }
 
 // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory records

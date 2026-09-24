@@ -207,10 +207,10 @@ void ConnectionSelector::setTargets(const QList<ConnectionTargetRow>& targets)
     }
     addGroup(tr("Radios on this network"), ConnectionTargetKind::LocalRadio,
              tr("No radios found on this network."), localRadios);
-    addGroup(tr("Stations on this network"), ConnectionTargetKind::LanCore,
-             tr("No stations found on this network."), lanCores);
-    addGroup(tr("Your stations"), ConnectionTargetKind::SavedCore,
-             tr("No saved stations."), savedCores);
+    addGroup(tr("Cores on this network"), ConnectionTargetKind::LanCore,
+             tr("No Cores found on this network."), lanCores);
+    addGroup(tr("Your Cores"), ConnectionTargetKind::SavedCore,
+             tr("No saved Cores."), savedCores);
     setSelectedKey(previousKey);
     updateActions();
 }

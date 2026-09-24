@@ -279,7 +279,7 @@ QWidget* RfKitPage::buildRf2ksTab()
         }
         m_setTciBtn->setEnabled(false);
         m_setTciBtn->setToolTip(tr("The Core puts the amplifier in TCI mode itself while the "
-                                   "station's TCI server is on."));
+                                   "Core's TCI server is on."));
         // I4: the Core's settings and names, and whether it takes them.
         connect(m_model, &RadioModel::stationLinkStateChanged,
                 this, &RfKitPage::refreshRemoteSettings);
@@ -709,12 +709,12 @@ void RfKitPage::refreshLiveStatus()
         using Phase = RfKitModel::ConnectionPhase;
         QString text;
         switch (rfKit->connectionPhase()) {
-        case Phase::Disabled: text = tr("Off at the station"); break;
+        case Phase::Disabled: text = tr("Off at the Core"); break;
         case Phase::Disconnected: text = tr("Disconnected"); break;
         case Phase::Discovering:
-        case Phase::Connecting: text = tr("Connecting at the station"); break;
+        case Phase::Connecting: text = tr("Connecting at the Core"); break;
         case Phase::Identifying: text = tr("Checking the device"); break;
-        case Phase::Retrying: text = tr("Retrying at the station"); break;
+        case Phase::Retrying: text = tr("Retrying at the Core"); break;
         case Phase::Connected:
             text = tr("Connected: %1 %2").arg(rfKit->deviceNickname(), rfKit->deviceVersion());
             break;

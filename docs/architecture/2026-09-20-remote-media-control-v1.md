@@ -304,11 +304,18 @@ readiness or slice that affects a wanted stream, is answered with one
 | `profile`, `encoder`, `profileRefusal` | As the audio-profile shape of `audio-context` |
 | `reason` | While disabled: `client-disabled`, `media-not-ready`, `radio-offline`, `encoder-unavailable`, `slice-removed` or `receiver-limit` |
 
-The profile follows the rules of the main stream: Opus at the Core's
-configured `audio_bitrate` and its audio bandwidth (the main stream's encoder
-profile), or lossless when asked, allowed by the Core's `audio_lossless`
-setting and carried by this media connection; otherwise Opus with
-`profileRefusal`. The GUI keeps every stream on the one choice, and one link
+The profile follows the rules of the main stream: Opus, or lossless when
+asked, allowed by the Core's `audio_lossless` setting and carried by this
+media connection; otherwise Opus with `profileRefusal`. Opus on a receiver
+stream always runs at 48000 bit/s with fullband sound (audio up to 20 kHz),
+whatever the Core's `audio_bitrate` (which sets the speakers' mix and the
+headphones mix only): when Opus is asked for, when lossless is refused and
+when the GUI asks for Opus after its link trial (operator decision of
+2026-09-24, from the FT8 measurement in
+`2026-09-20-remote-daemon-r3-verification/digital-modes-over-opus.md`). The
+`encoder` object reports it, so a GUI reads the rate from the context and
+assumes none; the media offer's `maxaveragebitrate` stays the main stream's
+target, as before. The GUI keeps every stream on the one choice, and one link
 trial covers every lossless stream.
 
 At most four receiver streams run at once, one per receiver stream ID; the

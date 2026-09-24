@@ -140,7 +140,7 @@ public:
     // owner logs once per state change instead.
     void setQuietListenAttempts(bool quiet) { m_quietListenAttempts = quiet; }
     static constexpr const char* kStationTransmitRefusedReason =
-        "Apps cannot transmit through the station's TCI server until remote transmit is ready.";
+        "Apps cannot transmit through the Core's TCI server until remote transmit is ready.";
 
     // The most recent reason given through operatorNotice(), or empty
     // after operatorNoticeCleared().

@@ -14,7 +14,7 @@
 //   3 - "Recall tune memory"        -> apply stored relay positions
 //   4 - "Clear tune memory"         -> m_tuneStore->clear(ant, band)
 //   5 - separator
-//   6 - "Disconnect" / "Reconnect"  -> connectionToggleRequested()
+//   6 - "Disconnect" / "Connect"    -> connectionToggleRequested()
 //   7 - "Copy diagnostics to clipboard" -> diagnosticsCopyRequested()
 //
 // Three test slots:
@@ -237,7 +237,7 @@ void TunerAppletContextMenuTest::remoteConnectionActionNavigatesToPeripheralsAnd
     const auto findConnectionAction = [](QMenu* menu) -> QAction* {
         for (QAction* action : menu->actions()) {
             if (action->text() == QStringLiteral("Disconnect")
-                || action->text() == QStringLiteral("Reconnect")
+                || action->text() == QStringLiteral("Connect")
                 || action->text() == QStringLiteral("Configure remote TGXL...")) {
                 return action;
             }
@@ -259,7 +259,7 @@ void TunerAppletContextMenuTest::remoteConnectionActionNavigatesToPeripheralsAnd
     QVERIFY(remoteAdvancedAction != nullptr);
     QVERIFY(!remoteAdvancedAction->isEnabled());
     QCOMPARE(remoteAdvancedAction->toolTip(),
-             QStringLiteral("TGXL Advanced administration is unavailable from a remote station."));
+             QStringLiteral("TGXL Advanced administration is unavailable from a remote Core."));
     remoteAdvancedAction->trigger();
     QCOMPARE(remoteNavigation.count(), 0);
 

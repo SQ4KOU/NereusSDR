@@ -397,10 +397,10 @@ share none.
   retrying, and shows the station's wording (below).
 - The station refuses any other `major` with `session.end`, `retryable`
   false, and a reason naming both sides' newest versions and the side to
-  update (`LinkVersion::refusalText(station majors, client majors)`), for
-  example "This station runs link version 1 and this app runs version 3.
-  Update the station." The reason is plain words and an app shows it as
-  sent.
+  update (`SessionEndReasons::versionRefused(station majors, client
+  majors)`), for example "This Core runs link version 1 and this app runs
+  version 3. Update the Core." The reason is plain words and an app shows
+  it as sent.
 - An equal major agrees the lower of the two minors
   (`std::min(kSessionProtocolMinor, message.protocolMinor)`), and each end
   keeps to what the agreed minor allows.
@@ -411,7 +411,7 @@ share none.
 | `[1, 2]` | `[2, 3]` | 2 |
 | `[3, 4]` | `[2, 3]` | 3 |
 | `[2, 3]` | `[1]` | none: refused, "Update this app." |
-| `[1]` | `[2, 3]` | none: refused, "Update the station." |
+| `[1]` | `[2, 3]` | none: refused, "Update the Core." |
 
 A second major does not exist yet. The station and the desktop client take
 their lists as a constructor argument, so the negotiation is tested with
@@ -1168,7 +1168,7 @@ property in one write, an unknown property or a wrong wire kind, an
 configuration on a receive-only station, and DSP settings from a peer that
 did not negotiate them (`StationServer::handlePropertyWrite`).
 A write to an `outbound` property is refused before anything is applied,
-with the reason "The station sets this itself; it cannot be changed from
+with the reason "The Core sets this itself; it cannot be changed from
 here.", unless one of the earlier, more specific refusals above applies
 first; this covers the station's own readings, such as a slice's signal
 strength, as well as properties changed through a command.
@@ -1609,6 +1609,18 @@ device list's revoke), and `identityChanged`, which a client uses for its
 own end when the Core's certificate binding or identity key is not the one
 it paired with; a station never sends it.
 
+The takeover and version reasons are worded in one place,
+`src/core/session/SessionEndReasons.{h,cpp}`: "Another app at
+*address:port* connected to the Core and took over. Connect again to take
+it back." and "This Core runs link version *N* and this app runs version
+*M*. Update the Core." (or "Update this app." when the app is the older
+side). An app that offers its own next steps for these two (take the Core
+back, check for updates) tells them apart by the `code` (`takenOver`,
+`linkVersion`) and falls back to these exact words for an older station.
+The desktop client still reads the words (`SessionEndReasons::parse`);
+this is interim, and a later task of the iPhone plan (Task 18) moves it to
+the code.
+
 Only one session is authenticated at a time. A second connection that
 authenticates takes the session: the station ends the first with
 `retryable` false, so the two clients do not trade the radio back and
@@ -2006,10 +2018,10 @@ same on every machine.
 | `device-other-challenge`, `device-other-certificate` | The paired device signs another challenge, or another certificate: `code` `deviceProofFailed`, then the close |
 | `connection-limit` | With eight other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
-| `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This station runs link version 1 and this app runs version 2. Update the station.", `retryable` false, `code` `linkVersion` |
+| `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This Core runs link version 1 and this app runs version 2. Update the Core.", `retryable` false, `code` `linkVersion` |
 | `version-declares` | A `hello` with `majors` `[1]` and a declared feature is accepted, and authentication follows |
 | `version-app-one-ahead` | An app supporting `[1, 2]` chooses 1, the highest it shares with the station, and is accepted |
-| `version-app-two-ahead` | An app supporting `[2, 3]` that sends major 3 gets `session.end` "This station runs link version 1 and this app runs version 3. Update the station.", `retryable` false |
+| `version-app-two-ahead` | An app supporting `[2, 3]` that sends major 3 gets `session.end` "This Core runs link version 1 and this app runs version 3. Update the Core.", `retryable` false |
 | `lower-minor` | A `hello` with minor 4 agrees minor 4: the capabilities without the minor-11 entries, and a minor-11 verb refused with a plain reason |
 | `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false, `code` `takenOver` |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
@@ -2060,7 +2072,7 @@ processors; its vectors hold decoders to the reference PCM instead.
 | `nsdc1` | `nsdc1-delta`: frame 2, a delta | `nsdc1-full` | As above, `keyframe` false |
 | `nsdc1` | `nsdc1-delta-after-loss`: frame 3, a delta, when frame 2 was lost | `nsdc1-full` | `disposition` `needKeyframe`, `reason` `sequenceGap`, no frame |
 | `nsdc1` | `nsdc1-keyframe-after-loss`: frame 4, the keyframe the sender was asked for | `nsdc1-full` | `accepted`, `keyframe` true, the frame |
-| `opus` | `opus-1` to `opus-4`: four consecutive RTP packets at the station's settings (48 kHz stereo, 1920 samples per packet, 24000 bit/s, wideband) | the packets before it | `status` `accepted`, `sequence`, `timestamp`, `channels` 2, `bandwidth` 1103 (Opus wideband), `samplesPerChannel` 1920, and `pcm16`, the station decoder's output as 16-bit values (`round(sample * 32767)`); `ssrc` is the packets' RTP source, which the decoder is given; `tolerance` `{"minSnrDb": 60}` |
+| `opus` | `opus-1` to `opus-4`: four consecutive RTP packets of the speakers' mix at the station's settings (48 kHz stereo, 1920 samples per packet, 24000 bit/s, wideband, the Core's default `audio_bitrate`). A receiver stream runs Opus at 48000 bit/s fullband whatever `audio_bitrate` says (media control document, receiver audio) and is read by the same decoder; its `encoder` object reports the rate | the packets before it | `status` `accepted`, `sequence`, `timestamp`, `channels` 2, `bandwidth` 1103 (Opus wideband), `samplesPerChannel` 1920, and `pcm16`, the station decoder's output as 16-bit values (`round(sample * 32767)`); `ssrc` is the packets' RTP source, which the decoder is given; `tolerance` `{"minSnrDb": 60}` |
 
 An NSDC `dbm` tolerance applies to every number of the decoded frame. An
 Opus tolerance is either `{"minSnrDb": N}` (the decoded PCM is at least N

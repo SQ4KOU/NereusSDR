@@ -186,7 +186,7 @@ int main(int argc, char* argv[])
     // against a real station. Accepted by a debug build only; a release
     // build refuses to start with it (LinkVersion::resolveTestLinkMajors).
     QCommandLineOption testLinkMajorsOpt(QStringLiteral("test-link-majors"),
-        QStringLiteral("Debug builds only: the link versions this station offers, "
+        QStringLiteral("Debug builds only: the link versions this Core offers, "
                        "for example 1,2."),
         QStringLiteral("list"));
     parser.addOption(testLinkMajorsOpt);

@@ -638,6 +638,9 @@ private slots:
         }
         QTest::newRow("audio/Headphones/Enabled is OperatorLocal (this computer's device)")
             << QStringLiteral("audio/Headphones/Enabled") << int(SettingsScope::OperatorLocal);
+        // R-R3-45: where MON plays is this computer's choice too.
+        QTest::newRow("audio/TxMonitor/Output is OperatorLocal (this computer's output)")
+            << QStringLiteral("audio/TxMonitor/Output") << int(SettingsScope::OperatorLocal);
         // The radio's own microphone input stays with the radio: TX Input's
         // mic source selector is a Core control in a remote window.
         QTest::newRow("hardware/<mac>/tx/Mic_Source is Station (the radio's mic input)")

@@ -142,7 +142,7 @@ constexpr Entry kEntries[] = {
     {"media-not-ready", nullptr,
      "Audio from the Core is not ready yet. This app asks for it again when it is."},
     {"radio-offline", nullptr,
-     "The radio at the station is offline. This receiver's audio comes back with the radio."},
+     "The radio at the Core is offline. This receiver's audio comes back with the radio."},
     {"encoder-unavailable", nullptr,
      "The Core could not start this receiver's audio."},
     {"slice-removed", nullptr,
@@ -241,9 +241,6 @@ constexpr Entry kEntries[] = {
      "This Core does not offer 4O3A control to this app."},
     {"This station cannot try noise reduction again. Update the station software.", nullptr,
      "This Core cannot try noise reduction again. Update the Core."},
-    // RadioModel.cpp: NNR diagnostics with no link to the Core.
-    {"The station is not connected.", nullptr,
-     "This app is not connected to the Core."},
 
     // Noise reduction status and refusals, NnrAdapter.cpp (two also in
     // SliceModel.cpp and RadioModel.cpp): shown in the NNR panel and when
@@ -521,6 +518,25 @@ constexpr Entry kOlderCoreEntries[] = {
      "The Power Genius at this address did not say which unit it is."},
     {"PGXL native identity timed out", nullptr,
      "The device at this address did not answer as a Power Genius in time."},
+    // The Core's reasons before they called the Core "the Core" (R-R3-21,
+    // operator decision of 2026-09-24): StationServer.cpp,
+    // SessionCommandDispatcher.cpp, AmplifierModel.cpp and WdspEngine.cpp.
+    {"Transmit configuration is unavailable on this receive-only station.", nullptr,
+     "Transmit configuration is unavailable on this receive-only Core."},
+    {"The station sets this itself; it cannot be changed from here.", nullptr,
+     "The Core sets this itself; it cannot be changed from here."},
+    {"Update this app to turn the station's TCI server on or off.", nullptr,
+     "Update this app to turn the Core's TCI server on or off."},
+    {"This Core has no TCI server for the station.", nullptr,
+     "This Core has no TCI server."},
+    {"The request to turn the station's TCI server on or off was not understood.", nullptr,
+     "The request to turn the Core's TCI server on or off was not understood."},
+    {"Operating the station's amplifier or tuner waits for remote transmit. This station is "
+     "receive-only.", nullptr,
+     "Operating the station's amplifier or tuner waits for remote transmit. This Core is "
+     "receive-only."},
+    {"NNR model changes apply after disconnecting and reconnecting the station.", nullptr,
+     "NNR model changes apply after the radio is disconnected and connected again."},
 };
 
 // Reasons worded around a value (a number, a pan's name, an action). The

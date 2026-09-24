@@ -60,6 +60,10 @@
 //                 stays on PhoneCwApplet — only VOX moves.
 //   2026-09-22 — Routed the PS-A toggle through RadioModel's shared
 //                 PureSignalSessionFacade for local and remote sessions.
+//   2026-09-24 : R-R3-45: Speakers / Headphones choice for MON on the MON
+//                 row, with a plain notice when the headphones are chosen
+//                 and not open. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -168,6 +172,8 @@
 #include "gui/StyleConstants.h"
 #include "gui/ComboStyle.h"
 #include "gui/widgets/DexpPeakMeter.h"
+#include "gui/widgets/VfoWidget.h"
+#include "core/AudioEngine.h"
 #include "core/audio/CompositeTxMicRouter.h"
 #include "core/MicProfileManager.h"
 #include "core/MoxController.h"
@@ -198,6 +204,16 @@
 #include <cmath>
 
 namespace NereusSDR {
+
+namespace {
+
+// R-R3-45: the MON output captions, in one place so a rename is one edit.
+// They match the receiver flag's output buttons (VfoWidget), in capitals
+// like the flag's other buttons.
+QString monitorSpeakersCaption()   { return QStringLiteral("SPEAKERS"); }
+QString monitorHeadphonesCaption() { return QStringLiteral("PHONES"); }
+
+} // namespace
 
 TxApplet::TxApplet(RadioModel* model, QWidget* parent)
     : AppletWidget(model, parent)
@@ -510,13 +526,51 @@ void TxApplet::buildUI()
                              " color: #ffffff;"
                              "}"));
         m_monBtn->setAccessibleName(QStringLiteral("Monitor enable"));
+        // R-R3-21: MON plays your own transmitted audio as it sounds on the
+        // air, in the output chosen beside it (R-R3-45).
         m_monBtn->setToolTip(QStringLiteral(
-            "Monitor: mix received audio into headphones during TX.\n"
-            "Does NOT persist across restarts (safety)."));
+            "Monitor: hear your own transmitted audio as it sounds on the air, "
+            "on the output chosen next to MON (SPEAKERS or PHONES).\n"
+            "MON is off each time NereusSDR starts, for safety."));
         monRow->addWidget(m_monBtn, 1);
-        monRow->addStretch();
+
+        // R-R3-45: where MON plays, beside MON. An exclusive pair in the
+        // LEV / EQ / CFC button family; speakers by default. NereusSDR-native:
+        // Thetis mixes MON into its one output.
+        const QString outStyle = Style::buttonBaseStyle()
+            + Style::greenCheckedStyle();
+        m_monSpeakersBtn = new QPushButton(monitorSpeakersCaption(), this);
+        m_monSpeakersBtn->setObjectName(QStringLiteral("TxMonitorSpeakersButton"));
+        m_monSpeakersBtn->setCheckable(true);
+        m_monSpeakersBtn->setChecked(true);
+        m_monSpeakersBtn->setFixedHeight(22);
+        m_monSpeakersBtn->setStyleSheet(outStyle);
+        m_monSpeakersBtn->setAccessibleName(QStringLiteral("Monitor on the speakers"));
+        m_monSpeakersBtn->setToolTip(QStringLiteral(
+            "Play your transmit monitor on the speakers"));
+        monRow->addWidget(m_monSpeakersBtn);
+
+        m_monHeadphonesBtn = new QPushButton(monitorHeadphonesCaption(), this);
+        m_monHeadphonesBtn->setObjectName(QStringLiteral("TxMonitorHeadphonesButton"));
+        m_monHeadphonesBtn->setCheckable(true);
+        m_monHeadphonesBtn->setFixedHeight(22);
+        m_monHeadphonesBtn->setStyleSheet(outStyle);
+        m_monHeadphonesBtn->setAccessibleName(QStringLiteral("Monitor on the headphones"));
+        m_monHeadphonesBtn->setToolTip(QStringLiteral(
+            "Play your transmit monitor on the headphones"));
+        monRow->addWidget(m_monHeadphonesBtn);
 
         vbox->addLayout(monRow);
+
+        // Why MON is silent with the headphones chosen and none open: the
+        // receiver flag's own words.
+        m_monOutputNotice = new QLabel(VfoWidget::headphonesMissingText(), this);
+        m_monOutputNotice->setObjectName(QStringLiteral("TxMonitorOutputNotice"));
+        m_monOutputNotice->setWordWrap(true);
+        m_monOutputNotice->setStyleSheet(
+            QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(Style::kAmberText));
+        m_monOutputNotice->setVisible(false);
+        vbox->addWidget(m_monOutputNotice);
 
         // Monitor volume slider row
         auto* volRow = new QHBoxLayout;
@@ -534,8 +588,12 @@ void TxApplet::buildUI()
         m_monitorVolumeSlider->setValue(50);
         m_monitorVolumeSlider->setFixedHeight(18);
         m_monitorVolumeSlider->setAccessibleName(QStringLiteral("Monitor volume"));
+        // R-R3-21: sets the TX monitor's gain (TransmitModel::monitorVolume
+        // -> AudioEngine::setTxMonitorVolume), the transmitted audio MON
+        // plays in the output chosen beside it (R-R3-45).
         m_monitorVolumeSlider->setToolTip(QStringLiteral(
-            "Monitor receive audio volume during TX (0–100 %)"));
+            "How loud you hear your own transmitted audio while MON is on, "
+            "on the output chosen next to MON (SPEAKERS or PHONES). 0 to 100."));
         volRow->addWidget(m_monitorVolumeSlider, 1);
 
         m_monitorVolumeValue = new QLabel(QStringLiteral("50"), this);
@@ -1239,6 +1297,43 @@ void TxApplet::wireControls()
         m_monBtn->setChecked(on);
         m_updatingFromModel = false;
     });
+
+    // ── R-R3-45: MON output ↔ AudioEngine::txMonitorOutput ──────────────────
+    // This computer's choice, so a local window only: a remote window cannot
+    // transmit yet, and its MON controls are held off by
+    // setTransmitPermitted. When remote transmit lands, the choice reaches
+    // the Core's AudioEngine::setTxMonitorOutput through the session.
+    if (m_model->role() == RadioModel::Role::Local) {
+        if (AudioEngine* engine = m_model->audioEngine()) {
+            connect(m_monSpeakersBtn, &QPushButton::clicked, this,
+                    [this, engine](bool) {
+                showMonitorOutput(false);
+                engine->setTxMonitorOutput(TxMonitorOutput::Speakers);
+            });
+            connect(m_monHeadphonesBtn, &QPushButton::clicked, this,
+                    [this, engine](bool) {
+                showMonitorOutput(true);
+                engine->setTxMonitorOutput(TxMonitorOutput::Headphones);
+            });
+            connect(engine, &AudioEngine::txMonitorOutputChanged, this,
+                    [this](TxMonitorOutput output) {
+                showMonitorOutput(output == TxMonitorOutput::Headphones);
+            });
+            connect(engine, &AudioEngine::headphonesAvailableChanged, this,
+                    [this](bool available) {
+                m_headphonesAvailable = available;
+                updateMonitorOutputNotice();
+            });
+            connect(engine, &AudioEngine::headphonesEnabledChanged, this,
+                    [this](bool enabled) {
+                m_headphonesEnabled = enabled;
+                updateMonitorOutputNotice();
+            });
+            m_headphonesAvailable = engine->headphonesAvailable();
+            m_headphonesEnabled = engine->headphonesEnabled();
+            showMonitorOutput(engine->txMonitorOutput() == TxMonitorOutput::Headphones);
+        }
+    }
 
     // ── Monitor volume slider ↔ TransmitModel::monitorVolume ─────────────────
     // Phase 3M-1b J.3.
@@ -2040,11 +2135,39 @@ void TxApplet::requestOpenCfcDialog()
 // the completed handshake explicitly grants that capability. Do not clear or
 // write any model state here: model-to-view updates must remain authoritative.
 // ---------------------------------------------------------------------------
+// R-R3-45: the MON output pair shows the choice; clicking the checked one
+// keeps it, as on the receiver flag.
+void TxApplet::showMonitorOutput(bool headphones)
+{
+    if (m_monSpeakersBtn) {
+        QSignalBlocker b(m_monSpeakersBtn);
+        m_monSpeakersBtn->setChecked(!headphones);
+    }
+    if (m_monHeadphonesBtn) {
+        QSignalBlocker b(m_monHeadphonesBtn);
+        m_monHeadphonesBtn->setChecked(headphones);
+    }
+    updateMonitorOutputNotice();
+}
+
+// R-R3-45: with the headphones chosen and none open, say why MON is silent
+// in the flag's words: turned on but not opened, or not set up at all.
+void TxApplet::updateMonitorOutputNotice()
+{
+    if (!m_monOutputNotice) {
+        return;
+    }
+    const bool headphones = m_monHeadphonesBtn && m_monHeadphonesBtn->isChecked();
+    m_monOutputNotice->setText(m_headphonesEnabled ? VfoWidget::headphonesNotOpenedText()
+                                                   : VfoWidget::headphonesMissingText());
+    m_monOutputNotice->setVisible(headphones && !m_headphonesAvailable);
+}
+
 void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableReason)
 {
     m_transmitPermitted = permitted;
     const QString reason = unavailableReason.isEmpty()
-        ? tr("Transmit controls are unavailable until the station confirms "
+        ? tr("Transmit controls are unavailable until the Core confirms "
              "transmit permission.")
         : unavailableReason;
 
@@ -2086,6 +2209,8 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
     apply(m_voxDlySlider);
     apply(m_monBtn);
     apply(m_monitorVolumeSlider);
+    apply(m_monSpeakersBtn);
+    apply(m_monHeadphonesBtn);
     apply(m_levBtn);
     apply(m_eqBtn);
     apply(m_cfcBtn);

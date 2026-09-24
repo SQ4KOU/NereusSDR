@@ -7,9 +7,12 @@
 // The TCI Server page and the meter data source (MMIO) windows read in the
 // words the operator approved on 2026-09-24 (R-R3-21, R-R3-48).
 // Wire reasons themselves are never touched: the table's left column is the
-// Core's and this computer's text byte for byte.
+// Core's and this computer's text byte for byte. User text calls the
+// NereusSDR computer "the Core", never "the station" (R-R3-21, 2026-09-24).
 
 #include <QtTest/QtTest>
+
+#include <algorithm>
 
 #include <QAbstractButton>
 #include <QComboBox>
@@ -1100,7 +1103,7 @@ private slots:
             QVERIFY2(!text.contains(QChar(0x2014)), qPrintable(text));
         }
         // The saved address is still the address itself.
-        const auto* listenOn = page.findChildren<QComboBox*>().value(0);
+        const auto* listenOn = page.findChild<QComboBox*>(QStringLiteral("tciListenOnCombo"));
         QVERIFY(listenOn);
         QCOMPARE(listenOn->itemData(0).toString(), QStringLiteral("127.0.0.1"));
         QCOMPARE(listenOn->itemData(1).toString(), QStringLiteral("0.0.0.0"));
@@ -1210,6 +1213,144 @@ private slots:
                 QVERIFY2(!tciAndMmioJargon().match(text).hasMatch(),
                          qPrintable(QStringLiteral("%1: %2").arg(QLatin1String(site.file), text)));
             }
+        }
+
+        // The audio reset list names what it clears in plain words.
+        const QString reset = userVisibleLiterals(
+            sourcePath("src/gui/setup/AudioAdvancedPage.cpp")).join(QLatin1Char('\n'));
+        const QString choices = QStringLiteral(
+            "\\u2022 All device choices (Speakers / Headphones / TX Input / VAX 1\\u20134)");
+        QVERIFY2(reset.contains(choices), qPrintable(choices));
+        QVERIFY(OperatorWording::isPlain(QStringLiteral(
+            "All device choices (Speakers / Headphones / TX Input / VAX 1\u20134)")));
+        QVERIFY(!reset.contains(QStringLiteral("device bindings")));
+        // R-R3-21 (Task 8): the last line in internal terms, now in plain
+        // words, so the whole message is plain.
+        const QString processing = QStringLiteral("\\u2022 Audio processing rate and block size");
+        QVERIFY2(reset.contains(processing), qPrintable(processing));
+        QVERIFY(!reset.contains(QStringLiteral("DSP sample rate")));
+        for (const QString& text : userVisibleLiterals(
+                 sourcePath("src/gui/setup/AudioAdvancedPage.cpp"))) {
+            if (text.startsWith(QLatin1String("This will clear:"))) {
+                QVERIFY2(OperatorWording::isPlain(text),
+                         qPrintable(text + QStringLiteral(" [")
+                                    + OperatorWording::internalTermIn(text) + QLatin1Char(']')));
+            }
+        }
+    }
+
+    // R3 completion Task 8 (R-R3-21, operator decision of 2026-09-24):
+    // user text calls the NereusSDR computer "the Core", in this app as in
+    // the iPhone app; "station" is kept only in its ham sense (the
+    // station's amplifier, your station, a FreeDV station). Every sentence
+    // the reason table shows, and every string a user can read in the
+    // sources (a reason the table translates is checked as it is shown),
+    // is held to OperatorWording::coreCalledStationIn.
+    void noUserTextCallsTheCoreAStation()
+    {
+        QStringList failures;
+        QStringList reasons = OperatorReasonText::knownReasons();
+        reasons += OperatorReasonText::tableKeys();
+        for (const QString& reason : std::as_const(reasons)) {
+            QStringList shown{OperatorReasonText::forDisplay(reason)};
+            shown += OperatorReasonText::shortFormsForDisplay(reason);
+            for (const QString& text : std::as_const(shown)) {
+                if (!OperatorWording::coreCalledStationIn(text).isEmpty()) {
+                    failures.append(reason + QStringLiteral(" -> ") + text);
+                }
+            }
+        }
+
+        // Literals that are never shown as words, each with why.
+        const struct {
+            const char* file;
+            const char* start;
+        } notShown[] = {
+            // The TLS server's name in the connection's HTTP header.
+            {"src/core/session/StationServer.cpp", "NereusSDR station"},
+            // The store's own errors, for the log: DspAssetService words
+            // what an app is told (isOperatorMessage).
+            {"src/core/dsp/DspAssetStore.cpp", "Station profile root is empty"},
+            {"src/core/dsp/DspAssetStore.cpp", "NNR model assets are station-scoped"},
+            {"src/core/dsp/DspAssetStore.cpp", "DSP asset ID is not present in this station store"},
+            // A value the Core sends (nnrDiagnostics' model source) and this
+            // app compares; a wire value keeps its words. Kept for the
+            // operator's checkpoint.
+            {"src/models/SliceModel.cpp", "Station asset"},
+            // Ambiguous (the Core, or the operator's station being ready);
+            // kept for the operator's checkpoint.
+            {"src/gui/PsForm.cpp",
+             "Remember whether automatic calibration should resume when the station is ready."},
+        };
+        static const QRegularExpression placeholder(QStringLiteral("%[0-9]"));
+        static const QRegularExpression stationWord(QStringLiteral("\\bstations?\\b"),
+                                                    QRegularExpression::CaseInsensitiveOption);
+        const QString general = OperatorReasonText::forDisplay(QString());
+        int checked = 0;
+        QDirIterator it(sourcePath("src"), {QStringLiteral("*.cpp"), QStringLiteral("*.h")},
+                        QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString path = it.next();
+            if (path.endsWith(QLatin1String("/OperatorReasonText.cpp"))) {
+                continue;  // Its left column is wire text; its sentences are checked above.
+            }
+            const QString file =
+                QDir(QStringLiteral(NEREUS_SOURCE_DIR)).relativeFilePath(path);
+            for (const QString& literal : userVisibleLiterals(path)) {
+                if (!literal.contains(QLatin1Char(' ')) || !stationWord.match(literal).hasMatch()) {
+                    continue;
+                }
+                const bool exempt = std::any_of(
+                    std::begin(notShown), std::end(notShown), [&](const auto& entry) {
+                        return file == QLatin1String(entry.file)
+                            && literal.startsWith(QLatin1String(entry.start));
+                    });
+                if (exempt) {
+                    continue;
+                }
+                ++checked;
+                // A reason the table knows is shown in the table's words.
+                QString sample = literal;
+                sample.replace(placeholder, QStringLiteral("5"));
+                const QString translated = OperatorReasonText::forDisplay(sample);
+                const QString shown =
+                    translated != sample && translated != general ? translated : literal;
+                const QString station = OperatorWording::coreCalledStationIn(shown);
+                if (!station.isEmpty()) {
+                    failures.append(QStringLiteral("%1: %2").arg(file, shown));
+                }
+            }
+        }
+        // QtTest cuts a long message short; each failure gets its own line.
+        for (const QString& failure : std::as_const(failures)) {
+            qWarning().noquote() << failure;
+        }
+        QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
+        QVERIFY2(checked >= 60, qPrintable(QString::number(checked)));
+
+        // The words the operator chose for the connection picker and the
+        // Setup page (the iPhone design's words).
+        const QString selector = joinedSource(sourcePath("src/gui/ConnectionSelector.cpp"));
+        for (const char* line : {"Cores on this network", "No Cores found on this network.",
+                                 "Your Cores", "No saved Cores."}) {
+            QVERIFY2(selector.contains(QLatin1String(line)), line);
+        }
+        QVERIFY(joinedSource(sourcePath("src/gui/GuiConnectionController.cpp"))
+                    .contains(QLatin1String("under Your Cores.")));
+        QVERIFY(joinedSource(sourcePath("src/gui/SetupDialog.cpp"))
+                    .contains(QLatin1String("\"Remote Access\"")));
+        QVERIFY(!joinedSource(sourcePath("src/gui/SetupDialog.cpp"))
+                     .contains(QLatin1String("\"Remote Station\"")));
+
+        // The rule catches the old words and keeps the ham sense.
+        QVERIFY(!OperatorWording::coreCalledStationIn(
+                     QStringLiteral("Transmit controls are unavailable until the station "
+                                    "confirms transmit permission.")).isEmpty());
+        QVERIFY(!OperatorWording::coreCalledStationIn(QStringLiteral("Your stations")).isEmpty());
+        for (const char* ham : {"Hide my station from the dashboard", "Send QSY to this station",
+                                "The Core keeps these for the station's Power Genius.",
+                                "Use --station to change it."}) {
+            QVERIFY2(OperatorWording::coreCalledStationIn(QLatin1String(ham)).isEmpty(), ham);
         }
     }
 

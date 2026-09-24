@@ -1062,41 +1062,6 @@ public:
 
     // Access buffer count for buffer-state tests.
     int txIqBufferedSamplesForTest() const { return m_txIqCount.load(std::memory_order_acquire); }
-
-    // ── RUNSTOP packet test seams (3M-1a E.5; R-R3-49) ──────────────────────
-    // metisStartPacketForTest — compose the 64-byte RUNSTOP start packet that
-    // sendMetisStart() would send (without a live socket).
-    //
-    // IMPORTANT: keep in sync with sendMetisStart() / sendMetisStop() in P1RadioConnection.cpp.
-    //
-    // Wire format: pkt[3] = run_bits: 0x01 (IQ only) or 0x02 (IQ + mic).
-    // R-R3-49: the Network Watchdog setting is not sent here, as in Thetis
-    // (networkproto1.c:50 [v2.10.3.15]); bit 7 stays 0 (the HL2 gateware's
-    // watchdog_disable, dsopenhpsdr1.v:399-400, is never set).
-    QByteArray metisStartPacketForTest(bool iqAndMic) const {
-        QByteArray pkt(64, '\0');
-        pkt[0] = static_cast<char>(0xEF);
-        pkt[1] = static_cast<char>(0xFE);
-        pkt[2] = static_cast<char>(0x04);
-        const quint8 runBits     = iqAndMic ? quint8(0x02) : quint8(0x01);
-        pkt[3] = static_cast<char>(runBits);
-        return pkt;
-    }
-
-    // metisStopPacketForTest — compose the 64-byte RUNSTOP stop packet (run = 0).
-    //
-    // IMPORTANT: keep in sync with sendMetisStart() / sendMetisStop() in P1RadioConnection.cpp.
-    //
-    // Wire format: pkt[3] = 0x00, whatever the Network Watchdog setting
-    // (Thetis networkproto1.c:85 [v2.10.3.15]).
-    QByteArray metisStopPacketForTest() const {
-        QByteArray pkt(64, '\0');
-        pkt[0] = static_cast<char>(0xEF);
-        pkt[1] = static_cast<char>(0xFE);
-        pkt[2] = static_cast<char>(0x04);
-        pkt[3] = static_cast<char>(0x00);
-        return pkt;
-    }
 #endif
 };
 

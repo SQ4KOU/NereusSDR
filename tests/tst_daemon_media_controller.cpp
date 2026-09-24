@@ -62,6 +62,12 @@ using namespace NereusSDR;
 namespace {
 
 constexpr char kConnectionId[] = "11111111-2222-4333-8444-555555555555";
+// R-R3-21: the waits on the real libdatachannel transport (ICE over
+// loopback, then the first display frame) wait for the condition itself,
+// with room for a heavily loaded machine: ten seconds fell short once
+// under a full parallel build. Only the timeout is generous; nothing
+// measured depends on it.
+constexpr int kRealTransportWaitMs = 60'000;
 
 // Messages the controller wrote to its own log category while installed.
 QStringList g_daemonMediaMessages;
@@ -1502,6 +1508,7 @@ void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
     // The far end answers Core's offer over the session, as a GUI does.
     LibDataChannelMediaTransport far;
     QSignalSpy farDisplays(&far, &IMediaTransport::displayReceived);
+    QSignalSpy farFailed(&far, &IMediaTransport::connectionFailed);
     QVERIFY(far.start({IMediaTransport::Role::Answerer, 0x4e523302U}));
     QSignalSpy controls(&harness.client, &StationClient::mediaControlReceived);
     connect(&harness.client, &StationClient::mediaControlReceived, &far,
@@ -1535,22 +1542,25 @@ void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
         {QStringLiteral("op"), QStringLiteral("start")},
         {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}},
         harness.client.sessionEpoch()));
-    QTRY_VERIFY_WITH_TIMEOUT(core && core->isReady() && far.isReady(), 10'000);
+    QTRY_VERIFY2_WITH_TIMEOUT(core && core->isReady() && far.isReady(),
+                              farFailed.isEmpty() ? "the media link did not come up in time"
+                                                  : "the far end's media link failed",
+                              kRealTransportWaitMs);
 
     QVERIFY(harness.client.sendMediaControl(
         subscription(62, 1, harness.sliceId,
                      harness.radio.streamCentreHz(harness.streamIndex)),
         harness.client.sessionEpoch()));
-    QTRY_VERIFY(([&] {
+    QTRY_VERIFY_WITH_TIMEOUT(([&] {
         harness.feedRadio();
         return !messageFor(controls, QStringLiteral("context"), 62).isEmpty();
-    })());
+    })(), kRealTransportWaitMs);
     int cycle = 0;
     QTRY_VERIFY_WITH_TIMEOUT(([&] {
         harness.feedRadio(0.125 + 0.0078125 * (++cycle % 16));
         harness.sendDisplayTick();
         return !farDisplays.isEmpty();
-    })(), 10'000);
+    })(), kRealTransportWaitMs);
     // Every frame Core has sent so far was produced before this point.
     QElapsedTimer sinceLastSend;
     sinceLastSend.start();
@@ -1572,7 +1582,7 @@ void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
     //    emitted on this thread and Core takes the source's latest frame
     //    inside the emit, so an emit after a newer frame was published
     //    hands Core a due frame. No display tick runs until the one below.
-    QTRY_VERIFY_WITH_TIMEOUT(!core->displayBusy(), 10'000);
+    QTRY_VERIFY_WITH_TIMEOUT(!core->displayBusy(), kRealTransportWaitMs);
     constexpr qint64 kOutputPeriodMs = 1000 / 60 + 1;
     QTRY_VERIFY(sinceLastSend.elapsed() > 2 * kOutputPeriodMs);
     auto* source = harness.controller.findChild<DaemonSpectrumSource*>();
@@ -1595,7 +1605,7 @@ void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
         }
         harness.feedRadio(0.3125);
         return false;
-    })(), 10'000);
+    })(), kRealTransportWaitMs);
     far.stop();
     std::this_thread::sleep_for(std::chrono::seconds(2));
     harness.sendDisplayTick();
@@ -3975,72 +3985,141 @@ void TstDaemonMediaController::staleReceiverRevisionIsIgnoredAndAFifthStreamIsRe
     h.finish();
 }
 
-// A receiver stream runs the session's one quality choice: Opus at the
-// Core's configured audio bitrate (the main stream's encoder profile), or
+// A receiver stream runs the session's one quality choice: Opus, or
 // lossless when asked and the rules admit it; refused lossless keeps Opus
-// and says why, as the main stream does.
+// and says why, as the main stream does. Compressed, it runs Opus at 48
+// kbit/s fullband (kReceiverAudioOpusBitrate) whatever audio_bitrate says:
+// when Opus is the choice, when lossless is refused, and when lossless
+// falls back (the window asks for Opus again). The speakers' mix keeps the
+// Core's audio_bitrate, and every packet the receiver stream sends is coded
+// fullband.
 void TstDaemonMediaController::receiverStreamFollowsTheSessionAudioProfile()
 {
     OpusAudioEncoder encoder;
     if (!encoder.isReady()) {
         QSKIP("Opus encoder is unavailable in this build");
     }
-    OpusAudioCodecConfig configured;
-    configured.bitrate = 48'000;
-    const DaemonAudioSender reference(nullptr, configured);
-    QVERIFY(reference.encoderProfile().has_value());
-    const QJsonObject expectedOpus = remoteAudioEncoderToJson(*reference.encoderProfile());
+    QCOMPARE(DaemonMediaController::kReceiverAudioOpusBitrate, 48'000);
+    OpusAudioCodecConfig receiverConfig;
+    receiverConfig.bitrate = DaemonMediaController::kReceiverAudioOpusBitrate;
+    const DaemonAudioSender receiverReference(nullptr, receiverConfig);
+    QVERIFY(receiverReference.encoderProfile().has_value());
+    QCOMPARE(receiverReference.encoderProfile()->targetBitrate, 48'000);
+    QCOMPARE(receiverReference.encoderProfile()->audioBandwidthHz, 20'000);
+    const QJsonObject expectedReceiver =
+        remoteAudioEncoderToJson(*receiverReference.encoderProfile());
 
-    for (const bool losslessNegotiated : {true, false}) {
-        Harness h;
-        h.controller.setAudioTargetBitrate(configured.bitrate);
-        h.establishSession();
-        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
-        QVERIFY(h.client.sendMediaControl(receiverStart(), h.client.sessionEpoch()));
-        QTRY_VERIFY(h.mediaTransport);
-        h.mediaTransport->losslessNegotiated = losslessNegotiated;
-        h.mediaTransport->becomeReady();
+    // The speakers' mix at each audio_bitrate the Core accepts, and the
+    // media connection with and without the lossless format.
+    for (const int mainBitrate : {24'000, 48'000}) {
+        OpusAudioCodecConfig mainConfig;
+        mainConfig.bitrate = mainBitrate;
+        const DaemonAudioSender mainReference(nullptr, mainConfig);
+        QVERIFY(mainReference.encoderProfile().has_value());
+        const QJsonObject expectedMain = remoteAudioEncoderToJson(*mainReference.encoderProfile());
+        for (const bool losslessNegotiated : {true, false}) {
+            const QByteArray row = QByteArray::number(mainBitrate)
+                + (losslessNegotiated ? " lossless offered" : " no lossless");
+            Harness h;
+            AudioEngine* const engine = h.radio.audioEngine();
+            engine->setSliceStreaming(h.spareSliceId, true);
+            h.controller.setAudioTargetBitrate(mainBitrate);
+            h.establishSession();
+            QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+            QVERIFY(h.client.sendMediaControl(receiverStart(), h.client.sessionEpoch()));
+            QTRY_VERIFY(h.mediaTransport);
+            // The offer is today's: the speakers' rate, not the receivers'.
+            QCOMPARE(h.mediaTransport->startOptions.audioTargetBitrate, mainBitrate);
+            const quint32 receiverSsrc = h.mediaTransport->startOptions.receiverAudioSsrcs.at(0);
+            h.mediaTransport->losslessNegotiated = losslessNegotiated;
+            h.mediaTransport->becomeReady();
 
-        QVERIFY(h.client.sendMediaControl(audioControl(1, true, QStringLiteral("opus")),
-                                          h.client.sessionEpoch()));
-        QTRY_COMPARE(audioContextsIn(controls).size(), 1);
-        QCOMPARE(audioContextsIn(controls).constLast().value(QStringLiteral("encoder"))
-                     .toObject(), expectedOpus);
+            QVERIFY(h.client.sendMediaControl(audioControl(1, true, QStringLiteral("opus")),
+                                              h.client.sessionEpoch()));
+            QTRY_COMPARE(audioContextsIn(controls).size(), 1);
+            QCOMPARE(audioContextsIn(controls).constLast().value(QStringLiteral("encoder"))
+                         .toObject(), expectedMain);
 
-        QVERIFY(h.client.sendMediaControl(receiverAudioControl(h.spareSliceId, 1, true),
-                                          h.client.sessionEpoch()));
-        QTRY_COMPARE(receiverContextsIn(controls).size(), 1);
-        QJsonObject context = receiverContextsIn(controls).constLast();
-        QCOMPARE(context.value(QStringLiteral("profile")).toString(), QStringLiteral("opus"));
-        QCOMPARE(context.value(QStringLiteral("encoder")).toObject(), expectedOpus);
-        QVERIFY(!context.contains(QStringLiteral("profileRefusal")));
-        QCOMPARE(h.controller.receiverAudioProfile(h.spareSliceId),
-                 std::optional{RemoteAudioProfile::Opus});
-
-        QVERIFY(h.client.sendMediaControl(
-            receiverAudioControl(h.spareSliceId, 2, true, QStringLiteral("lossless")),
-            h.client.sessionEpoch()));
-        QTRY_COMPARE(receiverContextsIn(controls).size(), 2);
-        context = receiverContextsIn(controls).constLast();
-        QVERIFY(context.value(QStringLiteral("enabled")).toBool());
-        if (losslessNegotiated) {
-            QCOMPARE(context.value(QStringLiteral("profile")).toString(),
-                     QStringLiteral("lossless"));
-            QCOMPARE(context.value(QStringLiteral("encoder")).toObject(),
-                     remoteAudioL16EncoderToJson(l16EncoderProfile()));
+            // Opus chosen.
+            QVERIFY(h.client.sendMediaControl(receiverAudioControl(h.spareSliceId, 1, true),
+                                              h.client.sessionEpoch()));
+            QTRY_COMPARE(receiverContextsIn(controls).size(), 1);
+            QJsonObject context = receiverContextsIn(controls).constLast();
+            QCOMPARE(context.value(QStringLiteral("profile")).toString(), QStringLiteral("opus"));
+            QVERIFY2(context.value(QStringLiteral("encoder")).toObject() == expectedReceiver,
+                     row.constData());
+            QVERIFY(!context.contains(QStringLiteral("profileRefusal")));
             QCOMPARE(h.controller.receiverAudioProfile(h.spareSliceId),
-                     std::optional{RemoteAudioProfile::Lossless});
-        } else {
-            QCOMPARE(context.value(QStringLiteral("profile")).toString(),
-                     QStringLiteral("opus"));
-            QCOMPARE(context.value(QStringLiteral("profileRefusal")).toString(),
-                     QStringLiteral("lossless-unavailable"));
-            QCOMPARE(context.value(QStringLiteral("encoder")).toObject(), expectedOpus);
+                     std::optional{RemoteAudioProfile::Opus});
+            feedSlicesBlock(h, {{h.spareSliceId, 0.5f}});
+            QTRY_VERIFY(!packetsWithSsrc(h.mediaTransport->rtpPackets, receiverSsrc).isEmpty());
+
+            // Lossless asked for: lossless when offered, else Opus at 48
+            // kbit/s with the refusal.
+            QVERIFY(h.client.sendMediaControl(
+                receiverAudioControl(h.spareSliceId, 2, true, QStringLiteral("lossless")),
+                h.client.sessionEpoch()));
+            QTRY_COMPARE(receiverContextsIn(controls).size(), 2);
+            context = receiverContextsIn(controls).constLast();
+            QVERIFY(context.value(QStringLiteral("enabled")).toBool());
+            if (losslessNegotiated) {
+                QCOMPARE(context.value(QStringLiteral("profile")).toString(),
+                         QStringLiteral("lossless"));
+                QCOMPARE(context.value(QStringLiteral("encoder")).toObject(),
+                         remoteAudioL16EncoderToJson(l16EncoderProfile()));
+                QCOMPARE(h.controller.receiverAudioProfile(h.spareSliceId),
+                         std::optional{RemoteAudioProfile::Lossless});
+            } else {
+                QCOMPARE(context.value(QStringLiteral("profile")).toString(),
+                         QStringLiteral("opus"));
+                QCOMPARE(context.value(QStringLiteral("profileRefusal")).toString(),
+                         QStringLiteral("lossless-unavailable"));
+                QVERIFY2(context.value(QStringLiteral("encoder")).toObject() == expectedReceiver,
+                         row.constData());
+            }
+            QVERIFY(decodeReceiverAudioContext(context).has_value());
+
+            // Lossless falls back: the window asks for Opus again after its
+            // link trial. Still 48 kbit/s, not the speakers' rate.
+            QVERIFY(h.client.sendMediaControl(
+                receiverAudioControl(h.spareSliceId, 3, true, QStringLiteral("opus")),
+                h.client.sessionEpoch()));
+            QTRY_COMPARE(receiverContextsIn(controls).size(), 3);
+            context = receiverContextsIn(controls).constLast();
+            QCOMPARE(context.value(QStringLiteral("profile")).toString(), QStringLiteral("opus"));
+            QVERIFY2(context.value(QStringLiteral("encoder")).toObject() == expectedReceiver,
+                     row.constData());
+            const std::optional<RemoteReceiverAudioContextMessage> decoded =
+                decodeReceiverAudioContext(context);
+            QVERIFY(decoded.has_value() && decoded->context.encoder.has_value());
+            QCOMPARE(decoded->context.encoder->targetBitrate, 48'000);
+            const qsizetype before = packetsWithSsrc(h.mediaTransport->rtpPackets,
+                                                     receiverSsrc).size();
+            feedSlicesBlock(h, {{h.spareSliceId, 0.5f}});
+            QTRY_VERIFY(packetsWithSsrc(h.mediaTransport->rtpPackets, receiverSsrc).size()
+                        > before);
+
+            // Every Opus packet on the receiver stream is coded fullband.
+            int opusPackets = 0;
+            for (const QByteArray& packet :
+                 packetsWithSsrc(h.mediaTransport->rtpPackets, receiverSsrc)) {
+                if (audioRtpPayloadType(packet) != OpusAudioCodecConfig::kPayloadType) {
+                    continue;
+                }
+                const OpusRtpInspection inspected = inspectOpusRtp(packet, receiverSsrc);
+                QCOMPARE(inspected.status, OpusAudioCodecStatus::Accepted);
+                QCOMPARE(inspected.packetInfo.bandwidth, bandwidthForBitrate(48'000));
+                ++opusPackets;
+            }
+            QVERIFY(opusPackets >= 2);
+
+            // The main stream was not touched by any of it, and still runs
+            // at the Core's audio_bitrate.
+            QCOMPARE(audioContextsIn(controls).size(), 1);
+            QCOMPARE(h.controller.audioTargetBitrate(), mainBitrate);
+            engine->setSliceStreaming(h.spareSliceId, false);
+            h.finish();
         }
-        QVERIFY(decodeReceiverAudioContext(context).has_value());
-        // The main stream was not touched by either.
-        QCOMPARE(audioContextsIn(controls).size(), 1);
-        h.finish();
     }
 
     // The Core's own setting refuses lossless for receiver streams too.
@@ -5166,6 +5245,9 @@ void TstDaemonMediaController::headphonesMixFollowsTheProfileAndTheRadio()
     QCOMPARE(context->profile, std::optional{RemoteAudioProfile::Opus});
     QVERIFY(context->encoder.has_value());
     QCOMPARE(context->encoder->targetBitrate, h.controller.audioTargetBitrate());
+    // A speaker-side mix: the Core's audio_bitrate (24 kbit/s by default),
+    // not the receiver streams' 48 kbit/s.
+    QCOMPARE(context->encoder->targetBitrate, 24'000);
     feedSlicesBlock(h, {{h.sliceId, 0.0f}, {h.spareSliceId, 0.5f}});
     QTRY_COMPARE(packetsWithSsrc(h.mediaTransport->rtpPackets, headphonesSsrc).size(), 1);
 

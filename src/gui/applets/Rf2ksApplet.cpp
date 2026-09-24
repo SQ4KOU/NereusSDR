@@ -230,7 +230,7 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
     root->addWidget(m_staleLabel);
 
     // R-R3-22: a remote window's line for the Core's connection to the amp
-    // and the reason a Disconnect or Reconnect was not taken.
+    // and the reason a Disconnect or Connect was not taken.
     m_connectionLabel = new QLabel(this);
     m_connectionLabel->setObjectName(QStringLiteral("rfKitConnectionLabel"));
     m_connectionLabel->setTextFormat(Qt::PlainText);
@@ -373,7 +373,7 @@ void Rf2ksApplet::updateConnectionLine()
     m_connectionLabel->setVisible(true);
 }
 
-// R-R3-22: the Core answered the applet's own Disconnect or Reconnect: a
+// R-R3-22: the Core answered the applet's own Disconnect or Connect: a
 // refusal shows its reason; either way the request is no longer waiting.
 // The RF-Kit page's requests show on the page.
 void Rf2ksApplet::onStationCommandFinished(quint32 commandId, bool accepted,
@@ -402,6 +402,13 @@ void Rf2ksApplet::requestRemoteConnectionToggle()
     m_pendingCommandId = outcome.sent ? outcome.commandId : 0;
     m_requestReason = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
     updateConnectionLine();
+    // R-R3-21 / R-R3-23: a refusal of this request shows on the applet's
+    // connection line, so it is not toasted too, as the accessory pages
+    // claim theirs. The claim is on the line itself: it holds only while
+    // the line is on screen when the refusal arrives.
+    if (outcome.sent) {
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId, m_connectionLabel);
+    }
 }
 
 QString Rf2ksApplet::connectionLineTextForTesting() const
@@ -640,7 +647,7 @@ QMenu* Rf2ksApplet::buildContextMenu(QObject* menuParent)
     auto* disco = menu->addAction(remote
         ? AmpApplet::stationConnectionToggleText(
               m_rfKit ? m_rfKit->connectionPhase() : TunerModel::ConnectionPhase::Disabled)
-        : (active ? QStringLiteral("Disconnect") : QStringLiteral("Reconnect")));
+        : (active ? QStringLiteral("Disconnect") : QStringLiteral("Connect")));
     auto* diag  = menu->addAction(QStringLiteral("Copy diagnostics to clipboard"));
 
     connect(openAdv, &QAction::triggered, this, [this] {

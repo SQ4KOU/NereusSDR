@@ -212,7 +212,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// CAT & Network > Remote Station
+// CAT & Network > Remote Access (the class keeps its name)
 // R-R3-38: route to the application-owned selector. Core credentials remain
 // in the OperatorLocal address book; this page no longer edits legacy keys.
 // ---------------------------------------------------------------------------

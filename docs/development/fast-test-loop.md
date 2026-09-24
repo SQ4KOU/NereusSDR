@@ -97,6 +97,56 @@ change that: it makes each dependency cheap, not narrower. Use `-L` to get
 fast feedback while iterating; use the full suite before you call something
 done.
 
+## Real-time tests
+
+A few tests measure real-time behaviour against the wall clock: how much
+processor time a DSP worker gets, whether a paced audio stream keeps up,
+how long a thread waits for another. They carry the `realtime` label on top
+of their derived labels, and `ctest -N -L realtime` lists them:
+
+```bash
+ctest --test-dir build -N -L realtime
+```
+
+**A `realtime` test is valid only on a machine without other heavy work.**
+Another build, a second worktree's suite or an indexer taking the
+processors can make it fail although the code is right. `RUN_SERIAL` does
+not prevent that: it keeps other tests of the same ctest run away, not
+other programs.
+
+On a shared or busy machine, run the suite without them first, then run
+them alone:
+
+```bash
+cmake --build build --target all_tests
+ctest --test-dir build -LE realtime --output-on-failure   # everything else
+ctest --test-dir build -L realtime --output-on-failure    # then these, alone
+```
+
+`tests_realtime` builds just these tests, like any other label's target:
+
+```bash
+cmake --build build --target tests_realtime && ctest --test-dir build -L realtime
+```
+
+A `realtime` test that fails prints the machine's load average in its log,
+just after the failure, for example
+`realtime test playsOnEverySpeakerFormat(192 kHz stereo) failed at load average 18.20 9.75 6.10 (1, 5, 15 min)`
+(the helper is `tests/RealtimeTestLoad.h`; Windows says it has no load
+average). A `realtime` failure under load is a rerun-alone item: rerun that
+test by itself on a quiet machine before you call anything done. Never
+treat it as background noise: if it also fails alone, it is a real failure.
+
+CI keeps running the `realtime` tests in its normal suite, with no label
+filter, because each CI job has its runner to itself.
+
+To add a test to the group, register it with
+`nereus_add_test(<name> REALTIME ...)` and call
+`NereusSDR::RealtimeTestLoad::printLoadAverageIfFailed()` from its
+`cleanup()` slot. Use it for a test whose pass or fail depends on keeping
+up with the wall clock, not for one that merely waits with a generous
+timeout.
+
 ## Test windows
 
 Tests run without windows by default. Every test registered through

@@ -12,6 +12,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QStringList>
 #include <QtGlobal>
 
 namespace NereusSDR {
@@ -24,6 +25,13 @@ namespace NereusSDR {
 // Shutdown in order and pumps 480-frame PCM records every 10 ms while a
 // microphone is open.  Returns 0 after Shutdown.
 int runCaptureHelper(int argc, char** argv);
+
+// R-R3-21: the input device names a test run's helper answers from. A test
+// run (PortAudioBus::portAudioBarredForTestRun) never initialises
+// PortAudio, so the helper looks a named device up here instead: a name
+// not on the list fails as a missing device, a listed one fails without
+// opening anything. Call before runCaptureHelper; ignored outside a test run.
+void setCaptureHelperTestDevices(const QStringList& names);
 
 // Process-level pipe plumbing shared by the helper and its scripted test
 // double.  Not for use inside NereusSDR itself.

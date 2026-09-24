@@ -142,7 +142,19 @@ function(nereus_add_test name)
     # its own on every platform: macOS keeps every linked dylib loaded, so
     # a test linked to NereusSDRLib there cannot see what GCC's default
     # --as-needed drops on Linux (R-R3-10).
-    cmake_parse_arguments(_nat "NATIVE_WINDOW;CORE_ONLY" "" "EXTRA_LABELS" ${ARGN})
+    #
+    # REALTIME marks a test that measures real-time behaviour against the
+    # wall clock (R-R3-21, R-R3-40): how much processor time a worker gets,
+    # whether a paced stream keeps up, how long a thread waits. Other
+    # programs loading the machine can fail such a test, which RUN_SERIAL
+    # cannot prevent (it only keeps other tests of the same ctest run
+    # away). It appends the `realtime` label to the derived ones, so a busy
+    # machine can run the suite with `-LE realtime` and these alone after
+    # it (docs/development/fast-test-loop.md, "Real-time tests"); the label
+    # gets its tests_realtime build target like every other label. Each
+    # such test also prints the load average when a case fails
+    # (tests/RealtimeTestLoad.h).
+    cmake_parse_arguments(_nat "NATIVE_WINDOW;CORE_ONLY;REALTIME" "" "EXTRA_LABELS" ${ARGN})
     set(_extra_sources ${_nat_UNPARSED_ARGUMENTS})
 
     # Sharding gate — when this test's hash bucket doesn't match the
@@ -230,6 +242,11 @@ function(nereus_add_test name)
     if(_nat_NATIVE_WINDOW)
         list(REMOVE_ITEM _test_labels "unclassified")
         list(APPEND _test_labels "native-window")
+    endif()
+    if(_nat_REALTIME)
+        # Appended, not a classification: the derived labels stay, including
+        # "unclassified", so `ctest -L core` still selects what it did.
+        list(APPEND _test_labels "realtime")
     endif()
     set_tests_properties(${name} PROPERTIES
         LABELS "${_test_labels}"
@@ -326,17 +343,21 @@ if(TARGET wdsp_static)
     nereus_add_test(tst_wdsp_nnr EXTRA_LABELS core)
     nereus_add_test(tst_nnr_model_assets EXTRA_LABELS core)
     if(NOT WIN32)
+        # wdsp_static arrives through the core library, as for tst_wdsp_nnr;
+        # linking it again here made the linker warn about a duplicate library.
         nereus_add_test(tst_linux_port_wait EXTRA_LABELS core)
-        target_link_libraries(tst_linux_port_wait PRIVATE wdsp_static)
         target_compile_definitions(tst_linux_port_wait PRIVATE WDSP_STATIC_BUILD)
     endif()
     # R-R3-39: a real RX channel with an overloaded worker still gives
     # control calls a bounded turn at csDSP (dsplock.c).
     # wdsp_static arrives through the core library, as for tst_wdsp_nnr.
-    nereus_add_test(tst_wdsp_dsp_turn_taking EXTRA_LABELS core)
+    # REALTIME: it times those turns and the worker's throughput on the
+    # wall clock.
+    nereus_add_test(tst_wdsp_dsp_turn_taking EXTRA_LABELS core REALTIME)
     # R-R3-39: channel teardown and rebuilds wait for a slow DSP worker to
-    # leave its loop before freeing its memory (dsplock.c).
-    nereus_add_test(tst_wdsp_channel_shutdown EXTRA_LABELS core)
+    # leave its loop before freeing its memory (dsplock.c). REALTIME: it
+    # holds an idle teardown's wait to the worker's measured wake-up time.
+    nereus_add_test(tst_wdsp_channel_shutdown EXTRA_LABELS core REALTIME)
     if(NOT WIN32)
         # R-R3-41: linux_port.c's thread-start hook fires once per channel
         # worker and flush thread, on that thread, with its kind and channel.
@@ -349,7 +370,7 @@ if(TARGET wdsp_static)
         # Windows. Real time, about 45 s. RUN_SERIAL (R-R3-40): it measures
         # the worker's real processor time, so ctest never runs it beside
         # another test that would take that processor away.
-        nereus_add_test(tst_receiver_dsp_load_frames EXTRA_LABELS core)
+        nereus_add_test(tst_receiver_dsp_load_frames EXTRA_LABELS core REALTIME)
         set_tests_properties(tst_receiver_dsp_load_frames PROPERTIES RUN_SERIAL TRUE)
     endif()
     nereus_add_test(tst_wdsp210_cfc_compat WdspCfcProbe.c EXTRA_LABELS core)
@@ -915,7 +936,8 @@ nereus_add_test(tst_rx_dsp_worker_multi_slice)
 # R-R3-40: RxDspWorker bounds how long a queued I/Q batch may wait. Stamped
 # batches, a test-only processing delay slower than real time, and the
 # one-log-line-per-episode contract. NereusSDR-original; no WDSP needed.
-nereus_add_test(tst_rx_dsp_worker_input_delay)
+# REALTIME: the bound is a wall-clock delay while batches arrive in real time.
+nereus_add_test(tst_rx_dsp_worker_input_delay REALTIME)
 
 # R-R3-40: one periodic sampler turns each receiver's WDSP load counters into
 # a snapshot every reader shares; a stuck block reads as overloaded, an idle
@@ -2746,6 +2768,11 @@ nereus_add_test(tst_tx_cfc_dialog)
 # NereusSDR-native UI (no Thetis cite stamps required for the applet layer).
 nereus_add_test(tst_tx_applet_mon)
 
+# R-R3-45: the SPEAKERS / PHONES choice beside MON on the TX applet, and the
+# plain notice when the headphones are chosen and not open.
+nereus_add_test(tst_tx_applet_mon_output)
+target_compile_definitions(tst_tx_applet_mon_output PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1a H.4: PowerPage wiring — Max Power, per-band Tune Power, ATT-on-TX ──
 # (class renamed from PowerPaPage in IA reshape Phase 6, 2026-05-02; test
 #  filename retains 'power_pa_page' for git history continuity)
@@ -3946,6 +3973,13 @@ nereus_add_test(tst_audio_engine_tx_monitor_state)
 # Pre-code review §4.3 + §4.4.
 nereus_add_test(tst_audio_engine_tx_monitor_block)
 target_compile_definitions(tst_audio_engine_tx_monitor_block PRIVATE NEREUS_BUILD_TESTS)
+
+# R-R3-45 (operator decision 2026-09-24): MON plays on the speakers or the
+# headphones, the operator's choice (audio/TxMonitor/Output, default
+# speakers). Default, saving, each route, a live change without doubling,
+# and MON never in the anti-VOX reference.
+nereus_add_test(tst_audio_engine_tx_monitor_output)
+target_compile_definitions(tst_audio_engine_tx_monitor_output PRIVATE NEREUS_BUILD_TESTS)
 
 # Plan: 3M-1b E.4. Exercises AudioEngine::rxBlockReady MOX gate —
 # the RX-leak-during-MOX fold that fixes the PR #144 cosmetic regression.
@@ -6993,6 +7027,8 @@ nereus_add_test(tst_settings_proxy)
 nereus_add_test(tst_remote_gui_gating)
 target_compile_definitions(tst_remote_gui_gating PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_remote_connection_controls fakes/LoopbackTransport.cpp)
+# R-R3-38 (R3 completion Task 5): the stop message of a remote window.
+nereus_add_test(tst_remote_core_stop_notice)
 nereus_add_test(tst_remote_tx_widgets)
 nereus_add_test(tst_remote_tx_presentation fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_remote_tx_presentation PRIVATE NEREUS_BUILD_TESTS)
@@ -7032,6 +7068,10 @@ target_compile_definitions(tst_other_button_item PRIVATE NEREUS_BUILD_TESTS)
 # including the surfaces hidden until their feature is built.
 nereus_add_test(tst_no_placeholder_marks)
 target_compile_definitions(tst_no_placeholder_marks PRIVATE NEREUS_BUILD_TESTS)
+# Linux sweep hang fix (R-R3-49, R-R3-21): a window built in a test run
+# opens no first-run dialog that blocks for a click.
+nereus_add_test(tst_first_run_prompts_test_run)
+target_compile_definitions(tst_first_run_prompts_test_run PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_connection_selector)
 nereus_add_test(tst_station_lan_cache)
 nereus_add_test(tst_station_lan_transport)
@@ -7264,6 +7304,9 @@ nereus_add_test(tst_link_surface_manifest_regen
 nereus_add_test(tst_link_version
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# R3 completion carry, review I1 (R-R3-21, R-R3-38, R-IOS-01): the takeover
+# and version reasons, formatted and parsed back in one place.
+nereus_add_test(tst_session_end_reasons EXTRA_LABELS session)
 nereus_add_test(tst_link_conformance_control
     LinkFixtures.cpp
     fakes/LoopbackTransport.cpp
@@ -7358,8 +7401,9 @@ nereus_add_test(tst_opus_audio_codec)
 nereus_add_test(tst_pcm_audio_codec)
 
 # Remote Daemon R3 audio source: bounded master-mix delivery and synchronous
-# tap retirement across an admitted DSP callback.
-nereus_add_test(tst_daemon_audio_source)
+# tap retirement across an admitted DSP callback. REALTIME: its soak paces a
+# producer at the DSP cadence against a polling consumer and allows no drop.
+nereus_add_test(tst_daemon_audio_source REALTIME)
 nereus_add_test(tst_daemon_audio_sender)
 nereus_add_test(tst_audio_jitter_buffer)
 # R-R3-23 Task 2: RFC 3550 jitter and sequence accounting for one context.
@@ -7395,7 +7439,7 @@ set_tests_properties(tst_daemon_audio_transitions PROPERTIES TIMEOUT 300)
 nereus_add_test(tst_daemon_telemetry fakes/LoopbackTransport.cpp)
 # R-R3-32/33: Core host sampler against fixture procfs/sysfs trees.
 nereus_add_test(tst_host_telemetry_sampler EXTRA_LABELS core)
-nereus_add_test(tst_remote_audio_receiver)
+nereus_add_test(tst_remote_audio_receiver REALTIME)
 # R-R3-23, R-R3-07, R-R3-21: playsOnEverySpeakerFormat plays through the
 # real receiver worker against a speaker that plays on the wall clock, and
 # asserts the speaker never ran short once playing. The worker keeps two
@@ -7405,7 +7449,10 @@ nereus_add_test(tst_remote_audio_receiver)
 # tst_receiver_dsp_load_frames, R-R3-40): ctest never runs it beside another
 # test that would take the worker's processor away.
 set_tests_properties(tst_remote_audio_receiver PROPERTIES RUN_SERIAL TRUE)
-nereus_add_test(tst_remote_audio_session fakes/LoopbackTransport.cpp)
+# REALTIME: its lossless case measures the stream's rate over a wall-clock
+# window, and its delay cases compare the measured delay with the heard one
+# on the wall clock within half a millisecond.
+nereus_add_test(tst_remote_audio_session fakes/LoopbackTransport.cpp REALTIME)
 # R-R3-44 (R3 receiver audio plan, Task 5): VAX in a remote window. The
 # feed contract (two 10-minute runs of the harness clock at +/-200 ppm
 # through WDSP rmatch), the Core opening no VAX device, the per-Core

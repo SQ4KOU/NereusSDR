@@ -7,6 +7,7 @@
 // =================================================================
 
 #include <QtTest>
+#include "RealtimeTestLoad.h"
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
@@ -214,6 +215,9 @@ class TstRemoteAudioSession final : public QObject {
     Q_OBJECT
 
 private slots:
+    // The load when a real-time case failed (R-R3-21, R-R3-40).
+    void cleanup() { NereusSDR::RealtimeTestLoad::printLoadAverageIfFailed(); }
+
     // R-R3-23: the remote audio choice is stored in this computer's
     // settings; keep this test's writes out of the operator's own file.
     void initTestCase()
@@ -861,10 +865,42 @@ private slots:
         const QString details = formatRemoteAudioDetails(
             status, remoteMedia.audioTelemetry(), remoteMedia.audioDelay(),
             remoteMedia.receiverAudioTelemetry());
-        QVERIFY2(details.contains(QStringLiteral("Receiver A for apps: Receiving, Opus\n"
+        // R-R3-43 / R-R3-23: each receiver stream reached this window at the
+        // Core's 48 kbit/s receiver rate while the speakers' stream kept the
+        // default 24 kbit/s; the window decoded them with no rate of its own
+        // (the unchanged receiver path an older window runs), and its status
+        // names the rate the Core reported.
+        QList<QJsonObject> receiverEncoders;
+        for (const auto& call : controls) {
+            const QJsonObject message = call.at(0).toJsonObject();
+            if (message.value(QStringLiteral("op")) == QLatin1String("receiver-audio-context")
+                && message.value(QStringLiteral("enabled")).toBool()) {
+                receiverEncoders << message.value(QStringLiteral("encoder")).toObject();
+            }
+        }
+        QVERIFY(receiverEncoders.size() >= 2);
+        QJsonObject receiverEncoderJson = defaultEncoderJson();
+        receiverEncoderJson.insert(QStringLiteral("targetBitrate"), 48000);
+        receiverEncoderJson.insert(QStringLiteral("audioBandwidthHz"), 20000);
+        for (const QJsonObject& encoder : receiverEncoders) {
+            QCOMPARE(encoder, receiverEncoderJson);
+        }
+        bool sawMainEncoder = false;
+        for (const QJsonObject& context : audioContexts(controls)) {
+            if (context.contains(QStringLiteral("encoder"))) {
+                QCOMPARE(context.value(QStringLiteral("encoder")).toObject(), defaultEncoderJson());
+                sawMainEncoder = true;
+            }
+        }
+        QVERIFY(sawMainEncoder);
+        for (const RemoteReceiverAudioStatus& receiver : status.receivers) {
+            QVERIFY(receiver.encoder.has_value());
+            QCOMPARE(receiver.encoder->targetBitrate, 48000);
+        }
+        QVERIFY2(details.contains(QStringLiteral("Receiver A for apps: Receiving, Opus 48\u00A0kbit/s\n"
                                                  "Receiver A: arrival jitter ")),
                  qPrintable(details));
-        QVERIFY2(details.contains(QStringLiteral("Receiver B for apps: Receiving, Opus")),
+        QVERIFY2(details.contains(QStringLiteral("Receiver B for apps: Receiving, Opus 48\u00A0kbit/s")),
                  qPrintable(details));
         QVERIFY2(details.contains(QStringLiteral(", gaps filled ")), qPrintable(details));
 

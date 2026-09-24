@@ -53,6 +53,9 @@ struct RemoteReceiverAudioStatus {
     QString stopReason;
     /// What the Core runs for this receiver; absent before it says.
     std::optional<RemoteAudioProfile> runningProfile;
+    /// The Opus encoder the Core reports for this receiver while it runs
+    /// Opus (its real rate, R-R3-43); absent for lossless or before it says.
+    std::optional<OpusEncoderProfile> encoder;
     friend bool operator==(const RemoteReceiverAudioStatus&,
                            const RemoteReceiverAudioStatus&) = default;
 };

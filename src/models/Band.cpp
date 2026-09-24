@@ -63,8 +63,6 @@
 
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
-#pragma once
-
 #include "Band.h"
 
 #include <QStringLiteral>

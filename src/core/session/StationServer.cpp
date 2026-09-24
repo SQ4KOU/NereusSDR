@@ -172,6 +172,11 @@
 //                                    permanent end; stationIdentityVersion
 //                                    1. AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 completion carry, review I1
+//                                    (R-R3-21, R-R3-38, R-IOS-01): the
+//                                    takeover and version reasons come from
+//                                    SessionEndReasons, which the app parses.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -189,6 +194,7 @@
 #include "core/session/MirrorSchema.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionCommandDispatcher.h"
+#include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/StateMirror.h"
 #include "core/settings/SettingsProxyServer.h"
@@ -435,7 +441,7 @@ constexpr const char* kRfKitSwitchWriteReason =
 // configuration write it refuses: direct TransmitModel property writes and
 // the DSP > Options TX settings keys alike (R-R3-21).
 constexpr const char* kReceiveOnlyTransmitReason =
-    "Transmit configuration is unavailable on this receive-only station.";
+    "Transmit configuration is unavailable on this receive-only Core.";
 
 // R-IOS-01: the one reason for a write to a property MirrorPolicy marks
 // outbound (the station's own readings and derived values, and properties
@@ -443,7 +449,7 @@ constexpr const char* kReceiveOnlyTransmitReason =
 // model's inbound hook, which exists to apply the station's reports on a
 // client, never runs on the station for a client's write.
 constexpr const char* kOutboundWriteReason =
-    "The station sets this itself; it cannot be changed from here.";
+    "The Core sets this itself; it cannot be changed from here.";
 
 // The tuner properties whose remote write reaches the tuner itself
 // (TunerModel::applyMirroredValue sends operate, bypass or antenna
@@ -735,9 +741,11 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             [this](const QString& key) {
                 sendToSession(SessionMessages::settingsValueAbsent(key, QString()));
             });
-    // R-R3-49: a removal (a settings reset on the Core, or the schema v7
-    // reset) leaves the settings reading the default, so the radio takes
-    // the default too rather than keep the last value it was given.
+    // R-R3-49: a removal (a settings reset on the Core while it runs)
+    // leaves the settings reading the default, so the radio takes the
+    // default too rather than keep the last value it was given. The schema
+    // v7 reset is not seen here: it runs in CoreInit before this server
+    // exists, and the radio reads the reset value when it connects.
     connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
             [this](const QString& key) {
                 if (key == QLatin1String("NetworkWatchdogEnabled") && m_radioModel) {
@@ -1337,8 +1345,8 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
-                    ? QStringLiteral("Update this app to turn the station's TCI server on or off.")
-                    : QStringLiteral("This Core has no TCI server for the station."), {}));
+                    ? QStringLiteral("Update this app to turn the Core's TCI server on or off.")
+                    : QStringLiteral("This Core has no TCI server."), {}));
             break;
         }
         // R-R3-47 / R-R3-22: the accessory record verbs came with
@@ -1443,7 +1451,7 @@ void StationServer::handleHello(SessionTransport* transport, const SessionMessag
     // on another major, and is refused naming both sides' versions.
     if (!m_supportedMajors.contains(message.protocolMajor)) {
         const QString reason =
-            LinkVersion::refusalText(m_supportedMajors, message.supportedMajors);
+            SessionEndReasons::versionRefused(m_supportedMajors, message.supportedMajors);
         qCWarning(lcStation) << "Refusing a client on link major" << message.protocolMajor
                              << "(it supports" << message.supportedMajors
                              << "; this station supports" << m_supportedMajors << "):"
@@ -1662,8 +1670,7 @@ void StationServer::promoteToSession(SessionTransport* transport)
                                       ? m_peers.value(m_session).description
                                       : QStringLiteral("<unknown>");
         const QString reason =
-            QStringLiteral("Another app at %1 connected to the Core and took over. Connect again to take it back.")
-                .arg(description);
+            SessionEndReasons::takenOver(description);
         qCInfo(lcStation) << "Preempting session" << displaced << "for" << description;
         // NOT retryable, and deliberately so even though the CONDITION is
         // transient. Another authenticated peer has deliberately taken the

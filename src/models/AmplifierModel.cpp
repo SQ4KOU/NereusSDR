@@ -28,7 +28,7 @@ QString AmplifierModel::readOnlyReason()
 QString AmplifierModel::receiveOnlyOperateReason()
 {
     return QStringLiteral("Operating the station's amplifier or tuner waits for remote "
-                          "transmit. This station is receive-only.");
+                          "transmit. This Core is receive-only.");
 }
 
 AmplifierModel::AmplifierModel(QObject* parent)

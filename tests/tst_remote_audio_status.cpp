@@ -15,6 +15,7 @@
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteGeneration.h"
+#include "OperatorWording.h"
 
 #include <QJsonObject>
 #include <QRegularExpression>
@@ -297,7 +298,7 @@ private slots:
              QStringLiteral("Audio waiting")},
             {State::MutedHere, QStringLiteral("Muted on this computer"),
              QStringLiteral("Audio muted")},
-            {State::RadioOffline, QStringLiteral("Radio offline at the station"),
+            {State::RadioOffline, QStringLiteral("Radio offline at the Core"),
              QStringLiteral("Radio offline")},
             {State::CoreCouldNotStart, QStringLiteral("Core could not start audio"),
              QStringLiteral("Audio unavailable")},
@@ -582,6 +583,54 @@ private slots:
 
         status.state = State::NotConnected;
         QVERIFY(!remoteReceiverAudioIsCompressed(status));
+    }
+
+    // R-R3-43 / R-R3-23: a receiver stream's line names the rate the Core
+    // reports for it (48 kbit/s from a current Core, 24 from an older one),
+    // never one assumed here; lossless, or no report, names the profile.
+    void receiverStateTextNamesTheReportedRate()
+    {
+        const QChar nbsp(0x00A0);
+        RemoteReceiverAudioStatus receiver;
+        receiver.sliceId = 1;
+        QCOMPARE(remoteReceiverAudioStateText(receiver), QStringLiteral("Waiting for the Core"));
+        receiver.state = RemoteReceiverAudioStatus::State::Receiving;
+        QCOMPARE(remoteReceiverAudioStateText(receiver), QStringLiteral("Receiving"));
+        receiver.runningProfile = RemoteAudioProfile::Opus;
+        QCOMPARE(remoteReceiverAudioStateText(receiver), QStringLiteral("Receiving, Opus"));
+
+        OpusAudioCodecConfig receiverConfig;
+        receiverConfig.bitrate = 48'000;
+        const OpusAudioEncoder encoder(receiverConfig);
+        if (!encoder.isReady()) {
+            QSKIP("Opus encoder is unavailable in this build");
+        }
+        receiver.encoder = encoder.profile();
+        QVERIFY(receiver.encoder.has_value());
+        const QString at48 = remoteReceiverAudioStateText(receiver);
+        QCOMPARE(at48, QStringLiteral("Receiving, Opus 48") + nbsp + QStringLiteral("kbit/s"));
+        receiver.encoder = defaultProfile();
+        const QString at24 = remoteReceiverAudioStateText(receiver);
+        QCOMPARE(at24, QStringLiteral("Receiving, Opus 24") + nbsp + QStringLiteral("kbit/s"));
+
+        // Lossless shows no Opus rate, even with a stale one beside it.
+        receiver.runningProfile = RemoteAudioProfile::Lossless;
+        QCOMPARE(remoteReceiverAudioStateText(receiver), QStringLiteral("Receiving, Lossless"));
+
+        // And the details line carries it.
+        RemoteAudioStatus status;
+        status.state = State::Playing;
+        receiver.runningProfile = RemoteAudioProfile::Opus;
+        receiver.encoder = encoder.profile();
+        status.receivers = {receiver};
+        const QString details = formatRemoteAudioDetails(status, {}, {}, {});
+        QVERIFY2(details.contains(QStringLiteral("Receiver B for apps: ") + at48), qPrintable(details));
+        for (const QString& text : {at48, at24}) {
+            QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+        }
+        RemoteReceiverAudioStatus other = receiver;
+        other.encoder = defaultProfile();
+        QVERIFY(!(other == receiver));
     }
 
     // R-R3-43 / R-R3-44 fix wave: which note the VAX page shows. None

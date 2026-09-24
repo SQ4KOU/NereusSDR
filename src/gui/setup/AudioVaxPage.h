@@ -53,6 +53,10 @@
 //                running the note says the connection cannot carry it right
 //                now. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                Code.
+//   2026-09-24: R-R3-43 / R-R3-44 / R-R3-23: the note says "a few of the
+//                weakest" signals, true of the receiver streams' 48 kbit/s
+//                Opus and of an older Core's 24 kbit/s. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/audio/VirtualCableDetector.h"

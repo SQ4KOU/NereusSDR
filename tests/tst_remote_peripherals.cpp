@@ -402,7 +402,7 @@ TunerModel::StationConnectionState state(TunerModel::ConnectionPhase phase,
 QAction* connectionToggle(QMenu* menu)
 {
     for (QAction* a : menu->actions()) {
-        if (a->text() == QStringLiteral("Reconnect") || a->text() == QStringLiteral("Disconnect")
+        if (a->text() == QStringLiteral("Connect") || a->text() == QStringLiteral("Disconnect")
             || a->text() == QStringLiteral("Cancel")) {
             return a;
         }
@@ -463,6 +463,7 @@ private slots:
     void remoteRfKitPageWorksEveryControl();
     void olderCoreLeavesTheRfKitSettingsSayingWhy();
     void refusalClaimsEndWithTheLink();
+    void ampAppletRefusalShownOnTheAppletIsNotToasted();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -918,9 +919,9 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     {
         std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
         std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
-        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), false,
+        checkToggle(ampMenu.get(), QStringLiteral("Connect"), false,
                     QStringLiteral("Waiting for the Core to connect."));
-        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), false,
+        checkToggle(rfKitMenu.get(), QStringLiteral("Connect"), false,
                     QStringLiteral("Waiting for the Core to connect."));
     }
     QVERIFY(amp.connectionLineTextForTesting().isEmpty());
@@ -933,9 +934,9 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     {
         std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
         std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
-        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), false,
+        checkToggle(ampMenu.get(), QStringLiteral("Connect"), false,
                     QStringLiteral("This Core does not offer Power Genius XL control to this app."));
-        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), false,
+        checkToggle(rfKitMenu.get(), QStringLiteral("Connect"), false,
                     QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app."));
         connectionToggle(ampMenu.get())->trigger();
         connectionToggle(rfKitMenu.get())->trigger();
@@ -956,13 +957,13 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     {
         std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
         std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
-        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), false,
+        checkToggle(ampMenu.get(), QStringLiteral("Connect"), false,
                     QStringLiteral("Enter the Power Genius address in Setup first."));
-        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), false,
+        checkToggle(rfKitMenu.get(), QStringLiteral("Connect"), false,
                     QStringLiteral("Enter the RF-Kit amplifier's address in Setup first."));
     }
 
-    // Reconnect asks the Core to dial its saved address.
+    // Connect asks the Core to dial its saved address.
     model.amplifierModel()->setStationConnectionState(
         state(TunerModel::ConnectionPhase::Disconnected, QStringLiteral("192.0.2.40"), 9008));
     model.rfKitModel()->setStationConnectionState(
@@ -970,8 +971,8 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     {
         std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
         std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
-        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), true, QString());
-        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), true, QString());
+        checkToggle(ampMenu.get(), QStringLiteral("Connect"), true, QString());
+        checkToggle(rfKitMenu.get(), QStringLiteral("Connect"), true, QString());
         connectionToggle(ampMenu.get())->trigger();
         connectionToggle(rfKitMenu.get())->trigger();
     }
@@ -1012,7 +1013,7 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     model.rfKitModel()->setStationConnectionState(
         state(TunerModel::ConnectionPhase::Connecting, QStringLiteral("192.0.2.41"), 8080));
     QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Identifying device"));
-    QCOMPARE(rfKit.connectionLineTextForTesting(), QStringLiteral("Connecting at station"));
+    QCOMPARE(rfKit.connectionLineTextForTesting(), QStringLiteral("Connecting at the Core"));
     model.reportStationAccessoryRefusal(QStringLiteral("pgxl"),
                                         QStringLiteral("Choose an output limit from 100 to 2000 W."));
     QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Identifying device"));
@@ -1040,7 +1041,7 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     model.reportStationAccessoryRefusal(QStringLiteral("rfkit"), otherRefusal);
     model.reportStationCommandFinished(link.nextCommandId + 51, false, otherRefusal);
     QCOMPARE(amp.connectionLineTextForTesting(), QStringLiteral("Identifying device"));
-    QCOMPARE(rfKit.connectionLineTextForTesting(), QStringLiteral("Connecting at station"));
+    QCOMPARE(rfKit.connectionLineTextForTesting(), QStringLiteral("Connecting at the Core"));
 
     // Connected, then a drop the Core retries, in user words.
     model.amplifierModel()->setStationConnectionState(
@@ -1049,7 +1050,7 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     model.rfKitModel()->setStationConnectionState(
         state(TunerModel::ConnectionPhase::Retrying, QStringLiteral("192.0.2.41"), 8080,
               QStringLiteral("Connection refused")));
-    QVERIFY(rfKit.connectionLineTextForTesting().startsWith(QStringLiteral("Retrying at station")));
+    QVERIFY(rfKit.connectionLineTextForTesting().startsWith(QStringLiteral("Retrying at the Core")));
     QVERIFY2(OperatorWording::isPlain(rfKit.connectionLineTextForTesting()),
              qPrintable(rfKit.connectionLineTextForTesting()));
     {
@@ -1105,8 +1106,8 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     {
         std::unique_ptr<QMenu> ampMenu(localAmp.buildContextMenuForTesting());
         std::unique_ptr<QMenu> rfKitMenu(localRfKit.buildContextMenuForTesting());
-        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), true, QString());
-        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), true, QString());
+        checkToggle(ampMenu.get(), QStringLiteral("Connect"), true, QString());
+        checkToggle(rfKitMenu.get(), QStringLiteral("Connect"), true, QString());
         connectionToggle(ampMenu.get())->trigger();
         connectionToggle(rfKitMenu.get())->trigger();
     }
@@ -1332,7 +1333,7 @@ void RemotePeripheralsTest::remoteWindowSetsUpThePgxlThroughTheCore()
         std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
         QAction* toggle = connectionToggle(menu.get());
         QVERIFY(toggle && toggle->isEnabled());
-        QCOMPARE(toggle->text(), QStringLiteral("Reconnect"));
+        QCOMPARE(toggle->text(), QStringLiteral("Connect"));
         toggle->trigger();
     }
     QTRY_VERIFY(amp.hasPendingConnections());   // the Core dials its saved address
@@ -1548,7 +1549,7 @@ void RemotePeripheralsTest::remoteWindowSetsUpTheRfKitThroughTheCore()
         std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
         QAction* toggle = connectionToggle(menu.get());
         QVERIFY(toggle && toggle->isEnabled());
-        QCOMPARE(toggle->text(), QStringLiteral("Reconnect"));
+        QCOMPARE(toggle->text(), QStringLiteral("Connect"));
         toggle->trigger();
     }
     QTRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
@@ -1573,7 +1574,7 @@ void RemotePeripheralsTest::remoteWindowSetsUpTheRfKitThroughTheCore()
         std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
         QAction* toggle = connectionToggle(menu.get());
         QVERIFY(toggle && toggle->isEnabled());
-        QCOMPARE(toggle->text(), QStringLiteral("Reconnect"));
+        QCOMPARE(toggle->text(), QStringLiteral("Connect"));
         toggle->trigger();
     }
     QTRY_COMPARE(applet.connectionLineTextForTesting(),
@@ -3069,6 +3070,71 @@ void RemotePeripheralsTest::refusalClaimsEndWithTheLink()
     window.reportStationLinkStateChanged();
     window.reportStationAccessoryRefusal(QStringLiteral("rfkit"), QStringLiteral("No."), 8);
     QVERIFY(!refused.last().at(2).toBool());     // the claim ended with the link
+}
+
+// R-R3-21 / R-R3-23: an amp applet's own Connect refused by the Core
+// shows on the applet's line, so it is not toasted too; the same refusal
+// is toasted when the applet is not on screen to show it.
+void RemotePeripheralsTest::ampAppletRefusalShownOnTheAppletIsNotToasted()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    RecordingTgxlLink link;
+    link.linkReady = true;
+    link.amplifierStatus = true;
+    link.rfKitStatus = true;
+    link.pgxlAvailable = true;
+    link.rfKitAvailable = true;
+    model.attachStation(&link);
+    AmpApplet amp(&model);
+    Rf2ksApplet rfKit(&model);
+    model.amplifierModel()->setStationConnectionState(
+        state(TunerModel::ConnectionPhase::Disconnected, QStringLiteral("192.0.2.40"), 9008));
+    model.rfKitModel()->setStationConnectionState(
+        state(TunerModel::ConnectionPhase::Disconnected, QStringLiteral("192.0.2.41"), 8080));
+    model.reportStationLinkStateChanged();
+    QSignalSpy refused(&model, &RadioModel::accessoryRequestRefused);
+    const QString pgxlRefusal = QStringLiteral("Enable 4O3A on Core before connecting the PGXL.");
+    const QString rfKitRefusal =
+        QStringLiteral("Turn on the RF-Kit amplifier on the Core before connecting it.");
+    const auto sendBoth = [&] {
+        std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
+        std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
+        QAction* ampToggle = connectionToggle(ampMenu.get());
+        QAction* rfKitToggle = connectionToggle(rfKitMenu.get());
+        QVERIFY(ampToggle && rfKitToggle);
+        ampToggle->trigger();
+        rfKitToggle->trigger();
+    };
+    const auto refuseBoth = [&] {
+        model.reportStationAccessoryRefusal(QStringLiteral("pgxl"), pgxlRefusal,
+                                            link.lastPgxlCommandId);
+        model.reportStationCommandFinished(link.lastPgxlCommandId, false, pgxlRefusal);
+        model.reportStationAccessoryRefusal(QStringLiteral("rfkit"), rfKitRefusal,
+                                            link.lastRfKitCommandId);
+        model.reportStationCommandFinished(link.lastRfKitCommandId, false, rfKitRefusal);
+    };
+
+    // On screen: the applets show the refusals, so neither is toasted.
+    amp.show();
+    rfKit.show();
+    sendBoth();
+    QCOMPARE(link.pgxlConfigureCalls, 1);
+    QCOMPARE(link.rfKitConfigureCalls, 1);
+    refuseBoth();
+    QCOMPARE(refused.count(), 2);
+    QVERIFY(refused.at(0).at(2).toBool());
+    QVERIFY(refused.at(1).at(2).toBool());
+    QCOMPARE(amp.connectionLineTextForTesting(), OperatorReasonText::forDisplay(pgxlRefusal));
+    QCOMPARE(rfKit.connectionLineTextForTesting(), OperatorReasonText::forDisplay(rfKitRefusal));
+
+    // Hidden before the answer came: nobody saw the line, so it is toasted.
+    sendBoth();
+    amp.hide();
+    rfKit.hide();
+    refuseBoth();
+    QCOMPARE(refused.count(), 4);
+    QVERIFY(!refused.at(2).at(2).toBool());
+    QVERIFY(!refused.at(3).at(2).toBool());
 }
 
 // Rework follow-up 5 (R-R3-48): typing a TCI port sends it (to this

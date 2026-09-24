@@ -1341,7 +1341,7 @@ void SessionCommandDispatcher::handleSetStationTci(const SessionMessage& invoke)
         || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
         || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("The request to turn the station's TCI server on or off was "
+                   QStringLiteral("The request to turn the Core's TCI server on or off was "
                                   "not understood."), {});
         return;
     }

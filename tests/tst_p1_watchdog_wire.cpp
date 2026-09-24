@@ -99,7 +99,8 @@ QByteArray runStop(quint8 cmd)
 }
 
 // Connect with the setting given, change it while connected, disconnect,
-// and return every start/stop datagram the fake received.
+// and return every start/stop datagram the fake received (none when the
+// link did not come up or no stop arrived).
 QList<QByteArray> runStopDatagrams(bool watchdogOn)
 {
     P1FakeRadio fake;
@@ -110,7 +111,9 @@ QList<QByteArray> runStopDatagrams(bool watchdogOn)
     }
     conn->setWatchdogEnabled(!watchdogOn);
     conn->disconnect();
-    QTest::qWaitFor([&fake] { return fake.metisStopCount() >= 1; }, 2000);
+    if (!QTest::qWaitFor([&fake] { return fake.metisStopCount() >= 1; }, 2000)) {
+        return {};
+    }
     return fake.metisCommandsReceived();
 }
 
@@ -135,7 +138,7 @@ private slots:
     {
         QFETCH(bool, watchdogOn);
         const QList<QByteArray> received = runStopDatagrams(watchdogOn);
-        QVERIFY2(!received.isEmpty(), "the link did not come up against the fake");
+        QVERIFY2(!received.isEmpty(), "the link did not come up against the fake, or no stop arrived");
         const QByteArray start = runStop(0x01);
         const QByteArray stop = runStop(0x00);
         int starts = 0;

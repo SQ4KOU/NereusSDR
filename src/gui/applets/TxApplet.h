@@ -81,6 +81,10 @@
 //                 the row.  DEXP row stays on PhoneCwApplet — only VOX moves.
 //   2026-09-22 — Routed the PS-A toggle through RadioModel's shared
 //                 PureSignalSessionFacade for local and remote sessions.
+//   2026-09-24 : R-R3-45: Speakers / Headphones choice for MON on the MON
+//                 row, with a plain notice when the headphones are chosen
+//                 and not open. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -361,6 +365,10 @@ private:
     void buildUI();
     void wireControls();  // called after buildUI() — attaches signals/slots
     void syncPsaFromFacade();
+    // R-R3-45: show the MON output choice (true = headphones) without
+    // writing it back, then refresh the notice.
+    void showMonitorOutput(bool headphones);
+    void updateMonitorOutputNotice();
     // K.2: slot called when SliceModel::dspModeChanged fires (via RadioModel).
     // Updates m_moxBtn->setToolTip(tooltipForMode(mode)).
     void onMoxModeChanged(DSPMode mode);
@@ -430,6 +438,14 @@ private:
     //     Default 50 (matches model default 0.5f from Thetis audio.cs:417).
     QSlider*     m_monitorVolumeSlider = nullptr;
     QLabel*      m_monitorVolumeValue  = nullptr;
+    // R-R3-45: where MON plays, beside the MON button. Exclusive pair
+    // bound to AudioEngine::txMonitorOutput (local window only), plus the
+    // plain notice shown when the headphones are chosen and not open.
+    QPushButton* m_monSpeakersBtn   = nullptr;
+    QPushButton* m_monHeadphonesBtn = nullptr;
+    QLabel*      m_monOutputNotice  = nullptr;
+    bool         m_headphonesAvailable = false;
+    bool         m_headphonesEnabled   = false;
     // 4e. TX-processing quick toggles — row of 3 (3M-3a-ii post-bench cleanup
     //     drops the duplicate PROC button; PROC lives on PhoneCwApplet which
     //     already had a wired button + slider sitting un-wired since 3I-3):

@@ -127,16 +127,16 @@ private slots:
     // R-R3-47: a remote window says when its readings are not live.
     void updateStationState();
     // R-R3-22: a remote window's connection line: the Core's phase, or the
-    // plain reason its last Disconnect or Reconnect was not taken.
+    // plain reason its last Disconnect or Connect was not taken.
     void updateConnectionLine();
     // R-R3-22 fix wave: the Core's answer to a command, by id; only the
-    // applet's own Disconnect or Reconnect (m_pendingCommandId) is shown.
+    // applet's own Disconnect or Connect (m_pendingCommandId) is shown.
     void onStationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
 
 private:
     QMenu* buildContextMenu(QObject* menuParent);
     bool   isRemoteModel() const;
-    // R-R3-22: a remote window's Disconnect or Reconnect, sent to the Core.
+    // R-R3-22: a remote window's Disconnect or Connect, sent to the Core.
     void   requestRemoteConnectionToggle();
 
     // Section A widgets.

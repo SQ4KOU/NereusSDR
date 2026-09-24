@@ -132,7 +132,7 @@ void VaxApplet::setTransmitPermitted(bool permitted, const QString& reason)
     static constexpr auto kSavedTooltip = "VaxSavedTransmitTooltip";
     if (!permitted) {
         const QString shown = reason.isEmpty()
-            ? tr("Transmit controls are unavailable until the station confirms transmit permission.")
+            ? tr("Transmit controls are unavailable until the Core confirms transmit permission.")
             : reason;
         if (!m_txMeter->property(kSavedTooltip).isValid()) {
             m_txMeter->setProperty(kSavedTooltip, m_txMeter->toolTip());

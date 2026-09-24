@@ -37,7 +37,7 @@
         {"advanceMs": 50},
         {"from": "station", "message": {"key": "slice:0", "properties": [{"kind": "i64", "name": "afGain", "ordinal": 7, "value": 40}, {"kind": "f64", "name": "snrDb", "ordinal": 142, "value": "nan"}], "type": "delta"}},
         {"from": "client", "role": "scripted", "message": {"type": "property.write", "key": "slice:0", "writeId": 1003, "properties": [{"ordinal": 15, "name": "signalStrengthDbm", "kind": "f64", "value": -50.0}]}},
-        {"from": "station", "message": {"key": "slice:0", "results": [{"accepted": false, "hasValue": true, "property": "signalStrengthDbm", "reason": "The station sets this itself; it cannot be changed from here.", "value": {"kind": "f64", "name": "signalStrengthDbm", "ordinal": 15, "value": -140}}], "type": "property.result", "writeId": 1003}},
+        {"from": "station", "message": {"key": "slice:0", "results": [{"accepted": false, "hasValue": true, "property": "signalStrengthDbm", "reason": "The Core sets this itself; it cannot be changed from here.", "value": {"kind": "f64", "name": "signalStrengthDbm", "ordinal": 15, "value": -140}}], "type": "property.result", "writeId": 1003}},
         {"advanceMs": 50},
         {"from": "station", "message": {"key": "slice:0", "properties": [{"kind": "f64", "name": "snrDb", "ordinal": 142, "value": "nan"}], "type": "delta"}}
     ]

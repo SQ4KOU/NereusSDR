@@ -144,7 +144,7 @@ void CatTciServerPage::buildUI()
 
 // ---------------------------------------------------------------------------
 // Group 1: Server
-// Controls: Enable / Bind IP (read-only 127.0.0.1) / Port + Default button /
+// Controls: Enable / Listen on (address dropdown) / Port + Default button /
 //           Send initial state / Rate limit / Show Log button / Status line.
 // AppSettings: TciServerEnabled, TciServerPort, TciSendInitialFrequencyStateOnConnect,
 //              TciRateLimitMsgsPerSec.
@@ -183,14 +183,14 @@ void CatTciServerPage::buildServerGroup()
     });
     form->addRow(QString(), m_enableCheck);
 
-    // ── Bind address dropdown ───────────────────────────────────────────────
+    // ── "Listen on:" address dropdown ───────────────────────────────────────
     //
     // Phase 3J-1 closeout Item 1 (2026-05-12): replaces the read-only
     // "127.0.0.1" label with an interface-aware dropdown.  Operator can
-    // pick:
-    //   - "Loopback only (127.0.0.1)" — default; safest
-    //   - "Any IPv4 interface (0.0.0.0)" — exposes server to LAN
-    //   - A specific detected NIC (e.g. "en0 — 192.168.1.50")
+    // pick (labels reworded 2026-09-24, R-R3-21):
+    //   - "This computer only (127.0.0.1)": default; safest
+    //   - "Any IPv4 address (0.0.0.0), open to your network"
+    //   - A specific detected NIC (e.g. "en0 (192.168.1.50)")
     //   - IPv6 equivalents
     //
     // Functional parity with Thetis Setup.cs:22410-22473 [v2.10.3.13]
@@ -200,6 +200,7 @@ void CatTciServerPage::buildServerGroup()
     // widgets are NereusSDR-native; a dropdown with validated, NIC-aware
     // choices is the better UX for our platform.
     m_bindAddressCombo = new QComboBox(group);
+    m_bindAddressCombo->setObjectName(QStringLiteral("tciListenOnCombo"));
     m_bindAddressCombo->setStyleSheet(QString::fromLatin1(Style::kComboStyle));
     m_bindAddressCombo->setToolTip(tr(
         "The IP address the TCI server listens on. "
@@ -734,11 +735,11 @@ void CatTciServerPage::buildVfoQuirksGroup()
 // Phase 3J-1 closeout Item 1 (2026-05-12): enumerate bindable interfaces
 // via QNetworkInterface::allInterfaces() and add one combo entry per
 // detected non-loopback IPv4 (and IPv6) NIC, plus the well-known options:
-//   - Loopback only (127.0.0.1)         ← default
-//   - Any IPv4 interface (0.0.0.0)
+//   - This computer only (127.0.0.1)                     ← default
+//   - Any IPv4 address (0.0.0.0), open to your network
 //   - <detected non-loopback IPv4 NICs>
-//   - Loopback IPv6 (::1)
-//   - Any IPv6 interface (::)
+//   - This computer only, IPv6 (::1)
+//   - Any IPv6 address (::), open to your network
 //   - <detected non-loopback IPv6 NICs>
 //
 // Each entry's data() carries the bindable address string used by
@@ -1033,7 +1034,7 @@ void CatMidiControlPage::buildUI()
 // RemoteStationPage — R-R3-38 unified connection entry point.
 // ---------------------------------------------------------------------------
 RemoteStationPage::RemoteStationPage(QWidget* parent)
-    : SetupPage(QStringLiteral("Remote Station"), parent)
+    : SetupPage(QStringLiteral("Remote Access"), parent)
 {
     NereusSDR::Style::applyDarkPageStyle(this);
     auto* description = new QLabel(
@@ -1388,7 +1389,7 @@ void PeripheralsPage::refreshRemoteTgxlRow()
     }
     const bool available = link && link->remoteTgxlConfigAvailable();
     scanButton->setEnabled(false);
-    scanButton->setToolTip(tr("LAN scanning runs at the station and is unavailable from this remote GUI."));
+    scanButton->setToolTip(tr("LAN scanning runs at the Core and is unavailable from this remote GUI."));
     const QString coreHost = tuner->configuredHost();
     const quint16 corePort = static_cast<quint16>(tuner->configuredPort());
     if (coreHost != m_lastDisplayedCoreTgxlHost
@@ -1421,15 +1422,15 @@ void PeripheralsPage::refreshRemoteTgxlRow()
         ? QString() : OperatorReasonText::forDisplay(tuner->connectionError());
     QString text;
     switch (phase) {
-    case TunerModel::ConnectionPhase::Disabled: text = tr("Disabled at station"); break;
+    case TunerModel::ConnectionPhase::Disabled: text = tr("Disabled at the Core"); break;
     case TunerModel::ConnectionPhase::Disconnected: text = tr("Disconnected"); break;
-    case TunerModel::ConnectionPhase::Discovering: text = tr("Discovering at station"); break;
-    case TunerModel::ConnectionPhase::Connecting: text = tr("Connecting at station"); break;
+    case TunerModel::ConnectionPhase::Discovering: text = tr("Discovering at the Core"); break;
+    case TunerModel::ConnectionPhase::Connecting: text = tr("Connecting at the Core"); break;
     case TunerModel::ConnectionPhase::Identifying: text = tr("Identifying device"); break;
     case TunerModel::ConnectionPhase::Retrying:
         text = error.isEmpty()
-            ? tr("Retrying at station")
-            : tr("Retrying at station: %1").arg(error);
+            ? tr("Retrying at the Core")
+            : tr("Retrying at the Core: %1").arg(error);
         break;
     case TunerModel::ConnectionPhase::Connected:
         text = tr("Connected: %1 %2").arg(tuner->deviceModel(), tuner->deviceSerial()); break;
@@ -1458,7 +1459,7 @@ void PeripheralsPage::refreshRemotePgxlRow()
     }
     const bool available = link && link->remotePgxlControlAvailable();
     scanButton->setEnabled(false);
-    scanButton->setToolTip(tr("LAN scanning runs at the station and is unavailable from this remote GUI."));
+    scanButton->setToolTip(tr("LAN scanning runs at the Core and is unavailable from this remote GUI."));
     // The Core's address fills the fields only when it changes, so an
     // unsent draft survives a phase or error update.
     const QString coreHost = amp->configuredHost();
@@ -1491,14 +1492,14 @@ void PeripheralsPage::refreshRemotePgxlRow()
         ? QString() : OperatorReasonText::forDisplay(amp->connectionError());
     QString text;
     switch (phase) {
-    case Phase::Disabled: text = tr("Disabled at station"); break;
+    case Phase::Disabled: text = tr("Disabled at the Core"); break;
     case Phase::Disconnected: text = tr("Disconnected"); break;
-    case Phase::Discovering: text = tr("Discovering at station"); break;
-    case Phase::Connecting: text = tr("Connecting at station"); break;
+    case Phase::Discovering: text = tr("Discovering at the Core"); break;
+    case Phase::Connecting: text = tr("Connecting at the Core"); break;
     case Phase::Identifying: text = tr("Identifying device"); break;
     case Phase::Retrying:
-        text = error.isEmpty() ? tr("Retrying at station")
-                               : tr("Retrying at station: %1").arg(error);
+        text = error.isEmpty() ? tr("Retrying at the Core")
+                               : tr("Retrying at the Core: %1").arg(error);
         break;
     case Phase::Connected:
         text = tr("Connected: %1 %2").arg(amp->deviceModel(), amp->deviceSerial()); break;

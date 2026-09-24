@@ -185,7 +185,7 @@ int main(int argc, char* argv[])
         QCommandLineOption stationOpt(
             QStringLiteral("station"),
             QStringLiteral(
-                "Drive a radio owned by a nereusd station instead of one "
+                "Drive a radio owned by a NereusSDR Core instead of one "
                 "attached to this machine. Takes a wss:// (or ws://) URL. "
                 "Without this, use the saved connection selection. "
                 "Use --local to select this computer's Core."),
@@ -203,14 +203,14 @@ int main(int argc, char* argv[])
         QCommandLineOption fingerprintOpt(
             QStringLiteral("station-fingerprint"),
             QStringLiteral(
-                "SHA-256 fingerprint of the station certificate to pin."),
+                "SHA-256 fingerprint of the Core's certificate to pin."),
             QStringLiteral("sha256"));
         parser.addOption(fingerprintOpt);
 
         QCommandLineOption allowUnpinnedOpt(
             QStringLiteral("station-allow-unpinned"),
             QStringLiteral(
-                "Accept the station's self-signed certificate without a "
+                "Accept the Core's self-signed certificate without a "
                 "pinned fingerprint. Bench use only."));
         parser.addOption(allowUnpinnedOpt);
 

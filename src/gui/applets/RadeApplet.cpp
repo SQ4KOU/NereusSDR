@@ -300,7 +300,7 @@ void RadeApplet::setTransmitPermitted(bool permitted, const QString& reason)
 {
     m_transmitPermitted = permitted;
     m_transmitReason = reason.isEmpty()
-        ? tr("Transmit controls are unavailable until the station confirms "
+        ? tr("Transmit controls are unavailable until the Core confirms "
              "transmit permission.")
         : reason;
     updateTransmitControlAvailability();
@@ -338,7 +338,7 @@ void RadeApplet::updateTransmitControlAvailability()
         // once it is permitted the button is still unavailable, because the
         // vocoder lives on the Core, and the reason says that instead.
         const QString reason = m_transmitPermitted
-            ? tr("The RADE vocoder runs on the station computer and cannot be "
+            ? tr("The RADE vocoder runs on the Core's computer and cannot be "
                  "reset from a remote window.")
             : m_transmitReason;
         m_resetButton->setEnabled(false);

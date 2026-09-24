@@ -10,7 +10,7 @@
 // and the two ends agree the highest major both support. Only ends two or
 // more majors apart have nothing in common; the station then refuses the
 // connection with a reason that names both sides' versions in plain
-// words.
+// words (SessionEndReasons::versionRefused).
 //
 // The minor stays where it is (kSessionProtocolMinor, 11): features added
 // since then carry their own capability versions, and a feature the
@@ -29,6 +29,11 @@
 //                                    refusal wording. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 completion carry, review I1
+//                                    (R-R3-38, R-IOS-01): the refusal
+//                                    wording moves to SessionEndReasons.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QList>
@@ -57,12 +62,6 @@ QList<quint16> supportedMajors();
 
 /// The highest major in both lists, or nullopt when they share none.
 std::optional<quint16> agreeMajor(QList<quint16> ours, QList<quint16> theirs);
-
-/// Why the station refuses an app it shares no major with, in plain
-/// words: each side's newest version, and which side to update. For
-/// example "This station runs link version 1 and this app runs version 3.
-/// Update the station."
-QString refusalText(QList<quint16> station, QList<quint16> client);
 
 /// Parses --test-link-majors: whole numbers from 1 to 65535 separated by
 /// commas ("1,2"). Returns the list sorted oldest first without repeats,

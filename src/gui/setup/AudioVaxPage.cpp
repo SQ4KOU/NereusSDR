@@ -30,6 +30,11 @@
 // and that Lossless avoids it; it follows the quality choice and its
 // fallback live (setReceiverAudioNote; with Lossless chosen but not running
 // it says the connection cannot carry it right now instead).
+//
+// 2026-09-24 (R-R3-43, R-R3-44, R-R3-23): J.J. Boyd (KG4VCF), AI-assisted
+// via Anthropic Claude Code. The note says "a few of the weakest" signals:
+// receiver streams now run Opus at 48 kbit/s when compressed, and the
+// wording holds for that and for an older Core's 24 kbit/s.
 // =================================================================
 
 #include "AudioVaxPage.h"
@@ -911,7 +916,7 @@ void AudioVaxPage::setReceiverAudioNote(RemoteReceiverAudioNote note)
         break;
     case RemoteReceiverAudioNote::OpusChosen:
         m_compressedNote->setText(QStringLiteral(
-            "Receiver audio from the Core is compressed (Opus), so the weakest "
+            "Receiver audio from the Core is compressed (Opus), so a few of the weakest "
             "digital-mode signals may not decode. Set Audio quality to Lossless "
             "in Core connection if your network can carry it."));
         break;
@@ -920,7 +925,7 @@ void AudioVaxPage::setReceiverAudioNote(RemoteReceiverAudioNote note)
         // would be wrong. Say the connection cannot carry it right now.
         m_compressedNote->setText(QStringLiteral(
             "Receiver audio from the Core is compressed (Opus): Lossless is chosen, "
-            "but this connection cannot carry it right now. The weakest "
+            "but this connection cannot carry it right now. A few of the weakest "
             "digital-mode signals may not decode."));
         break;
     }
@@ -1012,14 +1017,18 @@ void AudioVaxPage::buildPage()
     insertBeforeStretch(subHeader);
 
     // R-R3-43 / R-R3-44: in a remote window whose receiver streams are Opus,
-    // say what that costs digital modes and what avoids it. The measurement:
-    // 24 kbit/s Opus lost 12 of 180 FT8 decodes, all within about 2 dB of
-    // the decode limit; lossless lost none
+    // say what that costs digital modes and what avoids it. Receiver streams
+    // run Opus at 48 kbit/s when compressed: in the confirming FT8 run it
+    // decoded 175 files in all, 173 of the 177 the untouched audio decoded
+    // plus 2 it missed (24 kbit/s, an older Core's rate: 164 in all, 162 of
+    // the 177 plus 2); lossless decoded exactly the untouched audio's 177.
+    // "A few of the weakest" holds for both rates
     // (docs/architecture/2026-09-20-remote-daemon-r3-verification/
-    // digital-modes-over-opus.md:156-178). Hidden until MainWindow says so.
+    // digital-modes-over-opus.md, "Confirming run"). Hidden until MainWindow
+    // says so.
     m_compressedNote = new QLabel(
         QStringLiteral(
-            "Receiver audio from the Core is compressed (Opus), so the weakest "
+            "Receiver audio from the Core is compressed (Opus), so a few of the weakest "
             "digital-mode signals may not decode. Set Audio quality to Lossless "
             "in Core connection if your network can carry it."),
         this);
