@@ -29,11 +29,15 @@
         {"advanceMs": 50},
         {"from": "station", "message": {"key": "slice:0", "properties": [{"kind": "enum", "name": "band", "ordinal": 14, "value": 3}, {"kind": "f64", "name": "snrDb", "ordinal": 142, "value": "nan"}], "type": "delta"}},
         {"from": "client", "message": {"type": "property.write", "key": "slice:0", "writeId": 2, "properties": [{"ordinal": 11, "name": "active", "kind": "bool", "value": false}, {"ordinal": 900, "name": "conformanceNoSuchProperty", "kind": "i64", "value": 1}]}},
-        {"from": "station", "message": {"key": "slice:0", "results": [{"accepted": false, "hasValue": true, "property": "active", "reason": "active is exclusive across a pan's slices and arbitrated by RadioModel::setActiveSliceById(); use the setActiveSliceById command verb instead of writing this property directly", "value": {"kind": "bool", "name": "active", "ordinal": 11, "value": true}}, {"accepted": false, "hasValue": false, "property": "conformanceNoSuchProperty", "reason": "Unknown property or incompatible value type."}], "type": "property.result", "writeId": 2}},
+        {"from": "station", "message": {"key": "slice:0", "results": [{"accepted": false, "hasValue": true, "property": "active", "reason": "The station sets this itself; it cannot be changed from here.", "value": {"kind": "bool", "name": "active", "ordinal": 11, "value": true}}, {"accepted": false, "hasValue": false, "property": "conformanceNoSuchProperty", "reason": "Unknown property or incompatible value type."}], "type": "property.result", "writeId": 2}},
         {"advanceMs": 50},
         {"from": "station", "message": {"key": "slice:0", "properties": [{"kind": "f64", "name": "snrDb", "ordinal": 142, "value": "nan"}], "type": "delta"}},
         {"from": "client", "message": {"type": "property.write", "key": "slice:0", "properties": [{"ordinal": 7, "name": "afGain", "kind": "i64", "value": 40}]}},
         {"advanceMs": 50},
-        {"from": "station", "message": {"key": "slice:0", "properties": [{"kind": "i64", "name": "afGain", "ordinal": 7, "value": 40}, {"kind": "f64", "name": "snrDb", "ordinal": 142, "value": "nan"}], "type": "delta"}}
+        {"from": "station", "message": {"key": "slice:0", "properties": [{"kind": "i64", "name": "afGain", "ordinal": 7, "value": 40}, {"kind": "f64", "name": "snrDb", "ordinal": 142, "value": "nan"}], "type": "delta"}},
+        {"from": "client", "message": {"type": "property.write", "key": "slice:0", "writeId": 3, "properties": [{"ordinal": 15, "name": "signalStrengthDbm", "kind": "f64", "value": -50.0}]}},
+        {"from": "station", "message": {"key": "slice:0", "results": [{"accepted": false, "hasValue": true, "property": "signalStrengthDbm", "reason": "The station sets this itself; it cannot be changed from here.", "value": {"kind": "f64", "name": "signalStrengthDbm", "ordinal": 15, "value": -140}}], "type": "property.result", "writeId": 3}},
+        {"advanceMs": 50},
+        {"from": "station", "message": {"key": "slice:0", "properties": [{"kind": "f64", "name": "snrDb", "ordinal": 142, "value": "nan"}], "type": "delta"}}
     ]
 }

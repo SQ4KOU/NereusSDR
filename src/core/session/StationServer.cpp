@@ -106,6 +106,11 @@
 //                                    read-only `stationTci` object and the
 //                                    setStationTci verb. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-IOS-01: a write to any property
+//                                    MirrorPolicy marks outbound is refused
+//                                    in plain words before anything is
+//                                    applied. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -116,6 +121,8 @@
 #include "core/dsp/NnrSettings.h"
 #include "core/security/CertificateStore.h"
 #include "core/security/TokenStore.h"
+#include "core/session/MirrorPolicy.h"
+#include "core/session/MirrorSchema.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SessionTransport.h"
@@ -326,6 +333,14 @@ constexpr const char* kRfKitSwitchWriteReason =
 // the DSP > Options TX settings keys alike (R-R3-21).
 constexpr const char* kReceiveOnlyTransmitReason =
     "Transmit configuration is unavailable on this receive-only station.";
+
+// R-IOS-01: the one reason for a write to a property MirrorPolicy marks
+// outbound (the station's own readings and derived values, and properties
+// with a command of their own). Refused before anything is applied, so a
+// model's inbound hook, which exists to apply the station's reports on a
+// client, never runs on the station for a client's write.
+constexpr const char* kOutboundWriteReason =
+    "The station sets this itself; it cannot be changed from here.";
 
 // The tuner properties whose remote write reaches the tuner itself
 // (TunerModel::applyMirroredValue sends operate, bypass or antenna
@@ -1489,6 +1504,11 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         && m_radioModel->receiveOnlyStationPolicy();
     const bool tunerWrite = message.objectKey == QByteArray(kTunerKey);
     const bool amplifierWrite = message.objectKey == QByteArray(kAmplifierKey);
+    // R-IOS-01: the class MirrorPolicy's direction table is keyed by.
+    QByteArray outboundClass;
+    if (const QObject* target = m_mirror->watchedObject(message.objectKey)) {
+        outboundClass = MirrorSchema::shortClassName(target->metaObject()->className());
+    }
     QSet<QByteArray> requested;
     for (const MirrorUpdate& update : message.updates) {
         if (requested.contains(update.name)) {
@@ -1524,6 +1544,11 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             || update.name.startsWith("nnr")
             || (update.name == "activeNr" && update.value.toInt() == static_cast<int>(NrSlot::NNR)))) {
             refusals.insert(update.name, QStringLiteral("This client has not negotiated DSP settings control."));
+            continue;
+        }
+        if (!outboundClass.isEmpty()
+            && !MirrorPolicy::inboundAllowed(outboundClass, update.name)) {
+            refusals.insert(update.name, QString::fromLatin1(kOutboundWriteReason));
             continue;
         }
         const MirrorApplyResult result = m_mirror->applyInbound(message.objectKey, update.name, update.value);

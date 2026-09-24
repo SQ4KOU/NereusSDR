@@ -859,6 +859,11 @@ property in one write, an unknown property or a wrong wire kind, an
 `rfKitEnabled` (changed only with `setRfKitEnabled`), transmit
 configuration on a receive-only station, and DSP settings from a peer that
 did not negotiate them (`StationServer::handlePropertyWrite`).
+A write to an `outbound` property is refused before anything is applied,
+with the reason "The station sets this itself; it cannot be changed from
+here.", unless one of the earlier, more specific refusals above applies
+first; this covers the station's own readings, such as a slice's signal
+strength, as well as properties changed through a command.
 
 After the whole batch, the station reads each property back. When the
 agreed minor is at least 5 (`kDspControlSessionProtocolMinor`) and the
@@ -1459,7 +1464,7 @@ same on every machine.
 | `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "handshake deadline expired", `retryable` true |
-| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta` |
+| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound |
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry |
 | `unknown-verb` | `command.result` refused, "unrecognised command verb"; the connection stays up |
 | `unknown-kind` | `session.end` "undecodable message", `retryable` false |
