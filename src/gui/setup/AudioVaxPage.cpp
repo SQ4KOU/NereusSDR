@@ -1019,9 +1019,10 @@ void AudioVaxPage::buildPage()
     // R-R3-43 / R-R3-44: in a remote window whose receiver streams are Opus,
     // say what that costs digital modes and what avoids it. Receiver streams
     // run Opus at 48 kbit/s when compressed: in the confirming FT8 run it
-    // decoded 175 of the 177 files the untouched audio decoded (24 kbit/s,
-    // an older Core's rate, 164); lossless lost none. "A few of the weakest"
-    // holds for both rates
+    // decoded 175 files in all, 173 of the 177 the untouched audio decoded
+    // plus 2 it missed (24 kbit/s, an older Core's rate: 164 in all, 162 of
+    // the 177 plus 2); lossless decoded exactly the untouched audio's 177.
+    // "A few of the weakest" holds for both rates
     // (docs/architecture/2026-09-20-remote-daemon-r3-verification/
     // digital-modes-over-opus.md, "Confirming run"). Hidden until MainWindow
     // says so.
