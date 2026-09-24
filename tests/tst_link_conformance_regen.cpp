@@ -47,6 +47,7 @@
 #include "core/dsp/Ps3Snapshot.h"
 #include "core/session/Ps3DisplayCodec.h"
 #include "core/session/StationLanAnnouncement.h"
+#include "core/session/DnsSdAdvertiser.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/OpusAudioCodec.h"
 
@@ -61,6 +62,8 @@ class TstLinkConformanceRegen : public QObject {
 private slots:
     void initTestCase();
     void writeLanAnnouncement();
+    void writeLanAnnouncement2();
+    void writeDnsSdTxt();
     void writePs3dFrame();
     void writeNsdcFrames();
     void writeOpusPackets();
@@ -107,6 +110,28 @@ void TstLinkConformanceRegen::writeLanAnnouncement()
     QVERIFY(write(QStringLiteral("lan-announcement"), bytes,
                   QJsonObject{{QStringLiteral("codec"), QStringLiteral("nrsc1")},
                               {QStringLiteral("expect"), LinkMediaVectors::toJson(value)}}));
+}
+
+void TstLinkConformanceRegen::writeLanAnnouncement2()
+{
+    const StationLanAnnouncement value = LinkMediaVectors::lanAnnouncement2();
+    QString error;
+    const QByteArray bytes = encodeStationLanAnnouncement(value, &error);
+    QVERIFY2(!bytes.isEmpty(), qPrintable(error));
+    QVERIFY(write(QStringLiteral("lan-announcement-2"), bytes,
+                  QJsonObject{{QStringLiteral("codec"), QStringLiteral("nrsc1")},
+                              {QStringLiteral("expect"), LinkMediaVectors::toJson(value)}}));
+}
+
+void TstLinkConformanceRegen::writeDnsSdTxt()
+{
+    const DnsSdRecord record = LinkMediaVectors::dnsSdRecord();
+    QString error;
+    const QByteArray bytes = encodeDnsSdTxtRecord(record, &error);
+    QVERIFY2(!bytes.isEmpty(), qPrintable(error));
+    QVERIFY(write(QStringLiteral("dnssd-txt"), bytes,
+                  QJsonObject{{QStringLiteral("codec"), QStringLiteral("dnssd-txt")},
+                              {QStringLiteral("expect"), LinkMediaVectors::toJson(record)}}));
 }
 
 void TstLinkConformanceRegen::writePs3dFrame()

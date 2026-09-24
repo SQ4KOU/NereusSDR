@@ -102,6 +102,7 @@
 #include "core/RadioDiscovery.h"       // RadioInfo, RadioDiscovery, HPSDRHW
 #include "core/daemon/DaemonConfig.h"
 #include "core/daemon/DisplayLoadInputs.h"
+#include "core/session/DnsSdAdvertiser.h"
 #include "core/platform/ThreadPlacement.h"
 #include "core/session/media/DisplayLoadGovernor.h"
 #include "core/spectrum/FftTopology.h"
@@ -114,6 +115,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <utility>
 
 class QThread;
 class QTimer;
@@ -123,6 +125,7 @@ namespace NereusSDR {
 class RadioModel;
 class StationServer;
 class StationLanAnnouncer;
+class DnsSdAdvertiser;
 class DaemonMediaController;
 class DaemonTelemetryController;
 class DaemonAgcSource;
@@ -234,6 +237,19 @@ public:
     {
         return m_stationListenAttemptCount;
     }
+    // iPhone app Task 16: the announcement and Bonjour record the Core last
+    // built, whether or not they went out (a loopback listener sends
+    // neither), and whether each is going out.
+    StationLanAnnouncement stationAnnouncementForTest() const { return m_stationAnnouncement; }
+    DnsSdRecord dnsSdRecordForTest() const { return m_dnsSdRecord; }
+    bool stationAnnouncedForTest() const;
+    bool dnsSdAdvertisedForTest() const;
+    // Before start(): the Bonjour advertiser to use, so a test sees what
+    // would be advertised without reaching a real network.
+    void setDnsSdAdvertiserForTest(std::unique_ptr<DnsSdAdvertiser> advertiser);
+    // How the Core's pairing window reads on the announcement and in
+    // Bonjour's `pair` key.
+    static StationLanPairing stationLanPairingFor(const StationServer& server);
 
     // Test-only seam, only compiled when NEREUS_BUILD_TESTS is defined.
     // Forces the NEXT start() (and every start() after a stop(), since
@@ -446,6 +462,11 @@ private:
     std::unique_ptr<StationServer> m_stationServer;
     QList<quint16> m_linkMajors;
     std::unique_ptr<StationLanAnnouncer> m_stationAnnouncer;
+    // iPhone app Task 16 (D36): Bonjour beside the announcement.
+    std::unique_ptr<DnsSdAdvertiser> m_dnsSdAdvertiser;
+    StationLanAnnouncement m_stationAnnouncement;
+    DnsSdRecord m_dnsSdRecord;
+    std::optional<std::pair<quint16, DnsSdRecord>> m_dnsSdAttempt;
     QTimer* m_stationListenRetryTimer {nullptr};
     int m_stationListenRetryInitialMs {1000};
     int m_stationListenRetryMaximumMs {30000};

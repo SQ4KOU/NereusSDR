@@ -76,6 +76,11 @@
 #include "core/session/StationServer.h"
 #include "core/security/StationIdentity.h"
 #include "core/session/StationLanAnnouncer.h"
+#include "core/session/DnsSdAdvertiser.h"
+#include "core/session/StationDevicesFacade.h"
+#include "core/security/PairingWindow.h"
+#include "core/security/StationLabel.h"
+#include "core/AppSettings.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -674,6 +679,83 @@ private slots:
         // RadioModel its mirror holds QPointers into.
         app.stop();
         QVERIFY(app.stationServer() == nullptr);
+    }
+
+    // iPhone app Task 16 (D36, R-IOS-16): the Core builds a schema-2
+    // announcement and a Bonjour record from its identity, label, claimed
+    // state and pairing window, and rebuilds both on a rename. A listener on
+    // loopback only sends neither: nothing here reaches a network.
+    void discoveryFollowsRenameAndNeverLeavesLoopback()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend, so a wss listener cannot bind.");
+        }
+        AppSettings& settings = AppSettings::instance();
+        const QString labelKey = QString::fromLatin1(StationLabel::kSettingsKey);
+        const QVariant storedLabel = settings.value(labelKey);
+        const auto restore = qScopeGuard([&settings, labelKey, storedLabel] {
+            if (storedLabel.isValid()) {
+                settings.setValue(labelKey, storedLabel);
+            } else {
+                settings.remove(labelKey);
+            }
+            settings.save();
+        });
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(listenerConfig()));
+        StationServer* const server = app.stationServer();
+        QVERIFY(server && server->isListening());
+        StationDevicesFacade* const devices = server->devicesFacade();
+        QVERIFY(devices);
+
+        const StationLanAnnouncement built = app.stationAnnouncementForTest();
+        QCOMPARE(built.schema, kStationLanAnnouncementSchema);
+        QCOMPARE(built.controlPort, server->serverPort());
+        QCOMPARE(built.identity, server->stationIdentity().fingerprint());
+        QCOMPARE(built.claimed, devices->claimed());
+        QCOMPARE(built.label, devices->stationLabel());
+        QCOMPARE(built.pairing, DaemonApp::stationLanPairingFor(*server));
+        QString error;
+        QVERIFY2(!encodeStationLanAnnouncement(built, &error).isEmpty(), qPrintable(error));
+        // Loopback: neither the announcement nor Bonjour goes out.
+        QVERIFY(!app.stationAnnouncedForTest());
+        QVERIFY(!app.dnsSdAdvertisedForTest());
+        QCOMPARE(app.dnsSdRecordForTest(), DnsSdRecord{});
+
+        // station.rename: the next announcement carries the new label.
+        const QString renamed = QStringLiteral("KG4VCF/task16-%1").arg(
+            QCoreApplication::applicationPid() % 10000);
+        QVERIFY(devices->rename(renamed).accepted);
+        QCOMPARE(devices->stationLabel(), renamed);
+        QCOMPARE(app.stationAnnouncementForTest().label, renamed);
+        QCOMPARE(app.stationAnnouncementForTest().displayName(), renamed);
+        QVERIFY(!app.stationAnnouncedForTest());
+        QVERIFY(!app.dnsSdAdvertisedForTest());
+
+        // The pairing window reads as the pairing field.
+        const PairingWindow* window = server->pairingWindow();
+        QVERIFY(window);
+        const StationLanPairing pairing = DaemonApp::stationLanPairingFor(*server);
+        switch (window->state()) {
+        case PairingWindow::State::OpenUnclaimed:
+            QCOMPARE(pairing, server->pairingLanClickAllowed() ? StationLanPairing::Click
+                                                               : StationLanPairing::Code);
+            break;
+        case PairingWindow::State::OpenReopened:
+            QCOMPARE(pairing, StationLanPairing::Code);
+            break;
+        case PairingWindow::State::ClosedClaimed:
+            QCOMPARE(pairing, StationLanPairing::Closed);
+            break;
+        }
+        server->setPairingLanClickAllowed(false);
+        QVERIFY(DaemonApp::stationLanPairingFor(*server) != StationLanPairing::Click);
+        server->setPairingLanClickAllowed(true);
+
+        app.stop();
+        QCOMPARE(app.stationAnnouncementForTest(), StationLanAnnouncement{});
     }
 
     // R-R3-08/37/40 (final review M1): the display load governor's wiring.

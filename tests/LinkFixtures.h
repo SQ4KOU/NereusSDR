@@ -68,6 +68,7 @@ namespace NereusSDR {
 class StationServer;
 struct Ps3Snapshot;
 struct StationLanAnnouncement;
+struct DnsSdRecord;
 }
 
 namespace NereusSDR::Test {
@@ -162,11 +163,23 @@ public:
 /// encodes the expectation again to compare with the committed bytes.
 class LinkMediaVectors {
 public:
+    /// Schema 1, as a Core from before iPhone app Task 16 sends it.
     static NereusSDR::StationLanAnnouncement lanAnnouncement();
+    /// Task 16: schema 2, what a Core sends now: a claimed Core whose
+    /// window was reopened, so it pairs by code.
+    static NereusSDR::StationLanAnnouncement lanAnnouncement2();
+    /// `schema`, schema 1's fields, and for schema 2 `claimed`, `identity`
+    /// (base64url of the 32 bytes, no padding), `label` and `pairing`
+    /// ("click", "code" or "closed").
     static QJsonObject toJson(const NereusSDR::StationLanAnnouncement& value);
     /// False, with `error` set, when `json` is not one announcement.
     static bool fromJson(const QJsonObject& json, NereusSDR::StationLanAnnouncement* value,
                          QString* error);
+
+    /// Task 16: the Bonjour record of the Core lanAnnouncement2() describes.
+    static NereusSDR::DnsSdRecord dnsSdRecord();
+    /// `serviceType` and `txt`, the TXT record's entries as strings.
+    static QJsonObject toJson(const NereusSDR::DnsSdRecord& record);
 
     static NereusSDR::Ps3Snapshot ps3Snapshot();
     /// Every decoded field of a PS3D frame; the eight value lists as arrays.

@@ -13,7 +13,11 @@
 // decoders.
 //
 //   codec "nrsc1"   the LAN announcement datagram (link document section
-//                   14), decoded by decodeStationLanAnnouncement
+//                   14.1), schema 1 or 2, decoded by
+//                   decodeStationLanAnnouncement
+//   codec "dnssd-txt" the Bonjour TXT record (section 14.2), split by
+//                   decodeDnsSdTxtRecord; encoded again in the key order
+//                   v, id, claimed, pair, name
 //   codec "ps3d"    one PureSignal display chunk, assembled by a fresh
 //                   Ps3DisplayAssembler for the expectation's
 //                   sessionGeneration; values are exact (tolerance 0)
@@ -70,6 +74,7 @@
 #include "core/session/LinkVersion.h"
 #include "core/session/Ps3DisplayCodec.h"
 #include "core/session/StationLanAnnouncement.h"
+#include "core/session/DnsSdAdvertiser.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/OpusAudioCodec.h"
 
@@ -221,6 +226,50 @@ QString checkAnnouncement(const QByteArray& bytes, const QJsonObject& expect)
         return QStringLiteral("the station's encoder no longer writes these bytes for this "
                               "announcement %1")
             .arg(error);
+    }
+    return QString();
+}
+
+// iPhone app Task 16: the Bonjour TXT record. The expectation is the
+// service type and the entries as strings; the bytes are those entries in
+// the station's order, each preceded by its length.
+QString checkDnsSdTxt(const QByteArray& bytes, const QJsonObject& expect)
+{
+    for (auto it = expect.constBegin(); it != expect.constEnd(); ++it) {
+        if (it.key() != QStringLiteral("serviceType") && it.key() != QStringLiteral("txt")) {
+            return QStringLiteral("media expectation: unknown field \"%1\"").arg(it.key());
+        }
+    }
+    if (expect.value(QStringLiteral("serviceType")).toString()
+        != QString::fromLatin1(kDnsSdServiceType)) {
+        return QStringLiteral("the decoded record differs at $.serviceType");
+    }
+    QString error;
+    const std::optional<DnsSdTxtEntries> entries = decodeDnsSdTxtRecord(bytes, &error);
+    if (!entries) {
+        return QStringLiteral("the station's decoder refused the TXT record: %1").arg(error);
+    }
+    QJsonObject decoded;
+    for (const auto& [key, value] : *entries) {
+        decoded.insert(QString::fromLatin1(key), QString::fromLatin1(value));
+    }
+    LinkFixtures::Captures none;
+    const QString difference = LinkFixtures::match(
+        expect.value(QStringLiteral("txt")).toObject(), decoded, &none, QStringLiteral("$.txt"));
+    if (!difference.isEmpty()) {
+        return QStringLiteral("the decoded record differs at %1").arg(difference);
+    }
+    QByteArray encoded;
+    const QJsonObject txt = expect.value(QStringLiteral("txt")).toObject();
+    for (const QString& key : {QStringLiteral("v"), QStringLiteral("id"), QStringLiteral("claimed"),
+                               QStringLiteral("pair"), QStringLiteral("name")}) {
+        const QByteArray entry = key.toLatin1() + '=' + txt.value(key).toString().toLatin1();
+        encoded.append(static_cast<char>(entry.size()));
+        encoded.append(entry);
+    }
+    if (encoded != bytes) {
+        return QStringLiteral("the TXT record's bytes are not its entries in the order v, id, "
+                              "claimed, pair, name");
     }
     return QString();
 }
@@ -385,6 +434,9 @@ QString checkVector(const Vectors& all, const QString& id)
     if (codec == QStringLiteral("nrsc1")) {
         return checkAnnouncement(vector.bytes, expect);
     }
+    if (codec == QStringLiteral("dnssd-txt")) {
+        return checkDnsSdTxt(vector.bytes, expect);
+    }
     if (codec == QStringLiteral("ps3d")) {
         return checkPs3d(before, vector.bytes, expect);
     }
@@ -473,9 +525,22 @@ void TstLinkConformanceMedia::vectorsCoverThePlan()
           QStringLiteral("media-nsdc1-keyframe-after-loss"), QStringLiteral("media-opus-1"),
           QStringLiteral("media-opus-2"), QStringLiteral("media-opus-3"),
           QStringLiteral("media-opus-4"), QStringLiteral("media-lan-announcement"),
+          QStringLiteral("media-lan-announcement-2"), QStringLiteral("media-dnssd-txt"),
           QStringLiteral("media-ps3d-frame")}) {
         QVERIFY2(m_vectors.contains(id), qPrintable(id));
     }
+    // iPhone app Task 16: the announcement vectors name their schema; the
+    // station sends schema 2, and a desktop still reads schema 1.
+    QCOMPARE(expectOf(m_vectors.value(QStringLiteral("media-lan-announcement")))
+                 .value(QStringLiteral("schema")).toInt(), 1);
+    QCOMPARE(expectOf(m_vectors.value(QStringLiteral("media-lan-announcement-2")))
+                 .value(QStringLiteral("schema")).toInt(), int(kStationLanAnnouncementSchema));
+    // The TXT vector is the station's encoder's output for the Core the
+    // schema-2 announcement describes.
+    QCOMPARE(m_vectors.value(QStringLiteral("media-dnssd-txt")).bytes,
+             encodeDnsSdTxtRecord(LinkMediaVectors::dnsSdRecord()));
+    QCOMPARE(LinkMediaVectors::dnsSdRecord().identity,
+             LinkMediaVectors::lanAnnouncement2().identity);
     const QJsonObject delta = expectOf(m_vectors.value(QStringLiteral("media-nsdc1-delta")));
     QCOMPARE(delta.value(QStringLiteral("keyframe")).toBool(), false);
     const QJsonObject recovered =

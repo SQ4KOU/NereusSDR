@@ -214,7 +214,9 @@ void GuiConnectionController::refresh()
             : matches.size() > 1 ? tr("Choose a saved entry")
             : matches.isEmpty() ? tr("Needs setup") : tr("Saved, ready to connect");
         rows.append({QStringLiteral("lan:") + endpoint.key(), ConnectionTargetKind::LanCore,
-            tr("%1 (advertised)").arg(advertised.coreName),
+            // iPhone app Task 16: a Core is listed by its label (schema 2),
+            // or by its name when it sends none.
+            tr("%1 (advertised)").arg(advertised.displayName()),
             advertised.radioConnected ? tr("%1 (advertised online)").arg(advertised.radioName)
                 : tr("%1 (advertised offline)").arg(advertised.radioName.isEmpty() ? tr("Radio") : advertised.radioName),
             endpointText({endpoint.url().toString(), {}, {}, false}), state,
@@ -391,7 +393,7 @@ void GuiConnectionController::editCore(const QString& id)
         } else {
             for (const StationLanEndpoint& endpoint : m_lan.endpoints()) {
                 if (m_selector->selectedKey() == QStringLiteral("lan:") + endpoint.key()) {
-                    initial.label = endpoint.announcement.coreName;
+                    initial.label = endpoint.announcement.displayName();
                     initial.connection.url = endpoint.url().toString();
                     break;
                 }
@@ -464,7 +466,7 @@ void GuiConnectionController::showDetails(const QString& key)
         for (const StationLanEndpoint& endpoint : m_lan.endpoints()) {
             if (key == QStringLiteral("lan:") + endpoint.key()) {
                 m_selector->setNotice(tr("Core seen on this network, not yet verified: %1\nAddress: %2\nRadio MAC: %3\nUse a saved entry for it, or get its pairing token and certificate fingerprint from Core setup.")
-                    .arg(endpoint.announcement.coreName, endpointText({endpoint.url().toString(), {}, {}, false}),
+                    .arg(endpoint.announcement.displayName(), endpointText({endpoint.url().toString(), {}, {}, false}),
                          endpoint.announcement.radioMac));
                 return;
             }

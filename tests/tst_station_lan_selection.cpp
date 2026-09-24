@@ -180,6 +180,47 @@ private slots:
         QVERIFY(store.targets().isEmpty());
         controller.shutdown();
     }
+    void coresAreListedByLabelOrElseByName()
+    {
+        // iPhone app Task 16: a schema-2 Core is listed by its label; a
+        // Core from before Task 16 (schema 1) by its name.
+        GuiConnectionController controller;
+        controller.start({});
+        auto* discovery = controller.findChild<StationLanDiscovery*>();
+        QVERIFY(discovery && discovery->start(0));
+        controller.showConnections();
+        StationLanAnnouncement labelled{4711, QStringLiteral("AB:").repeated(31) + QStringLiteral("AB"),
+            QStringLiteral("Test Core"), {}, QStringLiteral("00:00:00:00:00:00"), false};
+        labelled.schema = kStationLanAnnouncementSchema;
+        labelled.identity = QByteArray(kStationLanIdentityBytes, '\x11');
+        labelled.label = QStringLiteral("KG4VCF/shack");
+        labelled.pairing = StationLanPairing::Click;
+        StationLanAnnouncement older{4712, QStringLiteral("CD:").repeated(31) + QStringLiteral("CD"),
+            QStringLiteral("Older Core"), {}, QStringLiteral("00:00:00:00:00:00"), false};
+        QUdpSocket sender;
+        for (const StationLanAnnouncement& packet : {labelled, older}) {
+            const auto bytes = encodeStationLanAnnouncement(packet);
+            QVERIFY(!bytes.isEmpty());
+            QCOMPARE(sender.writeDatagram(bytes, QHostAddress::LocalHost, discovery->port()), bytes.size());
+        }
+        QTRY_COMPARE(discovery->endpoints().size(), 2);
+        auto* tree = controller.selector()->findChild<QTreeWidget*>(QStringLiteral("connectionSelectorTargets"));
+        QVERIFY(tree);
+        const auto listed = [tree](const QString& text) {
+            for (int group = 0; group < tree->topLevelItemCount(); ++group) {
+                for (int row = 0; row < tree->topLevelItem(group)->childCount(); ++row) {
+                    if (tree->topLevelItem(group)->child(row)->text(0) == text) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        QTRY_VERIFY(listed(QStringLiteral("KG4VCF/shack (advertised)")));
+        QVERIFY(listed(QStringLiteral("Older Core (advertised)")));
+        QVERIFY(!listed(QStringLiteral("Test Core (advertised)")));
+        controller.shutdown();
+    }
     void spoofedKnownAnnouncementStillFailsTlsPin()
     {
         QTemporaryDir directory;

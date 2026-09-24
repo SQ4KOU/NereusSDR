@@ -70,6 +70,11 @@
 #include "core/WdspEngine.h"
 #include "core/session/StationServer.h"
 #include "core/session/StationLanAnnouncer.h"
+#include "core/session/DnsSdAdvertiser.h"
+#include "core/session/StationDevicesFacade.h"
+#include "core/security/DeviceStore.h"
+#include "core/security/PairingWindow.h"
+#include "core/security/StationIdentity.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -309,6 +314,9 @@ void DaemonApp::stop()
     cancelRadioDiscovery();
     cancelStationServerListenRetry();
     m_stationAnnouncer.reset();
+    m_dnsSdAdvertiser.reset();
+    m_stationAnnouncement = {};
+    m_dnsSdRecord = {};
     if (m_radioConnectInProgress) {
         // A cold WDSP initialization pumps a nested event loop. Never delete
         // the RadioModel from inside its still-running connect stack. Its
@@ -544,8 +552,28 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
         });
     }
     m_stationAnnouncer = std::make_unique<StationLanAnnouncer>();
+    if (!m_dnsSdAdvertiser) {
+        m_dnsSdAdvertiser = std::make_unique<DnsSdAdvertiser>();
+    }
+    connect(m_dnsSdAdvertiser.get(), &DnsSdAdvertiser::failed, this, [this]() {
+        // Let the next change try again rather than retrying at once.
+        m_dnsSdAttempt.reset();
+    });
     connect(m_stationServer.get(), &StationServer::listeningChanged,
             this, &DaemonApp::updateStationAnnouncement);
+    // iPhone app Task 16: the announcement and Bonjour carry the label, the
+    // claimed state and how the Core pairs, so a rename (Task 13), a claim
+    // or a change to the pairing window (Task 14) announces again.
+    if (StationDevicesFacade* devices = m_stationServer->devicesFacade()) {
+        connect(devices, &StationDevicesFacade::stationLabelChanged,
+                this, &DaemonApp::updateStationAnnouncement);
+        connect(devices, &StationDevicesFacade::devicesStateChanged,
+                this, &DaemonApp::updateStationAnnouncement);
+    }
+    if (PairingWindow* window = m_stationServer->pairingWindow()) {
+        connect(window, &PairingWindow::stateChanged,
+                this, &DaemonApp::updateStationAnnouncement);
+    }
     connect(m_radioModel.get(), &RadioModel::connectionStateChanged,
             this, &DaemonApp::updateStationAnnouncement);
     connect(m_radioModel.get(), &RadioModel::infoChanged,
@@ -662,11 +690,51 @@ bool DaemonApp::publishDisplayBudget(const std::optional<DisplayLoadDecision>& d
     return true;
 }
 
+bool DaemonApp::stationAnnouncedForTest() const
+{
+    return m_stationAnnouncer && m_stationAnnouncer->isActive();
+}
+
+bool DaemonApp::dnsSdAdvertisedForTest() const
+{
+    return m_dnsSdAdvertiser && m_dnsSdAdvertiser->isActive();
+}
+
+void DaemonApp::setDnsSdAdvertiserForTest(std::unique_ptr<DnsSdAdvertiser> advertiser)
+{
+    m_dnsSdAdvertiser = std::move(advertiser);
+}
+
+StationLanPairing DaemonApp::stationLanPairingFor(const StationServer& server)
+{
+    // The pairing window (link document section 3.6): an unclaimed Core
+    // pairs with one tap on its own network unless pairing_lan_click is
+    // deny; a reopened window pairs by code only; a closed one not at all.
+    const PairingWindow* window = server.pairingWindow();
+    if (server.pairingVersion() < 1 || window == nullptr) {
+        return StationLanPairing::Closed;
+    }
+    switch (window->state()) {
+    case PairingWindow::State::OpenUnclaimed:
+        return server.pairingLanClickAllowed() ? StationLanPairing::Click
+                                               : StationLanPairing::Code;
+    case PairingWindow::State::OpenReopened:
+        return StationLanPairing::Code;
+    case PairingWindow::State::ClosedClaimed:
+        break;
+    }
+    return StationLanPairing::Closed;
+}
+
 void DaemonApp::updateStationAnnouncement()
 {
     if (!m_stationAnnouncer) { return; }
     if (!m_stationServer || !m_stationServer->isListening() || !m_radioModel) {
         m_stationAnnouncer->stop();
+        if (m_dnsSdAdvertiser) { m_dnsSdAdvertiser->stop(); }
+        m_stationAnnouncement = {};
+        m_dnsSdRecord = {};
+        m_dnsSdAttempt.reset();
         return;
     }
     StationLanAnnouncement announcement;
@@ -681,7 +749,44 @@ void DaemonApp::updateStationAnnouncement()
     announcement.radioMac = m_radioModel->currentRadioMac().toUpper();
     if (announcement.radioMac.isEmpty()) { announcement.radioMac = m_selectedRadioMac.toUpper(); }
     if (announcement.radioMac.isEmpty()) { announcement.radioMac = QStringLiteral("00:00:00:00:00:00"); }
+    // iPhone app Task 16: schema 2, the only schema a station sends.
+    announcement.schema = kStationLanAnnouncementSchema;
+    announcement.identity = m_stationServer->stationIdentity().fingerprint();
+    if (const StationDevicesFacade* devices = m_stationServer->devicesFacade()) {
+        announcement.claimed = devices->claimed();
+        announcement.label = devices->stationLabel();
+    } else {
+        announcement.claimed = m_stationServer->deviceStore()->isClaimed();
+    }
+    announcement.pairing = stationLanPairingFor(*m_stationServer);
+    m_stationAnnouncement = announcement;
     m_stationAnnouncer->update(m_stationServer->serverAddress(), announcement);
+
+    // Bonjour follows the announcer's rule: only where the listener serves.
+    DnsSdRecord record;
+    record.instanceName = dnsSdInstanceName(announcement.displayName());
+    record.label = announcement.label;
+    record.identity = announcement.identity;
+    record.claimed = announcement.claimed;
+    record.pairing = announcement.pairing;
+    const std::optional<quint32> where = dnsSdInterfaceForListener(m_stationServer->serverAddress());
+    if (!where || !m_dnsSdAdvertiser) {
+        if (m_dnsSdAdvertiser) { m_dnsSdAdvertiser->stop(); }
+        m_dnsSdRecord = {};
+        m_dnsSdAttempt.reset();
+        return;
+    }
+    record.interfaceIndex = *where;
+    m_dnsSdRecord = record;
+    const quint16 port = m_stationServer->serverPort();
+    // Asked once per change: an advertiser that cannot (no Bonjour here, or
+    // the platform refused) is not asked again, and logged again, until what
+    // it would advertise changes.
+    if (m_dnsSdAdvertiser->isActive() || !m_dnsSdAttempt
+        || m_dnsSdAttempt->first != port || m_dnsSdAttempt->second != record) {
+        m_dnsSdAttempt = std::make_pair(port, record);
+        m_dnsSdAdvertiser->start(port, record);
+    }
 }
 
 void DaemonApp::attemptStationServerListen()

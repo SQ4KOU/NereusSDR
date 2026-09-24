@@ -173,6 +173,20 @@ else()
     message(STATUS "Qt6::SerialPort not found — serial PTT/CW support disabled")
 endif()
 
+# iPhone app Task 16 (D36): on Linux the Core advertises itself over Bonjour
+# through the Avahi daemon's D-Bus interface, with Qt's own D-Bus module.
+# It is part of qt6-base (the Rock and Pi 4 builder image has it, and
+# libQt6Network already depends on libQt6DBus), so no package is added.
+# Without it the Core still builds and announces over the LAN datagram.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Qt6 QUIET COMPONENTS DBus)
+    if(Qt6DBus_FOUND)
+        message(STATUS "Qt6::DBus found: Bonjour through Avahi enabled")
+    else()
+        message(STATUS "Qt6::DBus not found: the Core will not advertise itself over Bonjour")
+    endif()
+endif()
+
 # --------------------------------------------------------------------------
 # zlib (Phase 3M-3a-ii follow-up — gzip+base64url envelope helper for
 # the parametric-EQ blob round-trip with Thetis profile storage)
@@ -1171,6 +1185,9 @@ set(CORE_SOURCES
     src/core/session/StationLanCache.cpp
     src/core/session/StationLanDiscovery.cpp
     src/core/session/StationLanAnnouncer.cpp
+    # iPhone app Task 16 (D36): Bonjour. The platform backend is added by
+    # nereus_apply_core_deps().
+    src/core/session/DnsSdAdvertiser.cpp
     src/core/session/StationClient.cpp
     # R3 media transport, signalling, display, spectrum, and Opus building
     # blocks. IMediaTransport carries Q_OBJECT and is listed so AUTOMOC emits
@@ -1949,6 +1966,25 @@ function(nereus_apply_core_deps target)
     # iPhone app Task 14: SPAKE2+EE on libsodium, reached only through
     # src/core/security/SpakeExchange.cpp, so no consumer needs its headers.
     target_link_libraries(${target} PRIVATE nereus_spake2ee)
+
+    # iPhone app Task 16 (D36): one Bonjour backend per platform. Each defines
+    # createPlatformDnsSdBackend(); without one, DnsSdAdvertiser.cpp supplies
+    # a backend that is never available.
+    if(APPLE)
+        # dns_sd.h and its functions are part of libSystem.
+        target_sources(${target} PRIVATE src/core/session/DnsSdAdvertiserApple.cpp)
+        target_compile_definitions(${target} PRIVATE NEREUS_HAVE_DNSSD_BACKEND)
+    elseif(WIN32)
+        # dnsapi.dll is loaded at run time; nothing to link.
+        target_sources(${target} PRIVATE src/core/session/DnsSdAdvertiserWindows.cpp)
+        target_compile_definitions(${target} PRIVATE NEREUS_HAVE_DNSSD_BACKEND)
+        set_source_files_properties(src/core/session/DnsSdAdvertiserWindows.cpp
+            PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND Qt6DBus_FOUND)
+        target_sources(${target} PRIVATE src/core/session/DnsSdAdvertiserAvahi.cpp)
+        target_link_libraries(${target} PRIVATE Qt6::DBus)
+        target_compile_definitions(${target} PRIVATE NEREUS_HAVE_DNSSD_BACKEND)
+    endif()
 
     # libpipewire-0.3, gated by the pkg_check_modules block above. Only links on
     # Linux when the dev package is present; NEREUS_HAVE_PIPEWIRE lets follow-up

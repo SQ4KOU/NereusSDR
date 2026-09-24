@@ -1916,10 +1916,39 @@ has not advertised (section 6.2). An unknown verb does not end the
 connection (section 9.2), but the gate keeps a client from relying on
 that.
 
-## 14. LAN announcement
+## 14. Discovery
 
-A station that listens announces itself on its local networks
-(`StationLanAnnouncement.h`, `StationLanAnnouncer.cpp`):
+A station that listens makes itself known on its local networks two ways,
+independent of each other (iPhone app plan Task 16; D36; the pairing
+design, section 6): the LAN announcement, which desktops listen for, and
+Bonjour, which the iPhone app browses for, because iOS lets an app receive
+custom multicast only with a permission Apple grants on request. Both
+follow one rule: they go out only on addresses the listener serves. A
+listener bound to loopback only is neither announced nor advertised
+(`stationLanListenerServesAddress` in `StationLanAnnouncer.cpp`,
+`dnsSdInterfaceForListener` in `DnsSdAdvertiser.cpp`). Discovery is never
+trust: a client pins what it finds (section 3.2) or pairs (section 3.6).
+
+Both carry the same four facts about the Core, and both change when one
+does (`DaemonApp::updateStationAnnouncement`):
+
+- **identity**: the identity fingerprint, SHA-256 of the identity key
+  (section 3.4);
+- **label**: the Core's label as displayed (`StationLabel`, renamed by
+  `station.rename`, section 9.1), or empty when the Core has none. A list
+  shows the label, or the Core name when it is empty;
+- **claimed**: whether the Core has a paired device or an active token
+  (`DeviceStore::isClaimed`);
+- **pairing**: how the Core takes a new device right now, from its pairing
+  window (section 3.6): `click` while `OpenUnclaimed` with
+  `pairing_lan_click` allowed (one tap on this network pairs; the code does
+  too), `code` while `OpenUnclaimed` with it denied or while
+  `OpenReopened`, and `closed` while `ClosedClaimed` or when the Core does
+  not pair (`pairingVersion` 0).
+
+### 14.1 The LAN announcement
+
+(`StationLanAnnouncement.h`, `StationLanAnnouncer.cpp`)
 
 - UDP to port 47910, to the multicast groups 239.255.42.99 (IPv4) and
   `ff12::4e52:5344` (IPv6), from one source address of each family on each
@@ -1928,34 +1957,96 @@ A station that listens announces itself on its local networks
 - once when it starts, then every 5 s (`kStationLanAnnouncementIntervalMs`
   5000); a listener forgets a station it has not heard for 15 s
   (`kStationLanCacheTtlMs`);
-- at most 512 bytes (`kStationLanMaxDatagramBytes`).
+- a listener takes datagrams of at most 512 bytes
+  (`kStationLanMaxDatagramBytes`); a schema-2 datagram is at most 479
+  (`kStationLanMaxSchema2DatagramBytes`), so no field is ever cut short.
 
-The datagram is binary, schema 1, in this order:
+A station sends schema 2 only (`kStationLanAnnouncementSchema`). A listener
+reads schema 1 and schema 2, so a Core from before schema 2 is still found.
+The datagram is binary, in this order; schema 1 ends after the radio MAC:
 
 | Field | Size | Value |
 | --- | --- | --- |
 | Magic | 4 bytes | ASCII `NRSC` |
-| Schema | 1 byte | 1 (`kStationLanAnnouncementSchema`) |
+| Schema | 1 byte | 1 or 2 |
 | Service | 1 byte | 1: the control WebSocket over TLS (`kStationLanWssControlService`) |
 | Control port | 2 bytes | big-endian, not 0 |
 | Pin | 95 bytes | the certificate pin (section 3.2), uppercase |
 | Core name length | 1 byte | 1 to 128 |
-| Core name | that many bytes | UTF-8, no control characters |
+| Core name | that many bytes | UTF-8, no control characters: `core_name`, or the host name |
 | Radio connected | 1 byte | 0 or 1 |
 | Radio name length | 1 byte | 0 to 128; at least 1 when the radio is connected |
 | Radio name | that many bytes | UTF-8, no control characters |
 | Radio MAC | 17 bytes | uppercase hex pairs joined by colons; `00:00:00:00:00:00` only when no radio is connected |
+| Claimed | 1 byte | schema 2: 0 or 1 |
+| Identity | 32 bytes | schema 2: the identity fingerprint, raw |
+| Label length | 1 byte | schema 2: 0 to 65 (`kStationLanMaxLabelBytes`) |
+| Label | that many bytes | schema 2: ASCII letters, digits, `/`, `_` and `-` (a callsign of up to 32, `/`, a suffix of up to 32) |
+| Pairing | 1 byte | schema 2: 0 `closed`, 1 `click`, 2 `code` |
 
-A listener refuses a datagram with another magic, schema or service, any
+A listener refuses a datagram with another magic, service or schema, any
 bytes left over, or a field that fails these rules. It dials
 `wss://<source address>:<control port>`, with the IPv6 scope when the
-address is link-local, and pins the announced pin.
+address is link-local, and pins the announced pin. It keeps one entry per
+endpoint (pin, source address and scope, interface, control port). A
+schema-1 datagram for an endpoint that already sent schema 2 updates only
+the fields schema 1 carries; it never clears the identity, label, claimed
+state or pairing (`StationLanCache::ingest`).
 
-The conformance vector `media/lan-announcement.bin` (section 16.4) is a
-datagram the station's own encoder wrote, with its decoded fields in
-`media/lan-announcement.expect.json`. `tst_link_conformance_media` decodes
-it and encodes the fields again, so a change to this layout fails there
-until the vector, and this table, move with it.
+The conformance vectors `media/lan-announcement.bin` (schema 1) and
+`media/lan-announcement-2.bin` (schema 2) (section 16.4) are datagrams the
+station's own encoder wrote, with their decoded fields, `schema` among
+them, in the `.expect.json` beside each. `tst_link_conformance_media`
+decodes each and encodes the fields again, so a change to this layout
+fails there until the vectors, and this table, move with it.
+
+### 14.2 Bonjour
+
+(`DnsSdAdvertiser.h`)
+
+The station registers one DNS-SD service:
+
+- service type `_nereus-station._tcp` (`kDnsSdServiceType`), domain
+  `local.`, on the listener's port;
+- on every interface for a listener on every address, or on the interface
+  holding the address a listener is bound to; never for a loopback
+  listener;
+- instance name: the label, or the Core name when there is no label,
+  without control characters and cut to 63 bytes of UTF-8 at a character
+  boundary (`dnsSdInstanceName`), or `NereusSDR Core` when nothing is left.
+  Bonjour renames it when another service holds the name, so a client reads
+  the Core's label from the TXT record's `name`, not from the instance
+  name;
+- a TXT record of five entries, in this order:
+
+| Key | Value |
+| --- | --- |
+| `v` | `1`, this record's version |
+| `id` | the first 22 characters (`kDnsSdIdentityPrefixChars`) of the identity fingerprint in base64url without padding (RFC 4648 section 5) |
+| `claimed` | `0` or `1` |
+| `pair` | `click`, `code` or `closed` |
+| `name` | the label, possibly empty; at most 65 characters |
+
+A client ignores a key it does not know, so a newer station still lists,
+and treats a record whose `v` is not `1` as one it cannot read. `id` names
+the Core in a list; it proves nothing, and a client that pairs or signs in
+checks the whole identity key the station's `hello` carries (section 3.5).
+
+The station updates the TXT record in place when a fact changes, and
+registers again when the instance name changes. Each platform uses what it
+ships: `dns_sd.h` on macOS (`DnsSdAdvertiserApple.cpp`), the Avahi daemon
+over D-Bus on Linux (`DnsSdAdvertiserAvahi.cpp`, with Qt's D-Bus module),
+and `DnsServiceRegister` from `dnsapi.dll` on Windows 10 1903 and later
+(`DnsSdAdvertiserWindows.cpp`). Where Bonjour is not available (no
+avahi-daemon, an older Windows), the station still announces over the LAN
+datagram and logs once that iPhones and iPads will not find it by
+themselves (`DnsSdAdvertiser::unavailableText`).
+
+The conformance vector `media/dnssd-txt.bin` (section 16.4) is the TXT
+record the station's encoder writes for the Core of
+`media/lan-announcement-2.bin`, each entry preceded by its length in one
+byte (RFC 6763 section 6.1), with the service type and the entries as
+strings in `media/dnssd-txt.expect.json`.
 
 ## 15. Limits
 
@@ -2040,8 +2131,8 @@ files against its own client.
   No other key is allowed at either level.
 - `media/*.bin` with `*.expect.json`: the bytes of one packet exactly as
   it travels, and `{"codec":<codec>,"expect":{<decoded values>}}`, where
-  `<codec>` is `nsdc1`, `ps3d`, `opus` or `nrsc1` (the LAN announcement of
-  section 14). `expect` may hold `"after": ["<fixture id>", ...]` for a
+  `<codec>` is `nsdc1`, `ps3d`, `opus`, `nrsc1` (the LAN announcement of
+  section 14.1) or `dnssd-txt` (the Bonjour TXT record of section 14.2). `expect` may hold `"after": ["<fixture id>", ...]` for a
   codec whose decoder keeps state (section 16.4).
 
 A message in a fixture may hold placeholders in place of a value. Each is
@@ -2366,7 +2457,7 @@ vector of another codec, or that forms a cycle through the vectors it
 names, is a malformed vector, and the runner reports it.
 
 The station's media runner decodes the bytes and compares the result with
-`expect`. Where the encoder is exact (`nrsc1`, `ps3d`, `nsdc1`) it also
+`expect`. Where the encoder is exact (`nrsc1`, `dnssd-txt`, `ps3d`, `nsdc1`) it also
 holds the encoder to the bytes: it encodes `expect` (or, for `nsdc1`, the
 regen target's fixed input frames, and for the three malformed `nsdc1`
 vectors those frames' packets with the damage the table names) again and
@@ -2376,7 +2467,9 @@ processors; its vectors hold decoders to the reference PCM instead.
 
 | Codec | Vector | After | Decoded values |
 | --- | --- | --- | --- |
-| `nrsc1` | `lan-announcement`: one LAN announcement datagram (section 14) | none | `controlPort`, `fingerprint`, `coreName`, `radioName`, `radioMac`, `radioConnected`, exact |
+| `nrsc1` | `lan-announcement`: one schema-1 LAN announcement datagram, as a Core from before schema 2 sends it (section 14.1) | none | `schema` 1, `controlPort`, `fingerprint`, `coreName`, `radioName`, `radioMac`, `radioConnected`, exact |
+| `nrsc1` | `lan-announcement-2`: one schema-2 LAN announcement datagram, from a claimed Core whose pairing window was reopened (section 14.1) | none | `schema` 2, the fields above, `claimed` true, `identity` (base64url of the 32 bytes, no padding), `label` `KG4VCF/shack`, `pairing` `code`, exact |
+| `dnssd-txt` | `dnssd-txt`: the Bonjour TXT record of the same Core (section 14.2) | none | `serviceType` `_nereus-station._tcp` and `txt`, the entries as strings (`v`, `id`, `claimed`, `pair`, `name`); the bytes are those entries in that order, exact |
 | `ps3d` | `ps3d-frame`: one PureSignal display chunk, eight points and four correction points | none | Every header field and the eight value lists; `tolerance` `{"absolute": 0}`, because the values travel as IEEE-754 binary64 |
 | `nsdc1` | `nsdc1-full`: frame 1, a keyframe | none | `disposition` `accepted`, `reason` `none`, `keyframe` (the header's keyframe flag), the context (`endpointId`, `contextGeneration`, `minDbm`, `maxDbm`), `encoderSequence`, `producerTimestamp`, `waterfallAdvance` and the reconstructed `traceDbm`, `waterfallDbm` and `wideDbm` rows; `tolerance` `{"dbm": 0.01}` |
 | `nsdc1` | `nsdc1-delta`: frame 2, a delta | `nsdc1-full` | As above, `keyframe` false |

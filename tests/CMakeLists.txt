@@ -7086,6 +7086,10 @@ nereus_add_test(tst_connection_selector)
 nereus_add_test(tst_station_lan_cache)
 nereus_add_test(tst_station_lan_transport)
 nereus_add_test(tst_station_lan_selection)
+# iPhone app Task 16 (D36, R-IOS-16): the Core's Bonjour record and
+# advertiser. On macOS the real backend registers on this computer only and
+# the test browses for it; nothing reaches a network.
+nereus_add_test(tst_dns_sd_advertiser)
 nereus_add_test(tst_gui_connection_controller)
 
 # R3 remote window harness plan, Task 2 (R-R3-16/17/21/24): one real remote

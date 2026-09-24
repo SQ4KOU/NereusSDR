@@ -68,6 +68,7 @@
 #include "core/session/LinkVersion.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationLanAnnouncement.h"
+#include "core/session/DnsSdAdvertiser.h"
 #include "core/session/StationServer.h"
 #include "fakes/LoopbackTransport.h"
 
@@ -1308,9 +1309,40 @@ StationLanAnnouncement LinkMediaVectors::lanAnnouncement()
     return value;
 }
 
+namespace {
+
+// A made-up identity fingerprint, 32 bytes. Not any Core's.
+QByteArray vectorIdentity()
+{
+    QByteArray identity;
+    for (int i = 0; i < kStationLanIdentityBytes; ++i) {
+        identity.append(static_cast<char>(0x10 + i * 7));
+    }
+    return identity;
+}
+
+QByteArray base64Url(const QByteArray& bytes)
+{
+    return bytes.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+}
+
+} // namespace
+
+StationLanAnnouncement LinkMediaVectors::lanAnnouncement2()
+{
+    StationLanAnnouncement value = lanAnnouncement();
+    value.schema = kStationLanAnnouncementSchema2;
+    value.claimed = true;
+    value.identity = vectorIdentity();
+    value.label = QStringLiteral("KG4VCF/shack");
+    value.pairing = StationLanPairing::Code;
+    return value;
+}
+
 QJsonObject LinkMediaVectors::toJson(const StationLanAnnouncement& value)
 {
-    return QJsonObject{
+    QJsonObject json{
+        {QStringLiteral("schema"), int(value.schema)},
         {QStringLiteral("controlPort"), value.controlPort},
         {QStringLiteral("fingerprint"), value.fingerprint},
         {QStringLiteral("coreName"), value.coreName},
@@ -1318,35 +1350,87 @@ QJsonObject LinkMediaVectors::toJson(const StationLanAnnouncement& value)
         {QStringLiteral("radioMac"), value.radioMac},
         {QStringLiteral("radioConnected"), value.radioConnected},
     };
+    if (value.schema == kStationLanAnnouncementSchema2) {
+        json.insert(QStringLiteral("claimed"), value.claimed);
+        json.insert(QStringLiteral("identity"), QString::fromLatin1(base64Url(value.identity)));
+        json.insert(QStringLiteral("label"), value.label);
+        json.insert(QStringLiteral("pairing"), stationLanPairingName(value.pairing));
+    }
+    return json;
 }
 
 bool LinkMediaVectors::fromJson(const QJsonObject& json, StationLanAnnouncement* value,
                                 QString* error)
 {
+    const QStringList schemaOne{QStringLiteral("schema"), QStringLiteral("controlPort"),
+                                QStringLiteral("fingerprint"), QStringLiteral("coreName"),
+                                QStringLiteral("radioName"), QStringLiteral("radioMac"),
+                                QStringLiteral("radioConnected")};
+    const QStringList schemaTwo{QStringLiteral("claimed"), QStringLiteral("identity"),
+                                QStringLiteral("label"), QStringLiteral("pairing")};
+    const int schema = json.value(QStringLiteral("schema")).toInt(-1);
     const QString problem = expectKeys(
-        json,
-        {QStringLiteral("controlPort"), QStringLiteral("fingerprint"), QStringLiteral("coreName"),
-         QStringLiteral("radioName"), QStringLiteral("radioMac"), QStringLiteral("radioConnected")},
-        {}, QStringLiteral("announcement expect"));
+        json, schema == kStationLanAnnouncementSchema2 ? schemaOne + schemaTwo : schemaOne, {},
+        QStringLiteral("announcement expect"));
     if (!problem.isEmpty()) {
         *error = problem;
         return false;
     }
     qint64 port = 0;
     if (!readWhole(json, QStringLiteral("controlPort"), &port, error) || port < 0 || port > 65535
-        || !json.value(QStringLiteral("radioConnected")).isBool()) {
+        || !json.value(QStringLiteral("radioConnected")).isBool()
+        || (schema != kStationLanAnnouncementSchema1 && schema != kStationLanAnnouncementSchema2)) {
         if (error->isEmpty()) {
-            *error = QStringLiteral("controlPort or radioConnected is out of range");
+            *error = QStringLiteral("schema, controlPort or radioConnected is out of range");
         }
         return false;
     }
+    value->schema = static_cast<quint8>(schema);
     value->controlPort = static_cast<quint16>(port);
     value->fingerprint = json.value(QStringLiteral("fingerprint")).toString();
     value->coreName = json.value(QStringLiteral("coreName")).toString();
     value->radioName = json.value(QStringLiteral("radioName")).toString();
     value->radioMac = json.value(QStringLiteral("radioMac")).toString();
     value->radioConnected = json.value(QStringLiteral("radioConnected")).toBool();
+    if (schema == kStationLanAnnouncementSchema2) {
+        const auto pairing =
+            stationLanPairingFromName(json.value(QStringLiteral("pairing")).toString());
+        const auto identity = QByteArray::fromBase64Encoding(
+            json.value(QStringLiteral("identity")).toString().toLatin1(),
+            QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals
+                | QByteArray::AbortOnBase64DecodingErrors);
+        if (!json.value(QStringLiteral("claimed")).isBool() || !pairing || !identity) {
+            *error = QStringLiteral("claimed, identity or pairing is not readable");
+            return false;
+        }
+        value->claimed = json.value(QStringLiteral("claimed")).toBool();
+        value->identity = *identity;
+        value->label = json.value(QStringLiteral("label")).toString();
+        value->pairing = *pairing;
+    }
     return true;
+}
+
+DnsSdRecord LinkMediaVectors::dnsSdRecord()
+{
+    const StationLanAnnouncement announcement = lanAnnouncement2();
+    DnsSdRecord record;
+    record.instanceName = dnsSdInstanceName(announcement.displayName());
+    record.label = announcement.label;
+    record.identity = announcement.identity;
+    record.claimed = announcement.claimed;
+    record.pairing = announcement.pairing;
+    return record;
+}
+
+QJsonObject LinkMediaVectors::toJson(const DnsSdRecord& record)
+{
+    QJsonObject txt;
+    for (const auto& [key, value] : dnsSdTxtEntries(record)) {
+        txt.insert(QString::fromLatin1(key), QString::fromLatin1(value));
+    }
+    return QJsonObject{{QStringLiteral("serviceType"), QString::fromLatin1(kDnsSdServiceType)},
+                       {QStringLiteral("txt"), txt}};
 }
 
 Ps3Snapshot LinkMediaVectors::ps3Snapshot()
