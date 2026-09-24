@@ -23,6 +23,10 @@
 //                                    conformance runner. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): runs once per link major in
+//                                    the manifest.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -32,6 +36,7 @@
 #include <QJsonObject>
 #include <QSet>
 
+#include "core/session/LinkVersion.h"
 #include "core/session/SessionMessages.h"
 
 #include "LinkFixtures.h"
@@ -176,17 +181,25 @@ void TstLinkConformanceControl::everyKindIsCoveredInEachDirection()
 void TstLinkConformanceControl::controlFixtures_data()
 {
     QTest::addColumn<QString>("file");
+    QTest::addColumn<int>("major");
     const QList<LinkFixtures::Entry> entries =
         LinkFixtures::entries(m_manifest, QStringLiteral("control"));
     QVERIFY(!entries.isEmpty());
-    for (const LinkFixtures::Entry& entry : entries) {
-        QTest::newRow(qPrintable(entry.id)) << entry.file;
+    // Once per link major the suite covers (manifest linkMajors).
+    for (const quint16 major : LinkFixtures::linkMajors(m_manifest)) {
+        for (const LinkFixtures::Entry& entry : entries) {
+            QTest::newRow(qPrintable(QStringLiteral("%1 link %2").arg(entry.id).arg(major)))
+                << entry.file << int(major);
+        }
     }
 }
 
 void TstLinkConformanceControl::controlFixtures()
 {
     QFETCH(QString, file);
+    QFETCH(int, major);
+    QVERIFY2(LinkVersion::supportedMajors().contains(quint16(major)),
+             qPrintable(QStringLiteral("this station does not offer link major %1").arg(major)));
     QString error;
     const QJsonObject o =
         LinkFixtures::readObject(QDir(LinkFixtures::dataDirectory()).filePath(file), &error);

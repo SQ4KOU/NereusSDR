@@ -1,13 +1,13 @@
 {
-  "from": "station",
+  "from": "client",
   "wire": {
     "type": "hello",
     "major": 1,
     "minor": 11,
     "settingsSchema": 0,
-    "peer": "nereusd",
-    "majors": [1],
+    "peer": "NereusSDR iPhone",
+    "majors": [],
     "features": {}
   },
-  "decodes": true
+  "decodes": false
 }

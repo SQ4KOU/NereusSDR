@@ -11,6 +11,9 @@
 //                                    loader, matcher and script player.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): linkMajors().
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -336,6 +339,15 @@ QString LinkFixtures::checkManifest(const QJsonObject& manifest, const QString& 
         }
     }
     return QString();
+}
+
+QList<quint16> LinkFixtures::linkMajors(const QJsonObject& manifest)
+{
+    QList<quint16> majors;
+    for (const QJsonValue& value : manifest.value(QStringLiteral("linkMajors")).toArray()) {
+        majors.append(static_cast<quint16>(value.toInt()));
+    }
+    return majors;
 }
 
 QList<LinkFixtures::Entry> LinkFixtures::entries(const QJsonObject& manifest, const QString& kind)

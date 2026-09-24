@@ -31,6 +31,9 @@
 //                                    loader, matcher and script player.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): linkMajors().
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -81,6 +84,10 @@ public:
     /// .bin and needs the .expect.json beside it), and every file under
     /// control/, sessions/ and media/ listed exactly once. Empty on pass.
     static QString checkManifest(const QJsonObject& manifest, const QString& directory);
+
+    /// The manifest's linkMajors. Every runner runs its fixtures once per
+    /// major in it, against a station that offers that major.
+    static QList<quint16> linkMajors(const QJsonObject& manifest);
 
     /// The manifest's entries of one kind, in manifest order.
     static QList<Entry> entries(const QJsonObject& manifest, const QString& kind);

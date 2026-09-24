@@ -1,7 +1,7 @@
 {
     "stationSetup": {"radio": "static", "slices": 1},
     "steps": [
-        {"from": "station", "message": {"major": 1, "minor": 11, "peer": "nereusd", "settingsSchema": 0, "type": "hello"}},
+        {"from": "station", "message": {"features": {}, "major": 1, "majors": [1], "minor": 11, "peer": "nereusd", "settingsSchema": 0, "type": "hello"}},
         {"from": "client", "message": {"type": "hello", "major": 1, "minor": 11, "settingsSchema": 0, "peer": "NereusSDR iPhone"}},
         {"from": "client", "message": {"type": "auth.request", "token": "not-the-station-token"}},
         {"from": "station", "message": {"accepted": false, "reason": "Authentication failed", "retryable": false, "type": "auth.result"}},

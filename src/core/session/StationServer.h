@@ -167,17 +167,26 @@
 //                                    minor-11 peers. AI-assisted
 //                                    implementation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): link
+//                                    majors both ways (the hello's
+//                                    `majors`, the plain-words refusal),
+//                                    the peer's declared features and an
+//                                    explicit TLS 1.2 minimum. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QHash>
 #include <QHostAddress>
 #include <QObject>
 #include <QPointer>
+#include <QSslConfiguration>
 #include <QString>
 
 #include <memory>
 #include <functional>
 
+#include "core/session/LinkVersion.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
 
@@ -284,9 +293,16 @@ public:
     /// live. Empty means the daemon profile's own config directory, which
     /// is the production answer; tests pass a scratch directory so a run
     /// never reads back or overwrites a real station's identity.
+    ///
+    /// `supportedMajors` (iPhone app Task 4) is the link majors this
+    /// station advertises and accepts, oldest first. The default is the
+    /// build's own (kSupportedSessionMajors); tests inject theirs, and a
+    /// debug build of nereusd takes --test-link-majors.
     explicit StationServer(RadioModel* radioModel, AppSettings& settings,
                            const QString& securityDirectory = QString(),
-                           QObject* parent = nullptr);
+                           QObject* parent = nullptr,
+                           const QList<quint16>& supportedMajors =
+                               LinkVersion::supportedMajors());
     ~StationServer() override;
 
     StationServer(const StationServer&) = delete;
@@ -303,6 +319,27 @@ public:
     quint16 serverPort() const;
     QHostAddress serverAddress() const;
     QString lastError() const { return m_lastError; }
+
+    /// The listener's TLS configuration as it is in force, read back from
+    /// the listener (default-constructed before the first listen()). Its
+    /// protocol() is QSsl::TlsV1_2OrLater: the minimum is set explicitly
+    /// rather than left to Qt's default.
+    QSslConfiguration tlsConfiguration() const;
+
+    /// iPhone app Task 4 (R-IOS-01): the link majors this station accepts,
+    /// oldest first.
+    QList<quint16> supportedMajors() const { return m_supportedMajors; }
+
+    /// The major `peer`'s session runs at: the one its hello chose from
+    /// this station's list. 0 before that hello was accepted, or for a
+    /// transport that is not a peer.
+    quint16 peerAgreedMajor(SessionTransport* peer) const;
+
+    /// True when `peer`'s hello declared `feature` at `minVersion` or
+    /// later. What the station must know before capabilities are sent
+    /// (device authentication, pairing, the takeover question, Setup
+    /// descriptions) is asked here. An older app declares nothing.
+    bool peerDeclares(SessionTransport* peer, const QByteArray& feature, int minVersion) const;
 
     /// The generated pre-shared token and the TLS fingerprint a client has
     /// to be given out of band. Empty when provisioning failed.
@@ -483,6 +520,10 @@ private:
         bool helloReceived = false;
         bool authenticated = false;
         quint16 agreedMinor = 0;
+        /// iPhone app Task 4: the major the peer's hello chose (0 until
+        /// accepted) and what that hello declared.
+        quint16 agreedMajor = 0;
+        QHash<QByteArray, int> features;
         bool snapshotComplete = false;
 
         /// Pings sent since the last pong. Reset to 0 by every pong; the
@@ -548,6 +589,13 @@ private:
     AppSettings& m_settings;
     QString m_securityDirectory;
     QString m_lastError;
+
+    /// iPhone app Task 4: what this station's hello advertises. The
+    /// station declares no features yet; the tasks that add device
+    /// authentication, pairing, the takeover question and Setup
+    /// descriptions add theirs here.
+    QList<quint16> m_supportedMajors;
+    QHash<QByteArray, int> m_declaredFeatures;
 
     std::unique_ptr<CertificateStore> m_certificates;
     std::unique_ptr<TokenStore> m_tokens;

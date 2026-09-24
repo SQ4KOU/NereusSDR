@@ -42,6 +42,11 @@
 //                                    conformance runner. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): runs once per link major in
+//                                    the manifest, against a station that
+//                                    offers that major.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -63,6 +68,7 @@
 #include "core/dsp/DspAssetService.h"
 #include "core/meters/SliceMeterPump.h"
 #include "core/security/TokenStore.h"
+#include "core/session/LinkVersion.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationServer.h"
@@ -110,7 +116,7 @@ struct Station {
     }
 };
 
-QString buildStation(const QJsonObject& setup, Station* station)
+QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
 {
     for (auto it = setup.constBegin(); it != setup.constEnd(); ++it) {
         if (!kSetupKeys.contains(it.key())) {
@@ -183,8 +189,10 @@ QString buildStation(const QJsonObject& setup, Station* station)
     // Provision the throwaway token first, so the server loads it rather
     // than generating one and printing its first-run pairing banner.
     { TokenStore provision(station->dir.path()); }
-    station->server =
-        std::make_unique<StationServer>(station->model, *station->settings, station->dir.path());
+    // A station that offers exactly the link major this pass covers.
+    station->server = std::make_unique<StationServer>(station->model, *station->settings,
+                                                      station->dir.path(), nullptr,
+                                                      QList<quint16>{major});
     if (setup.value(QStringLiteral("media")).toBool(false)) {
         station->server->setMediaEnabled(true);
     }
@@ -246,7 +254,8 @@ private slots:
     void alteredFixturesFailReadably();
 
 private:
-    QString run(const QString& id, const QJsonObject& fixture);
+    QString run(const QString& id, const QJsonObject& fixture,
+                quint16 major = kSessionProtocolMajor);
     QJsonObject fixture(const QString& id);
     QJsonObject m_manifest;
 };
@@ -293,11 +302,12 @@ QJsonObject TstLinkConformanceSession::fixture(const QString& id)
     return {};
 }
 
-QString TstLinkConformanceSession::run(const QString& id, const QJsonObject& fixture)
+QString TstLinkConformanceSession::run(const QString& id, const QJsonObject& fixture,
+                                       quint16 major)
 {
     Station station;
     const QString problem =
-        buildStation(fixture.value(QStringLiteral("stationSetup")).toObject(), &station);
+        buildStation(fixture.value(QStringLiteral("stationSetup")).toObject(), &station, major);
     if (!problem.isEmpty()) {
         return problem;
     }
@@ -316,11 +326,16 @@ void TstLinkConformanceSession::sessionFixtures_data()
 {
     QTest::addColumn<QString>("id");
     QTest::addColumn<QString>("file");
+    QTest::addColumn<int>("major");
     const QList<LinkFixtures::Entry> entries =
         LinkFixtures::entries(m_manifest, QStringLiteral("session"));
     QVERIFY(!entries.isEmpty());
-    for (const LinkFixtures::Entry& entry : entries) {
-        QTest::newRow(qPrintable(entry.id)) << entry.id << entry.file;
+    // Once per link major the suite covers (manifest linkMajors).
+    for (const quint16 major : LinkFixtures::linkMajors(m_manifest)) {
+        for (const LinkFixtures::Entry& entry : entries) {
+            QTest::newRow(qPrintable(QStringLiteral("%1 link %2").arg(entry.id).arg(major)))
+                << entry.id << entry.file << int(major);
+        }
     }
 }
 
@@ -328,11 +343,14 @@ void TstLinkConformanceSession::sessionFixtures()
 {
     QFETCH(QString, id);
     QFETCH(QString, file);
+    QFETCH(int, major);
+    QVERIFY2(LinkVersion::supportedMajors().contains(quint16(major)),
+             qPrintable(QStringLiteral("this station does not offer link major %1").arg(major)));
     QString error;
     const QJsonObject o =
         LinkFixtures::readObject(QDir(LinkFixtures::dataDirectory()).filePath(file), &error);
     QVERIFY2(error.isEmpty(), qPrintable(error));
-    const QString failure = run(id, o);
+    const QString failure = run(id, o, quint16(major));
     QVERIFY2(failure.isEmpty(), qPrintable(failure));
 }
 

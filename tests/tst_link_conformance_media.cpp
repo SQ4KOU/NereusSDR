@@ -44,6 +44,10 @@
 //                                    stateful decoders. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): runs once per link major in
+//                                    the manifest.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -59,6 +63,7 @@
 #include <optional>
 
 #include "core/dsp/Ps3Snapshot.h"
+#include "core/session/LinkVersion.h"
 #include "core/session/Ps3DisplayCodec.h"
 #include "core/session/StationLanAnnouncement.h"
 #include "core/session/media/DisplayCodec.h"
@@ -404,6 +409,7 @@ private slots:
 
 private:
     Vectors m_vectors;
+    QList<quint16> m_linkMajors;
 };
 
 void TstLinkConformanceMedia::initTestCase()
@@ -412,6 +418,7 @@ void TstLinkConformanceMedia::initTestCase()
     const QJsonObject manifest = LinkFixtures::readObject(
         QDir(LinkFixtures::dataDirectory()).filePath(QStringLiteral("manifest.json")), &error);
     QVERIFY2(error.isEmpty(), qPrintable(error));
+    m_linkMajors = LinkFixtures::linkMajors(manifest);
     const QDir root(LinkFixtures::dataDirectory());
     for (const LinkFixtures::Entry& entry : LinkFixtures::entries(manifest, QStringLiteral("media"))) {
         QFile file(root.filePath(entry.file));
@@ -430,16 +437,24 @@ void TstLinkConformanceMedia::initTestCase()
 void TstLinkConformanceMedia::mediaVectors_data()
 {
     QTest::addColumn<QString>("id");
+    QTest::addColumn<int>("major");
     QStringList ids = m_vectors.keys();
     ids.sort();
-    for (const QString& id : ids) {
-        QTest::newRow(qPrintable(id)) << id;
+    // Once per link major the suite covers (manifest linkMajors).
+    for (const quint16 major : m_linkMajors) {
+        for (const QString& id : ids) {
+            QTest::newRow(qPrintable(QStringLiteral("%1 link %2").arg(id).arg(major)))
+                << id << int(major);
+        }
     }
 }
 
 void TstLinkConformanceMedia::mediaVectors()
 {
     QFETCH(QString, id);
+    QFETCH(int, major);
+    QVERIFY2(LinkVersion::supportedMajors().contains(quint16(major)),
+             qPrintable(QStringLiteral("this station does not offer link major %1").arg(major)));
     const QString failure = checkVector(m_vectors, id);
     QVERIFY2(failure.isEmpty(), qPrintable(failure));
 }

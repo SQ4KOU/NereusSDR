@@ -1072,6 +1072,8 @@ set(CORE_SOURCES
     # about MirrorUpdate, never a model class -- so it stays out of the
     # ObjectRegistry.cpp block above.
     src/core/session/SessionMessages.cpp
+    # iPhone app Task 4 (R-IOS-01): link majors agreed both ways.
+    src/core/session/LinkVersion.cpp
     src/core/session/StationTelemetry.cpp
     # R2 Task 11: command verbs. Turns a decoded CommandInvoke SessionMessage
     # into the corresponding RadioModel call (addSlice / removeSlice /

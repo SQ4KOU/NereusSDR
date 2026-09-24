@@ -122,6 +122,13 @@
 //                                    verbs; a window's accessory setting
 //                                    write reaches the Core's live objects.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): the
+//                                    hello advertises the station's link
+//                                    majors and features; a client major
+//                                    outside that list is refused in plain
+//                                    words; the peer's declared features;
+//                                    TLS 1.2 or later set explicitly.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -541,13 +548,20 @@ void writePairingBanner(const QString& banner)
 } // namespace
 
 StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
-                             const QString& securityDirectory, QObject* parent)
+                             const QString& securityDirectory, QObject* parent,
+                             const QList<quint16>& supportedMajors)
     : QObject(parent)
     , m_radioModel(radioModel)
     , m_settings(settings)
     , m_securityDirectory(securityDirectory.isEmpty() ? CertificateStore::defaultDirectory()
                                                       : securityDirectory)
+    , m_supportedMajors(supportedMajors.isEmpty() ? LinkVersion::supportedMajors()
+                                                  : supportedMajors)
 {
+    // Oldest first and each once, as the hello sends them.
+    std::sort(m_supportedMajors.begin(), m_supportedMajors.end());
+    m_supportedMajors.erase(std::unique(m_supportedMajors.begin(), m_supportedMajors.end()),
+                            m_supportedMajors.end());
     // Every capability set this R3 server advertises is receive-only. Make
     // that a persistent property of the hardware-owning model as well, so a
     // standalone StationServer host cannot admit a TX/accessory side effect
@@ -738,6 +752,11 @@ bool StationServer::listen(const QHostAddress& address, quint16 port)
     // it. Asking for a client certificate here would be a second,
     // unimplemented identity mechanism.
     tls.setPeerVerifyMode(QSslSocket::VerifyNone);
+    // iPhone app Task 4 (R-IOS-01): the minimum is set here rather than
+    // left to Qt's default (QSsl::SecureProtocols, which is TLS 1.2 or
+    // later today but may change with Qt). The link document's section 2
+    // states it; tst_link_version reads it back from the listener.
+    tls.setProtocol(QSsl::TlsV1_2OrLater);
     m_wsServer->setSslConfiguration(tls);
 
     if (!m_wsServer->listen(address, port)) {
@@ -775,6 +794,27 @@ void StationServer::close()
 bool StationServer::isListening() const
 {
     return m_wsServer != nullptr && m_wsServer->isListening();
+}
+
+QSslConfiguration StationServer::tlsConfiguration() const
+{
+    return m_wsServer != nullptr ? m_wsServer->sslConfiguration() : QSslConfiguration();
+}
+
+quint16 StationServer::peerAgreedMajor(SessionTransport* peer) const
+{
+    const auto it = m_peers.constFind(peer);
+    return it != m_peers.constEnd() ? it->agreedMajor : quint16(0);
+}
+
+bool StationServer::peerDeclares(SessionTransport* peer, const QByteArray& feature,
+                                 int minVersion) const
+{
+    const auto it = m_peers.constFind(peer);
+    if (it == m_peers.constEnd() || !it->features.contains(feature)) {
+        return false;
+    }
+    return it->features.value(feature) >= minVersion;
 }
 
 quint16 StationServer::serverPort() const
@@ -922,10 +962,15 @@ void StationServer::acceptTransport(SessionTransport* transport)
     // does not fix which end speaks first; sending it in the direction
     // that avoids exposing a secret to an incompatible peer is this
     // task's own choice, recorded here.
+    //
+    // iPhone app Task 4 (R-IOS-01): the hello names this station's newest
+    // major and every major it accepts, and declares its features, so the
+    // client can pick the highest shared major before it answers.
     send(transport,
-         SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor,
+         SessionMessages::hello(m_supportedMajors.last(), kSessionProtocolMinor,
                                 settingsSchemaVersionOf(m_settings),
-                                peerNameForThisProcess()));
+                                peerNameForThisProcess(), m_supportedMajors,
+                                m_declaredFeatures));
 
     qCDebug(lcStation) << "Peer attached:" << peer.description;
 }
@@ -1211,23 +1256,27 @@ void StationServer::handleHello(SessionTransport* transport, const SessionMessag
     }
     it->helloReceived = true;
 
-    // Parent design section 7.0's version policy, both halves.
-    if (message.protocolMajor != kSessionProtocolMajor) {
+    // Parent design section 7.0's version policy, both halves, with the
+    // iPhone app spec's D23 and D39 (R-IOS-01): the client's hello names
+    // the major it chose from this station's list, and the station accepts
+    // exactly that. A client that shares no major with this station (two
+    // or more apart) has chosen one outside the list, or is an older app
+    // on another major, and is refused naming both sides' versions.
+    if (!m_supportedMajors.contains(message.protocolMajor)) {
         const QString reason =
-            QStringLiteral("Protocol major version mismatch: station speaks %1.%2, "
-                           "client speaks %3.%4. A differing major means an "
-                           "incompatible wire contract.")
-                .arg(kSessionProtocolMajor)
-                .arg(kSessionProtocolMinor)
-                .arg(message.protocolMajor)
-                .arg(message.protocolMinor);
-        qCWarning(lcStation) << reason;
+            LinkVersion::refusalText(m_supportedMajors, message.supportedMajors);
+        qCWarning(lcStation) << "Refusing a client on link major" << message.protocolMajor
+                             << "(it supports" << message.supportedMajors
+                             << "; this station supports" << m_supportedMajors << "):"
+                             << reason;
         // NOT retryable: an incompatible wire contract does not become
         // compatible by being dialed again. The operator has to upgrade
         // one end.
         dropPeer(transport, reason, true, /*retryable=*/false);
         return;
     }
+    it->agreedMajor = message.protocolMajor;
+    it->features = message.features;
 
     // Equal major, differing minor: negotiate DOWN to the lower of the
     // two. A desktop GUI several releases ahead of a Pi still running this
@@ -1247,7 +1296,8 @@ void StationServer::handleHello(SessionTransport* transport, const SessionMessag
 
     qCDebug(lcStation) << "Hello from" << message.peerName << "version"
                        << message.protocolMajor << "." << message.protocolMinor
-                       << "agreed minor" << it->agreedMinor;
+                       << "agreed major" << it->agreedMajor << "agreed minor"
+                       << it->agreedMinor << "declares" << it->features.keys();
 }
 
 void StationServer::handleAuthRequest(SessionTransport* transport,

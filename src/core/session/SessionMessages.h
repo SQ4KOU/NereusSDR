@@ -115,9 +115,14 @@
 //                                    kind the link surface is captured
 //                                    from. AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): the
+//                                    hello's `majors` and `features`.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
+#include <QHash>
 #include <QList>
 #include <QMetaType>
 #include <QJsonObject>
@@ -390,6 +395,26 @@ struct SessionMessage {
     /// "NereusSDR 0.5.2"). Diagnostics only: nothing gates on it.
     QString peerName;
 
+    // ── iPhone app Task 4 (R-IOS-01): Hello only ────────────────────────
+
+    /// The link majors the sender supports (LinkVersion.h). On the wire as
+    /// `majors`; a hello without it (every peer built before Task 4)
+    /// decodes as [protocolMajor]. A station's `protocolMajor` is its
+    /// newest; a client's is the one it chose from the station's list.
+    QList<quint16> supportedMajors;
+
+    /// What the sender declares before capabilities are sent: feature name
+    /// to whole-number version. On the wire as `features`; absent decodes
+    /// as none. A name the receiver does not know is kept and never
+    /// consulted.
+    QHash<QByteArray, int> features;
+
+    /// Whether `majors` and `features` travel. Set by the six-argument
+    /// hello() builder and by decode() when the peer sent them, so a hello
+    /// from an older peer encodes again exactly as it arrived.
+    bool majorsOnWire = false;
+    bool featuresOnWire = false;
+
     // ── Task 18: AuthRequest only ───────────────────────────────────────
 
     /// The pre-shared token (TokenStore). NEVER logged: StationServer logs
@@ -445,9 +470,19 @@ public:
     // ── Task 18 builders ────────────────────────────────────────────────
 
     /// First message either end sends after the TLS handshake completes.
+    /// This form is today's hello, without `majors` or `features`.
     static SessionMessage hello(quint16 major, quint16 minor,
                                 qint32 settingsSchemaVersion,
                                 const QString& peerName);
+
+    /// iPhone app Task 4: the hello with the sender's supported majors and
+    /// declared features, both always on the wire (an empty `features` is
+    /// sent as {}).
+    static SessionMessage hello(quint16 major, quint16 minor,
+                                qint32 settingsSchemaVersion,
+                                const QString& peerName,
+                                const QList<quint16>& supportedMajors,
+                                const QHash<QByteArray, int>& features);
 
     /// Client to daemon, once the daemon's Hello has been accepted.
     static SessionMessage authRequest(const QString& token);

@@ -23,7 +23,8 @@
 //                                    Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): the
 //                                    accessory records' class after the
-//                                    accessories merge. AI-assisted
+//                                    accessories merge; the hello's
+//                                    `majors` and `features`. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
 // =================================================================
@@ -138,8 +139,11 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
         return SessionMessages::commandResult("removeSlice", 1, true, QString(), {"slice:0"},
                                               {sampleUpdate("revision")});
     case SessionMessageKind::Hello:
+        // With the Task 4 declarations, so `majors` and `features` are
+        // recorded (as optional: an older peer sends neither).
         return SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 1,
-                                      QStringLiteral("link-surface"));
+                                      QStringLiteral("link-surface"), {kSessionProtocolMajor},
+                                      {{"linkSurface", 1}});
     case SessionMessageKind::AuthRequest:
         // A placeholder, never a real token.
         return SessionMessages::authRequest(QStringLiteral("placeholder"));

@@ -46,9 +46,11 @@ and the [R3 plan](2026-09-20-remote-daemon-r3-plan.md).
 
 - The station listens with a `QWebSocketServer` in secure mode
   (`StationServer.cpp`, `listen()`), so every connection is a WebSocket
-  over TLS (`wss://`). The server takes Qt's default TLS configuration
-  (`QSslConfiguration::defaultConfiguration()`), whose protocol setting is
-  `QSsl::SecureProtocols`: TLS 1.2 or later. The station does not ask for
+  over TLS (`wss://`). The server starts from Qt's default TLS
+  configuration (`QSslConfiguration::defaultConfiguration()`) and sets the
+  minimum explicitly: `setProtocol(QSsl::TlsV1_2OrLater)`, TLS 1.2 or later,
+  whatever Qt's default becomes. `tst_link_version` reads it back from the
+  listener (`StationServer::tlsConfiguration()`). The station does not ask for
   a client certificate (`setPeerVerifyMode(QSslSocket::VerifyNone)`); the
   client's proof of identity is the token (section 3.3).
 - The control port is set by `remote_port` in `nereusd.conf`
@@ -124,7 +126,7 @@ decoder refuse the message) and the keys it may carry.
 | `command.invoke` | `args`, `id`, `type`, `verb` | none |
 | `command.result` | `accepted`, `affected`, `id`, `reason`, `type`, `verb` | `values` |
 | `delta` | `key`, `properties`, `type` | none |
-| `hello` | `major`, `minor`, `peer`, `settingsSchema`, `type` | none |
+| `hello` | `major`, `minor`, `peer`, `settingsSchema`, `type` | `features`, `majors` |
 | `media.control` | `payload`, `type` | none |
 | `object.create` | `class`, `key`, `properties`, `type` | none |
 | `object.destroy` | `class`, `key`, `type` | none |
@@ -175,10 +177,11 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
 1. The client opens the WebSocket and checks the pin (section 3.2).
 2. The station sends `hello` first, as soon as it accepts the connection,
    before the client has sent anything (`StationServer::acceptTransport`).
-   A client can therefore refuse an incompatible major without having sent
-   its token.
-3. The client answers with its own `hello`, then `auth.request` carrying
-   the token (`StationClient.cpp`, after its pin check).
+   It names every link major the station supports (section 6.1), so a
+   client can pick one, or leave without having sent its token.
+3. The client answers with its own `hello`, naming the major it chose,
+   then `auth.request` carrying the token (`StationClient.cpp`, after its
+   pin check).
 4. The station sends `auth.result`. On success, in this order
    (`StationServer::promoteToSession`):
    - `capabilities` (section 6);
@@ -194,7 +197,9 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
 
 A `hello` carries `major`, `minor`, `settingsSchema` (the sender's settings
 schema version) and `peer` (a name for the sending program). A difference
-in `settingsSchema` is logged by both ends and is not a refusal.
+in `settingsSchema` is logged by both ends and is not a refusal. It may
+also carry `majors` and `features` (sections 6.1 and 6.2); the station's
+`hello` always carries both.
 
 The station refuses, with `session.end` and `retryable` false: a second
 `hello` ("duplicate hello"), `auth.request` before `hello` ("auth before
@@ -220,15 +225,68 @@ A client treats every `capabilities` message as a whole new set.
 
 ### 6.1 The version rule
 
-Both ends send a major and a minor in `hello`: `kSessionProtocolMajor` 1
-and `kSessionProtocolMinor` 11 (`SessionMessages.h`).
+Both ends send a major and a minor in `hello`. The minor is
+`kSessionProtocolMinor` 11 (`SessionMessages.h`) and stays there: a
+feature added since carries its own capability version (section 6.3), and
+one the station must know about before capabilities are sent is declared
+in `features` (section 6.2).
 
-- A different major is refused. The station ends the connection with
-  `session.end`, `retryable` false, naming both versions; the desktop
-  client applies the same rule to the station's `hello` and disconnects.
+**Majors, both ways.** Each end supports its own major and the one before
+it (`kSupportedSessionMajors` in `LinkVersion.h`; today `[1]`, since there
+is no major before 1), and the two ends agree the highest major both
+support (`LinkVersion::agreeMajor`). Only ends two or more majors apart
+share none.
+
+- `majors` in `hello` is the sender's supported majors, oldest first, an
+  array of whole numbers from 0 to 65535, never empty. A `hello` without it
+  stands for `[major]`, which is what every peer built before the key
+  existed sends.
+- The station's `hello` has `major` set to its newest major and `majors` to
+  its whole list.
+- The client picks the highest major in both its list and the station's,
+  and sends it as `major` in its own `hello`, with its own list as
+  `majors`. The station accepts a client `major` that is in its own list,
+  and the session runs at that major. With no shared major, the desktop
+  client disconnects without sending its `hello` or its token and without
+  retrying, and shows the station's wording (below).
+- The station refuses any other `major` with `session.end`, `retryable`
+  false, and a reason naming both sides' newest versions and the side to
+  update (`LinkVersion::refusalText(station majors, client majors)`), for
+  example "This station runs link version 1 and this app runs version 3.
+  Update the station." The reason is plain words and an app shows it as
+  sent.
 - An equal major agrees the lower of the two minors
   (`std::min(kSessionProtocolMinor, message.protocolMinor)`), and each end
   keeps to what the agreed minor allows.
+
+| Station supports | App supports | Agreed |
+| --- | --- | --- |
+| `[1]` | `[1]` | 1 |
+| `[1, 2]` | `[2, 3]` | 2 |
+| `[3, 4]` | `[2, 3]` | 3 |
+| `[2, 3]` | `[1]` | none: refused, "Update this app." |
+| `[1]` | `[2, 3]` | none: refused, "Update the station." |
+
+A second major does not exist yet. The station and the desktop client take
+their lists as a constructor argument, so the negotiation is tested with
+injected lists (`tst_link_version`), and a debug build of `nereusd` takes
+`--test-link-majors <list>` (for example `1,2`), which replaces the list
+the station advertises and accepts, so an app's version screens can be
+tried against a real station. A release build of `nereusd` refuses to
+start with that option: "--test-link-majors works only in a debug build of
+nereusd."
+
+**Declared features.** `features` in `hello` is an object from a feature
+name to a whole-number version from 0 to 2147483647; names are not empty.
+A `hello` without it declares none. A receiver ignores a name it does not
+know. What the station must know about the app before capabilities are
+sent (device authentication, pairing, the takeover question, Setup
+descriptions) is declared here, and asked with
+`StationServer::peerDeclares(peer, feature, minVersion)`; the desktop
+client asks `StationClient::stationDeclares(feature, minVersion)`. Neither
+end declares a feature yet, so each sends `{}`. A client never sends a
+message kind or verb the station has not advertised, in `features` or in
+its capabilities.
 
 ### 6.2 The two-key feature gate
 
@@ -1286,7 +1344,7 @@ that is not retryable it stops and tells the operator.
 | --- | --- | --- |
 | Wrong token | `auth.result` accepted false, "Authentication failed", then the station closes | false |
 | Token checks locked out (section 3.3) | `auth.result` accepted false, "Too many failed authentication attempts; try again later" | true |
-| Different major | `session.end` naming both versions | false |
+| No shared major (section 6.1) | `session.end` naming both sides' versions and the side to update | false |
 | Message the station cannot decode (section 13) | `session.end` "undecodable message" | false |
 | Out-of-order handshake (section 5.1) | `session.end` | false |
 | Preempted by a newer authenticated connection | `session.end` "Displaced by a newer authenticated connection from ..." | false |
@@ -1420,7 +1478,10 @@ files against its own client.
 - `manifest.json` lists the fixtures:
   `{"linkMajors":[1],"fixtures":[{"id":"<fixture id>","file":"<path under v1/>","kind":"control"|"session"|"media","requires":{"<feature>":<version>}}]}`.
   `requires` names the capability versions a fixture exercises, and is
-  `{}` for a fixture every major-1 station passes. Every file under
+  `{}` for a fixture every major-1 station passes. `linkMajors` is the
+  link majors the suite covers; each runner runs its fixtures once per
+  major in it, against a station that offers that major, and fails when
+  this station does not offer it. Every file under
   `control/`, `sessions/` and `media/` is listed once; a media entry names
   its `.bin`, and its `.expect.json` sits beside it.
 - `control/*.json`: `{"from":"station"|"client","wire":{<the exact message>},"decodes":true|false}`.
@@ -1447,12 +1508,16 @@ ignored. The fixtures cover every message kind in each direction it
 travels: seven from the client (`hello`, `auth.request`, `command.invoke`,
 `media.control`, `property.write`, `settings.write`, `settings.remove`)
 and sixteen from the station, with a `delta` carrying `"nan"` and `"-inf"`
-(section 4.2). The refusals are: a `media.control` over its 128 KiB cap
-and a `station.metrics.v1` over its 16 KiB cap (each an otherwise valid
-message padded past the cap), a missing required key (`command.invoke`
-without `id`), a wrong type (an `f64` entry holding `true`), an `f64`
-string other than the three of section 4.2, a `hello` major above 65535,
-and an unknown `type`.
+(section 4.2). The client's `hello` has two fixtures: an older app's,
+without `majors` or `features`, and one declaring both. The station's
+`hello` carries both, as the station sends it. The refusals are: a
+`media.control` over its 128 KiB cap and a `station.metrics.v1` over its
+16 KiB cap (each an otherwise valid message padded past the cap), a
+missing required key (`command.invoke` without `id`), a wrong type (an
+`f64` entry holding `true`), an `f64` string other than the three of
+section 4.2, a `hello` major above 65535, a `hello` with an empty `majors`,
+a `hello` declaring a feature version that is not a whole number, and an
+unknown `type`.
 
 The two transport caps (1 MiB into the station, 8 MiB into the desktop
 client, section 12.3) are enforced by the WebSocket layer before any
@@ -1521,7 +1586,10 @@ same on every machine.
 | `connect-connectable` | The whole connect sequence to `snapshot.complete` on a connected radio with one slice, every message in full |
 | `wrong-token` | `auth.result` refused, `retryable` false, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
-| `major-refused` | A `hello` with major 2 gets `session.end` naming both versions, `retryable` false |
+| `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This station runs link version 1 and this app runs version 2. Update the station.", `retryable` false |
+| `version-declares` | A `hello` with `majors` `[1]` and a declared feature is accepted, and authentication follows |
+| `version-app-one-ahead` | An app supporting `[1, 2]` chooses 1, the highest it shares with the station, and is accepted |
+| `version-app-two-ahead` | An app supporting `[2, 3]` that sends major 3 gets `session.end` "This station runs link version 1 and this app runs version 3. Update the station.", `retryable` false |
 | `lower-minor` | A `hello` with minor 4 agrees minor 4: the capabilities without the minor-11 entries, and a minor-11 verb refused with a plain reason |
 | `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |

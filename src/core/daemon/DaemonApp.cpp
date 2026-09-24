@@ -38,6 +38,10 @@
 //               network (station_bind, RadioModel::setStationBind), by
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 4 (R-IOS-01): the station advertises the
+//               link majors setLinkMajors() names (a debug build's
+//               --test-link-majors), by J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -465,7 +469,8 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     // is the daemon's OWN store here -- server_main.cpp resolved the profile
     // before this point.
     m_stationServer = std::make_unique<StationServer>(m_radioModel.get(),
-                                                      AppSettings::instance());
+                                                      AppSettings::instance(), QString(),
+                                                      nullptr, m_linkMajors);
     // Set before listen() so the first authenticated client sees the media
     // capability, never a control-only session that cannot be upgraded.
     m_stationServer->setMediaEnabled(true);

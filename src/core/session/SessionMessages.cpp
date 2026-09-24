@@ -32,6 +32,11 @@
 //                                    allKinds(). AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4 (R-IOS-01): the
+//                                    hello's `majors` and `features`,
+//                                    optional on decode. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -148,6 +153,21 @@ SessionMessage SessionMessages::hello(quint16 major, quint16 minor,
     m.protocolMinor = minor;
     m.settingsSchemaVersion = settingsSchemaVersion;
     m.peerName = peerName;
+    m.supportedMajors = {major};
+    return m;
+}
+
+SessionMessage SessionMessages::hello(quint16 major, quint16 minor,
+                                      qint32 settingsSchemaVersion,
+                                      const QString& peerName,
+                                      const QList<quint16>& supportedMajors,
+                                      const QHash<QByteArray, int>& features)
+{
+    SessionMessage m = hello(major, minor, settingsSchemaVersion, peerName);
+    m.supportedMajors = supportedMajors;
+    m.features = features;
+    m.majorsOnWire = true;
+    m.featuresOnWire = true;
     return m;
 }
 
@@ -459,6 +479,16 @@ QJsonValue toJsonValue(MirrorWireKind kind, const QVariant& value)
     return QJsonValue();
 }
 
+// iPhone app Task 4: a JSON number that is a whole number within [lo, hi].
+bool isWholeNumberIn(const QJsonValue& value, double lo, double hi)
+{
+    if (!value.isDouble()) {
+        return false;
+    }
+    const double raw = value.toDouble();
+    return std::isfinite(raw) && raw >= lo && raw <= hi && std::floor(raw) == raw;
+}
+
 bool fromJsonValue(MirrorWireKind kind, const QJsonValue& json, QVariant* out)
 {
     if (out == nullptr) {
@@ -715,6 +745,22 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
         o.insert(QStringLiteral("settingsSchema"),
                  static_cast<double>(message.settingsSchemaVersion));
         o.insert(QStringLiteral("peer"), message.peerName);
+        // iPhone app Task 4: only when the sender declares them, so an
+        // older peer's hello encodes again exactly as it arrived.
+        if (message.majorsOnWire) {
+            QJsonArray majors;
+            for (const quint16 major : message.supportedMajors) {
+                majors.append(static_cast<int>(major));
+            }
+            o.insert(QStringLiteral("majors"), majors);
+        }
+        if (message.featuresOnWire) {
+            QJsonObject features;
+            for (auto it = message.features.cbegin(); it != message.features.cend(); ++it) {
+                features.insert(QString::fromUtf8(it.key()), it.value());
+            }
+            o.insert(QStringLiteral("features"), features);
+        }
         break;
     case SessionMessageKind::AuthRequest:
         o.insert(QStringLiteral("token"), message.token);
@@ -901,6 +947,33 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         }
         if (schemaRaw < -2147483648.0 || schemaRaw > 2147483647.0) {
             return false;
+        }
+        // iPhone app Task 4: `majors` and `features` are optional (an older
+        // peer sends neither), but when present they are checked like every
+        // other field here: a non-empty array of whole numbers 0..65535,
+        // and an object of non-empty names to whole numbers 0..2^31-1.
+        if (o.contains(QStringLiteral("majors"))) {
+            const QJsonValue majors = o.value(QStringLiteral("majors"));
+            if (!majors.isArray() || majors.toArray().isEmpty()) {
+                return false;
+            }
+            for (const QJsonValue& major : majors.toArray()) {
+                if (!isWholeNumberIn(major, 0.0, 65535.0)) {
+                    return false;
+                }
+            }
+        }
+        if (o.contains(QStringLiteral("features"))) {
+            const QJsonValue features = o.value(QStringLiteral("features"));
+            if (!features.isObject()) {
+                return false;
+            }
+            const QJsonObject declared = features.toObject();
+            for (auto it = declared.constBegin(); it != declared.constEnd(); ++it) {
+                if (it.key().isEmpty() || !isWholeNumberIn(it.value(), 0.0, 2147483647.0)) {
+                    return false;
+                }
+            }
         }
     }
     if (kind == SessionMessageKind::AuthRequest
@@ -1090,6 +1163,26 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         message.settingsSchemaVersion =
             static_cast<qint32>(o.value(QStringLiteral("settingsSchema")).toDouble());
         message.peerName = o.value(QStringLiteral("peer")).toString();
+        // Validated above. Absent `majors` means [major]; absent
+        // `features` means none.
+        message.majorsOnWire = o.contains(QStringLiteral("majors"));
+        message.featuresOnWire = o.contains(QStringLiteral("features"));
+        message.supportedMajors.clear();
+        if (message.majorsOnWire) {
+            for (const QJsonValue& major : o.value(QStringLiteral("majors")).toArray()) {
+                message.supportedMajors.append(static_cast<quint16>(major.toDouble()));
+            }
+        } else {
+            message.supportedMajors.append(message.protocolMajor);
+        }
+        message.features.clear();
+        if (message.featuresOnWire) {
+            const QJsonObject declared = o.value(QStringLiteral("features")).toObject();
+            for (auto it = declared.constBegin(); it != declared.constEnd(); ++it) {
+                message.features.insert(it.key().toUtf8(),
+                                        static_cast<int>(it.value().toDouble()));
+            }
+        }
         break;
     case SessionMessageKind::AuthRequest:
         message.token = o.value(QStringLiteral("token")).toString();

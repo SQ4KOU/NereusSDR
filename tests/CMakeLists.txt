@@ -7205,6 +7205,12 @@ nereus_add_test(tst_link_surface_manifest_regen
 # media/). tests/LinkFixtures holds the loader, the placeholder matcher and
 # the session script player. tst_link_conformance_regen writes the media
 # vectors from the station's own encoders, into NEREUS_LINK_REGEN_OUT only.
+# iPhone app plan, Task 4 (R-IOS-01): link versions both ways (each end
+# supports its own major and the one before, agrees the highest shared) and
+# the hello's declared features, with injected supported lists.
+nereus_add_test(tst_link_version
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 nereus_add_test(tst_link_conformance_control
     LinkFixtures.cpp
     fakes/LoopbackTransport.cpp
