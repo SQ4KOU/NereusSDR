@@ -262,3 +262,70 @@ with the operator's go-ahead.
 **Execution note (advisory):** opus.
 
 - [ ] **Step 1:** Read the Thetis PTT code, test, fix, commit.
+
+## Task 8: A stopped DSP channel is fed until its stop completes
+
+**Requirements:** the live-apply rule in CLAUDE.md; Phase 3F section 3. Found by Task 2's review
+(C1) and its fix wave.
+
+**Source first:** WDSP `channel.c` `SetChannelState` (about 280-310) and `iobuffs.c` (about
+540-565) in `third_party/wdsp/src`; Thetis's own I/Q flow while a channel stops.
+
+**Files:** `src/core/RxChannel.{h,cpp}` (`applyActive`, `processIq`,
+`deactivateWithoutDrain`), `src/models/RadioModel.cpp` (`setSampleRateLive`), tests.
+
+**Acceptance:**
+- Today `RxChannel` marks itself inactive before `SetChannelState(ch, 0, 1)`, and `processIq`
+  stops feeding the channel. So the drain never completes; each stop waits out WDSP's
+  timeout (about 100 ms). With five slices a live rate change blocks the GUI thread about
+  half a second.
+- After this task, a stopping channel keeps being fed (as Thetis's I/Q keeps flowing) until
+  WDSP reports the slew complete. Then it counts as inactive.
+- The no-drain stop becomes safe to use, as Thetis uses it for the other channels.
+- A live rate change with five slices finishes within one DSP block per channel, not
+  100 ms each. The test measures and asserts the bound.
+- Task 2's audio test (a channel already at the new rate stays audible) still passes.
+
+**Verification:** a consequential state transition; tests first. Bench pending: a live rate
+change with five slices on the G2.
+
+**Execution note (advisory):** opus.
+
+- [ ] **Step 1:** Read the WDSP source, test, fix, commit.
+
+## Task 9: Follow-ups from the checkpoint
+
+**Requirements:** R-R3-21 (wording), R-R3-26 (reachable listeners), R-R3-50 (licences), the
+fast-test-loop rules.
+
+**Items:**
+1. **A CI build with tests off.** Add a CI step that configures and builds the app and
+   `nereusd` with `NEREUS_BUILD_TESTS=OFF` (one platform is enough; Linux, reusing the
+   job's ccache). A function defined only in a test-only block then fails CI, not a release
+   build. The 2026-09-24 checkpoint found two: `AudioEngine::configureSpeakersConverter` and
+   `HardwarePage::showAntennaTab`.
+2. **`station_bind`** (the accessory listeners) reads its address the plain way, so
+   `station_bind = ::` is IPv6-only. Use the same `listenAddressFor` as the remote listener,
+   with a test binding `::` and connecting over 127.0.0.1 and ::1.
+3. **`tst_media_transport`** does a real encrypted loopback handshake with a fixed 10 s wait,
+   which misses at load 20-30. Give it the `REALTIME` option.
+4. **The parked Minors from the review of Tasks 1-2:**
+   - a window with no Core says "The Core supports a maximum of 5 slices" before its pool is
+     sized: choose the subject by role;
+   - stale comments at `MainWindow.cpp` (about 5544-5546, "1 slices"), `RadioModel.h`
+     (about 3313-3314, `maxSlices()`) and `RadioModel.cpp` (about 18062's heading);
+   - `tst_status_toast_preserves_bottom_bar.cpp:122`'s "1 slices" sample text.
+5. **The licence check's rule 5** compares the crate notices only with
+   `third_party/deepfilter/COMMIT`. Also require the pins in `setup-deepfilter.sh`
+   (`DFNR_COMMIT`) and `setup-deepfilter.ps1` to agree.
+6. **crunchy 0.2.2 and realfft 3.3.0** declare MIT but ship no licence file. Fetch each one's
+   upstream licence text at the matching version, byte for byte, and add it to
+   `deepfilternet-crates.txt`, marked as from upstream. Downloading these crates' own texts
+   falls within the operator's DeepFilterNet approval of 2026-09-24.
+
+**Verification:** each item's own test or check; the CI step read, and run once by hand in the
+Linux container if possible.
+
+**Execution note (advisory):** opus; items can be separate commits.
+
+- [ ] **Step 1:** Each item, test, commit.
