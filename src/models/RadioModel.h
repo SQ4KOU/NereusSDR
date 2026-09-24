@@ -573,6 +573,9 @@ public:
     // model's own radio, if it has one. applyNetworkWatchdog applies a value
     // without saving it: the Core calls it when a window's change arrives.
     // The connect path applies the saved value before the radio starts.
+    // Default on, as Thetis: setup.designer.cs:8434 [v2.10.3.15]
+    //   this.chkNetworkWDT.Checked = true;
+    static constexpr bool kNetworkWatchdogDefault = true;
     static bool networkWatchdogSetting();
     void setNetworkWatchdogEnabled(bool enabled);
     void applyNetworkWatchdog(bool enabled);

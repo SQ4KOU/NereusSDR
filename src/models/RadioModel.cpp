@@ -8671,7 +8671,8 @@ void RadioModel::removePanadapter(int index)
 bool RadioModel::networkWatchdogSetting()
 {
     return AppSettings::instance()
-               .value(QStringLiteral("NetworkWatchdogEnabled"), QStringLiteral("True"))
+               .value(QStringLiteral("NetworkWatchdogEnabled"),
+                      kNetworkWatchdogDefault ? QStringLiteral("True") : QStringLiteral("False"))
                .toString()
            == QStringLiteral("True");
 }

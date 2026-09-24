@@ -201,6 +201,29 @@ private slots:
         }
     }
 
+    void removingTheKeyOnTheCoreAppliesTheDefault()
+    {
+        // A settings reset on the Core removes the key. The settings then
+        // read the default (on), so the Core's radio must take it too
+        // rather than keep the last value it was given.
+        QTemporaryDir dir;
+        AppSettings coreSettings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel core;
+        WatchdogRecordingConnection coreRadio;
+        core.injectConnectionForTest(&coreRadio);
+        const auto detach = qScopeGuard([&core] { core.injectConnectionForTest(nullptr); });
+        {
+            StationServer server(&core, coreSettings, m_securityDir.path());
+
+            coreSettings.setValue(kKey, QStringLiteral("False"));
+            QTRY_VERIFY(!coreRadio.watchdog.isEmpty());
+            QCOMPARE(coreRadio.watchdog.last(), false);
+
+            coreSettings.remove(kKey);
+            QTRY_COMPARE(coreRadio.watchdog.last(), true);
+        }
+    }
+
     void remoteCheckboxIsDisabledWithoutTheCoresSettings()
     {
         RadioModel window(RadioModel::Role::Remote);

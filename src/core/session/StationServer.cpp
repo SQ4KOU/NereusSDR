@@ -660,6 +660,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             [this](const QString& key) {
                 sendToSession(SessionMessages::settingsValueAbsent(key, QString()));
             });
+    // R-R3-49: a removal (a settings reset on the Core, or the schema v7
+    // reset) leaves the settings reading the default, so the radio takes
+    // the default too rather than keep the last value it was given.
+    connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
+            [this](const QString& key) {
+                if (key == QLatin1String("NetworkWatchdogEnabled") && m_radioModel) {
+                    m_radioModel->applyNetworkWatchdog(RadioModel::kNetworkWatchdogDefault);
+                }
+            });
 
     // A daemon can authenticate a GUI before its configured radio is
     // discoverable.  currentRadioChanged is emitted only after RadioModel's
