@@ -123,4 +123,13 @@ bool StationBind::acceptsPeer(const QHostAddress& peer) const
     return from == station;
 }
 
+QString offNetworkReason(const QString& deviceName, const QString& address)
+{
+    return QStringLiteral("The %1 at %2 is on a different network from the radio, and the "
+                          "Core accepts station devices only on the radio's network. To allow "
+                          "it, set station_bind in the Core's nereusd.conf to the Core's "
+                          "address on that network (or 0.0.0.0 for every network), then "
+                          "restart the Core.").arg(deviceName, address);
+}
+
 } // namespace NereusSDR::StationNetwork

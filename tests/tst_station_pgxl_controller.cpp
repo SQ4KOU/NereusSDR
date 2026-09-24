@@ -23,6 +23,7 @@
 #include "core/LanDiscovery.h"
 #include "core/PgxlConnection.h"
 #include "core/SmartSdrApiListener.h"
+#include "core/StationNetwork.h"
 #include "core/StationDeviceSettings.h"
 #include "core/StationPgxlController.h"
 #include "models/AccessorySettingsModel.h"
@@ -579,6 +580,36 @@ private slots:
         discoveryOf(model)->injectDatagramForTesting(line, amp.serverPort(),
                                                      QHostAddress(QHostAddress::LocalHost));
         QTRY_VERIFY(pgxl->isConnected());
+        QString reason;
+        QVERIFY(model.disconnectPgxlForStation(&reason));
+    }
+
+    // M7 (R-R3-47): an amp heard only from another network than the
+    // radio's is refused, and the reason says so and which Core setting
+    // allows it.
+    void ampOnAnotherNetworkSaysHowToAllowIt()
+    {
+        AppSettings::instance().setValue(QStringLiteral("PGXL_AutoReconnect"), QStringLiteral("False"));
+        QTcpServer amp;
+        QVERIFY(amp.listen(QHostAddress::LocalHost, 0));
+        RadioModel model;
+        prepare(model);
+        model.setStationBind(QStringLiteral("127.0.0.1"));
+        auto* pgxl = model.pgxlConnection();
+        QSignalSpy frames(pgxl, &PgxlConnection::testFrameWrittenForTesting);
+        QVERIFY(answerUpToInfo(model, amp, frames, "V3.8.9", kInfoReply));
+        const QString line = QStringLiteral("PowerGeniusXL ip=192.168.1.43 v=3.8.9 serial=%1 nickname=PowerGeniusXL")
+                                 .arg(QString::fromLatin1(kSerial));
+        discoveryOf(model)->injectDatagramForTesting(line, amp.serverPort(),
+                                                     QHostAddress(QStringLiteral("192.168.1.43")));
+        QTRY_COMPARE_WITH_TIMEOUT(model.amplifierModel()->connectionPhase(), Phase::Error, 6000);
+        const QString error = model.amplifierModel()->connectionError();
+        QCOMPARE(error, StationNetwork::offNetworkReason(QStringLiteral("Power Genius"),
+                                                         QStringLiteral("192.168.1.43")));
+        QVERIFY(error.contains(QStringLiteral("station_bind")));
+        QVERIFY(OperatorWording::isPlain(error));
+        QCOMPARE(OperatorReasonText::forDisplay(error), error);   // a window shows it as sent
+        QVERIFY(!pgxl->isConnected());
         QString reason;
         QVERIFY(model.disconnectPgxlForStation(&reason));
     }

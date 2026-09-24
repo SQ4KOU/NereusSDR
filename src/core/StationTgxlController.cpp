@@ -6,10 +6,12 @@
 // AI-assisted via Anthropic Claude Code.
 // 2026-09-24: R-R3-47 / R-R3-22: deviceSettings, the tuner's own settings
 // for a window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
-// 2026-09-24: R-R3-47: one connection fault per outage. J.J. Boyd
-// (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-47: one connection fault per outage; a tuner on another
+// network is refused saying how to allow it. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include "core/StationTgxlController.h"
 #include "core/LanDiscovery.h"
+#include "core/StationNetwork.h"
 #include <QHostAddress>
 
 namespace NereusSDR {
@@ -248,6 +250,23 @@ void StationTgxlController::identify(quint64 attempt, const QString& peer, quint
     connect(discovery, &LanDiscovery::scanFinished, this, [this, discovery, attempt] {
         if (!current(attempt) || m_discovery != discovery) { return; }
         if (m_discoveredSerial.isEmpty()) {
+            // M7 (R-R3-47): heard, or configured, on another network than
+            // the radio's: say so, and which Core setting allows it.
+            QString offNetwork;
+            if (m_stationBind && !QHostAddress(m_peer).isNull()
+                && !m_stationBind->acceptsPeer(QHostAddress(m_peer))) {
+                offNetwork = m_peer;
+            }
+            for (const auto& [product, ip] : discovery->ignoredOffNetwork()) {
+                if (offNetwork.isEmpty() && (product == QStringLiteral("TunerGenius") || product == QStringLiteral("TunerGeniusXL"))) {
+                    offNetwork = ip;
+                }
+            }
+            if (!offNetwork.isEmpty()) {
+                m_connection->rejectIdentity(attempt,
+                    StationNetwork::offNetworkReason(QStringLiteral("Tuner Genius"), offNetwork));
+                return;
+            }
             m_connection->rejectIdentity(attempt,
                 QStringLiteral("No matching TGXL discovery announcement for %1:%2. Check the tuner address, port and station LAN discovery.")
                     .arg(m_peer).arg(m_peerPort));

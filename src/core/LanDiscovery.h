@@ -14,6 +14,8 @@
 // AI tooling: Anthropic Claude Code; modified by J.J. Boyd (KG4VCF),
 // September 2026, AI-assisted via OpenAI Codex. Station network filter
 // (setStationBind, R-R3-22 / R-R3-47) by J.J. Boyd (KG4VCF), 2026-09-24,
+// AI-assisted via Anthropic Claude Code. The announcements it ignored
+// (ignoredOffNetwork, R-R3-47) by J.J. Boyd (KG4VCF), 2026-09-24,
 // AI-assisted via Anthropic Claude Code.
 
 #pragma once
@@ -21,7 +23,9 @@
 #include "core/StationNetwork.h"
 
 #include <QHostAddress>
+#include <QList>
 #include <QObject>
+#include <QPair>
 #include <QUdpSocket>
 #include <QTimer>
 #include <QSet>
@@ -50,6 +54,9 @@ public:
     // network (or this computer) is ignored. A desktop window never calls
     // this and hears every announcement, as before.
     void setStationBind(const StationNetwork::StationBind& bind) { m_stationBind = bind; }
+    // M7 (R-R3-47): the announcements ignored as off the station network,
+    // as (product, announced address), so the owner can say why.
+    QList<QPair<QString, QString>> ignoredOffNetwork() const { return m_ignoredOffNetwork; }
 
     void start(int timeoutMs = 3000);
     void stop();
@@ -83,6 +90,7 @@ private:
     QSet<QString> m_seenIdentities;
     bool m_identitySensitiveDeduplication{false};
     std::optional<StationNetwork::StationBind> m_stationBind;
+    QList<QPair<QString, QString>> m_ignoredOffNetwork;
 };
 
 }  // namespace NereusSDR

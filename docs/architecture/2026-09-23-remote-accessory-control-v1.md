@@ -474,7 +474,14 @@ of this and binds as it always has.
   address hears no broadcast. The Core ignores any announcement whose
   sender, or whose announced address, is not on the station network or the
   Core's own computer, so a device on another network is never identified
-  or admitted.
+  or admitted. When the only Power Genius (Tuner Genius) announcement heard
+  came from another network, or the configured address itself is off the
+  station network, the refusal in `connectionError` says so and how to
+  allow it: "The Power Genius at <address> is on a different network from
+  the radio, and the Core accepts station devices only on the radio's
+  network. To allow it, set station_bind in the Core's nereusd.conf to the
+  Core's address on that network (or 0.0.0.0 for every network), then
+  restart the Core." (or the Tuner Genius).
 
 The FlexRadio discovery beacon (UDP 4992, which lets a Power Genius or Tuner
 Genius find the station) runs only while the radio's 4O3A switch is on and
