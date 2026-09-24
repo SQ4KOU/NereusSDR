@@ -14,10 +14,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
-//   2026-09-24 : peakHoldEnabledChanged signal (R-R3-49, R-R3-21).
-//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-09-24 : peakHoldEnabledChanged signal (R-R3-49, R-R3-21).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-08-08 — J.J. Boyd (KG4VCF). Two bench-reported defects.
 //                 (1) Extended pan: Sub-Epic F shipped the wideband DATA
 //                 path and never the paint, so the stored bins had no
