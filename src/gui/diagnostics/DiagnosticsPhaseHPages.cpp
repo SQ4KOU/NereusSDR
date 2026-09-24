@@ -261,6 +261,10 @@ void ExportImportConfigPage::buildUI()
     radioLayout->addWidget(m_radioSummaryLabel);
     m_exportRadioBtn = new QPushButton(QStringLiteral("Export Connected Radio…"));
     radioLayout->addWidget(m_exportRadioBtn);
+    // R-R3-49 (export-radio): exporting one radio's settings is not built;
+    // the group is hidden until it is. The button's code stays.
+    radioGroup->setObjectName(QStringLiteral("exportRadioGroup"));
+    UnbuiltFeatures::hideUnlessBuilt(radioGroup, UnbuiltFeature::ExportRadio);
 
     connect(m_exportAllBtn,   &QPushButton::clicked, this,
             &ExportImportConfigPage::onExportAllClicked);

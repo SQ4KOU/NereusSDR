@@ -14,6 +14,10 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-09-24 : FM repeater minus, simplex and plus hidden until FM
+//                 transmit is built; their tooltips say what they do
+//                 (R-R3-49, R-R3-21). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -121,6 +125,7 @@
 #include "VfoStyles.h"
 #include "models/SliceModel.h"
 #include "core/WdspTypes.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -243,6 +248,13 @@ void FmOptContainer::buildUi()
         row->addWidget(m_txHighBtn);
         row->addWidget(m_revBtn);
         vbox->addLayout(row);
+
+        // R-R3-49 (fm-repeater, under fm-tx): the repeater direction buttons
+        // store a transmit direction; they are hidden until FM transmit is
+        // built. Rev (receive on the repeater output) stays.
+        for (QPushButton* btn : {m_txLowBtn, m_simplexBtn, m_txHighBtn}) {
+            UnbuiltFeatures::hideUnlessBuilt(btn, UnbuiltFeature::FmTransmit);
+        }
     }
 
     // ── Signal connections ────────────────────────────────────────────────

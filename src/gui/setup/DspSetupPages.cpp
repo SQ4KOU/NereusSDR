@@ -2099,6 +2099,9 @@ FmSetupPage::FmSetupPage(RadioModel* model, QWidget* parent)
     addLabeledCombo(txLay, "Emphasis Position", emphasisPos);
 
     disableGroup(txGrp);
+    // R-R3-49 (fm-tx): hidden until FM transmit is built.
+    txGrp->setObjectName(QStringLiteral("fmTxGroup"));
+    UnbuiltFeatures::hideUnlessBuilt(txGrp, UnbuiltFeature::FmTransmit);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

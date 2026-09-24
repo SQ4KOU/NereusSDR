@@ -96,6 +96,10 @@ enum class UnbuiltFeature {
     ApfParams,        // Setup > DSP > CW peak filter bandwidth and gain (built after R4)
     AmSquelchTail,    // Setup > DSP > AM/SAM maximum squelch tail (built after R4)
     FmDeviation,      // Setup > DSP > FM deviation and de-emphasis (built after R4)
+    ExportRadio,      // Setup > Diagnostics > Export / Import: Export Connected Radio
+    FmTransmit,       // Setup > DSP > FM transmit group; the VFO flag's FM repeater minus,
+                      // simplex and plus buttons (table rows fm-tx and fm-repeater)
+    DdcRouting,       // Setup > Hardware > DDC Routing (multi-panadapter receiver routing)
 };
 
 namespace UnbuiltFeatures {

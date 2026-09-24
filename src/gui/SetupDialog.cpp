@@ -1052,9 +1052,14 @@ void SetupDialog::buildTree()
     // Phase 3F Sub-Epic E Tasks 8-10: DDC Routing power-user override page.
     // Skeleton-only landing; per-DDC table + override schema follow once
     // codec layer (Sub-Epic B) is in place.
-    markRemoteUnavailable(registerPage(hardware, "DDC Routing", SetupScope::Core, [this]() -> QWidget* {
-        return new HardwareDdcRoutingPage(m_model);
-    }), hardwareReason);
+    // R-R3-49 (ddc-routing): its choices do not steer the radio's receivers
+    // yet; the page is hidden until multi-panadapter receiver routing is
+    // built.
+    if (UnbuiltFeatures::isBuilt(UnbuiltFeature::DdcRouting)) {
+        markRemoteUnavailable(registerPage(hardware, "DDC Routing", SetupScope::Core, [this]() -> QWidget* {
+            return new HardwareDdcRoutingPage(m_model);
+        }), hardwareReason);
+    }
 
     // ── PA ────────────────────────────────────────────────────────────────────
     // Top-level PA category mirrors Thetis tpPowerAmplifier

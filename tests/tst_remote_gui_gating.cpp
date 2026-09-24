@@ -163,6 +163,7 @@
 #include "core/settings/SettingsScope.h"
 #include "gui/ConnectionPanel.h"
 #include "gui/GuiSessionCoordinator.h"
+#include "gui/UnbuiltFeatures.h"
 #include "gui/containers/ContainerButtonDispatcher.h"
 #include "models/Band.h"
 #include "gui/containers/ContainerManager.h"
@@ -2384,6 +2385,12 @@ private slots:
     {
         QFETCH(QString, label);
         QFETCH(QString, reasonWord);
+
+        // R-R3-49: DDC Routing is hidden until multi-panadapter receiver
+        // routing is built (ddc-routing); its remote reason is checked as
+        // the page will be once it is.
+        UnbuiltFeatures::setBuiltForTest(UnbuiltFeature::DdcRouting, true);
+        const auto unmark = qScopeGuard([] { UnbuiltFeatures::resetForTest(); });
 
         RadioModel remote(RadioModel::Role::Remote);
         SetupDialog dialog(&remote);
