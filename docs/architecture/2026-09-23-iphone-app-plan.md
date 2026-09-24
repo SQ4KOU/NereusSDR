@@ -4011,7 +4011,9 @@ iOS 17.4) and §4.13, R-IOS-28 (the Push to Talk capability on the app ID), R-IO
   mirror, media and settings for the connected station), `RootView.swift` (the tab bar:
   Panadapter, Modes, Tools, Radio, Setup), `ios/Shared/StationActivityAttributes.swift`,
   `ios/NereusApp/Resources/Assets.xcassets` (the app icon exported from the desktop's
-  own icon artwork, `packaging/macos`), `ios/NereusApp/Resources/Licenses.json` (every
+  own icon artwork, `resources/icons/NereusSDR.iconset/icon_512x512@2x.png`, which is
+  1024 by 1024 with no transparency, as the App Store requires),
+  `ios/NereusApp/Resources/Licenses.json` (every
   vendored library's notice, shown on a licences screen under Setup, Diagnostics)
 - Create: `ios/NereusKit/Sources/NereusKitTesting/FakeStation.swift` (an in-process fake
   that speaks the link from the conformance fixtures, for app tests and previews)
