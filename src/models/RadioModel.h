@@ -493,6 +493,15 @@ public:
     /// narrow anything. Meaningful for Role::Remote only.
     int stationUserDdcCount() const { return m_stationUserDdcCount; }
 
+    /// The number of receive streams (independent DDCs) slices get on this
+    /// radio: the one stream count every reader uses (plan Task 11).
+    /// Role::Remote: what the Core advertised (stationUserDdcCount()).
+    /// Otherwise BoardCapsTable::userDdcCountFor(boardCapabilities(), the
+    /// protocol in use): the connected radio's protocol once one has been
+    /// chosen, the board row's own protocol before that (a test-primed
+    /// board). Protocol 1 gives at most four.
+    int userStreamCount() const;
+
     /// Create a slice under the id the STATION chose rather than minting
     /// one locally. Role::Remote only.
     ///

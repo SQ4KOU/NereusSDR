@@ -12126,8 +12126,10 @@ void MainWindow::showPanLayoutDialog()
     // userDdcCount=2) can never fill more than 2 independent pans even
     // though it can host 5 slices total. Gating on maxSlices alone showed
     // tiles the board could paint but never fill (final-fix-wave finding 2).
+    // userStreamCount() is the one stream count (plan Task 11): it knows the
+    // protocol (four on Protocol 1) and, on a remote window, the Core's.
     const auto& caps = m_radioModel->boardCapabilities();
-    const int maxPanCount = qMin(caps.maxSlices, caps.userDdcCount);
+    const int maxPanCount = qMin(caps.maxSlices, m_radioModel->userStreamCount());
     const QString boardName = m_radioModel->name();
     PanLayoutDialog dlg(maxPanCount,
                         m_panStack ? m_panStack->currentLayoutId()

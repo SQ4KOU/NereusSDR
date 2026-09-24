@@ -4319,6 +4319,18 @@ bool RadioModel::isRfKitInOperate() const
         && m_rfKitConnection->operateMode() == QStringLiteral("OPERATE");
 }
 
+int RadioModel::userStreamCount() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationUserDdcCount;
+    }
+    const BoardCapabilities& caps = boardCapabilities();
+    const ProtocolVersion protocol = m_lastRadioInfo.macAddress.isEmpty()
+                                         ? caps.protocol
+                                         : m_lastRadioInfo.protocol;
+    return BoardCapsTable::userDdcCountFor(caps, protocol);
+}
+
 const BoardCapabilities& RadioModel::boardCapabilities() const
 {
 #ifdef NEREUS_BUILD_TESTS
@@ -9273,12 +9285,15 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // returns 1 until isConnected() is true, and m_connection is not
     // assigned until further down this function.
     const int poolSlices = caps.maxSlices > 0 ? caps.maxSlices : 1;
-    configureStreamPool(caps.userDdcCount, poolSlices, wdspInputRate);
+    // Plan Task 11: the stream count depends on the protocol too (four on
+    // Protocol 1); the same function userStreamCount() reads.
+    const int poolStreams = BoardCapsTable::userDdcCountFor(caps, info.protocol);
+    configureStreamPool(poolStreams, poolSlices, wdspInputRate);
 
     // One ReceiverManager receiver per stream. Receiver 0 was created above
     // with the board's primary-DDC mapping; the rest are auto-assigned and
     // stay inactive until a slice binds to them.
-    for (int st = 1; st < caps.userDdcCount; ++st) {
+    for (int st = 1; st < poolStreams; ++st) {
         if (m_receiverManager->receiverConfig(st).receiverIndex < 0) {
             m_receiverManager->createReceiver();
         }
@@ -9290,7 +9305,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // is also where Slice B and friends come back.
     bindUnboundSlices();
 
-    qCInfo(lcConnection) << "Sub-Epic I: streams=" << caps.userDdcCount
+    qCInfo(lcConnection) << "Sub-Epic I: streams=" << poolStreams
                          << "channels=" << poolSlices;
 
     // 3M-1a G.1 fixup: explicit disconnect in teardownConnection() prevents

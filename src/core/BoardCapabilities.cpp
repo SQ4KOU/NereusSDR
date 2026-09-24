@@ -269,6 +269,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 #include "BoardCapabilities.h"
 
+#include <algorithm>
+
 namespace NereusSDR {
 namespace {
 
@@ -1266,6 +1268,16 @@ const BoardCapabilities& forBoard(HPSDRHW hw) noexcept {
 
 const BoardCapabilities& forModel(HPSDRModel m) noexcept {
     return forBoard(boardForModel(m));
+}
+
+int userDdcCountFor(const BoardCapabilities& caps, ProtocolVersion protocol) noexcept {
+    // Plan Task 11: the Protocol 1 slot plan has room for four user streams
+    // on every board (see the declaration).
+    constexpr int kProtocol1UserStreams = 4;
+    if (protocol == ProtocolVersion::Protocol1) {
+        return std::min(caps.userDdcCount, kProtocol1UserStreams);
+    }
+    return caps.userDdcCount;
 }
 
 std::span<const BoardCapabilities> all() noexcept {

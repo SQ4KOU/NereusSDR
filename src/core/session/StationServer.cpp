@@ -2326,7 +2326,9 @@ StationCapabilities StationServer::buildCapabilities() const
     }
 
     caps.boardMaxSlices = board.maxSlices > 0 ? board.maxSlices : 1;
-    caps.userDdcCount = board.userDdcCount;
+    // Plan Task 11: the stream count for the protocol the Core runs (four
+    // on Protocol 1), the same number its own stream pool uses.
+    caps.userDdcCount = m_radioModel->userStreamCount();
     caps.pureSignalPresent = board.hasPureSignal;
 
     // EFFECTIVE, not board (parent section 4.5). R2 has no PerfMonitor to

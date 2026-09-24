@@ -252,7 +252,7 @@ bool DaemonApp::start(const DaemonConfig& cfg)
         m_radioModel->prepareReceiveLayout(m_testRadioMac);
         const auto& primedCaps = m_radioModel->boardCapabilities();
         const int poolSlices = primedCaps.maxSlices > 0 ? primedCaps.maxSlices : 1;
-        m_radioModel->configureStreamPool(primedCaps.userDdcCount, poolSlices,
+        m_radioModel->configureStreamPool(m_radioModel->userStreamCount(), poolSlices,
                                            cfg.sampleRateHz);
         radioMac = m_testRadioMac;
     } else

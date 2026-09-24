@@ -348,6 +348,34 @@ private slots:
         QCOMPARE(model.receiverManager()->receiverConfig(streamC).adcIndex, 0);
     }
 
+    // Plan Task 11: one stream count, from the board row and the protocol
+    // in use (BoardCapsTable::userDdcCountFor). Four on Protocol 1, the row
+    // on Protocol 2; before a radio is chosen, the row's own protocol.
+    void user_stream_count_follows_the_protocol()
+    {
+        RadioModel model;
+        model.setBoardForTest(HPSDRHW::OrionMKII);
+        QCOMPARE(model.userStreamCount(), 5);  // row protocol: Protocol 2
+
+        RadioInfo info;
+        info.macAddress = QStringLiteral("00:1c:c0:a2:13:dd");
+        info.boardType  = HPSDRHW::OrionMKII;
+        info.protocol   = ProtocolVersion::Protocol1;
+        model.setLastRadioInfoForTest(info);
+        QCOMPARE(model.userStreamCount(), 4);
+
+        info.protocol = ProtocolVersion::Protocol2;
+        model.setLastRadioInfoForTest(info);
+        QCOMPARE(model.userStreamCount(), 5);
+
+        RadioModel hl2;
+        hl2.setBoardForTest(HPSDRHW::HermesLite);
+        info.boardType = HPSDRHW::HermesLite;
+        info.protocol  = ProtocolVersion::Protocol1;
+        hl2.setLastRadioInfoForTest(info);
+        QCOMPARE(hl2.userStreamCount(), 2);
+    }
+
     void protocol1_leaves_receiver_routing_auto_assigned()
     {
         RadioModel model;
