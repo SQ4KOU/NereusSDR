@@ -2362,41 +2362,55 @@ live on the station), spec §4.10.
   `resources/bandplans/`, the waterfall palettes, the slice colours, the radio identity
   from the remote radio hardware plan when present.
 - Produces: object key `catalog`, class `StationCatalog`, properties `json` (string) and
-  `revision` (uint32), capability `stationCatalogVersion = 1`. `json` has exactly these
-  top-level keys:
-  - `modes`: `[{id, label, sideband}]` for the station's 14 modes (`DSPMode` 0 to 13).
+  `revision` (uint32), capability `stationCatalogVersion = 1`. The link document's
+  section 7.4 ("The catalogue") is the authority for the names and shapes; as built,
+  `json` has exactly these twelve top-level keys:
+  - `modes`: `[{id, label, sideband}]` for the station's 14 modes (`DSPMode` 0 to 13),
+    `sideband` `lower`, `upper` or `both`.
   - `filterPresets`: `{<mode label>: [{slot, label, lowHz, highHz}]}` from the station's
-    store.
-  - `tuneSteps`: `[{hz, label}]`.
-  - `agc`: `{modes: [{id, label}], thresholdDb: {min, max, step}}` plus one
-    `{min, max, step}` entry for each other AGC range the Modes tab's AGC section shows,
-    named after the setting it bounds.
-  - `meters`: the S-meter scale (dBm for S0 to S9 and S9+ steps), mic level
-    `{minDb:-40, maxDb:10, yellowFromDb:-10, redFromDb:0}`, RF power (full scale from the
-    board's PA rating), SWR, and any other gauge the phone draws.
-  - `board`: model, product label, maximum slices, attenuator `{min, max, step}`, preamp
-    items, receive antennas and receive-only inputs with the product's labels
-    (`SkuUiProfile`), transmit antennas, sample rates, PureSignal present, PA rating in
-    watts.
-  - `bandPlans`: `[{id, name, segments: [{lowHz, highHz, label, licence, colour}]}]`
-    with ARRL marked as the default.
-  - `palettes`: `[{id, name, stops: [{at, colour}]}]` for the waterfall.
+    store, slot 0 (`F1`) first.
+  - `tuneSteps`: `[{hz, label}]`, smallest first; `label` is the desktop's step label
+    (`1 Hz`, `500 Hz`, `1 kHz`, `2.5 kHz`, `1 MHz`).
+  - `agc`: `{modes: [{id, label}], thresholdDb: {min, max, step}}`: Off, Long, Slow,
+    Med and Fast, and AGC-T -160 to +2 step 1 (Thetis's clamp, `console.cs:46048-46049
+    [v2.10.3.15]`). The Modes tab's AGC section shows no other range; a later one
+    arrives as another `{min, max, step}` key named after the setting it bounds.
+  - `meters`: `sMeter {minDbm, s9Dbm, maxDbm, dbPerSUnit, redFromDbm, sUnits, overS9}`,
+    `micLevel {minDb:-40, maxDb:10, yellowFromDb:-10, redFromDb:0}`,
+    `rfPower {minW, maxW, ratedW, redFromW}` (full scale 20% past the PA rating) and
+    `swr {min, max, redFrom}`.
+  - `board`: `model`, `productLabel`, `maxSlices`, `attenuator {min, max, step}` (or
+    `null`), `preampItems [{id, label}]`, `rxAntennas`, `txAntennas`, `rxOnlyInputs`
+    (the product's labels, `SkuUiProfile`), `sampleRates`, `pureSignal`, `paRatingW`
+    and `micJack`.
+  - `bandPlans`: `[{id, name, default, segments: [{lowHz, highHz, label, licence,
+    colour}]}]`, `id` the plan file's name, `default` true on ARRL (US) alone.
+  - `palettes`: `[{id, name, stops: [{at, colour}]}]` for the waterfall. The Custom
+    palette is each computer's own and is left out.
   - `sliceColours`: `[colour]` in slice order.
   - `tools`: the desktop's station tools in its Tools-menu order,
-    `[{id, label, where: "station"|"both", offered}]`, and `radioItems`: Antenna Setup,
-    Transverters, Manage Radios and Protocol Info in the desktop's Radio-menu order,
-    `[{id, label, offered}]`. `offered` is set by the station (Task 25 fills in the live
-    cases); the phone lists only offered items (D41). MIDI Mapping and Macro Buttons are
-    dropped for now (D42) and are not listed.
-  - `audio`: filled by Task 23.
-  Numbers use the units named in each key; colours are `#RRGGBB`.
+    `[{id, label, where: "station"|"both", offered}]`, and `radioItems`: Manage Radios,
+    Antenna Setup, Transverters and Protocol Info in the desktop's Radio-menu order,
+    `[{id, label, offered}]`. Until Task 25 fills in the live cases, `offered` means the
+    desktop has built the item (CWX, Memory Manager, CAT Control and Transverters are
+    not yet offered); the phone lists only offered items (D41). MIDI Mapping and Macro
+    Buttons are dropped for now (D42) and are not listed.
+  - `audio`: `{}`, filled by Task 23.
+  Numbers use the units named in each key; colours are `#RRGGBB`, upper case.
+  The `catalog` object goes to every peer at agreed minor 11 (while
+  `stationCatalogVersion` is 1), in the snapshot and as deltas; an older desktop window
+  at minor 11 does not know the class and drops it. Minor 10 sees neither the object nor
+  the capability.
 
 **Acceptance:**
-- The G2 fixture and the HL2 fixture differ exactly where the radios differ (attenuator
-  0..31 step 1 against -28..31 step 1, preamp items, six sample rates against four,
-  three plus three antennas against one plus none, the mic jack) and match the desktop's
-  own values for each (the test builds the desktop widgets' ranges from `ControlRanges.h`
-  and compares).
+- The G2 fixture and the HL2 fixture differ exactly where the radios differ, which as
+  built is only `board` (attenuator 0..31 step 1 against -28..31 step 1, six sample
+  rates against four, three plus three antennas against one plus none, the mic jack,
+  the model, label and PA rating) and `meters.rfPower`, and match the desktop's own
+  values for each (the test builds the desktop widgets' ranges from `ControlRanges.h`
+  and compares). The preamp items are the same on both: the G2 always takes the
+  four-step set, and mi0bot puts the HL2 in HERMES's branch, which takes the same set
+  without Alex (`console.cs:41709-41718 [v2.10.3.13-beta2]`).
 - Changing a preset, the step list or the band plan data bumps `revision` once and the
   new catalogue reaches connected clients.
 - With `filters/` in Station scope, a desktop remote window shows and edits the
