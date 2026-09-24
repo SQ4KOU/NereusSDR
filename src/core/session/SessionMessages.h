@@ -477,7 +477,8 @@ public:
 
     /// iPhone app Task 4: the hello with the sender's supported majors and
     /// declared features, both always on the wire (an empty `features` is
-    /// sent as {}).
+    /// sent as {}; an empty `supportedMajors` is sent as [major], because
+    /// the wire never carries an empty `majors`).
     static SessionMessage hello(quint16 major, quint16 minor,
                                 qint32 settingsSchemaVersion,
                                 const QString& peerName,

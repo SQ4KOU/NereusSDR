@@ -37,6 +37,10 @@
 //                                    optional on decode. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01):
+//                                    the hello builder never sends an
+//                                    empty `majors`. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -164,7 +168,11 @@ SessionMessage SessionMessages::hello(quint16 major, quint16 minor,
                                       const QHash<QByteArray, int>& features)
 {
     SessionMessage m = hello(major, minor, settingsSchemaVersion, peerName);
-    m.supportedMajors = supportedMajors;
+    // `majors` is never empty on the wire (decode refuses []): an empty
+    // list sends what an absent key means, [major].
+    if (!supportedMajors.isEmpty()) {
+        m.supportedMajors = supportedMajors;
+    }
     m.features = features;
     m.majorsOnWire = true;
     m.featuresOnWire = true;

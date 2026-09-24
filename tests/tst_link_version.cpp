@@ -131,6 +131,7 @@ private slots:
     void helloCarriesMajorsAndFeatures();
     void helloWithoutTheNewKeysIsTodaysHello();
     void helloIgnoresUnknownFeatures();
+    void helloBuilderNeverSendsAnEmptyMajors();
     void helloRefusesMalformedDeclarations_data();
     void helloRefusesMalformedDeclarations();
 
@@ -327,6 +328,18 @@ void TstLinkVersion::helloIgnoresUnknownFeatures()
         &decoded));
     QCOMPARE(decoded.features.value("deviceAuth"), 1);
     QCOMPARE(decoded.features.value("somethingNotYetInvented"), 7);
+}
+
+void TstLinkVersion::helloBuilderNeverSendsAnEmptyMajors()
+{
+    // `majors` is never empty on the wire (decode refuses []). Given an
+    // empty list, the builder sends what an absent key means: [major].
+    const QByteArray wire = SessionMessages::encode(
+        SessionMessages::hello(1, 11, 0, QStringLiteral("nereusd"), MajorList{}, {}));
+    QCOMPARE(majorsOf(wireObject(wire)), (MajorList{1}));
+    SessionMessage decoded;
+    QVERIFY(SessionMessages::decode(wire, &decoded));
+    QCOMPARE(decoded.supportedMajors, (MajorList{1}));
 }
 
 void TstLinkVersion::helloRefusesMalformedDeclarations_data()
