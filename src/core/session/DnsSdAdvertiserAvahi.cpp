@@ -21,11 +21,24 @@
 // to the D-Bus connection that made it, so the daemon withdraws the
 // service if the Core goes away.
 //
+// Part C fix wave (R2-M4): a StateChanged subscription that fails is
+// reported, not ignored (collisions and failures would go unnoticed), and
+// a restart of avahi-daemon, which drops every entry group it held, is
+// followed: a QDBusServiceWatcher on org.freedesktop.Avahi
+// (WatchForOwnerChange; its serviceOwnerChanged(service, oldOwner,
+// newOwner) signal, Qt 6 qdbusservicewatcher.h) registers the service
+// again when the name gets a new owner.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (R2-M4, R2-M5): the Avahi
+//               subscription is checked and a daemon restart re-registers; the
+//               Windows instance is freed only by the deregistration
+//               completion. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "DnsSdAdvertiser.h"
@@ -38,6 +51,7 @@
 #include <QDBusMetaType>
 #include <QDBusObjectPath>
 #include <QDBusReply>
+#include <QDBusServiceWatcher>
 #include <QList>
 
 namespace NereusSDR {
@@ -99,30 +113,15 @@ public:
             // Avahi has no scope narrower than an interface.
             return false;
         }
-        QDBusConnection bus = QDBusConnection::systemBus();
-        const QDBusReply<QDBusObjectPath> group = bus.call(QDBusMessage::createMethodCall(
-            kAvahiService, QStringLiteral("/"), kAvahiServerInterface,
-            QStringLiteral("EntryGroupNew")));
-        if (!group.isValid()) {
-            qCWarning(lcDiscovery).noquote() << "Avahi refused a new entry group:"
-                                             << group.error().message();
+        if (!publish(port, record, txt)) {
             return false;
         }
-        m_group = group.value().path();
-        m_port = port;
-        m_record = record;
-        m_txt = avahiTxt(txt);
-        m_name = record.instanceName;
-        m_renames = 0;
-        m_watcher = std::make_unique<AvahiEntryGroupWatcher>();
-        m_watcher->onState = [this](int state, const QString& error) { onState(state, error); };
-        bus.connect(kAvahiService, m_group, kAvahiEntryGroupInterface,
-                    QStringLiteral("StateChanged"), m_watcher.get(),
-                    SLOT(stateChanged(int, QString)));
-        if (!addAndCommit()) {
-            unregisterService();
-            return false;
-        }
+        // What to publish again if avahi-daemon restarts.
+        m_wanted = true;
+        m_wantedPort = port;
+        m_wantedRecord = record;
+        m_wantedTxt = txt;
+        followDaemon();
         return true;
     }
 
@@ -142,10 +141,61 @@ public:
         }
         m_record = record;
         m_txt = strings;
+        m_wantedRecord = record;
+        m_wantedTxt = txt;
         return true;
     }
 
     void unregisterService() override
+    {
+        m_wanted = false;
+        withdraw(/*daemonGone=*/false);
+    }
+
+private:
+    // A new entry group for the service, subscribed to and committed.
+    bool publish(quint16 port, const DnsSdRecord& record, const DnsSdTxtEntries& txt)
+    {
+        QDBusConnection bus = QDBusConnection::systemBus();
+        const QDBusReply<QDBusObjectPath> group = bus.call(QDBusMessage::createMethodCall(
+            kAvahiService, QStringLiteral("/"), kAvahiServerInterface,
+            QStringLiteral("EntryGroupNew")));
+        if (!group.isValid()) {
+            qCWarning(lcDiscovery).noquote() << "Avahi refused a new entry group:"
+                                             << group.error().message();
+            return false;
+        }
+        m_group = group.value().path();
+        m_port = port;
+        m_record = record;
+        m_txt = avahiTxt(txt);
+        m_name = record.instanceName;
+        m_renames = 0;
+        m_watcher = std::make_unique<AvahiEntryGroupWatcher>();
+        m_watcher->onState = [this](int state, const QString& error) { onState(state, error); };
+        // QDBusConnection::connect is false when the subscription could not
+        // be made: then a name collision or a failure would go unnoticed,
+        // so the service is not published blind.
+        if (!bus.connect(kAvahiService, m_group, kAvahiEntryGroupInterface,
+                         QStringLiteral("StateChanged"), m_watcher.get(),
+                         SLOT(stateChanged(int, QString)))) {
+            qCWarning(lcDiscovery).noquote()
+                << "Could not follow the Avahi entry group's state, so the service is not "
+                   "advertised:"
+                << bus.lastError().message();
+            withdraw(/*daemonGone=*/false);
+            return false;
+        }
+        if (!addAndCommit()) {
+            withdraw(/*daemonGone=*/false);
+            return false;
+        }
+        return true;
+    }
+
+    // Drops the entry group. When the daemon is gone its group went with
+    // it, so there is nothing to free.
+    void withdraw(bool daemonGone)
     {
         if (m_group.isEmpty()) {
             return;
@@ -154,7 +204,9 @@ public:
         bus.disconnect(kAvahiService, m_group, kAvahiEntryGroupInterface,
                        QStringLiteral("StateChanged"), m_watcher.get(),
                        SLOT(stateChanged(int, QString)));
-        bus.call(groupCall(QStringLiteral("Free"), {}));
+        if (!daemonGone) {
+            bus.call(groupCall(QStringLiteral("Free"), {}));
+        }
         m_group.clear();
         if (m_watcher) {
             m_watcher->onState = nullptr;
@@ -162,7 +214,44 @@ public:
         }
     }
 
-private:
+    // Follows avahi-daemon's bus name, once, from the first registration.
+    void followDaemon()
+    {
+        if (m_daemonWatcher) {
+            return;
+        }
+        m_daemonWatcher = std::make_unique<QDBusServiceWatcher>(
+            kAvahiService, QDBusConnection::systemBus(),
+            QDBusServiceWatcher::WatchForOwnerChange);
+        QObject::connect(m_daemonWatcher.get(), &QDBusServiceWatcher::serviceOwnerChanged,
+                         m_daemonWatcher.get(),
+                         [this](const QString&, const QString&, const QString& newOwner) {
+                             onDaemonOwnerChanged(newOwner);
+                         });
+    }
+
+    void onDaemonOwnerChanged(const QString& newOwner)
+    {
+        if (!m_wanted) {
+            return;
+        }
+        // Whichever way the name moved, the old daemon's group is gone.
+        withdraw(/*daemonGone=*/true);
+        if (newOwner.isEmpty()) {
+            qCInfo(lcDiscovery) << "avahi-daemon stopped; Bonjour resumes when it is back";
+            return;
+        }
+        if (publish(m_wantedPort, m_wantedRecord, m_wantedTxt)) {
+            qCInfo(lcDiscovery) << "avahi-daemon restarted; the service is advertised again";
+            return;
+        }
+        m_wanted = false;
+        if (failed) {
+            failed(QStringLiteral("Avahi could not publish the service again after it "
+                                  "restarted."));
+        }
+    }
+
     QDBusMessage groupCall(const QString& method, const QVariantList& arguments) const
     {
         QDBusMessage message = QDBusMessage::createMethodCall(kAvahiService, m_group,
@@ -241,6 +330,13 @@ private:
     QList<QByteArray> m_txt;
     int m_renames = 0;
     std::unique_ptr<AvahiEntryGroupWatcher> m_watcher;
+    // Part C fix wave (R2-M4): what to publish again after a daemon
+    // restart, and the watcher on the daemon's bus name.
+    bool m_wanted = false;
+    quint16 m_wantedPort = 0;
+    DnsSdRecord m_wantedRecord;
+    DnsSdTxtEntries m_wantedTxt;
+    std::unique_ptr<QDBusServiceWatcher> m_daemonWatcher;
 };
 
 } // namespace

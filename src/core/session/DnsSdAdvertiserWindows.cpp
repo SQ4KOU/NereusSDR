@@ -12,13 +12,20 @@
 // DnsServiceRegister completes on a thread of Windows' own; the completion
 // is handed to the advertiser's thread before anything reads it. Changing
 // the TXT record registers the service again (Windows has no call that
-// replaces it in place).
+// replaces it in place). The request and its service instance live until
+// the deregistration's completion (Part C fix wave, R2-M5; see
+// Registration below). Not yet built or run on Windows.
 //
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: Part C fix wave (R2-M4, R2-M5): the Avahi
+//               subscription is checked and a daemon restart re-registers; the
+//               Windows instance is freed only by the deregistration
+//               completion. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 // The DNS-SD declarations in windns.h need Windows 10. This file is built
@@ -50,6 +57,8 @@
 #include <QHostInfo>
 #include <QMetaObject>
 
+#include <atomic>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -106,24 +115,77 @@ struct CompletionHandler {
     std::function<void(DWORD status, quint64 generation)> handle;
 };
 
-struct Completion {
+// Part C fix wave (R2-M5): one registration, and everything Windows may
+// still read while it is pending: the request and the instance it points
+// at. Both completions carry it as their context (the request's
+// pQueryContext). DnsServiceDeRegister "is asynchronous. The callback will
+// be invoked when the deregistration is completed, with a copy of the
+// DNS_SERVICE_INSTANCE structure that was passed to DnsServiceRegister"
+// (Microsoft Learn, DnsServiceDeRegister, Remarks), so the instance and
+// the request stay alive until that completion, which frees them; the
+// registration's completion may come before it or not at all before the
+// deregistration starts, so completions still owed are counted, with the
+// deregistration's flag in the same atomic word, and whichever completion
+// is the last one after the deregistration began frees it all.
+struct Registration {
+    static constexpr quint32 kDeregistering = 0x80000000u;
+    static constexpr quint32 kCountMask = 0x7fffffffu;
+
+    DNS_SERVICE_REGISTER_REQUEST request{};
+    PDNS_SERVICE_INSTANCE instance = nullptr;
     std::weak_ptr<CompletionHandler> handler;
     quint64 generation = 0;
+    // Completions still owed, and kDeregistering once
+    // DnsServiceDeRegister was asked.
+    std::atomic<quint32> state{0};
 };
+
+// Frees a registration Windows no longer reads: its instance (made by
+// DnsServiceConstructInstance) and itself.
+void release(Registration* registration)
+{
+    if (registration->instance != nullptr && dnsApi().freeInstance != nullptr) {
+        dnsApi().freeInstance(registration->instance);
+    }
+    delete registration;
+}
+
+// One completion fewer is owed; the last one after the deregistration
+// began releases the registration.
+void completionArrived(Registration* registration)
+{
+    const quint32 before = registration->state.fetch_sub(1);
+    if ((before & Registration::kCountMask) == 1 && (before & Registration::kDeregistering) != 0) {
+        release(registration);
+    }
+}
 
 VOID WINAPI onRegisterComplete(DWORD status, PVOID context, PDNS_SERVICE_INSTANCE instance)
 {
+    // The instance handed to a completion is a copy the caller frees
+    // (Microsoft Learn, DNS_SERVICE_REGISTER_COMPLETE: "If not nullptr, then
+    // you are responsible for freeing the data using
+    // DnsServiceFreeInstance").
     if (instance != nullptr && dnsApi().freeInstance != nullptr) {
         dnsApi().freeInstance(instance);
     }
-    const std::unique_ptr<Completion> completion(static_cast<Completion*>(context));
-    QCoreApplication* application = QCoreApplication::instance();
-    if (!completion || application == nullptr) {
+    auto* registration = static_cast<Registration*>(context);
+    if (registration == nullptr) {
         return;
     }
+    // Read before completionArrived(), which may free the registration.
+    const std::weak_ptr<CompletionHandler> handler = registration->handler;
+    const quint64 generation = registration->generation;
+    completionArrived(registration);
+    QCoreApplication* application = QCoreApplication::instance();
+    if (application == nullptr) {
+        return;
+    }
+    // The deregistration's own completion is posted too; its generation is
+    // past, so the backend ignores it.
     QMetaObject::invokeMethod(
         application,
-        [handler = completion->handler, generation = completion->generation, status]() {
+        [handler, generation, status]() {
             if (const std::shared_ptr<CompletionHandler> alive = handler.lock()) {
                 alive->handle(status, generation);
             }
@@ -170,29 +232,32 @@ public:
             keyPointers.push_back(keys[i].c_str());
             valuePointers.push_back(values[i].c_str());
         }
-        m_instance = api.construct(service.c_str(), host.c_str(), nullptr, nullptr, port, 0, 0,
-                                   static_cast<DWORD>(keys.size()), keyPointers.data(),
-                                   valuePointers.data());
-        if (m_instance == nullptr) {
+        auto registration = std::make_unique<Registration>();
+        registration->instance =
+            api.construct(service.c_str(), host.c_str(), nullptr, nullptr, port, 0, 0,
+                          static_cast<DWORD>(keys.size()), keyPointers.data(),
+                          valuePointers.data());
+        if (registration->instance == nullptr) {
             return false;
         }
-        auto completion = std::make_unique<Completion>();
-        completion->handler = m_handler;
-        completion->generation = ++m_generation;
-        m_request = {};
-        m_request.Version = DNS_QUERY_REQUEST_VERSION1;
-        m_request.InterfaceIndex = record.interfaceIndex;
-        m_request.pServiceInstance = m_instance;
-        m_request.pRegisterCompletionCallback = &onRegisterComplete;
-        m_request.pQueryContext = completion.get();
-        m_request.unicastEnabled = FALSE;
-        if (api.registerService(&m_request, nullptr) != DNS_REQUEST_PENDING) {
-            api.freeInstance(m_instance);
-            m_instance = nullptr;
+        registration->handler = m_handler;
+        registration->generation = ++m_generation;
+        DNS_SERVICE_REGISTER_REQUEST& request = registration->request;
+        request.Version = DNS_QUERY_REQUEST_VERSION1;
+        request.InterfaceIndex = record.interfaceIndex;
+        request.pServiceInstance = registration->instance;
+        request.pRegisterCompletionCallback = &onRegisterComplete;
+        request.pQueryContext = registration.get();
+        request.unicastEnabled = FALSE;
+        // The registration's completion is owed from here.
+        registration->state.store(1);
+        if (api.registerService(&request, nullptr) != DNS_REQUEST_PENDING) {
+            // Refused at once: no completion comes, and Windows holds
+            // nothing.
+            api.freeInstance(registration->instance);
             return false;
         }
-        completion.release(); // onRegisterComplete owns it now
-        m_registered = true;
+        m_registration = registration.release(); // released by its last completion
         qCInfo(lcDiscovery).noquote() << "Bonjour: advertising" << record.instanceName << "as"
                                       << kDnsSdServiceType;
         return true;
@@ -203,19 +268,21 @@ public:
     void unregisterService() override
     {
         ++m_generation;
+        Registration* registration = m_registration;
+        m_registration = nullptr;
+        if (registration == nullptr) {
+            return;
+        }
+        // The deregistration's completion is owed from here, and it (or the
+        // registration's, if that comes later) frees the request and the
+        // instance: never before, since Windows reads them until then.
+        registration->state.fetch_add(1 + Registration::kDeregistering);
         const DnsApi& api = dnsApi();
-        if (m_registered && api.usable()) {
-            // The deregistration's own completion carries no context of
-            // ours: the one the registration left, if it has not run yet,
-            // frees itself when it does.
-            m_request.pQueryContext = nullptr;
-            api.deregisterService(&m_request, nullptr);
+        if (!api.usable()
+            || api.deregisterService(&registration->request, nullptr) != DNS_REQUEST_PENDING) {
+            // Refused at once: its completion will not come.
+            completionArrived(registration);
         }
-        m_registered = false;
-        if (m_instance != nullptr && api.freeInstance != nullptr) {
-            api.freeInstance(m_instance);
-        }
-        m_instance = nullptr;
     }
 
 private:
@@ -223,7 +290,8 @@ private:
     {
         // A registration withdrawn since (unregisterService moves the
         // generation on) no longer speaks for this one.
-        if (!m_registered || generation != m_generation || status == ERROR_SUCCESS) {
+        if (m_registration == nullptr || generation != m_generation
+            || status == ERROR_SUCCESS) {
             return;
         }
         const QString reason =
@@ -235,10 +303,9 @@ private:
     }
 
     std::shared_ptr<CompletionHandler> m_handler;
-    DNS_SERVICE_REGISTER_REQUEST m_request{};
-    PDNS_SERVICE_INSTANCE m_instance = nullptr;
+    // Not owned: released by its last completion (Registration).
+    Registration* m_registration = nullptr;
     quint64 m_generation = 0;
-    bool m_registered = false;
 };
 
 } // namespace
