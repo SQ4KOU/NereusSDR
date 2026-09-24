@@ -1035,7 +1035,7 @@ private slots:
             QVERIFY2(!text.contains(QChar(0x2014)), qPrintable(text));
         }
         // The saved address is still the address itself.
-        const auto* listenOn = page.findChildren<QComboBox*>().value(0);
+        const auto* listenOn = page.findChild<QComboBox*>(QStringLiteral("tciListenOnCombo"));
         QVERIFY(listenOn);
         QCOMPARE(listenOn->itemData(0).toString(), QStringLiteral("127.0.0.1"));
         QCOMPARE(listenOn->itemData(1).toString(), QStringLiteral("0.0.0.0"));
@@ -1146,6 +1146,18 @@ private slots:
                          qPrintable(QStringLiteral("%1: %2").arg(QLatin1String(site.file), text)));
             }
         }
+
+        // The audio reset list names what it clears in plain words. Its
+        // whole message also names the sample rate's internal term, so the
+        // reworded line is checked on its own.
+        const QString reset = userVisibleLiterals(
+            sourcePath("src/gui/setup/AudioAdvancedPage.cpp")).join(QLatin1Char('\n'));
+        const QString choices = QStringLiteral(
+            "\\u2022 All device choices (Speakers / Headphones / TX Input / VAX 1\\u20134)");
+        QVERIFY2(reset.contains(choices), qPrintable(choices));
+        QVERIFY(OperatorWording::isPlain(QStringLiteral(
+            "All device choices (Speakers / Headphones / TX Input / VAX 1\u20134)")));
+        QVERIFY(!reset.contains(QStringLiteral("device bindings")));
     }
 
     void remoteFourO3APageIsInUserWords()

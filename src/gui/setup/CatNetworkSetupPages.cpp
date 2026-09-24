@@ -200,6 +200,7 @@ void CatTciServerPage::buildServerGroup()
     // widgets are NereusSDR-native; a dropdown with validated, NIC-aware
     // choices is the better UX for our platform.
     m_bindAddressCombo = new QComboBox(group);
+    m_bindAddressCombo->setObjectName(QStringLiteral("tciListenOnCombo"));
     m_bindAddressCombo->setStyleSheet(QString::fromLatin1(Style::kComboStyle));
     m_bindAddressCombo->setToolTip(tr(
         "The IP address the TCI server listens on. "
