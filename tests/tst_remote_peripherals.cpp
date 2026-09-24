@@ -462,6 +462,7 @@ private slots:
     void remoteRfKitPageWorksEveryControl();
     void olderCoreLeavesTheRfKitSettingsSayingWhy();
     void refusalClaimsEndWithTheLink();
+    void ampAppletRefusalShownOnTheAppletIsNotToasted();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -3067,6 +3068,71 @@ void RemotePeripheralsTest::refusalClaimsEndWithTheLink()
     window.reportStationLinkStateChanged();
     window.reportStationAccessoryRefusal(QStringLiteral("rfkit"), QStringLiteral("No."), 8);
     QVERIFY(!refused.last().at(2).toBool());     // the claim ended with the link
+}
+
+// R-R3-21 / R-R3-23: an amp applet's own Connect refused by the Core
+// shows on the applet's line, so it is not toasted too; the same refusal
+// is toasted when the applet is not on screen to show it.
+void RemotePeripheralsTest::ampAppletRefusalShownOnTheAppletIsNotToasted()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    RecordingTgxlLink link;
+    link.linkReady = true;
+    link.amplifierStatus = true;
+    link.rfKitStatus = true;
+    link.pgxlAvailable = true;
+    link.rfKitAvailable = true;
+    model.attachStation(&link);
+    AmpApplet amp(&model);
+    Rf2ksApplet rfKit(&model);
+    model.amplifierModel()->setStationConnectionState(
+        state(TunerModel::ConnectionPhase::Disconnected, QStringLiteral("192.0.2.40"), 9008));
+    model.rfKitModel()->setStationConnectionState(
+        state(TunerModel::ConnectionPhase::Disconnected, QStringLiteral("192.0.2.41"), 8080));
+    model.reportStationLinkStateChanged();
+    QSignalSpy refused(&model, &RadioModel::accessoryRequestRefused);
+    const QString pgxlRefusal = QStringLiteral("Enable 4O3A on Core before connecting the PGXL.");
+    const QString rfKitRefusal =
+        QStringLiteral("Turn on the RF-Kit amplifier on the Core before connecting it.");
+    const auto sendBoth = [&] {
+        std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
+        std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
+        QAction* ampToggle = connectionToggle(ampMenu.get());
+        QAction* rfKitToggle = connectionToggle(rfKitMenu.get());
+        QVERIFY(ampToggle && rfKitToggle);
+        ampToggle->trigger();
+        rfKitToggle->trigger();
+    };
+    const auto refuseBoth = [&] {
+        model.reportStationAccessoryRefusal(QStringLiteral("pgxl"), pgxlRefusal,
+                                            link.lastPgxlCommandId);
+        model.reportStationCommandFinished(link.lastPgxlCommandId, false, pgxlRefusal);
+        model.reportStationAccessoryRefusal(QStringLiteral("rfkit"), rfKitRefusal,
+                                            link.lastRfKitCommandId);
+        model.reportStationCommandFinished(link.lastRfKitCommandId, false, rfKitRefusal);
+    };
+
+    // On screen: the applets show the refusals, so neither is toasted.
+    amp.show();
+    rfKit.show();
+    sendBoth();
+    QCOMPARE(link.pgxlConfigureCalls, 1);
+    QCOMPARE(link.rfKitConfigureCalls, 1);
+    refuseBoth();
+    QCOMPARE(refused.count(), 2);
+    QVERIFY(refused.at(0).at(2).toBool());
+    QVERIFY(refused.at(1).at(2).toBool());
+    QCOMPARE(amp.connectionLineTextForTesting(), OperatorReasonText::forDisplay(pgxlRefusal));
+    QCOMPARE(rfKit.connectionLineTextForTesting(), OperatorReasonText::forDisplay(rfKitRefusal));
+
+    // Hidden before the answer came: nobody saw the line, so it is toasted.
+    sendBoth();
+    amp.hide();
+    rfKit.hide();
+    refuseBoth();
+    QCOMPARE(refused.count(), 4);
+    QVERIFY(!refused.at(2).at(2).toBool());
+    QVERIFY(!refused.at(3).at(2).toBool());
 }
 
 // Rework follow-up 5 (R-R3-48): typing a TCI port sends it (to this

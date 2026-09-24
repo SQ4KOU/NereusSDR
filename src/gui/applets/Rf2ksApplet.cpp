@@ -402,6 +402,13 @@ void Rf2ksApplet::requestRemoteConnectionToggle()
     m_pendingCommandId = outcome.sent ? outcome.commandId : 0;
     m_requestReason = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
     updateConnectionLine();
+    // R-R3-21 / R-R3-23: a refusal of this request shows on the applet's
+    // connection line, so it is not toasted too, as the accessory pages
+    // claim theirs. The claim is on the line itself: it holds only while
+    // the line is on screen when the refusal arrives.
+    if (outcome.sent) {
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId, m_connectionLabel);
+    }
 }
 
 QString Rf2ksApplet::connectionLineTextForTesting() const
