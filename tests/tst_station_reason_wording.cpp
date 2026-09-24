@@ -242,7 +242,7 @@ const QList<ReasonSender>& reasonSenders()
         {"reject", 0},       {"rejectDetail", 1},         {"fail", 0},
         // Text the station sends as a property value (propertyTextSources).
         {"connectionFailed", 0}, {"failIdentityAdmission", 1}, {"setLastLoadError", 0},
-        {"setNnrLastError", 0}, {"publish", 1},
+        {"setNnrLastError", 0}, {"publish", 1}, {"setReceiveLayoutRestoreStatus", 1},
     };
     return senders;
 }
@@ -301,8 +301,8 @@ QStringList reasonExpressionsIn(const QString& statement)
         }
     }
     static const QRegularExpression assignment(QStringLiteral(
-        "\\b(?:\\w*[Rr]eason|\\w*[Rr]easonText|\\w*[Rr]efusal|m_lastError|m_lastActionError)"
-        "\\s*=(?!=)"));
+        "\\b(?:\\w*[Rr]eason|\\w*[Rr]easonText|\\w*[Rr]efusal|m_lastError|m_lastActionError"
+        "|m_error|m_settingsSaveError|m_lastListenError)\\s*=(?!=)"));
     const QRegularExpressionMatch assigned = assignment.match(statement);
     // A bool named for a reason (`const bool plainReason = ...`) is not one.
     static const QRegularExpression boolDeclaration(QStringLiteral("\\bbool\\s+$"));
@@ -813,6 +813,31 @@ const QList<ReasonSource>& propertyTextSources()
           QStringLiteral("requestNnrDiagnostics"), QStringLiteral("restoreNnrSettings")},
          {}, 3},
         {"src/models/PureSignalSettings.cpp", {QStringLiteral("load")}, {}, 1},
+        // The station TCI server's error (StationTciModel error).
+        {"src/core/StationTciController.cpp", {}, {}, 1, {}, {}, true},
+        // The 4O3A listener's error (fourO3AListenerError).
+        {"src/core/SmartSdrApiListener.cpp", {}, {}, 1, {}, {}, true},
+        // The settings save error (settingsSaveError) and the receive
+        // layout notice (receiveLayoutRestoreMessage).
+        {"src/models/RadioModel.cpp",
+         {QStringLiteral("flushPendingSettingsSave"), QStringLiteral("bindReceiveLayoutSlices"),
+          QStringLiteral("connectToRadioImpl"), QStringLiteral("prepareReceiveLayout"),
+          QStringLiteral("completeReceiveLayoutStartup"),
+          QStringLiteral("plainReceiveLayoutProblem"), QStringLiteral("withKeptLayout"),
+          QStringLiteral("captureReceiveLayout"),
+          QStringLiteral("activateRestoredRadeReceiveOwner"),
+          QStringLiteral("radeAudioAwaitsReceiver")},
+         {}, 6,
+         // activateRestoredRadeReceiveOwner's refusal, scanned here.
+         {QStringLiteral("error")},
+         // Sentences these functions word, joined by withKeptLayout; and
+         // captureReceiveLayout's refusal, both scanned here.
+         {QStringLiteral("withKeptLayout(refusals)"), QStringLiteral("withKeptLayout(notes)"),
+          QStringLiteral("error")},
+         true},
+        // The Power Genius's efficiency: the device's own reading (a
+        // number and a unit), passed on as it reports it.
+        {"src/core/PgxlStatusGauges.cpp", {}, {}, 0, {}, {}, true},
     };
     return sources;
 }

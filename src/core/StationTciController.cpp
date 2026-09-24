@@ -29,7 +29,11 @@ StationTciController::StationTciController(RadioModel* radio, StationTciModel* m
     m_server = std::make_unique<TciServer>(radio);
     m_server->setStationReceiveOnly(true);
     connect(m_server.get(), &TciServer::errorOccurred, this, [this](const QString& error) {
-        m_error = error;
+        // The station TCI error reaches an app as sent: the Core's words
+        // here, the server's own reason in the log.
+        qCWarning(lcTci) << "Station TCI server error:" << error;
+        m_error = QStringLiteral("The Core could not start its TCI server. Check that no other "
+                                 "program is using the TCI port.");
         publish();
     });
     connect(m_server.get(), &TciServer::operatorNotice, this,

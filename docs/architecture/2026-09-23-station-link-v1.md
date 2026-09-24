@@ -1878,8 +1878,16 @@ how a fixture is written to what the code does.
   sends as a property value that an app shows as it arrives is held to the
   same rule: the `connectionError` of the `tuner`, `amplifier` and `rfkit`
   objects, a slice's `nnrStatus` and `nnrLastError`, the radio's
-  `rxFilter0Reason` and `rxFilter1Reason`, and `pureSignalSettings`'
-  `lastLoadError` (the same test reads the sources that write them). Codes are not reasons and keep their
+  `rxFilter0Reason`, `rxFilter1Reason`, `settingsSaveError`,
+  `receiveLayoutRestoreMessage` and `fourO3AListenerError`, the
+  `stationTci` object's `error`, the `amplifier` object's
+  `efficiencyText` (the Power Genius's own reading, passed on as it
+  reports it) and `pureSignalSettings`' `lastLoadError` (the same test
+  reads the sources that write them). A library's or the system's own
+  error text (a socket's, a file's) is never sent as one of these: the
+  station words it and logs the library's text. A reason passed on
+  without words of its own (a variable, a call) is named in the test with
+  the source its words come from. Codes are not reasons and keep their
   spelling: an audio context's `reason` (`client-disabled`,
   `receiver-limit`, ...), `displayBudgetReason`, and the display retire
   reasons "slice removed" and "slice stream binding changed", which

@@ -14645,7 +14645,7 @@ void RadioModel::prepareReceiveLayout(const QString& radioMac)
     m_receiveLayoutPendingAdmission = true;
     if (radioMac.isEmpty()) {
         setReceiveLayoutRestoreStatus(QStringLiteral("pending"),
-                                      tr("Waiting for the selected radio's identity."));
+                                      tr("Waiting for the selected radio to be identified."));
         return;
     }
     m_receiveLayoutMac = mac;
@@ -14953,7 +14953,16 @@ void RadioModel::flushPendingSettingsSave()
         saveSliceState(nullptr);
     }
     QString error;
-    if (!captureReceiveLayout(&error) || !AppSettings::instance().save(&error)) {
+    bool saved = captureReceiveLayout(&error);
+    if (saved && !AppSettings::instance().save(&error)) {
+        // settingsSaveError reaches a remote app as sent: plain words here,
+        // the store's own reason (a file error) in the log. The receive
+        // layout's refusal above is already worded for the operator.
+        qCWarning(lcConnection) << "Settings not saved:" << error;
+        error = tr("Settings could not be saved. Saving is tried again shortly.");
+        saved = false;
+    }
+    if (!saved) {
         // Retain both live identities and already captured removed-slice values.
         // A later edit, orderly shutdown, or bounded retry can commit them.
         m_dirtySettingsSliceIds.unite(dirty);
