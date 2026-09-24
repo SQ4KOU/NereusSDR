@@ -363,6 +363,20 @@ class RemotePeripheralsTest : public QObject {
     Q_OBJECT
 
 private slots:
+    // Rework: this binary's own settings file, since some tests use the
+    // process's AppSettings as the Core's store (and save it).
+    void initTestCase()
+    {
+        AppSettings::setProfileOverride(
+            QStringLiteral("tst-remote-peripherals-%1").arg(QCoreApplication::applicationPid()));
+    }
+    void cleanupTestCase()
+    {
+        const QString path = AppSettings::instance().filePath();
+        QFile::remove(path);
+        QFile::remove(path + QStringLiteral(".bak"));
+        QDir().rmdir(QFileInfo(path).absolutePath());
+    }
     void remoteTgxlDraftUsesStationLinkAndSurvivesUnrelatedSnapshots();
     void unknownCapabilityKeepsRemoteTgxlInert();
     void remoteParentPageExposesOnlyStationBackedControls();
@@ -379,6 +393,8 @@ private slots:
     void pgxlBandFollowLineLocalAndRemote();
     void oneTciSwitchDrivesTheCoresStationServer();
     void coreHereServesThisComputersApps();
+    void upgradeKeepsTciOnTheCoresComputer();
+    void coresStoredSwitchWinsOverTheLink();
     // R-R3-47 / R-R3-22
     void remoteWindowShowsTheCoresRecords();
     void remoteWindowChangesTheInterlockOnTheCore();
@@ -1378,7 +1394,9 @@ void RemotePeripheralsTest::oneTciSwitchDrivesTheCoresStationServer()
     RadioModel station;
     station.enableStationTci(QStringLiteral("127.0.0.1"));
     AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
-    StationServer server(&station, stationSettings, dir.path());
+    // The Core's own settings store: where its station TCI switch is kept
+    // (StationTciController) and what the window's settings snapshot reads.
+    StationServer server(&station, AppSettings::instance(), dir.path());
     QCOMPARE(server.stationTciVersion(), 1);
 
     auto window = std::make_unique<RadioModel>(RadioModel::Role::Remote);
@@ -1480,11 +1498,17 @@ void RemotePeripheralsTest::coreHereServesThisComputersApps()
             break;
         }
     }
+    // The Core keeps its station switch (off), so it wins at connect.
+    AppSettings::instance().clear();
+    AppSettings::instance().setValue(QStringLiteral("StationTci_Enabled"), QStringLiteral("False"));
+    AppSettings::instance().setValue(QStringLiteral("StationTci_Port"), QString::number(port));
     RadioModel station;
     station.enableStationTci(stationAddress.isEmpty() ? QStringLiteral("127.0.0.1")
                                                       : stationAddress);
     AppSettings stationSettings(dir.filePath(QStringLiteral("station.settings")));
-    StationServer server(&station, stationSettings, dir.path());
+    // The Core's own settings store: where its station TCI switch is kept
+    // (StationTciController) and what the window's settings snapshot reads.
+    StationServer server(&station, AppSettings::instance(), dir.path());
 
     RadioModel window(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -1541,6 +1565,109 @@ void RemotePeripheralsTest::coreHereServesThisComputersApps()
     }
     stationEnd->closeLink(QStringLiteral("test done"));
     QVERIFY(station.setStationTciForStation(false, port, &reason));
+    AppSettings::instance().clear();
+}
+
+namespace {
+
+// A Core with a station TCI server on this computer (loopback only) and a
+// window on it whose TCI switch was on before it connected.
+struct TciCoreAndWindow {
+    QTemporaryDir dir;
+    RadioModel station;
+    AppSettings stationSettings;
+    std::unique_ptr<StationServer> server;
+    RadioModel window{RadioModel::Role::Remote};
+    SettingsProxy proxy;
+    StationClient client{&window, &proxy};
+    TciServer local{&window};
+    TciSwitch tci{&local, &window};
+    TciCoreAndWindow() : stationSettings(dir.filePath(QStringLiteral("station.settings")))
+    {
+        window.attachStation(&client);
+        client.setCoreOnThisComputerForTest(true);
+    }
+    // The Core's own settings store (AppSettings::instance()), where its
+    // station TCI switch is kept and what the window's snapshot reads.
+    void start()
+    {
+        station.enableStationTci(QStringLiteral("127.0.0.1"));   // reads the Core's switch
+        server = std::make_unique<StationServer>(&station, AppSettings::instance(), dir.path());
+    }
+    bool connect(QObject* owner)
+    {
+        auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), owner);
+        auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), owner);
+        stationEnd->linkTo(clientEnd);
+        QSignalSpy completed(&client, &StationClient::handshakeComplete);
+        client.startSession(clientEnd, server->token());
+        server->acceptTransport(stationEnd);
+        return completed.wait(5000) || !completed.isEmpty();
+    }
+};
+
+bool tciAppServed(quint16 port)
+{
+    QWebSocket app;
+    QStringList frames;
+    QObject::connect(&app, &QWebSocket::textMessageReceived, &app,
+                     [&frames](const QString& text) { frames.append(text); });
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(port)));
+    const bool ok = QTest::qWaitFor([&] {
+        return frames.join(QString()).contains(QStringLiteral("receive_only:true;"));
+    }, 5000);
+    app.close();
+    return ok;
+}
+
+} // namespace
+
+// Rework part 2 (R-R3-48): nereusd and this window on one computer with TCI
+// on before the upgrade: the Core has no stored station switch, so the
+// window's switch seeds it at connect and apps here keep TCI (the Core's).
+void RemotePeripheralsTest::upgradeKeepsTciOnTheCoresComputer()
+{
+    AppSettings::instance().clear();
+    TciCoreAndWindow cw;
+    cw.start();
+    const quint16 port = freeLoopbackPort();
+    cw.tci.setSwitch(true, port, QHostAddress(QHostAddress::LocalHost), /*tellCore=*/false);
+    QVERIFY(cw.local.isRunning());   // before the link: as before
+    QVERIFY(!AppSettings::instance().contains(QStringLiteral("StationTci_Enabled")));
+    QVERIFY(cw.connect(this));
+    QTRY_VERIFY(cw.client.stationTciAvailable());
+    cw.window.reportStationLinkStateChanged();
+    QTRY_VERIFY_WITH_TIMEOUT(cw.station.stationTciModel()->listening(), 5000);
+    QCOMPARE(cw.station.stationTciModel()->port(), int(port));
+    QTRY_VERIFY(!cw.local.isRunning());
+    QVERIFY(cw.tci.switchOn());
+    QVERIFY(tciAppServed(port));
+    QString reason;
+    QVERIFY(cw.station.setStationTciForStation(false, port, &reason));
+    AppSettings::instance().clear();
+}
+
+// Rework part 2: a Core that already keeps a station switch (off here)
+// wins at connect; the window's switch follows it and the Core is not
+// changed.
+void RemotePeripheralsTest::coresStoredSwitchWinsOverTheLink()
+{
+    AppSettings::instance().clear();
+    TciCoreAndWindow cw;
+    AppSettings::instance().setValue(QStringLiteral("StationTci_Enabled"), QStringLiteral("False"));
+    AppSettings::instance().setValue(QStringLiteral("StationTci_Port"), QStringLiteral("50001"));
+    cw.start();
+    const quint16 port = freeLoopbackPort();
+    cw.tci.setSwitch(true, port, QHostAddress(QHostAddress::LocalHost), /*tellCore=*/false);
+    QVERIFY(cw.connect(this));
+    QTRY_VERIFY(cw.client.stationTciAvailable());
+    cw.window.reportStationLinkStateChanged();
+    QTRY_VERIFY(!cw.tci.switchOn());
+    QCOMPARE(cw.tci.port(), quint16(50001));
+    QVERIFY(!cw.local.isRunning());
+    QTest::qWait(100);
+    QVERIFY(!cw.station.stationTciModel()->enabled());
+    QVERIFY(!cw.station.stationTciModel()->listening());
     AppSettings::instance().clear();
 }
 

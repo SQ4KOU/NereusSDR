@@ -196,6 +196,10 @@ public:
     /// TCI here, so the window runs no TCI server of its own. Kept while the
     /// link is down (the Core keeps its server), false for another Core.
     virtual bool coreServesTciOnThisComputer() const { return false; }
+    /// Rework part 2 (R-R3-48): whether the Core keeps a station TCI switch
+    /// of its own yet (1), not yet (0: this window's switch seeds it), or
+    /// its settings have not arrived on this link (-1).
+    virtual int coreStationTciStored() const { return -1; }
 
     /// R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core shares its
     /// accessory records and settings (`accessoryData`) and takes these

@@ -453,6 +453,7 @@ public:
     bool tgxlDeviceSettingsAvailable() const override;
     bool stationTciAvailable() const override;
     bool coreServesTciOnThisComputer() const override;
+    int coreStationTciStored() const override;
     /// Test seam: whether the Core counts as on this computer (a session
     /// started without a dial has no address to judge by).
     void setCoreOnThisComputerForTest(bool onThisComputer)

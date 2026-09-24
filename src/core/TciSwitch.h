@@ -27,6 +27,11 @@ class TciServer;
 // keeps its own copy, so its server keeps running for the amp when this
 // window closes or another app connects.
 //
+// At connect the Core's stored switch wins and this window's switch follows
+// it. A Core that has no stored station switch yet (the upgrade: a Core and
+// this window on one computer with TCI on before) takes this window's
+// switch and port instead.
+//
 // This window's own server follows the switch only when the Core runs on
 // another computer. On the Core's own computer the window runs no server:
 // the Core's server also listens on this computer and serves apps here.
@@ -72,6 +77,7 @@ private:
     void tellCore();
     void onStationTciChanged();
     void followCore();
+    void syncAtConnect();
     bool linkUp() const;
 
     QPointer<TciServer> m_local;
@@ -85,6 +91,10 @@ private:
     std::optional<std::pair<bool, quint16>> m_asked;
     // The Core's object is read once its whole change has arrived.
     bool m_followQueued{false};
+    // This connection's start was settled: the Core's stored switch wins,
+    // or this window's seeded a Core that had none. Until then nothing is
+    // followed.
+    bool m_synced{false};
 };
 
 } // namespace NereusSDR

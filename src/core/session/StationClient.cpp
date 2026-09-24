@@ -3374,6 +3374,17 @@ bool StationClient::stationTciAvailable() const
         && m_capabilities.stationTciVersion >= 1;
 }
 
+int StationClient::coreStationTciStored() const
+{
+    // The Core's station switch is its StationTci_Enabled station setting
+    // (StationTciController), which reaches this window in the settings
+    // snapshot; absent there, the Core has none yet.
+    if (m_settingsProxy.isNull() || !m_settingsProxy->hasReceivedSnapshot()) {
+        return -1;
+    }
+    return m_settingsProxy->contains(QStringLiteral("StationTci_Enabled")) ? 1 : 0;
+}
+
 bool StationClient::coreServesTciOnThisComputer() const
 {
     // What the Core last said it offers, kept while the link is down: the

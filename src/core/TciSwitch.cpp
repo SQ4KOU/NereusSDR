@@ -19,6 +19,13 @@ TciSwitch::TciSwitch(TciServer* local, RadioModel* model, QObject* parent)
 {
     if (model) {
         connect(model, &RadioModel::stationLinkStateChanged, this, &TciSwitch::reevaluate);
+        // The Core's settings arriving tells whether it keeps a switch.
+        connect(model, &RadioModel::stationSettingChanged, this, [this](const QString& key) {
+            if (key.isEmpty() || key.startsWith(QLatin1String("StationTci_"))) {
+                syncAtConnect();
+                onStationTciChanged();
+            }
+        });
         if (StationTciModel* station = model->stationTciModel()) {
             connect(station, &StationTciModel::stateChanged,
                     this, &TciSwitch::onStationTciChanged);
@@ -47,9 +54,32 @@ void TciSwitch::onStationTciChanged()
     }
 }
 
-void TciSwitch::followCore()
+void TciSwitch::syncAtConnect()
 {
     if (!coreHasStationServer()) {
+        m_synced = false;   // a new connection settles again
+        return;
+    }
+    if (m_synced) {
+        return;
+    }
+    const int stored = m_model->stationLink()->coreStationTciStored();
+    if (stored < 0) {
+        return;   // the Core's settings have not arrived yet
+    }
+    m_synced = true;
+    if (stored == 0) {
+        // The Core has no station switch yet: this window's seeds it.
+        qCInfo(lcTci) << "The Core keeps no TCI switch yet; giving it this window's"
+                      << (m_on ? "on" : "off") << "port" << m_port;
+        tellCore();
+    }
+}
+
+void TciSwitch::followCore()
+{
+    syncAtConnect();
+    if (!coreHasStationServer() || !m_synced) {
         return;
     }
     const StationTciModel* station = m_model->stationTciModel();
@@ -157,7 +187,9 @@ void TciSwitch::setPortOrBind(quint16 port, const QHostAddress& bindAddress)
 
 void TciSwitch::reevaluate()
 {
+    syncAtConnect();
     applyLocal();
+    onStationTciChanged();
 }
 
 void TciSwitch::applyLocal()

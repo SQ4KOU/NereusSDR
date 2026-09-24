@@ -1032,7 +1032,12 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   or the phone, and keeping this computer's `TciServerEnabled` and
   `TciServerPort` in step), and changing them sends `setStationTci`. The
   Core keeps its own copy, so its server keeps running for the amp when
-  the window closes or another app connects. The window reads the Core's
+  the window closes or another app connects. At connect the Core's stored
+  switch wins and the window's switch follows it; a Core that has no
+  stored station switch yet (no `StationTci_Enabled` in its settings, as
+  after the upgrade on a computer that ran the window with TCI on) takes
+  the window's switch and port instead, so apps there keep TCI. Until
+  the Core's settings arrive the window decides nothing. The window reads the Core's
   change only once all its properties have arrived, and after sending a
   change it waits for the Core to report that same switch and port before
   following again, so it never flips back to a stale value. The window's

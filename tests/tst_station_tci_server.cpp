@@ -75,6 +75,7 @@ public:
     bool tciAvailable{true};
     bool coreHere{false};
     bool ready{true};
+    int stored{1};   // the Core has a stored station switch (-1: not known yet)
     int requests{0};
     bool requestedOn{false};
     quint16 requestedPort{0};
@@ -86,6 +87,7 @@ public:
     bool stationLinkReady() const override { return ready; }
     bool stationTciAvailable() const override { return ready && tciAvailable; }
     bool coreServesTciOnThisComputer() const override { return coreHere; }
+    int coreStationTciStored() const override { return stored; }
     CommandOutcome requestStationTci(bool on, quint16 port) override
     {
         ++requests;
@@ -433,6 +435,75 @@ private slots:
         QCOMPARE(link.requests, 2);
         QVERIFY(!link.requestedOn);
         QVERIFY(!local.isRunning());
+    }
+
+    // Rework part 2 (R-R3-48): at connect the Core's stored switch wins;
+    // this window's switch follows it and asks the Core for nothing.
+    void coresStoredSwitchWinsAtConnect()
+    {
+        const quint16 port = freePort();
+        const quint16 corePort = freePort();
+        RadioModel window(RadioModel::Role::Remote);
+        FakeStationLink link;
+        link.ready = false;
+        window.attachStation(&link);
+        TciServer local(&window);
+        TciSwitch tci(&local, &window);
+        tci.setSwitch(true, port, QHostAddress(QHostAddress::LocalHost), /*tellCore=*/false);
+        QVERIFY(local.isRunning());
+
+        link.ready = true;
+        window.reportStationLinkStateChanged();
+        StationTciModel* station = window.stationTciModel();
+        station->applyStationValue("enabled", false);
+        station->applyStationValue("port", int(corePort));
+        QTRY_VERIFY(!tci.switchOn());
+        QCOMPARE(tci.port(), corePort);
+        QVERIFY(!local.isRunning());
+        QCOMPARE(link.requests, 0);
+    }
+
+    // Rework part 2: a Core with no stored station switch yet (the upgrade:
+    // nereusd and this window on one computer with TCI on before) takes
+    // this window's switch and port at connect. Its first state (its
+    // defaults) does not turn this window's switch off meanwhile. A Core
+    // whose settings have not arrived yet is not decided until they do.
+    void windowSeedsACoreWithNoStoredSwitch()
+    {
+        const quint16 port = freePort();
+        RadioModel window(RadioModel::Role::Remote);
+        FakeStationLink link;
+        link.ready = false;
+        link.stored = -1;
+        link.coreHere = true;
+        window.attachStation(&link);
+        TciServer local(&window);
+        TciSwitch tci(&local, &window);
+        tci.setSwitch(true, port, QHostAddress(QHostAddress::LocalHost), /*tellCore=*/false);
+
+        link.ready = true;
+        window.reportStationLinkStateChanged();
+        StationTciModel* station = window.stationTciModel();
+        station->applyStationValue("enabled", false);
+        station->applyStationValue("port", int(StationTciController::kDefaultPort));
+        QCoreApplication::processEvents();
+        QCOMPARE(link.requests, 0);        // not known yet: nothing decided
+        QVERIFY(tci.switchOn());
+
+        link.stored = 0;                   // the Core's settings arrive
+        window.reportStationSettingChanged(QString());
+        QTRY_COMPARE(link.requests, 1);
+        QVERIFY(link.requestedOn);
+        QCOMPARE(link.requestedPort, port);
+        QCoreApplication::processEvents();
+        QVERIFY(tci.switchOn());           // the Core's defaults did not win
+        station->applyStationValue("enabled", true);
+        station->applyStationValue("port", int(port));
+        station->applyStationValue("listening", true);
+        QCoreApplication::processEvents();
+        QVERIFY(tci.switchOn());
+        QCOMPARE(tci.port(), port);
+        QCOMPARE(link.requests, 1);
     }
 
     // Follow-up 1b: the Core retries a station listener that could not
