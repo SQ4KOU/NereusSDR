@@ -25,6 +25,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, Task 3.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, fix wave.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -227,6 +230,23 @@ private slots:
         OtherButtonItem item;
         QVERIFY(item.isButtonShown(Id::Dup));
         QVERIFY(!item.isButtonShown(Id::Play));
+    }
+
+    // Fix wave I1: the macro buttons, AVG and the two-receiver layout
+    // (RX2, SUB, SWAP) each have an entry of their own, so marking the
+    // macro buttons built draws them and nothing else.
+    void markingTheMacroButtonsBuiltShowsOnlyTheMacroButtons()
+    {
+        UnbuiltFeatures::setBuiltForTest(UnbuiltFeature::MacroButtons, true);
+        OtherButtonItem item;
+        for (int i = 34; i < item.buttonCount(); ++i) {  // after the 34 core buttons
+            QVERIFY2(!item.button(i).hiddenUntilBuilt,
+                     qPrintable(QStringLiteral("macro %1 still hidden").arg(i)));
+        }
+        for (Id id : {Id::Rx2, Id::SubRx, Id::PanSwap, Id::Avg}) {
+            QVERIFY2(!item.isButtonShown(id),
+                     qPrintable(QStringLiteral("button %1 is drawn").arg(int(id))));
+        }
     }
 
     void savedVisibilityOfAHiddenButtonIsKept()

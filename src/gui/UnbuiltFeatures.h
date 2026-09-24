@@ -25,6 +25,10 @@
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-49, R-R3-21). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Fix wave: one entry per feature for the
+//                                    container buttons and the review's
+//                                    unfinished controls. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -57,8 +61,10 @@ enum class UnbuiltFeature {
     PhoneMon,         // Phone/CW applet MON and its level
     FmPage,           // Phone/CW applet FM page
     RfkitTune,        // RF-Kit applet TUNE and BYPASS
-    ContainerButtons, // Container buttons with nothing behind them: RX2, SUB RX, Pan Swap
-                      // (Thetis's two-receiver layout), AVG, and the macro buttons (built after R4)
+    MacroButtons,     // The container macro buttons (built after R4)
+    DisplayAveraging, // Display averaging from a container: the container AVG button
+    TwoReceiverLayout,// The two-receiver layout (RX1 and RX2, never built for slices A to D):
+                      // the container RX2, SUB RX and Pan Swap buttons
     VariableFilters,  // The variable filter slots: the container filter Var1 and Var2 buttons
     AntennaRxTxSplit, // The antenna box's receive/transmit split: the container antenna Rx/Tx button
     Voice,            // Voice Rec/Play container control; VFO flag record and play; DVK on the status bar;

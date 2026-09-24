@@ -36,6 +36,11 @@
 // ("variable-filters") and antenna Rx/Tx ("antenna-rx-tx") have entries of
 // their own, so marking the macro buttons built does not show them.
 //
+// R3 unfinished controls fix wave (R-R3-49, R-R3-21): the macro buttons
+// ("macro-buttons"), AVG ("display-averaging") and RX2, SUB and SWAP
+// ("two-receiver-layout") are three entries, so marking one built shows
+// only its own buttons.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, Task 1.
@@ -48,6 +53,9 @@
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, Task 4.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, fix wave.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
 // =================================================================
@@ -588,11 +596,24 @@ QMap<F, QList<Surface>> surfaces()
                             return false;
                         })};
     map[F::FmPage] = {applet(QStringLiteral("Phone/CW FM page"), phonePage(2))};
-    map[F::ContainerButtons] = {
+    // Fix wave I1: the macro buttons, AVG and the two-receiver layout each
+    // front a feature of their own.
+    map[F::MacroButtons] = {
+        Surface{QStringLiteral("container macro buttons"), Host::Container, [](Hosts& h) {
+                    // Macro buttons follow the 34 core buttons; none is saved
+                    // visible by default, so "not hidden until built" is the
+                    // surface here.
+                    OtherButtonItem* item = h.otherButtons();
+                    for (int i = 34; i < item->buttonCount(); ++i) {
+                        if (item->button(i).hiddenUntilBuilt) { return false; }
+                    }
+                    return item->buttonCount() > 34;
+                }}};
+    map[F::DisplayAveraging] = {functionButton(QStringLiteral("AVG"), B::Avg)};
+    map[F::TwoReceiverLayout] = {
         functionButton(QStringLiteral("RX2"), B::Rx2),
         functionButton(QStringLiteral("SUB"), B::SubRx),
-        functionButton(QStringLiteral("SWAP"), B::PanSwap),
-        functionButton(QStringLiteral("AVG"), B::Avg)};
+        functionButton(QStringLiteral("SWAP"), B::PanSwap)};
     // Task 4 carried finding: Var1, Var2 and Rx/Tx front features of their
     // own, so marking the macro buttons built does not show them.
     map[F::VariableFilters] = {boxButton(QStringLiteral("filter Var1"), filters, 10),

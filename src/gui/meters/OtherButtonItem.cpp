@@ -94,7 +94,7 @@ OtherButtonItem::OtherButtonItem(QObject* parent)
         button(idx).onColour = QColor(0x00, 0x70, 0xc0);
         // R-R3-49: the macro buttons are built after R4.
         setButtonHiddenUntilBuilt(
-            idx, !UnbuiltFeatures::isBuilt(UnbuiltFeature::ContainerButtons));
+            idx, !UnbuiltFeatures::isBuilt(UnbuiltFeature::MacroButtons));
     }
 
     // R-R3-49: a button whose feature NereusSDR does not have is not drawn
@@ -153,12 +153,14 @@ std::optional<UnbuiltFeature> OtherButtonItem::unbuiltFeatureFor(ButtonId id)
 {
     switch (id) {
     // Thetis's two-receiver layout (RX2 on, sub receiver, pan swap) has no
-    // place among slices A to D; AVG is built after R4 with the display work.
+    // place among slices A to D.
     case ButtonId::Rx2:
     case ButtonId::SubRx:
     case ButtonId::PanSwap:
+        return UnbuiltFeature::TwoReceiverLayout;
+    // AVG is built after R4 with the display work.
     case ButtonId::Avg:
-        return UnbuiltFeature::ContainerButtons;
+        return UnbuiltFeature::DisplayAveraging;
     case ButtonId::Dup:
         return UnbuiltFeature::Fdx;             // full duplex
     case ButtonId::Play:

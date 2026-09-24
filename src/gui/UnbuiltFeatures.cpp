@@ -142,9 +142,13 @@ const QList<Entry>& all()
          QStringLiteral("Phone/CW applet FM page")},
         {F::RfkitTune, QStringLiteral("rfkit-tune"),
          QStringLiteral("RF-Kit applet TUNE and BYPASS")},
-        {F::ContainerButtons, QStringLiteral("macro-buttons"),
-         QStringLiteral("Container function buttons with nothing behind them: RX2, SUB RX, "
-                        "Pan Swap, AVG, and the macro buttons")},
+        {F::MacroButtons, QStringLiteral("macro-buttons"),
+         QStringLiteral("The container macro buttons")},
+        {F::DisplayAveraging, QStringLiteral("display-averaging"),
+         QStringLiteral("Display averaging from a container: the container AVG button")},
+        {F::TwoReceiverLayout, QStringLiteral("two-receiver-layout"),
+         QStringLiteral("The two-receiver layout, never built for slices: the container RX2, "
+                        "SUB RX and Pan Swap buttons")},
         {F::VariableFilters, QStringLiteral("variable-filters"),
          QStringLiteral("The variable filter slots: the container filter Var1 and Var2 buttons")},
         {F::AntennaRxTxSplit, QStringLiteral("antenna-rx-tx"),
