@@ -17,18 +17,29 @@
 //   * Each file in kReasonSources is read with its comments removed and
 //     adjacent literals joined. In a whole-file entry every string literal
 //     with a space in it outside a log statement is a reason and is
-//     checked; a literal there that never reaches an app is named in the
-//     entry's notReasons, by its start, with why. In a function entry only
-//     the named functions' bodies are read (RadioModel.cpp and the models
-//     mix the station's reasons with this app's own text).
+//     checked, and so is every literal of any length in a reason position:
+//     a sender's reason argument (emitResult, commandResult, sessionEnd,
+//     authResult, settingsReject, dropPeer, sendRejected,
+//     sendAllocationResult, rejectAllocation, and the reject, rejectDetail
+//     and fail helpers) or the right-hand side of an assignment to a
+//     reason (…reason, …refusal, m_lastError, m_lastActionError). A
+//     reason of one word is not a sentence an operator can act on and
+//     fails. What .arg() inserts into a reason is part of it: an inserted
+//     literal is checked as words, and any other inserted expression must
+//     be named in the entry's plainInserts. A literal that never reaches
+//     an app is named in the entry's notReasons, by its start, with why.
+//     In a function entry only the named functions' bodies are read
+//     (RadioModel.cpp and the models mix the station's reasons with this
+//     app's own text).
 //   * The guard: every function in src/core and src/models whose name says
 //     it words a reason (…Reason, …Refusal, …ForStation, …FromStation,
-//     applyMirroredValue), and every file that sends a reason to an app
-//     (commandResult, sessionEnd, authResult, settingsReject,
-//     propertyResult, emitResult, dropPeer, sendRejected,
+//     applyMirroredValue) or that writes one through a QString*
+//     out-parameter (…reason, …refusal), and every file that sends a
+//     reason to an app (commandResult, sessionEnd, authResult,
+//     settingsReject, propertyResult, emitResult, dropPeer, sendRejected,
 //     sendAllocationResult, rejectAllocation), must be scanned here or
 //     named in kAppSideReasons with why. A new reason site fails until it
-//     is placed.
+//     is placed, whatever file it is in.
 //   * What the station actually sent: every reason in a station message of
 //     the link's session fixtures (tests/data/link/v1/sessions) is checked
 //     the same way.
@@ -43,6 +54,11 @@
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4b (R-IOS-01,
 //                                    R-R3-21): created. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A fix wave (R-IOS-01,
+//                                    R-R3-21): one-word reasons, .arg()
+//                                    insertions and out-parameter writers
+//                                    in any file. AI-assisted via
 //                                    Anthropic Claude Code.
 // =================================================================
 
@@ -167,30 +183,6 @@ QStringList statementsOf(const QString& code)
     return statements;
 }
 
-// Every string literal with a space in `code`, outside log statements, as
-// written (escapes kept).
-QStringList reasonLiteralsIn(const QString& code)
-{
-    static const QRegularExpression log(QStringLiteral(
-        "\\bq(C(Warning|Info|Debug|Critical)|Warning|Debug|Info|Critical)\\b"));
-    static const QRegularExpression literal(QStringLiteral("\"((?:[^\"\\\\\\n]|\\\\.)*)\""));
-    QStringList found;
-    for (QString statement : statementsOf(code)) {
-        const QRegularExpressionMatch logged = log.match(statement);
-        if (logged.hasMatch()) {
-            statement.truncate(logged.capturedStart());
-        }
-        QRegularExpressionMatchIterator it = literal.globalMatch(statement);
-        while (it.hasNext()) {
-            const QString text = it.next().captured(1);
-            if (text.contains(QLatin1Char(' ')) && !found.contains(text)) {
-                found.append(text);
-            }
-        }
-    }
-    return found;
-}
-
 // The index one past the bracket that closes the one at `open`.
 qsizetype closingOf(const QString& code, qsizetype open, QChar opener, QChar closer)
 {
@@ -212,9 +204,180 @@ qsizetype closingOf(const QString& code, qsizetype open, QChar opener, QChar clo
     return code.size();
 }
 
+// One reason as written: its text (escapes kept) and what each .arg()
+// after it inserts, as the text inside the .arg( ).
+struct ReasonText {
+    QString text;
+    QStringList inserts;
+    bool positioned = false;  // Found in a reason position, not only by its space.
+};
+
+// The calls that send a reason, with the index of their reason argument:
+// the messages (commandResult, sessionEnd, authResult, settingsReject), the
+// senders that wrap them, and the refusal helpers of the scanned files
+// (DspAssetService::reject/rejectDetail, the PureSignal facade's fail).
+struct ReasonSender {
+    const char* name;
+    int index;
+};
+
+const QList<ReasonSender>& reasonSenders()
+{
+    static const QList<ReasonSender> senders{
+        {"emitResult", 3},   {"commandResult", 3},        {"sessionEnd", 0},
+        {"authResult", 1},   {"settingsReject", 3},       {"dropPeer", 1},
+        {"sendRejected", 3}, {"sendAllocationResult", 4}, {"rejectAllocation", 3},
+        {"reject", 0},       {"rejectDetail", 1},         {"fail", 0},
+    };
+    return senders;
+}
+
+// `text` split at its top-level commas (outside brackets and literals).
+QStringList splitTopLevel(const QString& text)
+{
+    QStringList parts;
+    QString current;
+    int depth = 0;
+    qsizetype i = 0;
+    while (i < text.size()) {
+        const QChar c = text.at(i);
+        if (c == QLatin1Char('"') || opensCharLiteral(text, i)) {
+            const qsizetype end = literalEnd(text, i);
+            current += text.mid(i, end - i);
+            i = end;
+            continue;
+        }
+        if (c == QLatin1Char('(') || c == QLatin1Char('{') || c == QLatin1Char('[')) {
+            ++depth;
+        } else if (c == QLatin1Char(')') || c == QLatin1Char('}') || c == QLatin1Char(']')) {
+            --depth;
+        } else if (c == QLatin1Char(',') && depth == 0) {
+            parts.append(current);
+            current.clear();
+            ++i;
+            continue;
+        }
+        current += c;
+        ++i;
+    }
+    parts.append(current);
+    return parts;
+}
+
+// The parts of `statement` that are a reason: each sender's reason
+// argument, and the right-hand side of an assignment to a reason
+// (…reason, …Reason, …refusal, m_lastError, m_lastActionError).
+QStringList reasonExpressionsIn(const QString& statement)
+{
+    QStringList expressions;
+    for (const ReasonSender& sender : reasonSenders()) {
+        const QRegularExpression call(
+            QStringLiteral("\\b%1\\s*\\(").arg(QLatin1String(sender.name)));
+        QRegularExpressionMatchIterator it = call.globalMatch(statement);
+        while (it.hasNext()) {
+            const QRegularExpressionMatch match = it.next();
+            const qsizetype open = match.capturedEnd() - 1;
+            const qsizetype close = closingOf(statement, open, QLatin1Char('('), QLatin1Char(')'));
+            const QStringList arguments =
+                splitTopLevel(statement.mid(open + 1, close - open - 2));
+            if (sender.index < arguments.size()) {
+                expressions.append(arguments.at(sender.index));
+            }
+        }
+    }
+    static const QRegularExpression assignment(QStringLiteral(
+        "\\b(?:\\w*[Rr]eason|\\w*[Rr]efusal|m_lastError|m_lastActionError)\\s*=(?!=)"));
+    const QRegularExpressionMatch assigned = assignment.match(statement);
+    if (assigned.hasMatch()) {
+        expressions.append(statement.mid(assigned.capturedEnd()));
+    }
+    return expressions;
+}
+
+// What the .arg() calls right after the literal ending at `end` insert:
+// the text inside each .arg( ), whitespace simplified. A wrapper's closing
+// bracket (QStringLiteral( ), tr( )) may come first.
+QStringList insertsAfter(const QString& code, qsizetype end)
+{
+    QStringList inserts;
+    qsizetype i = end;
+    const auto skipSpace = [&code, &i]() {
+        while (i < code.size() && code.at(i).isSpace()) {
+            ++i;
+        }
+    };
+    skipSpace();
+    if (i < code.size() && code.at(i) == QLatin1Char(')')) {
+        ++i;
+    }
+    for (;;) {
+        skipSpace();
+        if (!code.mid(i, 5).startsWith(QStringLiteral(".arg("))) {
+            break;
+        }
+        const qsizetype open = i + 4;
+        const qsizetype close = closingOf(code, open, QLatin1Char('('), QLatin1Char(')'));
+        inserts.append(code.mid(open + 1, close - open - 2).simplified());
+        i = close;
+    }
+    return inserts;
+}
+
+// Every reason written in `code`, outside log statements: each string
+// literal with a space in it (as before), and each literal of any length
+// in a reason position (reasonExpressionsIn), with what .arg() inserts.
+QList<ReasonText> reasonsIn(const QString& code)
+{
+    static const QRegularExpression log(QStringLiteral(
+        "\\bq(C(Warning|Info|Debug|Critical)|Warning|Debug|Info|Critical)\\b"));
+    static const QRegularExpression literal(QStringLiteral("\"((?:[^\"\\\\\\n]|\\\\.)*)\""));
+    QList<ReasonText> found;
+    const auto add = [&found](const QString& text, const QStringList& inserts, bool positioned) {
+        for (ReasonText& known : found) {
+            if (known.text == text) {
+                for (const QString& insert : inserts) {
+                    if (!known.inserts.contains(insert)) {
+                        known.inserts.append(insert);
+                    }
+                }
+                known.positioned = known.positioned || positioned;
+                return;
+            }
+        }
+        found.append({text, inserts, positioned});
+    };
+    for (QString statement : statementsOf(code)) {
+        const QRegularExpressionMatch logged = log.match(statement);
+        if (logged.hasMatch()) {
+            statement.truncate(logged.capturedStart());
+        }
+        QStringList positioned;
+        for (const QString& expression : reasonExpressionsIn(statement)) {
+            QRegularExpressionMatchIterator it = literal.globalMatch(expression);
+            while (it.hasNext()) {
+                const QString text = it.next().captured(1);
+                if (!text.isEmpty()) {
+                    positioned.append(text);
+                }
+            }
+        }
+        QRegularExpressionMatchIterator it = literal.globalMatch(statement);
+        while (it.hasNext()) {
+            const QRegularExpressionMatch match = it.next();
+            const QString text = match.captured(1);
+            const bool inPosition = positioned.contains(text);
+            if (text.contains(QLatin1Char(' ')) || inPosition) {
+                add(text, insertsAfter(statement, match.capturedEnd()), inPosition);
+            }
+        }
+    }
+    return found;
+}
+
 struct FunctionBody {
     QString name;
     QString body;
+    QString params;  // The text inside its parameter list's brackets.
 };
 
 // Every function defined in `code` (a body follows its parameter list)
@@ -241,7 +404,9 @@ QList<FunctionBody> functionsIn(const QString& code, const QRegularExpression& n
             continue;
         }
         const qsizetype end = closingOf(code, brace, QLatin1Char('{'), QLatin1Char('}'));
-        found.append({name, code.mid(brace, end - brace)});
+        const qsizetype paramsStart = match.capturedEnd();
+        found.append({name, code.mid(brace, end - brace),
+                      code.mid(paramsStart, afterParams - 1 - paramsStart)});
     }
     return found;
 }
@@ -277,11 +442,68 @@ QString wordingProblemIn(const QString& text)
     return term.isEmpty() ? developerWordingIn(text) : term;
 }
 
+// Why the words .arg() inserts into a reason are not plain, or an empty
+// string. A literal is checked as words (one word is fine: a band, a
+// number's unit); anything else must be named in `plainInserts`.
+QString insertProblemIn(const QString& insert, const QStringList& plainInserts)
+{
+    static const QRegularExpression literalOnly(QStringLiteral(
+        "^(?:QStringLiteral|QLatin1String|QString|tr)?\\s*\\(?\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*\\)?$"));
+    const QRegularExpressionMatch literal = literalOnly.match(insert);
+    if (literal.hasMatch()) {
+        const QString words = literal.captured(1);
+        const QString term = OperatorWording::internalTermIn(words);
+        const QString problem = term.isEmpty() ? developerWordingIn(words) : term;
+        return problem.isEmpty()
+                   ? QString()
+                   : QStringLiteral("inserts \"%1\" [%2]").arg(words, problem);
+    }
+    return plainInserts.contains(insert)
+               ? QString()
+               : QStringLiteral("inserts %1, which is not known to be plain words").arg(insert);
+}
+
+// Every wording problem of one reason: its own words, one word standing
+// alone (not a sentence an operator can act on), and what .arg() inserts.
+QStringList problemsOf(const ReasonText& reason, const QStringList& plainInserts)
+{
+    QStringList problems;
+    QString problem = wordingProblemIn(reason.text);
+    if (problem.isEmpty() && reason.positioned
+        && !reason.text.trimmed().contains(QLatin1Char(' '))) {
+        problem = QStringLiteral("one word");
+    }
+    if (!problem.isEmpty()) {
+        problems.append(QStringLiteral("\"%1\" [%2]").arg(reason.text, problem));
+    }
+    for (const QString& insert : reason.inserts) {
+        const QString inserted = insertProblemIn(insert, plainInserts);
+        if (!inserted.isEmpty()) {
+            problems.append(QStringLiteral("\"%1\" %2").arg(reason.text, inserted));
+        }
+    }
+    return problems;
+}
+
+// Every wording problem among the reasons written in `code`. `plainInserts`
+// names the .arg() arguments, by their text, known to insert plain words.
+QStringList wordingProblemsInCode(const QString& code, const QStringList& plainInserts)
+{
+    QStringList problems;
+    for (const ReasonText& reason : reasonsIn(code)) {
+        problems.append(problemsOf(reason, plainInserts));
+    }
+    return problems;
+}
+
 struct ReasonSource {
     const char* file;
     QStringList functions;   // Empty: the whole file.
     QStringList notReasons;  // Literals here that never reach an app, by their start.
     int atLeast;             // So the scan cannot pass on nothing.
+    // .arg() arguments here, by their text inside .arg( ), that insert
+    // plain words (numbers, a band, an address, the operator's own label).
+    QStringList plainInserts = {};
 };
 
 const QList<ReasonSource>& reasonSources()
@@ -294,7 +516,9 @@ const QList<ReasonSource>& reasonSources()
           // name, and the pairing banner nereusd prints on its console.
           "Qt reports no working TLS backend", "No authentication token available",
           "NereusSDR station", "\\n  ====="},
-         30},
+         30,
+         // The other app's network address (WebSocketTransport::peerDescription).
+         {QStringLiteral("description")}},
         // command.result for every verb.
         {"src/core/session/SessionCommandDispatcher.cpp", {}, {}, 30},
         // property.result for a write the mirror refuses.
@@ -304,16 +528,37 @@ const QList<ReasonSource>& reasonSources()
         // Model and correction files; the store's and validator's own
         // messages are detail for the log unless isOperatorMessage says
         // otherwise (DspAssetService::rejectDetail).
-        {"src/core/dsp/DspAssetService.cpp", {}, {}, 30},
+        // The operator's own label for a model, and "the bundled small (large)
+        // model" (bundledNr3Name).
+        {"src/core/dsp/DspAssetService.cpp", {}, {}, 30,
+         {QStringLiteral("label"), QStringLiteral("bundledNr3Name(id)")}},
         {"src/core/dsp/DspAssetValidation.cpp", {QStringLiteral("isOperatorMessage")}, {}, 6},
         {"src/core/dsp/NnrAdapter.cpp", {}, {}, 6},
+        // NNR tuning and diagnostics refusals pass NnrAdapter's reasons on;
+        // the model paths' refusal reaches nnr.applyModelSelection.
+        {"src/core/RxChannel.cpp",
+         {QStringLiteral("setNnrTuning"), QStringLiteral("setNnrDiagnostics")}, {}, 0},
+        {"src/core/WdspEngine.cpp", {QStringLiteral("setNnrModelPaths")}, {}, 2},
+        // A refused PureSignal settings write (property.result).
+        {"src/models/PureSignalSettings.cpp",
+         {QStringLiteral("isValid"), QStringLiteral("apply")}, {}, 5},
         {"src/core/accessories/AlexAntennaFacade.cpp", {}, {}, 6},
-        {"src/core/StepAttenuatorFacade.cpp", {}, {}, 6},
+        // The attenuator's range in dB.
+        {"src/core/StepAttenuatorFacade.cpp", {}, {}, 6,
+         {QStringLiteral("lo"), QStringLiteral("hi")}},
         {"src/core/IoBoardHl2Facade.cpp", {}, {}, 1},
-        {"src/core/SliceStreamAllocator.cpp", {}, {}, 4},
-        {"src/core/StationAccessoryData.cpp", {}, {}, 4},
+        // A receiver count, and a frequency in MHz.
+        {"src/core/SliceStreamAllocator.cpp", {}, {}, 4,
+         {QStringLiteral("count"),
+          QStringLiteral("QString::number(frequencyHz / 1.0e6, 'f', 4)")}},
+        // Power in watts.
+        {"src/core/StationAccessoryData.cpp", {}, {}, 4,
+         {QStringLiteral("forwardW"), QStringLiteral("limitW")}},
         {"src/core/StationTciController.cpp", {}, {}, 1},
-        {"src/core/settings/SettingsProxyServer.cpp", {}, {}, 3},
+        // The SWR limit's range, one decimal.
+        {"src/core/settings/SettingsProxyServer.cpp", {}, {}, 3,
+         {QStringLiteral("kSwrProtectionLimitMin, 0, 'f', 1"),
+          QStringLiteral("kSwrProtectionLimitMax, 0, 'f', 1")}},
         {"src/core/settings/SettingsScope.cpp", {QStringLiteral("modelOwnedSettingsRefusal")},
          {}, 5},
         // The display refusals and retirements (rejected, allocation-result).
@@ -447,6 +692,43 @@ void collectReasons(const QJsonValue& value, QStringList* reasons)
     }
 }
 
+// The reason sites in `file` (its code `code`) this test neither scans
+// nor names on the app side: a function whose name says it words a reason
+// (…Reason, …Refusal, …ForStation, …FromStation, applyMirroredValue), a
+// function that writes a reason through a QString* out-parameter
+// (…reason, …Reason, …refusal), and a file that sends a reason to an app.
+// `functions` counts the functions found by name.
+QStringList unplacedReasonSites(const QString& file, const QString& code, int* functions = nullptr)
+{
+    static const QRegularExpression anyName(QStringLiteral("."));
+    static const QRegularExpression reasonFunction(
+        QStringLiteral("(Reason|Refusal|ForStation|FromStation)$|^applyMirroredValue$"));
+    static const QRegularExpression outParameter(
+        QStringLiteral("\\bQString\\s*\\*\\s*\\w*(?:[Rr]eason|[Rr]efusal)\\w*\\b"));
+    static const QRegularExpression sender(QStringLiteral(
+        "\\b(commandResult|sessionEnd|authResult|settingsReject|propertyResult|emitResult"
+        "|dropPeer|sendRejected|sendAllocationResult|rejectAllocation)\\s*\\("));
+    QStringList unplaced;
+    for (const FunctionBody& function : functionsIn(code, anyName)) {
+        const bool named = reasonFunction.match(function.name).hasMatch();
+        const bool writesOut = outParameter.match(function.params).hasMatch();
+        if (!named && !writesOut) {
+            continue;
+        }
+        if (named && functions != nullptr) {
+            ++*functions;
+        }
+        if (!scanned(file, function.name) && !appSide(file, function.name)) {
+            unplaced.append(file + QStringLiteral(": ") + function.name
+                            + (named ? QString() : QStringLiteral(" (writes a reason it is given)")));
+        }
+    }
+    if (sender.match(code).hasMatch() && !scanned(file, QString()) && !appSide(file, QString())) {
+        unplaced.append(file + QStringLiteral(": sends a reason"));
+    }
+    return unplaced;
+}
+
 } // namespace
 
 class TestStationReasonWording : public QObject {
@@ -476,6 +758,41 @@ private slots:
         }
     }
 
+    void theScanReadsOneWordAndInsertedReasons()
+    {
+        // A one-word reason is not a sentence an operator can act on.
+        const QStringList oneWord = wordingProblemsInCode(
+            QStringLiteral("emitResult(verb, id, false, QStringLiteral(\"unimplemented\"), {});"),
+            {});
+        QVERIFY2(oneWord.join(QLatin1Char('|')).contains(QStringLiteral("unimplemented")),
+                 qPrintable(oneWord.join(QLatin1Char('|'))));
+        const QStringList assigned = wordingProblemsInCode(
+            QStringLiteral("*reason = QStringLiteral(\"EINVAL\");"), {});
+        QVERIFY2(assigned.join(QLatin1Char('|')).contains(QStringLiteral("EINVAL")),
+                 qPrintable(assigned.join(QLatin1Char('|'))));
+        // What .arg() inserts into a reason is part of the reason: a
+        // developer word inserted as a literal, and an expression nobody
+        // has said inserts plain words.
+        const QStringList insertedLiteral = wordingProblemsInCode(
+            QStringLiteral("dropPeer(t, QStringLiteral(\"The Core stopped %1.\")"
+                           ".arg(QStringLiteral(\"sessionEpoch\")), true);"),
+            {});
+        QVERIFY2(insertedLiteral.join(QLatin1Char('|')).contains(QStringLiteral("sessionEpoch")),
+                 qPrintable(insertedLiteral.join(QLatin1Char('|'))));
+        const QStringList insertedName = wordingProblemsInCode(
+            QStringLiteral("emitResult(verb, id, false, QStringLiteral(\"The Core refused %1.\")"
+                           ".arg(QString::fromUtf8(verb)), {});"),
+            {});
+        QVERIFY2(insertedName.join(QLatin1Char('|')).contains(QStringLiteral("fromUtf8(verb)")),
+                 qPrintable(insertedName.join(QLatin1Char('|'))));
+        // Named as plain, the same insertion passes.
+        QVERIFY(wordingProblemsInCode(
+                    QStringLiteral("emitResult(verb, id, false, QStringLiteral(\"The Core refused %1.\")"
+                                   ".arg(count), {});"),
+                    {QStringLiteral("count")})
+                    .isEmpty());
+    }
+
     void everyStationReasonIsPlain()
     {
         static const QRegularExpression anyName(QStringLiteral("."));
@@ -484,9 +801,9 @@ private slots:
         for (const ReasonSource& source : reasonSources()) {
             const QString code = codeOf(sourcePath(QString::fromLatin1(source.file)));
             QVERIFY2(!code.isEmpty(), source.file);
-            QStringList literals;
+            QList<ReasonText> found;
             if (source.functions.isEmpty()) {
-                literals = reasonLiteralsIn(code);
+                found = reasonsIn(code);
             } else {
                 QStringList seen;
                 for (const FunctionBody& function : functionsIn(code, anyName)) {
@@ -494,9 +811,12 @@ private slots:
                         continue;
                     }
                     seen.append(function.name);
-                    for (const QString& text : reasonLiteralsIn(function.body)) {
-                        if (!literals.contains(text)) {
-                            literals.append(text);
+                    for (const ReasonText& reason : reasonsIn(function.body)) {
+                        const bool known = std::any_of(
+                            found.cbegin(), found.cend(),
+                            [&reason](const ReasonText& r) { return r.text == reason.text; });
+                        if (!known) {
+                            found.append(reason);
                         }
                     }
                 }
@@ -507,18 +827,16 @@ private slots:
                 }
             }
             int reasons = 0;
-            for (const QString& text : literals) {
+            for (const ReasonText& reason : found) {
                 const bool exempt = std::any_of(
                     source.notReasons.cbegin(), source.notReasons.cend(),
-                    [&text](const QString& start) { return text.startsWith(start); });
+                    [&reason](const QString& start) { return reason.text.startsWith(start); });
                 if (exempt) {
                     continue;
                 }
                 ++reasons;
-                const QString problem = wordingProblemIn(text);
-                if (!problem.isEmpty()) {
-                    failures.append(QStringLiteral("%1: \"%2\" [%3]")
-                                        .arg(QLatin1String(source.file), text, problem));
+                for (const QString& problem : problemsOf(reason, source.plainInserts)) {
+                    failures.append(QStringLiteral("%1: %2").arg(QLatin1String(source.file), problem));
                 }
             }
             QVERIFY2(reasons >= source.atLeast,
@@ -530,28 +848,31 @@ private slots:
         QVERIFY2(checked >= 250, qPrintable(QString::number(checked)));
     }
 
+    void anUnlistedReasonSiteFails()
+    {
+        // A function in a file this test does not list, writing a reason
+        // through a QString* out-parameter, fails whatever it is called.
+        const QString planted = QStringLiteral(
+            "bool PlantedModel::applyThing(int value, QString* reason)\n"
+            "{\n    if (value < 0) { *reason = QStringLiteral(\"The Core refused it.\"); }\n"
+            "    return value >= 0;\n}\n");
+        const QStringList unplaced =
+            unplacedReasonSites(QStringLiteral("src/core/PlantedModel.cpp"), planted);
+        QVERIFY2(unplaced.join(QLatin1Char('|')).contains(QStringLiteral("applyThing")),
+                 qPrintable(unplaced.join(QLatin1Char('|'))));
+        // Named on the app side, it is placed.
+        QVERIFY(unplacedReasonSites(QStringLiteral("src/core/session/StationClient.cpp"), planted)
+                    .isEmpty());
+    }
+
     void everyReasonSiteIsScannedOrOnTheAppSide()
     {
-        static const QRegularExpression reasonFunction(
-            QStringLiteral("(Reason|Refusal|ForStation|FromStation)$|^applyMirroredValue$"));
-        static const QRegularExpression sender(QStringLiteral(
-            "\\b(commandResult|sessionEnd|authResult|settingsReject|propertyResult|emitResult"
-            "|dropPeer|sendRejected|sendAllocationResult|rejectAllocation)\\s*\\("));
         QStringList unplaced;
         int functions = 0;
         for (const QString& file :
              sourceFiles({QStringLiteral("src/core"), QStringLiteral("src/models")})) {
             const QString code = codeOf(sourcePath(file));
-            for (const FunctionBody& function : functionsIn(code, reasonFunction)) {
-                ++functions;
-                if (!scanned(file, function.name) && !appSide(file, function.name)) {
-                    unplaced.append(file + QStringLiteral(": ") + function.name);
-                }
-            }
-            if (sender.match(code).hasMatch() && !scanned(file, QString())
-                && !appSide(file, QString())) {
-                unplaced.append(file + QStringLiteral(": sends a reason"));
-            }
+            unplaced.append(unplacedReasonSites(file, code, &functions));
         }
         QVERIFY2(functions >= 30, qPrintable(QString::number(functions)));
         QVERIFY2(unplaced.isEmpty(), qPrintable(unplaced.join(QLatin1Char('\n'))));

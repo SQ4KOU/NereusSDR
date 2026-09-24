@@ -1705,8 +1705,10 @@ how a fixture is written to what the code does.
   `property.result`, `settings.reject` and the display's `rejected` and
   `allocation-result`) passes `OperatorWording::isPlain` and names no
   function, class, requirement or phase; `tst_station_reason_wording`
-  checks the sources that word them and every reason the session fixtures
-  record. An app shows these as sent. Codes are not reasons and keep their
+  checks the sources that word them (every reason literal, a reason of one
+  word, and what `.arg()` inserts into one; a new function that words a
+  reason, in any file, fails until it is scanned) and every reason the
+  session fixtures record. An app shows these as sent. Codes are not reasons and keep their
   spelling: an audio context's `reason` (`client-disabled`,
   `receiver-limit`, ...), `displayBudgetReason`, and the display retire
   reasons "slice removed" and "slice stream binding changed", which

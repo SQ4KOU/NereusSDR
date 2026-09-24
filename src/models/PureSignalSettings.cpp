@@ -76,7 +76,7 @@ bool PureSignalSettings::apply(const PureSignalSettingsValues& requested)
         QString gateReason;
         if (!m_editGate(&gateReason)) {
             if (gateReason.isEmpty()) {
-                gateReason = QStringLiteral("PureSignal settings are not editable in the current session.");
+                gateReason = QStringLiteral("PureSignal settings cannot be changed from here right now.");
             }
             emit editRejected(gateReason);
             return false;
