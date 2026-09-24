@@ -46,7 +46,7 @@
         {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "nnr.applyModelSelection", "id": "$int:invoke41", "args": [{"ordinal": 0, "name": "revision", "kind": "i64", "value": 1}]}},
         {"from": "station", "message": {"accepted": true, "affected": ["dspAssets"], "id": "$ref:invoke41", "reason": "", "type": "command.result", "verb": "nnr.applyModelSelection"}},
         {"advanceMs": 50},
-        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "nnr.applyModelSelection", "id": 144, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "i64", "value": 0}]}},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "nnr.applyModelSelection", "id": 144, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "i64", "value": 1}]}},
         {"from": "station", "message": {"accepted": false, "affected": ["dspAssets"], "id": 144, "reason": "The model choice changed on the Core before this request arrived. Try again.", "type": "command.result", "verb": "nnr.applyModelSelection"}},
         {"advanceMs": 50}
     ]

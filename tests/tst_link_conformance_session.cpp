@@ -695,6 +695,8 @@ void TstLinkConformanceSession::rightAndWrongLegsGetDifferentAnswers()
         const QJsonArray steps = fixture(entry.id).value(QStringLiteral("steps")).toArray();
         QHash<QString, QString> right;
         QHash<QString, QString> wrong;
+        QHash<QString, QJsonArray> rightArgs;
+        QHash<QString, QJsonArray> wrongArgs;
         for (int i = 0; i < steps.size(); ++i) {
             const QJsonObject step = steps.at(i).toObject();
             const QJsonObject message = step.value(QStringLiteral("message")).toObject();
@@ -727,12 +729,36 @@ void TstLinkConformanceSession::rightAndWrongLegsGetDifferentAnswers()
             }
             const QString verb = message.value(QStringLiteral("verb")).toString();
             (renamed ? wrong : right).insert(verb, answer);
+            (renamed ? wrongArgs : rightArgs).insert(verb, message.value(QStringLiteral("args")).toArray());
         }
         for (auto it = wrong.constBegin(); it != wrong.constEnd(); ++it) {
             if (!right.contains(it.key())) {
                 continue;
             }
             ++compared;
+            // The legs differ by the one renamed argument name and nothing
+            // else: the same arguments in order, kinds and values alike.
+            const QJsonArray a = rightArgs.value(it.key());
+            const QJsonArray b = wrongArgs.value(it.key());
+            int renamedCount = 0;
+            bool otherwiseAlike = a.size() == b.size();
+            for (int k = 0; otherwiseAlike && k < a.size(); ++k) {
+                QJsonObject x = a.at(k).toObject();
+                QJsonObject y = b.at(k).toObject();
+                if (x.value(QStringLiteral("name")) != y.value(QStringLiteral("name"))) {
+                    ++renamedCount;
+                    otherwiseAlike = y.value(QStringLiteral("name")).toString()
+                        == QStringLiteral("conformanceWrongName");
+                    x.remove(QStringLiteral("name"));
+                    y.remove(QStringLiteral("name"));
+                }
+                otherwiseAlike = otherwiseAlike && x == y;
+            }
+            if (!otherwiseAlike || renamedCount != 1) {
+                same.append(QStringLiteral("%1 %2: the legs differ by more than one renamed "
+                                           "argument name")
+                                .arg(entry.id, it.key()));
+            }
             if (right.value(it.key()) == it.value()) {
                 same.append(QStringLiteral("%1 %2: both legs answered \"%3\"")
                                 .arg(entry.id, it.key(), it.value()));
