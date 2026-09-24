@@ -974,6 +974,21 @@ cancellable).
     builds something the station gates on a declared feature adds its entry:
     `deviceAuth` (Task 15), `remoteTx` (Task 55), `sessionHolder` (Task 56),
     `setupDescription` (Task 58).
+  - The app's `hello` carries every field the link document's hello section requires of
+    a client, with the values it gives: `major`, `minor` 11 (the agreed minor gates
+    features, and the app-run fixtures require 11), `majors`, `features`, `peer` and
+    `settingsSchema`. When no major is shared the session sends nothing after the
+    station's `hello`: neither its own `hello` nor any credential.
+  - `StationSession.send` refuses locally, sending nothing, whatever the link would end
+    the session for: anything but `hello` and `auth.request` before sign-in, a second
+    `hello`, an `auth.request` out of order, `media.control` before
+    `snapshot.complete`, and any message over the station's 1 MiB cap. Messages go as
+    compact JSON in text frames.
+  - `LinkCodec` keeps the `media.control` payload as an opaque JSON object for Task 11,
+    within the link document's decode caps (128 KiB for `media.control`, 16 KiB for
+    telemetry).
+  - An attempt whose connect sequence has not completed 30 s after the WebSocket opened
+    ends as a retryable failure, matching the station's own deadline.
   - `ReconnectPolicy`: delays 1, 2, 5, 10, 30, 60 s then 60 s repeating; `reset()` on
     a session that reached `.ready`; `cancel()` stops the next attempt at once.
 
@@ -982,8 +997,9 @@ cancellable).
   `192.0.2.7`, `192.0.2.7:5000`, `[2001:db8::1]`, `[2001:db8::1]:5000`, returning port
   47910 where none is given; it rejects `2001:db8::1` without brackets, `host:0`,
   `host:65536`, an empty string and `http://host`.
-- The control conformance test decodes and re-encodes every control fixture the manifest
-  marks as run by the app, equal after parsing; negative fixtures throw.
+- The control conformance test decodes and re-encodes every control fixture (each applies
+  to both ends; only session fixtures carry `runs`), equal after parsing; negative
+  fixtures throw.
 - The session conformance test plays every session fixture the app runs, in the
   client's role, by the rules of the link document's Conformance section (the steps
   the runner scripts, the behaviour the app must produce, placeholders and
@@ -995,10 +1011,19 @@ cancellable).
 - The certificate check rejects any certificate whose DER SHA-256 differs from the pin,
   before any byte of `hello` is read.
 - A station `hello` with no shared major yields `.refused(.stationTooOld)` or
-  `.refused(.appTooOld)` by which side is behind, and no retry.
+  `.refused(.appTooOld)` by which side is behind, and no retry; nothing is sent after
+  the station's `hello`.
 - A refused sign-in (`auth.result` not accepted, then the connection closes with no
-  `session.end`) yields `.refused(.authentication(reason))` with the station's words
-  and no automatic retry.
+  `session.end`) yields `.refused(.authentication(reason))` with the station's words,
+  and the session retries only when that `auth.result` says `retryable` (a lockout does,
+  a wrong credential does not), so a stranger's failed attempts never lock the operator
+  out for good.
+- The session redials only after a lost link or a `session.end` whose `retryable` is
+  true; a non-retryable end (preempted, an undecodable message) stops it, as the
+  app-run `unknown-kind` fixture checks.
+- `send` refuses each case listed under Produces locally and sends nothing; a message
+  over 1 MiB never leaves; an attempt still short of `snapshot.complete` 30 s after the
+  WebSocket opened ends and follows the retry schedule.
 - A `session.end` that arrives before `hello` (a station already at its connection
   limit) yields `.refused(.ended(reason, retryable:))`, and whether the session retries
   follows `retryable`.
@@ -1040,42 +1065,74 @@ Tasks 3, 4 and 5.
 **Interfaces:**
 - Consumes: `StationSession` and `LinkMessage` (Task 8).
 - Produces:
-  - `enum MirrorValue: Equatable { case bool(Bool), int(Int64), double(Double), text(String), enumeration(String) }`
+  - `enum MirrorValue: Equatable { case bool(Bool), int(Int64), double(Double), text(String), enumeration(Int64) }`:
+    an enum value travels as a whole number within int64, one of the schema's
+    `enumValues`, and the schema's kind says which properties are enums.
   - `@MainActor final class MirrorStore: ObservableObject` with
     `func apply(_ message: LinkMessage)`, `func object(_ key: String) -> MirrorObject?`,
     `func objects(ofClass: String) -> [MirrorObject]`, `var isSnapshotComplete: Bool`,
     `var isStale: Bool` (true from a lost link until the next snapshot completes), and
     `func write(_ key: String, property: String, value: MirrorValue) async -> PropertyWriteOutcome`.
+    The store never refuses a write on its own: the wire `schema` carries only ordinal,
+    name and kind, and the station refuses a write to a property it sets itself, which
+    comes back as the outcome.
+  - `property.write` carries a fresh nonzero uint32 `writeId`. Its outcome comes from
+    the matching `property.result` entry (`property`, `accepted`, `reason`, `hasValue`,
+    `value`, where `value` is what the station kept) when the agreed minor is 5 or more
+    and `propertyResultVersion` is 1 or more; otherwise from the next `delta` for that
+    property, as the link document describes.
   - `@MainActor final class MirrorObject: ObservableObject { let key: String; let className: String; @Published private(set) var values: [String: MirrorValue] }`
   - `@MainActor final class SettingsProxyClient: ObservableObject` with
     `func value(_ key: String) -> String?`, `func write(_ key: String, _ value: String) async -> SettingsWriteOutcome`,
-    `func remove(_ key: String) async`, holding the snapshot as a local cache and
-    telling its own echo from another device's change by the origin tag.
-  - `actor CommandClient { func invoke(_ verb: String, arguments: [String: MirrorValue], timeout: Duration) async throws -> CommandResult }`
-    with `CommandResult { accepted: Bool; reason: String; affectedKeys: [String]; values: [String: MirrorValue] }`,
+    `func remove(_ key: String) async`. It writes only the keys the link document marks
+    station-scoped, holds the snapshot as a local cache, and tells its own echo from
+    another device's change by `origin`, which only `settings.write` and
+    `settings.value` carry (the Core's own changes and every removal, this app's
+    included, carry `origin` ""). A `settings.reject` puts back the value it carries; an
+    operator-local key comes back with no entry.
+  - `struct CommandArgument { let name: String; let value: MirrorValue }` and
+    `actor CommandClient { func invoke(_ verb: String, arguments: [CommandArgument], timeout: Duration, onPhase: (@Sendable (CommandResult) -> Void)? = nil) async throws -> CommandResult }`.
+    Arguments keep their order on the wire (`args` is an ordered list, and the
+    conformance runner compares it in order). Ids start at 1 and run to 4294967295; in
+    fixture runs they stay below the scripted ids, which start at 1000. A PureSignal
+    action answers twice on one id (phase `accepted`, then `completed` or `failed`, the
+    last possibly not accepted), so `invoke` resolves on the final answer and hands the
+    interim one to `onPhase`.
+    `CommandResult { accepted: Bool; reason: String; affectedKeys: [String]; values: [String: MirrorValue]; phase: String? }`,
     where `affectedKeys` is read from the wire key `affected`.
-  - `struct StationMetrics` decoded from `station.metrics.v1` at telemetry versions 1
-    to 3.
+  - `struct StationMetrics` decoded from `station.metrics.v1`, read only when the agreed
+    minor is 3 or more with telemetry version 1 or more; host fields need minor 10 and
+    version 2, receivers need minor 11 and version 3. A message whose `sequence` is not
+    higher than the last, or whose `sampledElapsedMs` went back, is dropped; one over
+    16 KiB is refused.
 
 **Acceptance:**
 - A replayed connect sequence from the session fixtures builds the expected objects,
-  classes and values; a delta changes only the named properties; `object.destroy`
-  removes the object.
-- A write for a property the schema marks outbound-only is refused locally without a
-  message; a bidirectional write sends `property.write` and resolves on the matching
-  `property.result`.
-- Settings: a write updates the cache optimistically, a reject restores the prior
-  value, and a `settings.value` from another origin updates it.
-- `CommandClient` pairs results by command id; a result for an unknown id is ignored; a
-  timeout throws without leaking the pending entry.
+  classes and values, enum values as numbers; a delta changes only the named
+  properties; `object.destroy` removes the object.
+- A write sends `property.write` with a fresh nonzero `writeId` and resolves on the
+  matching `property.result`; a refused write (a property the station sets itself, for
+  example) resolves as refused with the station's reason and leaves the mirrored value as
+  the station has it; below minor 5, or without `propertyResultVersion`, it resolves
+  from the next `delta`.
+- Settings: a write updates the cache optimistically; a `settings.reject` puts back the
+  value it carries; a `settings.value` from another origin updates the cache; this
+  app's own echoes and removals are recognised as the link document describes.
+- `CommandClient` sends arguments in order, pairs results by command id, ignores a result
+  for an unknown id, resolves a two-phase PureSignal action on its final answer
+  (reporting a final answer that is not accepted), and a timeout throws without leaking
+  the pending entry.
 - After a lost link `isStale` is true and values stay readable; the next
   `snapshot.complete` clears it.
 - A `capabilities` message after the snapshot (a changed display allowance) replaces the
-  capabilities alone; `capabilities` followed by `settings.snapshot` (a radio that
-  arrived late) replaces both; the mirror clears nothing on either.
+  capabilities as a whole set; `capabilities` followed by `settings.snapshot` (a radio
+  that arrived late) replaces the capabilities and merges the settings, never replacing
+  them; the mirror clears nothing on either.
 - A verb the station does not know comes back as a `command.result` that is not
   accepted, with a reason; `invoke` returns it with that reason and the session stays
   up.
+- Telemetry out of sequence, or with an earlier `sampledElapsedMs`, is dropped; fields
+  beyond the agreed telemetry version are not read.
 
 **Verification:** unit and conformance. `ios/scripts/swift-test.sh --filter NereusMirrorTests`.
 
@@ -1123,7 +1180,20 @@ media peer), R-IOS-01 (the media plane interoperates with the station's).
     `func sendAudio(_ packet: RtpPacket) throws` (used from Task 55 on),
     `var state: AsyncStream<MediaPeer.State>`, `func close()`.
   - `MediaPeer.Configuration`: `iceServers: [String]` (empty before Part E), MTU 1000,
-    maximum message size 65536, host candidates only until Part E.
+    maximum message size 65536, host candidates only until Part E, ICE over TCP off, and
+    the station's peer settings: the answer is set explicitly (`forceMediaTransport` and
+    `disableAutoNegotiation` true), and the SCTP send and receive buffers (65536 and
+    131072) are set once per process before the first peer.
+  - Signalling within the media control document's limits: trickle candidates only (no
+    candidate embedded in an SDP, which the station refuses, in the answer as in the
+    offer), SDP at most 64 KiB, each candidate at most 4 KiB, a mid at most 256 bytes,
+    no NUL, at most 64 remote candidates.
+  - Audio arrives on the `audio` media line, send-only from the station.
+    `func setExpectedAudioSsrc(_ ssrc: UInt32?)`: when set, RTP with any other SSRC is
+    dropped (Task 11 sets it from each `audio-context`; the media document gives how the
+    station derives it). The receive queue holds 64 packets per stream and the display
+    channel keeps at most 8 messages or 256 KiB between drains, each dropping the
+    oldest.
   - `struct RtpPacket { var payloadType: UInt8; var sequence: UInt16; var timestamp: UInt32; var ssrc: UInt32; var payload: Data }`.
   - libdatachannel built with Mbed TLS for DTLS (`USE_MBEDTLS=1`, `USE_NICE=0`,
     `RTC_ENABLE_MEDIA=1`, `RTC_ENABLE_WEBSOCKET=0`, `RTC_STATIC`).
@@ -1135,6 +1205,11 @@ media peer), R-IOS-01 (the media plane interoperates with the station's).
   fixture frames, which decode; Opus packets on payload type 111 arrive and decode;
   the DTLS fingerprint check is never disabled (a test with a wrong fingerprint in the
   offer fails to connect).
+- The local answer carries no embedded candidates, each candidate goes out through
+  `localCandidates`, and an SDP or candidate over its limit is refused before it reaches
+  libdatachannel.
+- With an expected SSRC set, RTP from any other SSRC is dropped; under a burst the audio
+  queue and the display channel hold their bounds by dropping the oldest.
 - The package builds for macOS and, from Task 51 on, for the iOS simulator and device
   SDKs; `verify-ios-provenance.py` passes with the six new rows.
 - If SwiftPM cannot build usrsctp or libdatachannel for either platform with the
@@ -1172,33 +1247,71 @@ only: the phone can subscribe to no display endpoints and keep audio).
 - Modify: `ios/NereusKit/Package.swift`
 
 **Interfaces:**
-- Consumes: `MediaPeer` (Task 10), `StationSession` (Task 8),
-  `docs/architecture/2026-09-20-remote-media-control-v1.md`.
+- Consumes: `MediaPeer` (Task 10), `StationSession` and `ReconnectPolicy` (Task 8),
+  `docs/architecture/2026-09-20-remote-media-control-v1.md`, and the link document's
+  section 11, where the `audio` and `audio-context` shapes live.
 - Produces:
-  - `actor MediaControlClient` sending `start`, `description`, `candidate`,
-    `subscribe`, `unsubscribe`, `keyframe` and `audio {revision, enabled}` in the exact
-    shapes of the media control document, and exposing the station's `description`,
-    `candidate`, `context`, `rejected`, `noise-floor`, `audio-context` and
-    `allocation-result` as typed events.
-  - `struct DisplayEndpointRequest { var panId: Int; var widthPixels: Int; var framesPerSecond: Int; var extendedView: Bool }`
-    validated to 1...4096 pixels and 1...60 frames a second before sending.
+  - `actor MediaControlClient`. Media starts only when the station advertises
+    `remoteMediaVersion` 1 or more, on the current session, after `snapshot.complete`.
+    The client then creates the media `connectionId`, a lowercase, hyphenated UUID with
+    no braces (Swift's `uuidString` is uppercase, and the station drops a
+    non-canonical id without answering), and carries it in every op. A reconnect
+    retires the peer and its subscriptions, and the client sends a fresh `start`.
+  - It sends `start`, `description`, `candidate`, `subscribe`, `unsubscribe`, `keyframe`
+    and `audio` in the exact shapes of the media control document and the link
+    document's section 11. `unsubscribe` is `{op, connectionId, endpointId}`, with
+    `revision` exactly when the budget wire is on (`remoteDisplayBudgetVersion` 1 at
+    minor 7 or more). `keyframe` is `{endpointId, contextGeneration}`, sent only after a
+    context is accepted, only for the current context, at most 5 a second per endpoint.
+    `audio` is `{op, connectionId, revision, enabled}`, plus `profile` only with
+    `audioProfileVersion` at minor 8 or more, and its `revision` always rises.
+  - It exposes the station's `description`, `candidate`, `context`, `rejected`,
+    `noise-floor`, `audio-context` and `allocation-result` as typed events, each decoded
+    in exactly the shape the negotiated capabilities give (the documents list `context`'s
+    field sets by capability and minor). `allocation-result` exists only on the budget
+    wire, where it answers every subscribe and unsubscribe and replaces `rejected`; a
+    `rejected` with endpoint and revision 0 refuses the whole peer. Display frames that
+    arrive before their endpoint's context are discarded.
+  - `struct DisplaySubscription` carrying exactly the subscribe op's fields as the media
+    control document lists them: `endpointId`, `revision`, `sliceId`, `tier` (`wide` or
+    `fine`), `fftSize`, `windowType`, `centreHz`, `spanHz`, `pixels`, `fps`,
+    `framesPerLine`, `trace` and `waterfall` (each exactly `detector`, `averageMode`,
+    `averageAlpha`), `minDbm`, `maxDbm`, `wideSpanFactor`, and `extendedView` only when
+    `remoteWidebandDisplayVersion` is 1 or more. Endpoints are keyed by slice: the Core
+    has no pan objects. Validated before sending: nonzero `endpointId` and `revision`,
+    1 to 4096 pixels, 1 to 60 frames a second, an FFT size that is a power of two of at
+    least 1024, finite `minDbm` below `maxDbm` within -400 to 100, alpha in 0 to 1,
+    positive spans, `wideSpanFactor` 0 or above 1, and at most 8 endpoints.
   - `final class AudioJitterBuffer` for 48 kHz stereo 1920-frame packets: target depth
     180 ms, adaptive between 80 ms and 400 ms, loss concealment through
-    `OpusDecoder.concealLoss`, counters `underruns`, `lateDrops`, `concealed`.
+    `OpusDecoder.concealLoss`, counters `underruns`, `lateDrops`, `concealed`. It
+    re-anchors to each new `audio-context` (`generation`, `ssrc`, `firstSequence`,
+    `firstTimestamp`), which also sets the media peer's expected SSRC (Task 10).
   - `final class DriftResampler` holding a ratio within 1 ± 0.001, driven by buffer
     depth, NereusSDR-original.
   - `final class AudioPlaybackCore` pulling from the buffer through the resampler into an
     `AVAudioSourceNode` render callback that never allocates or locks.
+  - With media, `ReconnectPolicy.reset()` waits until the media connection is up, not
+    only for `snapshot.complete`.
 
 **Acceptance:**
-- Every operation the client sends matches the media control document's field set
-  exactly (tests compare against fixtures taken from the document's tables).
-- Subscribing with width 0, 4097 pixels or 61 frames a second throws before sending.
-- A start with no subscriptions gives audio and no display frames (with the offerer
-  helper from Task 10 in the interop script).
-- The jitter buffer, fed packets with a recorded arrival pattern (steady, bursty,
-  2 % loss, one 300 ms gap), stays within its bounds, conceals every loss, and its
-  underrun count matches the expected value for each pattern.
+- Every operation the client sends matches the media control document's and the link
+  document's field sets exactly (tests compare against fixtures taken from the
+  documents' tables), with the `connectionId` in its canonical lowercase form.
+- A subscription with 0 or 4097 pixels, 61 frames a second, an FFT size of 1000, a
+  `minDbm` below -400, `minDbm` not below `maxDbm`, or a ninth endpoint throws before
+  sending.
+- `unsubscribe` carries `revision` exactly when the budget wire is on, and
+  `allocation-result` is decoded only there.
+- Sound only: a `start` with no display subscriptions and an `audio` op with `enabled`
+  true gives audio and no display frames (with the offerer helper from Task 10 in the
+  interop script); audio stays off until that op.
+- Each new `audio-context` re-anchors the jitter buffer. Fed packets with a recorded
+  arrival pattern (steady, bursty, 2 % loss, one 300 ms gap), the buffer stays within
+  its bounds, conceals every loss, and its underrun count matches the expected value for
+  each pattern.
+- Keyframe requests: none before a context is accepted, at most 5 a second per endpoint;
+  frames before their context are discarded.
 - The resampler held at a ratio of 1.0002 for 60 s of input produces the expected
   output length within one frame and no discontinuity larger than the input's.
 
