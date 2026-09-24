@@ -111,6 +111,12 @@
 //   2026-09-23 - R-R3-46 fix wave: attenuator follows slice A, ioBoard,
 //                 OC reload, torn load reads, remote meter offset 0. J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22 / R-R3-25: the Core's Power Genius XL
+//                 (StationPgxlController): identity before admission, so
+//                 pairing (onPgxlConnected) runs only for a confirmed amp;
+//                 configure, disconnect and connection settings for the
+//                 station. NereusSDR-original; no Thetis logic. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -425,6 +431,7 @@ warren@wpratt.com
 // line PGXL sends so we can design the response layer in a follow-up.
 #include "core/SmartSdrApiListener.h"
 #include "core/StationTgxlController.h"
+#include "core/StationPgxlController.h"
 #include "core/PgxlStatusGauges.h"
 #include "models/AmplifierModel.h"
 #include "models/RfKitModel.h"
@@ -3135,7 +3142,9 @@ void RadioModel::setFourO3AEnabled(bool enabled)
         // already-connected PGXL keeps sending statusUpdated frames,
         // m_hasAmplifier stays true, and the S-Meter keeps showing the
         // 2 kW PGXL scale even though the operator just disabled 4O3A.
-        if (m_pgxlConnection) {
+        if (m_stationPgxl) {
+            m_stationPgxl->cancel(true);
+        } else if (m_pgxlConnection) {
             m_pgxlConnection->disconnect();
             qCInfo(lcConnection) << "4O3A disabled: PGXL TCP disconnected";
         }
@@ -3212,7 +3221,29 @@ void RadioModel::enableStationAccessoryIdentity()
     if (m_role != Role::Local || m_stationTgxl) { return; }
     m_stationTgxl = new StationTgxlController(m_tgxlConnection, m_tunerModel, this);
     m_stationTgxl->cancel(!fourO3AEnabled());
+    // R-R3-47: the Power Genius, likewise identified before it is admitted
+    // (and so before onPgxlConnected pairs it).
+    m_stationPgxl = new StationPgxlController(m_pgxlConnection, m_amplifierModel, this);
+    m_stationPgxl->cancel(!fourO3AEnabled());
 }
+
+namespace {
+// An accessory address a station may dial: an IP address or a valid DNS
+// name (Task 4d's TGXL rule, shared with the PGXL by R-R3-47).
+bool validStationAccessoryHost(const QString& host)
+{
+    bool validHost = !host.isEmpty() && host.size() <= 253;
+    if (validHost && QHostAddress(host).isNull()) {
+        const QByteArray ace = QUrl::toAce(host);
+        static const QRegularExpression label(QStringLiteral("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"));
+        validHost = !ace.isEmpty() && ace.size() <= 253;
+        auto labels = QString::fromLatin1(ace).split(QLatin1Char('.'));
+        if (labels.size() > 1 && labels.last().isEmpty()) { labels.removeLast(); }
+        for (const auto& part : labels) { validHost = validHost && label.match(part).hasMatch(); }
+    }
+    return validHost;
+}
+} // namespace
 
 bool RadioModel::configureTgxlForStation(const QString& inputHost, quint16 port, QString* reason)
 {
@@ -3230,15 +3261,7 @@ bool RadioModel::configureTgxlForStation(const QString& inputHost, quint16 port,
         return refuse(QStringLiteral("Enable 4O3A on Core before connecting the TGXL."));
     }
     const QString host = inputHost.trimmed();
-    bool validHost = !host.isEmpty() && host.size() <= 253;
-    if (validHost && QHostAddress(host).isNull()) {
-        const QByteArray ace = QUrl::toAce(host);
-        static const QRegularExpression label(QStringLiteral("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"));
-        validHost = !ace.isEmpty() && ace.size() <= 253;
-        auto labels = QString::fromLatin1(ace).split(QLatin1Char('.'));
-        if (labels.size() > 1 && labels.last().isEmpty()) { labels.removeLast(); }
-        for (const auto& part : labels) { validHost = validHost && label.match(part).hasMatch(); }
-    }
+    const bool validHost = validStationAccessoryHost(host);
     if (!validHost || port == 0) {
         return refuse(QStringLiteral("Enter a valid TGXL IP address or hostname and TCP port 1–65535."));
     }
@@ -3260,6 +3283,76 @@ bool RadioModel::disconnectTgxlForStation(QString* reason)
         return false;
     }
     m_stationTgxl->cancel(!fourO3AEnabled());
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+// R-R3-47 / R-R3-22: the TGXL's configure rule for the Power Genius.
+// Acceptance is "saved and identifying"; `amplifier`.connectionPhase says
+// whether it connected. Pairing waits for admission (onPgxlConnected).
+bool RadioModel::configurePgxlForStation(const QString& inputHost, quint16 port, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    if (m_role != Role::Local || !m_stationPgxl) {
+        return refuse(QStringLiteral("Station accessory configuration is unavailable."));
+    }
+    if (currentRadioMac().isEmpty()) {
+        return refuse(QStringLiteral("Connect Core to a radio before configuring its PGXL."));
+    }
+    if (!fourO3AEnabled()) {
+        return refuse(QStringLiteral("Enable 4O3A on Core before connecting the PGXL."));
+    }
+    const QString host = inputHost.trimmed();
+    if (!validStationAccessoryHost(host) || port == 0) {
+        return refuse(QStringLiteral("Enter a valid PGXL IP address or hostname and TCP port 1 to 65535."));
+    }
+    // Both fields are saved by one accepted command, validated first; no
+    // settings write on its own dials anything.
+    setPeripheralValue(QStringLiteral("PGXL_ManualIp"), host);
+    setPeripheralValue(QStringLiteral("PGXL_ManualPort"), QString::number(port));
+    AppSettings::instance().save();
+    m_stationPgxl->start(host, port);
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+bool RadioModel::disconnectPgxlForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationPgxl) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    m_stationPgxl->cancel(!fourO3AEnabled());
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+bool RadioModel::setPgxlConnectionSettingsForStation(bool autoReconnect, int keepaliveSec,
+                                                     int pingSec, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    if (m_role != Role::Local || !m_stationPgxl) {
+        return refuse(QStringLiteral("Station accessory configuration is unavailable."));
+    }
+    if (keepaliveSec < kPgxlKeepaliveMinSec || keepaliveSec > kPgxlKeepaliveMaxSec
+        || pingSec < 0 || pingSec > kPgxlPingMaxSec) {
+        return refuse(QStringLiteral("Enter a keepalive of 1 to 3600 seconds and a ping of 0 to 3600 seconds."));
+    }
+    // Station-wide keys (SettingsScope "PGXL_"), saved together, then
+    // applied to the running connection.
+    auto& settings = AppSettings::instance();
+    settings.setValue(QStringLiteral("PGXL_AutoReconnect"),
+                      autoReconnect ? QStringLiteral("True") : QStringLiteral("False"));
+    settings.setValue(QStringLiteral("PGXL_KeepaliveSec"), QString::number(keepaliveSec));
+    settings.setValue(QStringLiteral("PGXL_PingSec"), QString::number(pingSec));
+    settings.save();
+    m_stationPgxl->applyConnectionSettings();
     if (reason) { reason->clear(); }
     return true;
 }
@@ -3428,7 +3521,7 @@ void RadioModel::applyPeripheralsForCurrentMac()
         // A radio scope replacement can arrive without an intervening
         // enabled-state change. Never retain the previous scope's listener.
         if (m_smartSdrListener) { m_smartSdrListener->stop(); }
-        if (m_pgxlConnection) { m_pgxlConnection->disconnect(); }
+        if (!m_stationPgxl && m_pgxlConnection) { m_pgxlConnection->disconnect(); }
         emit fourO3AEnabledChanged(false);
     }
 
@@ -3470,6 +3563,16 @@ void RadioModel::applyPeripheralsForCurrentMac()
     if (m_stationTgxl) {
         m_stationTgxl->resetScope(tgxlIp, tgxlPort, fourO3AOn);
     }
+    // R-R3-47: the same for the Power Genius.
+    const QString pgxlIp = peripheralValue(QStringLiteral("PGXL_ManualIp"));
+    bool pgxlPortOk = false;
+    const uint savedPgxlPort = peripheralValue(QStringLiteral("PGXL_ManualPort"),
+        QStringLiteral("9008")).toUInt(&pgxlPortOk);
+    const quint16 pgxlPort = pgxlPortOk && savedPgxlPort <= 65535
+        ? quint16(savedPgxlPort) : 0;
+    if (m_stationPgxl) {
+        m_stationPgxl->resetScope(pgxlIp, pgxlPort, fourO3AOn);
+    }
 
     // ── PGXL / TGXL (gated on 4O3A master) ──────────────────────────────
     // Without the 4O3A gate, a saved PGXL_ManualIp would dial out even
@@ -3478,17 +3581,31 @@ void RadioModel::applyPeripheralsForCurrentMac()
     // the operator who explicitly turned 4O3A off (see MainWindow's
     // earlier auto-connect block where this gate was first established).
     if (fourO3AOn) {
-        const QString pgxlIp =
-            peripheralValue(QStringLiteral("PGXL_ManualIp"));
         if (!pgxlIp.isEmpty() && m_pgxlConnection
             && !m_pgxlConnection->isConnected()) {
-            const quint16 p = static_cast<quint16>(
-                peripheralValue(QStringLiteral("PGXL_ManualPort"),
-                                QStringLiteral("9008")).toUInt());
-            m_pgxlConnection->connectToPgxl(pgxlIp, p);
-            qCInfo(lcConnection) << "PGXL auto-connect for MAC" << mac
-                                  << ":" << pgxlIp << ":" << p;
-            ++started;
+            const quint16 p = m_stationPgxl ? pgxlPort
+                : static_cast<quint16>(peripheralValue(QStringLiteral("PGXL_ManualPort"),
+                                                       QStringLiteral("9008")).toUInt());
+            bool pgxlStarted = true;
+            if (m_stationPgxl) {
+                QString reason;
+                if (!configurePgxlForStation(pgxlIp, p, &reason)) {
+                    AmplifierModel::StationConnectionState state;
+                    state.configuredHost = pgxlIp;
+                    state.configuredPort = p;
+                    state.phase = AmplifierModel::ConnectionPhase::Error;
+                    state.error = reason;
+                    m_amplifierModel->setStationConnectionState(state);
+                    pgxlStarted = false;
+                }
+            } else {
+                m_pgxlConnection->connectToPgxl(pgxlIp, p);
+            }
+            if (pgxlStarted) {
+                qCInfo(lcConnection) << "PGXL auto-connect for MAC" << mac
+                                      << ":" << pgxlIp << ":" << p;
+                ++started;
+            }
         }
 
         if (!tgxlIp.isEmpty() && m_tgxlConnection
@@ -3537,7 +3654,9 @@ void RadioModel::teardownPeripherals()
         m_smartSdrListener->stop();
         qCInfo(lcConnection) << "Peripherals teardown: SmartSDR API stopped";
     }
-    if (m_pgxlConnection) {
+    if (m_stationPgxl) {
+        m_stationPgxl->cancel();
+    } else if (m_pgxlConnection) {
         m_pgxlConnection->disconnect();
         qCInfo(lcConnection) << "Peripherals teardown: PGXL disconnected";
     }

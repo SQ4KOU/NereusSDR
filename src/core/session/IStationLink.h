@@ -137,6 +137,17 @@ public:
     /// this app. Both false on an older Core or link.
     virtual bool remoteAmplifierStatusAvailable() const { return false; }
     virtual bool remoteRfKitStatusAvailable() const { return false; }
+
+    /// R-R3-47 / R-R3-22 (remotePgxlControlVersion 2): the Core's Power
+    /// Genius XL is set up through the Core. Acceptance means the Core
+    /// took the request; `amplifier`.connectionPhase says what happened.
+    virtual bool remotePgxlControlAvailable() const { return false; }
+    virtual CommandOutcome requestConfigurePgxl(const QString&, quint16)
+    { return { false, QStringLiteral("The station does not support remote PGXL configuration.") }; }
+    virtual CommandOutcome requestDisconnectPgxl()
+    { return { false, QStringLiteral("The station does not support remote PGXL configuration.") }; }
+    virtual CommandOutcome requestPgxlConnectionSettings(bool, int, int)
+    { return { false, QStringLiteral("The station does not support remote PGXL configuration.") }; }
     virtual CommandOutcome requestApplyNnrModels(quint32)
     { return { false, QStringLiteral("NNR model application is not supported by this station link.") }; }
     virtual bool nnrControlAvailable() const { return false; }

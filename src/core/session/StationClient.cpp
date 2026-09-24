@@ -66,6 +66,10 @@
 //                 (setAlexRxAntenna), and the window's OC pin matrix copy
 //                 reloaded when the Core's OC settings arrive. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: remotePgxlControlVersion 2, the
+//                 configurePgxl, disconnectPgxl and setPgxlConnectionSettings
+//                 requests. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2787,6 +2791,38 @@ StationClient::CommandOutcome StationClient::requestNnrRetry(int sliceId)
         QStringLiteral("trying noise reduction again"));
 }
 
+StationClient::CommandOutcome StationClient::requestConfigurePgxl(const QString& host, quint16 port)
+{
+    if (!remotePgxlControlAvailable()) {
+        return { false, QStringLiteral("The station does not support remote PGXL configuration.") };
+    }
+    return sendCommand("configurePgxl", -1,
+                       { stringArgument("host", host), intArgument("port", port) },
+                       QStringLiteral("the Power Genius address"));
+}
+
+StationClient::CommandOutcome StationClient::requestDisconnectPgxl()
+{
+    if (!remotePgxlControlAvailable()) {
+        return { false, QStringLiteral("The station does not support remote PGXL configuration.") };
+    }
+    return sendCommand("disconnectPgxl", -1, {}, QStringLiteral("the Power Genius disconnect"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlConnectionSettings(bool autoReconnect,
+                                                                           int keepaliveSec,
+                                                                           int pingSec)
+{
+    if (!remotePgxlControlAvailable()) {
+        return { false, QStringLiteral("The station does not support remote PGXL configuration.") };
+    }
+    return sendCommand("setPgxlConnectionSettings", -1,
+                       { boolArgument("autoReconnect", autoReconnect),
+                         intArgument("keepaliveSec", keepaliveSec),
+                         intArgument("pingSec", pingSec) },
+                       QStringLiteral("the Power Genius connection settings"));
+}
+
 StationClient::CommandOutcome StationClient::requestDisconnectTgxl()
 {
     if (!remoteTgxlConfigAvailable()) {
@@ -2970,6 +3006,12 @@ bool StationClient::remoteAmplifierStatusAvailable() const
 {
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.remotePgxlControlVersion >= 1;
+}
+
+bool StationClient::remotePgxlControlAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remotePgxlControlVersion >= 2;
 }
 
 bool StationClient::remoteRfKitStatusAvailable() const

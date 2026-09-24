@@ -14,9 +14,13 @@ deltas, `property.write` / `property.result`, `command.invoke` /
 The plan that builds it is
 [2026-09-23-r3-core-owned-accessories-plan.md](2026-09-23-r3-core-owned-accessories-plan.md).
 Each of its tasks extends this document in the same commit that adds what it
-describes. This revision covers Task 1: the read-only `amplifier` and `rfkit`
-status objects, plus everything the Core already serves for its accessories
-(the `tuner` object, the 4O3A fields, and the TGXL and 4O3A commands).
+describes. This revision covers Tasks 1 and 2: the read-only `amplifier` and
+`rfkit` status objects, everything the Core already serves for its
+accessories (the `tuner` object, the 4O3A fields, and the TGXL and 4O3A
+commands), and the Core-owned PGXL (identity before admission, pairing only
+after it, the `configurePgxl`, `disconnectPgxl` and
+`setPgxlConnectionSettings` commands, and the receive-only refusals of the
+amplifier's and tuner's operate controls).
 
 ## Wire conventions
 
@@ -55,10 +59,14 @@ contract; each feature has its own version.
 | `remoteTgxlConfigVersion` | 4 or later | 1 | The Core owns the TGXL: `configureTgxl` and `disconnectTgxl` work |
 | `remoteFourO3AControlVersion` | 4 or later | 1 | `setFourO3AEnabled` works |
 | `remotePgxlControlVersion` | 11 | 1 | The Core mirrors its PGXL as the read-only `amplifier` object |
+| `remotePgxlControlVersion` | 11 | 2 | Also: `configurePgxl`, `disconnectPgxl` and `setPgxlConnectionSettings` work, and the Core identifies and pairs the PGXL itself |
 | `remoteRfKitControlVersion` | 11 | 1 | The Core mirrors its RF2K-S as the read-only `rfkit` object |
 
-- The Core advertises all four as 1 when it owns its accessories (the
-  headless Core, `nereusd`, always does) and 0 otherwise.
+- The Core advertises `remotePgxlControlVersion` as 2 and the other three
+  as 1 when it owns its accessories (the headless Core, `nereusd`, always
+  does), and all four as 0 otherwise. A Core built between Tasks 1 and 2
+  says 1 for the PGXL: the object, no commands. An app treats 1 as
+  "readings only" and 2 or more as "readings and commands".
 - `remotePgxlControlVersion` and `remoteRfKitControlVersion` travel last in
   the minor-11 block of the capabilities message, after `hpsdrModel`,
   `radioProtocol`, `radioAddress` and `radioHardwareVersion`, and only to an
@@ -101,9 +109,12 @@ Which phases each device reports today:
 - TGXL: all eight. `discovering` and `identifying` are the Core's identity
   check (a TunerGenius or TunerGeniusXL discovery announcement from the same
   address and port, and the same serial in the tuner's own info reply).
-- PGXL: `disabled`, `disconnected`, `retrying`, `connected`, `error`. The
-  Core's identity check for the PGXL (Task 2) adds `discovering`,
-  `connecting` and `identifying`.
+- PGXL: `disabled`, `disconnected`, `connecting`, `identifying`,
+  `retrying`, `connected`, `error`. `identifying` is the Core's identity
+  check (a `PowerGeniusXL` discovery announcement from the same address and
+  port, and the same serial in the amp's own `info` reply; see "How the
+  Core identifies the PGXL"). The PGXL, like the TGXL, never reports
+  `discovering`: the discovery listen runs inside `identifying`.
 - RF2K-S: `disabled`, `disconnected`, `connected`, `error`. Its identity
   check (Task 3) adds the rest.
 
@@ -154,10 +165,10 @@ Read-only: every property is the Core's to report.
 | `configuredHost` | utf8 | The address the Core last dialled |
 | `configuredPort` | i64 | Its TCP port (9008 by default) |
 | `connectionError` | utf8 | Why the last attempt failed; empty otherwise |
-| `deviceModel` | utf8 | Empty until the Core's identity check (Task 2) |
-| `deviceSerial` | utf8 | Empty until the Core's identity check (Task 2) |
-| `deviceVersion` | utf8 | The version in the amp's connect banner, for example `3.8.9` |
-| `deviceNickname` | utf8 | Empty until Task 2 |
+| `deviceModel` | utf8 | The product in the amp's LAN discovery announcement, `PowerGeniusXL`; empty before the identity check. After a refused identity, the product that was found (for example `TunerGenius`) |
+| `deviceSerial` | utf8 | The serial in the amp's `info` reply (for example `10-200/24-0046`); empty before |
+| `deviceVersion` | utf8 | The version in the amp's connect banner and `info` reply, for example `3.8.9` |
+| `deviceNickname` | utf8 | The nickname in the amp's discovery announcement; empty before |
 | `present` | bool | The Core has a reading from the amp on the current connection. False: the values below are the last ones read and are not live |
 | `state` | enum | The amp's state (table below) |
 | `deviceState` | utf8 | The amp's own state word, as sent |
@@ -203,6 +214,36 @@ last value.
 `peakfwd` and `swr` are hold values on the amp: they keep the last transmit
 peak. The Core takes them only while `transmitting`, and a state line
 outside transmit sets `forwardPowerW` to 0 and `swr` to 1.0.
+
+### How the Core identifies the PGXL
+
+A connect banner (`V3.8.9`) says only that the peer speaks the Genius
+protocol; a Tuner Genius sends one too, and the amp's `info` reply has no
+model. So on every dial, before anything else is sent:
+
+1. The Core opens TCP to the configured address (`connecting`), reads the
+   `V` banner and sends only `info` (`identifying`).
+2. It listens for LAN discovery on UDP 9008 and 9010 for three seconds and
+   takes the announcement whose address and receiving port are the
+   connection's. Captured from the real amp:
+   `PowerGeniusXL ip=192.168.109.235 v=3.8.9 serial=10-200/24-0046 nickname=PowerGeniusXL`
+3. The amp's `info` reply, captured:
+   `R<seq>|0|serial=10-200/24-0046  version=3.8.9 protocol=1.0 mains=240`
+   (key=value pairs, no leading word, two spaces after the serial).
+4. Admitted only when the announced product is exactly `PowerGeniusXL` and
+   the two serials are equal. Then, and only then, the Core pairs the amp
+   (`amplifier create`, `flexradio ampslice=... ptt=LAN`, `keepalive enable`;
+   operator decision of 2026-09-23: pair automatically once the Core has
+   confirmed it is a real Power Genius) and follows the band after the amp
+   accepts the pairing.
+
+Anything else ends at `error` (and `retrying` when automatic retry is on)
+with a reason, having been sent nothing but `info`: another product at the
+address, no matching announcement in the window, a serial mismatch, an
+`info` reply with no serial or an error code, or no answer within five
+seconds. Replacing the address or disconnecting in any phase cancels the
+attempt, its discovery listen and any pending retry: the old address is
+never dialled again.
 
 ## The `rfkit` object (RF2K-S)
 
@@ -251,9 +292,12 @@ the Core took the request (see "Accepted is not connected").
 | `configureTgxl` | `host` (utf8), `port` (i64, 1 to 65535) | minor 4, `remoteTgxlConfigVersion` 1 | Saves the TGXL address for the Core's radio and starts connecting |
 | `disconnectTgxl` | none | minor 4, `remoteTgxlConfigVersion` 1 | Cancels an attempt or closes the connection; the address stays |
 | `setFourO3AEnabled` | `enabled` (bool) | minor 4, `remoteFourO3AControlVersion` 1 | Turns the station's 4O3A switch on or off for its radio |
+| `configurePgxl` | `host` (utf8), `port` (i64, 1 to 65535) | minor 11, `remotePgxlControlVersion` 2 | Saves the PGXL address for the Core's radio and starts connecting and identifying (see "How the Core identifies the PGXL") |
+| `disconnectPgxl` | none | minor 11, `remotePgxlControlVersion` 2 | Cancels an attempt or closes the connection in any phase; nothing is redialled; the address stays |
+| `setPgxlConnectionSettings` | `autoReconnect` (bool), `keepaliveSec` (i64, 1 to 3600), `pingSec` (i64, 0 to 3600; 0 is off) | minor 11, `remotePgxlControlVersion` 2 | Saves the three station-wide PGXL connection settings on the Core and applies them to the running connection: automatic retry off drops a pending retry (the phase becomes `disconnected`), a running keepalive takes the new interval, the Core pings the amp every `pingSec` while connected |
 
-The PGXL and RF-Kit verbs of this plan (connect, disconnect and configure
-for each, the RF-Kit switch) are added here by Tasks 2 and 3.
+The RF-Kit verbs of this plan (connect, disconnect and configure, the RF-Kit
+switch) are added here by Task 3.
 
 ## Refusals
 
@@ -271,14 +315,24 @@ Property writes:
 | Any property of `amplifier` | "The Core reports the amplifier's readings. They cannot be changed from this app." |
 | Any property of `rfkit` | "The Core reports the RF-Kit amplifier's readings. They cannot be changed from this app." |
 | `fourO3AEnabled`, `fourO3AListening`, `fourO3AListenerError` on `radio` | Refused with a diagnostic reason; use `setFourO3AEnabled` |
+| `operate` on `amplifier`, on a receive-only Core (every `nereusd` today) | "Operating the station's amplifier or tuner waits for remote transmit. This station is receive-only." |
 | `tuner` telemetry (everything except the three below) | "TunerModel::<name> is hardware telemetry TunerModel only learns from the tuner itself; there is no remote-write path" |
-| `tuner` `isOperate`, `isBypass`, `antennaA` | Not refused today: see the known gap under "What waits for remote transmit" |
+| `tuner` `isOperate`, `isBypass`, `antennaA`, on a receive-only Core | "Operating the station's amplifier or tuner waits for remote transmit. This station is receive-only." Nothing changes on the Core and nothing is sent to the tuner |
 
 Commands:
 
 | Verb | Reason |
 | --- | --- |
 | `configureTgxl`, `disconnectTgxl` below minor 4 | "Remote TGXL configuration requires a newer station protocol." |
+| `configurePgxl`, `disconnectPgxl`, `setPgxlConnectionSettings` below minor 11 | "Update this app to set up the Power Genius on this Core." |
+| `configurePgxl` with other arguments | "invalid host or port argument" |
+| `disconnectPgxl` with arguments | "disconnectPgxl takes no arguments" |
+| `setPgxlConnectionSettings` with other arguments | "setPgxlConnectionSettings requires an autoReconnect boolean and keepaliveSec and pingSec whole numbers" |
+| `configurePgxl`, `disconnectPgxl`, `setPgxlConnectionSettings` on a Core that does not own its accessories | "Station accessory configuration is unavailable." |
+| `configurePgxl` with no radio | "Connect Core to a radio before configuring its PGXL." |
+| `configurePgxl` with 4O3A off | "Enable 4O3A on Core before connecting the PGXL." |
+| `configurePgxl` with a bad address | "Enter a valid PGXL IP address or hostname and TCP port 1 to 65535." |
+| `setPgxlConnectionSettings` out of range | "Enter a keepalive of 1 to 3600 seconds and a ping of 0 to 3600 seconds." |
 | `setFourO3AEnabled` below minor 4 | "Remote 4O3A control requires a newer station protocol." |
 | `configureTgxl` with other arguments | "invalid host or port argument" |
 | `disconnectTgxl` with arguments | "disconnectTgxl takes no arguments" |
@@ -288,11 +342,25 @@ Commands:
 | `configureTgxl` with 4O3A off | "Enable 4O3A on Core before connecting the TGXL." |
 | `configureTgxl` with a bad address | "Enter a valid TGXL IP address or hostname and TCP port 1–65535." |
 | `setFourO3AEnabled` with no radio | "Connect Core to a radio before changing its 4O3A integration." |
-| Any refusal without its own reason | "TGXL configuration was refused", "TGXL disconnect was refused", "4O3A master change was refused" |
+| Any refusal without its own reason | "TGXL configuration was refused", "TGXL disconnect was refused", "4O3A master change was refused", "PGXL configuration was refused", "PGXL disconnect was refused", "PGXL settings change was refused" |
 
 The desktop app does not send a command its Core did not offer. It shows
-"The station does not support remote TGXL configuration." or "The station
-does not support remote 4O3A control." instead.
+"The station does not support remote TGXL configuration.", "The station
+does not support remote PGXL configuration." or "The station does not
+support remote 4O3A control." instead.
+
+PGXL identity reasons in `amplifier`.`connectionError` (diagnostic text; an
+app shows them in its own words):
+
+| Reason | When |
+| --- | --- |
+| "Expected PowerGeniusXL at the connected endpoint; observed <product> (serial <serial>)." | The announcement at the address names another product |
+| "No matching PGXL discovery announcement for <address>:<port>. Check the amplifier address, port and station LAN discovery." | No announcement from the address in the three-second window |
+| "PGXL identity serial mismatch: expected <announced>, observed <info>" | The two serials differ |
+| "PGXL native info failed with code <hex>" | The `info` reply carried an error code |
+| "PGXL native info omitted a nonempty serial" | The `info` reply had no serial |
+| "PGXL native identity timed out" | No `info` reply within five seconds |
+| "PGXL discovery approval timed out for serial <serial>" | The `info` reply came, the matching announcement did not, within five seconds |
 
 ## Core-owned settings
 
@@ -306,12 +374,16 @@ Per radio, under `hardware/<mac>/peripherals/`:
 | --- | --- | --- |
 | `FourO3A_Enabled` | `True` / `False` | `setFourO3AEnabled` |
 | `TGXL_ManualIp`, `TGXL_ManualPort` | text, whole number | `configureTgxl` |
-| `PGXL_ManualIp`, `PGXL_ManualPort` | text, whole number | Task 2 |
+| `PGXL_ManualIp`, `PGXL_ManualPort` | text, whole number | `configurePgxl` |
 | `RfKit_Enabled` | `True` / `False` | `rfKitEnabled` today; `setRfKitEnabled` from Task 3 |
 | `RfKit_ManualIp`, `RfKit_ManualPort` | text, whole number | Task 3 |
 
-Station-wide, not yet behind a command: `PGXL_AutoReconnect`,
-`PGXL_KeepaliveSec`, `PGXL_BroadcastDiscovery`, `PGXL_BroadcastNickname`,
+Station-wide, behind `setPgxlConnectionSettings`: `PGXL_AutoReconnect`
+(`True` / `False`, default `True`), `PGXL_KeepaliveSec` (default 30),
+`PGXL_PingSec` (default 0 on the Core, off: the amp's reply to `ping` has
+never been captured).
+
+Station-wide, not yet behind a command: `PGXL_BroadcastDiscovery`, `PGXL_BroadcastNickname`,
 `PGXL_FlexRadioSerial`, `PGXL_FlexAmpSlice`, `PGXL_TxAnt`, `PGXL_AntMap`,
 `PGXL_PairModel`, `PGXL_DiscoveryModel`, `PGXL_Nickname`, `PGXL_FanMode`,
 `PGXL_BiasMode`, `PGXL_LedIntensity`, `PGXL_PowerCapEnabled`,
@@ -355,7 +427,8 @@ Nothing in this contract keys a transmitter, operates an amplifier, starts a
 tune carrier or changes a relay or antenna on a transmit path. Until remote
 transmit, the Core refuses or does not offer:
 
-- PGXL OPERATE and STANDBY, and PGXL standby around a TGXL tune.
+- PGXL OPERATE and STANDBY, and PGXL standby around a TGXL tune. A write of
+  `amplifier` `operate` is refused with the receive-only reason above.
 - TGXL TUNE (autotune), operate, bypass, antenna choice, relay nudges, and
   tune-memory recall on a band change.
 - RF2K-S OPERATE and STANDBY, antenna choice, operational interface, error
@@ -364,15 +437,19 @@ transmit, the Core refuses or does not offer:
   on the Core; only viewing and changing the policy comes before remote
   transmit, in Task 4).
 
-Known gap: a `property.write` of `tuner` `isOperate`, `isBypass` or
-`antennaA` still reaches the Core's tuner (`TunerModel::applyMirroredValue`,
-an R2 path), whatever the receive-only policy. The desktop app never sends
-one (its tuner controls are behind transmit permission). Until the Core
-refuses these writes, a client must not send them.
+A `property.write` of `tuner` `isOperate`, `isBypass` or `antennaA` is
+refused on a receive-only Core with the receive-only reason, before it can
+reach the tuner (until Task 2 it reached `TunerModel::applyMirroredValue`, an
+R2 path, whatever the policy).
 
-A remote window shows these controls disabled with the reason "Amplifier
+Pairing is not operating: the Core pairs an admitted PGXL
+(`flexradio ... ptt=LAN`) automatically, by operator decision of
+2026-09-23. It keys nothing; the Core's own transmit refusals still apply.
+
+A remote window shows these controls disabled: the Power Genius tab's
+Operate button with the receive-only reason, the applets with "Amplifier
 control is not available from a remote window yet." (Power Genius and
-RF-Kit) or its transmit-permission reason (Tuner Genius).
+RF-Kit) or their transmit-permission reason (Tuner Genius).
 
 ## Window behaviour
 
@@ -390,6 +467,14 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
 - A remote window never opens a connection to an accessory. A local window
   reads the same objects, fed by its own connections, and shows no stale
   line.
+- With `remotePgxlControlVersion` 2, the desktop remote window's
+  Peripherals page Power Genius row and its 4O3A Power Genius tab ask the
+  Core (`configurePgxl`, `disconnectPgxl`, `setPgxlConnectionSettings`) and
+  show the Core's `amplifier` phase, identity and reason. The button says
+  Connect, Cancel (while `connecting`, `identifying` or `retrying`) or
+  Disconnect. LAN scanning is not offered remotely. Below 2 the row and tab
+  say "This Core does not offer Power Genius XL control to this app." A
+  local window keeps its own connection and its existing row.
 
 ## Fixtures
 
@@ -425,6 +510,24 @@ rewrite the fixtures, and update this document in the same commit.
   moved conversion.
 - `tst_station_session`, `tst_display_budget_contract`: the capability
   entries' place, and an older app's capabilities byte for byte.
+- `tst_station_pgxl_controller`: the captured discovery and `info` reply
+  admit a PGXL, which is then paired and follows the band; a Tuner Genius,
+  a serial mismatch and a silent peer are never admitted and are sent only
+  `info`; cancelling or switching off in every phase never redials; A
+  replaced by B while A is identifying leaves only B; the connection
+  settings are saved and applied; a radio's saved address is dialled
+  through the identity check.
+- `tst_pgxl_connection_reconnect`: the owned retry timer (replaced or
+  cancelled addresses never redialled, a fresh socket per retry, a late
+  callback from a replaced attempt cannot act, automatic retry off drops a
+  pending retry).
+- `tst_remote_peripherals`: the remote Power Genius row and tab through the
+  link, end to end through the Core over the loopback, and the receive-only
+  refusals of the tuner's and amplifier's operate controls (nothing
+  changes, nothing is sent to the tuner).
 
 Hardware evidence is pending for the operator checkpoint: readings from the
-real PGXL and RF2K-S reaching a remote window and the iPhone app.
+real PGXL and RF2K-S reaching a remote window and the iPhone app; identity
+and pairing with the real PGXL on the Core (the discovery announcement and
+`info` reply used here are the real amp's, captured on 2026-05-19 and
+2026-05-20 in `captures/`).

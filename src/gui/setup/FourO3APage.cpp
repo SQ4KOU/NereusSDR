@@ -22,6 +22,10 @@
 //   2026-05-21 -- Created in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-24 -- R-R3-47 / R-R3-22: a remote window's Power Genius XL
+//                 tab is a view of the Core's `amplifier` object plus the
+//                 Core's PGXL commands. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #include "FourO3APage.h"
@@ -31,15 +35,20 @@
 #include "PgxlAdvancedPage.h"
 #include "TgxlAdvancedPage.h"
 
+#include "core/AppSettings.h"
 #include "core/SmartSdrApiListener.h"
 #include "core/session/IStationLink.h"
 #include "gui/OperatorReasonText.h"
+#include "models/AmplifierModel.h"
 #include "models/RadioModel.h"
 
 #include <QCheckBox>
+#include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPushButton>
+#include <QSpinBox>
 #include <QSignalBlocker>
 #include <QTabWidget>
 #include <QTimer>
@@ -67,13 +76,12 @@ FourO3APage::FourO3APage(RadioModel* model, QWidget* parent)
     // operation, telemetry, fault history).  Page constructor takes
     // a RadioModel pointer so it can wire to PgxlConnection signals.
     if (m_model && m_model->role() == RadioModel::Role::Remote) {
-        // Advanced pages bind local accessory sockets. Keep their places
-        // visibly unavailable until remote administration is implemented.
-        m_tabs->addTab(new QWidget(m_tabs), tr("PowerGenius XL"));
+        // Advanced pages bind local accessory sockets. R-R3-47: the Power
+        // Genius tab is a view of the Core's amp plus the Core's commands;
+        // the Tuner Genius tab stays visibly unavailable.
+        m_tabs->addTab(buildRemotePgxlTab(), tr("PowerGenius XL"));
         m_tabs->addTab(new QWidget(m_tabs), tr("Tuner Genius XL"));
-        for (int i = 1; i < m_tabs->count(); ++i) {
-            m_tabs->setTabToolTip(i, tr("Remote accessory administration is not available yet."));
-        }
+        m_tabs->setTabToolTip(2, tr("Remote accessory administration is not available yet."));
     } else {
         m_pgxlAdvancedPage = new PgxlAdvancedPage(m_model);
         m_tabs->addTab(m_pgxlAdvancedPage, tr("PowerGenius XL"));
@@ -112,6 +120,18 @@ FourO3APage::FourO3APage(RadioModel* model, QWidget* parent)
                 });
         connect(m_model, &RadioModel::stationFourO3ACommandFinished,
                 this, &FourO3APage::onStationFourO3ACommandFinished);
+        if (m_remotePgxlTab) {
+            connect(m_model->amplifierModel(), &AmplifierModel::stationConnectionChanged,
+                    this, &FourO3APage::refreshRemotePgxlTab);
+            connect(m_model->amplifierModel(), &AmplifierModel::statusChanged,
+                    this, &FourO3APage::refreshRemotePgxlTab);
+            connect(m_model, &RadioModel::stationLinkStateChanged, this, [this] {
+                loadRemotePgxlSettings();
+                refreshRemotePgxlTab();
+            });
+            loadRemotePgxlSettings();
+            refreshRemotePgxlTab();
+        }
     }
     refreshConnectionBanner();  // initial paint
 
@@ -263,6 +283,12 @@ void FourO3APage::applyMasterGateToTabs(bool enabled)
     if (!m_tabs) { return; }
     if (m_model && m_model->role() == RadioModel::Role::Remote) {
         for (int i = 1; i < m_tabs->count(); ++i) { m_tabs->setTabEnabled(i, false); }
+        // R-R3-47: the Power Genius tab reads and asks the Core; it is
+        // open whenever this Core offers it.
+        if (m_remotePgxlTab) {
+            const auto* const link = m_model->stationLink();
+            m_tabs->setTabEnabled(1, link && link->remotePgxlControlAvailable());
+        }
         // Core refuses configure when its master is off. The row still needs
         // to show that reason and let an operator cancel existing work.
         if (m_peripheralsPage) { m_peripheralsPage->setEnabled(true); }
@@ -356,6 +382,198 @@ void FourO3APage::refreshConnectionBanner()
         m_pgxlInterlockPage->setEnabled(haveMac
                                         && m_model->fourO3AEnabled());
     }
+}
+
+QWidget* FourO3APage::buildRemotePgxlTab()
+{
+    auto* tab = new QWidget(this);
+    tab->setObjectName(QStringLiteral("remotePgxlTab"));
+    m_remotePgxlTab = tab;
+    auto* layout = new QVBoxLayout(tab);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setSpacing(10);
+
+    auto* note = new QLabel(tr("The Core connects to this Power Genius XL, checks that it is "
+                               "one, and pairs it. This window shows the Core's view."), tab);
+    note->setWordWrap(true);
+    layout->addWidget(note);
+
+    auto* statusBox = new QGroupBox(tr("Power Genius XL at the Core"), tab);
+    auto* statusForm = new QFormLayout(statusBox);
+    m_remotePgxlStatus = new QLabel(statusBox);
+    m_remotePgxlStatus->setObjectName(QStringLiteral("remotePgxlStatus"));
+    m_remotePgxlStatus->setWordWrap(true);
+    statusForm->addRow(tr("Status:"), m_remotePgxlStatus);
+    m_remotePgxlIdentity = new QLabel(statusBox);
+    m_remotePgxlIdentity->setObjectName(QStringLiteral("remotePgxlIdentity"));
+    m_remotePgxlIdentity->setWordWrap(true);
+    statusForm->addRow(tr("Device:"), m_remotePgxlIdentity);
+    m_remotePgxlReadings = new QLabel(statusBox);
+    m_remotePgxlReadings->setObjectName(QStringLiteral("remotePgxlReadings"));
+    statusForm->addRow(tr("Readings:"), m_remotePgxlReadings);
+
+    auto* buttons = new QHBoxLayout;
+    m_remotePgxlConnect = new QPushButton(tr("Connect"), statusBox);
+    m_remotePgxlConnect->setObjectName(QStringLiteral("remotePgxlConnectButton"));
+    connect(m_remotePgxlConnect, &QPushButton::clicked,
+            this, &FourO3APage::onRemotePgxlConnectClicked);
+    buttons->addWidget(m_remotePgxlConnect);
+    // R-R3-25: operating the amp waits for remote transmit.
+    m_remotePgxlOperate = new QPushButton(tr("Operate"), statusBox);
+    m_remotePgxlOperate->setObjectName(QStringLiteral("remotePgxlOperateButton"));
+    m_remotePgxlOperate->setEnabled(false);
+    m_remotePgxlOperate->setToolTip(
+        OperatorReasonText::forDisplay(AmplifierModel::receiveOnlyOperateReason()));
+    buttons->addWidget(m_remotePgxlOperate);
+    buttons->addStretch();
+    statusForm->addRow(buttons);
+    layout->addWidget(statusBox);
+
+    auto* settingsBox = new QGroupBox(tr("Connection settings at the Core"), tab);
+    auto* settingsForm = new QFormLayout(settingsBox);
+    m_remotePgxlAutoReconnect = new QCheckBox(tr("Reconnect automatically after a drop"),
+                                              settingsBox);
+    m_remotePgxlAutoReconnect->setObjectName(QStringLiteral("remotePgxlAutoReconnect"));
+    settingsForm->addRow(m_remotePgxlAutoReconnect);
+    m_remotePgxlKeepalive = new QSpinBox(settingsBox);
+    m_remotePgxlKeepalive->setObjectName(QStringLiteral("remotePgxlKeepalive"));
+    m_remotePgxlKeepalive->setRange(RadioModel::kPgxlKeepaliveMinSec,
+                                    RadioModel::kPgxlKeepaliveMaxSec);
+    m_remotePgxlKeepalive->setSuffix(tr(" s"));
+    m_remotePgxlKeepalive->setToolTip(tr("How often the Core checks in with the amplifier."));
+    settingsForm->addRow(tr("Keepalive every:"), m_remotePgxlKeepalive);
+    m_remotePgxlPing = new QSpinBox(settingsBox);
+    m_remotePgxlPing->setObjectName(QStringLiteral("remotePgxlPing"));
+    m_remotePgxlPing->setRange(0, RadioModel::kPgxlPingMaxSec);
+    m_remotePgxlPing->setSuffix(tr(" s"));
+    m_remotePgxlPing->setSpecialValueText(tr("Off"));
+    m_remotePgxlPing->setToolTip(tr("How often the Core measures the amplifier's response "
+                                    "time. Off sends none."));
+    settingsForm->addRow(tr("Response check every:"), m_remotePgxlPing);
+    m_remotePgxlApply = new QPushButton(tr("Apply"), settingsBox);
+    m_remotePgxlApply->setObjectName(QStringLiteral("remotePgxlApplySettings"));
+    connect(m_remotePgxlApply, &QPushButton::clicked,
+            this, &FourO3APage::onRemotePgxlApplySettingsClicked);
+    settingsForm->addRow(m_remotePgxlApply);
+    m_remotePgxlResult = new QLabel(settingsBox);
+    m_remotePgxlResult->setObjectName(QStringLiteral("remotePgxlResult"));
+    m_remotePgxlResult->setWordWrap(true);
+    settingsForm->addRow(m_remotePgxlResult);
+    layout->addWidget(settingsBox);
+    layout->addStretch();
+    return tab;
+}
+
+void FourO3APage::loadRemotePgxlSettings()
+{
+    if (!m_remotePgxlTab) { return; }
+    // Station-wide keys: in a remote window AppSettings reads the Core's
+    // copy (SettingsProxy). Unset ping is off on the Core.
+    auto& s = AppSettings::instance();
+    m_remotePgxlAutoReconnect->setChecked(
+        s.value(QStringLiteral("PGXL_AutoReconnect"), QStringLiteral("True")).toString()
+        == QStringLiteral("True"));
+    m_remotePgxlKeepalive->setValue(
+        s.value(QStringLiteral("PGXL_KeepaliveSec"), QStringLiteral("30")).toInt());
+    m_remotePgxlPing->setValue(
+        s.value(QStringLiteral("PGXL_PingSec"), QStringLiteral("0")).toInt());
+}
+
+void FourO3APage::refreshRemotePgxlTab()
+{
+    if (!m_remotePgxlTab || !m_model) { return; }
+    const AmplifierModel* amp = m_model->amplifierModel();
+    const auto* const link = m_model->stationLink();
+    const bool available = link && link->remotePgxlControlAvailable();
+    if (m_tabs) {
+        m_tabs->setTabEnabled(1, available);
+        m_tabs->setTabToolTip(1, available ? QString()
+            : tr("This Core does not offer Power Genius XL control to this app."));
+    }
+    using Phase = AmplifierModel::ConnectionPhase;
+    const Phase phase = amp->connectionPhase();
+    const bool active = phase == Phase::Discovering || phase == Phase::Connecting
+        || phase == Phase::Identifying || phase == Phase::Retrying;
+    const bool connected = phase == Phase::Connected;
+    const QString error = amp->connectionError().isEmpty()
+        ? QString() : OperatorReasonText::forDisplay(amp->connectionError());
+    QString text;
+    switch (phase) {
+    case Phase::Disabled: text = tr("Disabled at station"); break;
+    case Phase::Disconnected: text = tr("Disconnected"); break;
+    case Phase::Discovering: text = tr("Discovering at station"); break;
+    case Phase::Connecting: text = tr("Connecting at station"); break;
+    case Phase::Identifying: text = tr("Identifying device"); break;
+    case Phase::Retrying:
+        text = error.isEmpty() ? tr("Retrying at station")
+                               : tr("Retrying at station: %1").arg(error);
+        break;
+    case Phase::Connected: text = tr("Connected"); break;
+    case Phase::Error:
+        text = tr("Error: %1").arg(OperatorReasonText::forDisplay(amp->connectionError()));
+        break;
+    }
+    if (!amp->configuredHost().isEmpty()) {
+        text += tr(" (%1, port %2)").arg(amp->configuredHost()).arg(amp->configuredPort());
+    }
+    m_remotePgxlStatus->setText(available ? text
+        : tr("This Core does not offer Power Genius XL control to this app."));
+
+    QStringList identity;
+    if (!amp->deviceModel().isEmpty()) { identity << amp->deviceModel(); }
+    if (!amp->deviceSerial().isEmpty()) { identity << tr("serial %1").arg(amp->deviceSerial()); }
+    if (!amp->deviceVersion().isEmpty()) { identity << tr("version %1").arg(amp->deviceVersion()); }
+    if (!amp->deviceNickname().isEmpty()) { identity << tr("named %1").arg(amp->deviceNickname()); }
+    m_remotePgxlIdentity->setText(identity.isEmpty() ? tr("Not identified yet")
+                                                     : identity.join(QStringLiteral(", ")));
+    m_remotePgxlReadings->setText(amp->present()
+        ? tr("%1, %2 C, %3 V").arg(amp->deviceState())
+              .arg(amp->temperatureC(), 0, 'f', 1).arg(amp->mainsVoltageV(), 0, 'f', 0)
+        : tr("No live readings"));
+
+    m_remotePgxlConnect->setText(connected ? tr("Disconnect")
+                                 : active ? tr("Cancel") : tr("Connect"));
+    const bool haveAddress = !amp->configuredHost().isEmpty() && amp->configuredPort() > 0;
+    m_remotePgxlConnect->setEnabled(available && (connected || active || haveAddress));
+    m_remotePgxlConnect->setToolTip(available && !haveAddress && !connected && !active
+        ? tr("Enter the Power Genius address on the General tab first.") : QString());
+    m_remotePgxlApply->setEnabled(available);
+}
+
+void FourO3APage::onRemotePgxlConnectClicked()
+{
+    if (!m_model || !m_remotePgxlTab) { return; }
+    auto* link = m_model->stationLink();
+    if (!link || !link->remotePgxlControlAvailable()) {
+        refreshRemotePgxlTab();
+        return;
+    }
+    const AmplifierModel* amp = m_model->amplifierModel();
+    using Phase = AmplifierModel::ConnectionPhase;
+    const Phase phase = amp->connectionPhase();
+    const bool activeOrConnected = phase == Phase::Connected || phase == Phase::Discovering
+        || phase == Phase::Connecting || phase == Phase::Identifying || phase == Phase::Retrying;
+    const auto outcome = activeOrConnected
+        ? link->requestDisconnectPgxl()
+        : link->requestConfigurePgxl(amp->configuredHost(),
+                                     static_cast<quint16>(amp->configuredPort()));
+    m_remotePgxlResult->setText(outcome.sent ? QString()
+                                             : OperatorReasonText::forDisplay(outcome.reason));
+}
+
+void FourO3APage::onRemotePgxlApplySettingsClicked()
+{
+    if (!m_model || !m_remotePgxlTab) { return; }
+    auto* link = m_model->stationLink();
+    if (!link || !link->remotePgxlControlAvailable()) {
+        refreshRemotePgxlTab();
+        return;
+    }
+    const auto outcome = link->requestPgxlConnectionSettings(
+        m_remotePgxlAutoReconnect->isChecked(), m_remotePgxlKeepalive->value(),
+        m_remotePgxlPing->value());
+    m_remotePgxlResult->setText(outcome.sent ? tr("Sent to the Core.")
+                                             : OperatorReasonText::forDisplay(outcome.reason));
 }
 
 void FourO3APage::refreshFlexApiStatus()

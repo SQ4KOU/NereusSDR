@@ -167,6 +167,12 @@ private:
     void handleConfigureTgxl(const NereusSDR::SessionMessage& invoke);
     void handleDisconnectTgxl(const NereusSDR::SessionMessage& invoke);
     void handleSetFourO3AEnabled(const NereusSDR::SessionMessage& invoke);
+    // R-R3-47 / R-R3-22 (remotePgxlControlVersion 2): the Core's Power
+    // Genius XL, as configureTgxl / disconnectTgxl, plus its connection
+    // settings.
+    void handleConfigurePgxl(const NereusSDR::SessionMessage& invoke);
+    void handleDisconnectPgxl(const NereusSDR::SessionMessage& invoke);
+    void handleSetPgxlConnectionSettings(const NereusSDR::SessionMessage& invoke);
     void handleRequestIoBoardProbe(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 fix wave (radioHardwareVersion 3): one band's RX or RX-only
     // antenna, applied through the Core's AlexAntennaFacade.

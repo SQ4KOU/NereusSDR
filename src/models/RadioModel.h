@@ -279,6 +279,7 @@ class RadeChannel;
 // I/Q wire rate before m_connection->sendTxIq.  Lives in core/Resampler.h.
 class Resampler;
 class StationTgxlController;
+class StationPgxlController;
 class AmplifierModel;
 class RfKitModel;
 
@@ -1772,6 +1773,19 @@ public:
     bool stationAccessoryIdentityEnabled() const { return m_stationTgxl != nullptr; }
     bool configureTgxlForStation(const QString& host, quint16 port, QString* reason);
     bool disconnectTgxlForStation(QString* reason);
+    // R-R3-47 / R-R3-22: the Core's Power Genius XL, as the tuner's above.
+    // configure saves the address for the Core's radio and starts
+    // identifying what answers there; it is paired only once admitted.
+    bool configurePgxlForStation(const QString& host, quint16 port, QString* reason);
+    bool disconnectPgxlForStation(QString* reason);
+    /// Saves and applies the amp's connection settings on the Core:
+    /// automatic retry, keepalive seconds (1 to 3600) and ping seconds
+    /// (0 turns it off, up to 3600).
+    bool setPgxlConnectionSettingsForStation(bool autoReconnect, int keepaliveSec,
+                                             int pingSec, QString* reason);
+    static constexpr int kPgxlKeepaliveMinSec = 1;
+    static constexpr int kPgxlKeepaliveMaxSec = 3600;
+    static constexpr int kPgxlPingMaxSec = 3600;
 
     // Phase 3P-III RF-Kit RF2K-S master toggle.
     // Persisted per-MAC under hardware/<mac>/peripherals/RfKit_Enabled.
@@ -4938,6 +4952,7 @@ private:
     PgxlConnection* m_pgxlConnection{nullptr};
     TgxlConnection* m_tgxlConnection{nullptr};
     StationTgxlController* m_stationTgxl{nullptr};
+    StationPgxlController* m_stationPgxl{nullptr};
     TunerModel*     m_tunerModel{nullptr};
     AmplifierModel* m_amplifierModel{nullptr};
     RfKitModel*     m_rfKitModel{nullptr};

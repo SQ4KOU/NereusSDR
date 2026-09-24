@@ -930,6 +930,7 @@ set(CORE_SOURCES
     src/core/PgxlStatusGauges.cpp
     src/core/TgxlConnection.cpp
     src/core/StationTgxlController.cpp
+    src/core/StationPgxlController.cpp
     # Phase 3P-III RF-Kit RF2K-S amplifier
     src/core/Rf2ksConnection.cpp
     src/core/LanDiscovery.cpp

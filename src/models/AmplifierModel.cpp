@@ -9,6 +9,8 @@
 // Modification history (NereusSDR):
 //   2026-09-23  J.J. Boyd / KG4VCF  Created (R-R3-47, R-R3-22). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  setConnectionStateOwnedByController.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "models/AmplifierModel.h"
@@ -21,6 +23,12 @@ QString AmplifierModel::readOnlyReason()
 {
     return QStringLiteral("The Core reports the amplifier's readings. They cannot be "
                           "changed from this app.");
+}
+
+QString AmplifierModel::receiveOnlyOperateReason()
+{
+    return QStringLiteral("Operating the station's amplifier or tuner waits for remote "
+                          "transmit. This station is receive-only.");
 }
 
 AmplifierModel::AmplifierModel(QObject* parent)
@@ -71,6 +79,9 @@ void AmplifierModel::bindConnection(PgxlConnection* connection)
 
 void AmplifierModel::refreshFromConnection(ConnectionPhase phase, const QString& error)
 {
+    if (m_controllerOwnsConnection) {
+        return; // StationPgxlController reports the phase on the Core.
+    }
     StationConnectionState next = m_connection;
     next.phase = phase;
     next.error = phase == ConnectionPhase::Connected ? QString() : error;
@@ -100,7 +111,10 @@ void AmplifierModel::setAccessoryEnabled(bool enabled)
 void AmplifierModel::setStationConnectionState(const StationConnectionState& state)
 {
     StationConnectionState next = state;
-    if (!m_enabled && next.phase != ConnectionPhase::Connected) {
+    // The Core's controller reports Disabled itself (the 4O3A switch cancels
+    // it), so its states are taken as they are.
+    if (!m_enabled && !m_controllerOwnsConnection
+        && next.phase != ConnectionPhase::Connected) {
         next.phase = ConnectionPhase::Disabled;
     }
     // Readings are only live on a connection: off it, present says the

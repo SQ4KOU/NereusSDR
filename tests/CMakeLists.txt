@@ -6014,6 +6014,10 @@ target_compile_definitions(tst_station_accessory_state PRIVATE
 # objects over the in-process loopback.
 nereus_add_test(tst_remote_peripherals
     fakes/LoopbackTransport.cpp)
+# R-R3-47 / R-R3-22 / R-R3-25: the Core's Power Genius XL: identity before
+# admission (captured discovery and info replies), pairing only after it,
+# band follow, and cancellation in every phase. Loopback peers only.
+nereus_add_test(tst_station_pgxl_controller)
 
 # Task 59: auto-reconnect exponential backoff (1/2/5/10/30/60 s, cap at 60 s).
 # Test: backoffSequence verifies 8 calls to testForceDisconnect() produce

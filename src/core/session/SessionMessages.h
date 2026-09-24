@@ -300,6 +300,10 @@ struct SessionMessage {
     ///   requestStreamCtunPinned -- {"sliceId": Int64, "pinned": Bool}
     ///   configureTgxl          -- {"host": Utf8, "port": Int64}
     ///   disconnectTgxl         -- {}
+    ///   configurePgxl          -- {"host": Utf8, "port": Int64}
+    ///   disconnectPgxl         -- {}
+    ///   setPgxlConnectionSettings -- {"autoReconnect": Bool,
+    ///                               "keepaliveSec": Int64, "pingSec": Int64}
     ///   requestStreamCentre     -- {"sliceId": Int64, "centreHz": Double}
     QList<MirrorUpdate> arguments;
 

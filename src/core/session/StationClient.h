@@ -437,6 +437,8 @@ public:
     bool stationLinkReady() const override;
     bool remoteAmplifierStatusAvailable() const override;
     bool remoteRfKitStatusAvailable() const override;
+    // R-R3-47 / R-R3-22: see IStationLink.
+    bool remotePgxlControlAvailable() const override;
     bool telemetryAvailable() const;
     std::optional<SessionTransportTelemetry> transportTelemetry() const;
     bool sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch);
@@ -537,6 +539,10 @@ public:
     CommandOutcome requestConfigureTgxl(const QString& host, quint16 port) override;
     CommandOutcome requestDisconnectTgxl() override;
     CommandOutcome requestFourO3AEnabled(bool enabled) override;
+    CommandOutcome requestConfigurePgxl(const QString& host, quint16 port) override;
+    CommandOutcome requestDisconnectPgxl() override;
+    CommandOutcome requestPgxlConnectionSettings(bool autoReconnect, int keepaliveSec,
+                                                 int pingSec) override;
     CommandOutcome requestApplyNnrModels(quint32 revision) override;
     bool nnrControlAvailable() const override;
     // R-R3-21: the Core advertised dspAssetVersion 2 on a session that

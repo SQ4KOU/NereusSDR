@@ -18,6 +18,8 @@
 #include <cmath>
 #include "core/AppSettings.h"
 #include "core/SmartSdrApiListener.h"
+#include "core/LanDiscovery.h"
+#include "core/StationPgxlController.h"
 #include "core/PgxlConnection.h"
 #include "core/PgxlStatusGauges.h"
 #include "core/Rf2ksConnection.h"
@@ -279,17 +281,38 @@ private slots:
         QVERIFY(model.setFourO3AEnabledForStation(true, &reason));
         auto* pgxl = model.pgxlConnection();
         QSignalSpy frames(pgxl, &PgxlConnection::testFrameWrittenForTesting);
-        pgxl->connectToPgxl(QStringLiteral("127.0.0.1"), amp.serverPort());
+        // R-R3-47: the Core admits the amp (discovery plus the same serial
+        // in its own info reply, as captured) and only then pairs it. The
+        // loopback fixture stands in for the amp; nothing real is contacted.
+        QSignalSpy paired(pgxl, &PgxlConnection::pairingResult);
+        QVERIFY2(model.configurePgxlForStation(QStringLiteral("127.0.0.1"), amp.serverPort(),
+                                               &reason), qPrintable(reason));
         QTRY_VERIFY(amp.hasPendingConnections());
         auto* peer = amp.nextPendingConnection();
         peer->write("V3.8.9\n"); peer->flush();
+        const auto sequenceOf = [&](const QString& command) -> quint32 {
+            const QRegularExpression rx(QStringLiteral("^C(\\d+)\\|") + command);
+            for (const auto& row : frames) {
+                const auto match = rx.match(row.first().toString());
+                if (match.hasMatch()) { return match.captured(1).toUInt(); }
+            }
+            return 0;
+        };
+        QTRY_VERIFY(sequenceOf(QStringLiteral("info$")) != 0);
+        peer->write(QStringLiteral("R%1|0|serial=10-200/24-0046  version=3.8.9 protocol=1.0 mains=240\n")
+                        .arg(sequenceOf(QStringLiteral("info$"))).toUtf8());
+        peer->flush();
+        auto* controller = model.findChild<StationPgxlController*>();
+        QVERIFY(controller);
+        QTRY_VERIFY(controller->findChild<LanDiscovery*>() != nullptr);
+        controller->findChild<LanDiscovery*>()->injectDatagramForTesting(
+            QStringLiteral("PowerGeniusXL ip=127.0.0.1 v=3.8.9 serial=10-200/24-0046 nickname=PowerGeniusXL"),
+            amp.serverPort());
         QTRY_VERIFY(pgxl->isConnected());
-        // Existing parser's acknowledged pairing gate, driven only against
-        // this loopback fixture. No real amp or tuner is contacted.
-        QSignalSpy paired(pgxl, &PgxlConnection::pairingResult);
-        const auto seq = pgxl->flexradioPair(QLatin1Char('A'), QStringLiteral("TEST"),
-                                           QStringLiteral("ANT1"), false, true);
-        peer->write(QStringLiteral("R%1|0|\n").arg(seq).toUtf8()); peer->flush();
+        QTRY_VERIFY(sequenceOf(QStringLiteral("flexradio ampslice=A serial=")) != 0);
+        peer->write(QStringLiteral("R%1|0|\n")
+                        .arg(sequenceOf(QStringLiteral("flexradio ampslice=A serial="))).toUtf8());
+        peer->flush();
         QTRY_COMPARE(paired.count(), 1);
         QVERIFY(paired.first().first().toBool());
         const auto hasInitialBand = [&] {
@@ -596,12 +619,16 @@ private slots:
                 refusals.append(m.propertyResults.first().reason);
             }
         }
-        QCOMPARE(caps.remotePgxlControlVersion, 1);
+        // R-R3-47: 2 once the Core's PGXL commands are offered (Task 2).
+        QCOMPARE(caps.remotePgxlControlVersion, 2);
         QCOMPARE(caps.remoteRfKitControlVersion, 1);
         QVERIFY(sawAmplifier);
         QVERIFY(sawRfKit);
         refusals.sort();
-        QStringList expected{AmplifierModel::readOnlyReason(), RfKitModel::readOnlyReason()};
+        // R-R3-25 / R-R3-47: the Core is receive-only (StationServer sets
+        // it), so the amp's `operate` gets the receive-only reason.
+        QStringList expected{AmplifierModel::receiveOnlyOperateReason(),
+                             RfKitModel::readOnlyReason()};
         expected.sort();
         QCOMPARE(refusals, expected);
 
