@@ -196,6 +196,7 @@ void StationPgxlController::identify(quint64 attempt, const QString& peer, quint
     m_state.error.clear();
     auto* discovery = new LanDiscovery(this);
     discovery->setIdentitySensitiveDeduplication(true);
+    if (m_stationBind) { discovery->setStationBind(*m_stationBind); }
     m_discovery = discovery;
     connect(discovery, &LanDiscovery::deviceDiscovered, this,
             [this, discovery, attempt](const QString& product, const QString& ip,

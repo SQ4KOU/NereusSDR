@@ -66,6 +66,10 @@
 //                fault-history commands, and a window's setting changes
 //                reaching the Core's live objects. NereusSDR-original.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-22 / R-R3-47: setStationBind (the Core's station
+//                listeners on the station network only) and the FlexRadio
+//                beacon following the 4O3A switch. NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -161,6 +165,7 @@
 #include "core/HardwareProfile.h"
 #include "core/codec/CodecContext.h"  // SliceConfig (Phase 3F Sub-Epic B Task 16)
 #include "core/DdcAssignment.h"       // DdcAssignment (Phase 3F Sub-Epic B Task 16)
+#include "core/StationNetwork.h"  // StationBind (R-R3-22 station listeners)
 #include "core/SkuUiProfile.h"  // issue #257 — setLastBandForTest passes the SKU into refreshAntennasFromAlex
 #include "core/safety/SwrProtectionController.h"
 #include "core/safety/TxInhibitMonitor.h"
@@ -1825,11 +1830,28 @@ public:
 
     // R-R3-48: the Core runs the app's TCI server on the station network
     // (DaemonApp, before radio startup). `bindOverride` is nereusd.conf's
-    // station_tci_bind; empty picks this computer's address on the radio's
-    // subnet once the radio connects.
+    // station_bind (older name station_tci_bind); empty picks this
+    // computer's address on the radio's subnet once the radio connects.
+    // Once setStationBind has run, its rule wins.
     void enableStationTci(const QString& bindOverride);
     /// The station's TCI switch and port, from a window's command.
     bool setStationTciForStation(bool enabled, int port, QString* reason);
+
+    // R-R3-22 / R-R3-47 / R-R3-48: the Core's station network (DaemonApp,
+    // before radio startup). The SmartSDR API listener on TCP 4992, the
+    // Power Genius and Tuner Genius discovery sockets and the station TCI
+    // server then all accept connections there only, by one rule
+    // (StationNetwork::StationBind): `bindOverride` is nereusd.conf's
+    // station_bind (older name station_tci_bind); empty follows the radio's
+    // subnet, with 127.0.0.1 alone until a radio connects; a new radio
+    // address moves every listener. A desktop window never calls this and
+    // binds as it always has. The FlexRadio beacon then announces the
+    // station address.
+    void setStationBind(const QString& bindOverride);
+    /// The rule as it stands (radio address included); unset in a desktop window.
+    std::optional<StationNetwork::StationBind> stationBind() const { return m_stationBind; }
+    /// Test seam: this computer's address entries for the station rule.
+    void setStationInterfaceEntriesForTest(const QList<QNetworkAddressEntry>& entries);
     static constexpr int kPgxlKeepaliveMinSec = 1;
     static constexpr int kPgxlKeepaliveMaxSec = 3600;
     static constexpr int kPgxlPingMaxSec = 3600;
@@ -2231,6 +2253,12 @@ public:
     // setConnectionStateForTest + setLastRadioInfoForTest.
     void applyPeripheralsForTest() { applyPeripheralsForCurrentMac(); }
     void teardownPeripheralsForTest() { teardownPeripherals(); }
+    // R-R3-22: the FlexRadio beacon as connectToRadio leaves it, in a mode
+    // that sends nothing (FlexRadioDiscoveryBroadcaster::setNoSendForTesting),
+    // and whether it runs.
+    void configureFlexBeaconForTest();
+    bool flexBeaconRunningForTest() const;
+    class FlexRadioDiscoveryBroadcaster* flexBroadcasterForTest() const { return m_flexBroadcaster; }
 
 #ifdef NEREUS_BUILD_TESTS
 public:
@@ -5156,6 +5184,14 @@ private:
     // Allows PGXL/TGXL to auto-discover NereusSDR in their FlexRadio dropdown
     // without any manual IP entry.
     class FlexRadioDiscoveryBroadcaster* m_flexBroadcaster{nullptr};
+    // R-R3-22: connectToRadio configured the beacon for this radio. It
+    // runs only while this is set, 4O3A is on and PGXL_BroadcastDiscovery
+    // is True (updateFlexBeacon).
+    bool m_flexBeaconConfigured{false};
+    void updateFlexBeacon();
+    // R-R3-22 / R-R3-47: set by setStationBind on the Core only.
+    std::optional<StationNetwork::StationBind> m_stationBind;
+    void applyStationBind();
 
     // Passive SmartSDR API listener on TCP 4992. Bench-recon stub: logs every
     // line PGXL sends so we can design the response layer in a follow-up.

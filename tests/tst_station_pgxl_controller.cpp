@@ -1,6 +1,7 @@
 // no-port-check: NereusSDR-original. R-R3-47 / R-R3-22 / R-R3-25 Core-owned
 // Power Genius XL: identity before admission, pairing only after it, band
-// follow, and cancellation in every phase.
+// follow, and cancellation in every phase. Station network filter on the
+// identity announcement (R-R3-22, 2026-09-24).
 //
 // Loopback TCP peers stand in for the amp; discovery is injected. The
 // discovery announcement and the `info` reply are the real amp's, captured
@@ -276,6 +277,34 @@ private slots:
             QStringLiteral("PGXL identity serial mismatch")));
         QVERIFY(!pgxl->isConnected());
         QCOMPARE(commandsOf(frames), QStringList{QStringLiteral("info")});
+    }
+
+    // R-R3-22 / R-R3-47: with the Core's station rule set, the identity
+    // announcement is heard only from the station network (here this
+    // computer, station_bind = 127.0.0.1): the same announcement from
+    // another network admits nothing.
+    void coreHearsIdentityOnlyFromTheStationNetwork()
+    {
+        QTcpServer amp;
+        QVERIFY(amp.listen(QHostAddress::LocalHost, 0));
+        RadioModel model;
+        prepare(model);
+        model.setStationBind(QStringLiteral("127.0.0.1"));
+        auto* pgxl = model.pgxlConnection();
+        QSignalSpy frames(pgxl, &PgxlConnection::testFrameWrittenForTesting);
+        QVERIFY(answerUpToInfo(model, amp, frames, "V3.8.9", kInfoReply));
+        const QString line = QStringLiteral("PowerGeniusXL ip=127.0.0.1 v=3.8.9 serial=%1 nickname=PowerGeniusXL")
+                                 .arg(QString::fromLatin1(kSerial));
+        discoveryOf(model)->injectDatagramForTesting(line, amp.serverPort(),
+                                                     QHostAddress(QStringLiteral("192.168.1.43")));
+        QTest::qWait(100);
+        QVERIFY(!pgxl->isConnected());
+        QCOMPARE(model.amplifierModel()->connectionPhase(), Phase::Identifying);
+        discoveryOf(model)->injectDatagramForTesting(line, amp.serverPort(),
+                                                     QHostAddress(QHostAddress::LocalHost));
+        QTRY_VERIFY(pgxl->isConnected());
+        QString reason;
+        QVERIFY(model.disconnectPgxlForStation(&reason));
     }
 
     // Anything that answers V but never says who it is times out unpaired.

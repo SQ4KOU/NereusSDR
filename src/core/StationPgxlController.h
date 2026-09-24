@@ -1,11 +1,16 @@
 // no-port-check: NereusSDR-original. R-R3-47 / R-R3-22 station-owned PGXL identity.
 // The Tuner Genius controller's shape (StationTgxlController.h).
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-22 / R-R3-47: identity announcements from the station
+// network only (setStationBind).
 #pragma once
 
 #include "core/PgxlConnection.h"
 #include "models/AmplifierModel.h"
+#include "core/StationNetwork.h"
 #include <QPointer>
+
+#include <optional>
 
 namespace NereusSDR {
 class LanDiscovery;
@@ -44,6 +49,10 @@ public:
     /// Stop in any phase; nothing is redialled. `disabled` reports the
     /// station's switch as off.
     void cancel(bool disabled = false);
+    /// R-R3-22 / R-R3-47: the Core hears identity announcements from the
+    /// station network only (LanDiscovery::setStationBind). Unset (a
+    /// desktop window, or a test) hears every announcement.
+    void setStationBind(const StationNetwork::StationBind& bind) { m_stationBind = bind; }
     /// Connection settings changed on the Core: apply them to a running
     /// connection (automatic retry, keepalive interval, ping interval).
     void applyConnectionSettings();
@@ -59,6 +68,7 @@ private:
     QPointer<PgxlConnection> m_connection;
     QPointer<AmplifierModel> m_model;
     QPointer<LanDiscovery> m_discovery;
+    std::optional<StationNetwork::StationBind> m_stationBind;
     AmplifierModel::StationConnectionState m_state;
     PgxlIdentityInfo m_nativeInfo;
     QString m_discoveredModel;

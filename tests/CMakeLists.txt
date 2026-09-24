@@ -6050,6 +6050,12 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tst_station_tci_server PRIVATE Qt6::WebSockets Qt6::Network)
 endif()
 
+# R-R3-22 / R-R3-47: the Core's station listeners (the SmartSDR API listener
+# on 4992, the accessory discovery filter, the station TCI server) accept
+# connections on the station network only, one rule for all; a desktop
+# window binds as before. Loopback binds and injected interface lists only.
+nereus_add_test(tst_smartsdr_api_listener_bind)
+
 # Task 59: auto-reconnect exponential backoff (1/2/5/10/30/60 s, cap at 60 s).
 # Test: backoffSequence verifies 8 calls to testForceDisconnect() produce
 # reconnectAttempt signals with delays 1000/2000/5000/10000/30000/60000/

@@ -1,4 +1,5 @@
-// no-port-check: NereusSDR-original. R-R3-48 station network address choice.
+// no-port-check: NereusSDR-original. R-R3-48 station network address choice;
+// R-R3-22 / R-R3-47 one bind rule for every station listener (StationBind).
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
 #include "core/StationNetwork.h"
 
@@ -50,6 +51,76 @@ QList<QNetworkAddressEntry> localEntries()
         entries.append(iface.addressEntries());
     }
     return entries;
+}
+
+QList<QNetworkAddressEntry> StationBind::entries() const
+{
+    return entriesForTest ? *entriesForTest : localEntries();
+}
+
+bool StationBind::everyAddress() const
+{
+    if (bindOverride.isEmpty()) {
+        return false;
+    }
+    const QHostAddress address(bindOverride);
+    return address == QHostAddress(QHostAddress::AnyIPv4)
+        || address == QHostAddress(QHostAddress::AnyIPv6)
+        || address == QHostAddress(QHostAddress::Any);
+}
+
+QHostAddress StationBind::stationAddress() const
+{
+    if (!bindOverride.isEmpty()) {
+        return QHostAddress(bindOverride);
+    }
+    if (radio.isNull()) {
+        return {};
+    }
+    return addressFacing(radio, entries());
+}
+
+QList<QHostAddress> StationBind::listenAddresses() const
+{
+    QList<QHostAddress> addresses;
+    const QHostAddress station = stationAddress();
+    if (!station.isNull()) {
+        addresses.append(station);
+    }
+    // This computer too, unless every address already covers it.
+    const QHostAddress loopback(QHostAddress::LocalHost);
+    if (!everyAddress() && !addresses.contains(loopback)) {
+        addresses.append(loopback);
+    }
+    return addresses;
+}
+
+bool StationBind::acceptsPeer(const QHostAddress& peer) const
+{
+    const QHostAddress from = plainIpv4(peer);
+    if (from.isNull()) {
+        return false;
+    }
+    if (from.isLoopback() || everyAddress()) {
+        return true;
+    }
+    const QHostAddress station = plainIpv4(stationAddress());
+    if (station.isNull() || station.isLoopback()) {
+        return false;
+    }
+    // The station network is the subnet of this computer's address entry
+    // for the station address. An override naming no address of this
+    // computer has no subnet to compare, so only that address is accepted.
+    for (const QNetworkAddressEntry& entry : entries()) {
+        if (plainIpv4(entry.ip()) != station) {
+            continue;
+        }
+        const int prefix = entry.prefixLength();
+        if (prefix > 0 && from.protocol() == station.protocol()) {
+            return from.isInSubnet(station, prefix);
+        }
+    }
+    return from == station;
 }
 
 } // namespace NereusSDR::StationNetwork

@@ -2,6 +2,7 @@
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
 #pragma once
 
+#include "core/StationNetwork.h"
 #include "models/StationTciModel.h"
 
 #include <QHostAddress>
@@ -27,8 +28,9 @@ class TciServer;
 //
 // Where it listens: the station network only, plus this computer (so apps
 // on the Core's own computer reach it, and a window on the same computer
-// needs no server of its own). The station network address is, in order:
-// nereusd.conf's station_tci_bind; else this computer's address on the
+// needs no server of its own), by the one rule every station listener
+// follows (StationNetwork::StationBind): nereusd.conf's station_bind
+// (older name station_tci_bind); else this computer's address on the
 // radio's subnet once the radio is known. Before either is known the
 // server listens on this computer only. A bind to every address
 // (0.0.0.0) is used as given and covers this computer too.
@@ -48,8 +50,8 @@ public:
     StationTciController(RadioModel* radio, StationTciModel* model, QObject* parent = nullptr);
     ~StationTciController() override;
 
-    /// nereusd.conf station_tci_bind: empty chooses the station network
-    /// from the radio's address.
+    /// nereusd.conf station_bind (or station_tci_bind): empty chooses the
+    /// station network from the radio's address.
     void setBindOverride(const QString& address);
     /// The radio's address: the station network is the subnet holding it.
     void setRadioAddress(const QHostAddress& radio);
@@ -76,9 +78,7 @@ private:
 #ifdef HAVE_WEBSOCKETS
     std::unique_ptr<TciServer> m_server;
 #endif
-    QString m_bindOverride;
-    QHostAddress m_radioAddress;
-    std::optional<QList<QNetworkAddressEntry>> m_entriesForTest;
+    StationNetwork::StationBind m_bind;
     bool m_enabled{false};
     quint16 m_port{kDefaultPort};
     QList<QHostAddress> m_listening;

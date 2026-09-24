@@ -34,6 +34,10 @@
 //   2026-09-24: R-R3-48: the Core runs its own station TCI server
 //               (station_tci_bind), by J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-24: R-R3-22 / R-R3-47: every station listener on the station
+//               network (station_bind, RadioModel::setStationBind), by
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -157,11 +161,16 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     // callback: the daemon owns real hardware even though its model has the
     // normal local role.
     m_radioModel->setReceiveOnlyStationPolicy(true);
+    // R-R3-22 / R-R3-47: every station listener (4992, the Power Genius and
+    // Tuner Genius discovery, the station TCI server) accepts connections on
+    // the station network only: nereusd.conf's station_bind, else the
+    // radio's subnet. Set before any of them exists or starts.
+    m_radioModel->setStationBind(cfg.stationBind);
     m_radioModel->enableStationAccessoryIdentity();
     // R-R3-48: the Core's own TCI server on the station network, switched
     // by the app's one TCI switch (setStationTci) and kept in the Core's
     // settings. Receive-only until remote transmit (StationTciController).
-    m_radioModel->enableStationTci(cfg.stationTciBind);
+    m_radioModel->enableStationTci(cfg.stationBind);
     m_stepAttController = std::make_unique<StepAttenuatorController>();
     // R-R3-46 / R-R3-11: a change from a remote window is on disk shortly
     // after the Core applies it, not only when the Core stops.

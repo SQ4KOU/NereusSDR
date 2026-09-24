@@ -252,7 +252,8 @@ model. So on every dial, before anything else is sent:
    `V` banner and sends only `info` (`identifying`).
 2. It listens for LAN discovery on UDP 9008 and 9010 for three seconds and
    takes the announcement whose address and receiving port are the
-   connection's. Captured from the real amp:
+   connection's, heard only from the station network (see "Where the Core
+   accepts station devices"). Captured from the real amp:
    `PowerGeniusXL ip=192.168.109.235 v=3.8.9 serial=10-200/24-0046 nickname=PowerGeniusXL`
 3. The amp's `info` reply, captured:
    `R<seq>|0|serial=10-200/24-0046  version=3.8.9 protocol=1.0 mains=240`
@@ -396,12 +397,9 @@ The Core runs the app's existing TCI server on its own radio model, so a TCI
 app at the station (the RF2K-S first) hears the Core's radio: the init
 burst, `vfo:` as the Core's slices move, `split_enable:` (always false:
 NereusSDR has no split) and the rest of the protocol a local window's server
-speaks. Where it listens:
-
-- the station network: nereusd.conf's `station_tci_bind` when set, else the
-  Core's address on the radio's subnet once the radio connects;
-- and always the Core's own computer (127.0.0.1), so apps there reach it.
-  A bind to every address (`0.0.0.0`) is used as given and covers it.
+speaks. It listens where every station listener does (see "Where the Core
+accepts station devices"): the station network, and always the Core's own
+computer (127.0.0.1), so apps there reach it.
 
 It transmits for no app until remote transmit: the init burst says
 `receive_only:true` and `tx_enable:<rx>,false`; `trx:<rx>,true` touches no
@@ -415,6 +413,47 @@ The TCI compatibility settings (`TciEmulateExpertSDR3Protocol`,
 Core: the server reads them from the Core's own settings, where no window
 writes them, so it runs on their defaults (the two emulation keys read
 True, as in a fresh window).
+
+## Where the Core accepts station devices
+
+One rule for every listener the Core opens for station devices: the
+SmartSDR API listener on TCP 4992 (the Power Genius and Tuner Genius
+connect there), the Power Genius and Tuner Genius discovery on UDP 9008 and
+9010, and the station TCI server. A desktop window without a Core sets none
+of this and binds as it always has.
+
+- **The station network** is `station_bind` in `nereusd.conf` when set: an
+  address of the Core's computer (another network), or `0.0.0.0` for every
+  network. Empty, it is the network that holds the radio: the Core's
+  address on the radio's subnet. The older name `station_tci_bind` (which
+  covered the TCI server alone) is still read when `station_bind` is empty
+  or absent; `packaging/nereusd.conf.sample` documents only `station_bind`.
+- **The Core's own computer** (127.0.0.1) is always accepted as well, so an
+  app or amplifier program on that computer reaches it. `0.0.0.0` already
+  covers it.
+- **Before a radio connects** (and with no `station_bind`), only the Core's
+  own computer is accepted.
+- **When the radio's address changes** every listener moves to the new
+  network: a running listener restarts on the new addresses, and a device
+  connected on the old network is dropped and reconnects.
+- **TCP listeners** (4992 and the TCI server) listen on those addresses
+  only. A station address the Core's computer does not have is a failed
+  listen (`fourO3AListenerError`, `stationTci.error`), never a quiet
+  fallback to the Core's computer alone.
+- **Discovery sockets** still open on every address, because the Power
+  Genius and Tuner Genius announce by broadcast and a socket bound to one
+  address hears no broadcast. The Core ignores any announcement whose
+  sender, or whose announced address, is not on the station network or the
+  Core's own computer, so a device on another network is never identified
+  or admitted.
+
+The FlexRadio discovery beacon (UDP 4992, which lets a Power Genius or Tuner
+Genius find the station) runs only while the radio's 4O3A switch is on and
+`PGXL_BroadcastDiscovery` is `True`: with 4O3A off nothing listens on 4992,
+so nothing is announced. This holds for a desktop window too. On the Core
+the beacon announces the station network address, where 4992 listens
+(with `station_bind = 0.0.0.0` it finds its own address as a desktop
+window's does).
 
 ## The `accessoryData` object
 
@@ -623,8 +662,10 @@ Per radio, under `hardware/<mac>/peripherals/`:
 
 Station-wide, behind `setStationTci`: `StationTci_Enabled` (`True` /
 `False`, default `False`) and `StationTci_Port` (default 50001). Where the
-server listens on the station network is `station_tci_bind` in
-`nereusd.conf` (empty: the Core's address on the radio's subnet).
+server listens on the station network is `station_bind` in `nereusd.conf`
+(older name `station_tci_bind`; empty: the Core's address on the radio's
+subnet), the same for every station listener (see "Where the Core accepts
+station devices").
 
 Station-wide, behind `setPgxlConnectionSettings`: `PGXL_AutoReconnect`
 (`True` / `False`, default `True`), `PGXL_KeepaliveSec` (default 30),
@@ -892,6 +933,24 @@ rewrite the fixtures, and update this document in the same commit.
   servers (none of the window's own when the Core is on this computer), and
   the TCI page's line.
 - `tst_tci_tx_mutex`: the station server's transmit refusal on the wire.
+- `tst_smartsdr_api_listener_bind`: the one station rule on a Core with two
+  networks (the radio's network, the override, every address, this computer
+  only before a radio, a move when the radio moves); the 4992 listener on
+  the station address and this computer only, a missing station address
+  refused rather than narrowed, the move dropping the old connection; the
+  Core's model applying the rule to 4992 and the TCI server alike; a
+  desktop window's listener binding as before.
+- `tst_lan_discovery_regex`: the Core hears Power Genius and Tuner Genius
+  announcements only from the station network (sender and announced
+  address), this computer only before a radio, the override; a desktop
+  window hears every one.
+- `tst_station_pgxl_controller`: an announcement from another network
+  admits nothing; the same from the station network admits the amp.
+- `tst_flex_radio_discovery_broadcaster`: no FlexRadio beacon with 4O3A
+  off, on and off with the switch and with a radio's saved switch, off with
+  its own setting off; on the Core it announces the station address.
+- `tst_daemon_config`: `station_bind`, the older `station_tci_bind` read
+  beneath it, and a value that is not an address refused.
 - `tst_fault_log`: every record names its device and says what happened in
   plain words, older records read with both, a window's copy is replaced
   from the Core's list without saving, and a fault the Core recorded is
@@ -929,8 +988,9 @@ and pairing with the real PGXL on the Core (the discovery announcement and
 2026-05-20 in `captures/`); the real RF2K-S admitted by its `/info`, put in
 TCI mode by the Core, and following band changes made from the remote
 window and from the iPhone app through the Core's station TCI server (the
-RF2K-S pointed at the Rock); the station server bound on the Rock's station
-network; a real Power Genius fault, a Tuner Genius drop and an RF-Kit
+RF2K-S pointed at the Rock); the station server, the 4992 listener and the
+accessory discovery bound on the Rock's station network and not its other
+network, and the FlexRadio beacon announcing the station address there; a real Power Genius fault, a Tuner Genius drop and an RF-Kit
 interface error reaching a remote window and the iPhone app from the Rock,
 and the Rock's fault history after a restart; the power-cap alert from a
 real transmit through the Power Genius (with remote transmit).

@@ -18,6 +18,9 @@
 // shipped packaging/nereusd.conf.sample against the parser, because the
 // sample file documented keys the daemon did nothing with.
 //
+// R-R3-22 / R-R3-47 (2026-09-24): station_bind, and the older
+// station_tci_bind still read beneath it.
+//
 // Remote Daemon R2, Task 1: resolveDaemonProfileArgument() gained a
 // `wasSet` parameter and inverted its absent-flag default (nereusd's
 // own reserved profile instead of silently sharing the GUI's directory).
@@ -194,8 +197,11 @@ private slots:
             QStringLiteral("display_adaptive"),
             // R-R3-23: reaches DaemonMediaController::setAudioLosslessAllowed().
             QStringLiteral("audio_lossless"),
-            // R-R3-48: reaches RadioModel::enableStationTci().
-            QStringLiteral("station_tci_bind"),
+            // R-R3-22 / R-R3-47 / R-R3-48: reaches RadioModel::setStationBind()
+            // and enableStationTci(). (The older station_tci_bind is read
+            // too but no longer documented as a key of its own; see
+            // stationBindReadsTheOlderTciName.)
+            QStringLiteral("station_bind"),
         };
 
         // Each documented key parses without an "unknown key" complaint.
@@ -217,7 +223,7 @@ private slots:
                 "thread_placement = off\n"
                 "display_adaptive = off\n"
                 "audio_lossless = deny\n"
-                "station_tci_bind = 192.168.1.20\n");
+                "station_bind = 192.168.1.20\n");
         f.flush();
         QString err;
         const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
@@ -233,7 +239,7 @@ private slots:
         QCOMPARE(c.threadPlacement, false);
         QCOMPARE(c.displayAdaptive, false);
         QCOMPARE(c.audioLosslessAllowed, false);
-        QCOMPARE(c.stationTciBind, QStringLiteral("192.168.1.20"));
+        QCOMPARE(c.stationBind, QStringLiteral("192.168.1.20"));
         const std::optional<DisplayBudgetLimits> limits = c.displayBudgetLimits();
         QVERIFY(limits.has_value());
         QCOMPARE(limits->applicationBytesPerSecond, quint64(2400000));
@@ -569,6 +575,57 @@ private slots:
         c.remotePort = -1;
         QVERIFY(!c.validate(&err));
         QVERIFY(!err.isEmpty());
+    }
+
+    // R-R3-22 / R-R3-47: one station network key for every station
+    // listener. The Task 3 name station_tci_bind keeps working: read when
+    // station_bind is empty or absent, never over it.
+    void stationBindReadsTheOlderTciName_data()
+    {
+        QTest::addColumn<QByteArray>("text");
+        QTest::addColumn<QString>("expected");
+        QTest::newRow("absent") << QByteArray("slice_count = 1\n") << QString();
+        QTest::newRow("new name") << QByteArray("station_bind = 10.0.0.7\n")
+                                  << QStringLiteral("10.0.0.7");
+        QTest::newRow("older name") << QByteArray("station_tci_bind = 192.168.1.20\n")
+                                    << QStringLiteral("192.168.1.20");
+        QTest::newRow("both, new first")
+            << QByteArray("station_bind = 10.0.0.7\nstation_tci_bind = 192.168.1.20\n")
+            << QStringLiteral("10.0.0.7");
+        QTest::newRow("both, older first")
+            << QByteArray("station_tci_bind = 192.168.1.20\nstation_bind = 10.0.0.7\n")
+            << QStringLiteral("10.0.0.7");
+        QTest::newRow("new name empty")
+            << QByteArray("station_bind =\nstation_tci_bind = 192.168.1.20\n")
+            << QStringLiteral("192.168.1.20");
+        QTest::newRow("every address") << QByteArray("station_bind = 0.0.0.0\n")
+                                       << QStringLiteral("0.0.0.0");
+    }
+
+    void stationBindReadsTheOlderTciName()
+    {
+        QFETCH(QByteArray, text);
+        QFETCH(QString, expected);
+        QTemporaryFile f;
+        QVERIFY(f.open());
+        f.write(text);
+        f.flush();
+        QString err;
+        const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QCOMPARE(c.stationBind, expected);
+        QVERIFY(c.validate(&err));
+    }
+
+    void stationBindMustBeAnAddress()
+    {
+        DaemonConfig c = DaemonConfig::defaults();
+        c.stationBind = QStringLiteral("station-lan");
+        QString err;
+        QVERIFY(!c.validate(&err));
+        QVERIFY(err.contains(QStringLiteral("station_bind")));
+        c.stationBind = QStringLiteral("192.168.1.20");
+        QVERIFY(c.validate(&err));
     }
 
     void rejectsSliceCountBelowOne()
