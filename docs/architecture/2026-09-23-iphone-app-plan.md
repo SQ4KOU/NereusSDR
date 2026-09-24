@@ -1638,10 +1638,20 @@ pairing design §4.
   - Messages: `pair.start {mode: "lan"|"code", device: {publicKey, name, kind}}`;
     `pair.accept {identity: {publicKey, certBinding}, label}` (LAN mode);
     `pair.spake {step, data}` for steps 0 to 3 (base64url); `pair.confirm {box}` in each
-    direction; `pair.fail {reason, retryAfterMs}`. A client sends `pair.start` after
-    `hello` instead of `auth.request`, only to a station whose `hello` declares
-    `features.pairing: 1`. The device's `name` and `kind` sent inside the encrypted box
-    win over the plain ones in `pair.start`.
+    direction; `pair.fail {reason, retryAfterMs}` in each direction (the station's
+    refusals, and the device's when its own step 3 fails, which the station answers
+    by burning the code and sending its own `pair.fail` with `retryAfterMs`). A client
+    sends `pair.start` after `hello` instead of `auth.request`, only to a station whose
+    `hello` declares `features.pairing: 1`.
+  - Code mode runs in this order: `pair.spake` steps 0 (station), 1 (device), 2
+    (station) and 3 (device); then the device's `pair.confirm`; then the station's
+    `pair.confirm`, which is the success. Each box is a 24-byte nonce followed by the
+    `crypto_aead_xchacha20poly1305_ietf` ciphertext, with no additional data, around fixed
+    compact JSON: the device's box (sealed with `client_sk`) is
+    `{"publicKey", "name", "kind"}`, and the station's box (sealed with `server_sk`) is
+    `{"identity": {"publicKey", "certBinding"}, "label"}`. The box's `publicKey` must be
+    the key `pair.start` named, or the station refuses. The box's `name` and `kind` win
+    over the plain ones in `pair.start`. The link document's section 3.6 is the wire.
   - After `pair.accept` or a successful confirmation the pairing connection ends. The
     device then connects through the normal path (device authentication, Task 12).
     This holds whatever the session model is: it fits today's single-holder rule and
@@ -1673,7 +1683,8 @@ pairing design §4.
   `pair.fail` with a plain reason.
 - Code mode with the right code adds the device (name and kind from its box) and the
   client learns the station's identity key and label from the station's box; a wrong
-  code fails at step 3 or 4 on either side, burns the code, and the next code appears
+  code fails at step 3 (the device, which then sends `pair.fail`) or at step 4 (the
+  station), burns the code, and the next code appears
   after 5 s, doubling after each consecutive failure up to 300 s, reset by a success;
   `retryAfterMs` says when.
 - The password hash parameters are fixed as above on both sides; the rendezvous (Part
