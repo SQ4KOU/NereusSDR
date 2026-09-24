@@ -7048,6 +7048,12 @@ nereus_add_test(tst_station_session
 nereus_add_test(tst_remote_step_attenuator
     fakes/LoopbackTransport.cpp)
 
+# R-R3-46 / R-R3-11: with a local radio each band remembers its attenuator
+# and preamp, as through the Core: a local RadioModel's transmit slice feeds
+# the step attenuator controller its band and mode, and a band change
+# restores and sends that band's values to a fake radio connection.
+nereus_add_test(tst_local_step_attenuator_band_restore)
+
 # R-R3-16/17: a connect that never finishes setting up gives up and retries.
 # The GUI's handshake deadline against a silent Core, a Core blocked past the
 # deadline that recovers, the Core Connections status and Cancel, and Core's

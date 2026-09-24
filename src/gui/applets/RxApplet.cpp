@@ -30,6 +30,10 @@
 //                 the window's edits and otherwise disabled with its plain
 //                 reason. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46: in a remote window the RX1 preamp toggle is
+//                 built when the Core's dual-ADC board arrives, and hidden
+//                 on a single-ADC board. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -337,6 +341,43 @@ void RxApplet::applyRemoteStepAttAvailability()
         }
     }
     showRemoteStepAttValues();
+}
+
+// Phase 3P-B Task 10: the RX1 preamp toggle for dual-ADC boards, in the OVL
+// row. R-R3-46: built once, from buildUi() for a board known then, or from
+// setBoardCapabilities() when a remote window learns the Core's board.
+void RxApplet::ensureRx1PreampToggle()
+{
+    if (m_rx1PreampToggle || !m_ovlRow) {
+        return;
+    }
+    m_rx1PreampToggle = new QCheckBox(QStringLiteral("RX1 preamp"), this);
+    m_rx1PreampToggle->setObjectName(QStringLiteral("RxRx1PreampToggle"));
+    m_rx1PreampToggle->setStyleSheet(QStringLiteral(
+        "QCheckBox { color: %1; font-size: 10px; }"
+        "QCheckBox::indicator { width: 12px; height: 12px; }").arg(Style::kTitleText));
+    // Phase 3P-B Task 10: RX1 preamp wires to P2RadioConnection::setRx1Preamp
+    // which routes to CodecContext.p2Rx1Preamp → byte 1403 bit 1.
+    connect(m_rx1PreampToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (!m_model) { return; }
+        // R-R3-46: a remote window has no connection of its own;
+        // the toggle writes the Core's `stepAtt` object instead.
+        if (!m_model->ownsLocalDsp()) {
+            if (StepAttenuatorFacade* stepAtt = m_model->stepAttFacade()) {
+                stepAtt->setRx1Preamp(on);
+            }
+            return;
+        }
+        auto* conn = qobject_cast<class P2RadioConnection*>(m_model->connection());
+        if (!conn) { return; }
+        // P2RadioConnection lives on m_connThread.  Dispatch onto its
+        // event loop so the m_rx[1].preamp mutation and the resulting
+        // sendCmdHighPriority() run on the connection thread, not the
+        // GUI thread.  (Codex PR #94 review.)
+        QMetaObject::invokeMethod(conn, [conn, on] { conn->setRx1Preamp(on); },
+                                  Qt::QueuedConnection);
+    });
+    m_ovlRow->addWidget(m_rx1PreampToggle);
 }
 
 void RxApplet::buildUi()
@@ -1104,33 +1145,7 @@ void RxApplet::buildUi()
 
         // RX1 preamp toggle (dual-ADC boards only) ────────────────────────
         if (dualAdc) {
-            m_rx1PreampToggle = new QCheckBox(QStringLiteral("RX1 preamp"), this);
-            m_rx1PreampToggle->setObjectName(QStringLiteral("RxRx1PreampToggle"));
-            m_rx1PreampToggle->setStyleSheet(QStringLiteral(
-                "QCheckBox { color: %1; font-size: 10px; }"
-                "QCheckBox::indicator { width: 12px; height: 12px; }").arg(Style::kTitleText));
-            // Phase 3P-B Task 10: RX1 preamp wires to P2RadioConnection::setRx1Preamp
-            // which routes to CodecContext.p2Rx1Preamp → byte 1403 bit 1.
-            connect(m_rx1PreampToggle, &QCheckBox::toggled, this, [this](bool on) {
-                if (!m_model) { return; }
-                // R-R3-46: a remote window has no connection of its own;
-                // the toggle writes the Core's `stepAtt` object instead.
-                if (!m_model->ownsLocalDsp()) {
-                    if (StepAttenuatorFacade* stepAtt = m_model->stepAttFacade()) {
-                        stepAtt->setRx1Preamp(on);
-                    }
-                    return;
-                }
-                auto* conn = qobject_cast<class P2RadioConnection*>(m_model->connection());
-                if (!conn) { return; }
-                // P2RadioConnection lives on m_connThread.  Dispatch onto its
-                // event loop so the m_rx[1].preamp mutation and the resulting
-                // sendCmdHighPriority() run on the connection thread, not the
-                // GUI thread.  (Codex PR #94 review.)
-                QMetaObject::invokeMethod(conn, [conn, on] { conn->setRx1Preamp(on); },
-                                          Qt::QueuedConnection);
-            });
-            m_ovlRow->addWidget(m_rx1PreampToggle);
+            ensureRx1PreampToggle();
         }
 
         root->addLayout(m_ovlRow);
@@ -1510,9 +1525,18 @@ void RxApplet::setBoardCapabilities(const BoardCapabilities& caps)
     if (m_model && !m_model->ownsLocalDsp()) {
         rebuildPreampAndAttRangeForBoard(caps.board, caps.hasAlexFilters,
                                          caps.attenuator.minDb);
+        // R-R3-46: the RX1 preamp toggle belongs to dual-ADC boards; the
+        // applet was usually built before the Core's board was known.
+        if (caps.p2PreampPerAdc) {
+            ensureRx1PreampToggle();
+        }
+        if (m_rx1PreampToggle) {
+            m_rx1PreampToggle->setVisible(caps.p2PreampPerAdc);
+        }
         // R-R3-46 / R-R3-21: then the Core's own range and values, once it
-        // offers its attenuator (the rebuild may have reset the combo).
-        showRemoteStepAttValues();
+        // offers its attenuator (the rebuild may have reset the combo), and
+        // whether the row (the toggle too) takes edits now.
+        applyRemoteStepAttAvailability();
     }
 }
 

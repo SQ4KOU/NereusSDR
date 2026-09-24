@@ -44,6 +44,10 @@
 //                 attenuator edit are shown in user words, and the
 //                 overload alarm lights on the Core's overload report.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-46 / R-R3-11: with a local
+//                 radio each band remembers its attenuator and preamp; the
+//                 controller follows the transmit slice's band and mode.
+//                 AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-22 — J.J. Boyd (KG4VCF). Invoke the Aether-derived pan-stack
 //                 shutdown before QWidget destroys its graphics backend.
 //                 AI-assisted integration via OpenAI Codex.
@@ -4303,6 +4307,11 @@ void MainWindow::buildUI()
     // --- Phase 3G-13: Step attenuator + ADC overload ---
     m_stepAttController = new StepAttenuatorController(this);
     m_radioModel->setStepAttController(m_stepAttController);
+    // R-R3-46 / R-R3-11: each band remembers its attenuator and preamp with
+    // a local radio, as through the Core: the controller follows the
+    // transmit slice's band and mode and sends a band's restored values to
+    // the radio. A remote window is not wired (the Core does it).
+    m_radioModel->followTxSliceWithStepAttenuator();
 
     // 3M-1a G.1 / F.2: MoxController::hardwareFlipped → StepAttenuatorController.
     // Both objects are now live; RadioModel owns MoxController, MainWindow owns
@@ -11272,6 +11281,10 @@ void MainWindow::onConnectionStateChanged()
             // persisted "Adaptive" string is clamped to Classic when the
             // connected board lacks the feature.
             m_stepAttController->setHasStepAttenuatorCal(caps.hasStepAttenuatorCal);
+            // R-R3-46: select the transmit slice's band first, because
+            // loadSettings restores the per-band slot for the current band
+            // (DaemonApp::applyStepAttenuatorConnection does the same).
+            m_radioModel->syncStepAttenuatorToTxSlice();
             m_stepAttController->loadSettings(conn->radioInfo().macAddress);
         } else if (m_pureSignalApplet) {
             m_pureSignalApplet->setVisible(m_stationClient

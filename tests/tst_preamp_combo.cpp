@@ -7,6 +7,7 @@
 
 #include <QtTest/QtTest>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QStackedWidget>
 
@@ -236,6 +237,47 @@ private slots:
         // ...and the window's choice is written to the Core's object.
         combo->setCurrentIndex(5);
         QCOMPARE(stepAtt->preampMode(), combo->itemData(5).toInt());
+    }
+
+    // R-R3-46: a remote window is built before the Core's radio is known.
+    // When the Core's board arrives (MainWindow hands currentRadioChanged
+    // to setBoardCapabilities) and it is a dual-ADC board, the RX1 preamp
+    // toggle is built then, follows the Core's `stepAtt` object and writes
+    // to it; a single-ADC board hides it again.
+    void rxapplet_remote_rx1_preamp_toggle_arrives_with_the_cores_board()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        RxApplet applet(nullptr, &remote);
+        QVERIFY(!remote.boardCapabilities().p2PreampPerAdc);
+        QVERIFY(applet.findChild<QCheckBox*>(QStringLiteral("RxRx1PreampToggle")) == nullptr);
+
+        remote.setBoardForTest(HPSDRHW::OrionMKII);
+        QVERIFY(remote.boardCapabilities().p2PreampPerAdc);
+        applet.setBoardCapabilities(remote.boardCapabilities());
+        auto* toggle = applet.findChild<QCheckBox*>(QStringLiteral("RxRx1PreampToggle"));
+        QVERIFY(toggle != nullptr);
+        QVERIFY(!toggle->isHidden());
+        // Until the Core takes the window's edits it is disabled with the
+        // object's plain reason, like the rest of the row.
+        StepAttenuatorFacade* stepAtt = remote.stepAttFacade();
+        QVERIFY(!toggle->isEnabled());
+        QVERIFY(!toggle->toolTip().isEmpty());
+
+        stepAtt->setWindowAvailability(true, QString());
+        QVERIFY(toggle->isEnabled());
+        stepAtt->setRx1Preamp(true);
+        QVERIFY(toggle->isChecked());
+        toggle->click();
+        QVERIFY(!stepAtt->rx1Preamp());
+
+        // A second board message builds nothing new.
+        applet.setBoardCapabilities(remote.boardCapabilities());
+        QCOMPARE(applet.findChildren<QCheckBox*>(QStringLiteral("RxRx1PreampToggle")).size(), 1);
+
+        // A single-ADC board hides it.
+        remote.setBoardForTest(HPSDRHW::Hermes);
+        applet.setBoardCapabilities(remote.boardCapabilities());
+        QVERIFY(toggle->isHidden());
     }
 };
 

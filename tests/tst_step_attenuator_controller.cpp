@@ -10,6 +10,9 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23: band restore to the radio cases (R-R3-46, R-R3-11), by
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -67,10 +70,54 @@
 #include <QSignalSpy>
 
 #include "core/AppSettings.h"
+#include "core/RadioConnection.h"
 #include "core/StepAttenuatorController.h"
 #include "models/Band.h"
 
 using namespace NereusSDR;
+
+namespace {
+
+// R-R3-46: records the attenuator and preamp values sent to the radio.
+class RecordingConnection final : public RadioConnection {
+    Q_OBJECT
+public:
+    explicit RecordingConnection(QObject* parent = nullptr)
+        : RadioConnection(parent)
+    {
+        setState(ConnectionState::Connected);
+    }
+
+    QList<int> attenuator;
+    QList<bool> preamp;
+
+    void init() override {}
+    void connectToRadio(const NereusSDR::RadioInfo&) override {}
+    void disconnect() override {}
+    void setReceiverFrequency(int, quint64) override {}
+    void setTxFrequency(quint64) override {}
+    void setActiveReceiverCount(int) override {}
+    void setSampleRate(int) override {}
+    void setAttenuator(int dB) override { attenuator.append(dB); }
+    void setPreamp(bool on) override { preamp.append(on); }
+    void setTxDrive(int) override {}
+    void sendTxIq(const float*, int) override {}
+    void setWatchdogEnabled(bool) override {}
+    void setAntennaRouting(AntennaRouting) override {}
+    void setMox(bool) override {}
+    void setTrxRelay(bool) override {}
+    void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
+    void setMicTipRing(bool) override {}
+    void setMicBias(bool) override {}
+    void setLineInGain(int) override {}
+    void setUserDigOut(quint8) override {}
+    void setPuresignalRun(bool) override {}
+    void setMicPTTDisabled(bool) override {}
+    void setMicXlr(bool) override {}
+};
+
+} // namespace
 
 class TestStepAttenuatorController : public QObject {
     Q_OBJECT
@@ -718,6 +765,75 @@ private slots:
         ctrl.markSettingsUnloaded();
         ctrl.setAutoAttUndo(false);
         QVERIFY(!ctrl.savePending());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // R-R3-46: a band change restores that band's attenuation and preamp
+    // and, with setBandRestoreToRadio(true) (the Core and a local window),
+    // sends them to the radio, as Thetis's RX1Band setter does
+    // (console.cs:17325 [v2.10.3.15]). A band never visited keeps the
+    // current setting and sends nothing.
+    // ─────────────────────────────────────────────────────────────────────
+    void bandChangeRestoresAndSendsTheBandsValues()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        ctrl.setBandRestoreToRadio(true);
+
+        ctrl.setBand(Band::Band20m);
+        ctrl.setAttenuation(0);
+        ctrl.setPreampMode(PreampMode::Off);
+        ctrl.setBand(Band::Band40m);
+        ctrl.setAttenuation(20);
+        ctrl.setPreampMode(PreampMode::On);
+
+        radio.attenuator.clear();
+        radio.preamp.clear();
+        ctrl.setBand(Band::Band20m);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+        QCOMPARE(ctrl.preampMode(), PreampMode::Off);
+        QCOMPARE(radio.attenuator, QList<int>{0});
+        QCOMPARE(radio.preamp, QList<bool>{false});
+
+        radio.attenuator.clear();
+        radio.preamp.clear();
+        ctrl.setBand(Band::Band40m);
+        QCOMPARE(radio.attenuator, QList<int>{20});
+        QCOMPARE(radio.preamp, QList<bool>{true});
+
+        // Never visited: the current setting stays and nothing is sent.
+        radio.attenuator.clear();
+        radio.preamp.clear();
+        ctrl.setBand(Band::Band17m);
+        QCOMPARE(ctrl.attenuatorDb(), 20);
+        QCOMPARE(ctrl.preampMode(), PreampMode::On);
+        QVERIFY(radio.attenuator.isEmpty());
+        QVERIFY(radio.preamp.isEmpty());
+        ctrl.setRadioConnection(nullptr);
+    }
+
+    // Off (the default), a restored value is shown, not sent.
+    void bandRestoreIsNotSentWhenOff()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        QVERIFY(!ctrl.bandRestoreToRadio());
+
+        ctrl.setBand(Band::Band20m);
+        ctrl.setAttenuation(0);
+        ctrl.setBand(Band::Band40m);
+        ctrl.setAttenuation(20);
+        radio.attenuator.clear();
+        radio.preamp.clear();
+        ctrl.setBand(Band::Band20m);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+        QVERIFY(radio.attenuator.isEmpty());
+        QVERIFY(radio.preamp.isEmpty());
+        ctrl.setRadioConnection(nullptr);
     }
 };
 

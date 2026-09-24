@@ -285,6 +285,10 @@ private:
     void applyRemoteStepAttAvailability();
     // Shows the object's values in the row (signals blocked).
     void showRemoteStepAttValues();
+    // Builds the RX1 preamp toggle (dual-ADC boards) into the OVL row once;
+    // later calls return the existing one. R-R3-46: a remote window learns
+    // its board only when the Core's radio arrives, so it builds it then.
+    void ensureRx1PreampToggle();
 
     static QString formatFilterWidth(int low, int high);
 

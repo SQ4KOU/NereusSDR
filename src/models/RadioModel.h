@@ -1405,6 +1405,19 @@ public:
     // gate fires (Thetis console.cs:46740-46748 [v2.10.3.13] [2.10.3.5]MW0LGE).
     // Implementation in RadioModel.cpp.
     void setStepAttController(class StepAttenuatorController* c);
+    /// R-R3-46 / R-R3-11: a local window's step attenuator follows the
+    /// transmit-bound slice, as the Core's does (DaemonApp::
+    /// syncStepAttenuatorBandAndMode): its band and mode on every band or
+    /// mode change of that slice, and when the transmit binding moves.
+    /// The controller's setBand then restores that band's attenuation and
+    /// preamp and sends them to the radio (setBandRestoreToRadio), as
+    /// Thetis's RX1Band setter does. Wires once; a no-op on a Remote model
+    /// (the Core restores and sends) and without a controller.
+    void followTxSliceWithStepAttenuator();
+    /// R-R3-46: hand the controller the transmit-bound slice's band and
+    /// mode now. MainWindow calls it before loadSettings on connect, which
+    /// restores the per-band slot for the controller's current band.
+    void syncStepAttenuatorToTxSlice();
     /// R-R3-46: the step attenuator and preamp as the mirrored `stepAtt`
     /// object. A Local model binds it to its controller (the Core's, or a
     /// local window's, where nothing reads it); a Remote model leaves it
@@ -4262,6 +4275,8 @@ private:
     class TxAnalyzer*         m_txAnalyzer{nullptr};
     class ClarityController*  m_clarityController{nullptr};
     class StepAttenuatorController* m_stepAttController{nullptr};
+    // R-R3-46: followTxSliceWithStepAttenuator() has wired its connects.
+    bool m_stepAttFollowsTxSlice{false};
 
     // 2026-05-22 spectrum-calibration fix: cache of the last rxMeterOffsetDb
     // value we emitted via rxMeterOffsetChanged. NaN sentinel forces the

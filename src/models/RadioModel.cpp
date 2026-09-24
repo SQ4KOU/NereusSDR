@@ -88,6 +88,11 @@
 //   2026-09-23 - R-R3-46: the `alexAntennas` object, the Core's
 //                 hardware apply step and the I/O board probe request. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 / R-R3-11: followTxSliceWithStepAttenuator and
+//                 syncStepAttenuatorToTxSlice: with a local radio each band
+//                 restores its attenuator and preamp and sends them to the
+//                 radio (Thetis console.cs:17325 [v2.10.3.15]). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2906,6 +2911,66 @@ void RadioModel::setStepAttController(StepAttenuatorController* c)
         // Initial emit so subscribers seed their cache with the current
         // value rather than waiting for the first controller change.
         recompute();
+    }
+}
+
+// R-R3-46 / R-R3-11: each band remembers its attenuator and preamp with a
+// local radio, as it does through the Core. The same feed as the Core's
+// DaemonApp::configureStepAttenuatorController / wireStepAttenuatorSlice /
+// syncStepAttenuatorBandAndMode: the transmit-bound slice's band and mode,
+// on every band or mode change of that slice and when the binding moves.
+// StepAttenuatorController::setBand saves the old band's values, restores
+// the new band's and (setBandRestoreToRadio) sends them to the radio.
+// From Thetis console.cs:17325 [v2.10.3.15] (RX1Band setter):
+//   SetupForm.ATTOnTX = getTXstepAttenuatorForBand(_tx_band); //[2.10.3.6]MW0LGE att_fixes
+//   RX1PreampMode = rx1_preamp_by_band[(int)rx1_band];
+//   RX1AttenuatorData = getRX1stepAttenuatorForBand(rx1_band);
+//   //[2.10.3.6]MW0LGE this tmp is needed because RX1AGCMode causes an update to the setup form
+void RadioModel::followTxSliceWithStepAttenuator()
+{
+    // A remote window's values are the Core's: the Core restores and sends.
+    if (m_role != Role::Local || !m_stepAttController || m_stepAttFollowsTxSlice) {
+        return;
+    }
+    m_stepAttFollowsTxSlice = true;
+    m_stepAttController->setBandRestoreToRadio(true);
+
+    auto wireSlice = [this](SliceModel* slice) {
+        if (!slice) {
+            return;
+        }
+        connect(slice, &SliceModel::bandChanged, this, [this, slice](Band) {
+            if (slice == txBoundSlice()) {
+                syncStepAttenuatorToTxSlice();
+            }
+        });
+        connect(slice, &SliceModel::dspModeChanged, this, [this, slice](DSPMode) {
+            if (slice == txBoundSlice()) {
+                syncStepAttenuatorToTxSlice();
+            }
+        });
+    };
+    for (SliceModel* const slice : m_slices) {
+        wireSlice(slice);
+    }
+    connect(this, &RadioModel::sliceAdded, this, [this, wireSlice](int index) {
+        wireSlice(sliceById(index));
+    });
+    if (m_txSliceArbiter) {
+        connect(m_txSliceArbiter, &TxSliceArbiter::txBoundSliceChanged, this,
+                [this](int, int) { syncStepAttenuatorToTxSlice(); });
+    }
+    syncStepAttenuatorToTxSlice();
+}
+
+void RadioModel::syncStepAttenuatorToTxSlice()
+{
+    if (m_role != Role::Local || !m_stepAttController) {
+        return;
+    }
+    if (SliceModel* const slice = txBoundSlice()) {
+        m_stepAttController->setBand(slice->band());
+        m_stepAttController->setCurrentDspMode(slice->dspMode());
     }
 }
 
