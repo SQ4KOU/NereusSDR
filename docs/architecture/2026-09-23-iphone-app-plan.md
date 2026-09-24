@@ -262,7 +262,7 @@ All paths are on `codex/integrate-r2-main` (read at `4bb89b5d`).
   `PotaClient`, `FreeDVReporterClient`, `PskReporterClient`; `src/models/SpotModel`,
   `FreeDVStationModel`. Only the GUI starts them (`src/gui/MainWindow.cpp:834-840`).
 * **Desktop setup:** `src/gui/SetupDialog` (12 categories, 59 pages), the page classes in
-  `src/gui/setup/` (the Remote Station stub at `CatNetworkSetupPages.h:201-212`),
+  `src/gui/setup/` (the Remote Access page's stub at `CatNetworkSetupPages.h:201-212`),
   `src/gui/spectrum/PeakBlobDetector` and `ActivePeakHoldTrace` (Thetis ports),
   `src/gui/applets/VaxApplet`.
 * **Remote-window pieces from the R3 lanes:** `src/gui/CoreTargetStore` (saved Cores,
@@ -325,7 +325,7 @@ not, the controller stops and asks JJ.
 | `src/core/setup/SetupDescriptionService.*`, `resources/setup/*.json`, `resources/setup/HEADERS.md` | The Setup descriptions |
 | `src/core/SpotSourceHost.*`, `src/core/station/{StationRadios,StationHost,StationHandover}.*`, `src/core/StationBinaryLocator.*` | Spot sources at the station, the station's radios, the station host and the handover |
 | `src/core/daemon/{StationStatusPage,StationControlSocket,StationControlCommands}.*` | The status page and console commands |
-| `src/gui/StationServiceManager.*`, `src/gui/setup/RemoteStationPage.*`, `src/gui/setup/ThisCorePage.*` | Starting the background station; the Remote Station page; managing a remote Core |
+| `src/gui/StationServiceManager.*`, `src/gui/setup/RemoteStationPage.*`, `src/gui/setup/ThisCorePage.*` | Starting the background station; the Remote Access page; managing a remote Core |
 | `resources/pairing-words-v1.txt`, `cmake/NereusPairing.cmake` | The pairing word list; libsodium and SPAKE2+EE |
 | `rendezvous/` | The rendezvous service (Python), its conformance vectors, coturn configuration and deployment on the website's server (D38) |
 | `packaging/deb/`, `packaging/station-image/` | The station's Debian packages and the card image |
@@ -3589,7 +3589,7 @@ page, and a station test proves each station setting on it takes effect live.
   Styles but its one working toggle; Gradients; Diagnostics' Signal Generator and
   Hardware Tests; RX2 Display; the TX grid group. The parity test fails when a page the
   desktop has built has no description and is not on its short desktop-only list (the
-  Remote Station page, Skins, Collapsible Display), so a page appears on the phone as
+  Remote Access page, Skins, Collapsible Display), so a page appears on the phone as
   soon as the desktop builds it and its description is added.
 
 ## Task 43: Setup descriptions: the format, the service, the parity test, and General, Test, Diagnostics and CAT & Network
@@ -3889,11 +3889,11 @@ Parts C, F and G.
 - [ ] **Step 1:** `StationHost`, with the daemon moved onto it and its tests passing.
 - [ ] **Step 2:** The desktop hosting it, the lock and the two-way handover.
 
-## Task 49: The Remote Station page
+## Task 49: The Remote Access page
 
 **Runs in:** the Core/GUI session's lanes (a station task).
 
-**Requirements:** R-IOS-07, spec §5.3 item 10 (Run a station on this computer; Keep it
+**Requirements:** R-IOS-07, spec §5.3 item 10 (Run a Core on this computer; Keep it
 running when NereusSDR is closed; Start it with the computer; the station's name with
 Rename; the pairing code, shown until a device claims it; the paired devices with Revoke;
 Add a device), R-IOS-08 (the station-key backup prompt).
@@ -4397,7 +4397,7 @@ Touch section and the dial (R-IOS-12), PTT buttons and the transmit time-out gro
   description, which leaves out pages the desktop has not built (D41), so each appears
   once it exists; This phone pages native. Left off: the Keyboard page (the desktop has
   not built it; an iPad with a keyboard gets it once it exists), Appearance's Skins and
-  Collapsible Display, and the desktop's Remote Station page. From this task on the app
+  Collapsible Display, and the desktop's Remote Access page. From this task on the app
   declares `setupDescription: 1` in its `hello`, so the station sends it the
   descriptions.
   - Devices: Rename for the Core; the key backup reminder; each paired device with

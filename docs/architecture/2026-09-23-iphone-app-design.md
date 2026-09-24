@@ -104,7 +104,7 @@ Every row is a call JJ made, one question at a time, on a rendered mockup.
 | # | Decision | Why | Rejected |
 | --- | --- | --- | --- |
 | D19 | A Core is required: no demo mode. | The app is a console for a real station. | "Try it without a Core" with a sample band. |
-| D20 | The station runs from **a switch in the desktop app**, on a new Remote Station page under CAT & Network. It keeps running after the app closes and can start with the computer. | No second install for the common case. | A separate station install. |
+| D20 | The station runs from **a switch in the desktop app**, on a new Remote Access page under CAT & Network. It keeps running after the app closes and can start with the computer. | No second install for the common case. | A separate station install. |
 | D21 | **Ask before taking over.** Connecting to a station another device is using names that device and asks first. A device reclaiming its own dropped session is not asked. | A second person at home is not thrown off silently. Amends remote design §7.1 (§4.5). | Preempt at once. |
 | D22 | **Taking over may cut a transmission off.** "Unkey and take over" unkeys the other device first. | A transmission left running at home can be stopped from anywhere. | Wait until it unkeys. |
 | D23 | **The app keeps the older link too.** Every app release still speaks the link one major version back; only a station two majors behind is refused. Features the Core can't do yet are greyed "Needs a newer Core". | An App Store update must never lock the operator out. Amends remote design §7.0 (§4.4). | A station self-update triggered from the phone; updating at the station only. |
@@ -456,7 +456,7 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
    built yet appears once it exists (D41).
 7. Left off the phone: the Keyboard page on the iPhone (an iPad with a keyboard
    gets it once the desktop builds it, D41); Appearance's Skins and Collapsible
-   Display, which are about the desktop's window; the desktop's Remote Station
+   Display, which are about the desktop's window; the desktop's Remote Access
    page, whose job Devices does on the phone.
 8. **Devices**: Rename for the Core; a reminder to back up the Core's key;
    each paired device with when it was paired and last seen; one-tap Revoke,
@@ -490,7 +490,7 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
    its own when the link goes. That is the Core's promise, since the phone
    can't see it happen. The phone keeps retrying, with Cancel.
 9. **Back on the air:** transmit stays off until the operator taps PTT.
-10. **The desktop's Remote Station page:** Run a Core on this computer; Keep
+10. **The desktop's Remote Access page:** Run a Core on this computer; Keep
     it running when NereusSDR is closed; Start it with the computer; the
     Core's name with Rename; the pairing code, shown until a device claims
     it; then the paired devices with Revoke, and Add a device.
@@ -691,7 +691,7 @@ Hardware evidence stays **pending** until a device or the bench shows it.
 | R-IOS-04 | A remote transmit time-out: a station setting, on by default at 180 seconds for sessions from paired remote devices (30 seconds to 30 minutes, or off), off by default for the desktop at the station as in Thetis. When it fires the station drops MOX and TUNE and tells the client why; the time remaining is part of the transmit state the client sees. From Thetis `TimeOutTimerManager.cs` and `setup.designer.cs` `udMoxToTSeconds` (180, range 30 to 1800) and `chkToTMox` (off) [v2.10.3.15]. | Station, R4 (remote design §12.2) | Software: the timer, the reason and the remaining time. Bench: it fires on air at the setting. |
 | R-IOS-05 | Transmit-coupled accessory commands through the station: the amp's OPERATE and STANDBY; the tuner's TUNE, OPERATE, BYPASS and antenna; the RF2K-S's OPERATE, STANDBY and antenna. The TX interlock is enforced at the station and every refusal carries its reason. | Station, R4 (R-R3-25) | Software. Bench: Power Genius XL and Tuner Genius XL; RF2K-S when one is available. |
 | R-IOS-06 | The station advertises the values it owns and the phone shows (§4.10): the mode list, filter presets per mode, the tune-step list, AGC ranges, meter ranges and the board's capabilities. | Station, R3 follow-on | Software: the snapshot carries them; the phone builds its controls from them for an ANAN-G2 and a Hermes Lite 2. |
-| R-IOS-07 | The desktop's Remote Station page of §5.3 (items 10 and 11 describe it and the small box). | Desktop, R6 | Software, and screenshots of the running page per the ui-verification skill. |
+| R-IOS-07 | The desktop's Remote Access page of §5.3 (items 10 and 11 describe it and the small box). | Desktop, R6 | Software, and screenshots of the running page per the ui-verification skill. |
 | R-IOS-08 | Pairing, devices and revocation per the pairing design: one tap on the LAN, the code from anywhere, the window open while unclaimed with no timer, reopening from the console or a paired device, revoke dropping a live session, the station-key backup prompt, and the code on a small box's status page and console. | Station, R5 and R6 | Software. Integration: pair on the LAN, pair by code through the relay, revoke mid-session. |
 | R-IOS-09 | The higher audio quality is offered only when the station advertises a measured profile for it (R-R3-23); otherwise the phone greys it. | Station, R3 | Integration. |
 | R-IOS-10 | Sound only: with every display endpoint disabled, audio and the card's readings keep flowing (R-R3-08, R-R3-13). | Station, R3 | Integration: traffic drops to audio and telemetry, and the card's reading keeps moving. |
