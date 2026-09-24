@@ -7,6 +7,7 @@
 // =================================================================
 
 #include <QtTest>
+#include "RealtimeTestLoad.h"
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
@@ -214,6 +215,9 @@ class TstRemoteAudioSession final : public QObject {
     Q_OBJECT
 
 private slots:
+    // The load when a real-time case failed (R-R3-21, R-R3-40).
+    void cleanup() { NereusSDR::RealtimeTestLoad::printLoadAverageIfFailed(); }
+
     // R-R3-23: the remote audio choice is stored in this computer's
     // settings; keep this test's writes out of the operator's own file.
     void initTestCase()

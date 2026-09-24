@@ -3,6 +3,7 @@
 // DSP lock while the DSP worker is overloaded (R-R3-39), and that the
 // worker's per-block load counters measure that overload (R-R3-40).
 #include <QtTest>
+#include "RealtimeTestLoad.h"
 
 #include <algorithm>
 #include <array>
@@ -118,6 +119,9 @@ class TestWdspDspTurnTaking : public QObject {
     Q_OBJECT
 
 private slots:
+    // The load when a real-time case failed (R-R3-21, R-R3-40).
+    void cleanup() { NereusSDR::RealtimeTestLoad::printLoadAverageIfFailed(); }
+
     void initTestCase()
     {
         OpenChannel(kChannel, kInSize, kDspSize, kSampleRate, kSampleRate, kSampleRate,

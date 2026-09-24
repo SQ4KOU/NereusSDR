@@ -2,6 +2,7 @@
 // source bridge.
 
 #include <QtTest/QtTest>
+#include "RealtimeTestLoad.h"
 #include <QSemaphore>
 
 #include "core/AppSettings.h"
@@ -185,6 +186,9 @@ class TstDaemonAudioSource : public QObject {
     Q_OBJECT
 
 private slots:
+    // The load when a real-time case failed (R-R3-21, R-R3-40).
+    void cleanup() { NereusSDR::RealtimeTestLoad::printLoadAverageIfFailed(); }
+
     void capturesTheBarrierMixedStereoBeforeLocalMasterControls()
     {
         Harness harness;

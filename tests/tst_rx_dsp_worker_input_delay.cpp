@@ -12,6 +12,7 @@
 // second of input.
 
 #include <QtTest/QtTest>
+#include "RealtimeTestLoad.h"
 #include <QObject>
 #include <QRegularExpression>
 #include <QThread>
@@ -158,6 +159,9 @@ class TestRxDspWorkerInputDelay : public QObject {
     Q_OBJECT
 
 private slots:
+    // The load when a real-time case failed (R-R3-21, R-R3-40).
+    void cleanup() { NereusSDR::RealtimeTestLoad::printLoadAverageIfFailed(); }
+
     void initTestCase()
     {
         g_previousHandler = qInstallMessageHandler(captureEpisodeLines);

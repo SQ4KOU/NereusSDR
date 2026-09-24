@@ -15,6 +15,7 @@
 //
 // Real time: each case runs about 10 s. Opens no audio device.
 #include <QtTest>
+#include "RealtimeTestLoad.h"
 
 #include <QMutex>
 #include <QMutexLocker>
@@ -305,6 +306,8 @@ private slots:
 
     void cleanup()
     {
+        // The load when a real-time case failed (R-R3-21, R-R3-40).
+        NereusSDR::RealtimeTestLoad::printLoadAverageIfFailed();
         clearDelays();
         std::this_thread::sleep_for(kSettle);
     }

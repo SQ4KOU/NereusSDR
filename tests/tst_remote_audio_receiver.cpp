@@ -1,5 +1,6 @@
 // no-port-check: NereusSDR-original remote audio receiver integration tests.
 #include <QtTest>
+#include "RealtimeTestLoad.h"
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QSignalSpy>
@@ -114,6 +115,9 @@ double blockRms(const QVector<float>& block)
 class TstRemoteAudioReceiver : public QObject {
     Q_OBJECT
 private slots:
+    // The load when a real-time case failed (R-R3-21, R-R3-40).
+    void cleanup() { NereusSDR::RealtimeTestLoad::printLoadAverageIfFailed(); }
+
     void speakerTrimMuteAndLifecycle()
     {
         AudioEngine engine;

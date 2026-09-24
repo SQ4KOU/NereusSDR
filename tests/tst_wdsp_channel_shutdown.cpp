@@ -22,6 +22,7 @@
 //   failure path through dsplock.c directly (a failed _beginthread cannot be
 //   forced here), then proves the channel's exit pairing is intact.
 #include <QtTest>
+#include "RealtimeTestLoad.h"
 
 #include <algorithm>
 #include <array>
@@ -238,6 +239,8 @@ private slots:
 
     void cleanup()
     {
+        // The load when a real-time case failed (R-R3-21, R-R3-40).
+        NereusSDR::RealtimeTestLoad::printLoadAverageIfFailed();
         WDSPSetTestBlockDelayUs(kChannel, 0);
         WDSPSetTestProcessDelayUs(kChannel, 0);
         // A case that failed before its own CloseChannel must not leave the
