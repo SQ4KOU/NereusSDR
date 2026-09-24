@@ -17619,7 +17619,16 @@ void RadioModel::flushRemoteHardwareApply()
                                                 QStringLiteral("True"))
                                  .toString() == QStringLiteral("True");
         m_ocMatrix.setMacAddress(mac);
-        applyN2adrPreset(m_ocMatrix, n2adrOn);
+        // R-R3-46 / R-R3-21: the preset also sets every transmit OC pin.
+        // A receive-only Core refuses a window's transmit pins
+        // (StationServer), so from a window it applies only the receive
+        // half: the operator's receive filtering follows the switch, the
+        // transmit pins stay as they were.
+        if (receiveOnlyStationPolicy()) {
+            applyN2adrPresetReceiveOnly(m_ocMatrix, n2adrOn);
+        } else {
+            applyN2adrPreset(m_ocMatrix, n2adrOn);
+        }
         m_ocMatrix.save();
         observe(QStringLiteral("n2adr"));
     }

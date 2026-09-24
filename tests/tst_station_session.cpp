@@ -5969,6 +5969,13 @@ void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
         {hw(QStringLiteral("ocOutputs/hardware/oc/extPa/model")), QStringLiteral("2")},
         {QStringLiteral("hardware/oc/extPa/model"), QStringLiteral("2")},
         {QStringLiteral("hardware/oc/extPa/biasDelayMs"), QStringLiteral("50")},
+        // Follow-up item 4.
+        {hw(QStringLiteral("alex/master/hpfBypassOnTx")), QStringLiteral("True")},
+        {hw(QStringLiteral("alex/master/hpfBypassOnPs")), QStringLiteral("False")},
+        {hw(QStringLiteral("alex/master/disable6mLnaOnTx")), QStringLiteral("False")},
+        {hw(QStringLiteral("alex/lpf/20m/start")), QStringLiteral("10.0")},
+        {hw(QStringLiteral("antennaAlex/alex/lpf/20m/end")), QStringLiteral("30.0")},
+        {QStringLiteral("hardware/oc/allowHotSwitching"), QStringLiteral("True")},
     };
     int expected = 0;
     for (const auto& [key, value] : writes) {
@@ -6002,6 +6009,24 @@ void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
     QVERIFY(cal.paCalProfile().watts == paTable.watts);
     QCOMPARE(hl2.pttHangMs(), pttHang);
     QCOMPARE(hl2.txLatencyMs(), txLatency);
+
+    // Follow-up item 1: the N2ADR switch. On a receive-only Core only the
+    // preset's receive half applies; every transmit pin stays as it was
+    // (the preset would clear them and set its own), in memory and saved.
+    reloads.clear();
+    s.core->ocMatrixMutable().setPin(Band::Band20m, 0, /*tx=*/true, true);
+    const QString n2adr = hw(QStringLiteral("hl2IoBoard/n2adrFilter"));
+    s.proxy->setValue(n2adr, QStringLiteral("True"));
+    QTRY_COMPARE(reloads, QStringList{QStringLiteral("n2adr")});
+    QVERIFY(oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));   // receive half applied
+    QVERIFY(oc.pinEnabled(Band::Band20m, 0, /*tx=*/true));    // not cleared
+    QVERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));   // not set
+    QVERIFY(settings.value(hw(QStringLiteral("oc/tx/40m/pin3")), QStringLiteral("False"))
+                .toString() != QStringLiteral("True"));
+    s.proxy->setValue(n2adr, QStringLiteral("False"));
+    QTRY_VERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
+    QVERIFY(oc.pinEnabled(Band::Band20m, 0, /*tx=*/true));
+    s.core->ocMatrixMutable().setPin(Band::Band20m, 0, /*tx=*/true, false);
 
     // The receive side is still the window's to change.
     s.proxy->setValue(hw(QStringLiteral("oc/rx/40m/pin3")), QStringLiteral("True"));

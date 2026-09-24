@@ -18,6 +18,9 @@
 //   2026-09-23 - R-R3-46: TX pins, pin actions, external PA and reset
 //                 follow the transmit permission. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-24 - R-R3-46: "Allow hot switching" follows the transmit
+//                permission. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -145,6 +148,8 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
         m_allowHotSwitching = new QCheckBox(tr("Allow hot switching"), this);
         m_allowHotSwitching->setToolTip(tr("Allow OC output lines to switch while transmitting"));
         row->addWidget(m_allowHotSwitching);
+        // R-R3-46: OC lines switching while transmitting is a transmit setting.
+        m_transmitWidgets.append(m_allowHotSwitching);
 
         row->addStretch();
 

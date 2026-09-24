@@ -13,6 +13,9 @@
 //                (KG4VCF), with AI-assisted transformation via Anthropic
 //                Claude Code. Sub-sub-tab under Hardware → Antenna/ALEX.
 //                Saturn BPF1 panel auto-hides on non-Saturn boards.
+//   2026-09-24 - R-R3-46: transmit permission for the TX low-pass table
+//                and TX master switches. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -116,6 +119,11 @@ public:
     // Populate controls from AppSettings for the given MAC address.
     // Call when a radio is connected.
     void restoreSettings(const QString& macAddress);
+
+    // R-R3-46: the TX low-pass table and the three TX master switches (HPF
+    // bypass on TX and on PureSignal feedback, 6 m LNA off on TX) follow the
+    // transmit permission with its reason. Always permitted locally.
+    void setTransmitPermitted(bool permitted, const QString& reason);
 
     // Test seam — returns whether the Saturn BPF1 groupbox is visible.
     // Always compiled (NEREUS_BUILD_TESTS is set on NereusSDRLib globally). Used by

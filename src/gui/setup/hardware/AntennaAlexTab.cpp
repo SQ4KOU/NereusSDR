@@ -18,6 +18,9 @@
 //   2026-09-23 - R-R3-46: forwards the transmit permission to Antenna
 //                 Control. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-24 - R-R3-46: forwards the transmit permission to Alex-1
+//                Filters too. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -177,6 +180,7 @@ void AntennaAlexTab::populate(const RadioInfo& info, const BoardCapabilities& ca
 void AntennaAlexTab::setTransmitPermitted(bool permitted, const QString& reason)
 {
     m_antennaControlTab->setTransmitPermitted(permitted, reason);
+    m_alex1Tab->setTransmitPermitted(permitted, reason);
 }
 
 // ── restoreSettings ───────────────────────────────────────────────────────────

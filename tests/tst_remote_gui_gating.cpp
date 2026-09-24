@@ -2496,10 +2496,30 @@ private slots:
         auto* hl2Options = hardware->findChild<Hl2OptionsTab*>();
         QVERIFY(hl2Options != nullptr);
         QVERIFY(!hl2Options->transmitTimingsEnabledForTest());
+        // Follow-up item 4: OC hot switching and the Alex TX master switches.
+        const auto check = [hardware](const QString& text) -> QCheckBox* {
+            for (QCheckBox* box : hardware->findChildren<QCheckBox*>()) {
+                if (box->text() == text) { return box; }
+            }
+            return nullptr;
+        };
+        const QStringList transmitChecks{QStringLiteral("Allow hot switching"),
+                                         QStringLiteral("HPF Bypass on TX"),
+                                         QStringLiteral("HPF Bypass on PureSignal feedback"),
+                                         QStringLiteral("Disable 6m LNA on TX")};
+        for (const QString& text : transmitChecks) {
+            QCheckBox* box = check(text);
+            QVERIFY2(box != nullptr, qPrintable(text));
+            QVERIFY2(!box->isEnabled(), qPrintable(text));
+            QCOMPARE(box->toolTip(), transmitReason);
+        }
 
         // A Core that permits transmit lifts it.
         dialog.setTransmitPermitted(true);
         QVERIFY(hl2Options->transmitTimingsEnabledForTest());
+        for (const QString& text : transmitChecks) {
+            QVERIFY2(check(text)->isEnabled(), qPrintable(text));
+        }
         QVERIFY(antennas->txGridForTest()->isEnabled());
         QVERIFY(group(QStringLiteral("User Dig Out"))->isEnabled());
         QVERIFY(group(QStringLiteral("TX Display Cal"))->toolTip().isEmpty());

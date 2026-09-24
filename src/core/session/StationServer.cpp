@@ -81,6 +81,10 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 fix wave: radioHardwareVersion
 //                                    3, the read-only `ioBoard` object.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-46 follow-up: the Alex TX
+//                                    low-pass table and master TX switches
+//                                    and OC hot switching are transmit keys.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -310,6 +314,11 @@ bool isTransmitDspOptionsKey(const QString& key)
 //   hardware/<mac>/pa/...               PA profiles (PaProfileManager)
 //   hardware/<mac>/powerByBand/..., tunePowerByBand/...   (TransmitModel)
 //   any .../oc/extPa/...                the external PA group (OcOutputsHfTab)
+//   any .../oc/allowHotSwitching        OC lines switching while transmitting
+//   any .../alex/master/{hpfBypassOnTx,hpfBypassOnPs,disable6mLnaOnTx}
+//   any .../alex/lpf/...                the Alex TX low-pass table
+//                                       (AntennaAlexAlex1Tab, its own keys and
+//                                       the Hardware page's copies)
 bool isTransmitHardwareKey(const QString& rawKey)
 {
     const QString key = rawKey.toLower();
@@ -318,8 +327,21 @@ bool isTransmitHardwareKey(const QString& rawKey)
     }
     const QStringList parts = key.split(QLatin1Char('/'));
     for (int i = 1; i + 1 < parts.size(); ++i) {
-        if (parts[i] == QLatin1String("oc") && parts[i + 1] == QLatin1String("extpa")) {
+        const QString& here = parts[i];
+        const QString& next = parts[i + 1];
+        if (here == QLatin1String("oc")
+            && (next == QLatin1String("extpa") || next == QLatin1String("allowhotswitching"))) {
             return true;
+        }
+        if (here == QLatin1String("alex") && next == QLatin1String("lpf")) {
+            return true;
+        }
+        if (here == QLatin1String("alex") && next == QLatin1String("master") && i + 2 < parts.size()) {
+            const QString& field = parts[i + 2];
+            if (field == QLatin1String("hpfbypassontx") || field == QLatin1String("hpfbypassonps")
+                || field == QLatin1String("disable6mlnaontx")) {
+                return true;
+            }
         }
     }
     if (parts.size() < 4) {
