@@ -124,6 +124,10 @@
 //                live whether the Core's receiver streams are Opus, so it
 //                can say what that costs digital modes. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 / R-R3-21: a test run never auto-opens the
+//                blocking Linux audio first-run dialog
+//                (firstRunPromptsBarredForTestRun). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -537,6 +541,7 @@ warren@wpratt.com
 #include <QPixmap>
 #include <QProgressDialog>
 #include <QMessageBox>
+#include <QStandardPaths>
 #include <QTimer>
 #include <QThread>
 #include <QFile>          // /proc/stat reader for Linux system-CPU path
@@ -1024,7 +1029,12 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
     // be shown a first-run dialog about a local sound card that R2 never
     // uses -- with the "seen" flag then set, hiding the real prompt if that
     // same machine is later run in local direct mode.
-    if (m_radioModel->ownsLocalDsp()
+    //
+    // R-R3-49 / R-R3-21: nor in a test run. The dialog is modal (exec()),
+    // so a window built by a test on a host with no Linux sound server
+    // waited forever for a click.
+    if (!firstRunPromptsBarredForTestRun()
+        && m_radioModel->ownsLocalDsp()
         && m_radioModel->audioEngine()->linuxBackend() == LinuxAudioBackend::None
         && AppSettings::instance().value(QStringLiteral("Audio/LinuxFirstRunSeen"),
                                           QStringLiteral("False")).toString()
@@ -12127,6 +12137,19 @@ void MainWindow::updatePsaIndicatorVisibility()
         m_chromeBar->setItemAvailable(m_psaIndicator, caps && armed);
         m_chromeBar->relayout(m_chromeBarWidget->width());
     }
+}
+
+// R-R3-49 / R-R3-21: the rule PortAudioBus::portAudioBarredForTestRun
+// applies to audio devices, applied to first-run prompts. Test mode is
+// switched on before main() in every test binary (tests/TestSandboxInit.cpp)
+// and never in the app, so the app's behaviour is unchanged.
+bool MainWindow::firstRunPromptsBarredForTestRun()
+{
+#ifdef NEREUS_BUILD_TESTS
+    return QStandardPaths::isTestModeEnabled();
+#else
+    return false;
+#endif
 }
 
 void MainWindow::showAudioDiagnoseDialog()

@@ -21,6 +21,9 @@
 //   2026-09-23 - J.J. Boyd (KG4VCF). R3 receiver audio fix wave (R-R3-42,
 //                 R-R3-44): m_receiverStopNotices. AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-49 / R-R3-21:
+//                 firstRunPromptsBarredForTestRun(). AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -208,6 +211,11 @@ public:
     void retireForSessionSwitch();
     void setConnectionPickerManaged(bool managed);
     RadioModel* radioModel() const { return m_radioModel; }
+
+    // R-R3-49 / R-R3-21: true in a test run (QStandardPaths test mode, set
+    // before main() by tests/TestSandboxInit.cpp), false in the app. A test
+    // run never auto-opens a first-run prompt that blocks for a click.
+    static bool firstRunPromptsBarredForTestRun();
 
 signals:
     void connectionsRequested();

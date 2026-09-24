@@ -7035,6 +7035,10 @@ target_compile_definitions(tst_other_button_item PRIVATE NEREUS_BUILD_TESTS)
 # including the surfaces hidden until their feature is built.
 nereus_add_test(tst_no_placeholder_marks)
 target_compile_definitions(tst_no_placeholder_marks PRIVATE NEREUS_BUILD_TESTS)
+# Linux sweep hang fix (R-R3-49, R-R3-21): a window built in a test run
+# opens no first-run dialog that blocks for a click.
+nereus_add_test(tst_first_run_prompts_test_run)
+target_compile_definitions(tst_first_run_prompts_test_run PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_connection_selector)
 nereus_add_test(tst_station_lan_cache)
 nereus_add_test(tst_station_lan_transport)
