@@ -429,9 +429,13 @@ computer (127.0.0.1), so apps there reach it.
 It transmits for no app until remote transmit: the init burst says
 `receive_only:true` and `tx_enable:<rx>,false`; `trx:<rx>,true` touches no
 MOX, takes no transmit audio lock and is answered `trx:<rx>,false`; transmit
-audio frames are dropped. The Core logs the plain reason "Apps cannot
-transmit through the station's TCI server until remote transmit is ready."
-and never puts it on the TCI wire.
+audio frames are dropped. Nor does it let an app change the Core's
+transmit configuration: `tx_profile_ex:<name>`, `xit_enable:<rx>,<bool>`
+and `xit_offset:<rx>,<hz>` change nothing, are not broadcast, and are
+answered to the asking app with the value the Core keeps (queries answer
+as usual). The Core logs the plain reason "Apps cannot transmit through
+the station's TCI server until remote transmit is ready." for each and
+never puts it on the TCI wire.
 
 The TCI compatibility settings (`TciEmulateExpertSDR3Protocol`,
 `TciEmulateSunSDR2Pro` and the other `Tci` keys) are not seeded on the
@@ -1142,7 +1146,9 @@ rewrite the fixtures, and update this document in the same commit.
   serving that port; the window's own when the Core's switch is off, not
   listening or on another port, and after a wait with no answer), and the
   TCI page's line.
-- `tst_tci_tx_mutex`: the station server's transmit refusal on the wire.
+- `tst_tci_tx_mutex`: the station server's transmit refusal on the wire,
+  and its refusal of TX profile and XIT changes (nothing applied or
+  broadcast, the kept value to the asking app, the reason off the wire).
 - `tst_smartsdr_api_listener_bind`: the one station rule on a Core with two
   networks (the radio's network, the override, every address, this computer
   only before a radio, a move when the radio moves); the 4992 listener on

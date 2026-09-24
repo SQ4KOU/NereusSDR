@@ -29,6 +29,9 @@
 //                remote rx_sensors from the Core's mirrored meter; a late
 //                "cannot send" answer unsubscribes the apps and tells them.
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-48 / R-R3-25: the station server tells the operator
+//                why a TX profile or XIT change was not made. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -2566,6 +2569,16 @@ void TciServer::onTextMessageReceived(const QString& msg)
         // NereusSDR simplification: TryAcquire/Release runs directly in the
         // main-thread slot; no per-listener thread lock needed because all
         // WebSocket callbacks run on the same Qt event loop.
+        // M1 (R-R3-48 / R-R3-25): a TX profile or XIT change on the
+        // receive-only station server is not made (TciProtocol answers with
+        // the kept value); the operator hears why, off the wire.
+        if (m_stationReceiveOnly && !m_remoteWindow
+            && TciProtocol::isTransmitSettingChange(trimmed)) {
+            qCInfo(lcTci) << "TciServer: transmit setting refused on the station server"
+                          << trimmed << ", peer" << session->peer;
+            raiseOperatorNotice(session->peer,
+                                QString::fromLatin1(kStationTransmitRefusedReason));
+        }
         {
             const QString kTrx = QStringLiteral("trx:");
             if (trimmed.startsWith(kTrx)) {

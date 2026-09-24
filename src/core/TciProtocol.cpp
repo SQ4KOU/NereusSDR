@@ -20,6 +20,10 @@
 //   2026-09-24 - R-R3-48 / R-R3-25: the Core's station server is
 //                receive-only too (transmitRefused()). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-48 / R-R3-25: the station server refuses TX profile
+//                and XIT changes while receive-only
+//                (isTransmitSettingChange). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 
 #include "TciProtocol.h"
 #include "AppSettings.h"
@@ -39,6 +43,28 @@ namespace NereusSDR {
 // synonyms for "normal" so client-set values that round-trip through the
 // shim layer come back unchanged (Thetis tciModeToAgcMode at
 // TCIServer.cs:2280-2303 normalises identically).
+// static
+bool TciProtocol::isTransmitSettingChange(const QString& command)
+{
+    QString text = command.trimmed();
+    if (text.endsWith(QLatin1Char(';'))) {
+        text.chop(1);
+    }
+    const qsizetype colon = text.indexOf(QLatin1Char(':'));
+    if (colon < 0) {
+        return false;   // tx_profile_ex with no arguments is a query
+    }
+    const QString name = text.left(colon).trimmed().toLower();
+    const int argCount = int(text.mid(colon + 1).split(QLatin1Char(',')).size());
+    if (name == QLatin1String("tx_profile_ex")) {
+        return argCount >= 1;
+    }
+    if (name == QLatin1String("xit_enable") || name == QLatin1String("xit_offset")) {
+        return argCount >= 2;
+    }
+    return false;
+}
+
 QString TciProtocol::tciAgcModeForWire(const QString& enumName)
 {
     const QString u = enumName.trimmed().toUpper();
@@ -2649,6 +2675,13 @@ QString TciProtocol::handleXitEnableCommand(const QStringList& args)
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
     }
 
+    if (args.size() >= 2 && m_stationReceiveOnly) {
+        // M1 (R-R3-48 / R-R3-25): XIT is transmit configuration; the
+        // receive-only station server changes nothing and tells the asking
+        // app the value it keeps. TciServer tells the operator why.
+        return handleXitEnableCommand({args.at(0)});
+    }
+
     if (args.size() >= 2) {
         const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
         QMetaObject::invokeMethod(m_radio, "setXitEnable", Qt::DirectConnection,
@@ -2679,6 +2712,11 @@ QString TciProtocol::handleXitOffsetCommand(const QStringList& args)
         QMetaObject::invokeMethod(m_radio, "xitOffset", Qt::DirectConnection,
                                   Q_RETURN_ARG(int, offset));
         return QStringLiteral("xit_offset:%1,%2;").arg(rx).arg(offset);
+    }
+
+    if (args.size() >= 2 && m_stationReceiveOnly) {
+        // M1 (R-R3-48 / R-R3-25): as xit_enable.
+        return handleXitOffsetCommand({args.at(0)});
     }
 
     if (args.size() >= 2) {
@@ -3091,6 +3129,11 @@ QString TciProtocol::handleTxProfileExSetCommand(const QStringList& args)
     if (args.size() != 1) { return {}; }
     const QString name = args.at(0).trimmed();
     if (name.isEmpty()) { return {}; }
+    if (m_stationReceiveOnly) {
+        // M1 (R-R3-48 / R-R3-25): the TX profile is transmit configuration;
+        // the receive-only station server keeps the Core's and says which.
+        return handleTxProfileExQueryCommand();
+    }
     QMetaObject::invokeMethod(m_radio, "setTxProfile", Qt::DirectConnection,
                               Q_ARG(QString, name));
     m_pendingNotifications << buildTxProfileExLine(name);

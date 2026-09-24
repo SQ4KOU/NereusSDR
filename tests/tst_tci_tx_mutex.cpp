@@ -65,6 +65,7 @@ private slots:
     void tx_mutex_second_client_frame_is_dropped();
     void remote_window_refuses_transmit_off_the_wire();
     void station_server_refuses_transmit_until_remote_transmit();
+    void station_server_refuses_transmit_settings();
 };
 
 // ── tx_mutex_single_client_claim_and_release() ───────────────────────────────
@@ -333,6 +334,76 @@ void TestTciTxMutex::station_server_refuses_transmit_until_remote_transmit()
     QTRY_COMPARE_WITH_TIMEOUT(server.activeTxClientCount(), 0, 3000);
     local.close();
     client.close();
+    server.stop();
+}
+
+// M1 (R-R3-48 / R-R3-25): the station server does not let an app change the
+// Core's TX profile or XIT (tx_profile_ex, xit_enable, xit_offset) while the
+// Core is receive-only: nothing is applied or broadcast, the asking app
+// hears the current value, and the operator gets the same plain transmit
+// reason, off the wire. Queries still answer.
+void TestTciTxMutex::station_server_refuses_transmit_settings()
+{
+    RadioModel core;
+    TciServer server(&core);
+    server.setStationReceiveOnly(true);
+    QSignalSpy notices(&server, &TciServer::operatorNotice);
+    QVERIFY(server.start(0));
+
+    QWebSocket client;
+    QWebSocket other;
+    QSignalSpy connected(&client, &QWebSocket::connected);
+    QSignalSpy otherConnected(&other, &QWebSocket::connected);
+    QSignalSpy text(&client, &QWebSocket::textMessageReceived);
+    QSignalSpy otherText(&other, &QWebSocket::textMessageReceived);
+    client.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    other.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    QVERIFY(otherConnected.count() == 1 || otherConnected.wait(2000));
+    const auto lines = [](const QSignalSpy& spy) {
+        QStringList out;
+        for (const auto& call : spy) {
+            for (const QString& part :
+                 call.at(0).toString().split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+                out << part.trimmed() + QLatin1Char(';');
+            }
+        }
+        return out;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(lines(text).contains(QStringLiteral("ready;")), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(lines(otherText).contains(QStringLiteral("ready;")), 3000);
+    const QString profileBefore = core.txProfile();
+    const int mark = int(text.count());
+    const int otherMark = int(otherText.count());
+
+    client.sendTextMessage(QStringLiteral("xit_enable:0,true;"));
+    client.sendTextMessage(QStringLiteral("xit_offset:0,500;"));
+    client.sendTextMessage(QStringLiteral("tx_profile_ex:Contest;"));
+    QTRY_COMPARE_WITH_TIMEOUT(notices.count(), 3, 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(lines(text).mid(mark).contains(QStringLiteral("xit_enable:0,false;")),
+                             3000);
+    QTest::qWait(150);
+    QVERIFY(!core.xitEnable());
+    QCOMPARE(core.xitOffset(), 0);
+    QCOMPARE(core.txProfile(), profileBefore);
+    for (const QString& line : lines(text).mid(mark) + lines(otherText).mid(otherMark)) {
+        QVERIFY2(line != QStringLiteral("xit_enable:0,true;")
+                     && line != QStringLiteral("xit_offset:0,500;")
+                     && line != QStringLiteral("tx_profile_ex:Contest;"), qPrintable(line));
+        QVERIFY2(!line.contains(QString::fromLatin1(TciServer::kStationTransmitRefusedReason)),
+                 qPrintable(line));
+    }
+    for (const auto& notice : notices) {
+        QCOMPARE(notice.at(1).toString(),
+                 QString::fromLatin1(TciServer::kStationTransmitRefusedReason));
+    }
+    // A query still answers, and raises nothing.
+    client.sendTextMessage(QStringLiteral("xit_offset:0;"));
+    QTRY_VERIFY_WITH_TIMEOUT(lines(text).mid(mark).contains(QStringLiteral("xit_offset:0,0;")),
+                             3000);
+    QCOMPARE(notices.count(), 3);
+    client.close();
+    other.close();
     server.stop();
 }
 
