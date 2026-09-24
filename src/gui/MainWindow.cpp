@@ -534,18 +534,21 @@ QVector<DetectedCable> detectedForFirstRun()
 // Local tooltips of the Tools menu's two developer test entries. Defined
 // once because applyRemoteRoleGating() swaps them for the remote transmit
 // reason and has to be able to put them back.
+// R-R3-17 / R-R3-21: user words. The entries open AntennaSwitchToast and
+// TxBoundConfirmDialog (Phase 3F closeout); neither fires on its own until
+// the antenna conflict-detection state machine ships.
 QString testAntennaToastToolTip()
 {
-    return QStringLiteral("Phase 3F closeout: fire the AntennaSwitchToast surface "
-                          "for visual verification. Real auto-switch firing wires "
-                          "when the conflict-detection state machine ships.");
+    return QStringLiteral("Show the antenna switch notice to see how it looks. "
+                          "No antenna changes, and antennas do not switch on "
+                          "their own yet.");
 }
 
 QString testTxBoundReRouteToolTip()
 {
-    return QStringLiteral("Phase 3F closeout: open the TxBoundConfirmDialog surface "
-                          "for visual verification. Real emission from addSliceOnPan "
-                          "wires when the conflict-detection state machine ships.");
+    return QStringLiteral("Show the question asked before the transmit antenna "
+                          "moves, to see how it looks. No antenna changes, and "
+                          "adding a slice does not ask it yet.");
 }
 } // namespace
 

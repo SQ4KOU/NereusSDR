@@ -277,8 +277,9 @@ VaxChannelCard::VaxChannelCard(int channel, QWidget* parent)
             // owned PipeWireBus collection via Task 24+ accessor.
             QStringLiteral("—"), this);
         m_consumerLabel->setStyleSheet(QLatin1String(kSpecRowPlaceholderStyle));
-        m_consumerLabel->setToolTip(tr("Live consumer count not yet wired "
-                                       "(deferred to Task 24+)."));
+        // R-R3-17: user words (the live count is a Task 24+ accessor).
+        m_consumerLabel->setToolTip(tr("The number of programs using this "
+                                       "channel is not shown yet."));
         form->addRow(consumersLbl, m_consumerLabel);
 
         // "Level:" HGauge row.

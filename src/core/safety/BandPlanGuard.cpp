@@ -505,13 +505,18 @@ BandPlanGuard::checkMoxAllowed(Region region, std::int64_t freqHz,
     if (!isModeAllowedForTx(mode)) {
         QString reason;
         switch (mode) {
+            // R-R3-17 / R-R3-21: user words. CW transmit is planned work
+            // (Phase 3M-2); FM transmit waits on pre-emphasis (Phase 3M-3b).
+            // DRM has its own sentence, so a DRM refusal names DRM.
             case DSPMode::CWL:
             case DSPMode::CWU:
-                reason = QStringLiteral("CW TX coming in Phase 3M-2");
+                reason = QStringLiteral("CW transmit is not available yet");
                 break;
             case DSPMode::FM:
+                reason = QStringLiteral("FM transmit is not available yet");
+                break;
             case DSPMode::DRM:
-                reason = QStringLiteral("FM TX coming in Phase 3M-3b (pre-emphasis)");
+                reason = QStringLiteral("DRM transmit is not available yet");
                 break;
             default:
                 reason = QStringLiteral("Mode not supported for TX");
@@ -527,7 +532,7 @@ BandPlanGuard::checkMoxAllowed(Region region, std::int64_t freqHz,
 
     // Band-mismatch check.
     if (!isValidTxBand(rxBand, txBand, preventDifferentBand)) {
-        return {false, QStringLiteral("RX/TX band mismatch — cross-band TX disabled")};
+        return {false, QStringLiteral("RX/TX band mismatch: cross-band TX disabled")};
     }
 
     return {true, QString()};

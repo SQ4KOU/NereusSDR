@@ -1834,7 +1834,7 @@ void TxApplet::setCurrentBand(Band band)
 // Mode categories:
 //   Allowed (LSB/USB/DIGL/DIGU): normal "Manual transmit (MOX)" tooltip.
 //   CW (CWL/CWU):                CW TX deferred to Phase 3M-2.
-//   Audio (AM/SAM/DSB/FM/DRM):   AM/FM TX deferred to Phase 3M-3 (audio modes).
+//   FM, DRM:                     not yet transmit modes (FM waits on 3M-3b).
 //   SPEC:                        Never a TX mode.
 //
 // This helper is static so TxApplet tests can call it directly without
@@ -1853,13 +1853,18 @@ QString TxApplet::tooltipForMode(DSPMode mode)
     case DSPMode::DSB:
         return QStringLiteral("Manual transmit (MOX)");
 
+    // R-R3-17 / R-R3-21: the same user words BandPlanGuard refuses with.
+    // CW transmit is Phase 3M-2; FM transmit waits on pre-emphasis (Phase
+    // 3M-3b). DRM names DRM.
     case DSPMode::CWL:
     case DSPMode::CWU:
-        return QStringLiteral("CW TX coming in Phase 3M-2");
+        return QStringLiteral("CW transmit is not available yet");
 
     case DSPMode::FM:
+        return QStringLiteral("FM transmit is not available yet");
+
     case DSPMode::DRM:
-        return QStringLiteral("FM TX coming in Phase 3M-3b (pre-emphasis)");
+        return QStringLiteral("DRM transmit is not available yet");
 
     case DSPMode::SPEC:
     default:

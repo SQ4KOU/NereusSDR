@@ -946,7 +946,8 @@ void SpectrumOverlayPanel::buildVaxFlyout()
         m_vaxIqCmb->setObjectName(QStringLiteral("vaxIqCombo"));
         m_vaxIqCmb->addItems({"None", "1", "2", "3", "4"});
         m_vaxIqCmb->setEnabled(false);
-        m_vaxIqCmb->setToolTip("IQ-stream to VAX \u2014 reserved for future phase (design spec \u00a711.3)");
+        // R-R3-17: user words (reserved per design spec section 11.3).
+        m_vaxIqCmb->setToolTip("Sending I/Q to a VAX channel is not available yet.");
         row->addWidget(m_vaxIqCmb, 1);
         vb->addLayout(row);
     }

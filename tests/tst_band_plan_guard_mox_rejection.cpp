@@ -6,7 +6,7 @@
 // Phase 3M-1b Task K.2: MoxController::setMox(true) rejection path.
 //
 // Covers:
-//   1. MoxCheckFn callback: CW mode → moxRejected("CW TX coming in Phase 3M-2");
+//   1. MoxCheckFn callback: CW mode → moxRejected("CW transmit is not available yet");
 //      MOX state stays Rx.
 //   2. AM mode → accepted (AM/SAM/DSB TX via WDSP ammod);
 //      MOX state stays Rx.
@@ -109,7 +109,7 @@ private slots:
             QString::number(static_cast<int>(Region::UnitedStates)));
     }
 
-    // ── 1. CW mode + setMox(true) → moxRejected("CW TX coming in Phase 3M-2") ─
+    // ── 1. CW mode + setMox(true) → moxRejected("CW transmit is not available yet") ─
 
     void cwl_setMox_emitsMoxRejected()
     {
@@ -125,7 +125,7 @@ private slots:
 
         QCOMPARE(rejectedSpy.count(), 1);
         QCOMPARE(rejectedSpy.at(0).at(0).toString(),
-                 QStringLiteral("CW TX coming in Phase 3M-2"));
+                 QStringLiteral("CW transmit is not available yet"));
         // MOX state must NOT have advanced.
         QVERIFY(!ctrl.isMox());
         QCOMPARE(ctrl.state(), MoxState::Rx);
@@ -145,7 +145,7 @@ private slots:
 
         QCOMPARE(rejectedSpy.count(), 1);
         QCOMPARE(rejectedSpy.at(0).at(0).toString(),
-                 QStringLiteral("CW TX coming in Phase 3M-2"));
+                 QStringLiteral("CW transmit is not available yet"));
         QVERIFY(!ctrl.isMox());
     }
 
@@ -179,7 +179,7 @@ private slots:
 
         QCOMPARE(rejectedSpy.count(), 1);
         QCOMPARE(rejectedSpy.at(0).at(0).toString(),
-                 QStringLiteral("FM TX coming in Phase 3M-3b (pre-emphasis)"));
+                 QStringLiteral("FM transmit is not available yet"));
         QVERIFY(!ctrl.isMox());
     }
 
@@ -466,13 +466,13 @@ private slots:
     void tooltipForMode_cwl_returnsCwPhase()
     {
         const QString tip = TxApplet::tooltipForMode(DSPMode::CWL);
-        QCOMPARE(tip, QStringLiteral("CW TX coming in Phase 3M-2"));
+        QCOMPARE(tip, QStringLiteral("CW transmit is not available yet"));
     }
 
     void tooltipForMode_cwu_returnsCwPhase()
     {
         const QString tip = TxApplet::tooltipForMode(DSPMode::CWU);
-        QCOMPARE(tip, QStringLiteral("CW TX coming in Phase 3M-2"));
+        QCOMPARE(tip, QStringLiteral("CW transmit is not available yet"));
     }
 
     void tooltipForMode_am_returnsManualMox()
@@ -484,7 +484,7 @@ private slots:
     void tooltipForMode_fm_returnsAudioPhase()
     {
         const QString tip = TxApplet::tooltipForMode(DSPMode::FM);
-        QCOMPARE(tip, QStringLiteral("FM TX coming in Phase 3M-3b (pre-emphasis)"));
+        QCOMPARE(tip, QStringLiteral("FM transmit is not available yet"));
     }
 
     void tooltipForMode_sam_returnsManualMox()
@@ -502,7 +502,7 @@ private slots:
     void tooltipForMode_drm_returnsAudioPhase()
     {
         const QString tip = TxApplet::tooltipForMode(DSPMode::DRM);
-        QCOMPARE(tip, QStringLiteral("FM TX coming in Phase 3M-3b (pre-emphasis)"));
+        QCOMPARE(tip, QStringLiteral("DRM transmit is not available yet"));
     }
 
     void tooltipForMode_spec_returnsNotSupported()

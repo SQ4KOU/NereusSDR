@@ -1207,7 +1207,7 @@ void SpeechProcessorPage::buildStageStatusSection()
         QStringLiteral("Open DEXP/VOX Setup"),
         QStringLiteral("Open Setup → Transmit → DEXP/VOX (AM-Squelch + Downward Expander)"),
         QStringLiteral("DEXP/VOX"),
-        QStringLiteral("3M-3a-iii"),
+        QString(),  // R-R3-17: no "(3M-3a-iii)" tag; DEXP/VOX shipped.
         QStringLiteral("Transmit"));
 
     auto* groupLayout = qobject_cast<QVBoxLayout*>(group->layout());

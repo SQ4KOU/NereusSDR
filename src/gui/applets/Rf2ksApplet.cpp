@@ -168,10 +168,12 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
     auto* actionRow = new QHBoxLayout();
     m_tuneBtn   = new QPushButton(QStringLiteral("TUNE"),   tunerWrap);
     m_bypassBtn = new QPushButton(QStringLiteral("BYPASS"), tunerWrap);
+    // R-R3-17: user words. Firmware G200C267 has no tuner write verb; a
+    // feature request to RF-Power is filed.
     const QString tip = QStringLiteral(
-        "RF2K-S firmware (G200C267) does not expose a tuner write verb.\n"
-        "Press TUNE / BYPASS on the amp's front panel.\n"
-        "Feature request to RF-Power filed; this button un-greys when firmware ships it.");
+        "The amplifier's firmware does not let NereusSDR tune or bypass it.\n"
+        "Press TUNE or BYPASS on the amplifier's front panel.\n"
+        "These buttons turn on when the amplifier's firmware allows it.");
     m_tuneBtn->setEnabled(false);
     m_bypassBtn->setEnabled(false);
     m_tuneBtn->setToolTip(tip);
