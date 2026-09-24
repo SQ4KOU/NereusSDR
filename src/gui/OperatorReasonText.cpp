@@ -164,6 +164,9 @@ constexpr Entry kEntries[] = {
     {"receiver-limit", nullptr,
      "The Core is already sending audio for as many receivers as it can. Stop the audio "
      "for another receiver to hear this one."},
+    // R-R3-45: the headphones audio context's own reason.
+    {"no-headphones-receiver", nullptr,
+     "No receiver is playing on the headphones."},
 
     // Audio and display from the Core: the Core's refusals
     // (DaemonMediaController::sendRejected) and this computer's own

@@ -24,6 +24,10 @@
 // before receiver audio streams (no receiverAudioVersion). The station's
 // two slices carry their own tones, 617 Hz on slice A and 1579 Hz on slice
 // B, so a receiver stream shows which slice it carries.
+// R-R3-45: hideHeadphonesMix likewise makes the Core look like one from
+// before the headphones mix (no headphonesMixVersion), and
+// attachRemoteHeadphones() gives the remote window a paced headphones
+// device beside its speakers.
 //
 // =================================================================
 
@@ -96,16 +100,17 @@ public:
     {
         const bool mayRewrite = (m_helloMinor && wire.contains("\"hello\""))
             || (forgeNextAudioContext && wire.contains("\"audio-context\""))
-            || ((hideAudioProfile || hideAudioClock || hideReceiverAudio)
+            || ((hideAudioProfile || hideAudioClock || hideReceiverAudio || hideHeadphonesMix)
                 && wire.contains("\"capabilities\""));
         SessionMessage message;
         if (mayRewrite && SessionMessages::decode(wire, &message)) {
-            if ((hideAudioProfile || hideAudioClock || hideReceiverAudio)
+            if ((hideAudioProfile || hideAudioClock || hideReceiverAudio || hideHeadphonesMix)
                 && message.kind == SessionMessageKind::Capabilities) {
                 StationCapabilities capabilities = StationCapabilities::fromUpdates(message.updates);
                 if (hideAudioProfile) { capabilities.audioProfileVersion = 0; }
                 if (hideAudioClock) { capabilities.audioClockVersion = 0; }
                 if (hideReceiverAudio) { capabilities.receiverAudioVersion = 0; }
+                if (hideHeadphonesMix) { capabilities.headphonesMixVersion = 0; }
                 ++hiddenAudioProfiles;
                 LoopbackTransport::sendText(SessionMessages::encode(
                     SessionMessages::capabilities(capabilities.toUpdates())));
@@ -138,6 +143,7 @@ public:
     bool hideAudioProfile = false;
     bool hideAudioClock = false;
     bool hideReceiverAudio = false;
+    bool hideHeadphonesMix = false;
 
 private:
     std::optional<quint16> m_helloMinor;
@@ -266,6 +272,7 @@ struct RemoteAudioSessionHarness {
         station->hideAudioProfile = hideAudioProfile;
         station->hideAudioClock = hideAudioClock;
         station->hideReceiverAudio = hideReceiverAudio;
+        station->hideHeadphonesMix = hideHeadphonesMix;
         stationLink = station;
         station->linkTo(clientEnd);
         client.startSession(clientEnd, server.token());
@@ -276,13 +283,14 @@ struct RemoteAudioSessionHarness {
             QCOMPARE(clientEnd->rewrittenHellos, 1);
             QCOMPARE(client.agreedMinor(), *helloMinor);
         }
-        if (hideAudioProfile || hideAudioClock || hideReceiverAudio) {
+        if (hideAudioProfile || hideAudioClock || hideReceiverAudio || hideHeadphonesMix) {
             // On a reconnect the server can still report media from the
             // session being replaced; wait for this link's capabilities.
             QTRY_VERIFY(station->hiddenAudioProfiles >= 1 && client.isHandshakeComplete());
             if (hideAudioProfile) { QCOMPARE(client.capabilities().audioProfileVersion, 0); }
             if (hideAudioClock) { QCOMPARE(client.capabilities().audioClockVersion, 0); }
             if (hideReceiverAudio) { QCOMPARE(client.capabilities().receiverAudioVersion, 0); }
+            if (hideHeadphonesMix) { QCOMPARE(client.capabilities().headphonesMixVersion, 0); }
         }
     }
 
@@ -294,6 +302,32 @@ struct RemoteAudioSessionHarness {
     // Set before connectSession(): the Core appears to predate receiver
     // audio streams (R-R3-43).
     bool hideReceiverAudio = false;
+    // Set before connectSession(): the Core appears to predate the
+    // headphones mix (R-R3-45).
+    bool hideHeadphonesMix = false;
+
+    // R-R3-45: the remote window's headphones, a paced fake device the test
+    // renders like the speakers. Open, so the window can play the Core's
+    // headphones mix on it.
+    PacedAudioBus* remoteHeadphonesBus{nullptr};
+    void attachRemoteHeadphones()
+    {
+        auto bus = std::make_unique<PacedAudioBus>();
+        remoteHeadphonesBus = bus.get();
+        remote.audioEngine()->setHeadphonesBusForTest(std::move(bus));
+    }
+
+    // R-R3-45: both station slices back on the speakers, here and in the
+    // settings the station saved, so later tests start from the default.
+    void resetOutputRoutes()
+    {
+        for (int sliceId : {sliceA, sliceB}) {
+            if (SliceModel* slice = station.sliceById(sliceId)) {
+                slice->setOutputRoute(SliceModel::OutputRoute::Speakers);
+            }
+            AppSettings::instance().remove(QStringLiteral("Slice%1/OutputRoute").arg(sliceId));
+        }
+    }
 
     // The station's two slice tones.
     static constexpr double kSliceAToneHz = 617.0;

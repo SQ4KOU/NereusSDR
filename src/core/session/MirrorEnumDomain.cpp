@@ -14,6 +14,10 @@
 //                                    declared enum domains. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-45: SliceModel::OutputRoute
+//                                    (speakers or headphones). AI-assisted
+//                                    implementation via Anthropic Claude
+//                                    Code.
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-47: AmplifierModel::State.
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-45: SliceModel::OutputRoute.
@@ -21,6 +25,11 @@
 //   2026-09-24 - R-R3-47 / R-R3-48: TunerModel::BandFollow and
 //                RfKitModel::TunerMode. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Merge: lane B already declared
+//                                    SliceModel::OutputRoute; the
+//                                    duplicate declaration is removed.
+//                                    AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/MirrorEnumDomain.h"
@@ -104,6 +113,10 @@ const DomainTable& table()
 
         declare<FmTxMode>(&t, { FmTxMode::High, FmTxMode::Simplex, FmTxMode::Low });
 
+        // R-R3-45: the output a receiver plays on (VAX design 6.2).
+        declare<SliceModel::OutputRoute>(&t, { SliceModel::OutputRoute::Speakers,
+                                               SliceModel::OutputRoute::Headphones });
+
         declare<TunerModel::ConnectionPhase>(&t, {
             TunerModel::ConnectionPhase::Disabled,
             TunerModel::ConnectionPhase::Disconnected,
@@ -144,12 +157,6 @@ const DomainTable& table()
             RfKitModel::TunerMode::Manual,
             RfKitModel::TunerMode::AutoTuning,
             RfKitModel::TunerMode::Auto,
-        });
-
-        // R-R3-45: each receiver plays on the speakers or the headphones.
-        declare<SliceModel::OutputRoute>(&t, {
-            SliceModel::OutputRoute::Speakers,
-            SliceModel::OutputRoute::Headphones,
         });
 
         // From src/models/Band.h. Count is deliberately ABSENT: it is an

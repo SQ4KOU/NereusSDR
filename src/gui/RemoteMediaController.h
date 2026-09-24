@@ -142,6 +142,34 @@ public:
     void releaseReceiverAudio(int sliceId, IReceiverPcmSink* sink);
     /// R-R3-43: each wanted receiver stream's measured health, by slice id.
     QHash<int, RemoteAudioReceiverTelemetry> receiverAudioTelemetry() const;
+    /// R-R3-45: this Core can send the headphones mix on its own stream:
+    /// audioProfileNegotiated() and a Core advertising headphonesMixVersion
+    /// 1 or later. Only then does the media start carry
+    /// headphonesMixVersion (the Core then sends the speakers' mix alone on
+    /// the main stream) and a headphones-audio request go out; otherwise
+    /// the controls on the wire are exactly today's.
+    bool headphonesMixNegotiated() const;
+    /// R-R3-45: why a receiver routed to the headphones is not heard, for
+    /// the slice flags; empty when nothing is wrong on the Core's side or
+    /// this computer's headphones device. Plain words, shown as they are.
+    /// (No headphones set up on this computer is the flag's own notice.)
+    QString headphonesProblem() const;
+    /// R-R3-45: headphonesProblem() from a Core that cannot send the
+    /// headphones mix.
+    static constexpr const char* kHeadphonesMixUnavailableReason =
+        "This Core cannot send audio for the headphones, so this receiver plays on "
+        "the speakers.";
+    /// R-R3-45: headphonesProblem() when the Core could not start the mix.
+    static constexpr const char* kHeadphonesCoreCouldNotStart =
+        "The Core could not start the audio for the headphones.";
+    /// R-R3-45: headphonesProblem() after a headphones device fault on this
+    /// computer, in the operator's words (the toast says the same).
+    static QString headphonesFaultText(RemoteAudioReceiver::Fault fault);
+    /// R-R3-45: the headphones mix's playback health on this computer.
+    RemoteAudioReceiverTelemetry headphonesTelemetry() const;
+    /// R-R3-45: the headphones-audio-context most recently accepted, or
+    /// empty before the first and after stop().
+    std::optional<RemoteAudioContextMessage> acceptedHeadphonesContext() const;
     /// R-R3-35: the measured audio delay now. measurable follows
     /// audioClockNegotiated() while a media session exists; estimate is
     /// present only while audio plays, echoes arrive (the newest younger
@@ -177,6 +205,8 @@ signals:
     /// stopped for it. A malformed or stale context emits nothing.
     void audioContextAccepted();
     void audioStatusChanged();
+    /// R-R3-45: headphonesProblem() changed.
+    void headphonesProblemChanged(const QString& problem);
 
 private:
     struct Private;
@@ -212,6 +242,13 @@ private:
     void onReceiverError(int sliceId, RemoteAudioReceiver* receiver, const QString& reason,
                          RemoteAudioReceiver::Fault fault);
     void reconcileLinkTrial();
+    // R-R3-45: the headphones mix.
+    bool headphonesWanted() const;
+    void requestHeadphonesAudio();
+    void receiveHeadphonesAudioContext(const QJsonObject& payload);
+    void onHeadphonesRestart(const QString& reason, RemoteAudioReceiver::Fault fault);
+    void onHeadphonesError(const QString& reason, RemoteAudioReceiver::Fault fault);
+    void setHeadphonesProblem(const QString& problem);
     void refreshAudioStatus();
     void checkLosslessLink();
     void fallBackToOpus(const QString& cause);

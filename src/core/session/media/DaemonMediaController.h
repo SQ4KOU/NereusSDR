@@ -33,6 +33,7 @@
 namespace NereusSDR {
 
 class RadioModel;
+class SliceModel;
 class StationServer;
 enum class ConnectionState;
 
@@ -121,6 +122,10 @@ public:
     /// R-R3-43: the profile slice `sliceId`'s receiver stream runs, or empty
     /// while that stream is not sending.
     std::optional<RemoteAudioProfile> receiverAudioProfile(int sliceId) const;
+    /// R-R3-45: the headphones mix is sending now (an enabled headphones
+    /// context), and the profile it runs; empty while it is not sending.
+    bool headphonesMixSending() const;
+    std::optional<RemoteAudioProfile> headphonesMixProfile() const;
     DaemonDisplayDiagnostics displayDiagnostics() const;
     /// What Core granted a live spectrum endpoint: FFT size and tier after
     /// the largest-size and shared-engine rules, and pixels after the source
@@ -161,6 +166,24 @@ private:
         bool sending{false};
         std::unique_ptr<DaemonAudioSender> sender;
     };
+    /// R-R3-45: the headphones mix for a GUI that declared
+    /// headphonesMixVersion: its latest request and, while it runs, the
+    /// sender capturing AudioEngine's headphones-mix tap. The RTP timeline
+    /// of the one headphones stream id continues across contexts.
+    struct HeadphonesAudioStream {
+        quint32 revision{0};
+        bool desiredEnabled{false};
+        RemoteAudioProfile requestedProfile{RemoteAudioProfile::Opus};
+        RemoteAudioProfile activeProfile{RemoteAudioProfile::Opus};
+        std::optional<RemoteAudioProfileRefusal> profileRefusal;
+        bool sending{false};
+        /// The reason in the last context sent, or empty after an enabled
+        /// one (fix wave: a radio drop says only what changed).
+        std::optional<RemoteAudioOffReason> lastOffReason;
+        quint16 nextSequence{1};
+        quint32 nextTimestamp{0};
+        std::unique_ptr<DaemonAudioSender> sender;
+    };
     struct AdmittedAudioProfile {
         RemoteAudioProfile active{RemoteAudioProfile::Opus};
         std::optional<RemoteAudioProfileRefusal> refusal;
@@ -189,6 +212,11 @@ private:
     /// in its start; anything else is ignored. Answered with a
     /// receiver-audio-context; never touches the main audio context.
     bool handleReceiverAudio(const QJsonObject& control);
+    /// R-R3-45: {op:"headphones-audio", connectionId, revision, enabled,
+    /// profile}, only from a GUI that declared headphonesMixVersion in its
+    /// start; anything else is ignored. Answered with a
+    /// headphones-audio-context; never touches the main audio context.
+    bool handleHeadphonesAudio(const QJsonObject& control);
     /// R-R3-35: answers {op:"clock-probe", connectionId, id, t0} with
     /// {op:"clock-echo", connectionId, id, t0, t1, t2, generation,
     /// rtpTimestamp, capturedNs}. t1 is the Core clock on entry to
@@ -265,6 +293,20 @@ private:
     void onReceiverAudioPacket(int sliceId, DaemonAudioSender* sender, const QByteArray& packet);
     void resetReceiverAudioSession();
     quint32 nextReceiverContextGeneration();
+    // R-R3-45: the headphones mix.
+    void reconcileHeadphonesAudio();
+    /// Why the headphones mix cannot run now, in reconcile order; empty
+    /// when it can.
+    std::optional<RemoteAudioOffReason> headphonesBlockedBy() const;
+    void stopHeadphonesAudioCapture();
+    void sendHeadphonesAudioContext(bool enabled, RemoteAudioOffReason reason);
+    void onHeadphonesAudioPacket(DaemonAudioSender* sender, const QByteArray& packet);
+    void resetHeadphonesAudioSession();
+    quint32 nextHeadphonesContextGeneration();
+    /// Some slice on this Core plays on the headphones now.
+    bool anySliceOnHeadphones() const;
+    void watchSliceOutputRoute(SliceModel* slice);
+    void onOutputRoutesChanged();
     void recordDisplaySent(const QByteArray& spectrumFrame, bool keyframe);
     void onMediaTransportError(const QString& message);
     void onMediaPeerError(const QString& message);
@@ -304,6 +346,15 @@ private:
     std::array<quint16, IMediaTransport::kMaxReceiverAudioStreams> m_receiverNextSequence{};
     std::array<quint32, IMediaTransport::kMaxReceiverAudioStreams> m_receiverNextTimestamp{};
     quint32 m_nextReceiverContextGeneration{0};
+    // R-R3-45 headphones mix, per media peer. Requests are honoured only
+    // when the GUI declared headphonesMixVersion at start (the offer then
+    // declares the headphones stream id, and the main stream carries the
+    // speakers' mix alone). m_headphonesRouted is anySliceOnHeadphones() as
+    // last acted on.
+    bool m_headphonesMixNegotiated{false};
+    HeadphonesAudioStream m_headphones;
+    quint32 m_nextHeadphonesContextGeneration{0};
+    bool m_headphonesRouted{false};
     std::map<quint32, EndpointEntry> m_endpoints;
     QMap<MediaSourceKey, SourceRuntime> m_sources;
     QTimer m_sendTimer;

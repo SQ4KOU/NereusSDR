@@ -13,6 +13,10 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-40: SliceModel nnrLimit is
 //                                    Outbound. AI-assisted implementation
 //                                    via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-45: SliceModel outputRoute is
+//                                    Bidirectional. AI-assisted
+//                                    implementation via Anthropic Claude
+//                                    Code.
 //   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the Core's step
 //                                    attenuator and preamp (`stepAtt`).
 //                                    AI-assisted via Anthropic Claude Code.
@@ -29,6 +33,9 @@
 //   2026-09-24 - R-R3-47 / R-R3-48: RfKitModel rows, bandFollow,
 //                StationTciModel, all Outbound; rfKitEnabled Outbound. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Merge: lane B's headphones Task 2 makes outputRoute
+//                 two-way; the Outbound entry is removed. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -93,7 +100,7 @@ namespace {
 // WRITE. Listing them keeps the table total, so the guard can name a
 // newly added property instead of silently accepting it.
 const MirrorPolicy::Entry kEntries[] = {
-    // ---- SliceModel (110 entries) ----
+    // ---- SliceModel (144 entries) ----
     { "SliceModel", "frequency", MirrorDirection::Bidirectional },
     { "SliceModel", "dspMode", MirrorDirection::Bidirectional },
     { "SliceModel", "filterLow", MirrorDirection::Bidirectional },
@@ -140,6 +147,11 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "locked", MirrorDirection::Bidirectional },
     { "SliceModel", "muted", MirrorDirection::Bidirectional },
     { "SliceModel", "audioPan", MirrorDirection::Bidirectional },
+    // R-R3-45: speakers or headphones (VAX design 6.2). The Core owns it:
+    // the Core's mixer splits the two mixes and the Core saves the choice;
+    // a remote window writes it from the flag and plays the headphones mix
+    // the Core sends while any receiver is on the headphones.
+    { "SliceModel", "outputRoute", MirrorDirection::Bidirectional },
     { "SliceModel", "ssqlEnabled", MirrorDirection::Bidirectional },
     { "SliceModel", "ssqlThresh", MirrorDirection::Bidirectional },
     { "SliceModel", "amsqEnabled", MirrorDirection::Bidirectional },
@@ -271,10 +283,6 @@ const MirrorPolicy::Entry kEntries[] = {
     // Outbound here too.
     { "SliceModel", "snrDb", MirrorDirection::Outbound },
     { "SliceModel", "lastRadeRxCallsign", MirrorDirection::Outbound },
-    // R-R3-45: speakers or headphones. Outbound, the direction every
-    // unlisted property already had; the headphones plan's remote window
-    // task (Task 2) makes it two-way with the headphones mix it plays.
-    { "SliceModel", "outputRoute", MirrorDirection::Outbound },
 
     // ---- TransmitModel (15 entries) ----
     { "TransmitModel", "mox", MirrorDirection::Bidirectional },
@@ -293,7 +301,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitModel", "antiVoxRun", MirrorDirection::Bidirectional },
     { "TransmitModel", "paSettingsBypass", MirrorDirection::Bidirectional },
 
-    // ---- TunerModel (13 entries) ----
+    // ---- TunerModel (21 entries) ----
     { "TunerModel", "relayC1", MirrorDirection::Outbound },
     { "TunerModel", "relayL", MirrorDirection::Outbound },
     { "TunerModel", "relayC2", MirrorDirection::Outbound },
@@ -468,7 +476,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (5 entries) ----
+    // ---- RadioModel (19 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },

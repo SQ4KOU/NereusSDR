@@ -36,6 +36,10 @@
 //                                    headphones per receiver, persisted as
 //                                    Slice<N>/OutputRoute. NereusSDR-original.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-45 Task 2: setOutputRoutePersisted(),
+//                                    so a remote window leaves the route to
+//                                    the Core. AI-assisted implementation via
+//                                    Anthropic Claude Code. NereusSDR-original.
 // =================================================================
 
 //=================================================================
@@ -2926,9 +2930,11 @@ void SliceModel::setOutputRoute(OutputRoute route)
                                             std::memory_order_acq_rel);
     if (prev == static_cast<int>(route)) { return; }
 
-    AppSettings::instance().setValue(
-        slicePrefix(m_sliceIndex) + QStringLiteral("OutputRoute"),
-        outputRouteSettingValue(route));
+    if (m_outputRoutePersisted) {
+        AppSettings::instance().setValue(
+            slicePrefix(m_sliceIndex) + QStringLiteral("OutputRoute"),
+            outputRouteSettingValue(route));
+    }
 
     emit outputRouteChanged(route);
 }

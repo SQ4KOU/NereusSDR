@@ -11,6 +11,14 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-45 fix wave: each slice flag
+//                 also learns whether the headphones are turned on.
+//                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-45 Task 2: a remote window opens
+//                 this computer's headphones when they are enabled, and each
+//                 slice flag learns why a receiver on the headphones is
+//                 silent on the Core's side. AI-assisted implementation via
+//                 Anthropic Claude Code.
 //   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-47 / R-R3-22: the Power Genius
 //                 gauge conversion moved to the Core side
 //                 (PgxlStatusGauges); AmpApplet and Rf2ksApplet read
@@ -1293,6 +1301,12 @@ void MainWindow::ensureRemoteSession()
         // ~MainWindow).
         if (AudioEngine* vaxEngine = m_radioModel->localAudioDevices()) {
             vaxEngine->openVaxOutputs();
+            // R-R3-45: this computer's headphones open here too when Setup,
+            // Audio, Devices has them enabled, as a local start() opens
+            // them, so the Core's headphones mix has somewhere to play.
+            if (vaxEngine->headphonesEnabled() && !vaxEngine->headphonesAvailable()) {
+                vaxEngine->setHeadphonesEnabled(true);
+            }
             m_remoteVax = new RemoteVaxRouter(m_radioModel, vaxEngine,
                                               RemoteVaxRouter::coreKeyFor(m_station), this);
             const QPointer<RemoteMediaController> media(m_remoteMedia);
@@ -1793,6 +1807,17 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         newFlag->setHeadphonesAvailable(engine->headphonesAvailable());
         connect(engine, &AudioEngine::headphonesAvailableChanged,
                 newFlag, &VfoWidget::setHeadphonesAvailable);
+        // Turned on but not open: "could not be opened", not "turn on".
+        newFlag->setHeadphonesEnabled(engine->headphonesEnabled());
+        connect(engine, &AudioEngine::headphonesEnabledChanged,
+                newFlag, &VfoWidget::setHeadphonesEnabled);
+    }
+    // R-R3-45: in a remote window, the Core's side too: a Core that cannot
+    // send the headphones mix, or headphones that failed here.
+    if (m_remoteMedia) {
+        newFlag->setHeadphonesProblem(m_remoteMedia->headphonesProblem());
+        connect(m_remoteMedia, &RemoteMediaController::headphonesProblemChanged,
+                newFlag, &VfoWidget::setHeadphonesProblem);
     }
 
     // Remote Daemon R2 Task 12: per-slice S-meter. SliceMeterPump

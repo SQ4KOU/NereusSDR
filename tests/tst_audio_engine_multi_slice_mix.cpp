@@ -43,6 +43,7 @@
 #include <atomic>
 #include <memory>
 #include <thread>
+#include <vector>
 
 using namespace NereusSDR;
 
@@ -531,6 +532,48 @@ private slots:
         const int b = h.radio->addSlice();
         QCOMPARE(h.radio->sliceById(a)->outputRoute(), SliceModel::OutputRoute::Speakers);
         QCOMPARE(h.radio->sliceById(b)->outputRoute(), SliceModel::OutputRoute::Headphones);
+        AppSettings::instance().clear();
+    }
+
+    // R-R3-45 fix wave: the mix scratch is the engine's, sized before any
+    // block (never grown on the DSP thread), and grown by setDspBlockSize
+    // so a block that size mixes in one push.
+    void mixScratchIsSizedOffTheDspThread()
+    {
+        AppSettings::instance().clear();
+        Harness h = makeHarness();
+        QCOMPARE(h.engine->mixScratchFrames(), AudioEngine::kMixScratchMinFrames);
+        const int a = h.radio->addSlice();
+
+        h.engine->setDspBlockSize(8192);
+        QCOMPARE(h.engine->mixScratchFrames(), 8192);
+        h.engine->setDspBlockSize(1024);          // never shrinks
+        QCOMPARE(h.engine->mixScratchFrames(), 8192);
+
+        const std::vector<float> block(6000 * 2, 0.25f);
+        const int before = h.speakers->pushCount();
+        const qsizetype bytesBefore = h.speakers->buffer().size();
+        h.engine->rxBlockReady(a, block.data(), 6000);
+        QCOMPARE(h.speakers->pushCount(), before + 1);
+        QCOMPARE(h.speakers->buffer().size() - bytesBefore,
+                 qsizetype(6000 * 2 * sizeof(float)));
+        AppSettings::instance().clear();
+    }
+
+    // R-R3-45 (carried from Task 1): each local slice's VAX channel is
+    // restored when it is added, as its output route is. Nothing called
+    // SliceModel::loadFromSettings(), so the saved channel was lost on
+    // every restart.
+    void addedSliceRestoresItsVaxChannel()
+    {
+        AppSettings::instance().clear();
+        AppSettings::instance().setValue(QStringLiteral("Slice1/VaxChannel"),
+                                         QStringLiteral("3"));
+        Harness h = makeHarness();
+        const int a = h.radio->addSlice();
+        const int b = h.radio->addSlice();
+        QCOMPARE(h.radio->sliceById(a)->vaxChannel(), 0);
+        QCOMPARE(h.radio->sliceById(b)->vaxChannel(), 3);
         AppSettings::instance().clear();
     }
 };

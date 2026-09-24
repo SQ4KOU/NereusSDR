@@ -639,6 +639,11 @@ private slots:
     void staleReceiverRevisionIsIgnoredAndAFifthStreamIsRefused();
     void receiverStreamFollowsTheSessionAudioProfile();
     void receiverStreamRetiresOnSliceRadioAndSessionEnd();
+    void olderAppGetsTheWholeProgramAndNoHeadphonesMix();
+    void headphonesMixRunsWhileAReceiverIsOnTheHeadphones();
+    void headphonesMixFollowsTheProfileAndTheRadio();
+    void radioDropKeepsTheHeadphonesReasonWhenNothingIsRouted();
+    void radioDropTellsAnAppWaitingOnMediaThatTheRadioIsGone();
 };
 
 void TstDaemonMediaController::configuredBudgetReturnsExactAllocationResultsAndRejectsOvercommit()
@@ -4865,5 +4870,394 @@ void TstDaemonMediaController::currentMinorSpectrumContextsReportTheGrant()
                  .value(QStringLiteral("traceSamples")).toInt(), 257);
     QCOMPARE(*grant, spectrumContextGrant(*h.controller.spectrumGrant(1)));
     QVERIFY(messageFor(controls, QStringLiteral("rejected"), 1).isEmpty());
+    h.finish();
+}
+
+
+namespace {
+
+// R-R3-45: the start of a GUI that understands audio profiles and plays the
+// headphones mix.
+QJsonObject headphonesStart()
+{
+    QJsonObject start = profileStart();
+    start.insert(QStringLiteral("headphonesMixVersion"), 1);
+    return start;
+}
+
+QJsonObject headphonesAudioControl(quint32 revision, bool enabled,
+                                   const QString& profile = QStringLiteral("opus"))
+{
+    return {{QStringLiteral("op"), QStringLiteral("headphones-audio")},
+            {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+            {QStringLiteral("revision"), static_cast<qint64>(revision)},
+            {QStringLiteral("enabled"), enabled},
+            {QStringLiteral("profile"), profile}};
+}
+
+QList<QJsonObject> headphonesContextsIn(const QSignalSpy& controls)
+{
+    QList<QJsonObject> found;
+    for (const auto& call : controls) {
+        const QJsonObject message = call.at(0).toJsonObject();
+        if (message.value(QStringLiteral("op")) == QLatin1String("headphones-audio-context")) {
+            found.append(message);
+        }
+    }
+    return found;
+}
+
+// The largest sample magnitude in lossless packets on `ssrc`.
+float peakOfL16(const QList<QByteArray>& packets, quint32 ssrc)
+{
+    float peak = 0.0f;
+    for (const QByteArray& packet : packets) {
+        const PcmRtpDecodeResult l16 = decodeL16Rtp(packet, ssrc);
+        if (l16.status != OpusAudioCodecStatus::Accepted) {
+            return -1.0f;
+        }
+        for (float sample : l16.pcmInterleaved) {
+            peak = std::max(peak, std::abs(sample));
+        }
+    }
+    return peak;
+}
+
+// Both of the harness's slices back on the speakers, here and in the
+// settings they saved, so later tests start from the default.
+void resetOutputRoutes(Harness& h)
+{
+    for (int sliceId : {h.sliceId, h.spareSliceId}) {
+        if (SliceModel* slice = h.radio.sliceById(sliceId)) {
+            slice->setOutputRoute(SliceModel::OutputRoute::Speakers);
+        }
+        AppSettings::instance().remove(QStringLiteral("Slice%1/OutputRoute").arg(sliceId));
+    }
+}
+
+} // namespace
+
+// R-R3-45: an app that did not declare headphonesMixVersion at start sees
+// today's wire: no headphones stream id in the offer, a headphones request
+// ignored, and a receiver routed to the headphones still in its one mix.
+void TstDaemonMediaController::olderAppGetsTheWholeProgramAndNoHeadphonesMix()
+{
+    Harness h;
+    const auto routes = qScopeGuard([&h] { resetOutputRoutes(h); });
+    AudioEngine* const engine = h.radio.audioEngine();
+    engine->masterMixForTest().setRampFrames(1);
+    engine->masterMixForTest().setSlewUpFrames(0);
+    engine->setSliceStreaming(h.sliceId, true);
+    engine->setSliceStreaming(h.spareSliceId, true);
+    h.establishSession();
+    QCOMPARE(h.server.buildCapabilities().headphonesMixVersion, 1);
+    QCOMPARE(StationCapabilities::fromUpdates(
+                 h.server.buildCapabilities().toUpdates()).headphonesMixVersion, 1);
+    QCOMPARE(h.client.capabilities().headphonesMixVersion, 1);
+
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    // A malformed capability version starts nothing.
+    for (const QJsonValue& bad : {QJsonValue(0), QJsonValue(1.5), QJsonValue(-1),
+                                  QJsonValue(QStringLiteral("1")), QJsonValue()}) {
+        QJsonObject start = headphonesStart();
+        start.insert(QStringLiteral("headphonesMixVersion"), bad);
+        QVERIFY(h.client.sendMediaControl(start, h.client.sessionEpoch()));
+        QTest::qWait(20);
+        QVERIFY(!h.mediaTransport);
+    }
+    QVERIFY(h.client.sendMediaControl(profileStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    QCOMPARE(h.mediaTransport->startOptions.headphonesAudioSsrc, quint32{0});
+    QVERIFY(h.mediaTransport->startOptions.receiverAudioSsrcs.isEmpty());
+    h.mediaTransport->losslessNegotiated = true;
+    h.mediaTransport->becomeReady();
+    const quint32 mainSsrc = h.mediaTransport->startOptions.localAudioSsrc;
+    QVERIFY(h.client.sendMediaControl(audioControl(1, true, QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(audioContextsIn(controls).size(), 1);
+
+    // B on the headphones: the one mix still carries it.
+    h.radio.sliceById(h.spareSliceId)->setOutputRoute(SliceModel::OutputRoute::Headphones);
+    QVERIFY(h.client.sendMediaControl(headphonesAudioControl(1, true, QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    feedSlicesBlock(h, {{h.sliceId, 0.0f}, {h.spareSliceId, 0.5f}});
+    QTRY_COMPARE(h.mediaTransport->rtpPackets.size(), 10);
+    QTest::qWait(50);
+    QCOMPARE(packetsWithSsrc(h.mediaTransport->rtpPackets, mainSsrc).size(), 10);
+    QVERIFY(peakOfL16(h.mediaTransport->rtpPackets, mainSsrc) > 0.05f);
+    QVERIFY(headphonesContextsIn(controls).isEmpty());
+    QCOMPARE(audioContextsIn(controls).size(), 1);
+    QVERIFY(!h.controller.headphonesMixSending());
+    h.finish();
+}
+
+// R-R3-45: with the headphones mix declared, the main stream carries the
+// speakers' mix alone. Routing slice B to the headphones starts the second
+// mix on its own stream id; it carries B and the main stream keeps A.
+// Routing A there too changes only what the mix holds (no new context);
+// routing both back stops the stream. The main stream is never restarted.
+void TstDaemonMediaController::headphonesMixRunsWhileAReceiverIsOnTheHeadphones()
+{
+    Harness h;
+    const auto routes = qScopeGuard([&h] { resetOutputRoutes(h); });
+    AudioEngine* const engine = h.radio.audioEngine();
+    engine->masterMixForTest().setRampFrames(1);
+    engine->masterMixForTest().setSlewUpFrames(0);
+    engine->setSliceStreaming(h.sliceId, true);
+    engine->setSliceStreaming(h.spareSliceId, true);
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(headphonesStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    const quint32 headphonesSsrc =
+        MediaPeer::headphonesAudioSsrcForConnection(QLatin1String(kConnectionId));
+    QCOMPARE(h.mediaTransport->startOptions.headphonesAudioSsrc, headphonesSsrc);
+    QVERIFY(h.mediaTransport->startOptions.receiverAudioSsrcs.isEmpty());
+    const quint32 mainSsrc = h.mediaTransport->startOptions.localAudioSsrc;
+    QVERIFY(headphonesSsrc != 0 && headphonesSsrc != mainSsrc);
+    QVERIFY(!MediaPeer::receiverAudioSsrcsForConnection(QLatin1String(kConnectionId))
+                 .contains(headphonesSsrc));
+    h.mediaTransport->losslessNegotiated = true;
+    h.mediaTransport->becomeReady();
+    QVERIFY(h.client.sendMediaControl(audioControl(1, true, QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(audioContextsIn(controls).size(), 1);
+
+    // Asked for with every receiver on the speakers: off, and why.
+    QVERIFY(h.client.sendMediaControl(headphonesAudioControl(1, true, QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 1);
+    std::optional<RemoteAudioContextMessage> context =
+        decodeHeadphonesAudioContext(headphonesContextsIn(controls).constLast());
+    QVERIFY(context.has_value());
+    QVERIFY(!context->enabled);
+    QCOMPARE(context->offReason, std::optional{RemoteAudioOffReason::NoHeadphonesReceiver});
+    QCOMPARE(context->ssrc, headphonesSsrc);
+    QCOMPARE(engine->sliceAudioTapCount(), 0);
+
+    // B to the headphones: the mix starts on its own id, lossless.
+    h.radio.sliceById(h.spareSliceId)->setOutputRoute(SliceModel::OutputRoute::Headphones);
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 2);
+    context = decodeHeadphonesAudioContext(headphonesContextsIn(controls).constLast());
+    QVERIFY(context.has_value());
+    QVERIFY(context->enabled);
+    QCOMPARE(context->ssrc, headphonesSsrc);
+    QCOMPARE(context->firstSequence, quint16{1});
+    QCOMPARE(context->firstTimestamp, quint32{0});
+    QCOMPARE(context->profile, std::optional{RemoteAudioProfile::Lossless});
+    QVERIFY(context->losslessEncoder.has_value());
+    QVERIFY(h.controller.headphonesMixSending());
+    QCOMPARE(h.controller.headphonesMixProfile(), std::optional{RemoteAudioProfile::Lossless});
+
+    // A alone plays: it is on the main stream, the headphones mix is silent.
+    feedSlicesBlock(h, {{h.sliceId, 0.5f}, {h.spareSliceId, 0.0f}});
+    QTRY_COMPARE(packetsWithSsrc(h.mediaTransport->rtpPackets, mainSsrc).size(), 10);
+    QTRY_COMPARE(packetsWithSsrc(h.mediaTransport->rtpPackets, headphonesSsrc).size(), 10);
+    QVERIFY(peakOfL16(packetsWithSsrc(h.mediaTransport->rtpPackets, mainSsrc), mainSsrc)
+            > 0.05f);
+    QCOMPARE(peakOfL16(packetsWithSsrc(h.mediaTransport->rtpPackets, headphonesSsrc),
+                       headphonesSsrc), 0.0f);
+    // B alone plays: it is on the headphones mix, the main stream is silent.
+    h.mediaTransport->rtpPackets.clear();
+    feedSlicesBlock(h, {{h.sliceId, 0.0f}, {h.spareSliceId, 0.5f}});
+    QTRY_COMPARE(packetsWithSsrc(h.mediaTransport->rtpPackets, mainSsrc).size(), 10);
+    QTRY_COMPARE(packetsWithSsrc(h.mediaTransport->rtpPackets, headphonesSsrc).size(), 10);
+    QCOMPARE(peakOfL16(packetsWithSsrc(h.mediaTransport->rtpPackets, mainSsrc), mainSsrc),
+             0.0f);
+    QVERIFY(peakOfL16(packetsWithSsrc(h.mediaTransport->rtpPackets, headphonesSsrc),
+                      headphonesSsrc) > 0.05f);
+
+    // A joins B on the headphones and leaves again: the mix changes, the
+    // stream does not.
+    h.radio.sliceById(h.sliceId)->setOutputRoute(SliceModel::OutputRoute::Headphones);
+    h.radio.sliceById(h.sliceId)->setOutputRoute(SliceModel::OutputRoute::Speakers);
+    QTest::qWait(50);
+    QCOMPARE(headphonesContextsIn(controls).size(), 2);
+
+    // A stale request is ignored.
+    QVERIFY(h.client.sendMediaControl(headphonesAudioControl(1, false, QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    QTest::qWait(50);
+    QCOMPARE(headphonesContextsIn(controls).size(), 2);
+    QVERIFY(h.controller.headphonesMixSending());
+
+    // B back to the speakers: the headphones stream stops, and why.
+    h.radio.sliceById(h.spareSliceId)->setOutputRoute(SliceModel::OutputRoute::Speakers);
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 3);
+    context = decodeHeadphonesAudioContext(headphonesContextsIn(controls).constLast());
+    QVERIFY(context.has_value());
+    QVERIFY(!context->enabled);
+    QCOMPARE(context->offReason, std::optional{RemoteAudioOffReason::NoHeadphonesReceiver});
+    QCOMPARE(context->firstSequence, quint16{21});
+    QCOMPARE(context->firstTimestamp, quint32{3840});
+    QVERIFY(!h.controller.headphonesMixSending());
+    h.mediaTransport->rtpPackets.clear();
+    feedSlicesBlock(h, {{h.sliceId, 0.0f}, {h.spareSliceId, 0.5f}});
+    QTRY_COMPARE(packetsWithSsrc(h.mediaTransport->rtpPackets, mainSsrc).size(), 10);
+    QTest::qWait(50);
+    QVERIFY(packetsWithSsrc(h.mediaTransport->rtpPackets, headphonesSsrc).isEmpty());
+    // B is back in the speakers' mix.
+    QVERIFY(peakOfL16(packetsWithSsrc(h.mediaTransport->rtpPackets, mainSsrc), mainSsrc)
+            > 0.05f);
+
+    // Back on the headphones, the stream id's timeline continues.
+    h.radio.sliceById(h.spareSliceId)->setOutputRoute(SliceModel::OutputRoute::Headphones);
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 4);
+    context = decodeHeadphonesAudioContext(headphonesContextsIn(controls).constLast());
+    QVERIFY(context.has_value() && context->enabled);
+    QCOMPARE(context->firstSequence, quint16{21});
+    QCOMPARE(context->firstTimestamp, quint32{3840});
+    // The app turns it off with B still there: client-disabled.
+    QVERIFY(h.client.sendMediaControl(headphonesAudioControl(2, false, QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 5);
+    QCOMPARE(headphonesContextsIn(controls).constLast().value(QStringLiteral("reason")).toString(),
+             QStringLiteral("client-disabled"));
+
+    // One main context for the one main control; none from the headphones.
+    QCOMPARE(audioContextsIn(controls).size(), 1);
+    const QList<QByteArray> mainPackets =
+        packetsWithSsrc(h.mediaTransport->rtpPackets, mainSsrc);
+    for (int index = 1; index < mainPackets.size(); ++index) {
+        QCOMPARE(rtpSequence(mainPackets.at(index)),
+                 static_cast<quint16>(rtpSequence(mainPackets.at(index - 1)) + 1));
+    }
+    h.finish();
+    QTRY_VERIFY(!h.controller.headphonesMixSending());
+}
+
+// R-R3-45: the headphones mix follows its request's profile (the session's
+// one choice), so the app's one fallback to Opus moves it too; it pauses
+// with the radio and resumes with it, and ends with the session.
+void TstDaemonMediaController::headphonesMixFollowsTheProfileAndTheRadio()
+{
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    Harness h;
+    const auto routes = qScopeGuard([&h] { resetOutputRoutes(h); });
+    AudioEngine* const engine = h.radio.audioEngine();
+    engine->masterMixForTest().setRampFrames(1);
+    engine->masterMixForTest().setSlewUpFrames(0);
+    engine->setSliceStreaming(h.sliceId, true);
+    engine->setSliceStreaming(h.spareSliceId, true);
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(headphonesStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    const quint32 headphonesSsrc = h.mediaTransport->startOptions.headphonesAudioSsrc;
+    h.mediaTransport->losslessNegotiated = true;
+    h.mediaTransport->becomeReady();
+    h.radio.sliceById(h.spareSliceId)->setOutputRoute(SliceModel::OutputRoute::Headphones);
+    QVERIFY(h.client.sendMediaControl(headphonesAudioControl(1, true, QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 1);
+    QCOMPARE(h.controller.headphonesMixProfile(), std::optional{RemoteAudioProfile::Lossless});
+
+    // The app falls back to Opus: the mix follows, at the Core's bitrate.
+    QVERIFY(h.client.sendMediaControl(headphonesAudioControl(2, true, QStringLiteral("opus")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 2);
+    std::optional<RemoteAudioContextMessage> context =
+        decodeHeadphonesAudioContext(headphonesContextsIn(controls).constLast());
+    QVERIFY(context.has_value() && context->enabled);
+    QCOMPARE(context->profile, std::optional{RemoteAudioProfile::Opus});
+    QVERIFY(context->encoder.has_value());
+    QCOMPARE(context->encoder->targetBitrate, h.controller.audioTargetBitrate());
+    feedSlicesBlock(h, {{h.sliceId, 0.0f}, {h.spareSliceId, 0.5f}});
+    QTRY_COMPARE(packetsWithSsrc(h.mediaTransport->rtpPackets, headphonesSsrc).size(), 1);
+
+    // Lossless refused by the Core's own setting: Opus, and why.
+    h.controller.setAudioLosslessAllowed(false);
+    QVERIFY(h.client.sendMediaControl(headphonesAudioControl(3, true, QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 3);
+    context = decodeHeadphonesAudioContext(headphonesContextsIn(controls).constLast());
+    QVERIFY(context.has_value() && context->enabled);
+    QCOMPARE(context->profile, std::optional{RemoteAudioProfile::Opus});
+    QCOMPARE(context->profileRefusal, std::optional{RemoteAudioProfileRefusal::NotAllowed});
+    h.controller.setAudioLosslessAllowed(true);
+
+    // The radio goes offline: the mix stops and says why, then resumes.
+    h.radio.setConnectionStateForTest(ConnectionState::Disconnected);
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 4);
+    QCOMPARE(headphonesContextsIn(controls).constLast().value(QStringLiteral("reason")).toString(),
+             QStringLiteral("radio-offline"));
+    QVERIFY(!h.controller.headphonesMixSending());
+    h.radio.setConnectionStateForTest(ConnectionState::Connected);
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 5);
+    QVERIFY(headphonesContextsIn(controls).constLast().value(QStringLiteral("enabled")).toBool());
+    QVERIFY(h.controller.headphonesMixSending());
+
+    // The session ends: the mix and its tap go with it.
+    h.finish();
+    QTRY_VERIFY(!h.controller.headphonesMixSending());
+    QTest::qWait(20);
+    QCOMPARE(headphonesContextsIn(controls).size(), 5);
+}
+
+// R-R3-45 fix wave: a radio drop sends a disabled headphones context only
+// when the mix was sending. With no receiver on the headphones the app was
+// told no-headphones-receiver, and that stays the reason: nothing is sent,
+// and radio-offline never replaces it. A route made while the radio is
+// away is answered in reconcileHeadphonesAudio's order (radio-offline).
+void TstDaemonMediaController::radioDropKeepsTheHeadphonesReasonWhenNothingIsRouted()
+{
+    Harness h;
+    const auto routes = qScopeGuard([&h] { resetOutputRoutes(h); });
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(headphonesStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    h.mediaTransport->becomeReady();
+    QVERIFY(h.client.sendMediaControl(headphonesAudioControl(1, true),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 1);
+    QCOMPARE(headphonesContextsIn(controls).constLast().value(QStringLiteral("reason")).toString(),
+             QStringLiteral("no-headphones-receiver"));
+
+    h.radio.setConnectionStateForTest(ConnectionState::Disconnected);
+    QTest::qWait(50);
+    QCOMPARE(headphonesContextsIn(controls).size(), 1);
+
+    h.radio.sliceById(h.spareSliceId)->setOutputRoute(SliceModel::OutputRoute::Headphones);
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 2);
+    QCOMPARE(headphonesContextsIn(controls).constLast().value(QStringLiteral("reason")).toString(),
+             QStringLiteral("radio-offline"));
+    QVERIFY(!h.controller.headphonesMixSending());
+
+    h.radio.setConnectionStateForTest(ConnectionState::Connected);
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 3);
+    QVERIFY(headphonesContextsIn(controls).constLast().value(QStringLiteral("enabled")).toBool());
+    h.finish();
+}
+
+// R-R3-45 fix wave (re-review): an app last told media-not-ready learns
+// radio-offline when the radio drops, since that is now the reason; a
+// second drop notice with the same reason is not sent.
+void TstDaemonMediaController::radioDropTellsAnAppWaitingOnMediaThatTheRadioIsGone()
+{
+    Harness h;
+    const auto routes = qScopeGuard([&h] { resetOutputRoutes(h); });
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(headphonesStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    h.radio.sliceById(h.spareSliceId)->setOutputRoute(SliceModel::OutputRoute::Headphones);
+    QVERIFY(h.client.sendMediaControl(headphonesAudioControl(1, true),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 1);
+    QCOMPARE(headphonesContextsIn(controls).constLast().value(QStringLiteral("reason")).toString(),
+             QStringLiteral("media-not-ready"));
+
+    h.radio.setConnectionStateForTest(ConnectionState::Disconnected);
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 2);
+    QCOMPARE(headphonesContextsIn(controls).constLast().value(QStringLiteral("reason")).toString(),
+             QStringLiteral("radio-offline"));
+    h.radio.setConnectionStateForTest(ConnectionState::Connected);
+    QTRY_COMPARE(headphonesContextsIn(controls).size(), 3);
+    QCOMPARE(headphonesContextsIn(controls).constLast().value(QStringLiteral("reason")).toString(),
+             QStringLiteral("media-not-ready"));
     h.finish();
 }

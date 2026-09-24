@@ -83,6 +83,8 @@ AudioHeader inspectAudioRtp(const QByteArray& packet, quint32 ssrc, RemoteAudioP
 struct RemoteAudioReceiver::Private {
     struct Packet { QByteArray bytes; quint32 timestamp; qint64 arrival; quint16 sequence; };
     AudioEngine* engine = nullptr; // owner stops/joins before engine destruction
+    // R-R3-45: the output this receiver plays on.
+    RemotePlaybackOutput output = RemotePlaybackOutput::Speakers;
     // R-R3-43: set only in the PCM-sink mode, which has no engine.
     RemoteAudioReceiver::PcmSink sink;
     std::jthread worker;
@@ -209,6 +211,13 @@ RemoteAudioReceiver::RemoteAudioReceiver(AudioEngine* engine, QObject* parent, C
     d->engine = engine;
     d->clock = clock ? std::move(clock) : Clock(defaultClockNs);
 }
+RemoteAudioReceiver::RemoteAudioReceiver(AudioEngine* engine, RemotePlaybackOutput output,
+                                         QObject* parent, Clock clock)
+    : RemoteAudioReceiver(engine, parent, std::move(clock))
+{
+    d->output = output;
+}
+RemotePlaybackOutput RemoteAudioReceiver::output() const { return d->output; }
 RemoteAudioReceiver::RemoteAudioReceiver(PcmSinkMode mode, QObject* parent, Clock clock)
     : QObject(parent), d(std::make_unique<Private>())
 {
@@ -318,7 +327,7 @@ void RemoteAudioReceiver::stop()
         d->startPhase = false;
         d->startBacklog = false;
     }
-    if (d->engine) { d->engine->endRemotePlayback(); }
+    if (d->engine) { d->engine->endRemotePlayback(d->output); }
     d->telemetrySequence.fetch_add(1);
 }
 
@@ -327,8 +336,12 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
     stop();
     QString error;
     // R-R3-43: a PCM sink needs no speaker.
-    if (!d->sink && (!d->engine || !d->engine->beginRemotePlayback(&error))) {
-        emit errorOccurred(error.isEmpty() ? QStringLiteral("Speaker playback is unavailable") : error,
+    if (!d->sink && (!d->engine || !d->engine->beginRemotePlayback(&error, d->output))) {
+        emit errorOccurred(error.isEmpty()
+                               ? (d->output == RemotePlaybackOutput::Headphones
+                                      ? QStringLiteral("Headphones playback is unavailable")
+                                      : QStringLiteral("Speaker playback is unavailable"))
+                               : error,
                             Fault::SpeakerOpenFailed);
         return false;
     }
@@ -336,7 +349,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
     // A PCM sink takes the stream's own 48 kHz stereo.
     AudioFormat speakerFormat;
     if (!d->sink) {
-        if (const auto accepted = d->engine->remotePlaybackFormat()) {
+        if (const auto accepted = d->engine->remotePlaybackFormat(d->output)) {
             speakerFormat = *accepted;
         }
     }
@@ -460,7 +473,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
             d->reorderQueuedPackets.store(-1);
             d->running.store(false);
             const auto stats = publishMatcherStats();
-            const auto pacing = d->engine ? d->engine->remotePlaybackPacing()
+            const auto pacing = d->engine ? d->engine->remotePlaybackPacing(d->output)
                                           : std::optional<IAudioBus::OutputPacing>{};
             const qint64 now = d->now();
             // Bounded, restart-only diagnostics distinguish capture/network
@@ -487,7 +500,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
         };
         // R-R3-43: a PCM sink has no speaker to pace it and no rate matcher.
         const auto initialPacing = sinkMode ? std::optional<IAudioBus::OutputPacing>{}
-                                            : d->engine->remotePlaybackPacing();
+                                            : d->engine->remotePlaybackPacing(d->output);
         if (sinkMode) {
             if (decoder && !decoder->isReady()) {
                 notify(QStringLiteral("Could not initialize the remote audio decoder"),
@@ -761,10 +774,10 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
             }
             d->reorderQueuedPackets.store(jitter.queuedPackets());
             if (!playing) {
-                publishSpeakerQueue(d->engine->remotePlaybackPacing());
+                publishSpeakerQueue(d->engine->remotePlaybackPacing(d->output));
                 continue;
             }
-            auto pacing = d->engine->remotePlaybackPacing();
+            auto pacing = d->engine->remotePlaybackPacing(d->output);
             if (!pacing) {
                 notify(QStringLiteral("Speaker device timing became unavailable"),
                        Fault::SpeakerTimingUnavailable, true);
@@ -829,12 +842,12 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                     }
                     pcm = std::move(mono);
                 }
-                if (pcm.isEmpty() || !d->engine->writeRemotePlayback(pcm)) {
+                if (pcm.isEmpty() || !d->engine->writeRemotePlayback(pcm, d->output)) {
                     notify(QStringLiteral("Could not write remote audio to the speaker device"),
                            Fault::SpeakerWriteFailed, true);
                     return;
                 }
-                pacing = d->engine->remotePlaybackPacing();
+                pacing = d->engine->remotePlaybackPacing(d->output);
                 if (!pacing) { break; }
             }
             const auto stats = publishMatcherStats();
@@ -854,7 +867,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
             // a worker preempted between them widens the accuracy instead of
             // moving the figure.
             const qint64 readStart = d->now();
-            const auto finalPacing = d->engine->remotePlaybackPacing();
+            const auto finalPacing = d->engine->remotePlaybackPacing(d->output);
             const qint64 readEnd = d->now();
             publishSpeakerQueue(finalPacing);
             // R-R3-35: the newest matched sample is heard after the matcher
