@@ -115,6 +115,11 @@
 //                and shown from `accessoryData` in every window; a remote
 //                window's antenna names follow the Core's. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-22 / R-R3-47: the Power Genius and RF-Kit applets
+//                send a remote window's Disconnect or Reconnect to the
+//                Core themselves; the handlers here act on this computer's
+//                own connections in a local window only. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -6718,22 +6723,11 @@ void MainWindow::populateDefaultMeter()
 
         connect(m_rfKitApplet, &Rf2ksApplet::connectionToggleRequested,
                 this, [this]() {
-            // R-R3-47: a remote window asks the Core, which owns the amp.
+            // R-R3-22 / R-R3-47: a remote window's applet asks the Core
+            // itself (disconnectRfKit, configureRfKit) and shows the
+            // answer on its own line; this computer's connection is local
+            // only.
             if (m_radioModel->role() == RadioModel::Role::Remote) {
-                IStationLink* link = m_radioModel->stationLink();
-                RfKitModel* rfKit = m_radioModel->rfKitModel();
-                if (!link || !rfKit || !link->remoteRfKitControlAvailable()) { return; }
-                using Phase = RfKitModel::ConnectionPhase;
-                const auto phase = rfKit->connectionPhase();
-                const bool active = phase == Phase::Connected || phase == Phase::Connecting
-                    || phase == Phase::Identifying || phase == Phase::Retrying;
-                const auto outcome = active
-                    ? link->requestDisconnectRfKit()
-                    : link->requestConfigureRfKit(rfKit->configuredHost(),
-                                                  static_cast<quint16>(rfKit->configuredPort()));
-                if (!outcome.sent) {
-                    statusBar()->showMessage(OperatorReasonText::forDisplay(outcome.reason), 5000);
-                }
                 return;
             }
             Rf2ksConnection* conn = m_radioModel->rfKitConnection();
@@ -12241,6 +12235,12 @@ void MainWindow::onConnectionStateChanged()
             // connectionToggleRequested: disconnect or reconnect PGXL.
             connect(m_ampApplet, &AmpApplet::connectionToggleRequested,
                     this, [this]() {
+                // R-R3-22 / R-R3-47: a remote window's applet asks the Core
+                // itself (disconnectPgxl, configurePgxl); this computer's
+                // Power Genius connection is local only.
+                if (m_radioModel->role() == RadioModel::Role::Remote) {
+                    return;
+                }
                 PgxlConnection* pgxl = m_radioModel->pgxlConnection();
                 if (!pgxl) { return; }
                 if (pgxl->isConnected()) {

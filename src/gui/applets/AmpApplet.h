@@ -24,10 +24,16 @@
 //                 window, the same object in-process locally), with a stale
 //                 line when a remote window loses the Core. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24  R-R3-22 / R-R3-47: a remote window's Disconnect and
+//                 Reconnect ask the Core (disconnectPgxl, configurePgxl)
+//                 and a status line shows the Core's connection and any
+//                 refusal. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #pragma once
 #include "AppletWidget.h"
+#include "models/TunerModel.h"
 
 #include <QPushButton>
 
@@ -76,6 +82,14 @@ public:
     // kind of station-side amplifier, gives the same reason.
     static QString remoteUnavailableReason();
 
+    // R-R3-22 / R-R3-47: a station accessory's connection as a remote
+    // window shows it, in user words. Shared with the RF-Kit applet.
+    static QString stationConnectionText(TunerModel::ConnectionPhase phase,
+                                         const QString& error);
+    // R-R3-22: the phases in which the Core is connected to, or trying to
+    // reach, the accessory; Disconnect then cancels or closes it.
+    static bool stationConnectionActive(TunerModel::ConnectionPhase phase);
+
     // Test seams (R-R3-47).
     double  fwdGaugeValueForTesting() const;
     double  swrGaugeValueForTesting() const;
@@ -87,6 +101,8 @@ public:
     bool    staleIndicatorVisibleForTesting() const;
     QString staleIndicatorTextForTesting() const;
     QString bandFollowTextForTesting() const;
+    // R-R3-22: a remote window's connection line ("" when hidden).
+    QString connectionLineTextForTesting() const;
 
 signals:
     // Emitted when the user clicks the OPERATE/STANDBY button.
@@ -100,9 +116,10 @@ signals:
     // pageKey is "pgxlAdvanced"; MainWindow::openSetup() is the handler.
     void navigationRequested(const QString& pageKey);
 
-    // Emitted when "Disconnect" / "Reconnect" is triggered.
-    // MainWindow should call pgxlConnection()->disconnectFromPgxl() or
-    // reconnect depending on current state.
+    // Emitted when "Disconnect" / "Reconnect" is triggered in a local
+    // window. MainWindow should call pgxlConnection()->disconnectFromPgxl()
+    // or reconnect depending on current state. A remote window asks the
+    // Core itself and does not emit this (R-R3-22).
     void connectionToggleRequested();
 
     // Emitted when "Copy diagnostics to clipboard" is triggered.
@@ -139,8 +156,16 @@ private slots:
     void syncFromAmplifier();
     // R-R3-47: a remote window says when its readings are not live.
     void updateStationState();
+    // R-R3-22: a remote window's connection line: the Core's phase, or the
+    // plain reason its last Disconnect or Reconnect was not taken.
+    void updateConnectionLine();
+    void onAccessoryRequestRefused(const QString& device, const QString& reason);
 
 private:
+    // R-R3-22: a remote window's Disconnect or Reconnect, sent to the Core.
+    void requestRemoteConnectionToggle();
+    bool isRemoteWindow() const;
+
     // From AetherSDR src/gui/AmpApplet.h:29 [@0cd4559]
     void updatePowerLabel();
 
@@ -172,6 +197,12 @@ private:
     QLabel*         m_staleLabel{nullptr};
     // R-R3-48: the band-follow line.
     QLabel*         m_bandFollowLabel{nullptr};
+    // R-R3-22: a remote window's connection line, whether its own request
+    // is still waiting on the Core, and the reason one was not taken.
+    QLabel*         m_connectionLabel{nullptr};
+    bool            m_requestPending{false};
+    QString         m_requestReason;
+    TunerModel::ConnectionPhase m_lastPhase{TunerModel::ConnectionPhase::Disabled};
 };
 
 } // namespace NereusSDR

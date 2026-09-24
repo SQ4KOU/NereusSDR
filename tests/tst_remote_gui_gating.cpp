@@ -3265,6 +3265,9 @@ private slots:
         QVERIFY(!AppSettings::instance().contains(QStringLiteral("Slice0/VaxChannel")));
     }
 
+    // R-R3-21 / R-R3-22: OPERATE waits for remote transmit. Disconnect
+    // and Reconnect ask the Core (tst_remote_peripherals); with no Core
+    // offering Power Genius control the item stays off and says why.
     void remoteAmplifierAppletControlsAreUnavailable()
     {
         RadioModel remote(RadioModel::Role::Remote);
@@ -3292,7 +3295,9 @@ private slots:
         QVERIFY(toggle != nullptr);
         QVERIFY(!toggle->isEnabled());
         QVERIFY2(OperatorWording::isPlain(toggle->toolTip()), qPrintable(toggle->toolTip()));
-        QCOMPARE(toggle->toolTip(), operateBtn->toolTip());
+        QCOMPARE(toggle->toolTip(),
+                 QStringLiteral("This Core does not offer Power Genius XL control to this app."));
+        QCOMPARE(operateBtn->toolTip(), AmpApplet::remoteUnavailableReason());
         toggle->trigger();
         QCOMPARE(toggles.count(), 0);
 
@@ -3563,9 +3568,9 @@ private slots:
 
     // ====================================================================
     // R-R3-21 fix wave: the RF-Kit RF2K-S applet. A Core with RF-Kit
-    // enabled shows it in a remote window (rfKitEnabled is mirrored), and
-    // OPERATE, the antenna buttons and Disconnect/Reconnect drive this
-    // computer's own RF2K-S connection, the amplifier the station owns.
+    // enabled shows it in a remote window (rfKitEnabled is mirrored).
+    // OPERATE and the antenna buttons wait for remote transmit;
+    // Disconnect/Reconnect ask the Core, which owns the amp (R-R3-22).
     // ====================================================================
     void remoteRfKitAppletControlsAreUnavailable()
     {
