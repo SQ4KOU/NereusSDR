@@ -405,6 +405,7 @@ private slots:
     void accessoryRefusalsNeverReachTheSliceToast();
     void remoteRfKitPageWorksEveryControl();
     void olderCoreLeavesTheRfKitSettingsSayingWhy();
+    void refusalClaimsEndWithTheLink();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -2025,6 +2026,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     QVERIFY(!page.applyNetworkButtonForTesting()->isEnabled());
     QVERIFY(!page.revertButtonForTesting()->isEnabled());
     QSignalSpy offlineRefused(&window, &RadioModel::accessoryRequestRefused);
+    page.show();   // rework part 5: a refusal counts as shown only on a visible page
     editName(page.nicknameEditForTesting(), QStringLiteral("Offline"));
     QTRY_COMPARE(page.deviceAnswerForTesting(),
                  QStringLiteral("The Core is not connected to the Power Genius."));
@@ -2484,13 +2486,29 @@ void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
     // Reset amp error with no amp at the Core: the Core's words, nothing sent.
     QSignalSpy sliceToast(&window, &RadioModel::sliceAddRejected);
     QSignalSpy accessoryRefused(&window, &RadioModel::accessoryRequestRefused);
+    // Rework part 5: Setup closed (the page hidden) when the answer comes:
+    // the refusal is toasted, not lost.
+    page.hide();
     page.resetErrorButtonForTesting()->click();
+    QTRY_COMPARE(accessoryRefused.count(), 1);
+    QCOMPARE(accessoryRefused.first().size(), 3);
+    QVERIFY(!accessoryRefused.first().at(2).toBool());
+    // A page gone before the answer: toasted too.
+    {
+        auto gone = std::make_unique<RfKitPage>(&window);
+        gone->show();
+        gone->resetErrorButtonForTesting()->click();
+    }
+    QTRY_COMPARE(accessoryRefused.count(), 2);
+    QVERIFY(!accessoryRefused.at(1).at(2).toBool());
+    // Follow-up 3: the visible page that sent it shows it, so it is not
+    // toasted too.
+    page.show();
+    page.resetErrorButtonForTesting()->click();
+    QTRY_COMPARE(accessoryRefused.count(), 3);
+    QVERIFY(accessoryRefused.at(2).at(2).toBool());
     QTRY_VERIFY(page.liveStatusTextForTesting().contains(
         QStringLiteral("The Core is not connected to the RF-Kit amplifier.")));
-    // Follow-up 3: the page that sent it shows it, so it is not toasted too.
-    QCOMPARE(accessoryRefused.count(), 1);
-    QCOMPARE(accessoryRefused.first().size(), 3);
-    QVERIFY(accessoryRefused.first().at(2).toBool());
     QVERIFY(OperatorWording::isPlain(page.liveStatusTextForTesting()));
     QCOMPARE(sliceToast.count(), 0);
 
@@ -2593,6 +2611,34 @@ void RemotePeripheralsTest::olderCoreLeavesTheRfKitSettingsSayingWhy()
     QVERIFY(!outcome.sent);
     QVERIFY(OperatorWording::isPlain(outcome.reason));
     AppSettings::instance().clear();
+}
+
+// Rework part 5 (R-R3-47): a page's claim on a request's refusal ends when
+// the link to the Core drops; a refusal arriving later is toasted.
+void RemotePeripheralsTest::refusalClaimsEndWithTheLink()
+{
+    struct Link final : IStationLink {
+        bool ready{true};
+        CommandOutcome requestAddSlice(const QString&) override { return {}; }
+        CommandOutcome requestAddSliceOnPan(const QString&) override { return {}; }
+        CommandOutcome requestRemoveSlice(int) override { return {}; }
+        CommandOutcome requestActiveSlice(int) override { return {}; }
+        CommandOutcome requestSliceSampleRate(int, int) override { return {}; }
+        bool stationLinkReady() const override { return ready; }
+    } link;
+    RadioModel window(RadioModel::Role::Remote);
+    window.attachStation(&link);
+    RfKitPage page(&window);
+    page.show();
+    QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
+    window.noteAccessoryRequestShownOnPage(7, &page);
+    window.reportStationAccessoryRefusal(QStringLiteral("rfkit"), QStringLiteral("No."), 7);
+    QVERIFY(refused.last().at(2).toBool());      // claimed and visible
+    window.noteAccessoryRequestShownOnPage(8, &page);
+    link.ready = false;
+    window.reportStationLinkStateChanged();
+    window.reportStationAccessoryRefusal(QStringLiteral("rfkit"), QStringLiteral("No."), 8);
+    QVERIFY(!refused.last().at(2).toBool());     // the claim ended with the link
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

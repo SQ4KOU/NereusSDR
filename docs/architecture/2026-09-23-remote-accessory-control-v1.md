@@ -718,7 +718,10 @@ document (the Power Genius, Tuner Genius and RF-Kit commands, the
 interlock, output limit and fault history commands, `setStationTci` and
 `setFourO3AEnabled`) on its own accessory route, never as a slice notice.
 A refusal of a request sent by the Power Genius, Tuner Genius or RF-Kit
-page shows on that page only (with the Core's values kept); any other
+page shows on that page only (with the Core's values kept) if that page
+is still open and on screen when the refusal arrives; if Setup was
+closed meanwhile, or the link to the Core dropped, it shows as a notice
+instead, so no refusal is lost. Any other
 accessory refusal (from the interlock page, the Peripherals and 4O3A
 pages, an applet, the TCI switch) shows as a notice, and the interlock
 page also reloads the Core's policy. An unrelated slice refusal does not

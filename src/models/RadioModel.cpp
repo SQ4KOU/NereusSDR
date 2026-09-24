@@ -4537,15 +4537,28 @@ void RadioModel::reportStationAccessoryRefusal(const QString& device, const QStr
     if (m_role != Role::Remote) {
         return;
     }
-    const bool shownOnPage = commandId != 0 && m_pageShownAccessoryRequests.remove(commandId);
+    // Rework part 5: shown only on a page still there and on screen.
+    const QPointer<QObject> page = m_pageShownAccessoryRequests.take(commandId);
+    const bool shownOnPage = commandId != 0 && page
+        && page->property("visible").toBool();
     emit accessoryRequestRefused(device, reason, shownOnPage);
 }
 
-void RadioModel::noteAccessoryRequestShownOnPage(quint32 commandId)
+void RadioModel::noteAccessoryRequestShownOnPage(quint32 commandId, QObject* page)
 {
-    if (commandId != 0) {
-        m_pageShownAccessoryRequests.insert(commandId);
+    if (commandId != 0 && page) {
+        m_pageShownAccessoryRequests.insert(commandId, page);
     }
+}
+
+void RadioModel::reportStationLinkStateChanged()
+{
+    // Rework part 5: with the link down no claimed answer will come.
+    const IStationLink* link = stationLink();
+    if (!link || !link->stationLinkReady()) {
+        m_pageShownAccessoryRequests.clear();
+    }
+    emit stationLinkStateChanged();
 }
 
 void RadioModel::forgetAccessoryRequest(quint32 commandId)

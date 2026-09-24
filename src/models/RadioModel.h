@@ -420,7 +420,7 @@ public:
     void attachStation(NereusSDR::IStationLink* link) { m_station = link; }
     IStationLink* stationLink() const { return m_station; }
     void detachStation() { m_station = nullptr; }
-    void reportStationLinkStateChanged() { emit stationLinkStateChanged(); }
+    void reportStationLinkStateChanged();
 
     // ── Remote-daemon R2 Task 18: the production handshake entry points ──
     //
@@ -553,10 +553,13 @@ public:
     /// pages that sent the request show, never to the slice toast.
     void reportStationAccessoryRefusal(const QString& device, const QString& reason,
                                        quint32 commandId = 0);
-    /// Follow-up 3: the page that sent request `commandId` shows the Core's
-    /// refusal of it itself, so accessoryRequestRefused says shownOnPage
-    /// and MainWindow does not toast it too. 0 is ignored.
-    void noteAccessoryRequestShownOnPage(quint32 commandId);
+    /// Follow-up 3 / rework part 5: `page` sent request `commandId` and
+    /// shows the Core's refusal of it itself. The refusal counts as shown
+    /// (accessoryRequestRefused's shownOnPage, so MainWindow does not toast
+    /// it too) only if the page still exists and is visible when it
+    /// arrives; otherwise it is toasted. Claims end when the command
+    /// completes or the link to the Core drops. 0 is ignored.
+    void noteAccessoryRequestShownOnPage(quint32 commandId, QObject* page);
     /// The request was accepted: nothing to claim.
     void forgetAccessoryRequest(quint32 commandId);
     /// Follow-up 6: one of the Core's station settings changed (`key`), or
@@ -5134,7 +5137,7 @@ private:
     std::unique_ptr<StationTciController> m_stationTci;
     std::unique_ptr<RfKitBandFollow>      m_rfKitBandFollow;
     // Follow-up 3: accessory requests whose refusal their page shows.
-    QSet<quint32> m_pageShownAccessoryRequests;
+    QHash<quint32, QPointer<QObject>> m_pageShownAccessoryRequests;
 
     // Phase 3P-III: RF-Kit RF2K-S connection. unique_ptr with Qt parent=this
     // so destruction order is deterministic and QObject hierarchy is intact.
