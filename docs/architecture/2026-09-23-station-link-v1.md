@@ -1346,7 +1346,13 @@ from 1 to 4294967295 or the message is refused.
 
 A PureSignal action can answer more than once: each result carries a
 `phase` value of `accepted`, `pending`, `completed` or `failed`, and the
-last is `completed` or `failed`.
+last is `completed` or `failed`. The phase travels in the result's
+`values`, as a `utf8` property entry named `phase` (ordinal 0), beside any
+other values the action returns: `session-verbs-ps3` shows it
+(`{"kind": "utf8", "name": "phase", "ordinal": 0, "value": "accepted"}`,
+then `"completed"` for `ps3.off`, and `"failed"` for `ps3.saveCorrection`).
+A PureSignal request refused before the action starts (one with arguments
+it does not take) answers once, with no `values` and so no phase.
 
 Every handler requires exactly the arguments listed, and an extra or
 missing argument is refused. The one exception is `setPgxlHardware`, whose
@@ -2060,7 +2066,9 @@ names, is a malformed vector, and the runner reports it.
 The station's media runner decodes the bytes and compares the result with
 `expect`. Where the encoder is exact (`nrsc1`, `ps3d`, `nsdc1`) it also
 holds the encoder to the bytes: it encodes `expect` (or, for `nsdc1`, the
-regen target's fixed input frames) again and compares. Opus is not held
+regen target's fixed input frames, and for the three malformed `nsdc1`
+vectors those frames' packets with the damage the table names) again and
+compares. Opus is not held
 to its bytes, because its floating-point encoder may differ between
 processors; its vectors hold decoders to the reference PCM instead.
 
@@ -2072,7 +2080,18 @@ processors; its vectors hold decoders to the reference PCM instead.
 | `nsdc1` | `nsdc1-delta`: frame 2, a delta | `nsdc1-full` | As above, `keyframe` false |
 | `nsdc1` | `nsdc1-delta-after-loss`: frame 3, a delta, when frame 2 was lost | `nsdc1-full` | `disposition` `needKeyframe`, `reason` `sequenceGap`, no frame |
 | `nsdc1` | `nsdc1-keyframe-after-loss`: frame 4, the keyframe the sender was asked for | `nsdc1-full` | `accepted`, `keyframe` true, the frame |
+| `nsdc1` | `nsdc1-malformed-delta`: frame 2's delta with its trace plane's block size code set to 4 (no such size), to a fresh decoder | none | `disposition` `rejected`, `reason` `malformed`, `keyframe` false, no frame (not `needKeyframe` `noHistory`) |
+| `nsdc1` | `nsdc1-malformed-stale-delta`: frame 2's delta with sequence 0 (older than frame 1's) and its last byte cut off | `nsdc1-full` | `rejected`, `malformed`, `keyframe` false, no frame (not `staleSequence`) |
+| `nsdc1` | `nsdc1-malformed-keyframe`: frame 4's keyframe with its trace plane claiming one block more than its length needs, to a decoder that needs a keyframe | `nsdc1-full`, `nsdc1-delta-after-loss` | `rejected`, `malformed`, `keyframe` true, no frame |
 | `opus` | `opus-1` to `opus-4`: four consecutive RTP packets of the speakers' mix at the station's settings (48 kHz stereo, 1920 samples per packet, 24000 bit/s, wideband, the Core's default `audio_bitrate`). A receiver stream runs Opus at 48000 bit/s fullband whatever `audio_bitrate` says (media control document, receiver audio) and is read by the same decoder; its `encoder` object reports the rate | the packets before it | `status` `accepted`, `sequence`, `timestamp`, `channels` 2, `bandwidth` 1103 (Opus wideband), `samplesPerChannel` 1920, and `pcm16`, the station decoder's output as 16-bit values (`round(sample * 32767)`); `ssrc` is the packets' RTP source, which the decoder is given; `tolerance` `{"minSnrDb": 60}` |
+
+The three `nsdc1-malformed-*` vectors hold a decoder to the display codec
+document's order ("State and recovery"): the whole datagram's structure
+first (the codec bound, the header, and every plane), then the endpoint,
+context, generation, sequence and history rules, then the datagram is
+applied. A datagram that is both malformed and refused is `rejected` with
+its structure reason, whatever state the decoder is in, and leaves history
+untouched.
 
 An NSDC `dbm` tolerance applies to every number of the decoded frame. An
 Opus tolerance is either `{"minSnrDb": N}` (the decoded PCM is at least N

@@ -1451,6 +1451,36 @@ QList<DisplayCodecFrame> LinkMediaVectors::nsdcFrames()
     return frames;
 }
 
+// The first plane's prefix starts right after the 42-byte header:
+// blockSizeCode at 42, blockCount at 43..44; the sequence is at 16..19.
+QByteArray LinkMediaVectors::nsdcBadPlaneDelta(const QByteArray& delta)
+{
+    QByteArray bytes = delta;
+    bytes[42] = 4;
+    return bytes;
+}
+
+QByteArray LinkMediaVectors::nsdcStaleTruncatedDelta(const QByteArray& delta)
+{
+    QByteArray bytes = delta;
+    for (int i = 16; i < 20; ++i) {
+        bytes[i] = 0;
+    }
+    bytes.chop(1);
+    return bytes;
+}
+
+QByteArray LinkMediaVectors::nsdcBadBlockCountKeyframe(const QByteArray& keyframe)
+{
+    QByteArray bytes = keyframe;
+    const quint16 count = static_cast<quint16>(
+        (static_cast<quint8>(bytes.at(43)) << 8) | static_cast<quint8>(bytes.at(44)));
+    const quint16 wrong = static_cast<quint16>(count + 1U);
+    bytes[43] = static_cast<char>(wrong >> 8);
+    bytes[44] = static_cast<char>(wrong & 0xFF);
+    return bytes;
+}
+
 QString LinkMediaVectors::nsdcDispositionName(DisplayCodecDisposition disposition)
 {
     switch (disposition) {

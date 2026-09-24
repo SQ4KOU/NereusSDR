@@ -48,6 +48,10 @@
 //                                    the manifest.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A (R-R3-03, R-IOS-01):
+//                                    the malformed-and-refused NSDC
+//                                    vectors. AI-assisted transformation
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -461,7 +465,8 @@ void TstLinkConformanceMedia::mediaVectors()
 
 void TstLinkConformanceMedia::vectorsCoverThePlan()
 {
-    // Three NSDC frames (full, delta, keyframe after loss) and four Opus
+    // Three NSDC frames (full, delta, keyframe after loss), three malformed
+    // NSDC datagrams (below) and four Opus
     // packets, besides the announcement and the PS3D frame.
     for (const QString& id :
          {QStringLiteral("media-nsdc1-full"), QStringLiteral("media-nsdc1-delta"),
@@ -477,6 +482,17 @@ void TstLinkConformanceMedia::vectorsCoverThePlan()
         expectOf(m_vectors.value(QStringLiteral("media-nsdc1-keyframe-after-loss")));
     QCOMPARE(recovered.value(QStringLiteral("keyframe")).toBool(), true);
     QCOMPARE(recovered.value(QStringLiteral("disposition")).toString(), QStringLiteral("accepted"));
+
+    // Three datagrams both malformed and refused reject as malformed: the
+    // structure is checked before the sequence and history rules.
+    for (const QString& id : {QStringLiteral("media-nsdc1-malformed-delta"),
+                              QStringLiteral("media-nsdc1-malformed-stale-delta"),
+                              QStringLiteral("media-nsdc1-malformed-keyframe")}) {
+        QVERIFY2(m_vectors.contains(id), qPrintable(id));
+        const QJsonObject expect = expectOf(m_vectors.value(id));
+        QCOMPARE(expect.value(QStringLiteral("disposition")).toString(), QStringLiteral("rejected"));
+        QCOMPARE(expect.value(QStringLiteral("reason")).toString(), QStringLiteral("malformed"));
+    }
 }
 
 void TstLinkConformanceMedia::nsdcVectorsAreTheStationsEncoderOutput()
@@ -495,6 +511,12 @@ void TstLinkConformanceMedia::nsdcVectorsAreTheStationsEncoderOutput()
     QCOMPARE(m_vectors.value(QStringLiteral("media-nsdc1-delta")).bytes, delta);
     QCOMPARE(m_vectors.value(QStringLiteral("media-nsdc1-delta-after-loss")).bytes, lost);
     QCOMPARE(m_vectors.value(QStringLiteral("media-nsdc1-keyframe-after-loss")).bytes, keyframe);
+    QCOMPARE(m_vectors.value(QStringLiteral("media-nsdc1-malformed-delta")).bytes,
+             LinkMediaVectors::nsdcBadPlaneDelta(delta));
+    QCOMPARE(m_vectors.value(QStringLiteral("media-nsdc1-malformed-stale-delta")).bytes,
+             LinkMediaVectors::nsdcStaleTruncatedDelta(delta));
+    QCOMPARE(m_vectors.value(QStringLiteral("media-nsdc1-malformed-keyframe")).bytes,
+             LinkMediaVectors::nsdcBadBlockCountKeyframe(keyframe));
 }
 
 void TstLinkConformanceMedia::malformedAfterIsReported()

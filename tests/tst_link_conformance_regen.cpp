@@ -29,6 +29,10 @@
 //                                    stateful decoders. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A (R-R3-03, R-IOS-01):
+//                                    three NSDC vectors both malformed and
+//                                    refused. AI-assisted transformation
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -159,6 +163,22 @@ void TstLinkConformanceRegen::writeNsdcFrames()
                   expectation({full}, lost, afterFull)));
     QVERIFY(write(QStringLiteral("nsdc1-keyframe-after-loss"), keyframe,
                   expectation({full}, keyframe, afterFull)));
+
+    // Datagrams both malformed and refused: the structure is checked first
+    // (display codec document, "State and recovery"), so each rejects as
+    // malformed whatever the decoder's state would have refused it for.
+    QVERIFY(write(QStringLiteral("nsdc1-malformed-delta"),
+                  LinkMediaVectors::nsdcBadPlaneDelta(delta),
+                  expectation({}, LinkMediaVectors::nsdcBadPlaneDelta(delta), {})));
+    QVERIFY(write(QStringLiteral("nsdc1-malformed-stale-delta"),
+                  LinkMediaVectors::nsdcStaleTruncatedDelta(delta),
+                  expectation({full}, LinkMediaVectors::nsdcStaleTruncatedDelta(delta),
+                              afterFull)));
+    QVERIFY(write(QStringLiteral("nsdc1-malformed-keyframe"),
+                  LinkMediaVectors::nsdcBadBlockCountKeyframe(keyframe),
+                  expectation({full, lost}, LinkMediaVectors::nsdcBadBlockCountKeyframe(keyframe),
+                              {QStringLiteral("media-nsdc1-full"),
+                               QStringLiteral("media-nsdc1-delta-after-loss")})));
 }
 
 void TstLinkConformanceRegen::writeOpusPackets()

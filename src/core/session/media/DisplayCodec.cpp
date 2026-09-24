@@ -93,12 +93,12 @@ public:
         std::memcpy(&value, &bits, sizeof(value));
         return true;
     }
-    bool bytes(int count, QByteArray& out) {
+    bool skip(int count) {
         if (count < 0 || count > m_bytes.size() - m_pos) { return false; }
-        out = m_bytes.mid(m_pos, count);
         m_pos += count;
         return true;
     }
+    int position() const { return m_pos; }
     bool atEnd() const { return m_pos == m_bytes.size(); }
 
 private:
@@ -262,33 +262,32 @@ void writePlane(Writer& writer, const QVector<quint8>& values,
     }
 }
 
-bool unpackResidual(const QByteArray& payload, int sample, int width, int& value)
+int unpackResidual(const unsigned char* payload, int sample, int width)
 {
     unsigned packed = 0;
     const int firstBit = sample * width;
     for (int bit = 0; bit < width; ++bit) {
         const int offset = firstBit + bit;
-        const unsigned byte = static_cast<unsigned char>(payload.at(offset / 8));
+        const unsigned byte = payload[offset / 8];
         packed = (packed << 1) | ((byte >> (7 - (offset % 8))) & 1U);
     }
-    value = static_cast<int>(packed) - (1 << (width - 1));
-    return true;
+    return static_cast<int>(packed) - (1 << (width - 1));
 }
 
-bool readPlane(Reader& reader, int expectedLength, bool keyframe,
-               const QVector<quint8>* previous, bool validateOnly,
-               QVector<quint8>& reconstructed)
+// The structure pass: every plane check that needs no decoder state (block
+// size code, block count against the declared length, block sample counts,
+// mode, bit width, payload length, overrun and truncation). It records where
+// the plane starts and copies nothing.
+bool checkPlane(Reader& reader, int expectedLength, bool keyframe, int& planeStart)
 {
+    planeStart = reader.position();
     quint8 blockCode = 0;
     quint16 blockCount = 0;
     if (!reader.u8(blockCode) || !reader.u16(blockCount) || blockCode >= 4) { return false; }
     const int blockSize = kBlockSizes[blockCode];
     const int expectedBlocks = (expectedLength + blockSize - 1) / blockSize;
     if (blockCount != expectedBlocks) { return false; }
-    if (!keyframe && !validateOnly
-        && (!previous || previous->size() != expectedLength)) { return false; }
 
-    if (!validateOnly) { reconstructed.resize(expectedLength); }
     int first = 0;
     for (int block = 0; block < blockCount; ++block) {
         quint8 mode = 0, width = 0, count = 0;
@@ -298,33 +297,50 @@ bool readPlane(Reader& reader, int expectedLength, bool keyframe,
         }
         const int expectedCount = std::min(blockSize, expectedLength - first);
         if (count != expectedCount || count == 0 || (mode != 0 && mode != 1)) { return false; }
-        QByteArray payload;
-        if (!reader.bytes(bytes, payload)) { return false; }
         if (mode == 1) {
             if (width != 8 || bytes != count) { return false; }
-            if (!validateOnly) {
-                for (int i = 0; i < count; ++i) {
-                    reconstructed[first + i] = static_cast<quint8>(
-                        static_cast<unsigned char>(payload.at(i)));
-                }
-            }
-        } else {
-            if (keyframe || width == 0 || width > 8 || bytes != payloadBytes(count, width)) {
-                return false;
-            }
-            for (int i = 0; i < count; ++i) {
-                int residual = 0;
-                if (!unpackResidual(payload, i, width, residual)) { return false; }
-                if (!validateOnly) {
-                    const int value = static_cast<int>(previous->at(first + i)) + residual;
-                    if (value < 0 || value > 255) { return false; }
-                    reconstructed[first + i] = static_cast<quint8>(value);
-                }
-            }
+        } else if (keyframe || width == 0 || width > 8 || bytes != payloadBytes(count, width)) {
+            return false;
         }
+        if (!reader.skip(bytes)) { return false; }
         first += count;
     }
     return first == expectedLength;
+}
+
+// The apply pass, over a plane checkPlane accepted: reads the block headers
+// it already checked and reconstructs from the payload in place. The only
+// failures left need history: a delta without a matching previous plane,
+// and a residual that takes a value outside 0..255.
+bool applyPlane(const QByteArray& packet, int planeStart, int expectedLength,
+                const QVector<quint8>* previous, QVector<quint8>& reconstructed)
+{
+    const auto* data = reinterpret_cast<const unsigned char*>(packet.constData());
+    const int blockCount = (static_cast<int>(data[planeStart + 1]) << 8) | data[planeStart + 2];
+    int position = planeStart + 3;
+    reconstructed.resize(expectedLength);
+    int first = 0;
+    for (int block = 0; block < blockCount; ++block) {
+        const int mode = data[position];
+        const int width = data[position + 1];
+        const int count = data[position + 2];
+        const int bytes = (static_cast<int>(data[position + 3]) << 8) | data[position + 4];
+        const unsigned char* payload = data + position + 5;
+        if (mode == 1) {
+            for (int i = 0; i < count; ++i) { reconstructed[first + i] = payload[i]; }
+        } else {
+            if (!previous || previous->size() != expectedLength) { return false; }
+            for (int i = 0; i < count; ++i) {
+                const int value = static_cast<int>(previous->at(first + i))
+                    + unpackResidual(payload, i, width);
+                if (value < 0 || value > 255) { return false; }
+                reconstructed[first + i] = static_cast<quint8>(value);
+            }
+        }
+        position += 5 + bytes;
+        first += count;
+    }
+    return true;
 }
 
 DisplayCodecDecodeResult result(DisplayCodecDisposition disposition, DisplayCodecReason reason)
@@ -475,6 +491,19 @@ DisplayCodecDecodeResult DisplayCodecDecoder::decode(const QByteArray& packet)
         return result(DisplayCodecDisposition::Rejected, DisplayCodecReason::Malformed);
     }
 
+    // The whole datagram's structure first (display codec document, "State
+    // and recovery"): a malformed packet rejects as malformed whatever state
+    // the decoder is in, before any endpoint, context, generation, sequence
+    // or history rule is asked.
+    int tracePlane = 0, waterfallPlane = 0, widePlane = 0;
+    if (!checkPlane(reader, traceLength, keyframe, tracePlane)
+        || !checkPlane(reader, waterfallLength, keyframe, waterfallPlane)
+        || (hasWide && !checkPlane(reader, wideLength, keyframe, widePlane))
+        || !reader.atEnd()) {
+        return result(DisplayCodecDisposition::Rejected, DisplayCodecReason::Malformed);
+    }
+
+    // Then the endpoint, context, generation, sequence and history rules.
     const QVector<quint8>* oldTrace = nullptr;
     const QVector<quint8>* oldWaterfall = nullptr;
     const QVector<quint8>* oldWide = nullptr;
@@ -511,16 +540,17 @@ DisplayCodecDecodeResult DisplayCodecDecoder::decode(const QByteArray& packet)
         }
     }
 
-    QVector<quint8> trace, waterfall, wide;
-    if (!readPlane(reader, traceLength, keyframe, oldTrace, sequenceGap, trace)
-        || !readPlane(reader, waterfallLength, keyframe, oldWaterfall, sequenceGap, waterfall)
-        || (hasWide && !readPlane(reader, wideLength, keyframe, oldWide, sequenceGap, wide))
-        || !reader.atEnd()) {
-        return result(DisplayCodecDisposition::Rejected, DisplayCodecReason::Malformed);
-    }
     if (sequenceGap) {
         m_needsKeyframe = true;
         return result(DisplayCodecDisposition::NeedKeyframe, DisplayCodecReason::SequenceGap);
+    }
+
+    // Then the datagram is applied.
+    QVector<quint8> trace, waterfall, wide;
+    if (!applyPlane(packet, tracePlane, traceLength, oldTrace, trace)
+        || !applyPlane(packet, waterfallPlane, waterfallLength, oldWaterfall, waterfall)
+        || (hasWide && !applyPlane(packet, widePlane, wideLength, oldWide, wide))) {
+        return result(DisplayCodecDisposition::Rejected, DisplayCodecReason::Malformed);
     }
 
     DisplayCodecDecodeResult decoded;

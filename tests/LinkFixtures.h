@@ -178,6 +178,15 @@ public:
     /// a keyframe, two deltas, and a keyframe the sender was asked for
     /// after the third was lost (encode it with requestKeyframe = true).
     static QList<NereusSDR::DisplayCodecFrame> nsdcFrames();
+    /// The malformed-and-refused vectors, each made from the station
+    /// encoder's own packet of nsdcFrames(): frame 2's delta with its trace
+    /// plane's block size code set to 4 (no such size); frame 2's delta with
+    /// sequence 0 (older than frame 1) and its last byte cut off; frame 4's
+    /// keyframe with its trace plane claiming one block more than its length
+    /// needs.
+    static QByteArray nsdcBadPlaneDelta(const QByteArray& delta);
+    static QByteArray nsdcStaleTruncatedDelta(const QByteArray& delta);
+    static QByteArray nsdcBadBlockCountKeyframe(const QByteArray& keyframe);
     /// A decode result as the vector's expectation holds it: disposition
     /// and reason by name, and the frame's fields when it was accepted.
     static QJsonObject toJson(const NereusSDR::DisplayCodecDecodeResult& result);
