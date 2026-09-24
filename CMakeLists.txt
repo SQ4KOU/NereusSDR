@@ -620,10 +620,25 @@ else()
         # Apple's ld warns "ignoring duplicate libraries: '-lfftw3'" on
         # that. Linking the full path, as fftw3f already is, keeps the
         # ordering and drops the warning.
+        #
+        # Searched like fftw3f: the default paths (CMAKE_PREFIX_PATH, then
+        # Homebrew's own lib folder) before pkg-config's folder. Homebrew's
+        # pkg-config names the versioned Cellar folder, and a cached Cellar
+        # path breaks linking in an existing build folder once
+        # `brew upgrade fftw` and `brew cleanup` remove it; the unversioned
+        # ${HOMEBREW_PREFIX}/lib link follows upgrades. (The cache variable
+        # was FFTW3_FULL_PATH; the new name makes existing build folders
+        # search again instead of keeping a cached Cellar path.)
         if(FFTW3_FOUND)
-            find_library(FFTW3_FULL_PATH fftw3 HINTS ${FFTW3_LIBRARY_DIRS} NO_DEFAULT_PATH)
-            if(FFTW3_FULL_PATH)
-                set(FFTW3_LIBRARIES ${FFTW3_FULL_PATH})
+            set(_fftw3_hints "")
+            if(HOMEBREW_PREFIX)
+                list(APPEND _fftw3_hints "${HOMEBREW_PREFIX}/lib")
+            endif()
+            list(APPEND _fftw3_hints ${FFTW3_LIBRARY_DIRS})
+            find_library(FFTW3_LINK_LIBRARY fftw3 HINTS ${_fftw3_hints})
+            unset(_fftw3_hints)
+            if(FFTW3_LINK_LIBRARY)
+                set(FFTW3_LIBRARIES ${FFTW3_LINK_LIBRARY})
             endif()
         endif()
     endif()
