@@ -243,6 +243,16 @@
 //               command results to the asking session, media and telemetry to
 //               one session until Task 76. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 73 (R-IOS-02): slice ownership. Each view
+//               receives its own slices and a SliceMarker for every other
+//               (none to an older window); a write or verb naming another
+//               device's slice is refused with its owner named; admission
+//               returns held slices, restores saved ones, adopts unowned
+//               ones for the first device alone and gives a slice-less
+//               device one; the end of its 180 s, leaving and revocation
+//               close, save or hold its slices; listeningOn. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -250,6 +260,7 @@
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
 #include "core/HardwareProfile.h"
+#include "core/WdspEngine.h"
 #include "core/dsp/NnrSettings.h"
 #include "core/security/CertificateStore.h"
 #include "core/security/DeviceAuthenticator.h"
@@ -264,6 +275,8 @@
 #include "core/session/MirrorView.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionCommandDispatcher.h"
+#include "core/session/SliceMarker.h"
+#include "core/SliceOwnership.h"
 #include "core/session/ConnectedDevicesFacade.h"
 #include "core/session/DeviceSessionRegistry.h"
 #include "core/session/SessionEndReasons.h"
@@ -860,6 +873,26 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     connect(m_devices.get(), &DeviceStore::deviceRemoved, this, [this](const QByteArray& id) {
         m_deviceSessions->remove(id);
     });
+    // iPhone app Task 73 (ruling 4.11): revoking a device closes its slices,
+    // held ones included, and forgets its saved layout. The Core's last
+    // slice is never closed; it stays, owned by nobody.
+    connect(m_devices.get(), &DeviceStore::deviceRemoved, this, [this](const QByteArray& id) {
+        if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local) {
+            SliceOwnership* ownership = m_radioModel->sliceOwnership();
+            QList<int> slices = ownership->ownedBy(id);
+            slices += ownership->heldFor(id);
+            for (int sliceId : std::as_const(slices)) {
+                if (!closeSliceFor(sliceId, QByteArray())) {
+                    ownership->setOwner(sliceId, QByteArray());
+                }
+            }
+        }
+        DeviceLayoutStore::forgetDevice(AppSettings::instance(), id);
+        m_slicesNotRestored.remove(id);
+    });
+    // iPhone app Task 73 (ruling 4.11): the end of a device's 180 s.
+    connect(m_deviceSessions.get(), &DeviceSessionRegistry::graceEnded, this,
+            &StationServer::releaseDeviceSlices);
     // iPhone app Task 13 (R-IOS-08): the `devices` object. A device removed
     // by anything (devices.revoke, the console, a reset) loses its
     // connection at once; so does every connection signed in with the token
@@ -961,6 +994,24 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // messages to that session alone, fitted by sendToPeer; nothing goes
     // to a connection that holds no view.
     connect(radioModel, &RadioModel::receiveLayoutHydrated, this, [this] {
+        // iPhone app Task 73 (ruling 5.2): a layout restored while devices
+        // are on the Core (a radio that arrived late) brings its slices
+        // with the owners its manifest names, each held for its device.
+        // A device holding a place takes its own back, and a device alone
+        // on the Core adopts the slices nobody owns, as at its admission.
+        // The bursts below carry the result, so no view is sent the
+        // change of owner on its own.
+        if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local) {
+            m_ownerChangesInBurst = true;
+            SliceOwnership* ownership = m_radioModel->sliceOwnership();
+            const QList<DeviceSessionRegistry::Entry> entries = m_deviceSessions->entries();
+            for (const DeviceSessionRegistry::Entry& entry : entries) {
+                ownership->returnHeld(entry.deviceId);
+            }
+            adoptForLoneDevice();
+            m_ownerChangesInBurst = false;
+            m_connectedDevices->refresh();
+        }
         if (hasAuthenticatedSession() && m_mirrorBuilt) {
             // Shared slice QObjects were restored without individual notify
             // signals. Re-seed their entire settled state on every session,
@@ -1108,6 +1159,89 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             [this](const QByteArray& objectKey, const QByteArray& className, int) {
                 sendToEveryView(SessionMessages::objectDestroy(objectKey, className));
             });
+
+    // iPhone app Task 73 (ruling 5.4): a marker per slice, made after
+    // ObjectRegistry's connections so a slice's create and destroy go out
+    // before its marker's. Its owner fields name the device the slice is
+    // held for when held, else its owner, one device named the same way on
+    // every page (ruling 4.3).
+    m_markers = new SliceMarkerSet(radioModel, m_mirror, [this](int sliceId) {
+        SliceMarker::Owner owner;
+        if (!m_radioModel) {
+            return owner;
+        }
+        const SliceOwnership::Mark mark = m_radioModel->sliceOwnership()->mark(sliceId);
+        const QByteArray subject = mark.subject();
+        if (subject.isEmpty() || subject == SliceOwnership::stationDevice()) {
+            owner.kind = QStringLiteral("station");
+            return owner;
+        }
+        if (const auto words = m_connectedDevices->describe(subject)) {
+            owner.deviceId = words->wireId;
+            owner.name = words->name;
+            owner.shortName = words->shortName;
+            owner.kind = words->kind;
+        } else {
+            owner.deviceId = StationIdentity::toBase64Url(subject);
+        }
+        const std::optional<DeviceSessionRegistry::Entry> entry = m_deviceSessions->entry(subject);
+        owner.away = mark.isHeld()
+            || (entry && entry->state == DeviceSessionRegistry::State::Away);
+        return owner;
+    }, this);
+    connect(m_markers, &SliceMarkerSet::markerCreated, this,
+            [this](const QByteArray& key, const QByteArray& className,
+                   const QList<MirrorUpdate>& snapshot) {
+                sendToEveryView(SessionMessages::objectCreate(key, className, snapshot));
+            });
+    connect(m_markers, &SliceMarkerSet::markerDestroyed, this,
+            [this](const QByteArray& key, const QByteArray& className) {
+                sendToEveryView(SessionMessages::objectDestroy(key, className));
+            });
+    // Away, back, a name or a short name changed: the markers say so.
+    connect(m_deviceSessions.get(), &DeviceSessionRegistry::changed, m_markers,
+            &SliceMarkerSet::refreshOwners);
+    connect(m_devices.get(), &DeviceStore::devicesChanged, m_markers,
+            &SliceMarkerSet::refreshOwners);
+    // connectedDevices.listeningOn: a device's slices, their bands and
+    // modes.
+    m_connectedDevices->setListeningProvider(
+        [this](const QByteArray& deviceId) { return listeningOn(deviceId); });
+    m_dispatcher->setSliceAccess([this](const QByteArray& requester, int sliceId) {
+        return sliceRefusal(requester, sliceId);
+    });
+    if (radioModel) {
+        connect(radioModel->sliceOwnership(), &SliceOwnership::markChanged, this,
+                &StationServer::onSliceOwnerChanged);
+        const auto followSlice = [this](SliceModel* slice) {
+            if (slice == nullptr) {
+                return;
+            }
+            connect(slice, &SliceModel::bandChanged, m_connectedDevices.get(),
+                    &ConnectedDevicesFacade::refresh, Qt::UniqueConnection);
+            connect(slice, &SliceModel::dspModeChanged, m_connectedDevices.get(),
+                    &ConnectedDevicesFacade::refresh, Qt::UniqueConnection);
+        };
+        for (SliceModel* slice : radioModel->slices()) {
+            followSlice(slice);
+        }
+        connect(radioModel, &RadioModel::sliceAdded, this, [this, followSlice](int sliceId) {
+            if (m_radioModel) {
+                followSlice(m_radioModel->sliceById(sliceId));
+                // A slice the Core made for nobody (a radio that arrived
+                // after the device, the Core's own top-up) goes to a device
+                // alone on the Core, as the slices it found at admission
+                // did. A turn later, so a layout being restored settles its
+                // owners first.
+                if (m_radioModel->sliceOwnership()->mark(sliceId).owner.isEmpty()) {
+                    QTimer::singleShot(0, this, [this]() { adoptForLoneDevice(); });
+                }
+            }
+            m_connectedDevices->refresh();
+        });
+        connect(radioModel, &RadioModel::sliceRemoved, m_connectedDevices.get(),
+                &ConnectedDevicesFacade::refresh);
+    }
 
     m_heartbeatTimer = new QTimer(this);
     m_heartbeatTimer->setInterval(m_heartbeatIntervalMs);
@@ -1738,6 +1872,13 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         m_deviceSessions->sessionEnded(sessionDevice, transport,
                                        leaving ? DeviceSessionRegistry::EndKind::Left
                                                : DeviceSessionRegistry::EndKind::Dropped);
+        // iPhone app Task 73 (ruling 4.12): a device that left, and a token
+        // window (no 180 s: it cannot be recognised when it comes back),
+        // give up their slices now. A paired device that dropped keeps them
+        // for its 180 s (graceEnded).
+        if (leaving || sessionDevice.startsWith("token:")) {
+            releaseDeviceSlices(sessionDevice);
+        }
     }
     publishConnectedDevices();
 
@@ -2114,7 +2255,11 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             // iPhone app Task 72 (ruling 5.8): the command acts for this
             // session, so a DSP-asset job it starts is this device's.
             m_dispatcher->setSessionOwner(sessionOwner(m_peers.value(transport).sessionId));
+            // iPhone app Task 73 (rulings 5.9, 5.10): and for this device,
+            // whose slices it may name and whose active slice it sets.
+            m_dispatcher->setRequester(m_peers.value(transport).sessionDeviceId);
             m_dispatcher->dispatch(message);
+            m_dispatcher->setRequester({});
             m_dispatcher->setSessionOwner({});
             m_dispatchingTransport = nullptr;
             // iPhone app Task 71: a result still owed (it arrives on a later
@@ -2485,7 +2630,20 @@ void StationServer::admit(SessionTransport* transport, const QString& name,
         return;
     }
     it->sessionDeviceId = device.deviceId;
+    // iPhone app Task 73 (ruling 4.8): a device back to its own place keeps
+    // its slices, pans and active slice as they are.
+    it->returning = result.admission == DeviceSessionRegistry::Admission::SameDevice;
     publishConnectedDevices();
+    // iPhone app Task 73 (ruling 5.2): the device's slices, before its own
+    // burst so the burst carries them, and within the held refresh so its
+    // sign-in is still one change to `connectedDevices`. Other views see
+    // them as markers.
+    if (!it->returning) {
+        placeSlicesForAdmission(device.deviceId);
+        if (!m_peers.contains(transport)) {
+            return;
+        }
+    }
     resumeDevices.dismiss();
     m_devicesFacade->resumeRefresh();
     m_connectedDevices->resumeRefresh();
@@ -3052,6 +3210,8 @@ void StationServer::buildMirror()
     // Called after the objectCreated/objectDestroyed wiring in the
     // constructor, which is the ordering its own doc comment requires.
     m_registry->backfillExistingSlices();
+    // iPhone app Task 73: and a marker for each.
+    m_markers->backfill();
 }
 
 bool StationServer::sendCapabilitiesAndSettingsSnapshot(SessionTransport* transport)
@@ -3101,6 +3261,47 @@ bool StationServer::sendCapabilitiesAndSettingsSnapshot(SessionTransport* transp
 void StationServer::handlePropertyWrite(SessionTransport* transport,
                                         const SessionMessage& message)
 {
+    // iPhone app Task 73 (ruling 5.9): a device writes only its own slices,
+    // and nobody writes a marker. Refused before anything is read or
+    // applied, with no value of the other device's slice in the answer.
+    {
+        QString refusal;
+        const QByteArray requester = m_peers.value(transport).sessionDeviceId;
+        if (message.objectKey.startsWith("slice:")) {
+            bool ok = false;
+            const int sliceId = message.objectKey.mid(6).toInt(&ok);
+            if (ok) {
+                refusal = sliceRefusal(requester, sliceId);
+            }
+        } else if (message.objectKey.startsWith("marker:")) {
+            const int sliceId = SliceMarkerSet::sliceIdOf(message.objectKey);
+            if (m_radioModel && sliceId >= 0 && m_radioModel->sliceOwnership()->isLive(sliceId)) {
+                refusal = ownedElsewhereReason(sliceId);
+            }
+        }
+        if (!refusal.isEmpty()) {
+            QList<SessionPropertyResult> results;
+            QSet<QByteArray> reported;
+            for (const MirrorUpdate& update : message.updates) {
+                if (reported.contains(update.name)) {
+                    continue;
+                }
+                reported.insert(update.name);
+                SessionPropertyResult result;
+                result.property = update.name;
+                result.accepted = false;
+                result.reason = refusal;
+                results.append(result);
+            }
+            if (m_peers.value(transport).agreedMinor >= kDspControlSessionProtocolMinor
+                && message.writeId != 0) {
+                send(transport,
+                     SessionMessages::propertyResult(message.objectKey, message.writeId, results));
+            }
+            return;
+        }
+    }
+
     // Persist accepted PS preferences without replaying transmit operations.
     // This session advertises txPermitted=false until the R4 transmit path.
     const QPointer<PureSignal> hydrating = message.objectKey == "pureSignalSettings"
@@ -3484,6 +3685,11 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
     // iPhone app Task 14: the pairing code only to a connection signed in
     // with a paired device's key.
     const SessionMessage message = withPairingCodeFor(transport, original);
+    // iPhone app Task 73 (ruling 5.6): a device's own slices, and markers
+    // for the others to a view with the feature.
+    if (!ownershipAllows(transport, message)) {
+        return;
+    }
     switch (message.kind) {
     case SessionMessageKind::Schema:
     case SessionMessageKind::ObjectCreate:
@@ -3564,6 +3770,319 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
     default:
         transport->sendText(SessionMessages::encode(message));
         return;
+    }
+}
+
+// ── Slice ownership (iPhone app Task 73) ─────────────────────────────────
+
+bool StationServer::ownershipAllows(SessionTransport* transport,
+                                    const SessionMessage& message) const
+{
+    switch (message.kind) {
+    case SessionMessageKind::Schema:
+        // A marker's class only to a view with the feature.
+        return message.className != "SliceMarker" || peerHasSessionHolderVersion(transport);
+    case SessionMessageKind::ObjectCreate:
+    case SessionMessageKind::ObjectDestroy:
+    case SessionMessageKind::Delta:
+        break;
+    default:
+        return true;
+    }
+    const bool slice = message.objectKey.startsWith("slice:");
+    const bool marker = message.objectKey.startsWith("marker:");
+    if ((!slice && !marker) || m_radioModel.isNull()) {
+        return true;
+    }
+    const auto peer = m_peers.constFind(transport);
+    if (peer == m_peers.cend()) {
+        return false;
+    }
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    if (slice) {
+        bool ok = false;
+        const int sliceId = message.objectKey.mid(6).toInt(&ok);
+        // Its own: owned by this device (a held slice is the station
+        // device's, so never here).
+        return ok && !peer->sessionDeviceId.isEmpty()
+            && ownership->mark(sliceId).owner == peer->sessionDeviceId;
+    }
+    // A marker: to a view with the feature, and never to the device whose
+    // slice it is (the one it is held for, when held).
+    if (!peerHasSessionHolderVersion(transport)) {
+        return false;
+    }
+    const int sliceId = SliceMarkerSet::sliceIdOf(message.objectKey);
+    return sliceId >= 0 && ownership->mark(sliceId).subject() != peer->sessionDeviceId;
+}
+
+QString StationServer::ownedElsewhereReason(int sliceId) const
+{
+    QString owner;
+    if (m_radioModel) {
+        const QByteArray subject = m_radioModel->sliceOwnership()->mark(sliceId).subject();
+        if (const auto words = m_connectedDevices->describe(subject)) {
+            owner = words->name;
+        }
+    }
+    // The owner's name is the operator's own word (ruling 4.3), never held
+    // to the wording rules; the sentence around it is.
+    if (owner.isEmpty()) {
+        return QStringLiteral("That slice belongs to the Core. It can be changed only there.");
+    }
+    return QStringLiteral("That slice belongs to %1. It can be changed only there.").arg(owner);
+}
+
+QString StationServer::sliceRefusal(const QByteArray& requester, int sliceId) const
+{
+    if (m_radioModel.isNull() || requester.isEmpty()) {
+        return {};
+    }
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    // A slice that is not there is the verb's own refusal ("no longer on
+    // the Core"), not this one.
+    if (!ownership->isLive(sliceId) || ownership->mark(sliceId).owner == requester) {
+        return {};
+    }
+    return ownedElsewhereReason(sliceId);
+}
+
+QJsonArray StationServer::listeningOn(const QByteArray& deviceId) const
+{
+    QJsonArray slices;
+    if (m_radioModel.isNull() || deviceId.isEmpty()) {
+        return slices;
+    }
+    for (int sliceId : m_radioModel->sliceOwnership()->ownedBy(deviceId)) {
+        const SliceModel* slice = m_radioModel->sliceById(sliceId);
+        if (slice == nullptr) {
+            continue;
+        }
+        slices.append(QJsonObject{
+            {QStringLiteral("sliceId"), sliceId},
+            {QStringLiteral("letter"), QString(QChar(QLatin1Char('A').unicode() + sliceId))},
+            {QStringLiteral("band"), static_cast<int>(slice->band())},
+            {QStringLiteral("mode"), static_cast<int>(slice->dspMode())},
+        });
+    }
+    return slices;
+}
+
+int StationServer::deviceLayoutLimit() const
+{
+    // The board's own cap, not maxSlices(), which reads 1 while the radio
+    // is disconnected.
+    const int board = m_radioModel ? m_radioModel->boardCapabilities().maxSlices : 0;
+    return board > 0 ? std::min(board, WdspEngine::kMaxSliceChannels)
+                     : WdspEngine::kMaxSliceChannels;
+}
+
+void StationServer::adoptForLoneDevice()
+{
+    if (m_radioModel.isNull() || m_radioModel->role() != RadioModel::Role::Local) {
+        return;
+    }
+    const QList<DeviceSessionRegistry::Entry> entries = m_deviceSessions->entries();
+    if (entries.size() == 1
+        && !m_radioModel->sliceOwnership()->adoptUnowned(entries.first().deviceId).isEmpty()) {
+        m_connectedDevices->refresh();
+    }
+}
+
+bool StationServer::anotherDeviceHoldsAPlace(const QByteArray& deviceId) const
+{
+    const QList<DeviceSessionRegistry::Entry> entries = m_deviceSessions->entries();
+    return std::any_of(entries.cbegin(), entries.cend(),
+                       [&deviceId](const DeviceSessionRegistry::Entry& entry) {
+                           return entry.deviceId != deviceId;
+                       });
+}
+
+void StationServer::placeSlicesForAdmission(const QByteArray& deviceId)
+{
+    if (m_radioModel.isNull() || deviceId.isEmpty()
+        || m_radioModel->role() != RadioModel::Role::Local) {
+        return;
+    }
+    SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    AppSettings& store = AppSettings::instance();
+
+    // 1. Slices the station device held for it are its own again.
+    ownership->returnHeld(deviceId);
+
+    // 2. Its saved slices, where they fit: its old letter when free, else
+    //    the lowest free, each with its own settings; what does not fit is
+    //    kept in its store and recorded for the notice (Task 74). A token
+    //    window has none.
+    const QString mac = m_radioModel->currentRadioMac();
+    if (!deviceId.startsWith("token:") && !mac.isEmpty()) {
+        const QList<SavedSlice> saved = DeviceLayoutStore::load(store, mac, deviceId);
+        QList<SavedSlice> notRestored;
+        for (const SavedSlice& entry : saved) {
+            const int sliceId = m_radioModel->sliceById(entry.id) == nullptr
+                    && entry.id < WdspEngine::kMaxSliceChannels
+                ? entry.id
+                : m_radioModel->lowestFreeSliceId();
+            if (sliceId < 0) {
+                notRestored.append(entry);
+                continue;
+            }
+            DeviceLayoutStore::writeSliceSettings(store, mac, sliceId, entry.settings);
+            const ReceiveSliceState state{sliceId, entry.panKey, entry.frequencyHz, entry.dspMode,
+                                          {}, {}};
+            QString reason;
+            if (m_radioModel->restoreSliceFor(deviceId, sliceId, state, &reason) < 0) {
+                qCInfo(lcStation) << "A saved slice did not fit:" << reason;
+                DeviceLayoutStore::clearSliceSettings(store, mac, sliceId);
+                notRestored.append(entry);
+            }
+        }
+        if (!saved.isEmpty()) {
+            DeviceLayoutStore::replace(store, mac, deviceId, notRestored, deviceLayoutLimit());
+            m_radioModel->requestSettingsSave();
+        }
+        if (notRestored.isEmpty()) {
+            m_slicesNotRestored.remove(deviceId);
+        } else {
+            m_slicesNotRestored.insert(deviceId, notRestored);
+        }
+    }
+
+    // 3. The first device admitted while no other is on the Core adopts
+    //    every slice nobody owns (never one held for another device).
+    if (!anotherDeviceHoldsAPlace(deviceId)) {
+        ownership->adoptUnowned(deviceId);
+    }
+
+    // 4. A device that still owns no slice gets one on the station-level
+    //    active slice's frequency, on its receiver; with the slice cap full
+    //    it starts with none.
+    if (ownership->ownedBy(deviceId).isEmpty()) {
+        const SliceOwnership::CreatorScope creator(ownership, deviceId);
+        if (m_radioModel->addSlice(QString()) < 0) {
+            qCInfo(lcStation) << "A device was admitted with no slice: the slice cap is full";
+        }
+    }
+    m_connectedDevices->refresh();
+}
+
+bool StationServer::closeSliceFor(int sliceId, const QByteArray& saveFor)
+{
+    if (m_radioModel.isNull()) {
+        return false;
+    }
+    const SliceModel* slice = m_radioModel->sliceById(sliceId);
+    // The Core keeps one slice: its last is never closed for another
+    // device's reason.
+    if (slice == nullptr || m_radioModel->slices().size() <= 1) {
+        return false;
+    }
+    SavedSlice saved;
+    saved.id = sliceId;
+    saved.panKey = slice->panKey();
+    saved.frequencyHz = slice->frequency();
+    saved.dspMode = slice->dspMode();
+    const QString mac = m_radioModel->currentRadioMac();
+    // Removing saves the slice's own settings to its keys first.
+    m_radioModel->removeSlice(sliceId);
+    if (m_radioModel->sliceById(sliceId) != nullptr) {
+        return false;
+    }
+    AppSettings& store = AppSettings::instance();
+    if (!saveFor.isEmpty() && !mac.isEmpty()) {
+        saved.settings = DeviceLayoutStore::captureSliceSettings(store, mac, sliceId);
+        DeviceLayoutStore::append(store, mac, saveFor, saved, deviceLayoutLimit());
+    }
+    // The letter's keys go with it, so another device's new slice there
+    // starts from defaults (ruling 5.3).
+    DeviceLayoutStore::clearSliceSettings(store, mac, sliceId);
+    m_radioModel->requestSettingsSave();
+    return true;
+}
+
+void StationServer::releaseDeviceSlices(const QByteArray& deviceId)
+{
+    if (m_radioModel.isNull() || deviceId.isEmpty()
+        || m_radioModel->role() != RadioModel::Role::Local) {
+        return;
+    }
+    SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    const QList<int> owned = ownership->ownedBy(deviceId);
+    const bool token = deviceId.startsWith("token:");
+    // Ruling 4.11: with another device on the Core they close (saved for a
+    // paired device); with none they keep running, the station device's,
+    // held for their owner, as a Core with one client keeps its slices. A
+    // token window cannot be recognised again: its slices pass to nobody.
+    const bool others = anotherDeviceHoldsAPlace(deviceId);
+    for (int sliceId : owned) {
+        if (others && closeSliceFor(sliceId, token ? QByteArray() : deviceId)) {
+            continue;
+        }
+        if (token) {
+            ownership->setOwner(sliceId, QByteArray());
+        } else {
+            ownership->hold(sliceId, deviceId);
+        }
+    }
+    m_connectedDevices->refresh();
+}
+
+void StationServer::onSliceOwnerChanged(int sliceId, const QByteArray& oldOwner,
+                                        const QByteArray& oldHeldFor)
+{
+    if (m_radioModel.isNull()) {
+        return;
+    }
+    // The markers name the new owner before any view is given one.
+    m_markers->refreshOwners();
+    m_connectedDevices->refresh();
+    if (m_ownerChangesInBurst) {
+        // Every view is about to receive its whole burst again.
+        return;
+    }
+    const SliceOwnership::Mark before{oldOwner, oldHeldFor};
+    const SliceOwnership::Mark after = m_radioModel->sliceOwnership()->mark(sliceId);
+    const QByteArray sliceKey = ObjectRegistry::keyForSlice(sliceId);
+    const QByteArray markerKey = SliceMarkerSet::keyFor(sliceId);
+    // Ruling 5.8: a change of owner reaches each view as object.destroy of
+    // the form it had and object.create of the form it has now.
+    const QList<SessionTransport*> transports = m_peers.keys();
+    for (SessionTransport* transport : transports) {
+        const auto peer = m_peers.constFind(transport);
+        if (peer == m_peers.cend() || peer->sessionDeviceId.isEmpty() || peer->view.isNull()
+            || !peer->view->isAttached()) {
+            continue;
+        }
+        const QByteArray device = peer->sessionDeviceId;
+        // A device that no longer holds a place (revoked a moment ago; its
+        // connection ends next) is told nothing more about slices.
+        if (!m_deviceSessions->entry(device)) {
+            continue;
+        }
+        const bool markers = peerHasSessionHolderVersion(transport);
+        const bool hadSlice = before.owner == device;
+        const bool hasSlice = after.owner == device;
+        const bool hadMarker = markers && before.subject() != device;
+        const bool hasMarker = markers && after.subject() != device;
+        const QPointer<MirrorView> view = peer->view;
+        if (hadSlice && !hasSlice) {
+            send(transport, SessionMessages::objectDestroy(sliceKey, QByteArrayLiteral("SliceModel")));
+        }
+        if (hadMarker && !hasMarker) {
+            send(transport, SessionMessages::objectDestroy(markerKey, QByteArrayLiteral("SliceMarker")));
+        }
+        if (!hadSlice && hasSlice && !view.isNull()) {
+            if (const QObject* object = m_mirror->watchedObject(sliceKey)) {
+                view->deliver(SessionMessages::objectCreate(
+                    sliceKey, MirrorSchema::shortClassName(object->metaObject()->className()),
+                    m_mirror->snapshot(sliceKey)));
+            }
+        }
+        if (!hadMarker && hasMarker && !view.isNull()
+            && m_mirror->watchedObject(markerKey) != nullptr) {
+            view->deliver(SessionMessages::objectCreate(markerKey, QByteArrayLiteral("SliceMarker"),
+                                                        m_mirror->snapshot(markerKey)));
+        }
     }
 }
 

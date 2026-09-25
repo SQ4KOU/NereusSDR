@@ -14,6 +14,9 @@
 // Loopback sockets only; synthetic interface entries stand in for the
 // station network. No radio, amplifier or real Core is contacted.
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
+// 2026-09-25: iPhone app plan Task 73 (R-IOS-02, ruling 5.13): the Core's
+// server reads every slice and changes only the station device's own. J.J.
+// Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QNetworkInterface>
 #include <QTcpServer>
@@ -21,6 +24,7 @@
 
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
+#include "core/SliceOwnership.h"
 #include "core/RfKitBandFollow.h"
 #include "core/StationNetwork.h"
 #include "core/StationTciController.h"
@@ -246,6 +250,59 @@ private slots:
         }
         QCOMPARE(server->activeTxClientCount(), 0);
         amp.socket.close();
+    }
+
+    // iPhone app Task 73 (the several-devices design, ruling 5.13): the
+    // Core's own server reads every slice (trx:N is slice N), changes only
+    // the station device's own (here, a slice it holds for an absent
+    // device) and never keys.
+    void coresServerChangesOnlyTheStationDevicesOwnSlices()
+    {
+        const quint16 port = freePort();
+        RadioModel station;
+        const int devicesSlice = station.addSlice(QStringLiteral("pan-0"));
+        const int heldSlice = station.addSlice(QStringLiteral("pan-0"));
+        QCOMPARE(devicesSlice, 0);
+        QCOMPARE(heldSlice, 1);
+        station.sliceById(0)->setFrequency(7074000.0);
+        station.sliceById(1)->setFrequency(14074000.0);
+        SliceOwnership* ownership = station.sliceOwnership();
+        ownership->setOwner(0, QByteArray(32, '\x41'));
+        ownership->hold(1, QByteArray(32, '\x42'));
+        station.enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(station.setStationTciForStation(true, port, &reason));
+
+        TciApp app(port);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
+        // Reads every slice, as trx:N.
+        QVERIFY(app.has(QStringLiteral("vfo:0,0,7074000;")));
+        QVERIFY(app.has(QStringLiteral("vfo:1,0,14074000;")));
+        QVERIFY(app.has(QStringLiteral("receive_only:true;")));
+
+        // A device's slice: nothing changes, and the app hears the value
+        // the slice holds.
+        app.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("vfo:0,0,7100000;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("vfo:0,0,7074000;")), 3000);
+        const DSPMode mode = station.sliceById(0)->dspMode();
+        app.socket.sendTextMessage(QStringLiteral("modulation:0,am;"));
+        app.socket.sendTextMessage(QStringLiteral("rx_mute:0,true;"));
+        QTest::qWait(200);
+        QCOMPARE(station.sliceById(0)->frequency(), 7074000.0);
+        QCOMPARE(station.sliceById(0)->dspMode(), mode);
+        QVERIFY(!station.sliceById(0)->muted());
+
+        // The station device's own slice changes.
+        app.socket.sendTextMessage(QStringLiteral("vfo:1,0,14100000;"));
+        QTRY_COMPARE_WITH_TIMEOUT(station.sliceById(1)->frequency(), 14100000.0, 3000);
+
+        // And it never keys.
+        app.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("trx:1,true;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("trx:1,false;")), 3000);
+        QVERIFY(!station.mox());
+        app.socket.close();
     }
 
     // R-R3-48: band follow over the Core's server. The amp's address

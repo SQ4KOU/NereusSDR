@@ -56,8 +56,10 @@
 // StateMirror keeps its one set of watches, and each admitted session gets
 // a MirrorView (Peer::view) with its own outbound coalescer, its own attach
 // burst and its own sink, sendToPeer(), which fits every message to what
-// that session negotiated (today's filter by minor and capabilities; Task
-// 73 adds ownership). A newcomer's attach therefore never touches what
+// that session negotiated (today's filter by minor and capabilities, and
+// from Task 73 ownership: a view receives its own `slice:` objects and,
+// with sessionHolderVersion 1, a `marker:` for every other slice; an older
+// view its own slices and no marker). A newcomer's attach therefore never touches what
 // another session has pending. Echo is per writer: a property write is
 // applied as its session's write, and what it changes, on the written
 // object or as a side effect on another (a shared receiver's blanker), is
@@ -247,10 +249,20 @@
 //                                    writer, routing per session and the
 //                                    dispatcher's owner per session. AI-
 //                                    assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 73 (R-IOS-02): slice
+//                                    ownership in every view (own slices,
+//                                    markers for the others), refusals for
+//                                    another device's slice, where a
+//                                    device's slices come from at
+//                                    admission and where they go when it
+//                                    leaves, is away past its 180 s or is
+//                                    revoked, and listeningOn. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
 #include <QHostAddress>
+#include <QJsonArray>
 #include <QPair>
 #include <QObject>
 #include <QPointer>
@@ -262,6 +274,7 @@
 #include <optional>
 #include <utility>
 
+#include "core/DeviceLayoutStore.h"
 #include "core/session/LinkVersion.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
@@ -283,6 +296,7 @@ class SpakeExchange;
 class StationIdentity;
 class ObjectRegistry;
 class MirrorView;
+class SliceMarkerSet;
 class ConnectedDevicesFacade;
 class DeviceSessionRegistry;
 class RadioModel;
@@ -672,6 +686,14 @@ public:
     /// deviceAuth 1, at minor 11 (the design's ruling 10.1), and takes
     /// session.leave.
     int sessionHolderVersion() const { return 1; }
+    /// iPhone app Task 73 (ruling 5.2 step 2): the saved slices of
+    /// `deviceId` that did not fit at its last admission (no free letter or
+    /// no receiver), kept in its layout store and reported by Task 74's
+    /// slicesNotRestored or graceEnded notice after snapshot.complete.
+    QList<SavedSlice> slicesNotRestored(const QByteArray& deviceId) const
+    {
+        return m_slicesNotRestored.value(deviceId);
+    }
     /// Places taken as the LAN announcement and the Bonjour record count
     /// them: DeviceSessionRegistry::placesTaken(), or 0 on a Core no device
     /// has claimed (ruling 10.4).
@@ -750,6 +772,9 @@ private:
         /// keeps its place by itself and must not be marked away.
         bool placeSettled = false;
         bool leaving = false;
+        // iPhone app Task 73: admitted as a device that already held a place
+        // (ruling 4.8), which keeps its slices as they are.
+        bool returning = false;
         /// iPhone app Task 72: this session's view of the mirror (ruling
         /// 5.6), made when it is let in and closed when it ends; and its
         /// id, for the dispatcher's owner string station:<sessionId>.
@@ -879,6 +904,37 @@ private:
     /// RadioModel already holds. Idempotent.
     void buildMirror();
 
+    // ── iPhone app Task 73: slice ownership ─────────────────────────────
+    /// Ruling 5.2: held slices, saved slices, adoption, a first slice.
+    void placeSlicesForAdmission(const QByteArray& deviceId);
+    /// Rulings 4.11, 4.12: a device's slices when its 180 s end or it
+    /// leaves (a token window: when its session ends).
+    void releaseDeviceSlices(const QByteArray& deviceId);
+    /// Closes slice `sliceId` for a reason other than its owner's own
+    /// request, saving it for `saveFor` when set; false (nothing done)
+    /// when it is the Core's last slice.
+    bool closeSliceFor(int sliceId, const QByteArray& saveFor);
+    /// Each attached view's `slice:` and `marker:` forms after an owner
+    /// change: object.destroy of the old form, object.create of the new.
+    void onSliceOwnerChanged(int sliceId, const QByteArray& oldOwner,
+                             const QByteArray& oldHeldFor);
+    /// Ruling 5.6: whether `transport`'s view receives `message`'s slice or
+    /// marker (any other message: yes).
+    bool ownershipAllows(SessionTransport* transport, const SessionMessage& message) const;
+    /// Ruling 5.9: the plain refusal when `requester` names another
+    /// device's slice, else empty.
+    QString sliceRefusal(const QByteArray& requester, int sliceId) const;
+    QString ownedElsewhereReason(int sliceId) const;
+    /// What `deviceId` owns, for connectedDevices.listeningOn.
+    QJsonArray listeningOn(const QByteArray& deviceId) const;
+    /// At most the board's maxSlices saved slices per device.
+    int deviceLayoutLimit() const;
+    bool anotherDeviceHoldsAPlace(const QByteArray& deviceId) const;
+    /// A device alone on the Core adopts the slices nobody owns (ruling
+    /// 5.2 step 3, applied also to slices the Core makes while it is
+    /// there).
+    void adoptForLoneDevice();
+
     QPointer<RadioModel> m_radioModel;
     AppSettings& m_settings;
     QString m_securityDirectory;
@@ -944,6 +1000,12 @@ private:
     QHash<QPair<QByteArray, quint32>, QPointer<SessionTransport>> m_resultRoutes;
     bool m_resultSentInDispatch = false;
     std::unique_ptr<ConnectedDevicesFacade> m_connectedDevices;
+    // iPhone app Task 73: one marker per slice (Qt-parented to this).
+    SliceMarkerSet* m_markers = nullptr;
+    // True while a restored layout's owners are settled just before every
+    // view's burst is sent again (receiveLayoutHydrated).
+    bool m_ownerChangesInBurst = false;
+    QHash<QByteArray, QList<SavedSlice>> m_slicesNotRestored;
     QTimer* m_graceTimer = nullptr;
     bool m_mediaEnabled = false;
     bool m_displayBudgetEnforcementEnabled = false;

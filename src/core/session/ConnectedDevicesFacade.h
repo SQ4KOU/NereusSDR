@@ -18,9 +18,11 @@
 //                 revocable, state, holdsTransmit, lastActivitySeconds,
 //                 connectedForSeconds, awayForSeconds,
 //                 transmittingForSeconds, listeningOn}
-//                (transmittingOn is absent until Task 77; listeningOn is
-//                [] until Task 73; holdsTransmit false and
-//                transmittingForSeconds 0 until Task 34).
+//                (transmittingOn is absent until Task 77; holdsTransmit
+//                false and transmittingForSeconds 0 until Task 34).
+//                listeningOn (Task 73) is every slice the device owns, an
+//                away device's included: [{sliceId, letter, band, mode}],
+//                from the listening provider the Core sets.
 //   revision     moves by one with every change (serial-number arithmetic,
 //                as `devices`' revision).
 //   deviceLimit  4 (DeviceSessionRegistry::kMaxDeviceSessions).
@@ -43,14 +45,25 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 71 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 73 (R-IOS-02): listeningOn, and one
+//               device described the same way wherever the Core names it
+//               (describe(), for markers and refusals). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
+#include <QByteArray>
+#include <QHash>
+#include <QJsonArray>
 #include <QObject>
 #include <QString>
 
+#include <functional>
+#include <optional>
+
+#include "core/session/DeviceSessionRegistry.h"
+
 namespace NereusSDR {
 
-class DeviceSessionRegistry;
 class DeviceStore;
 
 class ConnectedDevicesFacade final : public QObject {
@@ -73,6 +86,23 @@ public:
     /// time passing moves revision once and notifies.
     void refresh();
 
+    /// Task 73: what a device owns, for its listeningOn; the Core sets it.
+    using ListeningProvider = std::function<QJsonArray(const QByteArray& deviceId)>;
+    void setListeningProvider(ListeningProvider provider);
+
+    /// Task 73: one device as the Core names it everywhere (ruling 4.3):
+    /// its id on the wire (a paired device's key fingerprint in base64url,
+    /// "token:<n>" for a token window), its numbered name and short name,
+    /// and its kind. A paired device that holds no place is described from
+    /// the device store. nullopt for an id the Core does not know.
+    struct DeviceWords {
+        QString wireId;
+        QString name;
+        QString shortName;
+        QString kind;
+    };
+    std::optional<DeviceWords> describe(const QByteArray& deviceId) const;
+
     /// Holds refresh() back until the matching resumeRefresh(), which
     /// refreshes once: a sign-in (a new short name, then the admission) is
     /// one change.
@@ -87,11 +117,14 @@ private:
     /// whether it changed.
     QString stableForm() const;
     QString render(bool withDurations) const;
+    /// Ruling 4.3's numbering over every device the Core names.
+    QHash<QByteArray, DeviceSessionRegistry::NumberedName> numbered() const;
 
     const DeviceSessionRegistry& m_registry;
     const DeviceStore& m_devices;
     QString m_stable;
     quint32 m_revision = 0;
+    ListeningProvider m_listening;
     int m_hold = 0;
     bool m_refreshWanted = false;
 };

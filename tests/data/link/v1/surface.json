@@ -3417,6 +3417,139 @@
                 }
             ]
         },
+        "SliceMarker": {
+            "properties": [
+                {
+                    "direction": "constantSnapshot",
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ownerDeviceId",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ownerName",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ownerShortName",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ownerKind",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "ownerAway",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "frequency",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7,
+                        8,
+                        9,
+                        10,
+                        11,
+                        12,
+                        13
+                    ],
+                    "kind": "enum",
+                    "name": "dspMode",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "filterLow",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "filterHigh",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "txSlice",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7,
+                        8,
+                        9,
+                        10,
+                        11,
+                        12,
+                        13,
+                        14,
+                        15,
+                        16,
+                        17,
+                        18,
+                        19,
+                        20,
+                        21,
+                        22,
+                        23,
+                        24,
+                        25,
+                        26
+                    ],
+                    "kind": "enum",
+                    "name": "band",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "streamIndex",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "psPaused",
+                    "ordinal": 13
+                }
+            ]
+        },
         "SliceModel": {
             "properties": [
                 {
@@ -4912,6 +5045,10 @@
         {
             "class": "SliceModel",
             "key": "slice:<id>"
+        },
+        {
+            "class": "SliceMarker",
+            "key": "marker:<id>"
         }
     ],
     "settingsScope": {

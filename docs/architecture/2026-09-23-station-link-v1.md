@@ -540,7 +540,9 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
    - one `schema` per mirrored class, in the order the classes are first
      watched (`MirrorView::attach`);
    - one `object.create` per object, each with its full property set: the
-     fixed objects first, then one per slice;
+     fixed objects first, then one per slice the device owns and, to a
+     device with `sessionHolderVersion` 1, one `marker:<id>` per slice of
+     another device (section 7.1, iPhone app plan Task 73);
    - `snapshot.complete`.
 
    These go to the device let in alone, from its own view of the station's
@@ -1172,6 +1174,25 @@ An enum property lists the values its domain allows.
 | 28 | `bandFollowAddress` | `utf8` | outbound |  |
 | 29 | `bandFollowPort` | `i64` | outbound |  |
 
+**SliceMarker** (14 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `sliceId` | `i64` | constantSnapshot |  |
+| 1 | `ownerDeviceId` | `utf8` | outbound |  |
+| 2 | `ownerName` | `utf8` | outbound |  |
+| 3 | `ownerShortName` | `utf8` | outbound |  |
+| 4 | `ownerKind` | `utf8` | outbound |  |
+| 5 | `ownerAway` | `bool` | outbound |  |
+| 6 | `frequency` | `f64` | outbound |  |
+| 7 | `dspMode` | `enum` | outbound | 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 |
+| 8 | `filterLow` | `i64` | outbound |  |
+| 9 | `filterHigh` | `i64` | outbound |  |
+| 10 | `txSlice` | `bool` | outbound |  |
+| 11 | `band` | `enum` | outbound | 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26 |
+| 12 | `streamIndex` | `i64` | outbound |  |
+| 13 | `psPaused` | `bool` | outbound |  |
+
 **SliceModel** (144 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
@@ -1448,6 +1469,7 @@ destroyed during the session.
 | `catalog` | `StationCatalog` |
 | `pan:<i>` | `PanadapterModel` |
 | `slice:<id>` | `SliceModel` |
+| `marker:<id>` | `SliceMarker` |
 
 <!-- /surface -->
 
@@ -1525,8 +1547,13 @@ Notes on the keys:
     hosting desktop's window and for a token window. `state` is
     `listening`, or `away` for a device whose link dropped without leaving
     and that still holds its place (section 12.4). `holdsTransmit` is false
-    and `transmittingForSeconds` 0 until remote transmit; `listeningOn` is
-    `[]` until devices own their slices; `transmittingOn` is absent.
+    and `transmittingForSeconds` 0 until remote transmit; `transmittingOn`
+    is absent. `listeningOn` (iPhone app plan Task 73) lists every slice
+    the device owns, an away device's included, each `{sliceId, letter,
+    band, mode}` (`letter` "A" for slice 0; `band` and `mode` the values
+    the slice's own `band` and `dspMode` carry); a slice's frequency is on
+    its `marker:<id>`, so tuning does not change the list. Slices the Core
+    holds for a device that has left show only on their markers.
     `lastActivitySeconds` counts from the device's last command, property
     write or settings write, never a heartbeat, and moves at most once a
     minute; `connectedForSeconds` from when the device took its place;
@@ -1566,6 +1593,44 @@ Notes on the keys:
   either is refused as any `outbound` write is. Today's desktop window
   holds no object for the key and drops it, as it does any class it does
   not know.
+- **Whose each slice is** (iPhone app plan Task 73; the several-devices
+  design, rulings 5.1 to 5.6). With several devices on one Core every
+  slice has an owner: the device that made it, the device that adopted it
+  (the first device let in while no other is on the Core takes every slice
+  nobody owns, and a device alone on the Core takes a slice the Core makes
+  itself, such as when its radio arrives late), or the station itself, which runs a slice **held for** a
+  device that has left while no other device was on the Core, until that
+  device signs in again. A session receives its own slices as `slice:<id>`
+  objects and nothing else of any other slice. A device let in that owns
+  no slice gets one at once, at the frequency of the Core's current
+  slice and on its receiver; with every slice in use it starts with none.
+  Owners live at the Core: no `slice:` property changed. Slice letters
+  come from one pool (`slice:<id>` is letter 'A' + id on every device), a
+  slice keeps its letter for its whole life, and a slice restored for a
+  device takes its old letter when it is free.
+- **`marker:<id>`** (`SliceMarker`, `sessionHolderVersion` 1). One per
+  slice, sent to every session with the feature except the one whose
+  slice it is (for a held slice, the device it is held for); an older
+  window never receives one or its schema. Every property is `outbound`:
+  `sliceId` (`constantSnapshot`; its letter is 'A' + `sliceId`),
+  `ownerDeviceId` (the owner's id as `connectedDevices` names it, or the
+  id of the device it is held for; `""` for a slice nobody owns),
+  `ownerName` and `ownerShortName` (numbered as below), `ownerKind`
+  (`phone`, `tablet`, `computer`, or `station` for a slice nobody owns),
+  `ownerAway` (the owner is away, or the slice is held for it), and
+  `frequency`, `dspMode`, `filterLow`, `filterHigh`, `txSlice`, `band`,
+  `streamIndex` (the receiver it sits on, -1 when none; a screen shows
+  "Receiver `streamIndex` + 1") and `psPaused`, each as the slice's own.
+  `txSlice` is the arbiter's binding until remote transmit makes it the
+  holder's alone. A marker has no colour on the wire: a client draws it in
+  its letter's colour. A write to a marker is refused (section 7.3).
+- **A change of owner** (a device adopting slices nobody owned, a slice
+  passing to the station for a device that left, a held slice returning)
+  reaches each session as `object.destroy` of the form it had and
+  `object.create` of the form it has now (`slice:<id>` to `marker:<id>`,
+  or back). A session first sent an object of a class after its
+  connect-time burst (its first marker, when a second device arrives) is
+  sent that class's `schema` just before it.
 - **Unknown classes.** A client that receives a schema for a class it does
   not know records the difference and drops that class's objects and
   deltas.
@@ -1622,6 +1687,19 @@ above. Every other device's session receives each change as an ordinary
 station's tests `tst_station_multi_session` and `tst_mirror_view` hold it
 to this; the several-client fixtures of later tasks (`two-devices` and
 after) carry it on the wire.
+
+**Another device's slice** (iPhone app plan Task 73; the several-devices
+design, ruling 5.9). A device changes only its own slices. A
+`property.write` to a `slice:<id>` the writer does not own, or to any
+`marker:<id>`, is refused before anything is read or applied: every
+property answers not accepted, with no value, and the reason "That slice
+belongs to <the owner's name>. It can be changed only there." (the name as
+`connectedDevices` numbers it; "the Core" for a slice nobody owns). Nothing
+else comes back. The commands `removeSlice`, `setActiveSliceById`,
+`nnr.setDiagnostics`, `nnr.resetTuning`, `nnr.tryAgain` and `notch.add`
+naming another device's slice are refused with the same reason (section
+9.1). A sample-rate change, a C-Tune centre change or pin and a receiver's
+band change are not refused this way: later tasks route them.
 
 A property write never keys the transmitter: `txPermitted` is false and
 the transmit safety gates stay at the station (section 17).
@@ -1972,7 +2050,18 @@ refused.
 The table's capability columns are the gate the desktop client applies
 before sending (section 6.2).
 
-Four command groups need a sentence beyond the table:
+These command groups need a sentence beyond the table:
+
+- **Slices** (iPhone app plan Task 73). With several devices on one Core,
+  `addSlice` and `addSliceOnPan` make a slice the asking device owns;
+  `setActiveSliceById` makes one of the asking device's own slices its
+  active slice, and a slice's `active` means "its owner's active slice", so
+  each device sees one active slice among its own and another device's
+  choice never moves it. The station's own duties that exist once per
+  radio (the FreeDV Reporter's frequency, TCI's per-slice broadcasts)
+  follow the most recent choice by any device. `removeSlice`,
+  `setActiveSliceById`, `nnr.*` and `notch.add` naming another device's
+  slice are refused (section 7.3).
 
 - **The filter policy.** `setAlexBpfMode` sets one receive filter chain's
   filter policy (`chain` 0 or 1; `mode` 0 Auto, 1 Force filter, 2 Force
@@ -2286,6 +2375,22 @@ signed in with the token and no key, and a device that leaves with
 device, away or not. The heartbeat timeout stays retryable: that end is
 what starts a device's 3 minutes.
 
+**What happens to a device's slices** (iPhone app plan Task 73; the
+several-devices design, rulings 4.11, 4.12 and 5.2). An away device's
+slices keep running, its own, their markers `ownerAway`. When its 3
+minutes end, or it leaves with `session.leave`, its slices close and the
+Core saves them for its return, with each slice's own settings; if no
+other device is on the Core they keep running instead, held for it. A
+token window's slices are not saved (it cannot be recognised again): with
+another device on the Core they close, otherwise they pass to nobody.
+Removing a device closes its slices, held ones included, and forgets what
+was saved for it. The Core never closes its last slice for any of these;
+that one stays, held (or owned by nobody). When a device is let in, the
+Core returns the slices held for it, restores its saved slices where they
+fit (a receiver window that covers each or a free receiver; its old
+letter when free, else the lowest free), keeps any that do not fit for
+next time, and, if it still owns none, gives it one (section 7.1).
+
 **Routing with several devices** (iPhone app plan Task 72; the
 several-devices design, ruling 5.8). Each session has its own view of the
 station's state, with its own pending changes and its own connect-time
@@ -2296,7 +2401,7 @@ its minor and its capabilities, as before.
 | --- | --- |
 | `command.result`, `property.result`, `settings.reject` | the session that asked, only |
 | `confirm.request`, `notice` (when the station sends them) | the one device they are for |
-| `delta`, `object.create`, `object.destroy` | every session holding the object; a device's own write is not echoed to it (section 7.3) |
+| `delta`, `object.create`, `object.destroy` | every session holding the object; a device's own write is not echoed to it (section 7.3). A `slice:<id>` only to the session of the device that owns it; a `marker:<id>` to every session with `sessionHolderVersion` 1 but that one (section 7.1) |
 | `settings.value` | every session, with the writer's `origin` (section 8.1) |
 | a write's readback of its side effects on the written object | the writer, only (section 7.3) |
 | `capabilities` | each session its own |
@@ -2893,10 +2998,13 @@ same on every machine.
 | `version-app-two-ahead` | An app supporting `[2, 3]` that sends major 3 gets `session.end` "This Core runs link version 1 and this app runs version 3. Update the Core.", `retryable` false, `code` `linkVersion` |
 | `lower-minor` | A `hello` with minor 4 agrees minor 4: the capabilities without the minor-11 entries, and a minor-11 verb refused with a plain reason |
 | `same-device-again` | The device signs in again on another connection (`otherClients` `"self"`): the older connection ends with `session.end` "This device connected again.", `retryable` false, `code` `sameDevice`, and the newer one is let in with no question. Runs on the station alone |
-| `older-window` | Four devices fill the Core; a window from before paired devices (the token, no features) is let through `auth.result` and then turned away: `session.end` "The Core already has four devices connected.", `retryable` true, no code. Runs on the station alone |
-| `connected-devices` | A device that declares `sessionHolder` receives `connectedDevices` in its snapshot (`deviceLimit` 4, `revision` 1), and a `delta` of it (with one of `devices`) each time another device is let in, including a window that declares only `deviceAuth` and so never receives the object itself, and when one drops; `listJson` is `"$string"`, since it carries run-time ids |
-| `short-name` | Another device signs in with a short name, drops, and signs in again with a new one: each change moves `connectedDevices`' and `devices`' revisions, the new short name replacing the old in both lists |
-| `grace-return` | Another device drops and is away; a minute later nothing has been sent about it; it signs in again within its 3 minutes and is let in with no question, the list sent again |
+| `older-window` | A window that signs in by key but predates several devices is let in first and owns the Core's slice; when a device with the feature is let in with a slice of its own, the older window is sent no marker for it, only the `devices` list moving. Four devices then fill the Core; a window from before paired devices (the token, no features) is let through `auth.result` and then turned away: `session.end` "The Core already has four devices connected.", `retryable` true, no code. Runs on the station alone |
+| `connected-devices` | A device that declares `sessionHolder` receives `connectedDevices` in its snapshot (`deviceLimit` 4, `revision` 1), and a `delta` of it (with one of `devices`) each time another device is let in, including a window that declares only `deviceAuth` and so never receives the object itself, and when one drops; each device let in gets a slice of its own, which reaches this device as a marker; `listJson` is `"$string"`, since it carries run-time ids (its `listeningOn` is held to its content by the station's own tests, `tst_station_multi_session`) |
+| `short-name` | Another device signs in with a short name, drops, and signs in again with a new one: each change moves `connectedDevices`' and `devices`' revisions, the new short name replacing the old in both lists and on its slice's marker |
+| `grace-return` | Another device drops and is away; a minute later nothing has been sent about it but its slice's marker turning `ownerAway`; it signs in again within its 3 minutes and is let in with no question, the list sent again and its marker back; it drops again, and when its 3 minutes end with this device still on the Core its slice closes (the marker's `object.destroy`) and is saved for its return |
+| `two-devices` | Another device holds the Core's slice; this device is let in with a slice of its own (`slice:1`) and the other's as `marker:0`, naming its owner, with the `SliceMarker` schema; the other device is sent `marker:1` for this device's slice, and when this device tunes its slice the other sees the marker move, never the slice |
+| `foreign-write-refused` | This device holds slice 0 and another device slice 1: a `property.write` to `slice:1` and to `marker:1`, and `removeSlice` and `setActiveSliceById` naming slice 1, are refused "That slice belongs to Other device 1. It can be changed only there.", with no value sent back and nothing changed; its own slice it may make active |
+| `held-for-device` | Another device, alone on the Core, leaves with `session.leave`: its slice keeps running, held for it. This device, let in meanwhile, does not adopt it: it gets a slice of its own and the other's as a marker with `ownerAway` true; the other device signs in again and the marker's `ownerAway` turns false (the slice is its own again) |
 | `verbs-session-leave` | `session.leave` with an argument is refused, "The request to leave the Core was not understood."; without, it is accepted and the station closes the connection with no `session.end`. Runs on the station alone |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |

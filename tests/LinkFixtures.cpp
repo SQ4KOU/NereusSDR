@@ -41,6 +41,10 @@
 //               and close steps, a named expectClosed); preemptingClient
 //               withdrawn. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 73 (R-IOS-02): the session registry counts
+//               on the virtual clock, so advanceMs reaches the end of a
+//               device's 180 s. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -77,6 +81,7 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationLanAnnouncement.h"
 #include "core/session/DnsSdAdvertiser.h"
+#include "core/session/DeviceSessionRegistry.h"
 #include "core/session/StationServer.h"
 #include "fakes/LoopbackTransport.h"
 
@@ -1189,6 +1194,11 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
     };
 
     VirtualClock clock(&server);
+    // iPhone app Task 73: a device's 180 s count on the same virtual time as
+    // the timer that ends them, so an advanceMs of 180000 ends them.
+    if (server.deviceSessions() != nullptr) {
+        server.deviceSessions()->setClock([&clock]() { return clock.now(); });
+    }
 
     const auto describe = [&steps](int index) {
         const QJsonObject step = steps.at(index).toObject();

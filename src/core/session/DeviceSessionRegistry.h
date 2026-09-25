@@ -69,6 +69,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 71 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 73 (R-IOS-02): graceEnded, for what
+//               the end of a device's 180 s does to its slices. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -245,6 +249,10 @@ signals:
     /// Anything in entries() changed (not merely time passing).
     void changed();
     void placesTakenChanged(int placesTaken);
+    /// Task 73 (ruling 4.11): `deviceId`'s 180 s ended and its place was
+    /// freed (after changed()). Its slices close and are saved, or pass to
+    /// the station device held for it.
+    void graceEnded(const QByteArray& deviceId);
 
 private:
     int indexOf(const QByteArray& deviceId) const;

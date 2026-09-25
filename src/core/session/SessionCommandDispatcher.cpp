@@ -114,10 +114,17 @@
 //               session; ending one owner cancels only its DSP-asset jobs.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 73 (R-IOS-02, rulings 5.9, 5.10): the
+//               requesting device; removeSlice, setActiveSliceById, nnr.*
+//               and notch.add refused for another device's slice; a new
+//               slice is its requester's; setActiveSliceById sets the
+//               requester's own active slice. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
 
+#include "core/SliceOwnership.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/dsp/DspAssetService.h"
 #include "DspCommandValues.h"
@@ -618,6 +625,12 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         return;
     }
 
+    // iPhone app Task 73 (ruling 5.9): a device addresses only its own
+    // slices. Refused before anything is looked at or changed.
+    if (refusedForAnotherDevice(invoke)) {
+        return;
+    }
+
     if (invoke.commandVerb.startsWith("notch.")) {
         handleNotchAction(invoke);
         return;
@@ -689,6 +702,31 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("The Core does not know this request. Updating the Core may help."), {});
     }
+}
+
+bool SessionCommandDispatcher::refusedForAnotherDevice(const SessionMessage& invoke)
+{
+    // The verbs that name a slice of the requester's by `sliceId` (ruling
+    // 5.9). requestSliceSampleRate, requestStreamCtunPinned and
+    // requestStreamCentre are routes on a shared receiver, not refusals
+    // (Tasks 74 and 75).
+    static const QSet<QByteArray> kSliceVerbs{
+        QByteArrayLiteral("removeSlice"), QByteArrayLiteral("setActiveSliceById"),
+        QByteArrayLiteral("nnr.setDiagnostics"), QByteArrayLiteral("nnr.resetTuning"),
+        QByteArrayLiteral("nnr.tryAgain"), QByteArrayLiteral("notch.add")};
+    if (m_requester.isEmpty() || !m_sliceAccess || !kSliceVerbs.contains(invoke.commandVerb)) {
+        return false;
+    }
+    int sliceId = -1;
+    if (findIntArgument(invoke.arguments, "sliceId", &sliceId) != ArgumentStatus::Ok) {
+        return false;
+    }
+    const QString reason = m_sliceAccess(m_requester, sliceId);
+    if (reason.isEmpty()) {
+        return false;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, false, reason, {});
+    return true;
 }
 
 void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invoke)
@@ -930,7 +968,12 @@ void SessionCommandDispatcher::handleAddSlice(const SessionMessage& invoke)
     const QMetaObject::Connection conn = connect(
         m_radioModel, &RadioModel::sliceAddRejected, this,
         [&rejectionReason](const QString& reason) { rejectionReason = reason; });
-    const int id = m_radioModel->addSlice(panIdArg.toString());
+    int id = -1;
+    {
+        // iPhone app Task 73: the new slice is the requesting device's.
+        const SliceOwnership::CreatorScope creator(m_radioModel->sliceOwnership(), m_requester);
+        id = m_radioModel->addSlice(panIdArg.toString());
+    }
     QObject::disconnect(conn);
 
     if (id < 0) {
@@ -1013,7 +1056,11 @@ void SessionCommandDispatcher::handleAddSliceOnPan(const SessionMessage& invoke)
         m_radioModel, &RadioModel::sliceAddRejected, this,
         [&rejectionReason](const QString& reason) { rejectionReason = reason; });
 
-    m_radioModel->addSliceOnPan(panIdArg.toString());
+    {
+        // iPhone app Task 73: the new slice is the requesting device's.
+        const SliceOwnership::CreatorScope creator(m_radioModel->sliceOwnership(), m_requester);
+        m_radioModel->addSliceOnPan(panIdArg.toString());
+    }
 
     QObject::disconnect(addedConn);
     QObject::disconnect(rejectedConn);
@@ -1179,11 +1226,18 @@ void SessionCommandDispatcher::handleSetActiveSliceById(const SessionMessage& in
     // being active, and setActiveSliceById() (RadioModel.cpp) reassigns
     // m_activeSlice as its very first side effect on success, so reading
     // this afterward would already show the NEW slice.
+    //
+    // iPhone app Task 73 (ruling 5.10): with a requesting device, its own
+    // active slice among its own, which is the one that stops being active.
     SliceModel* const previouslyActive = m_radioModel->activeSlice();
-    const int previouslyActiveId =
-        (previouslyActive != nullptr) ? previouslyActive->sliceIndex() : -1;
+    const int previouslyActiveId = !m_requester.isEmpty()
+        ? m_radioModel->sliceOwnership()->activeFor(m_requester)
+        : ((previouslyActive != nullptr) ? previouslyActive->sliceIndex() : -1);
 
-    if (!m_radioModel->setActiveSliceById(sliceId)) {
+    const bool activated = !m_requester.isEmpty()
+        ? m_radioModel->setActiveSliceByIdFor(m_requester, sliceId)
+        : m_radioModel->setActiveSliceById(sliceId);
+    if (!activated) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("That receiver is no longer on the Core."), {});
         return;

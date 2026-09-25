@@ -8,6 +8,9 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 71 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 73 (R-IOS-02): graceEnded. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/DeviceSessionRegistry.h"
@@ -168,6 +171,9 @@ QList<QByteArray> DeviceSessionRegistry::expireAway()
     }
     if (!expired.isEmpty()) {
         emitChanges(placesBefore);
+    }
+    for (const QByteArray& id : std::as_const(expired)) {
+        emit graceEnded(id);
     }
     return expired;
 }

@@ -24,8 +24,16 @@
 //                and XIT changes while receive-only
 //                (isTransmitSettingChange). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-25 - iPhone app Task 73 (R-IOS-02, ruling 5.13): a slice write
+//                gate; a per-receiver set command naming a slice the gate
+//                refuses changes nothing and is answered as its query.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 
 #include "TciProtocol.h"
+
+#include <QHash>
+
 #include "AppSettings.h"
 #include "LogCategories.h"
 #include "TciVolume.h"
@@ -120,6 +128,35 @@ QString TciProtocol::handleCommand(const QString& command)
 
     if (parts.size() == 2 || jsonSpot) {
         const QStringList args = parts.at(1).split(QLatin1Char(','));
+        // iPhone app Task 73 (ruling 5.13): a per-receiver command's set
+        // form takes more arguments than its query form. When the gate
+        // refuses the slice a set names, nothing changes and the app hears
+        // the value the slice holds, as its query would answer. NereusSDR-
+        // original: a Thetis console has one operating position.
+        if (m_sliceWriteGate && !args.isEmpty()) {
+            static const QHash<QString, int> kQueryArgs{
+                {QStringLiteral("vfo"), 2},           {QStringLiteral("lock"), 1},
+                {QStringLiteral("vfo_lock"), 2},      {QStringLiteral("modulation"), 1},
+                {QStringLiteral("rx_filter_band"), 1}, {QStringLiteral("split_enable"), 1},
+                {QStringLiteral("rx_mute"), 1},       {QStringLiteral("rx_nb_enable"), 1},
+                {QStringLiteral("rx_bin_enable"), 1}, {QStringLiteral("rx_apf_enable"), 1},
+                {QStringLiteral("rx_nf_enable"), 1},  {QStringLiteral("rx_anf_enable"), 1},
+                {QStringLiteral("rx_nr_enable"), 1},  {QStringLiteral("rx_nr_enable_ex"), 1},
+                {QStringLiteral("agc_mode"), 1},      {QStringLiteral("agc_gain"), 1},
+                {QStringLiteral("sql_enable"), 1},    {QStringLiteral("sql_level"), 1},
+                {QStringLiteral("rit_enable"), 1},    {QStringLiteral("rit_offset"), 1},
+                {QStringLiteral("xit_enable"), 1},    {QStringLiteral("xit_offset"), 1},
+                {QStringLiteral("rx_balance"), 2},    {QStringLiteral("rx_enable"), 1},
+                {QStringLiteral("rx_ctun_ex"), 1},
+            };
+            const auto query = kQueryArgs.constFind(name);
+            bool ok = false;
+            const int rx = args.at(0).trimmed().toInt(&ok);
+            if (query != kQueryArgs.cend() && args.size() > *query && ok
+                && !m_sliceWriteGate(trxToSlice(rx))) {
+                return handleSetCommand(name, args.mid(0, *query));
+            }
+        }
         return handleSetCommand(name, args);
     }
     return handleQueryCommand(name);

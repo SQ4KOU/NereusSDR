@@ -95,6 +95,10 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 71 (R-IOS-02): the
 //                                    several-devices sentences are plain.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 73 (R-IOS-02): the
+//                                    refusal for another device's slice,
+//                                    and a saved slice that did not fit.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -616,8 +620,10 @@ const QList<ReasonSource>& reasonSources()
           "Qt reports no working TLS backend", "No authentication token available",
           "NereusSDR station", "\\n  ====="},
          30,
-         // The other app's network address (WebSocketTransport::peerDescription).
-         {QStringLiteral("description")},
+         // The other app's network address (WebSocketTransport::peerDescription),
+         // and (iPhone app Task 73) the name of the device a slice belongs
+         // to, the operator's own word (ruling 4.3).
+         {QStringLiteral("description"), QStringLiteral("owner")},
          {// listen(): the Core's own setup error (m_lastError), for its
           // console and log; never sent to an app.
           QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),
@@ -648,6 +654,11 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("QString::fromLatin1(kCoreFullReason)"),
           QStringLiteral("QString::fromLatin1(kSameDeviceReason)"),
           QStringLiteral("QString::fromLatin1(kLeftReason)"),
+          // iPhone app Task 73: functions of this file, their literals
+          // scanned here (the owner's name is the operator's own word,
+          // ruling 4.3).
+          QStringLiteral("sliceRefusal(requester, sliceId)"),
+          QStringLiteral("ownedElsewhereReason(sliceId)"),
           // StateMirror's and SettingsProxyServer's results, scanned below.
           QStringLiteral("result.reason"),
           QStringLiteral("m_settingsServer->otherRadioRefusal(key)"),
@@ -672,6 +683,8 @@ const QList<ReasonSource>& reasonSources()
                          "alex->setRxAntForBand(Band(band), antenna)"),
           // A function of this file, its literal scanned here.
           QStringLiteral("notRepresentableReason()"),
+          // iPhone app Task 73: StationServer::sliceRefusal, scanned there.
+          QStringLiteral("m_sliceAccess(m_requester, sliceId)"),
           // AlexAntennaFacade's filter policy refusal, scanned below.
           QStringLiteral("alex->setBpfModeForChain(chain, mode)")}},
         // iPhone app Task 13 (R-IOS-08): the device administration verbs'
@@ -823,7 +836,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("nr3CannotRunReason"),
           // The slice cap reason, relayed by the addSlice and addSliceOnPan
           // verbs' results.
-          QStringLiteral("sliceCapReason")},
+          QStringLiteral("sliceCapReason"),
+          // iPhone app Task 73: why a device's saved slice did not fit (the
+          // Core's log today; Task 74's slicesNotRestored notice).
+          QStringLiteral("restoreSliceFor")},
          {// This app's own branch in a remote window (role Remote), shown
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},

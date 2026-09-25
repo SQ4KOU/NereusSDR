@@ -54,6 +54,8 @@
 //   2026-09-24 - iPhone app Task 19 (R-IOS-06): StationCatalog, all
 //                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-25 - iPhone app Task 73 (R-IOS-02): SliceMarker, all Outbound.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -584,6 +586,24 @@ const MirrorPolicy::Entry kEntries[] = {
     { "ConnectedDevicesFacade", "listJson", MirrorDirection::Outbound },
     { "ConnectedDevicesFacade", "revision", MirrorDirection::Outbound },
     { "ConnectedDevicesFacade", "deviceLimit", MirrorDirection::Outbound },
+
+    // iPhone app Task 73 (R-IOS-02, sessionHolderVersion 1): another device's
+    // slice, read-only (ruling 5.4). Only its owner changes the slice; a
+    // write to a marker is refused with the owner named (ruling 5.9).
+    { "SliceMarker", "sliceId", MirrorDirection::ConstantSnapshot },
+    { "SliceMarker", "ownerDeviceId", MirrorDirection::Outbound },
+    { "SliceMarker", "ownerName", MirrorDirection::Outbound },
+    { "SliceMarker", "ownerShortName", MirrorDirection::Outbound },
+    { "SliceMarker", "ownerKind", MirrorDirection::Outbound },
+    { "SliceMarker", "ownerAway", MirrorDirection::Outbound },
+    { "SliceMarker", "frequency", MirrorDirection::Outbound },
+    { "SliceMarker", "dspMode", MirrorDirection::Outbound },
+    { "SliceMarker", "filterLow", MirrorDirection::Outbound },
+    { "SliceMarker", "filterHigh", MirrorDirection::Outbound },
+    { "SliceMarker", "txSlice", MirrorDirection::Outbound },
+    { "SliceMarker", "band", MirrorDirection::Outbound },
+    { "SliceMarker", "streamIndex", MirrorDirection::Outbound },
+    { "SliceMarker", "psPaused", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

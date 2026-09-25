@@ -35,6 +35,24 @@
 // that asked, settings.value to every device with its writer's origin; a
 // DSP-asset job ends with its own device's session and no other.
 //
+// Then, from Task 73 (sections 5.1 to 5.9, rulings 5.1 to 5.14), whose each
+// slice is. Refusals first (authorisation): a write to another device's slice
+// or to any marker, and removeSlice, setActiveSliceById, nnr.* and notch.add
+// naming another device's slice, are refused with the plain reason naming
+// its owner, and nothing changes (the red check: take the owner filter out
+// and this fails). Then: each device receives its own slices and a marker
+// for every other slice, an older window its own slices and no marker; the
+// first device alone adopts the slices nobody owns, a later one gets a first
+// slice on the station-level active slice's receiver, costing no receiver,
+// or none with the slice cap full; each device has its own active slice and
+// the station-level one follows the most recent choice, the FreeDV Reporter
+// frequency with it; a device away keeps its slices for its 180 s, then they
+// close and are saved (restored under its old letter when free, else the
+// lowest free, with their settings), or pass to the station device held for
+// it when it was the last device, never adopted by another and its own again
+// when it signs in; revoking closes its slices, held ones included, and
+// forgets its layout; connectedDevices lists what each device listens on.
+//
 // Keys are made at run time in scratch directories. Media on a second
 // device is not asserted: Task 76 owns it.
 //
@@ -45,6 +63,11 @@
 //               AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-25: iPhone app plan Task 72 (R-IOS-02): a mirror view per
 //               device, echo per writer and routing per session. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-25: iPhone app plan Task 73 (R-IOS-02): slice ownership,
+//               markers, refusals for another device's slice, the active
+//               slice per device, held slices and saved layouts. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
 // =================================================================
@@ -65,6 +88,9 @@
 #include <memory>
 
 #include "core/AppSettings.h"
+#include "core/AudioEngine.h"
+#include "core/DeviceLayoutStore.h"
+#include "core/SliceOwnership.h"
 #include "core/security/DeviceAuthenticator.h"
 #include "core/security/DeviceStore.h"
 #include "core/security/PairingWindow.h"
@@ -75,6 +101,7 @@
 #include "core/session/StationServer.h"
 #include "core/WdspTypes.h"
 #include "core/dsp/DspAssetService.h"
+#include "models/NotchModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -441,6 +468,89 @@ int countOfType(const QList<QByteArray>& received, int from, const QString& type
     return count;
 }
 
+// Task 73: whether `key` was created on `app` and not destroyed since.
+bool holds(const LoopbackTransport* app, const QString& key)
+{
+    bool held = false;
+    for (const QByteArray& wire : app->received()) {
+        const QJsonObject o = QJsonDocument::fromJson(wire).object();
+        if (o.value(QStringLiteral("key")).toString() != key) {
+            continue;
+        }
+        const QString type = o.value(QStringLiteral("type")).toString();
+        if (type == QStringLiteral("object.create")) {
+            held = true;
+        } else if (type == QStringLiteral("object.destroy")) {
+            held = false;
+        }
+    }
+    return held;
+}
+
+// Every key with `prefix` `app` holds now.
+QStringList heldKeys(const LoopbackTransport* app, const QString& prefix)
+{
+    QStringList keys;
+    for (const QByteArray& wire : app->received()) {
+        const QString key = QJsonDocument::fromJson(wire).object().value(QStringLiteral("key")).toString();
+        if (key.startsWith(prefix) && !keys.contains(key) && holds(app, key)) {
+            keys.append(key);
+        }
+    }
+    keys.sort();
+    return keys;
+}
+
+// Whether any object message of `app` (create, delta, destroy) carried
+// `key`: a property.result names the key it answers and is not one.
+bool everSaw(const LoopbackTransport* app, const QString& key)
+{
+    for (const QByteArray& wire : app->received()) {
+        const QJsonObject o = QJsonDocument::fromJson(wire).object();
+        const QString type = o.value(QStringLiteral("type")).toString();
+        if ((type == QStringLiteral("object.create") || type == QStringLiteral("delta")
+             || type == QStringLiteral("object.destroy"))
+            && o.value(QStringLiteral("key")).toString() == key) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Every value of the property.result for `writeId` on `app`.
+QJsonObject propertyResult(const LoopbackTransport* app, qint64 writeId)
+{
+    for (const QJsonObject& o : ofType(app->received(), QStringLiteral("property.result"))) {
+        if (o.value(QStringLiteral("writeId")).toInteger() == writeId) {
+            return o;
+        }
+    }
+    return {};
+}
+
+// The plain refusal for another device's slice (ruling 5.9).
+QString ownedElsewhere(const QString& ownerName)
+{
+    return QStringLiteral("That slice belongs to %1. It can be changed only there.").arg(ownerName);
+}
+
+MirrorUpdate f64(const char* name, double value)
+{
+    return MirrorUpdate{0, QByteArray(name), MirrorWireKind::Float64, QVariant(value)};
+}
+
+// Which slice ids hold at least one receiver, by receiver.
+int receiversInUse(const RadioModel& model)
+{
+    QSet<int> streams;
+    for (const SliceModel* slice : model.slices()) {
+        if (slice->streamIndex() >= 0) {
+            streams.insert(slice->streamIndex());
+        }
+    }
+    return streams.size();
+}
+
 // A second slice 10 kHz from slice 0, so the two share one receiver and
 // its one noise blanker (tst_mirror_inbound's co-hosting).
 int addCoHostedSlice(RadioModel& model)
@@ -710,7 +820,8 @@ private slots:
             QCOMPARE(e.value(QStringLiteral("holdsTransmit")).toBool(), false);
             QCOMPARE(e.value(QStringLiteral("transmittingForSeconds")).toInt(-1), 0);
             QCOMPARE(e.value(QStringLiteral("awayForSeconds")).toInt(-1), 0);
-            QCOMPARE(e.value(QStringLiteral("listeningOn")).toArray().size(), 0);
+            // Task 73: the first adopted slice 0, each later one got a slice.
+            QCOMPARE(e.value(QStringLiteral("listeningOn")).toArray().size(), 1);
             QVERIFY(!e.contains(QStringLiteral("transmittingOn")));
         }
         QCOMPARE(entryFor(list, devices[1].id()).value(QStringLiteral("kind")).toString(),
@@ -1074,6 +1185,10 @@ private slots:
         LoopbackTransport* appB = core.signIn(b);
         QVERIFY(admitted(appA));
         QVERIFY(admitted(appB));
+        const QStringList bKeys = heldKeys(appB, QStringLiteral("slice:"));
+        QCOMPARE(bKeys.size(), 1);
+        const QString bKey = bKeys.first();
+        const int bSlice = bKey.mid(6).toInt();
         const int fromA = appA->received().size();
         const int fromB = appB->received().size();
 
@@ -1095,18 +1210,21 @@ private slots:
                  static_cast<int>(NbMode::NB));
         QCOMPARE(core.model->sliceById(second)->nbMode(), NbMode::NB);
 
-        // B: the change, and the side effect on the slice sharing its
-        // receiver.
+        // B: A's two slices are A's (Task 73), so B never sees them; the
+        // blanker change reaches B on its own slice, which joined the same
+        // receiver when B was admitted.
+        QCOMPARE(core.model->sliceById(bSlice)->streamIndex(),
+                 core.model->sliceById(0)->streamIndex());
+        QCOMPARE(core.model->sliceById(bSlice)->nbMode(), NbMode::NB);
         QVERIFY(QTest::qWaitFor(
             [&]() {
-                return !deltaValues(appB->received(), fromB, QStringLiteral("slice:0"),
-                                    QStringLiteral("nbMode")).isEmpty()
-                    && !deltaValues(appB->received(), fromB, sharedKey,
-                                    QStringLiteral("nbMode")).isEmpty();
+                return !deltaValues(appB->received(), fromB, bKey, QStringLiteral("nbMode")).isEmpty();
             },
             5000));
-        QCOMPARE(deltaValues(appB->received(), fromB, sharedKey, QStringLiteral("nbMode")).last().toInt(),
+        QCOMPARE(deltaValues(appB->received(), fromB, bKey, QStringLiteral("nbMode")).last().toInt(),
                  static_cast<int>(NbMode::NB));
+        QVERIFY(!everSaw(appB, QStringLiteral("slice:0")));
+        QVERIFY(!everSaw(appB, sharedKey));
         QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("property.result")), 0);
 
         // A: no echo of its own write, on either slice, over several flushes.
@@ -1133,13 +1251,12 @@ private slots:
         LoopbackTransport* appA = core.signIn(a);
         QVERIFY(admitted(appA));
 
-        // A's burst holds the current values.
-        QCOMPARE(latest(appA->received(), QStringLiteral("slice:0"), QStringLiteral("frequency"))
+        // A's burst holds the current values: slice 0 is B's (Task 73), so
+        // A holds it as a marker.
+        QCOMPARE(latest(appA->received(), QStringLiteral("marker:0"), QStringLiteral("frequency"))
                      .toDouble(),
                  7151000.0);
-        QCOMPARE(latest(appA->received(), QStringLiteral("slice:0"), QStringLiteral("afGain"))
-                     .toInt(),
-                 31);
+        QVERIFY(!everSaw(appA, QStringLiteral("slice:0")));
         // Every one of B's arrives, and none of A's burst.
         QVERIFY(QTest::qWaitFor(
             [&]() {
@@ -1177,8 +1294,7 @@ private slots:
         QCOMPARE(listed.value(QStringLiteral("accepted")).toBool(false), true);
         // property.result
         appA->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
-            "slice:0", {MirrorUpdate{0, "afGain", MirrorWireKind::Int64, QVariant(qint64(42))}},
-            91)));
+            "slice:0", {f64("frequency", 14123000.0)}, 91)));
         QVERIFY(QTest::qWaitFor(
             [appA]() { return !firstOfType(appA->received(), QStringLiteral("property.result")).isEmpty(); },
             5000));
@@ -1203,17 +1319,617 @@ private slots:
         QVERIFY(QTest::qWaitFor(
             [appA]() { return !firstOfType(appA->received(), QStringLiteral("settings.reject")).isEmpty(); },
             5000));
-        // B also receives A's afGain as a delta (A's write, B's change).
+        // B also receives A's retune as a delta (A's write, B's change), on
+        // the marker it holds for A's slice (Task 73).
         QVERIFY(QTest::qWaitFor(
             [&]() {
-                return !deltaValues(appB->received(), fromB, QStringLiteral("slice:0"),
-                                    QStringLiteral("afGain")).isEmpty();
+                return !deltaValues(appB->received(), fromB, QStringLiteral("marker:0"),
+                                    QStringLiteral("frequency")).isEmpty();
             },
             5000));
         QTest::qWait(2 * StationServer::kDefaultDeltaFlushMs);
         QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("command.result")), 0);
         QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("property.result")), 0);
         QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("settings.reject")), 0);
+    }
+
+    // ── Slice ownership (Task 73) ────────────────────────────────────────
+    //
+    // Refusals first: who may change which slice.
+
+    void aWriteOrVerbOnAnotherDevicesSliceIsRefusedAndNothingChanges()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, a.key.fingerprint());
+        SliceModel* hers = core.model->sliceById(0);
+        const double frequency = hers->frequency();
+        const int afGain = hers->afGain();
+        const QString reason = ownedElsewhere(QStringLiteral("iPhone"));
+        QVERIFY(OperatorWording::isPlain(reason));
+
+        // A property write to A's slice from B: every property refused, no
+        // value of A's slice sent back, nothing changed.
+        appB->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "slice:0", {f64("frequency", 7074000.0), int64("afGain", 5)}, 501)));
+        QTRY_VERIFY(!propertyResult(appB, 501).isEmpty());
+        const QJsonArray results = propertyResult(appB, 501).value(QStringLiteral("results")).toArray();
+        QCOMPARE(results.size(), 2);
+        for (const QJsonValue& r : results) {
+            QCOMPARE(r.toObject().value(QStringLiteral("accepted")).toBool(true), false);
+            QCOMPARE(r.toObject().value(QStringLiteral("reason")).toString(), reason);
+            QCOMPARE(r.toObject().value(QStringLiteral("hasValue")).toBool(true), false);
+        }
+        QCOMPARE(hers->frequency(), frequency);
+        QCOMPARE(hers->afGain(), afGain);
+
+        // A write to any marker is refused the same way.
+        appB->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "marker:0", {f64("frequency", 7074000.0)}, 502)));
+        QTRY_VERIFY(!propertyResult(appB, 502).isEmpty());
+        const QJsonObject marker =
+            propertyResult(appB, 502).value(QStringLiteral("results")).toArray().first().toObject();
+        QCOMPARE(marker.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(marker.value(QStringLiteral("reason")).toString(), reason);
+        QCOMPARE(hers->frequency(), frequency);
+
+        // The verbs that name a slice.
+        const QList<QPair<QByteArray, QList<MirrorUpdate>>> verbs{
+            {"removeSlice", {int64("sliceId", 0)}},
+            {"setActiveSliceById", {int64("sliceId", 0)}},
+            {"nnr.resetTuning", {int64("sliceId", 0)}},
+            {"nnr.tryAgain", {int64("sliceId", 0)}},
+            {"nnr.setDiagnostics", {int64("sliceId", 0), int64("testMode", 1), int64("outputMode", 1)}},
+            {"notch.add", {int64("sliceId", 0), f64("centreHz", frequency + 500.0), f64("widthHz", 100.0)}},
+        };
+        const int notches = static_cast<int>(core.model->notchModel()->notches().size());
+        for (const auto& verb : verbs) {
+            const QJsonObject refused = core.invoke(appB, verb.first, verb.second);
+            QVERIFY2(!refused.value(QStringLiteral("accepted")).toBool(true), verb.first.constData());
+            QCOMPARE(refused.value(QStringLiteral("reason")).toString(), reason);
+        }
+        QVERIFY(core.model->sliceById(0) == hers);
+        QVERIFY(hers->isActive());
+        QCOMPARE(static_cast<int>(core.model->notchModel()->notches().size()), notches);
+        QCOMPARE(core.model->activeSlice(), hers);
+
+        // Its own slice it may address.
+        const int own = heldKeys(appB, QStringLiteral("slice:")).first().mid(6).toInt();
+        QCOMPARE(core.invoke(appB, "setActiveSliceById", {int64("sliceId", own)})
+                     .value(QStringLiteral("accepted")).toBool(false),
+                 true);
+        // And never saw A's.
+        QVERIFY(!everSaw(appB, QStringLiteral("slice:0")));
+    }
+
+    // Each device receives its own slices and a marker for every other.
+
+    void eachDeviceReceivesItsOwnSlicesAndTheOthersMarkers()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("Tab"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        // A, admitted alone, adopts the slice nobody owned.
+        QCOMPARE(heldKeys(appA, QStringLiteral("slice:")), QStringList{QStringLiteral("slice:0")});
+        QVERIFY(heldKeys(appA, QStringLiteral("marker:")).isEmpty());
+
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        // B gets a first slice of its own, and a marker for A's.
+        QCOMPARE(core.model->slices().size(), 2);
+        QCOMPARE(heldKeys(appB, QStringLiteral("slice:")), QStringList{QStringLiteral("slice:1")});
+        QCOMPARE(heldKeys(appB, QStringLiteral("marker:")), QStringList{QStringLiteral("marker:0")});
+        QVERIFY(!everSaw(appB, QStringLiteral("slice:0")));
+        const SliceModel* hers = core.model->sliceById(0);
+        const auto markerB = [&](const char* property) {
+            return latest(appB->received(), QStringLiteral("marker:0"), QString::fromLatin1(property));
+        };
+        QCOMPARE(markerB("sliceId").toInt(), 0);
+        QCOMPARE(markerB("ownerDeviceId").toString(), a.id());
+        QCOMPARE(markerB("ownerName").toString(), QStringLiteral("iPhone"));
+        QCOMPARE(markerB("ownerShortName").toString(), QStringLiteral("Phone"));
+        QCOMPARE(markerB("ownerKind").toString(), QStringLiteral("phone"));
+        QCOMPARE(markerB("ownerAway").toBool(true), false);
+        QCOMPARE(markerB("frequency").toDouble(), hers->frequency());
+        QCOMPARE(markerB("dspMode").toInt(), static_cast<int>(hers->dspMode()));
+        QCOMPARE(markerB("filterLow").toInt(), hers->filterLow());
+        QCOMPARE(markerB("filterHigh").toInt(), hers->filterHigh());
+        QCOMPARE(markerB("band").toInt(), static_cast<int>(hers->band()));
+        QCOMPARE(markerB("streamIndex").toInt(), hers->streamIndex());
+        QCOMPARE(markerB("psPaused").toBool(true), hers->psPaused());
+        QCOMPARE(markerB("txSlice").toBool(), hers->isTxSlice());
+
+        // A: B's marker, its schema first, and never B's slice.
+        QTRY_VERIFY(holds(appA, QStringLiteral("marker:1")));
+        QVERIFY(!everSaw(appA, QStringLiteral("slice:1")));
+        QCOMPARE(latest(appA->received(), QStringLiteral("marker:1"), QStringLiteral("ownerShortName"))
+                     .toString(),
+                 QStringLiteral("Tab"));
+        QCOMPARE(latest(appA->received(), QStringLiteral("marker:1"), QStringLiteral("ownerKind"))
+                     .toString(),
+                 QStringLiteral("tablet"));
+        int schemaAt = -1;
+        int createAt = -1;
+        for (int i = 0; i < appA->received().size(); ++i) {
+            const QJsonObject o = QJsonDocument::fromJson(appA->received().at(i)).object();
+            if (schemaAt < 0 && o.value(QStringLiteral("type")).toString() == QStringLiteral("schema")
+                && o.value(QStringLiteral("class")).toString() == QStringLiteral("SliceMarker")) {
+                schemaAt = i;
+            }
+            if (createAt < 0 && o.value(QStringLiteral("type")).toString() == QStringLiteral("object.create")
+                && o.value(QStringLiteral("key")).toString() == QStringLiteral("marker:1")) {
+                createAt = i;
+            }
+        }
+        QVERIFY(schemaAt >= 0);
+        QVERIFY(schemaAt < createAt);
+
+        // A's retune reaches B as its marker's frequency, and only so.
+        const int fromB = appB->received().size();
+        core.model->sliceById(0)->setFrequency(14100000.0);
+        QVERIFY(QTest::qWaitFor(
+            [&]() {
+                const QList<QJsonValue> v = deltaValues(appB->received(), fromB,
+                                                        QStringLiteral("marker:0"),
+                                                        QStringLiteral("frequency"));
+                return !v.isEmpty() && v.last().toDouble() == 14100000.0;
+            },
+            5000));
+        QVERIFY(!everSaw(appB, QStringLiteral("slice:0")));
+    }
+
+    void anOlderWindowReceivesOnlyItsOwnSlicesAndNoMarkers()
+    {
+        Core core;
+        Device a;
+        Device older(QStringLiteral("Mac"), QStringLiteral("computer"));
+        core.pair(a);
+        core.pair(older);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        // An older window: signs in by key, predates several devices.
+        LoopbackTransport* window = core.signIn(older, {{"deviceAuth", 1}});
+        QVERIFY(admitted(window));
+        QCOMPARE(heldKeys(window, QStringLiteral("slice:")), QStringList{QStringLiteral("slice:1")});
+        core.model->sliceById(0)->setFrequency(14150000.0);
+        QTest::qWait(3 * StationServer::kDefaultDeltaFlushMs);
+        for (const QByteArray& wire : window->received()) {
+            const QJsonObject o = QJsonDocument::fromJson(wire).object();
+            QVERIFY(!o.value(QStringLiteral("key")).toString().startsWith(QStringLiteral("marker:")));
+            QVERIFY(o.value(QStringLiteral("class")).toString() != QStringLiteral("SliceMarker"));
+        }
+        QVERIFY(!everSaw(window, QStringLiteral("slice:0")));
+        // The device with the feature sees the window's slice as a marker.
+        QTRY_VERIFY(holds(appA, QStringLiteral("marker:1")));
+    }
+
+    // The active slice (rulings 5.10, 5.11).
+
+    void eachDeviceHasItsOwnActiveSliceAndTheStationFollowsTheLatest()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        // A adds a second slice: A's, a marker to B.
+        const QJsonObject added = core.invoke(appA, "addSlice", {utf8("initialPanId", QString())});
+        QVERIFY2(added.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(added.value(QStringLiteral("reason")).toString()));
+        QCOMPARE(core.model->sliceOwnership()->mark(2).owner, a.key.fingerprint());
+        QTRY_VERIFY(holds(appA, QStringLiteral("slice:2")));
+        QTRY_VERIFY(holds(appB, QStringLiteral("marker:2")));
+        QVERIFY(!everSaw(appB, QStringLiteral("slice:2")));
+
+        const auto activeOwn = [](const LoopbackTransport* app) {
+            int count = 0;
+            for (const QString& key : heldKeys(app, QStringLiteral("slice:"))) {
+                if (latest(app->received(), key, QStringLiteral("active")).toBool()) {
+                    ++count;
+                }
+            }
+            return count;
+        };
+
+        // A chooses slice 2: B's active slice is unchanged.
+        QCOMPARE(core.invoke(appA, "setActiveSliceById", {int64("sliceId", 2)})
+                     .value(QStringLiteral("accepted")).toBool(false),
+                 true);
+        QVERIFY(core.model->sliceById(2)->isActive());
+        QVERIFY(!core.model->sliceById(0)->isActive());
+        QVERIFY(core.model->sliceById(1)->isActive());
+        QCOMPARE(core.model->activeSlice()->sliceIndex(), 2);
+        QTRY_VERIFY(latest(appA->received(), QStringLiteral("slice:2"), QStringLiteral("active")).toBool());
+        QTRY_COMPARE(activeOwn(appA), 1);
+        QCOMPARE(activeOwn(appB), 1);
+
+        // B chooses its own: the station-level slice follows, and the FreeDV
+        // Reporter frequency with it.
+        core.model->sliceById(1)->setFrequency(7074000.0);
+        QCOMPARE(core.invoke(appB, "setActiveSliceById", {int64("sliceId", 1)})
+                     .value(QStringLiteral("accepted")).toBool(false),
+                 true);
+        QCOMPARE(core.model->activeSlice()->sliceIndex(), 1);
+        QVERIFY(core.model->sliceById(2)->isActive());
+        QCOMPARE(core.model->freedvWantedFrequencyHzForTest(), quint64(7074000));
+        // A tuning its own slice does not move it; B tuning the station's does.
+        core.model->sliceById(2)->setFrequency(21074000.0);
+        QCOMPARE(core.model->freedvWantedFrequencyHzForTest(), quint64(7074000));
+        core.model->sliceById(1)->setFrequency(7076000.0);
+        QCOMPARE(core.model->freedvWantedFrequencyHzForTest(), quint64(7076000));
+        QCOMPARE(activeOwn(appA), 1);
+        QCOMPARE(activeOwn(appB), 1);
+    }
+
+    // Where a device's slices come from, and where they go (ruling 5.2,
+    // rulings 4.11 and 4.12).
+
+    void aDeviceWithNoSliceGetsOneOnTheStationReceiverOrNoneWithTheCapFull()
+    {
+        Core core;
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(14200000.0);
+        QVERIFY(core.model->sliceById(0)->streamIndex() >= 0);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        Device c(QStringLiteral("Mac"), QStringLiteral("computer"));
+        for (Device* x : {&a, &b, &c}) {
+            core.pair(*x);
+        }
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        const int receivers = receiversInUse(*core.model);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        QCOMPARE(core.model->slices().size(), 2);
+        const SliceModel* bs = core.model->sliceById(1);
+        QVERIFY(bs != nullptr);
+        QCOMPARE(core.model->sliceOwnership()->mark(1).owner, b.key.fingerprint());
+        QCOMPARE(bs->frequency(), 14200000.0);
+        QCOMPARE(bs->streamIndex(), core.model->sliceById(0)->streamIndex());
+        QCOMPARE(receiversInUse(*core.model), receivers);
+
+        // A fills the slice cap.
+        for (int i = 0; i < 8; ++i) {
+            if (!core.invoke(appA, "addSlice", {utf8("initialPanId", QString())})
+                     .value(QStringLiteral("accepted")).toBool()) {
+                break;
+            }
+        }
+        const int full = core.model->slices().size();
+        QVERIFY(full > 2);
+        LoopbackTransport* appC = core.signIn(c);
+        QVERIFY(admitted(appC));
+        QCOMPARE(core.model->slices().size(), full);
+        QVERIFY(heldKeys(appC, QStringLiteral("slice:")).isEmpty());
+        QCOMPARE(heldKeys(appC, QStringLiteral("marker:")).size(), full);
+    }
+
+    void theLastDeviceLeavingPassesItsSlicesToTheStationHeldForIt()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        QVERIFY(core.invoke(appA, "session.leave").value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(!appA->isOpen());
+        const SliceOwnership* own = core.model->sliceOwnership();
+        // Still running, the station device's, held for A.
+        QVERIFY(core.model->sliceById(0) != nullptr);
+        QCOMPARE(own->mark(0).owner, SliceOwnership::stationDevice());
+        QCOMPARE(own->mark(0).heldFor, a.key.fingerprint());
+        // Ruling 5.14: VAX on the Core's computer carries the station
+        // device's slices, and no device's.
+        const auto vaxCarries = [&core](int sliceId) {
+            return ((core.model->audioEngine()->vaxSliceMask() >> sliceId) & 1u) != 0;
+        };
+        QVERIFY(vaxCarries(0));
+
+        // B, admitted meanwhile, does not adopt it.
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        QCOMPARE(own->mark(0).heldFor, a.key.fingerprint());
+        QCOMPARE(heldKeys(appB, QStringLiteral("slice:")), QStringList{QStringLiteral("slice:1")});
+        QVERIFY(holds(appB, QStringLiteral("marker:0")));
+        QCOMPARE(latest(appB->received(), QStringLiteral("marker:0"), QStringLiteral("ownerDeviceId"))
+                     .toString(),
+                 a.id());
+        QCOMPARE(latest(appB->received(), QStringLiteral("marker:0"), QStringLiteral("ownerAway"))
+                     .toBool(false),
+                 true);
+
+        QVERIFY(!vaxCarries(1));
+        // A signs in again: its slice is its own again.
+        LoopbackTransport* back = core.signIn(a);
+        QVERIFY(admitted(back));
+        QVERIFY(!vaxCarries(0));
+        QCOMPARE(own->mark(0).owner, a.key.fingerprint());
+        QVERIFY(!own->mark(0).isHeld());
+        QCOMPARE(heldKeys(back, QStringLiteral("slice:")), QStringList{QStringLiteral("slice:0")});
+        QVERIFY(holds(back, QStringLiteral("marker:1")));
+        QTRY_COMPARE(latest(appB->received(), QStringLiteral("marker:0"), QStringLiteral("ownerAway"))
+                         .toBool(true),
+                     false);
+        QCOMPARE(core.model->slices().size(), 2);
+    }
+
+    void anAwayDevicesSlicesAreKeptThenClosedAndSavedAtTheEndOf180Seconds()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        core.model->sliceById(1)->setFrequency(7074000.0);
+        core.model->sliceById(1)->setAfGain(17);
+        core.now = 1000;
+        appB->closeLink(QStringLiteral("lost"));
+        QTRY_COMPARE(core.sessions().entry(b.key.fingerprint())->state,
+                     DeviceSessionRegistry::State::Away);
+        // Within the 180 s: kept, still B's, its marker away.
+        QVERIFY(core.model->sliceById(1) != nullptr);
+        QCOMPARE(core.model->sliceOwnership()->mark(1).owner, b.key.fingerprint());
+        QTRY_COMPARE(latest(appA->received(), QStringLiteral("marker:1"), QStringLiteral("ownerAway"))
+                         .toBool(false),
+                     true);
+
+        // At their end, with A still here: closed and saved.
+        core.now = 1000 + DeviceSessionRegistry::kGraceMs;
+        QCOMPARE(core.sessions().expireAway().size(), 1);
+        QVERIFY(core.model->sliceById(1) == nullptr);
+        QTRY_VERIFY(!holds(appA, QStringLiteral("marker:1")));
+        const QString mac = core.model->currentRadioMac();
+        const QList<SavedSlice> saved =
+            DeviceLayoutStore::load(AppSettings::instance(), mac, b.key.fingerprint());
+        QCOMPARE(saved.size(), 1);
+        QCOMPARE(saved.first().id, 1);
+        QCOMPARE(saved.first().frequencyHz, 7074000.0);
+        QCOMPARE(saved.first().settings.value(QStringLiteral("Slice/AfGain")), QStringLiteral("17"));
+        // Its letter's keys were cleared: a new slice there starts fresh.
+        QVERIFY(DeviceLayoutStore::captureSliceSettings(AppSettings::instance(), mac, 1).isEmpty());
+
+        // Back: restored under its old letter, with its settings.
+        LoopbackTransport* back = core.signIn(b);
+        QVERIFY(admitted(back));
+        QCOMPARE(heldKeys(back, QStringLiteral("slice:")), QStringList{QStringLiteral("slice:1")});
+        QVERIFY(core.model->sliceById(1) != nullptr);
+        QCOMPARE(core.model->sliceById(1)->frequency(), 7074000.0);
+        QCOMPARE(core.model->sliceById(1)->afGain(), 17);
+        QCOMPARE(core.model->sliceOwnership()->mark(1).owner, b.key.fingerprint());
+        QVERIFY(DeviceLayoutStore::load(AppSettings::instance(), mac, b.key.fingerprint()).isEmpty());
+    }
+
+    void aRestoredSliceTakesTheLowestFreeLetterWhenItsOwnIsTaken()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        core.model->sliceById(1)->setAfGain(23);
+        core.model->sliceById(1)->setFrequency(3573000.0);
+        QVERIFY(core.invoke(appB, "session.leave").value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(core.model->sliceById(1) == nullptr);
+
+        // A takes letter B meanwhile, and does not get B's settings.
+        QVERIFY(core.invoke(appA, "addSlice", {utf8("initialPanId", QString())})
+                    .value(QStringLiteral("accepted")).toBool());
+        QVERIFY(core.model->sliceById(1) != nullptr);
+        QCOMPARE(core.model->sliceOwnership()->mark(1).owner, a.key.fingerprint());
+        QVERIFY(core.model->sliceById(1)->afGain() != 23);
+
+        // B back: its slice on the lowest free letter, with its settings.
+        LoopbackTransport* back = core.signIn(b);
+        QVERIFY(admitted(back));
+        QCOMPARE(heldKeys(back, QStringLiteral("slice:")), QStringList{QStringLiteral("slice:2")});
+        QCOMPARE(core.model->sliceById(2)->afGain(), 23);
+        QCOMPARE(core.model->sliceById(2)->frequency(), 3573000.0);
+        QCOMPARE(core.model->sliceOwnership()->mark(2).owner, b.key.fingerprint());
+    }
+
+    void theLastDevicesSlicesAreHeldForItWhenIts180SecondsEnd()
+    {
+        Core core;
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        appA->closeLink(QStringLiteral("lost"));
+        QTRY_COMPARE(core.sessions().entry(a.key.fingerprint())->state,
+                     DeviceSessionRegistry::State::Away);
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, a.key.fingerprint());
+        core.now = DeviceSessionRegistry::kGraceMs;
+        QCOMPARE(core.sessions().expireAway().size(), 1);
+        QVERIFY(core.model->sliceById(0) != nullptr);
+        QCOMPARE(core.model->sliceOwnership()->mark(0).heldFor, a.key.fingerprint());
+    }
+
+    void revokingADeviceClosesItsSlicesHeldOnesIncludedAndForgetsItsLayout()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        QVERIFY(core.invoke(appA, "addSlice", {utf8("initialPanId", QString())})
+                    .value(QStringLiteral("accepted")).toBool());
+        QVERIFY(core.invoke(appA, "session.leave").value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(!appA->isOpen());
+        QCOMPARE(core.model->sliceOwnership()->heldFor(a.key.fingerprint()), (QList<int>{0, 1}));
+        const QString mac = core.model->currentRadioMac();
+        SavedSlice earlier;
+        earlier.id = 3;
+        earlier.frequencyHz = 10136000.0;
+        QVERIFY(DeviceLayoutStore::append(AppSettings::instance(), mac, a.key.fingerprint(), earlier, 5));
+
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        QTRY_VERIFY(holds(appB, QStringLiteral("marker:0")));
+        const QJsonObject revoked = core.invoke(appB, "devices.revoke", {utf8("id", a.id())});
+        QVERIFY2(revoked.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(revoked.value(QStringLiteral("reason")).toString()));
+        QVERIFY(core.model->sliceById(0) == nullptr);
+        QVERIFY(core.model->sliceById(1) == nullptr);
+        QVERIFY(core.model->sliceById(2) != nullptr);
+        QTRY_VERIFY(!holds(appB, QStringLiteral("marker:0")));
+        QTRY_VERIFY(!holds(appB, QStringLiteral("marker:1")));
+        QVERIFY(DeviceLayoutStore::load(AppSettings::instance(), mac, a.key.fingerprint()).isEmpty());
+    }
+
+    // Ruling 5.2 step 3 with ruling 5.3: a manifest from before owners
+    // restores its slices with no owner; the first device admitted alone
+    // adopts them all, a later one none.
+    void aManifestFromBeforeOwnersIsAdoptedByTheFirstDeviceAlone()
+    {
+        Core core;
+        const QString mac = AppSettings::normalizedRadioMac(core.model->currentRadioMac());
+        AppSettings::instance().setHardwareValue(
+            mac, QStringLiteral("receiveLayout"),
+            QStringLiteral(R"({"version":1,"slices":[{"id":0,"panKey":"pan-0","frequencyHz":7074000,"dspMode":1},{"id":1,"panKey":"pan-0","frequencyHz":7075000,"dspMode":1}]})"));
+        const auto forget = qScopeGuard([&mac] {
+            AppSettings::instance().remove(QStringLiteral("hardware/%1/receiveLayout").arg(mac));
+        });
+        core.model->prepareReceiveLayout(mac);
+        QCOMPARE(core.model->slices().size(), 2);
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownership->unowned(), (QList<int>{0, 1}));
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        QCOMPARE(ownership->ownedBy(a.key.fingerprint()), (QList<int>{0, 1}));
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        QCOMPARE(ownership->ownedBy(a.key.fingerprint()), (QList<int>{0, 1}));
+        QCOMPARE(ownership->ownedBy(b.key.fingerprint()), (QList<int>{2}));
+    }
+
+    // Ruling 5.2 step 2: a saved slice that does not fit is recorded for
+    // the notice and kept, not dropped.
+    void aSavedSliceThatDoesNotFitIsRecordedNotDropped()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        core.model->sliceById(1)->setFrequency(10136000.0);
+        QVERIFY(core.invoke(appB, "session.leave").value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(core.model->sliceById(1) == nullptr);
+        // A fills every slice while B is gone.
+        for (int i = 0; i < 8; ++i) {
+            if (!core.invoke(appA, "addSlice", {utf8("initialPanId", QString())})
+                     .value(QStringLiteral("accepted")).toBool()) {
+                break;
+            }
+        }
+        const int full = core.model->slices().size();
+        LoopbackTransport* back = core.signIn(b);
+        QVERIFY(admitted(back));
+        QCOMPARE(core.model->slices().size(), full);
+        QVERIFY(heldKeys(back, QStringLiteral("slice:")).isEmpty());
+        const QList<SavedSlice> missing = core.server->slicesNotRestored(b.key.fingerprint());
+        QCOMPARE(missing.size(), 1);
+        QCOMPARE(missing.first().frequencyHz, 10136000.0);
+        const QList<SavedSlice> kept = DeviceLayoutStore::load(
+            AppSettings::instance(), core.model->currentRadioMac(), b.key.fingerprint());
+        QCOMPARE(kept.size(), 1);
+        QCOMPARE(kept.first().frequencyHz, 10136000.0);
+    }
+
+    // A slice the Core makes for nobody (a radio that arrives after the
+    // device, the Core's own top-up) goes to a device alone on the Core; with
+    // several on it, it stays nobody's, a marker to each.
+    void aSliceTheCoreMakesGoesToADeviceAloneAndToNobodyWithSeveral()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        const int alone = core.model->addSlice(QString());
+        QVERIFY(alone > 0);
+        QTRY_COMPARE(core.model->sliceOwnership()->mark(alone).owner, a.key.fingerprint());
+        QTRY_VERIFY(holds(appA, QStringLiteral("slice:%1").arg(alone)));
+
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        const int shared = core.model->addSlice(QString());
+        QVERIFY(shared > 0);
+        QTest::qWait(3 * StationServer::kDefaultDeltaFlushMs);
+        QVERIFY(core.model->sliceOwnership()->mark(shared).owner.isEmpty());
+        QTRY_VERIFY(holds(appA, QStringLiteral("marker:%1").arg(shared)));
+        QTRY_VERIFY(holds(appB, QStringLiteral("marker:%1").arg(shared)));
+        QVERIFY(!everSaw(appA, QStringLiteral("slice:%1").arg(shared)));
+    }
+
+    void connectedDevicesListsWhatEachDeviceListensOn()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        const SliceModel* bs = core.model->sliceById(1);
+        const QJsonObject expected{{QStringLiteral("sliceId"), 1},
+                                   {QStringLiteral("letter"), QStringLiteral("B")},
+                                   {QStringLiteral("band"), static_cast<int>(bs->band())},
+                                   {QStringLiteral("mode"), static_cast<int>(bs->dspMode())}};
+        QVERIFY(waitForList(appA, [&](const QJsonArray& list) {
+            return entryFor(list, b.id()).value(QStringLiteral("listeningOn")).toArray()
+                == QJsonArray{expected};
+        }));
+        const QJsonArray mine =
+            entryFor(connectedList(appA), a.id()).value(QStringLiteral("listeningOn")).toArray();
+        QCOMPARE(mine.size(), 1);
+        QCOMPARE(mine.first().toObject().value(QStringLiteral("letter")).toString(), QStringLiteral("A"));
+        // An away device's slices are still listed.
+        appB->closeLink(QStringLiteral("lost"));
+        QVERIFY(waitForList(appA, [&](const QJsonArray& list) {
+            const QJsonObject entry = entryFor(list, b.id());
+            return entry.value(QStringLiteral("state")).toString() == QStringLiteral("away")
+                && entry.value(QStringLiteral("listeningOn")).toArray() == QJsonArray{expected};
+        }));
     }
 
     void aDspAssetJobEndsWithItsOwnDeviceOnly()

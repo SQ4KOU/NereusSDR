@@ -19,6 +19,7 @@
         {"from": "station", "message": {"class": "ConnectedDevicesFacade", "fields": "$any", "type": "schema"}},
         {"from": "station", "message": {"class": "StationCatalog", "fields": "$any", "type": "schema"}},
         {"from": "station", "message": {"class": "SliceModel", "fields": "$any", "type": "schema"}},
+        {"from": "station", "message": {"class": "SliceMarker", "fields": "$any", "type": "schema"}},
         {"from": "station", "message": {"class": "RadioModel", "key": "radio", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"class": "PureSignalSettings", "key": "pureSignalSettings", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"class": "DspAssetService", "key": "dspAssets", "properties": "$any", "type": "object.create"}},

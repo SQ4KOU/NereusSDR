@@ -215,6 +215,18 @@ public:
     /// verbs are refused in plain words. They need no radio.
     void setDeviceAdmin(StationDevicesFacade* devices) { m_deviceAdmin = devices; }
 
+    /// iPhone app Task 73 (rulings 5.9, 5.10): the device the dispatches
+    /// that follow act for, by the id its slices are owned under (the Core
+    /// sets it with the session owner and clears it after). Empty acts for
+    /// nobody in particular, as before several devices: no slice is refused,
+    /// a new slice has no owner and setActiveSliceById moves the one active
+    /// slice.
+    void setRequester(const QByteArray& device) { m_requester = device; }
+    /// The plain refusal for `requester` naming `sliceId`, or empty when it
+    /// may: "That slice belongs to <owner>. It can be changed only there."
+    using SliceAccess = std::function<QString(const QByteArray& requester, int sliceId)>;
+    void setSliceAccess(SliceAccess access) { m_sliceAccess = std::move(access); }
+
     /// R-IOS-01: every verb dispatch() routes, declared beside the routing
     /// rather than derived from it. A family routed by prefix ("ps3.",
     /// "dspAssets.", "notch.") lists each concrete verb it accepts.
@@ -302,6 +314,12 @@ private:
     QPointer<RadioModel> m_radioModel;
     QPointer<StationDevicesFacade> m_deviceAdmin;
     QString m_sessionOwner{QStringLiteral("local")};
+    // iPhone app Task 73.
+    QByteArray m_requester;
+    SliceAccess m_sliceAccess;
+    /// Refuses (and answers) a verb whose sliceId names another device's
+    /// slice. True when it did.
+    bool refusedForAnotherDevice(const NereusSDR::SessionMessage& invoke);
     struct PendingPureSignalCommand {
         quint32 commandId;
         QByteArray verb;

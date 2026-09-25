@@ -38,6 +38,8 @@
 // list. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-24: R-R3-47 / R-R3-22: AccessorySettingsModel joins it. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-25: iPhone app Task 73 (R-IOS-02): SliceMarker joins it. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -71,6 +73,7 @@
 #include "core/session/StationCatalog.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/ConnectedDevicesFacade.h"
+#include "core/session/SliceMarker.h"
 
 using namespace NereusSDR;
 
@@ -886,7 +889,9 @@ private:
                  // iPhone app Task 19 (R-IOS-06): the Core's catalogue.
                  &StationCatalog::staticMetaObject,
                  // iPhone app Task 71 (R-IOS-02): who is on the Core.
-                 &ConnectedDevicesFacade::staticMetaObject };
+                 &ConnectedDevicesFacade::staticMetaObject,
+                 // iPhone app Task 73 (R-IOS-02): another device's slice.
+                 &SliceMarker::staticMetaObject };
     }
 };
 

@@ -11,6 +11,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 72 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 73 (R-IOS-02): a class's schema before
+//               its first object.create after the burst. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/MirrorView.h"
@@ -87,6 +91,23 @@ bool MirrorView::deliver(const SessionMessage& message)
     if (!m_attached || m_closed || !m_sink) {
         return false;
     }
+    // Task 73: a class first seen after the burst (the first marker a
+    // device receives when a second device arrives) is declared first,
+    // since a client drops an object whose class it was never told of.
+    if (message.kind == SessionMessageKind::ObjectCreate
+        && !m_announced.contains(message.className) && !m_mirror.isNull()) {
+        if (const QObject* object = m_mirror->watchedObject(message.objectKey)) {
+            const MirrorSchema& schema = MirrorSchema::forObject(object);
+            if (schema.size() > 0
+                && MirrorSchema::shortClassName(schema.className()) == message.className) {
+                m_announced.insert(message.className);
+                m_sink(SessionMessages::schema(message.className, schemaFieldsFor(schema)));
+                if (m_closed || !m_sink) {
+                    return false;
+                }
+            }
+        }
+    }
     m_sink(message);
     return true;
 }
@@ -125,7 +146,8 @@ void MirrorView::attach()
     // One schema per DISTINCT class among what is watched, first-watched
     // order, under the short wire name ("SliceModel"), as ObjectRegistry
     // names it.
-    QSet<QByteArray> announced;
+    m_announced.clear();
+    QSet<QByteArray>& announced = m_announced;
     for (const QByteArray& key : keys) {
         if (m_closed || m_mirror.isNull()) {
             return;

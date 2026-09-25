@@ -20,7 +20,9 @@
 //   - its own sink, which is where the Core fits each message to the
 //     device (StationServer::sendToPeer: its agreed minor, what its
 //     capabilities offer, the pairing code only to a paired device's key).
-//     Task 73 adds ownership to that filter.
+//     Task 73 adds ownership to that filter: a device's own slice:
+//     objects, a marker: for every other slice (never to an older
+//     window).
 //
 // Echo is per writer (ruling 5.7). StateMirror tells every view about
 // every change it sees, EXCEPT the view whose device's write it is
@@ -45,12 +47,17 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 72 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 73 (R-IOS-02): a class's schema before
+//               its first object.create after the burst. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QByteArray>
 #include <QList>
 #include <QObject>
 #include <QPointer>
+#include <QSet>
 
 #include <functional>
 
@@ -92,6 +99,9 @@ public:
     /// Sends `message` (an object.create or object.destroy from the slice
     /// lifecycle, or a settings.value) through the sink, once this view has
     /// attached. False, sending nothing, before then or after close().
+    /// iPhone app Task 73: an object.create of a class this view has not
+    /// yet declared (a device's first marker after its burst) is preceded
+    /// by that class's schema.
     bool deliver(const SessionMessage& message);
 
     /// Leaves the mirror, drops everything pending and sends nothing more.
@@ -116,6 +126,8 @@ private:
     QPointer<StateMirror> m_mirror;
     Sink m_sink;
     MirrorCoalescer m_coalescer;
+    /// The classes whose schema this view has sent since its last attach.
+    QSet<QByteArray> m_announced;
     bool m_attached = false;
     bool m_closed = false;
 };

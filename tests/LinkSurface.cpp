@@ -58,6 +58,10 @@
 //               sessionHolder), and the maxDeviceSessions, graceMs and
 //               lanAnnouncementMaxBytes limits. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 73 (R-IOS-02): SliceMarker and the
+//               `marker:<id>` key (a slice held for an away device in the
+//               live session). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -101,6 +105,8 @@
 #include "core/session/StationCatalog.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/ConnectedDevicesFacade.h"
+#include "core/session/SliceMarker.h"
+#include "core/SliceOwnership.h"
 #include "core/session/DeviceSessionRegistry.h"
 #include "core/session/StationLanAnnouncement.h"
 #include "core/session/StationServer.h"
@@ -357,6 +363,11 @@ std::optional<QList<QByteArray>> liveSessionWire(
     model->setLastRadioInfoForTest(info);
     model->setConnectionStateForTest(ConnectionState::Connected);
     model->addSlice(QStringLiteral("pan-0"));
+    // iPhone app Task 73: a second slice the Core runs for another device
+    // that is away, so the session this peer sees holds a `marker:<id>` as
+    // well as its own `slice:<id>`.
+    const int held = model->addSlice(QStringLiteral("pan-0"));
+    model->sliceOwnership()->hold(held, QByteArray(32, '\x5a'));
     model->addPanadapter();
 
 
@@ -523,6 +534,7 @@ QJsonArray captureObjectKeys()
 
     static const QRegularExpression kPan(QStringLiteral("^pan:[0-9]+$"));
     static const QRegularExpression kSlice(QStringLiteral("^slice:[0-9]+$"));
+    static const QRegularExpression kMarker(QStringLiteral("^marker:[0-9]+$"));
     QSet<QString> seen;
     for (const QByteArray& message : *wire) {
         SessionMessage decoded;
@@ -535,6 +547,8 @@ QJsonArray captureObjectKeys()
             pattern = QStringLiteral("pan:<i>");
         } else if (kSlice.match(pattern).hasMatch()) {
             pattern = QStringLiteral("slice:<id>");
+        } else if (kMarker.match(pattern).hasMatch()) {
+            pattern = QStringLiteral("marker:<id>");
         }
         if (seen.contains(pattern)) {
             continue;
@@ -1315,7 +1329,8 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &AccessorySettingsModel::staticMetaObject,
             &StationDevicesFacade::staticMetaObject,
             &StationCatalog::staticMetaObject,
-            &ConnectedDevicesFacade::staticMetaObject};
+            &ConnectedDevicesFacade::staticMetaObject,
+            &SliceMarker::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

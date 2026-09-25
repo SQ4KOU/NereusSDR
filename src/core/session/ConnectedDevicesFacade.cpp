@@ -8,6 +8,9 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 71 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 73 (R-IOS-02): listeningOn and
+//               describe(). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/ConnectedDevicesFacade.h"
@@ -96,7 +99,13 @@ void ConnectedDevicesFacade::refresh()
     emit connectedDevicesChanged();
 }
 
-QString ConnectedDevicesFacade::render(bool withDurations) const
+void ConnectedDevicesFacade::setListeningProvider(ListeningProvider provider)
+{
+    m_listening = std::move(provider);
+    refresh();
+}
+
+QHash<QByteArray, Registry::NumberedName> ConnectedDevicesFacade::numbered() const
 {
     const QList<Registry::Entry> entries = m_registry.entries();
     const QList<PairedDevice> paired = m_devices.list();
@@ -126,7 +135,47 @@ QString ConnectedDevicesFacade::render(bool withDurations) const
         order.append({entry.deviceId, entry.name,
                       Registry::usableShortName(entry.shortName, entry.deviceKind)});
     }
-    const QHash<QByteArray, Registry::NumberedName> names = Registry::numberNames(order);
+    return Registry::numberNames(order);
+}
+
+std::optional<ConnectedDevicesFacade::DeviceWords>
+ConnectedDevicesFacade::describe(const QByteArray& deviceId) const
+{
+    if (deviceId.isEmpty()) {
+        return std::nullopt;
+    }
+    const QHash<QByteArray, Registry::NumberedName> names = numbered();
+    const auto name = names.constFind(deviceId);
+    if (name == names.cend()) {
+        return std::nullopt;
+    }
+    DeviceWords words;
+    words.name = name->name;
+    words.shortName = name->shortName;
+    const std::optional<Registry::Entry> entry = m_registry.entry(deviceId);
+    const bool token = entry && entry->kind == Registry::Kind::Token;
+    words.wireId = token ? QString::fromLatin1(deviceId) : StationIdentity::toBase64Url(deviceId);
+    words.kind = entry ? entry->deviceKind : QString();
+    if (!entry || entry->kind == Registry::Kind::Paired) {
+        for (const PairedDevice& device : m_devices.list()) {
+            if (device.id == deviceId) {
+                words.kind = device.kind;
+                break;
+            }
+        }
+    }
+    return words;
+}
+
+QString ConnectedDevicesFacade::render(bool withDurations) const
+{
+    const QList<Registry::Entry> entries = m_registry.entries();
+    const QList<PairedDevice> paired = m_devices.list();
+    QSet<QByteArray> inStore;
+    for (const PairedDevice& device : paired) {
+        inStore.insert(device.id);
+    }
+    const QHash<QByteArray, Registry::NumberedName> names = numbered();
 
     const qint64 now = m_registry.now();
     QJsonArray list;
@@ -158,7 +207,8 @@ QString ConnectedDevicesFacade::render(bool withDurations) const
             // Task 34 adds the holder; Task 73 the slices; Task 77
             // transmittingOn.
             {QStringLiteral("holdsTransmit"), false},
-            {QStringLiteral("listeningOn"), QJsonArray{}},
+            {QStringLiteral("listeningOn"),
+             m_listening ? m_listening(entry.deviceId) : QJsonArray{}},
         };
         if (withDurations) {
             o.insert(QStringLiteral("lastActivitySeconds"),
