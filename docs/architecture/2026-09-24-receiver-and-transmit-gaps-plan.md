@@ -734,3 +734,54 @@ and there is no receive-only kit on the bench.
 
 - [ ] **Step 1:** Read Thetis and mi0bot, test red, fix the rows and the model resolution,
   commit.
+
+## Task 16: Receive only stops every key, as Thetis's RXOnly does
+
+**Requirements:** 3M-1 transmit (the keying gate); remote parity both ways (the operator,
+2026-09-25: "we want parity no matter how i am connected"); a control that cannot run is shown
+disabled with its reason, never hidden (the operator, 2026-09-25). Found by Task 15: the
+`isRxOnlySku` flag is read only by two Setup screens, `TxInhibitMonitor::notifyRxOnly` has no
+caller, and `GeneralOptionsPage` hides `m_chkGeneralRXOnly` (`GeneralOptionsPage.cpp:216-229`).
+
+**Source first:** Thetis `console.cs` `RXOnly` (`console.cs:15312-15334 [v2.10.3.15]`: MOX
+disabled unless SPEC or DRM, TUN, 2TONE (`// MW0LGE_21a`) and VOX disabled, MOX dropped if
+keyed, Setup kept in step) and `setup.cs` `chkGeneralRXOnly_CheckedChanged`
+(`setup.cs:6479 [v2.10.3.15]`) with its recovery line (`setup.cs:740`); mi0bot-Thetis for the
+HL2 (Task 15's report: mi0bot models no receive-only kit, only the operator's toggle). Every
+author tag preserved.
+
+**Files:** the keying gate (`MoxController` and the admission path Task 7 and Task 13 use for
+TX inhibit, so every source is refused: MOX, TUNE, two-tone, VOX, the radio's PTT, CAT, TCI);
+`TxInhibitMonitor::notifyRxOnly` (wire it, or remove it if the gate has one better place);
+`GeneralOptionsPage.{h,cpp}` (the checkbox shown on every radio, disabled with a reason where it
+cannot change); the TX applet, the VFO flag and the container buttons for MOX, TUNE, 2TONE and
+VOX (disabled with the reason while receive only is on); the `RxOnly` setting's scope
+(`SettingsScope.cpp:540`) and the remote path (Setup's checkbox from a remote window, the Core's
+gate, the mirrored state); the N2ADR settings migration (Task 15's concern: it covers radios
+saved as a standard HL2, not the kit).
+
+**Acceptance:**
+- With receive only on, every keying source is refused through the one gate, with a plain
+  reason, on a local window and on a Core; a keyed MOX drops when it is turned on, as Thetis
+  does. MOX, TUNE, 2TONE and VOX show disabled with the reason (MOX follows Thetis's SPEC and
+  DRM exception).
+- The HL2 receive-only kit (board byte 12, `isRxOnlySku`) always runs receive only: the
+  checkbox shows checked and disabled with a plain reason that the radio has no transmitter.
+  This is NereusSDR's own rule (mi0bot has no kit model); say so in a comment.
+- The checkbox is never hidden on any radio.
+- A remote window shows the Core's receive-only state, can change it off the air exactly as a
+  local window can (or, if the design scopes it per window, says in the report how the Core's
+  gate and each window's controls then follow; ask with NEEDS_CONTEXT before choosing a scope
+  that lets one window's setting key a radio another window has in receive only).
+- The N2ADR migration covers the kit, or the report shows why it needs none.
+- Tests show each refusal red first; the Task 7 and Task 13 keying tests stay green.
+
+**Verification:** the transmit safety boundary: unit tests through the real gate, a remote
+window through the session, and the regression freezes (no wire byte changes while receive only
+is off). Hardware pending (an HL2 with receive only on: nothing keys; no kit on the bench). Its
+own review follows, as Task 7's did.
+
+**Execution note (advisory):** opus.
+
+- [ ] **Step 1:** Read Thetis and mi0bot, test red, port the gate and the controls, commit.
+- [ ] **Step 2:** The remote path, the kit's forced receive only and the N2ADR migration.
