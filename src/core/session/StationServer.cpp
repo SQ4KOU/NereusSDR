@@ -895,6 +895,8 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // slice is never closed; it stays, owned by nobody.
     connect(m_devices.get(), &DeviceStore::deviceRemoved, this, [this](const QByteArray& id) {
         if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local) {
+            // Fix wave: and its C-Tune pins.
+            m_radioModel->clearStreamCtunPinsAnchoredBy(id);
             SliceOwnership* ownership = m_radioModel->sliceOwnership();
             QList<int> slices = ownership->ownedBy(id);
             slices += ownership->heldFor(id);
@@ -1986,9 +1988,9 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
             if (m_radioModel) {
                 m_radioModel->pureSignalFacade()->resetSession();
             }
-            if (!m_radioModel.isNull()) {
-                m_radioModel->clearStreamCtunPins();
-            }
+            // Fix wave: the C-Tune pins are not the session's. They end
+            // when their device leaves for good (releaseDeviceSlices and
+            // revocation), so a device coming back keeps them (ruling 4.8).
         } else if (m_ps3SubscriberEpoch == mediaEpoch) {
             m_ps3SubscriberEpoch = 0;
             if (m_radioModel) {
@@ -4316,6 +4318,9 @@ void StationServer::releaseDeviceSlices(const QByteArray& deviceId)
         || m_radioModel->role() != RadioModel::Role::Local) {
         return;
     }
+    // Fix wave: a device gone for good takes its C-Tune pins with it; the
+    // receivers it anchored keep their windows, unpinned.
+    m_radioModel->clearStreamCtunPinsAnchoredBy(deviceId);
     SliceOwnership* ownership = m_radioModel->sliceOwnership();
     const QList<int> owned = ownership->ownedBy(deviceId);
     const bool token = deviceId.startsWith("token:");

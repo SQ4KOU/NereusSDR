@@ -1993,6 +1993,42 @@ private slots:
         QVERIFY(!appB->receivedKinds().contains(QByteArrayLiteral("notice")));
     }
 
+    // Fix wave (ruling 4.8 keeps a device's pans): a device's C-Tune pin
+    // survives its link dropping, its media ending with it, and its coming
+    // back as the same device; it ends when the device leaves for good.
+    void aDevicesPinSurvivesItsReturnAndEndsWhenItLeaves()
+    {
+        MediaCore m;
+        m.appA = m.core.signIn(m.a);
+        QVERIFY(admitted(m.appA));
+        QTRY_COMPARE(m.hub->controllerCount(), 1);
+        QVERIFY(m.startMedia(m.appA) != nullptr);
+        QTRY_COMPARE(m.core.server->mediaSessionEpochs().size(), 1);
+        const SliceModel* slice = m.core.model->sliceById(0);
+        QVERIFY(slice->streamIndex() >= 0);
+        QCOMPARE(m.core.model->sliceOwnership()->anchorOf(slice->streamIndex()),
+                 m.a.key.fingerprint());
+        const MirrorUpdate pin{0, "pinned", MirrorWireKind::Bool, true};
+        QVERIFY(m.core.invoke(m.appA, "requestStreamCtunPinned", {int64("sliceId", 0), pin})
+                    .value(QStringLiteral("accepted")).toBool(false));
+        QVERIFY(slice->streamCtunPinned());
+
+        // The link drops: A is away, its media has ended, the pin stays.
+        m.appA->closeLink(QStringLiteral("the link dropped"));
+        QTRY_VERIFY(m.core.server->mediaSessionEpochs().isEmpty());
+        QVERIFY(m.core.model->sliceById(0)->streamCtunPinned());
+
+        // A back as the same device: its pin is as it left it.
+        LoopbackTransport* back = m.core.signIn(m.a);
+        QVERIFY(admitted(back));
+        QVERIFY(m.core.model->sliceById(0)->streamCtunPinned());
+
+        // A leaves for good: the pin ends.
+        m.core.invoke(back, "session.leave");
+        QTRY_VERIFY(!back->isOpen());
+        QVERIFY(!m.core.model->sliceById(0)->streamCtunPinned());
+    }
+
     void aDspAssetJobEndsWithItsOwnDeviceOnly()
     {
         Core core;

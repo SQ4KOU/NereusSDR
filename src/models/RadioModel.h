@@ -1320,10 +1320,13 @@ public:
     SampleRateReach planSampleRateReach(int sliceId, int rateHz,
                                         const std::function<bool(int)>& mayClose) const;
 
-    /// End the session-scoped C-Tune state and project the cleared value to
-    /// every cohost. StationServer calls this when the authenticated session
-    /// goes away; it does not persist across a reconnect.
-    void clearStreamCtunPins();
+    /// End the C-Tune pins of the receivers `device` anchors and project the
+    /// cleared value to every cohost. Fix wave after the several-devices
+    /// group review (ruling 4.8 keeps a device's pans): StationServer calls
+    /// this when a device leaves for good (session.leave, a token window's
+    /// end, the end of its 180 s, revocation), not when a session drops, so
+    /// a device coming back keeps its pins.
+    void clearStreamCtunPinsAnchoredBy(const QByteArray& device);
 
     /// Push a slice's just-restored per-band sample rate onto its DDC.
     ///

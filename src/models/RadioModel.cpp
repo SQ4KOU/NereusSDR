@@ -6593,10 +6593,15 @@ bool RadioModel::moveSlicesToStream(const QList<int>& sliceIds, int stream, doub
     return all;
 }
 
-void RadioModel::clearStreamCtunPins()
+void RadioModel::clearStreamCtunPinsAnchoredBy(const QByteArray& device)
 {
+    if (device.isEmpty() || m_sliceOwnership == nullptr) {
+        return;
+    }
     for (int stream = 0; stream < m_streamCtunPinned.size(); ++stream) {
-        setStreamCtunPinned(stream, false);
+        if (m_sliceOwnership->anchorOf(stream) == device) {
+            setStreamCtunPinned(stream, false);
+        }
     }
 }
 

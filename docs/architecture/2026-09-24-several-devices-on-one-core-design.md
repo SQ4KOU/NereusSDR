@@ -810,6 +810,12 @@ moves. When the last slice leaves, the receiver is free.
 receiver's window (`RadioModel.cpp:6139-6145`, read by every placement on it at `6604-6605`),
 so `requestStreamCtunPinned` from a device that does not anchor the receiver is refused ("This
 panadapter shows iPhone's receiver. Its C-Tune setting is iPhone's.").
+A pin lasts as its anchor's pans do (ruling 4.8): through the anchor's link dropping, its
+media ending and its coming back as the same device. It ends when the anchor leaves for good
+(`session.leave`, a token window's end, the end of its 180 s, revocation), and the receiver
+keeps its window, unpinned (fix wave after the group review of Tasks 71 to 76,
+`RadioModel::clearStreamCtunPinsAnchoredBy`; before it, every pin ended with the Core's last
+media session).
 
 ### 6.3 Moving a pan (D50)
 
