@@ -5,10 +5,12 @@
 // =================================================================
 //
 // iPhone app plan Task 74 (R-IOS-02, R-IOS-30): the several-devices
-// harness of tst_station_multi_session (Tasks 71 to 73), shared with
-// tst_confirm_step: one Core over the in-process loopback, in scratch
-// directories, with an injected monotonic clock, and devices signed in by
-// keys made at run time. Include it from one translation unit only.
+// harness of tst_station_multi_session (Tasks 71 to 73), shared by
+// tst_station_multi_session, tst_confirm_step and tst_antenna_kept: one
+// Core over the in-process loopback, in scratch directories, with an
+// injected monotonic clock, and devices signed in by keys made at run time.
+// Its helpers sit in an unnamed namespace: include it once per test
+// executable.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -16,6 +18,10 @@
 //               (KG4VCF), iPhone app plan Task 74 (R-IOS-02, R-IOS-30),
 //               copied from tst_station_multi_session's harness, with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: fix wave after the group review of Tasks 71 to 76: the one
+//               harness; tst_station_multi_session includes it instead of
+//               its own copy. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -345,13 +351,19 @@ QJsonObject endOf(LoopbackTransport* app)
     return firstOfType(app->received(), QStringLiteral("session.end"));
 }
 
-void verifyCoreFull(LoopbackTransport* app)
+// Fix wave, the full-Core wording (the several-devices design, 15.2): an
+// older window cannot answer the fifth-device question, so it is told to
+// update or try later.
+const QString kOlderWindowCoreFull =
+    QStringLiteral("The Core is full. Update NereusSDR to take a device's place, or try again later.");
+
+void verifyCoreFull(LoopbackTransport* app, const QString& reason = kCoreFull)
 {
     const QJsonObject result = firstOfType(app->received(), QStringLiteral("auth.result"));
     QCOMPARE(result.value(QStringLiteral("accepted")).toBool(false), true);
     const QJsonObject end = endOf(app);
     QVERIFY(!app->isOpen());
-    QCOMPARE(end.value(QStringLiteral("reason")).toString(), kCoreFull);
+    QCOMPARE(end.value(QStringLiteral("reason")).toString(), reason);
     QCOMPARE(end.value(QStringLiteral("retryable")).toBool(false), true);
     QVERIFY(!end.contains(QStringLiteral("code")));
     // Nothing of a session reached it.
