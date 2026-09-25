@@ -689,6 +689,15 @@ public:
     /// asks (0 when the asker has none).
     using SessionPs3DisplayAdmissionHandler = std::function<bool(quint64, bool, QString*)>;
     void setSessionPs3DisplayAdmissionHandler(SessionPs3DisplayAdmissionHandler handler);
+    /// Fix wave I5 (ruling 9.3): each media session's display demand, the
+    /// charges of its displays as subscribed (before grants clamp them, a
+    /// display refused for the budget included). DaemonMediaHub installs
+    /// it; a session it has no controller for asks for nothing. Without a
+    /// provider every budget-aware session asks for the whole total, as
+    /// before several devices.
+    using DisplayDemandProvider = std::function<std::optional<DisplayBudgetCharge>(quint64)>;
+    void setDisplayDemandProvider(DisplayDemandProvider provider)
+    { m_displayDemand = std::move(provider); }
     /// The primary media session's epoch (0 with none).
     quint64 mediaSessionEpoch() const;
     /// expectedEpoch is captured by the producer when its session starts;
@@ -1301,6 +1310,7 @@ private:
     /// close() is ending every session.
     bool m_closing = false;
     SessionPs3DisplayAdmissionHandler m_ps3DisplayAdmission;
+    DisplayDemandProvider m_displayDemand;
     /// During promoteToSession()'s attach: the session its burst is for.
     quint64 m_nextSessionId = 0;
     /// Command results owed to a session other than the one being

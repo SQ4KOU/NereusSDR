@@ -1509,6 +1509,19 @@ capabilities (the existing budget entries, the link, section 6.4):
    floor counts it (`DisplayLoadGovernor.h:141-143`); charging it per device would count it
    four times.
 
+**The requested charge is demand, not grant** (fix wave I5, 2026-09-25). A device's request is
+the sum of its display subscriptions' charges as subscribed, at the pixels and frame rate it
+asked for, before the grant clamps them, a subscription refused for the budget included, until
+that display is closed or asked for again. What no device asks for is shared equally among the
+devices as room to grow into, so a device alone keeps the whole total, as before shares. A
+subscription is admitted against the share the device has with its new request (for a present
+holder, what rule 1 gives it), not the share it had. So a sound-only device and a one-pan device
+beside a four-pan device each get what they ask for, and the rest goes max-min fair. What the
+phone's and the desktop's display planners do: without transmit, plan inside the share as
+today; while holding transmit, subscribe the displays at the rate the operator wants, since that
+request is what gives the holder room (a plan held inside the share would pin the holder at an
+equal share and D54 would never be met).
+
 **The phone computes its own frame rate** (review finding 5). The Core hands each device a
 share, never a frame rate. Inside its share each device's own client plans its displays: it
 lowers background frame rates first, then detail, then the active pan, down to one useful pan

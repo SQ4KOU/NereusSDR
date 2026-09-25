@@ -4533,13 +4533,20 @@ QList<QPair<SessionTransport*, DisplayBudgetShare>> StationServer::splitDisplayB
         }
         DisplayBudgetSplitDevice device;
         device.id = QByteArray::number(epoch);
-        // The Core cannot see what a client would like before it plans
-        // inside its share (the budget design: each client plans its own
-        // displays), so every device asks for the whole total and the split
-        // gives equal shares. Rule 1 needs the holder's own request: Task 34
-        // brings the holder and joins here.
-        device.request = {m_displayBudget->applicationBytesPerSecond,
-                          m_displayBudget->spectrumSampleUnitsPerSecond, 0};
+        // Fix wave I5 (ruling 9.3): a device's request is its demand, what
+        // its displays ask for as subscribed, not its grant, so max-min
+        // fair shares (rules 2 and 3) and the holder's whole request (rule
+        // 1, with Task 34) mean what they say. Without the media hub's
+        // provider every device asks for the whole total, as before.
+        if (m_displayDemand) {
+            const DisplayBudgetCharge demand =
+                m_displayDemand(epoch).value_or(DisplayBudgetCharge{});
+            device.request = {demand.applicationBytesPerSecond,
+                              demand.spectrumSampleUnitsPerSecond, 0};
+        } else {
+            device.request = {m_displayBudget->applicationBytesPerSecond,
+                              m_displayBudget->spectrumSampleUnitsPerSecond, 0};
+        }
         device.previous = peer.budgetShare;
         device.previousReason = peer.budgetShareReason;
         input.devices.append(device);

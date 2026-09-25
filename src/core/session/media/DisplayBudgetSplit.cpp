@@ -75,8 +75,22 @@ std::vector<quint64> splitDimension(const Dimension& d, std::optional<std::size_
         otherRequests.push_back(d.requests[i]);
     }
     const std::vector<quint64> fair = maxMinFair(otherRequests, remaining);
+    quint64 given = 0;
     for (std::size_t k = 0; k < others.size(); ++k) {
         shares[others[k]] = fair[k];
+        given += fair[k];
+    }
+    remaining -= given;
+    // Fix wave I5: what no device asks for is shared equally among all of
+    // them as room to grow into (the remainder to the last), so a device
+    // alone keeps the whole total and a device may ask for more than it
+    // has without another device being cut below its own request.
+    if (remaining > 0 && count > 0) {
+        const quint64 each = remaining / count;
+        for (std::size_t i = 0; i < count; ++i) {
+            shares[i] += each;
+        }
+        shares[count - 1] += remaining - each * count;
     }
     return shares;
 }

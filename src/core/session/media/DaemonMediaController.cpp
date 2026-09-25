@@ -755,6 +755,36 @@ DisplayBudgetCharge DaemonMediaController::ownDisplayCharge() const
     return acceptedDisplayCharge();
 }
 
+DisplayBudgetCharge DaemonMediaController::displayDemand() const
+{
+    QList<DisplayBudgetCharge> charges;
+    for (const auto& [unused, demand] : m_displayDemand) {
+        Q_UNUSED(unused);
+        charges.append(demand);
+    }
+    return sumDisplayCharges(charges).value_or(DisplayBudgetCharge{});
+}
+
+void DaemonMediaController::setDisplayDemand(quint32 endpointId,
+                                             std::optional<DisplayBudgetCharge> demand)
+{
+    const auto it = m_displayDemand.find(endpointId);
+    const std::optional<DisplayBudgetCharge> before =
+        it == m_displayDemand.end() ? std::nullopt : std::optional(it->second);
+    if (before == demand) {
+        return;
+    }
+    if (demand) {
+        m_displayDemand[endpointId] = *demand;
+    } else {
+        m_displayDemand.erase(endpointId);
+    }
+    // Every device's share follows every device's demand.
+    if (m_server && m_boundEpoch != 0) {
+        m_server->publishDisplayBudgetCapabilities();
+    }
+}
+
 DisplayBudgetCharge DaemonMediaController::acceptedDisplayCharge() const
 {
     const bool ps3Enabled = ps3DisplayHere();
@@ -1145,7 +1175,11 @@ void DaemonMediaController::onRadioConnectionStateChanged(ConnectionState state)
                 sendHeadphonesAudioContext(false, reason);
             }
         }
+        const bool demanded = !m_displayDemand.empty();
         clearProduction();
+        if (demanded && m_server && m_boundEpoch != 0) {
+            m_server->publishDisplayBudgetCapabilities();
+        }
         return;
     }
     reconcileAudio();
@@ -1559,6 +1593,25 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         ? grant.grantedPixels : pixels;
     const auto displayCost = endpointDisplayCost(
         chargedPixels, fps, request.requestedWideSpanFactor > 1.0, extrasRequest.sections());
+    // Fix wave I5 (ruling 9.3): the device's request is what it asks for,
+    // at the pixels it asked for, before the grant. It is recorded first,
+    // so the shares are split again with it and this display is admitted
+    // against the share the device has with its new demand (for a holder,
+    // what rule 1 gives it), not the share it had. A display refused for
+    // the budget stays in the demand until it is closed or asked again.
+    const std::optional<DisplayBudgetCharge> previousDemand =
+        m_displayDemand.count(endpointId) != 0 ? std::optional(m_displayDemand.at(endpointId))
+                                               : std::nullopt;
+    const auto asked = endpointDisplayCost(pixels, fps, request.requestedWideSpanFactor > 1.0,
+                                           extrasRequest.sections());
+    if (asked) {
+        setDisplayDemand(endpointId, asked->charge);
+    }
+    // A display refused for any other reason than the budget leaves the
+    // demand as it was.
+    const auto undoDemand = [this, endpointId, previousDemand]() {
+        setDisplayDemand(endpointId, previousDemand);
+    };
     if (!displayCost || !spectrumAdmissionFits(endpointId, displayCost->charge)) {
         return rejectAllocation(control, endpointId, revision,
                                 QStringLiteral("The Core's display limit has no room left."));
@@ -1582,6 +1635,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         entry.extras = std::make_unique<DisplayExtrasProcessor>(extrasRequest);
     }
     if (!reconcileWidebandDemand(entry)) {
+        undoDemand();
         return rejectAllocation(control, endpointId, revision,
                                 QStringLiteral("The extended view is not available right now."));
     }
@@ -1600,6 +1654,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
             m_endpoints.emplace(endpointId, std::move(*replaced));
             reconcileSource(replacedSource);
         }
+        undoDemand();
         return rejectAllocation(control, endpointId, revision,
                                 QStringLiteral("The Core could not set up this receiver's spectrum."));
     }
@@ -3008,6 +3063,9 @@ void DaemonMediaController::onWidebandSourceChanged(int)
 
 void DaemonMediaController::removeEndpoint(quint32 endpointId, bool retainOperation)
 {
+    // Fix wave I5: a closed display (or one refused and then closed) asks
+    // for nothing more.
+    setDisplayDemand(endpointId, std::nullopt);
     auto it = m_endpoints.find(endpointId);
     if (it == m_endpoints.end()) {
         return;
@@ -3614,6 +3672,10 @@ QList<quint32> DaemonMediaController::endpointIds() const
 
 void DaemonMediaController::clearProduction()
 {
+    // Fix wave I5: no display is asked for once production stops. Split
+    // again by the caller that keeps its session (the session's own end
+    // splits again on the Core's side).
+    m_displayDemand.clear();
     m_sendTimer.stop();
     m_ps3CurrentChunks.clear();
     m_ps3LatestChunks.clear();
@@ -3717,6 +3779,15 @@ DaemonMediaHub::DaemonMediaHub(StationServer* server, RadioModel* radioModel, QO
         }
         return controller->admitPs3DisplayForSession(enabled, refusal);
     });
+    // Fix wave I5 (ruling 9.3): each session's request is its controller's
+    // display demand.
+    m_server->setDisplayDemandProvider([self](quint64 epoch) -> std::optional<DisplayBudgetCharge> {
+        DaemonMediaController* controller = self ? self->controllerFor(epoch) : nullptr;
+        if (!controller) {
+            return std::nullopt;
+        }
+        return controller->displayDemand();
+    });
     // The gate is in place before capability publication can advertise
     // budget enforcement.
     m_server->setDisplayBudgetEnforcementEnabled(true);
@@ -3733,6 +3804,7 @@ DaemonMediaHub::~DaemonMediaHub()
     if (m_server) {
         m_server->disconnect(this);
         m_server->setSessionPs3DisplayAdmissionHandler({});
+        m_server->setDisplayDemandProvider({});
         m_server->setDisplayBudgetEnforcementEnabled(false);
     }
     m_controllers.clear();

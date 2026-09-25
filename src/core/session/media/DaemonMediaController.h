@@ -171,6 +171,12 @@ public:
     /// endpoints, plus the PureSignal display when its session is the
     /// subscriber). DaemonMediaHub sums them for the governor.
     DisplayBudgetCharge ownDisplayCharge() const;
+    /// Fix wave I5 (ruling 9.3): this controller's display demand, the
+    /// charges its displays asked for as subscribed (at the requested
+    /// pixels and frame rate, before any grant clamps them), a display
+    /// refused for the budget included, until it is closed. The PureSignal
+    /// display is not in it (the split charges it to its subscriber).
+    DisplayBudgetCharge displayDemand() const;
     /// Task 76 (ruling 9.3 item 4): the PureSignal display goes to this
     /// controller's session.
     bool ps3DisplayHere() const;
@@ -510,6 +516,11 @@ private:
     bool m_ps3CurrentAttempted{false};
     bool m_lastDisplayAttemptWasPs3{false};
     quint32 m_endpointHighWater{0};
+    /// Fix wave I5: each display's requested charge, by endpoint id.
+    std::map<quint32, DisplayBudgetCharge> m_displayDemand;
+    /// Sets (or, with nullopt, forgets) one display's demand and has the
+    /// Core split its budget again when the demand changed.
+    void setDisplayDemand(quint32 endpointId, std::optional<DisplayBudgetCharge> demand);
     std::map<quint32, AllocationRecord> m_nonliveOperations;
     QList<quint32> m_nonliveOperationOrder;
 };

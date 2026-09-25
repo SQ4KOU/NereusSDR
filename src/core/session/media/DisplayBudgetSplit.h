@@ -31,9 +31,10 @@ struct DisplayBudgetSplitDevice {
     /// Stable identity for the caller (the Core uses the media session's
     /// epoch as a string). Order in the input list is the tie-break order.
     QByteArray id;
-    /// What the device asks for. The Core cannot see a client's wish
-    /// before the client plans inside its share, so it passes the Core's
-    /// total for every budget-aware device (see StationServer).
+    /// What the device asks for: its demand, the charges of its displays
+    /// as subscribed (before any grant clamps them, a display refused for
+    /// the budget included), not what it was granted (fix wave I5, ruling
+    /// 9.3). The Core reads it from the device's media controller.
     /// messagesPerSecond is not part of a budget and is ignored.
     DisplayBudgetCharge request;
     /// Limits and reason last published to this device, if any, so an
@@ -85,6 +86,9 @@ struct DisplayBudgetShare {
 ///     difference to the rest.
 ///  3. With transmit unheld, held by the station device or held by a device
 ///     that is away, every device shares the whole total that way.
+///  What no device asks for is then shared equally among all of them, as
+///  room to grow into (fix wave I5): a device alone has the whole total, and
+///  a device given its whole request keeps some headroom.
 /// A share never reaches zero in either dimension (a budget of zero is not
 /// a budget): at least 1, which is too small for any display, so the
 /// device's client suspends its display with sound kept.

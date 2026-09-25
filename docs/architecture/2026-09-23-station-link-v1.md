@@ -869,22 +869,30 @@ share in the budget entries: `displayApplicationBytesPerSecond` and
 not change keeps its generation; one that does takes the total's generation
 when that is newer, otherwise the device's last plus one, so a device alone
 on the Core sees exactly the generations it saw before shares existed. When
-a device is admitted or leaves, or the total changes, every device whose
-share or reason changed is sent `capabilities` again. The rules of the
+a device is admitted or leaves, the total changes, or a device's displays
+ask for more or less, every device whose share or reason changed is sent
+`capabilities` again. The rules of the
 split: the PureSignal display's charge comes off the total once and belongs
 to the device that subscribed to it (`remotePs3DisplaySubscribed` is true
 for that device only); a network device holding transmit gets its whole
 request, the rest is shared among the others; with transmit unheld, held by
 the station device or held by a device that is away, every device gets an
 equal share, and a device asking for less leaves the difference to the
-rest. The Core cannot see what a client would like before the client plans
-inside its share, so every device asks for the whole total and the shares
-are equal. **Transmit joins here:** until the transmit holder exists
-(Task 34) transmit counts as unheld; Task 34 names the holder and its
-request. The Core hands each device a share, never a frame rate: each
-client plans its own displays inside its share, and a share too small for
-one pan at 256 pixels and 10 frames a second suspends that device's display,
-pane and slice kept. Audio is never split and never cut when the Core runs
+rest (max-min fair). A device's request is what its displays ask for: the
+sum of its display subscriptions' charges at the pixels and frame rate it
+subscribed at, before any grant clamps them, a subscription refused for the
+budget included, until the display is closed or asked for again. What no
+device asks for is shared equally among them as room to grow, so a device
+alone has the whole total. A subscription is admitted against the share the
+device has once it asks for it (for the transmit holder, its whole
+request), not the share it had. **Transmit joins here:** until the transmit
+holder exists (Task 34) transmit counts as unheld; Task 34 names the holder.
+The Core hands each device a share, never a frame rate: each client plans
+its own displays inside its share, and a share too small for one pan at 256
+pixels and 10 frames a second suspends that device's display, pane and
+slice kept. A client holding transmit subscribes its displays at the rate it
+wants, not at the rate its share allows today, since its request is what
+gives it room (rule 1); a client without transmit plans inside its share. Audio is never split and never cut when the Core runs
 short.
 
 `displayBudgetReason` says which of the Core's limits is short:

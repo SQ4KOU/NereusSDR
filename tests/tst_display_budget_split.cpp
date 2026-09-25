@@ -105,6 +105,18 @@ void TstDisplayBudgetSplit::shares_data()
                              {450'000, 45'000, sc}};
     }
     {
+        // Fix wave I5: what nobody asks for is shared equally as headroom.
+        DisplayBudgetSplitInput in{kTotal, false,
+                                   {device("a", 100'000, 10'000), device("b", 200'000, 30'000)}};
+        QTest::newRow("headroom: what nobody asks for is shared") << in
+            << QList<Wanted>{{450'000, 40'000, none}, {550'000, 60'000, none}};
+    }
+    {
+        DisplayBudgetSplitInput in{kTotal, false, {device("a", 0, 0)}};
+        QTest::newRow("alone asking for nothing: the whole total") << in
+            << QList<Wanted>{{1'000'000, 100'000, none}};
+    }
+    {
         DisplayBudgetSplitInput in{kTotal, false,
                                    {device("a", 1'000'000, 100'000),
                                     device("h", 600'000, 40'000),
