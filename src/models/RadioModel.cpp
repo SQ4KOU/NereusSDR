@@ -19295,6 +19295,13 @@ void RadioModel::scheduleRemoteDspOptionsApply(const QString& key)
         m_dspOptionsApplyTimer->setSingleShot(true);
         connect(m_dspOptionsApplyTimer, &QTimer::timeout,
                 this, &RadioModel::flushRemoteDspOptionsApply);
+        // R-R3-49 (group A fix wave, I2): TX groups held while the radio
+        // was on the air apply once it is back on receive.
+        connect(this, &RadioModel::transmittingChanged, this, [this](bool transmitting) {
+            if (!transmitting && !m_pendingDspOptionsTxGroups.isEmpty()) {
+                flushRemoteDspOptionsApply();
+            }
+        });
     }
     // Trailing edge from the first key of a burst, not restarted by later
     // ones: the whole burst lands in one apply, and a steady stream of
@@ -19310,7 +19317,13 @@ void RadioModel::flushRemoteDspOptionsApply()
     // makes (rebuildDspOptionsForMode's TxChannel::onModeChanged), for the
     // TX-bound slice's mode, as the mode-change handler applies it. It sets
     // the TX channel's buffer, filter size and filter type only.
-    if (!m_pendingDspOptionsTxGroups.isEmpty()) {
+    //
+    // R-R3-49 (group A fix wave, I2): the write was accepted off the air,
+    // but the radio can be keyed inside the coalescing window, and this
+    // apply reaches SetDSPBuffsize and its channel flush. While the radio
+    // is on the air the TX groups stay pending; the transmittingChanged
+    // connect in scheduleRemoteDspOptionsApply applies them on the unkey.
+    if (!m_pendingDspOptionsTxGroups.isEmpty() && !stationOnAirRefusal(nullptr)) {
         const QSet<QString> txGroups = m_pendingDspOptionsTxGroups;
         m_pendingDspOptionsTxGroups.clear();
         if (const SliceModel* txSlice = txBoundSlice()) {

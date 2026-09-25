@@ -157,6 +157,7 @@ private slots:
     void onAirRefusalIsTheTgxlRefusal();
     void dspOptionsTxKeyTakenOffTheAirAndApplied();
     void dspOptionsTxKeyRefusedWhileOnTheAir();
+    void dspOptionsTxApplyWaitsForTheUnkey();
     void transmitHardwareKeysStayRefused();
     void windowOnAirFollowsTheCore();
     void windowOnAirClearsWhenTheSessionEnds();
@@ -536,6 +537,43 @@ void TstTransmitSettingsGate::dspOptionsTxKeyRefusedWhileOnTheAir()
 
     mox->setMox(false);
     QTRY_VERIFY(mox->state() == MoxState::Rx);
+}
+
+// Group A fix wave, I2: a TX DSP > Options write accepted off the air
+// applies up to 50 ms later. Keyed inside that window, nothing reaches the
+// TX channel until the radio is back on receive; then the change applies.
+void TstTransmitSettingsGate::dspOptionsTxApplyWaitsForTheUnkey()
+{
+    const QString txKey = QStringLiteral("DspOptionsBufferSizePhoneTx");
+    Session s(m_securityDir.path(), this);
+    QList<DSPMode> txApplies;
+    s.core->setDspOptionsTxApplyObserverForTest(
+        [&txApplies](DSPMode mode) { txApplies.append(mode); });
+    QVERIFY(s.connect());
+    SliceModel* txSlice = s.core->txBoundSlice();
+    QVERIFY(txSlice);
+    txSlice->setDspMode(DSPMode::USB);
+
+    // Accepted off the air: the apply is queued for the coalescing window.
+    QVERIFY(!s.core->stationOnAirRefusal(nullptr));
+    s.settings.setValue(txKey, QStringLiteral("2048"));
+    s.core->scheduleRemoteDspOptionsApply(txKey);
+
+    // Keyed before the window ends.
+    MoxController* const mox = s.core->moxController();
+    mox->setMoxCheck({});
+    mox->setMox(true);
+    QVERIFY(s.core->stationOnAirRefusal(nullptr));
+    QTest::qWait(150);
+    QVERIFY(txApplies.isEmpty());
+
+    // Back on receive: the held change applies once.
+    mox->setMox(false);
+    QTRY_VERIFY(mox->state() == MoxState::Rx);
+    QTRY_COMPARE(txApplies.size(), 1);
+    QCOMPARE(txApplies.first(), DSPMode::USB);
+    QTest::qWait(120);
+    QCOMPARE(txApplies.size(), 1);
 }
 
 void TstTransmitSettingsGate::transmitHardwareKeysStayRefused()
