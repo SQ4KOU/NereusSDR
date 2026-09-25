@@ -253,6 +253,13 @@
 //               close, save or hold its slices; listeningOn. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25: iPhone app Task 74 (R-IOS-02, R-IOS-30): the receiver
+//               commands and a retune leaving a shared receiver go through
+//               the confirm step (StationReceivers.cpp); the property write
+//               body is applyPropertyWrite; an older window with no slice
+//               at admission is refused; notices after snapshot.complete.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -277,6 +284,7 @@
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SliceMarker.h"
 #include "core/SliceOwnership.h"
+#include "core/session/ConfirmStep.h"
 #include "core/session/ConnectedDevicesFacade.h"
 #include "core/session/DeviceSessionRegistry.h"
 #include "core/session/SessionEndReasons.h"
@@ -865,6 +873,8 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // iPhone app Task 71 (R-IOS-02): who holds a place, and the mirrored
     // `connectedDevices` object that shows it.
     m_deviceSessions = std::make_unique<DeviceSessionRegistry>();
+    // iPhone app Task 74 (R-IOS-30): the questions asked and notices kept.
+    m_confirm = std::make_unique<ConfirmStep>();
     m_connectedDevices = std::make_unique<ConnectedDevicesFacade>(*m_deviceSessions, *m_devices);
     // Revoking a device frees its place at once, live or away, and forgets
     // that its time ran out (ruling 4.11). Its live connection ends in the
@@ -889,6 +899,8 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         }
         DeviceLayoutStore::forgetDevice(AppSettings::instance(), id);
         m_slicesNotRestored.remove(id);
+        // iPhone app Task 74 (7.4): its questions and waiting notices go.
+        m_confirm->forgetDevice(id);
     });
     // iPhone app Task 73 (ruling 4.11): the end of a device's 180 s.
     connect(m_deviceSessions.get(), &DeviceSessionRegistry::graceEnded, this,
@@ -1023,12 +1035,23 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             }
         }
     });
+    // iPhone app Task 74 (R-IOS-30): confirm.proceed, confirm.cancel and
+    // notice.takeBack are answered by the confirm step.
+    m_dispatcher->setConfirmAnswer([this](const SessionMessage& invoke, int id, int choice) {
+        return answerConfirm(invoke, id, choice);
+    });
     // iPhone app Task 71: a command's result goes to the session that asked:
     // the one being dispatched now, or, for a result that arrives on a later
     // turn, the one its verb and id were recorded for. The media session
     // keeps any other (as the one session did before).
     connect(m_dispatcher, &SessionCommandDispatcher::commandResultReady, this,
-            [this](const SessionMessage& result) {
+            [this](const SessionMessage& original) {
+                // iPhone app Task 74: the confirm step reads (and may keep,
+                // or reword) a result of a change it is running.
+                SessionMessage result = original;
+                if (m_resultHook && !m_resultHook(result)) {
+                    return;
+                }
                 SessionTransport* to = nullptr;
                 if (m_dispatchingTransport != nullptr) {
                     to = m_dispatchingTransport;
@@ -1868,6 +1891,11 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         pairing->finished = true;
         m_pairingWindow->pairingFailed();
     }
+    // iPhone app Task 74 (ruling 7.5): a session's open question ends with
+    // it (a newer connection of the same device asks afresh).
+    if (!sessionDevice.isEmpty()) {
+        m_confirm->dropQuestion(sessionDevice);
+    }
     if (!sessionDevice.isEmpty() && !placeSettled) {
         m_deviceSessions->sessionEnded(sessionDevice, transport,
                                        leaving ? DeviceSessionRegistry::EndKind::Left
@@ -2045,7 +2073,10 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
         // iPhone app Task 71 (ruling 10.1): session.leave came with
         // sessionHolderVersion 1; from any other peer it is a verb this
         // Core does not route, answered in the same words.
-        if (message.commandVerb == "session.leave" && !peerHasSessionHolderVersion(transport)) {
+        if ((message.commandVerb == "session.leave" || message.commandVerb == "confirm.proceed"
+             || message.commandVerb == "confirm.cancel"
+             || message.commandVerb == "notice.takeBack")
+            && !peerHasSessionHolderVersion(transport)) {
             // SessionCommandDispatcher's own words for a verb it does not
             // route.
             send(transport, SessionMessages::commandResult(
@@ -2258,7 +2289,12 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             // iPhone app Task 73 (rulings 5.9, 5.10): and for this device,
             // whose slices it may name and whose active slice it sets.
             m_dispatcher->setRequester(m_peers.value(transport).sessionDeviceId);
-            m_dispatcher->dispatch(message);
+            // iPhone app Task 74: a receiver change may be the anchor's
+            // (rulings 6.3, 6.4, 6.6) or a take (section 6.4).
+            if (!handleReceiverCommand(transport, message)) {
+                m_dispatcher->dispatch(message);
+            }
+            sendHeldQuestions();
             m_dispatcher->setRequester({});
             m_dispatcher->setSessionOwner({});
             m_dispatchingTransport = nullptr;
@@ -2643,11 +2679,25 @@ void StationServer::admit(SessionTransport* transport, const QString& name,
         if (!m_peers.contains(transport)) {
             return;
         }
+        // iPhone app Task 74 (ruling 10.2): an older window needs a slice
+        // of its own; with none to give it, it is refused, retryable, in
+        // words that name the limit that is full.
+        const QString noSlice = olderWindowWithoutSliceReason(transport);
+        if (!noSlice.isEmpty()) {
+            m_peers[transport].leaving = true;
+            dropPeer(transport, noSlice, true, /*retryable=*/true);
+            return;
+        }
     }
     resumeDevices.dismiss();
     m_devicesFacade->resumeRefresh();
     m_connectedDevices->resumeRefresh();
     promoteToSession(transport);
+    // iPhone app Task 74 (7.4): after snapshot.complete, graceEnded or
+    // slicesNotRestored, then the notices that waited while it was away.
+    if (m_peers.contains(transport)) {
+        deliverAdmissionNotices(transport, result.timeRanOutAtMs);
+    }
 }
 
 // ── Pairing (iPhone app Task 14, R-IOS-08) ───────────────────────────────
@@ -3302,6 +3352,19 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         }
     }
 
+    // iPhone app Task 74 (rulings 6.5 and 6.5a): a retune of a slice that
+    // leaves its shared receiver's window may be a pan move, asked first,
+    // or a take once refused.
+    if (handleSliceRetune(transport, message)) {
+        return;
+    }
+    applyPropertyWrite(transport, message, true, {});
+}
+
+QList<SessionPropertyResult> StationServer::applyPropertyWrite(
+    SessionTransport* transport, const SessionMessage& message, bool answer,
+    const std::function<void(QList<SessionPropertyResult>&)>& adjust)
+{
     // Persist accepted PS preferences without replaying transmit operations.
     // This session advertises txPermitted=false until the R4 transmit path.
     const QPointer<PureSignal> hydrating = message.objectKey == "pureSignalSettings"
@@ -3465,7 +3528,10 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         result.accepted = result.reason.isEmpty();
         results.append(result);
     }
-    if (negotiated && message.writeId != 0) {
+    if (adjust) {
+        adjust(results);
+    }
+    if (answer && negotiated && message.writeId != 0) {
         send(transport, SessionMessages::propertyResult(message.objectKey, message.writeId, results));
     }
 
@@ -3493,6 +3559,7 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             send(transport, delta);
         }
     }
+    return results;
 }
 
 void StationServer::handleSettingsWrite(SessionTransport* transport,
@@ -3966,7 +4033,7 @@ void StationServer::placeSlicesForAdmission(const QByteArray& deviceId)
     m_connectedDevices->refresh();
 }
 
-bool StationServer::closeSliceFor(int sliceId, const QByteArray& saveFor)
+bool StationServer::closeSliceFor(int sliceId, const QByteArray& saveFor, SavedSlice* closed)
 {
     if (m_radioModel.isNull()) {
         return false;
@@ -3989,9 +4056,16 @@ bool StationServer::closeSliceFor(int sliceId, const QByteArray& saveFor)
         return false;
     }
     AppSettings& store = AppSettings::instance();
-    if (!saveFor.isEmpty() && !mac.isEmpty()) {
+    if ((!saveFor.isEmpty() || closed != nullptr) && !mac.isEmpty()) {
         saved.settings = DeviceLayoutStore::captureSliceSettings(store, mac, sliceId);
+    }
+    if (!saveFor.isEmpty() && !mac.isEmpty()) {
         DeviceLayoutStore::append(store, mac, saveFor, saved, deviceLayoutLimit());
+    }
+    // iPhone app Task 74: a slice another device took is kept by its
+    // notice for Take it back, not in the device's saved layout.
+    if (closed != nullptr) {
+        *closed = saved;
     }
     // The letter's keys go with it, so another device's new slice there
     // starts from defaults (ruling 5.3).

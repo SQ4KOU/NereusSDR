@@ -62,6 +62,9 @@
 //               `marker:<id>` key (a slice held for an away device in the
 //               live session). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 74 (R-IOS-30): confirm.request and notice
+//               samples, and the confirmExpiryMs limit. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -107,6 +110,7 @@
 #include "core/session/ConnectedDevicesFacade.h"
 #include "core/session/SliceMarker.h"
 #include "core/SliceOwnership.h"
+#include "core/session/ConfirmStep.h"
 #include "core/session/DeviceSessionRegistry.h"
 #include "core/session/StationLanAnnouncement.h"
 #include "core/session/StationServer.h"
@@ -265,6 +269,35 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
         return SessionMessages::pairConfirm(QStringLiteral("box"));
     case SessionMessageKind::PairFail:
         return SessionMessages::pairFail(QStringLiteral("refused"), 5000);
+    // iPhone app Task 74: every optional key present.
+    case SessionMessageKind::ConfirmRequest: {
+        SessionPrompt prompt;
+        prompt.id = 1;
+        prompt.kind = QStringLiteral("panMove");
+        prompt.affected = QJsonArray{QJsonObject{}};
+        prompt.expiresInMs = 60000;
+        prompt.change = QJsonObject{{QStringLiteral("label"), QStringLiteral("Receiver 1")}};
+        prompt.choices = QJsonArray{QJsonObject{}};
+        prompt.forCommandId = 2;
+        prompt.forWriteId = 3;
+        prompt.forSettingsKey = QStringLiteral("StationCallsign");
+        return SessionMessages::confirmRequest(prompt, QStringLiteral("asked"));
+    }
+    case SessionMessageKind::Notice: {
+        SessionPrompt prompt;
+        prompt.id = 1;
+        prompt.kind = QStringLiteral("receiverTaken");
+        prompt.secondsAgo = 3;
+        prompt.takeBack = true;
+        prompt.byDeviceId = QStringLiteral("id");
+        prompt.byName = QStringLiteral("name");
+        prompt.byShortName = QStringLiteral("short");
+        prompt.byKind = QStringLiteral("phone");
+        prompt.bySource = QStringLiteral("device");
+        prompt.slices = QJsonArray{QJsonObject{}};
+        prompt.change = QJsonObject{{QStringLiteral("label"), QStringLiteral("Receiver 1")}};
+        return SessionMessages::notice(prompt, QStringLiteral("told"));
+    }
     }
     return std::nullopt;
 }
@@ -1137,6 +1170,11 @@ QJsonObject captureLimits()
     limits.insert(QStringLiteral("graceMs"),
                   limit(static_cast<qint64>(DeviceSessionRegistry::kGraceMs), QStringLiteral("ms"),
                         QStringLiteral("DeviceSessionRegistry::kGraceMs")));
+    // iPhone app Task 74 (R-IOS-30): how long a question stays open
+    // (ruling 7.5; sent as expiresInMs, enforced from Task 75).
+    limits.insert(QStringLiteral("confirmExpiryMs"),
+                  limit(static_cast<qint64>(ConfirmStep::kExpiryMs), QStringLiteral("ms"),
+                        QStringLiteral("ConfirmStep::kExpiryMs")));
     limits.insert(QStringLiteral("lanAnnouncementMaxBytes"),
                   limit(kStationLanMaxSchema2DatagramBytes, QStringLiteral("bytes"),
                         QStringLiteral("kStationLanMaxSchema2DatagramBytes")));

@@ -125,6 +125,10 @@
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): session.leave and
 //               sessionLeaveRequested. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 74 (R-IOS-30): confirm.proceed,
+//               confirm.cancel, notice.takeBack (setConfirmAnswer).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 //   2026-09-25: iPhone app Task 72 (R-IOS-02, ruling 5.8): the owner is
 //               per session (setSessionOwner before each dispatch,
 //               endSessionOwner, resetSessionState). J.J. Boyd (KG4VCF),
@@ -227,6 +231,13 @@ public:
     using SliceAccess = std::function<QString(const QByteArray& requester, int sliceId)>;
     void setSliceAccess(SliceAccess access) { m_sliceAccess = std::move(access); }
 
+    /// iPhone app Task 74 (R-IOS-30): the Core's confirm step, which
+    /// answers confirm.proceed (`choice` -1 when the kind has none),
+    /// confirm.cancel and notice.takeBack with the command.result to send.
+    using ConfirmAnswer =
+        std::function<SessionMessage(const SessionMessage& invoke, int id, int choice)>;
+    void setConfirmAnswer(ConfirmAnswer answer) { m_confirmAnswer = std::move(answer); }
+
     /// R-IOS-01: every verb dispatch() routes, declared beside the routing
     /// rather than derived from it. A family routed by prefix ("ps3.",
     /// "dspAssets.", "notch.") lists each concrete verb it accepts.
@@ -307,6 +318,8 @@ private:
     void handlePairingWindow(const NereusSDR::SessionMessage& invoke);
     // iPhone app Task 71 (R-IOS-02, sessionHolderVersion 1): session.leave.
     void handleSessionLeave(const NereusSDR::SessionMessage& invoke);
+    // iPhone app Task 74 (R-IOS-30, sessionHolderVersion 1).
+    void handleConfirmAnswer(const NereusSDR::SessionMessage& invoke);
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
                     const QString& reason, const QList<QByteArray>& affectedKeys);
@@ -317,6 +330,7 @@ private:
     // iPhone app Task 73.
     QByteArray m_requester;
     SliceAccess m_sliceAccess;
+    ConfirmAnswer m_confirmAnswer;
     /// Refuses (and answers) a verb whose sliceId names another device's
     /// slice. True when it did.
     bool refusedForAnotherDevice(const NereusSDR::SessionMessage& invoke);

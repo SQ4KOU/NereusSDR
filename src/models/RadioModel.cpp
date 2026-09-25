@@ -190,6 +190,13 @@
 //                 filter presets follow the Core's (FilterPresetStore::
 //                 followStationSetting on stationSettingChanged). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 74 (R-IOS-02, R-IOS-30): a slice's
+//                receiver reaches the anchors (SliceOwnership::noteStream);
+//                activateStreamAt (bindSliceToStream's claim arm, shared);
+//                a bound slice given a required stream joins it;
+//                moveStreamWindowFor and moveSlicesToStream. NereusSDR-
+//                original. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -6475,6 +6482,93 @@ bool RadioModel::requestStreamCentre(int sliceId, double centreHz)
     return true;
 }
 
+// iPhone app Task 74 (rulings 6.4, 6.5 and 6.7): a confirmed pan move on
+// the Core. The window moves to `centreHz` (as requestStreamCentre moves
+// it), then every slice it no longer covers, except `exemptSliceId`, is
+// placed again as any retune leaving a shared window is: another window
+// that covers it, or a free receiver. Returns the slices that found none;
+// the caller closes them.
+QList<int> RadioModel::moveStreamWindowFor(int stream, double centreHz, int exemptSliceId)
+{
+    QList<int> unplaced;
+    if (m_role != Role::Local || !std::isfinite(centreHz) || centreHz <= 0.0
+        || !m_streamAllocator.isStreamActive(stream)) {
+        return unplaced;
+    }
+    const int rateHz = m_streamAllocator.streamSampleRateHz(stream);
+    if (rateHz <= 0) {
+        return unplaced;
+    }
+    if (m_streamAllocator.streamCentreHz(stream) != centreHz) {
+        m_streamAllocator.activateStream(stream, centreHz, rateHz);
+        if (m_receiverManager) {
+            m_receiverManager->forceHardwareFrequency(stream, static_cast<quint64>(centreHz));
+        }
+        reshiftSlicesOnStream(stream, centreHz);
+        emit streamCentreChanged(stream, centreHz, rateHz);
+    }
+    const double halfWindow = static_cast<double>(rateHz) / 2.0;
+    for (const int id : slicesOnStream(stream)) {
+        SliceModel* slice = sliceById(id);
+        if (slice == nullptr || id == exemptSliceId) {
+            continue;
+        }
+        const double offset = slice->frequency() - centreHz;
+        if (offset > -halfWindow && offset < halfWindow) {
+            continue;
+        }
+        if (!bindSliceToStream(slice, slice->frequency())) {
+            unplaced.append(id);
+        }
+    }
+    return unplaced;
+}
+
+// iPhone app Task 74 (ruling 6.6): a device that does not anchor its
+// receiver takes its pan, with its slices, to `stream` centred on
+// `centreHz`: claimed when free (the allocator's own-window path), and
+// each slice joined to it. False, with nothing moved, when a slice does not
+// fit the window there.
+bool RadioModel::moveSlicesToStream(const QList<int>& sliceIds, int stream, double centreHz)
+{
+    if (m_role != Role::Local || sliceIds.isEmpty() || stream < 0
+        || stream >= m_streamAllocator.streamCount() || !std::isfinite(centreHz)
+        || centreHz <= 0.0) {
+        return false;
+    }
+    const bool wasActive = m_streamAllocator.isStreamActive(stream);
+    const int rateHz = wasActive ? m_streamAllocator.streamSampleRateHz(stream)
+                                 : (m_connectionSampleRateHz > 0 ? m_connectionSampleRateHz
+                                                                 : m_streamDefaultRateHz);
+    const double halfWindow = static_cast<double>(rateHz) / 2.0;
+    const double centre = wasActive ? m_streamAllocator.streamCentreHz(stream) : centreHz;
+    for (const int id : sliceIds) {
+        const SliceModel* slice = sliceById(id);
+        if (slice == nullptr) {
+            return false;
+        }
+        const double offset = slice->frequency() - centre;
+        if (!(offset > -halfWindow && offset < halfWindow)) {
+            return false;
+        }
+    }
+    if (!wasActive) {
+        activateStreamAt(stream, centreHz);
+    }
+    bool all = true;
+    for (const int id : sliceIds) {
+        SliceModel* slice = sliceById(id);
+        if (slice == nullptr || !bindSliceToStream(slice, slice->frequency(), false, stream)) {
+            all = false;
+        }
+    }
+    if (!wasActive && slicesOnStream(stream).isEmpty()) {
+        retireStream(stream);
+        syncReceiverToStream(stream, /*live=*/false);
+    }
+    return all;
+}
+
 void RadioModel::clearStreamCtunPins()
 {
     for (int stream = 0; stream < m_streamCtunPinned.size(); ++stream) {
@@ -6813,6 +6907,74 @@ void RadioModel::syncReceiverToStream(int streamIndex, bool live)
     m_receiverManager->activateReceiver(streamIndex);
 }
 
+// iPhone app Task 74: claims `streamIndex` (or moves its centre when it is
+// already live) and centres it on `centreHz`: the NewStream and
+// RetunedStream arm of bindSliceToStream, which calls it, and the arm a
+// confirmed pan move to a free receiver uses (moveSlicesToStream).
+void RadioModel::activateStreamAt(int streamIndex, double centreHz)
+{
+    // Claim or move the DDC, then centre it on the slice.
+    //
+    // Preserve the stream's own rate when it is already live. A
+    // RetunedStream is a sole occupant dragging its existing DDC to a new
+    // centre, and that DDC keeps whatever width the operator gave it
+    // (Task 10). Only a freshly claimed DDC takes the connection default.
+    // Without this, every sole-occupant retune silently reset the stream
+    // back to the connection rate and threw away a per-stream width.
+    const bool streamAlreadyLive =
+        m_streamAllocator.isStreamActive(streamIndex);
+    const int existingRateHz =
+        m_streamAllocator.streamSampleRateHz(streamIndex);
+    const int rateForStream =
+        (streamAlreadyLive && existingRateHz > 0)
+            ? existingRateHz
+            : (m_connectionSampleRateHz > 0 ? m_connectionSampleRateHz
+                                            : m_streamDefaultRateHz);
+
+    if (!streamAlreadyLive) {
+        claimStreamEpoch(streamIndex);
+    }
+    m_streamAllocator.activateStream(
+        streamIndex, centreHz, rateForStream);
+
+    // A claimed stream is worthless until its hardware DDC routes.
+    // setReceiverFrequency below tunes the DDC; this is what makes
+    // ReceiverManager forward its samples.
+    syncReceiverToStream(streamIndex, /*live=*/true);
+
+    if (m_receiverManager) {
+        // forceHardwareFrequency, not setReceiverFrequency: this arm only
+        // runs when the stream CENTRE moved, and moving the centre is the
+        // operator asking for a retune, not a VFO nudge inside a pinned
+        // window. setReceiverFrequency respects m_ddcFreqLocked, so in
+        // CTUN it silently swallowed the push and the DDC never followed
+        // a band change. Confirmed on a live HL2 2026-07-31: the
+        // allocator returned NewStream for a 40 m to 60 m band press and
+        // the hardware emit was dropped with ddcLocked=true, leaving both
+        // the Alex high-pass and the receive low-pass on the old band
+        // until the operator nudged the VFO far enough to re-place.
+        //
+        // ReceiverManager draws exactly this distinction in its own
+        // comment on forceHardwareFrequency: the lock exists so a VFO
+        // move inside a pinned CTUN window does not retune the DDC,
+        // "while the pan drag itself is exactly the operator asking for a
+        // retune". A band button is the same act as a pan drag.
+        //
+        // The signal forceHardwareFrequency suppresses,
+        // receiverFrequencyChanged, has no consumer outside
+        // ReceiverManager, so nothing downstream loses an update. The
+        // JoinedExisting arm is deliberately untouched: that one really
+        // is a nudge inside the window, and it must keep respecting the
+        // lock.
+        m_receiverManager->forceHardwareFrequency(
+            streamIndex,
+            static_cast<quint64>(centreHz));
+    }
+    emit streamCentreChanged(
+        streamIndex, centreHz,
+        m_streamAllocator.streamSampleRateHz(streamIndex));
+}
+
 bool RadioModel::bindSliceToStream(SliceModel* slice, double frequencyHz,
                                     bool preferOwnStream, int requiredStream)
 {
@@ -6879,8 +7041,12 @@ bool RadioModel::bindSliceToStream(SliceModel* slice, double frequencyHz,
     // preferOwnStream applies only to a first bind. A retune already owns a
     // stream, and the retune path has its own rules about when it may keep,
     // move or leave it; forcing a fresh DDC there would strand the old one.
+    // iPhone app Task 74: a bound slice given a required stream moves onto
+    // it (a confirmed pan move taking its slices to another receiver,
+    // moveSlicesToStream); every other caller leaves requiredStream -1 on
+    // a retune, as before.
     const auto placement =
-        (previousStream < 0)
+        (previousStream < 0 || (requiredStream >= 0 && requiredStream != previousStream))
             ? (requiredStream >= 0
                 ? m_streamAllocator.joinStream(requiredStream, frequencyHz)
                 : m_streamAllocator.placeSlice(frequencyHz, preferOwnStream))
@@ -6937,66 +7103,7 @@ bool RadioModel::bindSliceToStream(SliceModel* slice, double frequencyHz,
 
     if (placement.outcome == Outcome::NewStream
         || placement.outcome == Outcome::RetunedStream) {
-        // Claim or move the DDC, then centre it on the slice.
-        //
-        // Preserve the stream's own rate when it is already live. A
-        // RetunedStream is a sole occupant dragging its existing DDC to a new
-        // centre, and that DDC keeps whatever width the operator gave it
-        // (Task 10). Only a freshly claimed DDC takes the connection default.
-        // Without this, every sole-occupant retune silently reset the stream
-        // back to the connection rate and threw away a per-stream width.
-        const bool streamAlreadyLive =
-            m_streamAllocator.isStreamActive(placement.streamIndex);
-        const int existingRateHz =
-            m_streamAllocator.streamSampleRateHz(placement.streamIndex);
-        const int rateForStream =
-            (streamAlreadyLive && existingRateHz > 0)
-                ? existingRateHz
-                : (m_connectionSampleRateHz > 0 ? m_connectionSampleRateHz
-                                                : m_streamDefaultRateHz);
-
-        if (!streamAlreadyLive) {
-            claimStreamEpoch(placement.streamIndex);
-        }
-        m_streamAllocator.activateStream(
-            placement.streamIndex, placement.newStreamCentreHz, rateForStream);
-
-        // A claimed stream is worthless until its hardware DDC routes.
-        // setReceiverFrequency below tunes the DDC; this is what makes
-        // ReceiverManager forward its samples.
-        syncReceiverToStream(placement.streamIndex, /*live=*/true);
-
-        if (m_receiverManager) {
-            // forceHardwareFrequency, not setReceiverFrequency: this arm only
-            // runs when the stream CENTRE moved, and moving the centre is the
-            // operator asking for a retune, not a VFO nudge inside a pinned
-            // window. setReceiverFrequency respects m_ddcFreqLocked, so in
-            // CTUN it silently swallowed the push and the DDC never followed
-            // a band change. Confirmed on a live HL2 2026-07-31: the
-            // allocator returned NewStream for a 40 m to 60 m band press and
-            // the hardware emit was dropped with ddcLocked=true, leaving both
-            // the Alex high-pass and the receive low-pass on the old band
-            // until the operator nudged the VFO far enough to re-place.
-            //
-            // ReceiverManager draws exactly this distinction in its own
-            // comment on forceHardwareFrequency: the lock exists so a VFO
-            // move inside a pinned CTUN window does not retune the DDC,
-            // "while the pan drag itself is exactly the operator asking for a
-            // retune". A band button is the same act as a pan drag.
-            //
-            // The signal forceHardwareFrequency suppresses,
-            // receiverFrequencyChanged, has no consumer outside
-            // ReceiverManager, so nothing downstream loses an update. The
-            // JoinedExisting arm is deliberately untouched: that one really
-            // is a nudge inside the window, and it must keep respecting the
-            // lock.
-            m_receiverManager->forceHardwareFrequency(
-                placement.streamIndex,
-                static_cast<quint64>(placement.newStreamCentreHz));
-        }
-        emit streamCentreChanged(
-            placement.streamIndex, placement.newStreamCentreHz,
-            m_streamAllocator.streamSampleRateHz(placement.streamIndex));
+        activateStreamAt(placement.streamIndex, placement.newStreamCentreHz);
     }
 
     slice->setStreamIndex(placement.streamIndex);
@@ -7412,6 +7519,11 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     }
     slice->setSliceIndex(index);
     if (role() == Role::Local) {
+        // iPhone app Task 74 (ruling 6.2): every change of the slice's
+        // receiver reaches the anchors, from its first bind on.
+        connect(slice, &SliceModel::streamIndexChanged, this, [this, slice](int stream) {
+            m_sliceOwnership->noteStream(slice->sliceIndex(), stream);
+        });
         slice->setSettingsRadioIdentity((restoreSeed && !bindRestored)
                                                 || m_lastRadioInfo.macAddress.isEmpty()
                                             ? m_receiveLayoutMac : m_lastRadioInfo.macAddress);

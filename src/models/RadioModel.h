@@ -99,6 +99,12 @@
 //                and the FreeDV Reporter frequency following the
 //                station-level active slice. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 74 (R-IOS-02, R-IOS-30): each
+//                slice's receiver reported to the anchors;
+//                moveStreamWindowFor and moveSlicesToStream for a confirmed
+//                pan move; the allocator and the slice cap readable.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1265,6 +1271,20 @@ public:
     /// Move the bound stream's DDC centre explicitly. All cohosts must remain
     /// inside the target window or the request is refused without changes.
     bool requestStreamCentre(int sliceId, double centreHz);
+
+    /// iPhone app Task 74 (rulings 6.4, 6.5, 6.7): moves a receiver's
+    /// window on a confirmed pan move and places again every slice it no
+    /// longer covers (but `exemptSliceId`); returns those that found no
+    /// receiver, for the caller to close. Local only.
+    QList<int> moveStreamWindowFor(int stream, double centreHz, int exemptSliceId);
+    /// iPhone app Task 74 (ruling 6.6): takes these slices to `stream`,
+    /// claimed at `centreHz` when free. Local only.
+    bool moveSlicesToStream(const QList<int>& sliceIds, int stream, double centreHz);
+    /// iPhone app Task 74: the placement policy's state, read to plan a pan
+    /// move or a take on a copy before anything changes.
+    const NereusSDR::SliceStreamAllocator& streamAllocator() const { return m_streamAllocator; }
+    /// iPhone app Task 74 (ruling 6.9): the slice cap every device shares.
+    int sliceCapForDevices() const { return sliceChannelLimit(); }
 
     /// End the session-scoped C-Tune state and project the cleared value to
     /// every cohost. StationServer calls this when the authenticated session
@@ -4171,6 +4191,9 @@ public:
     void setStreamEpoch(int streamIndex, quint64 epoch);
     void claimStreamEpoch(int streamIndex);
     void retireStream(int streamIndex);
+    // iPhone app Task 74: claim a stream, or move a live one, centred on
+    // `centreHz` (bindSliceToStream's NewStream / RetunedStream arm).
+    void activateStreamAt(int streamIndex, double centreHz);
 
     /// Emit ddcAssignmentRequested and drive the per-board codec recompute.
     void requestDdcAssignment();

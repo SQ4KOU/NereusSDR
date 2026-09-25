@@ -34,6 +34,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08): the
 //                                    pair.* kinds in both directions.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 74 (R-IOS-30):
+//                                    confirm.request and notice, from the
+//                                    station. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -85,6 +89,8 @@ const QStringList& stationKinds()
         // iPhone app Task 14: pairing.
         QStringLiteral("pair.accept"),     QStringLiteral("pair.spake"),
         QStringLiteral("pair.confirm"),    QStringLiteral("pair.fail"),
+        // iPhone app Task 74: asking first, telling afterwards.
+        QStringLiteral("confirm.request"), QStringLiteral("notice"),
     };
     return kinds;
 }

@@ -56,6 +56,9 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 73 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 74 (R-IOS-02, R-IOS-30): each
+//               receiver's anchor (rulings 6.2, 6.3). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -157,6 +160,18 @@ public:
     void setTransmitHolder(const QByteArray& holder);
     QByteArray transmitHolder() const { return m_transmitHolder; }
 
+    // ---- Anchors (Task 74) ----
+
+    /// A slice's receiver changed to `stream` (-1: it has none). May come
+    /// before noteSliceAdded (RadioModel binds a new slice first).
+    void noteStream(int sliceId, int stream);
+    /// The device anchoring `stream`: the subject of the slice that claimed
+    /// it, or of the longest-staying one since. Empty when the receiver is
+    /// free or its anchoring slice has no owner.
+    QByteArray anchorOf(int stream) const;
+    /// The slices on `stream`, longest there first.
+    QList<int> slicesOnStreamInJoinOrder(int stream) const;
+
     // ---- New slices ----
 
     /// While one is open, a new slice belongs to its owner. Scopes nest.
@@ -182,6 +197,8 @@ signals:
 
 private:
     QList<int> matching(const std::function<bool(const Mark&)>& test) const;
+    QByteArray subjectOf(int sliceId) const { return m_marks.value(sliceId).subject(); }
+    void leaveStream(int sliceId);
 
     QList<int> m_order;
     QHash<int, Mark> m_marks;
@@ -190,6 +207,11 @@ private:
     int m_mostRecent = -1;
     QByteArray m_transmitHolder;
     QByteArray m_creator;
+    // Task 74: each slice's receiver, the slices on each receiver in the
+    // order they arrived, and each receiver's anchor.
+    QHash<int, int> m_streamOf;
+    QHash<int, QList<int>> m_joinOrder;
+    QHash<int, QByteArray> m_anchor;
 };
 
 } // namespace NereusSDR

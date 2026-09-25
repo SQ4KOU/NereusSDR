@@ -11,6 +11,9 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 73 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 74 (R-IOS-02, R-IOS-30): each
+//               receiver's anchor. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/SliceOwnership.h"
@@ -38,6 +41,13 @@ void SliceOwnership::noteSliceAdded(int sliceId)
     Mark mark;
     mark.owner = m_creator;
     m_marks.insert(sliceId, mark);
+    // Task 74: bound before it was noted, it claimed its receiver for
+    // nobody; it is the first there, so the receiver is its owner's.
+    const auto stream = m_streamOf.constFind(sliceId);
+    if (stream != m_streamOf.cend() && m_anchor.value(*stream).isEmpty()
+        && m_joinOrder.value(*stream).value(0, -1) == sliceId) {
+        m_anchor.insert(*stream, mark.subject());
+    }
     emit activeChanged();
 }
 
@@ -57,6 +67,7 @@ void SliceOwnership::beginRemove(int sliceId)
 
 void SliceOwnership::endRemove(int sliceId)
 {
+    leaveStream(sliceId);
     m_removing.remove(sliceId);
     m_order.removeAll(sliceId);
     m_marks.remove(sliceId);
@@ -115,6 +126,22 @@ void SliceOwnership::setMark(int sliceId, const Mark& requested)
         return;
     }
     m_marks.insert(sliceId, next);
+    // Task 74: the anchor goes with the slice to its new owner when it was
+    // the old owner's only slice on the receiver.
+    const auto stream = m_streamOf.constFind(sliceId);
+    if (stream != m_streamOf.cend() && before.subject() != next.subject()
+        && m_anchor.value(*stream) == before.subject()) {
+        bool otherOfOld = false;
+        for (int other : m_joinOrder.value(*stream)) {
+            if (other != sliceId && subjectOf(other) == before.subject()) {
+                otherOfOld = true;
+                break;
+            }
+        }
+        if (!otherOfOld) {
+            m_anchor.insert(*stream, next.subject());
+        }
+    }
     emit markChanged(sliceId, before.owner, before.heldFor);
     emit activeChanged();
 }
@@ -229,6 +256,63 @@ void SliceOwnership::setTransmitHolder(const QByteArray& holder)
     }
     m_transmitHolder = holder;
     emit activeChanged();
+}
+
+// ── Anchors (Task 74, rulings 6.2 and 6.3) ──────────────────────────────
+
+void SliceOwnership::leaveStream(int sliceId)
+{
+    const auto found = m_streamOf.constFind(sliceId);
+    if (found == m_streamOf.cend()) {
+        return;
+    }
+    const int stream = *found;
+    m_streamOf.remove(sliceId);
+    QList<int>& order = m_joinOrder[stream];
+    order.removeAll(sliceId);
+    if (order.isEmpty()) {
+        // The last slice left: the receiver is free.
+        m_joinOrder.remove(stream);
+        m_anchor.remove(stream);
+        return;
+    }
+    const QByteArray anchor = m_anchor.value(stream);
+    for (int other : std::as_const(order)) {
+        if (subjectOf(other) == anchor) {
+            return;  // the anchor still has a slice here
+        }
+    }
+    // Ruling 6.2: the device whose slice has been here longest. Nobody is
+    // asked or told; nothing on anyone's band moves.
+    m_anchor.insert(stream, subjectOf(order.first()));
+}
+
+void SliceOwnership::noteStream(int sliceId, int stream)
+{
+    if (m_streamOf.value(sliceId, -1) == stream) {
+        return;
+    }
+    leaveStream(sliceId);
+    if (stream < 0) {
+        return;
+    }
+    QList<int>& order = m_joinOrder[stream];
+    if (order.isEmpty()) {
+        // Ruling 6.2: this slice claimed the receiver (NewStream).
+        m_anchor.insert(stream, subjectOf(sliceId));
+    }
+    order.append(sliceId);
+    m_streamOf.insert(sliceId, stream);
+}
+
+QByteArray SliceOwnership::anchorOf(int stream) const
+{
+    return m_anchor.value(stream);
+}
+
+QList<int> SliceOwnership::slicesOnStreamInJoinOrder(int stream) const
+{
+    return m_joinOrder.value(stream);
 }
 
 // ── Creator scope ───────────────────────────────────────────────────────

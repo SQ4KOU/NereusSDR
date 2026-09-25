@@ -1237,6 +1237,50 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "session.leave"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "choice",
+                    "optional": false
+                }
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "confirm.proceed"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                }
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "confirm.cancel"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                }
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "notice.takeBack"
         }
     ],
     "limits": {
@@ -1256,6 +1300,11 @@
                 30000,
                 60000
             ]
+        },
+        "confirmExpiryMs": {
+            "source": "ConfirmStep::kExpiryMs",
+            "unit": "ms",
+            "value": 60000
         },
         "connectDeadlineMs": {
             "source": "kStationHandshakeDeadlineMs",
@@ -1915,6 +1964,36 @@
                 "verb": "string"
             }
         },
+        "confirm.request": {
+            "optional": [
+                "change",
+                "choices",
+                "forCommandId",
+                "forSettingsKey",
+                "forWriteId"
+            ],
+            "required": [
+                "affected",
+                "expiresInMs",
+                "id",
+                "kind",
+                "reason",
+                "type"
+            ],
+            "types": {
+                "affected": "array",
+                "change": "object",
+                "choices": "array",
+                "expiresInMs": "number",
+                "forCommandId": "number",
+                "forSettingsKey": "string",
+                "forWriteId": "number",
+                "id": "number",
+                "kind": "string",
+                "reason": "string",
+                "type": "string"
+            }
+        },
         "delta": {
             "optional": [
             ],
@@ -1964,6 +2043,40 @@
             ],
             "types": {
                 "payload": "object",
+                "type": "string"
+            }
+        },
+        "notice": {
+            "optional": [
+                "byDeviceId",
+                "byKind",
+                "byName",
+                "byShortName",
+                "bySource",
+                "change",
+                "slices"
+            ],
+            "required": [
+                "id",
+                "kind",
+                "reason",
+                "secondsAgo",
+                "takeBack",
+                "type"
+            ],
+            "types": {
+                "byDeviceId": "string",
+                "byKind": "string",
+                "byName": "string",
+                "byShortName": "string",
+                "bySource": "string",
+                "change": "object",
+                "id": "number",
+                "kind": "string",
+                "reason": "string",
+                "secondsAgo": "number",
+                "slices": "array",
+                "takeBack": "boolean",
                 "type": "string"
             }
         },

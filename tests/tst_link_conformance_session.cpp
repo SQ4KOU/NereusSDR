@@ -40,6 +40,10 @@
 //                    run time, is paired before the client connects;
 //                    otherClients: iPhone app Task 71, other clients the
 //                    player signs in as paired devices, LinkFixtures.h)
+//   receivers        iPhone app Task 74: the static radio's receivers,
+//                    192 kHz each, sized before its slices are made, so
+//                    slices bind to them (absent: none, as before)
+//   maxSlices        with receivers, the slice cap (5)
 //   otherPairedDevices
 //                    devices besides the runner's own paired before the
 //                    client connects (0); their keys are made at run time
@@ -111,6 +115,10 @@
 //                                    fixture check skips other clients'
 //                                    steps. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 74 (R-IOS-30):
+//                                    stationSetup "receivers" and
+//                                    "maxSlices". AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -163,7 +171,8 @@ const QStringList kSetupKeys{
     QStringLiteral("clientAnswersPings"), QStringLiteral("otherClients"),
     QStringLiteral("otherConnections"), QStringLiteral("token"),
     QStringLiteral("pairedDevice"),    QStringLiteral("otherPairedDevices"),
-    QStringLiteral("board"),
+    QStringLiteral("board"),           QStringLiteral("receivers"),
+    QStringLiteral("maxSlices"),
 };
 
 // The station a fixture's stationSetup describes. Members are declared in
@@ -261,6 +270,22 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         station->stepAtt = std::make_unique<StepAttenuatorController>();
         station->stepAtt->setTickTimerEnabled(false);
         model.setStepAttController(station->stepAtt.get());
+    }
+    // iPhone app Task 74: "receivers" sizes the static radio's receiver
+    // pool (192 kHz each), so slices bind to receivers and the anchor, pan
+    // move and take rules apply; "maxSlices" is its slice cap (5).
+    if (setup.contains(QStringLiteral("receivers"))) {
+        if (radio != QStringLiteral("static")) {
+            return QStringLiteral("stationSetup.receivers applies only to the static radio");
+        }
+        const int receivers = setup.value(QStringLiteral("receivers")).toInt(0);
+        const int maxSlices = setup.value(QStringLiteral("maxSlices")).toInt(5);
+        if (receivers < 1 || receivers > 5 || maxSlices < 1 || maxSlices > 5) {
+            return QStringLiteral("stationSetup.receivers and maxSlices must be 1 to 5");
+        }
+        model.configureStreamPool(receivers, maxSlices, 192000);
+    } else if (setup.contains(QStringLiteral("maxSlices"))) {
+        return QStringLiteral("stationSetup.maxSlices needs receivers");
     }
     const int slices = setup.value(QStringLiteral("slices")).toInt(1);
     while (model.slices().size() < slices) {

@@ -70,6 +70,9 @@
 //               slice per device, held slices and saved layouts. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25: iPhone app plan Task 74 (R-IOS-02): the anchor passes
+//               with the C-Tune pin. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -1930,6 +1933,41 @@ private slots:
             return entry.value(QStringLiteral("state")).toString() == QStringLiteral("away")
                 && entry.value(QStringLiteral("listeningOn")).toArray() == QJsonArray{expected};
         }));
+    }
+
+    // iPhone app Task 74 (ruling 6.2): the anchor passes to the device whose
+    // slice has been on the receiver longest when the anchor's last slice
+    // leaves it, and with it the C-Tune pin (ruling 6.3); nobody is asked
+    // or told.
+    void theAnchorPassesWithThePinWhenItsLastSliceLeaves()
+    {
+        Core core;
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        const int receiver = core.model->sliceById(0)->streamIndex();
+        QCOMPARE(core.model->sliceById(1)->streamIndex(), receiver);
+        QCOMPARE(core.model->sliceOwnership()->anchorOf(receiver), a.key.fingerprint());
+        const MirrorUpdate pin{0, "pinned", MirrorWireKind::Bool, true};
+        QCOMPARE(core.invoke(appB, "requestStreamCtunPinned", {int64("sliceId", 1), pin})
+                     .value(QStringLiteral("accepted")).toBool(true),
+                 false);
+        // A's slice leaves for 20 m, a receiver of its own.
+        core.model->sliceById(0)->setFrequency(14074000.0);
+        QVERIFY(core.model->sliceById(0)->streamIndex() != receiver);
+        QCOMPARE(core.model->sliceOwnership()->anchorOf(receiver), b.key.fingerprint());
+        QCOMPARE(core.invoke(appB, "requestStreamCtunPinned", {int64("sliceId", 1), pin})
+                     .value(QStringLiteral("accepted")).toBool(false),
+                 true);
+        QVERIFY(!appA->receivedKinds().contains(QByteArrayLiteral("confirm.request")));
+        QVERIFY(!appB->receivedKinds().contains(QByteArrayLiteral("notice")));
     }
 
     void aDspAssetJobEndsWithItsOwnDeviceOnly()

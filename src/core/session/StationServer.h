@@ -258,6 +258,13 @@
 //                                    leaves, is away past its 180 s or is
 //                                    revoked, and listeningOn. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 74 (R-IOS-02,
+//                                    R-IOS-30): receivers several devices
+//                                    share (the anchor, the pin, pan
+//                                    moves, takes and Take it back), the
+//                                    confirm step with its readback, and
+//                                    notices (StationReceivers.cpp).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -275,7 +282,9 @@
 #include <utility>
 
 #include "core/DeviceLayoutStore.h"
+#include "core/session/ConfirmStep.h"
 #include "core/session/LinkVersion.h"
+#include "core/session/ReceiverPlanner.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
 
@@ -913,7 +922,7 @@ private:
     /// Closes slice `sliceId` for a reason other than its owner's own
     /// request, saving it for `saveFor` when set; false (nothing done)
     /// when it is the Core's last slice.
-    bool closeSliceFor(int sliceId, const QByteArray& saveFor);
+    bool closeSliceFor(int sliceId, const QByteArray& saveFor, SavedSlice* closed = nullptr);
     /// Each attached view's `slice:` and `marker:` forms after an owner
     /// change: object.destroy of the old form, object.create of the new.
     void onSliceOwnerChanged(int sliceId, const QByteArray& oldOwner,
@@ -934,6 +943,96 @@ private:
     /// 5.2 step 3, applied also to slices the Core makes while it is
     /// there).
     void adoptForLoneDevice();
+
+    // ── iPhone app Task 74 (R-IOS-30): receivers, anchors, the confirm
+    //    step and notices (StationReceivers.cpp) ─────────────────────────
+    /// The rest of handlePropertyWrite: applies the write as this
+    /// session's, answers it (when `answer`), and sends its side effects.
+    /// `adjust` may reword the results first. Returns them.
+    QList<SessionPropertyResult> applyPropertyWrite(
+        SessionTransport* transport, const SessionMessage& message, bool answer,
+        const std::function<void(QList<SessionPropertyResult>&)>& adjust);
+    /// A command about receivers (the pin, a C-Tune move, adding a slice or
+    /// a pan) under the anchor and take rules. True when it answered.
+    bool handleReceiverCommand(SessionTransport* transport, const SessionMessage& message);
+    /// A slice retune that leaves its shared receiver (ruling 6.5). True
+    /// when it answered.
+    bool handleSliceRetune(SessionTransport* transport, const SessionMessage& message);
+    /// confirm.proceed, confirm.cancel, notice.takeBack.
+    SessionMessage answerConfirm(const SessionMessage& invoke, int id, int choice);
+    /// Ruling 10.2's refusal for an older window left with no slice at
+    /// admission; empty when it has one or is not an older window.
+    QString olderWindowWithoutSliceReason(SessionTransport* transport) const;
+    /// graceEnded or slicesNotRestored, then the notices that waited.
+    void deliverAdmissionNotices(SessionTransport* transport,
+                                 std::optional<qint64> timeRanOutAtMs);
+    struct PanMoveCheck {
+        /// None: not a pan move (today's path); Apply: nobody would be
+        /// asked; Ask: another device's slice moves or closes.
+        enum class Kind { None, Apply, Ask };
+        Kind kind = Kind::None;
+        int stream = -1;
+        double centreHz = 0.0;
+        int exemptSliceId = -1;
+        ReceiverPlanner::WindowMove plan;
+        /// The disturbed slices of devices (a slice nobody owns moves or
+        /// closes without asking anyone).
+        QList<ReceiverPlanner::Disturbed> named;
+    };
+    PanMoveCheck checkPanMove(const QByteArray& requester, const SessionMessage& original) const;
+    ReceiverPlanner::DeviceInfo planDevice(const QByteArray& deviceId) const;
+    ReceiverPlanner receiverPlanner() const;
+    SessionTransport* liveTransportFor(const QByteArray& deviceId) const;
+    QString withHolderNames(const QString& reason, const QByteArray& requester) const;
+    QString namesOf(const QList<ReceiverPlanner::Disturbed>& disturbed) const;
+    void answerHere(SessionTransport* transport, const SessionMessage& result);
+    void answerWrite(SessionTransport* transport, const SessionMessage& write,
+                     const QString& reason);
+    bool handleCentreMove(SessionTransport* transport, const SessionMessage& message,
+                          const QByteArray& requester);
+    bool handleAddWithTake(SessionTransport* transport, const SessionMessage& message,
+                           const QByteArray& requester);
+    void refuseWhileAsking(SessionTransport* transport, const SessionMessage& original);
+    void sendQuestion(SessionTransport* transport, ConfirmStep::Question question,
+                      SessionPrompt prompt);
+    void askPanMove(SessionTransport* transport, const SessionMessage& original,
+                    const PanMoveCheck& check, const std::optional<QJsonObject>& change);
+    void askTake(SessionTransport* transport, const SessionMessage& original,
+                 const ReceiverPlanner::TakeRequest& request);
+    void askTakeSlice(SessionTransport* transport, const SessionMessage& original,
+                      const QList<ReceiverPlanner::Choice>& choices);
+    void applyPanMove(const PanMoveCheck& check, const QByteArray& requester);
+    SessionMessage runHeldCommand(const SessionMessage& original);
+    SessionMessage applyHeld(SessionTransport* transport, const ConfirmStep::Question& question,
+                             int stream, const SessionMessage& invoke);
+    bool heldFitsNow(const ConfirmStep::Question& question) const;
+    QHash<QByteArray, QList<SavedSlice>> closeForTake(const QList<int>& sliceIds);
+    void tellTaken(const QHash<QByteArray, QList<SavedSlice>>& closedBy, const QByteArray& taker,
+                   const QString& kind, int stream, int takerSlice);
+    void endOlderWindowsWithoutSlices(const QList<QByteArray>& devices, const QByteArray& taker);
+    void tellDevice(ConfirmStep::Notice notice, const QByteArray& by);
+    void sendNotice(SessionTransport* transport, const ConfirmStep::Notice& notice);
+    SessionMessage askAgain(const SessionMessage& invoke);
+    SessionMessage proceedPanMove(SessionTransport* transport, const ConfirmStep::Question& question,
+                                  const SessionMessage& invoke);
+    SessionMessage proceedTakeReceiver(SessionTransport* transport,
+                                       const ConfirmStep::Question& question, int choice,
+                                       const SessionMessage& invoke);
+    SessionMessage proceedTakeSlice(SessionTransport* transport,
+                                    const ConfirmStep::Question& question, int choice,
+                                    const SessionMessage& invoke);
+    SessionMessage askTakeBack(SessionTransport* transport, const SessionMessage& invoke,
+                               int noticeId);
+    SessionMessage proceedTakeBack(SessionTransport* transport,
+                                   const ConfirmStep::Question& question, int choice,
+                                   const SessionMessage& invoke);
+    void sendHeldQuestions();
+    std::unique_ptr<ConfirmStep> m_confirm;
+    bool m_holdQuestions = false;
+    QList<QPair<SessionTransport*, SessionMessage>> m_heldQuestions;
+    /// While set, every result the dispatcher emits passes through it
+    /// first; false keeps it from being sent.
+    std::function<bool(SessionMessage&)> m_resultHook;
 
     QPointer<RadioModel> m_radioModel;
     AppSettings& m_settings;

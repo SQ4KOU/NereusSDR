@@ -495,6 +495,15 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"pairing.close", {}, "pairingVersion", 1, kRadioIdentitySessionProtocolMinor},
         // Leaving the Core on purpose (iPhone app Task 71, R-IOS-02).
         {"session.leave", {}, "sessionHolderVersion", 1, kRadioIdentitySessionProtocolMinor},
+        // Answering the Core's questions and taking back (iPhone app Task
+        // 74, R-IOS-30; the several-devices design, section 10.4).
+        {"confirm.proceed",
+         {{"id", MirrorWireKind::Int64, false}, {"choice", MirrorWireKind::Int64, false}},
+         "sessionHolderVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"confirm.cancel", {{"id", MirrorWireKind::Int64, false}}, "sessionHolderVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"notice.takeBack", {{"id", MirrorWireKind::Int64, false}}, "sessionHolderVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
     };
     return specs;
 }
@@ -579,6 +588,13 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     // iPhone app Task 71: nor does leaving the Core.
     if (invoke.commandVerb == "session.leave") {
         handleSessionLeave(invoke);
+        return;
+    }
+    // iPhone app Task 74: an answer to the Core's question, or Take it
+    // back; the Core's confirm step decides.
+    if (invoke.commandVerb == "confirm.proceed" || invoke.commandVerb == "confirm.cancel"
+        || invoke.commandVerb == "notice.takeBack") {
+        handleConfirmAnswer(invoke);
         return;
     }
     if (m_radioModel.isNull()) {
@@ -1477,6 +1493,30 @@ void SessionCommandDispatcher::handleSessionLeave(const SessionMessage& invoke)
     }
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
     emit sessionLeaveRequested();
+}
+
+// iPhone app Task 74 (R-IOS-30): confirm.proceed {id, choice},
+// confirm.cancel {id}, notice.takeBack {id}. The arguments are read here;
+// what they do is the Core's confirm step (StationServer).
+void SessionCommandDispatcher::handleConfirmAnswer(const SessionMessage& invoke)
+{
+    const bool proceed = invoke.commandVerb == "confirm.proceed";
+    int id = 0;
+    int choice = -1;
+    const bool shape = proceed ? hasExactlyArguments(invoke.arguments, {"id", "choice"})
+                               : hasExactlyArguments(invoke.arguments, {"id"});
+    if (!shape || findIntArgument(invoke.arguments, "id", &id) != ArgumentStatus::Ok
+        || (proceed && findIntArgument(invoke.arguments, "choice", &choice) != ArgumentStatus::Ok)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    if (!m_confirmAnswer) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("That question is no longer open. Make the change again."), {});
+        return;
+    }
+    emit commandResultReady(m_confirmAnswer(invoke, id, choice));
 }
 
 // R-R3-48: the one TCI switch and port, kept by the Core.

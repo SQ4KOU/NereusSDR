@@ -449,9 +449,11 @@ writes.
 | `capabilities` | `properties` (array), `type` (string) | none |
 | `command.invoke` | `args` (array), `id` (number), `type` (string), `verb` (string) | none |
 | `command.result` | `accepted` (boolean), `affected` (array), `id` (number), `reason` (string), `type` (string), `verb` (string) | `values` (array) |
+| `confirm.request` | `affected` (array), `expiresInMs` (number), `id` (number), `kind` (string), `reason` (string), `type` (string) | `change` (object), `choices` (array), `forCommandId` (number), `forSettingsKey` (string), `forWriteId` (number) |
 | `delta` | `key` (string), `properties` (array), `type` (string) | none |
 | `hello` | `major` (number), `minor` (number), `peer` (string), `settingsSchema` (number), `type` (string) | `challenge` (string), `features` (object), `identity` (object), `majors` (array) |
 | `media.control` | `payload` (object), `type` (string) | none |
+| `notice` | `id` (number), `kind` (string), `reason` (string), `secondsAgo` (number), `takeBack` (boolean), `type` (string) | `byDeviceId` (string), `byKind` (string), `byName` (string), `byShortName` (string), `bySource` (string), `change` (object), `slices` (array) |
 | `object.create` | `class` (string), `key` (string), `properties` (array), `type` (string) | none |
 | `object.destroy` | `class` (string), `key` (string), `type` (string) | none |
 | `pair.accept` | `identity` (object), `label` (string), `type` (string) | none |
@@ -828,8 +830,10 @@ When a feature is off, its version is 0:
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
   other peer is sent no entry (and reads 0), so its capabilities are
   today's. 1: up to four devices at once, the `connectedDevices` object
-  (section 7.1) and `session.leave` (section 9.1). The table above shows
-  the value a declaring peer is sent.
+  (section 7.1), `session.leave` (section 9.1), and sharing the radio's
+  receivers: `confirm.request` and `notice`, and the verbs
+  `confirm.proceed`, `confirm.cancel` and `notice.takeBack` (section 7.5).
+  The table above shows the value a declaring peer is sent.
 - While several devices are on a Core, media and telemetry go to one of
   them (section 11): any other is sent `remoteMediaVersion`,
   `remoteWidebandDisplayVersion`, `remoteAudioStatusVersion`,
@@ -1698,11 +1702,180 @@ belongs to <the owner's name>. It can be changed only there." (the name as
 else comes back. The commands `removeSlice`, `setActiveSliceById`,
 `nnr.setDiagnostics`, `nnr.resetTuning`, `nnr.tryAgain` and `notch.add`
 naming another device's slice are refused with the same reason (section
-9.1). A sample-rate change, a C-Tune centre change or pin and a receiver's
-band change are not refused this way: later tasks route them.
+9.1). A C-Tune centre change or pin and a slice's band change follow the
+receiver rules of section 7.5 instead (a C-Tune request naming another
+device's slice is refused with this same reason); a sample-rate change is
+the next task's.
+
+**Waiting for you to confirm** (iPhone app plan Task 74; the
+several-devices design, section 7.3). A write that would disturb another
+device, from a device with `sessionHolderVersion` 1, is not applied. Its
+`property.result` answers every property not accepted, with the value the
+Core keeps and the reason "Waiting for you to confirm.", and a
+`confirm.request` follows with `forWriteId` naming the write (section
+7.5). Today that is a band change of the anchor's slice on a receiver
+another device shares. A window without the feature is never asked: the
+same write is refused with "This change would affect <names>. Update
+NereusSDR to confirm changes that affect other devices.", the names as
+`connectedDevices` numbers them.
 
 A property write never keys the transmitter: `txPermitted` is false and
 the transmit safety gates stay at the station (section 17).
+
+### 7.5 Receivers several devices share
+
+iPhone app plan Task 74 (the several-devices design, sections 6.1 to 6.4,
+7.3 and 7.4). Up to four devices share the radio's receivers. A slice
+joins any receiver whose window covers its frequency, whoever claimed it,
+as it always has; two devices' slices can therefore share one receiver.
+
+**The anchor.** The device whose slice claimed a receiver anchors it.
+When the anchor's last slice leaves the receiver, the anchor passes to the
+device whose slice has been on it longest; nobody is asked or told. When
+the last slice leaves, the receiver is free. A shared receiver's window
+does not follow a slice's tuning inside it (the slice moves only its own
+shift, as several slices on one receiver always have).
+
+**The C-Tune pin** of a shared receiver is its anchor's.
+`requestStreamCtunPinned` from another device is refused with "This
+panadapter shows <anchor's name>'s receiver. Its C-Tune setting is
+<anchor's name>'s.".
+
+**The anchor moves its panadapter.** A `requestStreamCentre` from the
+anchor that would leave another device's slice outside the new window is
+held: its `command.result` is not accepted, with the reason "Waiting for
+you to confirm." and `values` holding `phase` `needsConfirmation`, and a
+`confirm.request` of kind `panMove` follows. One that would leave the
+anchor's own slice outside is refused as before. On proceed the window
+moves; each other device's slice outside it moves to another receiver
+(one whose window covers it, or a free one) or, with none free, closes,
+and its device is told (`notice` `sliceMoved` or `sliceClosed`).
+
+**The anchor changes band.** A `property.write` of the `frequency` of one
+of the anchor's slices, outside its receiver's window, while another
+device's slice shares the receiver, is the same question (`panMove`),
+held as section 7.3 says, with `change` `{label, from, to}`:
+"Receiver <n>" and the bands, "20 m" and "40 m". On proceed the receiver
+follows the anchor's slice, centred on its new frequency; each other
+device's slice the new window no longer covers moves or closes, as above;
+one it still covers stays. When the anchor has another slice of its own
+on the receiver that the new window would not cover, the change is not a
+pan move: the slice leaves for another receiver as it always has (design
+ruling 6.5a). Cancel changes nothing. With nobody else on the receiver,
+nothing changes from before.
+
+**A device that does not anchor moves its panadapter** by taking it,
+with its slices there, to a free receiver centred where it asked; the
+anchor is not disturbed and nobody is asked. Its slices must fit the new
+window, as C-Tune requires.
+
+**Taking a receiver** (the several-devices design, section 6.4). A
+request that needs a receiver (`addSlice`, `addSliceOnPan`, a retune out
+of a window, a panadapter move by a device that does not anchor) and is
+refused because every receiver is in use is answered with the refusal,
+whose words now end "The radio's receivers are in use by <names>.", and,
+to a device with the feature, a `confirm.request` of kind `takeReceiver`
+with one choice per receiver in use. On proceed with a choice the Core
+checks again, closes every other device's slice on that receiver (even
+one the new window would cover), tells each owner (`notice`
+`receiverTaken`, with Take it back), and applies the held request on the
+freed receiver. The taker's own slices there stay when the new window
+covers them; a receiver where the taker's own slice would be left outside
+is offered with `takeable` false and `why` "Your slice E would close.",
+and a receiver the taker's own panadapter uses cannot give it a new one
+(`takeable` false, "Your panadapter already uses this receiver."). When
+the slice cap, not the receivers, is full, the question is `takeSlice`,
+one choice per slice of another device, and taking one closes only that
+slice (`notice` `sliceTaken`, with Take it back). A receiver or slice free
+by the time of the answer is used without taking anything.
+
+**Take it back.** `notice.takeBack {id}` asks the same question the other
+way: a `takeReceiver` whose first choice is the receiver the taker now
+holds, then any receiver free by then (for a slice, a `takeSlice` with the
+taker's slice and, when one is free, a choice with `sliceId` -1). Its own
+`command.result` is "Waiting for you to confirm." with `phase`
+`needsConfirmation`. On proceed the Core closes what the choice names
+(telling its owner, with Take it back) and recreates the device's closed
+slices at their frequencies, modes and panadapters, with their settings.
+Once taken back, a notice cannot be taken back again ("That can no longer
+be taken back.").
+
+**An older window** (a session without `sessionHolderVersion` 1) is never
+asked: it gets the refusal only, naming the devices involved. When a take
+closes its last slice its session ends: "<taker's name> took the receiver
+this app was using. Update NereusSDR to share the Core.", not retryable,
+`code` `takenOver`. With no slice for it at sign-in it is refused,
+retryable: "All the radio's slices are in use. Try again when another
+device closes one." when the slice cap is full, "All the radio's
+receivers are in use. Try again when another device frees one." otherwise
+(section 12.4).
+
+**`confirm.request`** (Core to device, to a session with
+`sessionHolderVersion` 1 only): `id` (number, unique on this Core), `kind`
+(`panMove`, `takeReceiver`, `takeSlice`; later tasks add `sharedSetting`
+and `takeTransmit`), `reason` ("Waiting for you to confirm."), `affected`
+(array), `expiresInMs` (60000, `confirmExpiryMs` in section 15), and,
+optionally, `change` `{label, from, to}` (absent for a take), `choices`
+(a take), and `forCommandId` or `forWriteId` naming the held change
+(`forSettingsKey` for a settings write, from the next task). `affected`
+has one entry per disturbed device, `{deviceId, deviceName,
+deviceShortName, state, holdsTransmit, slices}`, each slice `{sliceId,
+letter, frequencyHz, band, mode, adc, streamIndex, effect}`: `state` is
+`listening` or `away`, `mode` the slice's `dspMode` value, `band` its
+`Band` value, `adc` its receiver's ADC from 0, `streamIndex` its receiver
+from 0 (shown as "Receiver `streamIndex` + 1", "ADC `adc` + 1"), `effect`
+`moves` or `closes` here. A take's `affected` is empty: its choices say
+what each would close. A `takeReceiver` choice is `{choice, streamIndex,
+adc, centreHz, rateHz, anchorName, slices, devices, takeable, why}`, its
+slices `{sliceId, letter, deviceId, deviceName, frequencyHz, mode, band,
+txSlice}` and its devices `{deviceId, name, shortName, state,
+lastActivitySeconds}`; a free receiver (offered only by Take it back) has
+no slices. A `takeSlice` choice is `{choice, sliceId, letter, deviceId,
+deviceName, deviceShortName, state, frequencyHz, mode, band, txSlice,
+streamIndex, adc, takeable, why}`.
+
+**Answers** (section 9.1): `confirm.proceed {id, choice}` (`choice` -1
+for a `panMove`) or `confirm.cancel {id}`. Nothing a device sent before
+its answer changes anything. A device has one open question; a new one
+replaces it, and its session ending drops it. On proceed the Core computes
+what the change reaches again: when that names a device or an effect the
+operator was not shown, the proceed is answered "Waiting for you to
+confirm." with `phase` `needsConfirmation`, a new `confirm.request`
+follows, and nothing is applied. Otherwise the change is applied exactly
+as the original request would have been, and the proceed's
+`command.result` carries the readback (ruling 7.4a): for a property
+write, `objectKey` and the settled value of every property the write
+named in `values` (its side effects on the written object reach the
+writer as the usual `delta`); for a command, the original command's own
+`affected` and `values`. The change reaches every other session as a
+`delta`. A proceed that is refused ("That question is no longer open.
+Make the change again.", "That choice is not in the list. Make the change
+again.", "What this change reaches has changed. Make the change again.")
+carries no readback. The question is always sent after the answer to the
+request that raised it.
+
+**`notice`** (Core to device, `sessionHolderVersion` 1 only): `id`,
+`kind`, `reason`, `secondsAgo` (whole seconds since it happened, measured
+when sent), `takeBack` (boolean), and optionally `byDeviceId`, `byName`,
+`byShortName`, `byKind`, `bySource` (`device`) naming who did it,
+`slices` `[{sliceId, letter, frequencyHz, mode, band}]` (closed ones
+included) and `change`. Kinds here: `sliceMoved` and `sliceClosed` (no
+Take it back), `receiverTaken` and `sliceTaken` (Take it back),
+`graceEnded` and `slicesNotRestored` (about the device's own state: no
+`by` keys, no Take it back). `graceEnded`, "You were away for more than 3
+minutes. Your slices are back.", goes right after `snapshot.complete` to a
+device let in after its 3 minutes ran out, its `slices` listing any saved
+slice that could not be restored; otherwise `slicesNotRestored`, "<n> of
+your slices could not be restored: all the radio's receivers are in
+use.", reports those. An away device's notices wait and follow its
+`snapshot.complete`; after its 3 minutes they still arrive, after
+`graceEnded`, with `takeBack` false. The Core keeps them until the device
+returns, is removed, or the Core restarts. A session without
+`sessionHolderVersion` 1 is sent neither kind.
+
+While a device is on the air, the rules above that would move or close
+its transmit slice are refused instead (the several-devices design, ruling
+7.4): that refusal arrives with the transmit holder (a later task).
 
 ### 7.4 The catalogue
 
@@ -1902,6 +2075,12 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
   client puts that value back. It goes to the session that wrote, and to
   no other.
 
+A `settings.write` that would disturb another device (from the next
+task, the several-devices design's section 7.1 list) is held as section
+7.3 says: `settings.reject` with the reason "Waiting for you to confirm."
+and the Core's value, then a `confirm.request` with `forSettingsKey`; its
+proceed carries `settingsKey` and `value` as its readback (section 7.5).
+
 The station refuses a write to a key outside the station scope ("Each app
 keeps this setting itself; the Core does not store it."), to another radio's `hardware/<mac>/` keys ("These settings
 are for a radio this Core is not connected to."), an out-of-range
@@ -2044,6 +2223,9 @@ refused.
 | `pairing.open` | none | `pairingVersion` | 1 | 11 |
 | `pairing.close` | none | `pairingVersion` | 1 | 11 |
 | `session.leave` | none | `sessionHolderVersion` | 1 | 11 |
+| `confirm.proceed` | `id` i64, `choice` i64 | `sessionHolderVersion` | 1 | 11 |
+| `confirm.cancel` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
+| `notice.takeBack` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
 
 <!-- /surface -->
 
@@ -2143,6 +2325,26 @@ These command groups need a sentence beyond the table:
   Core was not understood.". From a peer without `sessionHolderVersion` 1
   it is refused as a verb the station does not route is (section 9.2),
   and the connection stays up.
+- **Answering the Core's questions** (`sessionHolderVersion` 1, iPhone
+  app plan Task 74; section 7.5). `confirm.proceed {id, choice}` applies
+  the change a `confirm.request` held (`choice` -1 when the kind has none,
+  a choice's `choice` for a take); `confirm.cancel {id}` drops it and
+  changes nothing; `notice.takeBack {id}` asks a `receiverTaken` or
+  `sliceTaken` notice's take the other way, answered "Waiting for you to
+  confirm." with `values` `phase` `needsConfirmation` and a
+  `confirm.request`. A missing or renamed argument is refused, "The Core
+  could not read this request."; an id that names no open question, "That
+  question is no longer open. Make the change again.". From a peer without
+  `sessionHolderVersion` 1 each is refused as a verb the station does not
+  route (section 9.2).
+- **Receiver requests from several devices** (section 7.5).
+  `requestStreamCtunPinned` from a device that does not anchor the
+  receiver is refused; `requestStreamCentre` from the anchor that would
+  leave another device's slice outside is held and asked, from another
+  device it takes the panadapter to a free receiver. `addSlice`,
+  `addSliceOnPan` and those refused because every receiver (or slice) is
+  in use name the devices holding them, and a device with the feature is
+  then asked to take one.
 
 ### 9.2 Unknown verbs
 
@@ -2317,6 +2519,8 @@ non-empty string; an empty one is refused like any mistyped key.
 | Out-of-order handshake (section 5.1) | `session.end` | false | `protocolError` |
 | The same device connected again (section 5.1): its older connection | `session.end` "This device connected again." | false | `sameDevice` |
 | Every place on the Core is taken (section 5.1) | `session.end` "The Core already has four devices connected." | true | none |
+| A window without the several-devices feature, with no slice for it at sign-in (section 7.5) | `session.end` "All the radio's slices are in use. Try again when another device closes one." or "All the radio's receivers are in use. Try again when another device frees one." | true | none |
+| Such a window's last slice taken by another device (section 7.5) | `session.end` "<taker's name> took the receiver this app was using. Update NereusSDR to share the Core." | false | `takenOver` |
 | Connection limit reached | `session.end` | true | none |
 | Connect deadline expired | `session.end` | true | none |
 | Heartbeat timeout | `session.end` | true | none |
@@ -2341,8 +2545,9 @@ not verify for the certificate the connection presented, is refused and
 never trusted silently. A new certificate whose binding verifies is
 accepted without a question, whatever pin was saved.
 
-No end the station sends today carries `takenOver`: the fifth device's
-takeover, which will, is a later version's. The takeover and version
+The one end the station sends today with `takenOver` is an older
+window's last slice taken (section 7.5), with its own words above; the
+fifth device's takeover, which will also carry it, is a later version's. The takeover and version
 reasons are worded in one place,
 `src/core/session/SessionEndReasons.{h,cpp}`: "Another app at
 *address:port* connected to the Core and took over. Connect again to take
@@ -2400,7 +2605,7 @@ its minor and its capabilities, as before.
 | Message | Goes to |
 | --- | --- |
 | `command.result`, `property.result`, `settings.reject` | the session that asked, only |
-| `confirm.request`, `notice` (when the station sends them) | the one device they are for |
+| `confirm.request`, `notice` | the one device they are for, only with `sessionHolderVersion` 1; a notice for an away device waits for its return (section 7.5) |
 | `delta`, `object.create`, `object.destroy` | every session holding the object; a device's own write is not echoed to it (section 7.3). A `slice:<id>` only to the session of the device that owns it; a `marker:<id>` to every session with `sessionHolderVersion` 1 but that one (section 7.1) |
 | `settings.value` | every session, with the writer's `origin` (section 8.1) |
 | a write's readback of its side effects on the written object | the writer, only (section 7.3) |
@@ -2608,6 +2813,7 @@ maximum also equals `kMaximumSpectrumDisplayFramesPerSecond` in
 | --- | --- | --- | --- |
 | `clientInboundMessageBytes` | 8388608 | bytes | StationClient::kMaxIncomingMessageBytes |
 | `clientReconnectBackoffMs` | 1000, 2000, 5000, 10000, 30000, 60000 | ms | StationClient.cpp kReconnectBackoffSteps x StationClient::kDefaultReconnectBackoffUnitMs |
+| `confirmExpiryMs` | 60000 | ms | ConfirmStep::kExpiryMs |
 | `connectDeadlineMs` | 30000 | ms | kStationHandshakeDeadlineMs |
 | `deltaFlushMs` | 50 | ms | StationServer::kDefaultDeltaFlushMs |
 | `endpointFps` | 1 to 60 | frames per second | DaemonMediaController.cpp handleSubscribe literal 1; kMaximumSpectrumDisplayFramesPerSecond |
@@ -2731,9 +2937,10 @@ again and the two JSON objects compare equal after parsing, key order
 ignored. The fixtures cover every message kind in each direction it
 travels: eleven from the client (`hello`, `auth.request`, `command.invoke`,
 `media.control`, `property.write`, `settings.write`, `settings.remove`,
-and `pair.start`, `pair.spake`, `pair.confirm`, `pair.fail`) and twenty
-from the station (the sixteen before pairing, and `pair.accept`,
-`pair.spake`, `pair.confirm`, `pair.fail`), with a `delta` carrying `"nan"` and `"-inf"`
+and `pair.start`, `pair.spake`, `pair.confirm`, `pair.fail`) and
+twenty-two from the station (the sixteen before pairing, `pair.accept`,
+`pair.spake`, `pair.confirm`, `pair.fail`, and `confirm.request` and
+`notice`, section 7.5), with a `delta` carrying `"nan"` and `"-inf"`
 (section 4.2). The client's `hello` has two fixtures: an older app's,
 without `majors` or `features`, and one declaring both; `auth.request` has
 three: a token, a device sign-in with its `device` block (section 3.5), and
@@ -2752,7 +2959,8 @@ a `hello` declaring a feature version that is not a whole number, a
 `hello` whose `identity` is not an object, an `auth.request` whose `device`
 lacks `signature`, one whose `shortName` is not a string, a `session.end` with an empty `code`, a `pair.start`
 whose `mode` is neither `lan` nor `code`, a `pair.spake` step outside 0 to
-3, a `pair.fail` whose `retryAfterMs` is not a whole number, and an
+3, a `pair.fail` whose `retryAfterMs` is not a whole number, a `notice`
+whose `takeBack` is not a boolean, and an
 unknown `type`. The pairing fixtures carry placeholders for keys, shares
 and boxes; the live exchange is proved by `nereus_pairing_peer` (section
 3.6).
@@ -2970,6 +3178,8 @@ role.
 | `otherClients` | other clients the runner plays beside its own, each signing in as a paired device (above) | none |
 | `otherConnections` | other clients connected before this one, still connecting and sending nothing; 24 puts the station at its connection limit | 0 |
 | `token` | `"active"`: a Core upgraded from before paired devices, with a pairing token (made at run time) that `"$ref:token"` names; `"none"`: a new Core, without one (section 3.3) | `"active"` |
+| `receivers` | iPhone app plan Task 74: the static radio's receivers, 192 kHz wide each, sized before its slices are made, so slices bind to them and the rules of section 7.5 apply; only with `"radio": "static"` | none |
+| `maxSlices` | with `receivers`, the slice cap | 5 |
 | `otherPairedDevices` | that many devices besides the runner's own are paired before the client connects, their keys made at run time and never written in a fixture; their ids are `"$ref:device:1"` onwards; an app's runner ignores it | 0 |
 | `pairedDevice` | the station runner's own device (its key made at run time, the one `"$device:<case>"` signs with) is paired with the station before the client connects; an app's runner ignores it, as it ignores all of `stationSetup`, and accepts its app's key | false |
 
@@ -3005,6 +3215,14 @@ same on every machine.
 | `two-devices` | Another device holds the Core's slice; this device is let in with a slice of its own (`slice:1`) and the other's as `marker:0`, naming its owner, with the `SliceMarker` schema; the other device is sent `marker:1` for this device's slice, and when this device tunes its slice the other sees the marker move, never the slice |
 | `foreign-write-refused` | This device holds slice 0 and another device slice 1: a `property.write` to `slice:1` and to `marker:1`, and `removeSlice` and `setActiveSliceById` naming slice 1, are refused "That slice belongs to Other device 1. It can be changed only there.", with no value sent back and nothing changed; its own slice it may make active |
 | `held-for-device` | Another device, alone on the Core, leaves with `session.leave`: its slice keeps running, held for it. This device, let in meanwhile, does not adopt it: it gets a slice of its own and the other's as a marker with `ownerAway` true; the other device signs in again and the marker's `ownerAway` turns false (the slice is its own again) |
+| `share-receiver` | Another device's slice shares this device's receiver (this device anchors it); a C-Tune move that would leave it outside is answered "Waiting for you to confirm." with `phase` `needsConfirmation`, then a `confirm.request` `panMove` naming the other device and its slice's effect `moves`; `confirm.proceed` with a renamed argument is refused, with its own arguments it is accepted; the other device's slice moves to the free receiver and it is told (`notice` `sliceMoved`, no Take it back) |
+| `anchor-band-change` | The same two devices; this device retunes its slice from 20 m to 40 m: the write is answered "Waiting for you to confirm.", then `panMove` with `change` "Receiver 1", "20 m", "40 m"; `confirm.cancel` with a renamed argument is refused, with its own it changes nothing; the write again, `confirm.proceed`: its result carries `objectKey` and `frequency`, the receiver follows this device's slice and the other device's slice moves, the other device told |
+| `non-anchor-pan-move` | The other device moves its panadapter on this device's receiver while this device holds the second receiver: refused, naming this device, and asked to take one (`takeReceiver`); it cancels; this device removes its second slice and the other device's move goes to the free receiver, nobody asked |
+| `take-receiver` | Each device holds one receiver; this device's `addSliceOnPan` is refused naming the other and asked `takeReceiver` (its own receiver `takeable` false); proceed takes the other's receiver: the other device's slice closes and it is told `receiverTaken` with Take it back; `notice.takeBack` with a renamed argument is refused; with its own it asks the other way, and proceed closes this device's new slice (told `receiverTaken`) and restores the other's |
+| `take-slice` | The slice cap (2) full with a receiver free: `addSlice` is refused and asked `takeSlice`; proceed closes the other device's slice, which is told `sliceTaken`. Runs on the station alone |
+| `grace-expired` | Another device drops; after its 180 s its slice closes; it signs in again and `graceEnded` follows its `snapshot.complete`, `secondsAgo` from when its time ran out |
+| `older-window-taken-over` | A window without the feature holds the second receiver; this device takes it: the window's session ends `takenOver`, not retryable. Runs on the station alone |
+| `older-window-no-slice` | The slice cap full, a window without the feature signs in: `session.end` "All the radio's slices are in use. Try again when another device closes one.", retryable. Runs on the station alone |
 | `verbs-session-leave` | `session.leave` with an argument is refused, "The request to leave the Core was not understood."; without, it is accepted and the station closes the connection with no `session.end`. Runs on the station alone |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
@@ -3126,7 +3344,9 @@ how a fixture is written to what the code does.
 - **Operator wording.** A reason a client may show an operator is plain
   English with no protocol terms. Every reason the station sends (the
   `reason` of `auth.result`, `session.end`, `command.result`,
-  `property.result`, `settings.reject`, `pair.fail` and the display's
+  `property.result`, `settings.reject`, `pair.fail`, `confirm.request`
+  and `notice`, a take choice's `why`, the three strings of `change`, and
+  the display's
   `rejected` and `allocation-result`) passes `OperatorWording::isPlain` and names no
   function, class, requirement or phase; `tst_station_reason_wording`
   checks the sources that word them (every reason literal, a reason of one
