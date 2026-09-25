@@ -33,6 +33,10 @@
 // answered with the transmitter's real state, never the value it asked for
 // (the MOX button keyed under trx:0,false; a manual key under trx:0,true),
 // and WSJT-X's own sequence still sees trx:0,true; with no suffix.
+//
+// Receiver and transmit gaps plan, Task 7 follow-up (R-R3-49), 2026-09-24,
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code: a trx that is
+// refused gives the TX audio back at once (second_app_trx_follows_thetis_rule).
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -521,19 +525,21 @@ void TestTciTxMutex::second_app_trx_follows_thetis_rule()
     QTRY_VERIFY_WITH_TIMEOUT(!core.mox(), 3000);
     QTRY_COMPARE_WITH_TIMEOUT(server.activeTxClientCount(), 0, 3000);
 
-    // A takes the TX audio but the transmitter refuses to key, so A holds
-    // the audio with MOX off. B's trx then keys the transmitter, as Thetis
-    // does, while B's TX audio is refused: A still holds it.
+    // A asks but the transmitter refuses to key. Task 7 follow-up (item
+    // 5): a trx that keyed nothing gives the TX audio back at once, so A
+    // does not hold it with MOX off (Thetis kept it until A's trx:false).
+    // B's trx then keys the transmitter and takes the TX audio itself.
     refuseKey = true;
     appA.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
-    QTRY_VERIFY_WITH_TIMEOUT(holderIs(peerA), 3000);
     QTRY_COMPARE_WITH_TIMEOUT(keyRequests, 3, 3000);
+    QTest::qWait(50);
     QVERIFY(!core.mox());
+    QCOMPARE(server.activeTxClientCount(), 0);
     refuseKey = false;
     appB.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
     QTRY_VERIFY_WITH_TIMEOUT(core.mox(), 3000);
     QCOMPARE(keyRequests, 4);
-    QVERIFY(holderIs(peerA));
+    QVERIFY(holderIs(peerB));
 
     appB.sendTextMessage(QStringLiteral("trx:0,false;"));
     QTRY_VERIFY_WITH_TIMEOUT(!core.mox(), 3000);

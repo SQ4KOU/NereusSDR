@@ -54,6 +54,11 @@
 //                (R-R3-49): the trx note says what an app's trx:N,false
 //                does since Task 7 (it releases a TCI key only). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7 follow-up
+//                (R-R3-49): a trx:N,true,tci that keyed nothing and left no
+//                TCI level held gives the TX audio lock back and stops
+//                TX_CHRONO. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -2361,6 +2366,10 @@ void TciServer::onTextMessageReceived(const QString& msg)
     session->lastCommand   = msg;
     session->lastCommandAt = QDateTime::currentMSecsSinceEpoch();
 
+    // Task 7 follow-up (R-R3-49): this app took (or kept) the TX audio lock
+    // for its trx:N,true,tci. Checked again after the protocol's setMox.
+    bool trxTookTxAudio = false;
+
     // Phase 3J-1 closeout Item 2 (2026-05-12): firehose for TciLogWindow.
     // Strip the trailing ';' for readability in the log view.  Peer comes
     // from the session struct populated in onNewConnection.
@@ -2795,6 +2804,7 @@ void TciServer::onTextMessageReceived(const QString& msg)
                                 // TX_CHRONO timing frames so WSJT-X begins
                                 // streaming TX_AUDIO_STREAM binary frames.
                                 startTxChrono(ws, trxIdx);
+                                trxTookTxAudio = true;
                             } else {
                                 // Phase 26 review finding #10: explicit find +
                                 // fallback string, zero allocation path.
@@ -2843,6 +2853,30 @@ void TciServer::onTextMessageReceived(const QString& msg)
     // in priority order. Coalescing (Thetis m_outboundCoalescedFrames at
     // TCIServer.cs:769-774 [v2.10.3.13]) lands in Phase 15.
     const QString response = m_protocol->handleCommand(msg);
+
+    // Task 7 follow-up (R-R3-49): the trx keyed nothing and holds no TCI
+    // level (refused by the band plan, the interlock or the microphone
+    // check, or made under TX inhibit or a PA trip): give the TX audio
+    // back and stop TX_CHRONO. Otherwise the lock stays with the app until
+    // its trx:N,false or any unkey, and meanwhile a MOX-button, mic or VOX
+    // key transmits the app's TCI buffer instead of the microphone and
+    // skips R-R3-36's microphone-ready check (RadioModel::
+    // pcCaptureGatesKeying). A trx held off by a manual key keeps its
+    // level, and the lock, for the key that follows.
+    //
+    // Not in Thetis: its handleTrxMessage keeps the listener's
+    // ownsActiveTciPtt until the app's trx:false or OnMoxPreChangeHandler
+    // (TCIServer.cs:3623-3672 [v2.10.3.15]).
+    if (trxTookTxAudio && m_model && m_model->moxController() != nullptr
+        && !m_model->moxController()->isTciPttHeld()
+        && !m_txAudioActiveClient.isNull() && m_txAudioActiveClient.data() == ws) {
+        m_txAudioActiveClient = nullptr;
+        qCInfo(lcTci) << "TciServer: TX audio mutex released for" << session->peer
+                      << "(its trx keyed nothing)";
+        emit txAudioActiveClientChanged(nullptr);
+        stopTxChrono();
+    }
+
     if (!response.isEmpty()) {
         session->sendQueue.push(TciSendQueue::Priority::Control, response);
     }

@@ -169,8 +169,9 @@
 //                 ready is never queued (m_notQueuedHeld, R-R3-36). A CAT
 //                 or TCI rising edge is a new press (N2). CAT and TCI
 //                 requests are dropped, not held, under TX inhibit or a
-//                 PA trip (N3). J.J. Boyd (KG4VCF), AI-assisted via
-//                 Anthropic Claude Code.
+//                 PA trip (N3). isTciPttHeld() for TciServer's TX audio
+//                 lock. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -298,6 +299,13 @@ public:
     // keying source (Task 7 fix wave, I2). See setTxInhibited / setPaTripped.
     bool     isTxInhibited() const noexcept { return m_txInhibited; }
     bool     isPaTripped()   const noexcept { return m_paTripped; }
+
+    // isTciPttHeld: Thetis _tci_ptt, the level an app's trx last left
+    // (onTciPtt). False after a refused trx (the refusal drops it) and
+    // under TX inhibit or a PA trip; true while a trx:N,true is held off by
+    // a manual key. TciServer reads it after a trx to give back the TX
+    // audio lock when the trx keyed nothing (Task 7 follow-up, item 5).
+    bool     isTciPttHeld()  const noexcept { return m_tciPtt; }
 
     // ── K.2: MOX pre-check callback ──────────────────────────────────────────
     //
