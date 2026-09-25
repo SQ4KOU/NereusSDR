@@ -10,7 +10,8 @@
 //   - the subscription fields and their ranges;
 //   - through a real StationServer session: an endpoint that asks gets an
 //     NSDX datagram beside each NSDC frame, calibration and normalise move
-//     the bins, and one that does not ask gets only today's frames.
+//     the bins, and one that does not ask gets exactly the bytes the Core
+//     sent before display extras (a golden recorded from 535dd412).
 //
 // =================================================================
 
@@ -33,11 +34,14 @@
 #include "core/settings/SettingsProxy.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
+#include "OlderPeerDisplayRun.h"
 #include "gui/SpectrumWidget.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QFile>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QPointer>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -923,40 +927,40 @@ private slots:
         harness.finish();
     }
 
-    void anEndpointThatDoesNotAskGetsOnlyTodaysFrames()
+    // A subscription without any extras field gets exactly what the Core
+    // sent before display extras existed: the same charge, the same display
+    // control messages and every datagram byte for byte, against the golden
+    // recorded from 535dd412 with the same fixed run (OlderPeerDisplayRun.h).
+    void anEndpointThatDoesNotAskGetsTodaysBytes()
     {
 #ifndef HAVE_FFTW3
         QSKIP("FFTEngine has no FFTW3 backend in this build");
 #endif
-        Harness harness;
-        QVERIFY(harness.establishSession());
-        QSignalSpy controls(&harness.client, &StationClient::mediaControlReceived);
-        QVERIFY(harness.startReadyPeer());
-        const double centreHz = harness.radio.streamCentreHz(harness.streamIndex);
-        QVERIFY(harness.client.sendMediaControl(subscription(8, harness.sliceId, centreHz),
-                                                harness.client.sessionEpoch()));
-        QTRY_COMPARE(harness.controller.activeEndpointCount(), 1);
-        // Today's charge: the frames alone.
-        const auto plainCost = spectrumDisplayCost(128, 60, false);
-        QCOMPARE(harness.controller.acceptedDisplayCharge(), plainCost->charge);
-        QTRY_VERIFY_WITH_TIMEOUT(
-            (harness.feedRadio(), !messageFor(controls, QStringLiteral("context"), 8).isEmpty()),
-            10'000);
-        for (int i = 0; i < 8; ++i) {
-            harness.feedRadio(0.1 + 0.01 * i);
-            QTest::qWait(20);
+        using namespace NereusSDR::Test::OlderPeerDisplay;
+        QFile file(QStringLiteral(NEREUS_TEST_DATA_DIR "/display_extras_older_peer_frames.json"));
+        QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(file.fileName()));
+        const QJsonObject golden = QJsonDocument::fromJson(file.readAll()).object();
+        QCOMPARE(golden.value(QStringLiteral("recordedFrom")).toString(),
+                 QStringLiteral("535dd412"));
+        const Recording expected = Recording::fromJson(golden);
+        QVERIFY(expected.displays.size() >= 10);
+
+        Recording actual;
+        run(actual);
+        if (QTest::currentTestFailed()) {
+            return;
         }
-        QTRY_VERIFY(harness.mediaTransport->displays.size() >= 3);
-        const DisplayCodecContext context8 =
-            contextFrom(messageFor(controls, QStringLiteral("context"), 8));
-        DisplayCodecDecoder decoder;
-        for (const QByteArray& bytes : harness.mediaTransport->displays) {
-            QVERIFY(bytes.startsWith("NSDC"));
-            const auto decoded = decoder.decode(bytes);
-            QCOMPARE(decoded.disposition, DisplayCodecDisposition::Accepted);
-            QCOMPARE(decoded.frame.context.endpointId, context8.endpointId);
+        QCOMPARE(actual.charge, expected.charge);
+        QCOMPARE(actual.controls.size(), expected.controls.size());
+        for (qsizetype i = 0; i < expected.controls.size(); ++i) {
+            QVERIFY2(actual.controls.at(i) == expected.controls.at(i),
+                     qPrintable(QStringLiteral("control message %1 differs").arg(i)));
         }
-        harness.finish();
+        QCOMPARE(actual.displays.size(), expected.displays.size());
+        for (qsizetype i = 0; i < expected.displays.size(); ++i) {
+            QVERIFY2(actual.displays.at(i) == expected.displays.at(i),
+                     qPrintable(QStringLiteral("datagram %1 differs").arg(i)));
+        }
     }
 
     // averageTimeMs sets the trace's constant, waterfallAverageTimeMs the

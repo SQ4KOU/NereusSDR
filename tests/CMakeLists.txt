@@ -4910,6 +4910,8 @@ nereus_add_test(tst_display_followers CORE_ONLY)
 nereus_add_test(tst_display_extras
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+target_compile_definitions(tst_display_extras PRIVATE
+    NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
 
 # ── Task 2.3: Spectrum Defaults overlay group + decimation wire-up ──────────
 # Tests for SpectrumWidget overlay setters (ShowMHzOnCursor / ShowBinWidth /

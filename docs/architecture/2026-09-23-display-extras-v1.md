@@ -26,7 +26,11 @@ cannot read (as it refuses any unknown key today).
 
 A subscription without any of the fields gets exactly today's frames, bytes
 and charge: no NSDX datagram, no shift, the averaging constant the plane
-objects name. The extras belong to the subscription: each endpoint asks for
+objects name. `tst_display_extras` holds this to a golden: a fixed run
+(`tests/OlderPeerDisplayRun.h`) recorded from the Core before display
+extras existed (`535dd412`), in `tests/data/display_extras_older_peer_frames.json`,
+compared charge, display control messages and every datagram byte for
+byte. The extras belong to the subscription: each endpoint asks for
 its own, and a new `subscribe` for the endpoint replaces them and starts
 their computations again. Nothing in them is per device.
 
