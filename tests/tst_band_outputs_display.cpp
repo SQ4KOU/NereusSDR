@@ -65,6 +65,10 @@ constexpr quint8 kReceiveBypass = 0x00;
 class ConnectedP1 final : public P1RadioConnection {
 public:
     ConnectedP1() { setState(ConnectionState::Connected); }
+    // The connection's own state machine, as the watchdog and the
+    // reconnect timer drive it (P1RadioConnection.cpp onWatchdogTick /
+    // onReconnectTimeout), on this same object.
+    void setStateForTest(ConnectionState s) { setState(s); }
 };
 
 struct DetachConnection {
@@ -206,6 +210,42 @@ private slots:
         QCOMPARE(core.send(), kReceiveBypass);
         QCOMPARE(ocTab.currentOcByteForTest(), kReceiveBypass);
         QCOMPARE(ioTab.ocShownByteForTest(), int(kReceiveBypass));
+    }
+
+    // ── Protocol 1's automatic reconnect, on the same connection ─────────
+    //
+    // Re-review N1: leaving Connected clears the model's copy, so the
+    // connection must forget what it last reported too. Otherwise the same
+    // byte, composed again after the reconnect, is suppressed as unchanged
+    // and every display stays blank until the band or the key changes.
+    void p1Reconnect_sameConnection_showsTheByteAgain()
+    {
+        Hl2Core core;
+        core.crossBandSplit();
+        core.model.setConnectionStateForTest(ConnectionState::Connected);
+        Hl2IoBoardTab ioTab(&core.model);
+
+        QCOMPARE(core.send(), kReceiveBypass);
+        QVERIFY(core.model.bandOutputsKnown());
+        QCOMPARE(ioTab.ocShownByteForTest(), int(kReceiveBypass));
+
+        // The watchdog declares the link lost; the model forgets the byte.
+        for (ConnectionState s : {ConnectionState::LinkLost, ConnectionState::Connecting}) {
+            core.conn.setStateForTest(s);
+            core.model.setConnectionStateForTest(s);
+        }
+        QVERIFY(!core.model.bandOutputsKnown());
+        QCOMPARE(ioTab.ocShownByteForTest(), -1);
+
+        // The retry succeeds on the same object and composes the same byte.
+        core.conn.setStateForTest(ConnectionState::Connected);
+        core.model.setConnectionStateForTest(ConnectionState::Connected);
+        QCOMPARE(core.send(), kReceiveBypass);
+        QVERIFY(core.model.bandOutputsKnown());
+        QCOMPARE(core.model.bandOutputsByte(), int(kReceiveBypass));
+        QCOMPARE(core.model.bandOutputsKeyed(), false);
+        QCOMPARE(ioTab.ocShownByteForTest(), int(kReceiveBypass));
+        QCOMPARE(ioTab.ocKeyedTextForTest(), QStringLiteral("RX"));
     }
 
     // ── A tab shows the byte it is given, never one of its own ───────────
