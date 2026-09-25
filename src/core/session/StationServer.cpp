@@ -4321,15 +4321,23 @@ QByteArray StationServer::saveForAbsentSubject(int sliceId) const
 
 void StationServer::saveTakenSlicesFor(const QByteArray& deviceId)
 {
-    const QList<ConfirmStep::Notice> taken = m_confirm->endPendingTakeBacks(deviceId);
-    if (m_radioModel.isNull() || deviceId.isEmpty() || deviceId.startsWith("token:")
-        || deviceId == SliceOwnership::stationDevice()) {
+    if (m_radioModel.isNull() || deviceId.isEmpty()) {
         return;
     }
+    if (deviceId.startsWith("token:") || deviceId == SliceOwnership::stationDevice()) {
+        // Nothing is saved for these, and no device returns to take back.
+        m_confirm->endTakeBacks(deviceId);
+        return;
+    }
+    // Fix wave 3 (the re-review's Minor 2): check it can save before Take
+    // it back ends. With no radio connected there is no layout store to
+    // save in, so Take it back is kept (it arrives with its notice) and
+    // ends, the slice saved, at the end of the device's next away period.
     const QString mac = m_radioModel->currentRadioMac();
     if (mac.isEmpty()) {
         return;
     }
+    const QList<ConfirmStep::Notice> taken = m_confirm->endTakeBacks(deviceId);
     AppSettings& store = AppSettings::instance();
     bool saved = false;
     for (const ConfirmStep::Notice& notice : taken) {

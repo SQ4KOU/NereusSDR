@@ -110,20 +110,17 @@ QList<ConfirmStep::Notice> ConfirmStep::takePending(const QByteArray& device)
     return m_pending.take(device);
 }
 
-QList<ConfirmStep::Notice> ConfirmStep::endPendingTakeBacks(const QByteArray& device)
+QList<ConfirmStep::Notice> ConfirmStep::endTakeBacks(const QByteArray& device)
 {
-    QList<Notice> ended;
+    // Every record: a waiting notice's and a delivered one's alike (a
+    // waiting notice that offers Take it back always has its record,
+    // StationServer::tellDevice).
+    const QList<Notice> ended = m_takeBack.take(device);
     const auto it = m_pending.find(device);
-    if (it == m_pending.end()) {
-        return ended;
-    }
-    for (Notice& notice : *it) {
-        if (!notice.prompt.takeBack) {
-            continue;
+    if (it != m_pending.end()) {
+        for (Notice& notice : *it) {
+            notice.prompt.takeBack = false;
         }
-        ended.append(notice);
-        notice.prompt.takeBack = false;
-        forgetTakeBack(device, notice.id);
     }
     return ended;
 }

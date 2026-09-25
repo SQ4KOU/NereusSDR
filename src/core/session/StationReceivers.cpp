@@ -1154,10 +1154,13 @@ void StationServer::deliverAdmissionNotices(SessionTransport* transport,
         sendNotice(transport, notice);
     }
     for (ConfirmStep::Notice notice : waiting) {
-        if (timeRanOutAtMs && notice.prompt.takeBack) {
-            // After its 3 minutes they still arrive, without Take it back.
+        // After its 3 minutes they still arrive, without Take it back: the
+        // end of the 180 s ended it and saved the slice
+        // (saveTakenSlicesFor). Fix wave 3: one whose record is still kept
+        // (no radio was connected to save in then) keeps Take it back.
+        if (timeRanOutAtMs && notice.prompt.takeBack
+            && !m_confirm->takeBackRecord(device, notice.id)) {
             notice.prompt.takeBack = false;
-            m_confirm->forgetTakeBack(device, notice.id);
         }
         sendNotice(transport, notice);
     }

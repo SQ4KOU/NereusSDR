@@ -1182,7 +1182,13 @@ or the Core restarts. A slice taken from an away device lives only in its notice
 back is possible; when the 3 minutes end first, Take it back ends and the slice is saved in the
 device's `DeviceLayoutStore` with its settings, as ruling 5.2 saves a held slice another device
 closes, so the device's next admission restores it (fix wave 2,
-`StationServer::saveTakenSlicesFor`).
+`StationServer::saveTakenSlicesFor`). A Take it back already delivered (the device was there
+when its slice was taken) ends the same way: when the device's next away period ends, the record
+goes and the slice is saved then (fix wave 3; `ConfirmStep::endTakeBacks` ends every record the
+device has, delivered or waiting). The save needs the radio the store is kept under: when no
+radio is connected as the 3 minutes end, nothing can be saved, so Take it back is kept and
+arrives with the notice at the device's return; it ends, the slice saved, at the end of the
+device's next away period with a radio connected (fix wave 3, the re-review's Minor 2).
 
 ### 7.5 The transmitter's own settings
 
