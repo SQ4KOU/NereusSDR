@@ -211,6 +211,10 @@
 //               per-address handshake cap and 0600 on load. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-24: Part C follow-up (R-IOS-08): IPv6 peers counted per /64
+//               in the handshake cap; pairing.open refused to a token
+//               session. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1781,6 +1785,17 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 pairingVersion() < 1
                     ? QStringLiteral("This Core cannot pair new devices.")
                     : QStringLiteral("Update this app to pair new devices with this Core."),
+                {}));
+            break;
+        }
+        // Part C follow-up (R-IOS-08): only a device signed in with its own
+        // key reopens pairing. A window signed in with the pairing token is
+        // refused before the dispatcher sees the verb; pairing.close stays
+        // open to it, since closing only narrows who can pair.
+        if (message.commandVerb == "pairing.open" && !peerSeesPairingCode(transport)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("Open pairing from a paired device or from the Core's console."),
                 {}));
             break;
         }

@@ -953,31 +953,49 @@ private slots:
         LoopbackTransport* token = core.tokenSession();
         QVERIFY(token != nullptr);
         // Its hello declares deviceAuth, so it has the devices object and
-        // the verbs, but never the code.
-        const QJsonObject opened = core.invoke(token, "pairing.open");
-        QVERIFY(opened.value(QStringLiteral("accepted")).toBool());
-        QVERIFY(codeValueOf(opened).isEmpty());
-        QCOMPARE(core.window().state(), PairingWindow::State::OpenReopened);
-        QVERIFY(!core.window().currentCode().isEmpty());
-        QVERIFY(core.settled(token, QStringLiteral("pairingWindowOpen"), true)
-                == std::optional<QJsonValue>(true));
-        QVERIFY(devicesValue(token, QStringLiteral("pairingCode"))
-                == std::optional<QJsonValue>(QString()));
-        for (const QByteArray& wire : token->received()) {
-            QVERIFY2(!wire.contains(core.window().currentCode().toUtf8()),
-                     "a token connection received the pairing code");
-        }
+        // the verbs, but it may not reopen pairing (Part C follow-up,
+        // R-IOS-08: "from a paired device"), and never receives the code.
+        const QJsonObject refused = core.invoke(token, "pairing.open");
+        QVERIFY(!refused.value(QStringLiteral("accepted")).toBool(true));
+        const QString reason = refused.value(QStringLiteral("reason")).toString();
+        QCOMPARE(reason,
+                 QStringLiteral("Open pairing from a paired device or from the Core's console."));
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        QCOMPARE(codeValueOf(refused), QStringLiteral("<absent>"));
+        QCOMPARE(core.window().state(), PairingWindow::State::ClosedClaimed);
 
-        // A device signed in with its own key receives it.
+        // A device signed in with its own key opens it and receives the code.
         Device device;
         QVERIFY(core.store().add(device.record()));
         LoopbackTransport* app = core.deviceSession(device);
         QVERIFY(app != nullptr);
-        const std::optional<QJsonValue> shown = devicesValue(app, QStringLiteral("pairingCode"));
-        QVERIFY(shown.has_value());
-        QVERIFY(shown->toString() == core.window().currentCode());
-        const QJsonObject again = core.invoke(app, "pairing.open");
-        QVERIFY(codeValueOf(again) == core.window().currentCode());
+        const QJsonObject opened = core.invoke(app, "pairing.open");
+        QVERIFY(opened.value(QStringLiteral("accepted")).toBool());
+        QCOMPARE(core.window().state(), PairingWindow::State::OpenReopened);
+        QVERIFY(!core.window().currentCode().isEmpty());
+        QVERIFY(codeValueOf(opened) == core.window().currentCode());
+        QVERIFY(core.settled(app, QStringLiteral("pairingCode"), core.window().currentCode())
+                == std::optional<QJsonValue>(core.window().currentCode()));
+
+        // The token window, signed in again, sees the window open and a
+        // blank code, and never the code itself.
+        LoopbackTransport* again = core.tokenSession();
+        QVERIFY(again != nullptr);
+        QVERIFY(core.settled(again, QStringLiteral("pairingWindowOpen"), true)
+                == std::optional<QJsonValue>(true));
+        QVERIFY(devicesValue(again, QStringLiteral("pairingCode"))
+                == std::optional<QJsonValue>(QString()));
+        for (LoopbackTransport* link : {token, again}) {
+            for (const QByteArray& wire : link->received()) {
+                QVERIFY2(!wire.contains(core.window().currentCode().toUtf8()),
+                         "a token connection received the pairing code");
+            }
+        }
+
+        // pairing.close stays open to it: closing only narrows who can pair.
+        const QJsonObject closed = core.invoke(again, "pairing.close");
+        QVERIFY(closed.value(QStringLiteral("accepted")).toBool());
+        QCOMPARE(core.window().state(), PairingWindow::State::ClosedClaimed);
     }
 
     void thePairingVerbsNeedAHelloThatDeclaresDeviceAuth()

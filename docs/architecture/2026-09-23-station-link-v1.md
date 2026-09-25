@@ -322,7 +322,8 @@ page of a desktop running the Core. It is never printed to standard output
 and never logged: on a packaged Core both land in the journal. The link carries it only to a connection signed in with
 a paired device's own key: in the `devices` object's `pairingCode` and in
 `pairing.open`'s result (section 7.1). A connection signed in with the
-token receives `""` in both, even when its hello declares `deviceAuth`. A
+token receives `""` in `pairingCode`, even when its hello declares
+`deviceAuth`, and its `pairing.open` is refused (section 9.1). A
 fixture writes the code as `"$string"`, never literally.
 
 **Single use, and the wait.** The station commits to the code when the
@@ -1764,9 +1765,11 @@ Four command groups need a sentence beyond the table:
   from any other the station refuses them with "Update this app to pair
   new devices with this Core.". `pairing.open` reopens the window on a
   claimed Core (nothing to do while it is open) and answers with `values`
-  holding `code` (`utf8`), the current code, which is `""` for a
-  connection signed in with the token (section 3.6). `pairing.close`
-  closes a reopened window. Either one with arguments is refused ("The
+  holding `code` (`utf8`), the current code. Only a connection signed in
+  with a paired device's key may send it: one signed in with the token is
+  refused with "Open pairing from a paired device or from the Core's
+  console." (section 3.6). `pairing.close` closes a reopened window, from
+  either kind of connection. Either one with arguments is refused ("The
   request to open pairing was not understood.", "The request to close
   pairing was not understood.").
 
