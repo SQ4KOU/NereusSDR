@@ -10,6 +10,9 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 35 (R-IOS-13), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 36 (R-IOS-13): keying on a filled
+//               microphone buffer. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RemoteKeying.h"
@@ -19,8 +22,10 @@
 #include "core/TwoToneController.h"
 #include "core/safety/TransmitHolder.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include <limits>
+#include <memory>
 
 namespace NereusSDR {
 
@@ -113,18 +118,89 @@ RemoteKeying::RemoteKeying(RadioModel* model, TransmitHolder* holder, QObject* p
     }
 }
 
+void RemoteKeying::setMicUplink(MicUplink uplink)
+{
+    m_mic = std::move(uplink);
+}
+
 RemoteKeying::Result RemoteKeying::handle(const Command& command)
 {
+    // The answer, if it comes before this returns; a later one (a key
+    // waiting for its microphone buffer) lands in state nobody reads.
+    const auto answer = std::make_shared<std::optional<Result>>();
+    handle(command, [answer](const Result& result) { *answer = result; });
+    if (answer->has_value()) {
+        return **answer;
+    }
+    Result pending;
+    pending.pending = true;
+    return pending;
+}
+
+void RemoteKeying::handle(const Command& command, Reply reply)
+{
     if (m_model.isNull() || m_model->moxController() == nullptr || m_holder.isNull()) {
-        return refusedPlain(QStringLiteral("The Core has no radio ready."));
+        reply(refusedPlain(QStringLiteral("The Core has no radio ready.")));
+        return;
+    }
+    // Task 36: the device's key is waiting for its microphone buffer.
+    if (const auto waiting = m_waiting.find(command.deviceId); waiting != m_waiting.end()) {
+        if (command.verb == Verb::Key) {
+            // A copy, or a new press from the same device: answered with
+            // the waiting key's answer.
+            waiting->replies.append(std::move(reply));
+            return;
+        }
+        if (command.verb == Verb::Unkey) {
+            // Released before it keyed: it never keys.
+            finishWait(command.deviceId, refused(TxRefusals::keyEnded()));
+        }
     }
     if (const std::optional<Result> copy = copyOf(command)) {
-        return *copy;
+        reply(*copy);
+        return;
+    }
+    if (keyWaitsForMicrophone(command) && !moxKeyedFor(command.deviceId)) {
+        // The holder's own refusal first, at once (a question only).
+        if (const TxRefusal refusal =
+                m_holder->keyRefusalFor(command.deviceId, command.trigger == kProgramTrigger);
+            !refusal.isEmpty()) {
+            const Result result = refused(refusal);
+            remember(command, result);
+            reply(result);
+            return;
+        }
+        Waiting waiting;
+        waiting.command = command;
+        waiting.replies.append(std::move(reply));
+        waiting.generation = ++m_waitGeneration;
+        const quint64 generation = waiting.generation;
+        const QByteArray deviceId = command.deviceId;
+        m_waiting.insert(deviceId, std::move(waiting));
+        qCInfo(lcDsp) << "Key from" << deviceId << "waits for its microphone";
+        QPointer<RemoteKeying> self(this);
+        m_mic.prime(deviceId, [self, deviceId, generation](bool ready) {
+            if (self.isNull()) {
+                return;
+            }
+            const auto it = self->m_waiting.constFind(deviceId);
+            if (it == self->m_waiting.cend() || it->generation != generation) {
+                return;
+            }
+            const Command waited = it->command;
+            const Result result = ready ? self->keyNow(waited) : refused(TxRefusals::micNotReady());
+            if (!ready) {
+                qCInfo(lcDsp) << "Key from" << deviceId
+                              << "refused: no microphone audio within the deadline";
+            }
+            self->finishWait(deviceId, result);
+        });
+        return;
     }
     Result result;
     switch (command.verb) {
     case Verb::Key:
-        result = key(command);
+        result = keyNow(command);
         break;
     case Verb::Unkey:
         result = unkey(command);
@@ -137,12 +213,61 @@ RemoteKeying::Result RemoteKeying::handle(const Command& command)
         break;
     }
     remember(command, result);
-    return result;
+    reply(result);
 }
 
 void RemoteKeying::forgetSession(const QString& session)
 {
     m_sessions.remove(session);
+    // Task 36: a key of this session still waiting never keys, and nobody
+    // is left to answer.
+    QList<QByteArray> devices;
+    for (auto it = m_waiting.cbegin(); it != m_waiting.cend(); ++it) {
+        if (it->command.session == session) {
+            devices.append(it.key());
+        }
+    }
+    for (const QByteArray& device : std::as_const(devices)) {
+        m_waiting.remove(device);
+        if (m_mic.endPriming) {
+            m_mic.endPriming(device);
+        }
+    }
+}
+
+bool RemoteKeying::keyWaitsForMicrophone(const Command& command) const
+{
+    if (command.verb != Verb::Key || !m_mic.carriesMic || !m_mic.prime
+        || !m_mic.carriesMic(command.deviceId)) {
+        return false;
+    }
+    // A mode that transmits the microphone: every mode but CW, whose key
+    // comes from the keyer.
+    const SliceModel* slice = m_model->txBoundSlice();
+    if (slice == nullptr) {
+        return false;
+    }
+    const DSPMode mode = slice->dspMode();
+    return mode != DSPMode::CWL && mode != DSPMode::CWU;
+}
+
+void RemoteKeying::finishWait(const QByteArray& deviceId, const Result& result)
+{
+    const auto it = m_waiting.find(deviceId);
+    if (it == m_waiting.end()) {
+        return;
+    }
+    Waiting waiting = std::move(*it);
+    m_waiting.erase(it);
+    if (m_mic.endPriming) {
+        m_mic.endPriming(deviceId);
+    }
+    remember(waiting.command, result);
+    for (const Reply& reply : std::as_const(waiting.replies)) {
+        if (reply) {
+            reply(result);
+        }
+    }
 }
 
 // ---- Copies (the pairing design, section 9.6) ------------------------------
@@ -210,7 +335,7 @@ bool RemoteKeying::keyLive(const QByteArray& deviceId, quint32 epoch) const
 
 // ---- The verbs ------------------------------------------------------------------
 
-RemoteKeying::Result RemoteKeying::key(const Command& command)
+RemoteKeying::Result RemoteKeying::keyNow(const Command& command)
 {
     MoxController* mox = m_model->moxController();
     // A key with a new id while this device's own key is on changes

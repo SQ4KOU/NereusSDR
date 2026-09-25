@@ -620,6 +620,17 @@ public:
     /// displayExtrasVersion 1: a subscription may carry the display extras
     /// fields (iPhone app Task 20, display extras v1).
     bool displayExtrasAvailable() const;
+    /// iPhone app plan Task 36 (R-IOS-13): the media session was told
+    /// remoteTxVersion (it agreed minor 11 and its hello declared remoteTx
+    /// 1), so its media start may carry remoteTxVersion and get the
+    /// microphone line.
+    bool remoteTxAvailableForMedia() const;
+    /// Task 36: the device the media session is for (DeviceSessionRegistry's
+    /// id), or empty without one.
+    QByteArray mediaSessionDeviceId() const;
+    /// Task 36: whether the media session may transmit now (its
+    /// txPermitted).
+    bool mediaSessionTxPermitted() const;
     /// Installs newer limits (a later generation) and why they are below the
     /// Core's ceiling (R-R3-08, R-R3-37). A new reason needs a new
     /// generation; the same limits with the same reason are accepted as-is.

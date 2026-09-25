@@ -49,11 +49,27 @@
 // holder (for a key the Core's own position made, the station device, kind
 // "station"), the trigger and the key's epoch; empty while unkeyed.
 //
+// ---- Keying on a filled buffer (Task 36) ----
+// For a device whose media carries a microphone line, a tx.key in a mode
+// that transmits the microphone (every mode but CWL and CWU) waits for the
+// line's buffer to reach its 60 ms target and then keys; if it has not
+// within 250 ms it is refused micNotReady. The holder's own refusals come
+// first, at once. Copies of the key, and a new-id key from the same device,
+// wait with it and get its answer; a tx.unkey from the device while it
+// waits cancels it (the key is answered keyEnded). A session that ends
+// while its key waits is forgotten with it. TUNE and two-tone use no
+// microphone and key at once, as does a device without a microphone line
+// (the station's own source then, as before Task 36).
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 35 (R-IOS-13), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 36 (R-IOS-13): a key waits for the
+//               microphone line's buffer (MicUplink), answered later
+//               through handle()'s reply. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -64,6 +80,7 @@
 #include <QPointer>
 #include <QString>
 
+#include <functional>
 #include <optional>
 
 #include "core/safety/TxRefusal.h"
@@ -107,7 +124,27 @@ public:
         /// Why it was refused, in plain words, when no transmit refusal
         /// says it (the Core has no radio, two-tone cannot run).
         QString reason;
+        /// Task 36: handle(const Command&) only: the key is waiting for the
+        /// microphone line's buffer; its answer goes to the reply of
+        /// handle(command, reply).
+        bool pending{false};
     };
+
+    /// Task 36: the microphone line of the device a key is for.
+    struct MicUplink {
+        /// True while `deviceId`'s media carries a microphone line.
+        std::function<bool(const QByteArray& deviceId)> carriesMic;
+        /// Puts the line in use for the key and calls done(true) once its
+        /// buffer holds the target, or done(false) when it has not within
+        /// the deadline.
+        std::function<void(const QByteArray& deviceId, std::function<void(bool)> done)> prime;
+        /// The key that primed it has keyed or been refused (or the wait was
+        /// cancelled); from here the line follows who is keyed.
+        std::function<void(const QByteArray& deviceId)> endPriming;
+    };
+    void setMicUplink(MicUplink uplink);
+
+    using Reply = std::function<void(const Result& result)>;
 
     /// The trigger names tx.key takes.
     static bool isTrigger(const QByteArray& trigger);
@@ -121,12 +158,20 @@ public:
     RemoteKeying(RadioModel* model, TransmitHolder* holder, QObject* parent = nullptr);
 
     Result handle(const Command& command);
+    /// The same, answering through `reply`: at once, or (Task 36) once a
+    /// key's microphone buffer has filled or timed out. `reply` runs once
+    /// per command.
+    void handle(const Command& command, Reply reply);
 
     /// The session ended: its commands are forgotten.
     void forgetSession(const QString& session);
 
 private:
-    Result key(const Command& command);
+    /// The key itself, after any wait: the gates, MOX, the epoch.
+    Result keyNow(const Command& command);
+    /// Whether this key waits for `command.deviceId`'s microphone line.
+    bool keyWaitsForMicrophone(const Command& command) const;
+    void finishWait(const QByteArray& deviceId, const Result& result);
     Result unkey(const Command& command);
     Result tune(const Command& command);
     Result twoTone(const Command& command);
@@ -165,6 +210,16 @@ private:
         Result result;
     };
     QHash<QString, QList<Remembered>> m_sessions;
+
+    // Task 36: keys waiting for a microphone buffer, one per device.
+    struct Waiting {
+        Command command;
+        QList<Reply> replies;
+        quint64 generation{0};
+    };
+    QHash<QByteArray, Waiting> m_waiting;
+    quint64 m_waitGeneration{0};
+    MicUplink m_mic;
 };
 
 } // namespace NereusSDR

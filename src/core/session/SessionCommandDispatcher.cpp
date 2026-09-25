@@ -858,22 +858,31 @@ void SessionCommandDispatcher::handleTxKeying(const SessionMessage& invoke)
         emitRefusal(invoke.commandVerb, invoke.commandId, TxRefusals::stationReceiveOnly());
         return;
     }
-    const RemoteKeying::Result result = m_transmitAccess.keying(command);
-    if (result.accepted) {
-        QList<MirrorUpdate> values;
-        if (result.epoch != 0) {
-            values.append({0, "epoch", MirrorWireKind::Int64,
-                           QVariant(static_cast<qlonglong>(result.epoch))});
+    // Task 36: answered through the reply, now or once a key's microphone
+    // buffer has filled or timed out.
+    const QPointer<SessionCommandDispatcher> self(this);
+    const QByteArray verb = invoke.commandVerb;
+    const quint32 id = invoke.commandId;
+    m_transmitAccess.keying(command, [self, verb, id](const RemoteKeying::Result& result) {
+        if (self.isNull()) {
+            return;
         }
-        emit commandResultReady(SessionMessages::commandResult(
-            invoke.commandVerb, invoke.commandId, true, QString(), {}, values));
-        return;
-    }
-    if (!result.refusal.isEmpty()) {
-        emitRefusal(invoke.commandVerb, invoke.commandId, result.refusal);
-        return;
-    }
-    emitResult(invoke.commandVerb, invoke.commandId, false, result.reason, {});
+        if (result.accepted) {
+            QList<MirrorUpdate> values;
+            if (result.epoch != 0) {
+                values.append({0, "epoch", MirrorWireKind::Int64,
+                               QVariant(static_cast<qlonglong>(result.epoch))});
+            }
+            emit self->commandResultReady(
+                SessionMessages::commandResult(verb, id, true, QString(), {}, values));
+            return;
+        }
+        if (!result.refusal.isEmpty()) {
+            self->emitRefusal(verb, id, result.refusal);
+            return;
+        }
+        self->emitResult(verb, id, false, result.reason, {});
+    });
 }
 
 void SessionCommandDispatcher::handleSetTxSlice(const SessionMessage& invoke)

@@ -997,6 +997,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 if (const auto holder = m_transmitHolder->holder()) {
                     request.deviceId = holder->deviceId;
                 }
+            } else if (keyer.isStation() && source == PttMode::Vox && m_radioModel
+                       && !m_radioModel->remoteVoxDevice().isEmpty()) {
+                // iPhone app plan Task 36: VOX is listening to a remote
+                // device's microphone (it has VOX armed), so its VOX key is
+                // that device's, on unheld transmit too: it becomes the
+                // holder as its own key would, and VOX stays armed.
+                request.deviceId = m_radioModel->remoteVoxDevice();
             }
             // The radio's own PTT (its mic or a footswitch) is PttMode::Mic
             // from the station device (ruling 8.5).
@@ -1430,13 +1437,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             return refusal.isEmpty() ? TxRefusals::notHolder() : refusal;
         };
         // Task 35: tx.key, tx.unkey, tx.tune and tx.twoTone.
-        access.keying = [this](const RemoteKeying::Command& command) {
+        access.keying = [this](const RemoteKeying::Command& command, RemoteKeying::Reply reply) {
             if (!m_remoteKeying) {
                 RemoteKeying::Result result;
                 result.reason = QStringLiteral("The Core has no radio ready.");
-                return result;
+                reply(result);
+                return;
             }
-            return m_remoteKeying->handle(command);
+            // Task 36: a key waiting for its microphone buffer answers later.
+            m_remoteKeying->handle(command, std::move(reply));
         };
         m_dispatcher->setTransmitAccess(std::move(access));
     }
@@ -4661,6 +4670,25 @@ bool StationServer::displayExtrasAvailable() const
     return mediaAvailable() && it != m_peers.cend()
         && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
         && displayExtrasVersion() >= 1;
+}
+
+bool StationServer::remoteTxAvailableForMedia() const
+{
+    const auto it = m_peers.constFind(m_mediaSession);
+    return mediaAvailable() && it != m_peers.cend()
+        && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(m_mediaSession, QByteArrayLiteral("remoteTx"), 1);
+}
+
+QByteArray StationServer::mediaSessionDeviceId() const
+{
+    const auto it = m_peers.constFind(m_mediaSession);
+    return it != m_peers.cend() && it->authenticated ? it->sessionDeviceId : QByteArray();
+}
+
+bool StationServer::mediaSessionTxPermitted() const
+{
+    return m_mediaSession != nullptr && txDecisionFor(m_mediaSession).permitted;
 }
 
 void StationServer::setDisplayBudgetForReasonPeersOnly(bool reasonPeersOnly)

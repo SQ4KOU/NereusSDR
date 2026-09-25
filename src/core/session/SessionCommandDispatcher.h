@@ -248,10 +248,14 @@ public:
     /// Task 35 (R-IOS-13): keying: the Core's answer to tx.key, tx.unkey,
     /// tx.tune and tx.twoTone (RemoteKeying::handle). Unset, those verbs
     /// are refused stationReceiveOnly and nothing keys.
+    /// Task 36: the answer comes through the reply, at once or later (a key
+    /// waiting for its microphone buffer); a later one is emitted then, and
+    /// the Core routes it by verb and id to the session that asked.
     struct TransmitAccess {
         std::function<TxRefusal(const QByteArray& requester)> onAir;
         std::function<TxRefusal(const QByteArray& requester)> txSlice;
-        std::function<RemoteKeying::Result(const RemoteKeying::Command& command)> keying;
+        std::function<void(const RemoteKeying::Command& command, RemoteKeying::Reply reply)>
+            keying;
     };
     void setTransmitAccess(TransmitAccess access) { m_transmitAccess = std::move(access); }
 

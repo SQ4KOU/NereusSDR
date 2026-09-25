@@ -93,6 +93,11 @@
 //                lock holder's disconnect release only this window's key.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 36 (R-IOS-13): through a remote
+//                window the lock holder's transmit audio goes to the Core
+//                on the window's microphone line (RemoteTransmit::audio).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -3455,6 +3460,14 @@ void TciServer::onBinaryMessageReceived(const QByteArray& data)
     // or L,L,L... for mono).  The ring stores raw float bytes; TxChannel's
     // feedTxAudioFromTci drains them per block.
     const int frames = (channels > 1) ? (decodedValueCount / channels) : decodedValueCount;
+    // iPhone app plan Task 36 (R-IOS-13): through a remote window, the app's
+    // transmit audio goes to the Core on the window's microphone line.
+    if (m_remoteTransmit.key && m_remoteTransmit.audio) {
+        if (frames > 0) {
+            m_remoteTransmit.audio(decoded.data(), frames, channels, sampleRate);
+        }
+        return;
+    }
     if (frames > 0) {
         m_txAudioRing.tryPushCopy(
             reinterpret_cast<const uint8_t*>(decoded.data()),

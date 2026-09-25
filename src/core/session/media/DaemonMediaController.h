@@ -4,6 +4,14 @@
 // =================================================================
 // no-port-check: NereusSDR-original. Session-owned daemon display media
 // coordination; it contains neither GUI nor radio control policy.
+//
+// Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone line.
+//               A start carrying remoteTxVersion gets it; its receiver
+//               feeds RadioModel's remote microphone ring; keys wait on it
+//               (RemoteKeying::MicUplink); VOX armed and starvation follow
+//               the device. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
@@ -14,7 +22,9 @@
 #include "core/session/media/DisplayExtras.h"
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/RemoteAudioContext.h"
+#include "core/session/media/RemoteMicReceiver.h"
 #include "core/session/media/SpectrumEndpoint.h"
+#include "core/session/RemoteKeying.h"
 
 #include <QElapsedTimer>
 #include <QJsonObject>
@@ -167,6 +177,14 @@ public:
     /// What the display load governor scales when the Core is busy.
     DisplayBudgetCharge acceptedDisplayCharge() const;
 
+    /// iPhone app plan Task 36 (R-IOS-13): the media connection's microphone
+    /// line receiver, while its start carried remoteTxVersion; null
+    /// otherwise. Its starved(bool) is the Core's starvation signal.
+    RemoteMicReceiver* micReceiver() const { return m_micReceiver.get(); }
+    /// Task 36: the keying's view of the line (RemoteKeying::setMicUplink;
+    /// the constructor installs it on the Core's RemoteKeying).
+    RemoteKeying::MicUplink micUplink();
+
 private:
     struct EndpointEntry;
     struct AllocationRecord {
@@ -249,6 +267,11 @@ private:
     /// end (DaemonAudioSenderTelemetry::captureTimestamp/captureNs); all
     /// three are 0 when no audio context is capturing.
     bool handleClockProbe(const QJsonObject& control, qint64 receivedNs);
+    // Task 36: the microphone line.
+    void startMicLine(MediaPeer* peer);
+    void stopMicLine();
+    void refreshMicVoxArmed();
+    void refreshMicWatching();
     bool acceptPeerControl(const QJsonObject& control);
 
     void clearSession();
@@ -384,6 +407,10 @@ private:
     HeadphonesAudioStream m_headphones;
     quint32 m_nextHeadphonesContextGeneration{0};
     bool m_headphonesRouted{false};
+    // Task 36: the microphone line of the current media peer, and the
+    // device it is for.
+    std::unique_ptr<RemoteMicReceiver> m_micReceiver;
+    QByteArray m_micDeviceId;
     std::map<quint32, EndpointEntry> m_endpoints;
     QMap<MediaSourceKey, SourceRuntime> m_sources;
     QTimer m_sendTimer;

@@ -7704,6 +7704,15 @@ if(TEST tst_remote_mic_receiver)
     set_tests_properties(tst_remote_mic_receiver PROPERTIES TIMEOUT 600)
 endif()
 
+# iPhone app plan Task 36 (R-IOS-13): the remote microphone ring at the
+# transmitter: the pump's branch in the normal and RADE paths, the Core's
+# microphone line, keying on a filled buffer (micNotReady), VOX from the
+# device, and the monitor in the remote audio.
+nereus_add_test(tst_tx_worker_remote_ring
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_tx_worker_remote_ring PRIVATE NEREUS_BUILD_TESTS)
+
 # Remote Daemon R3, Task 1: strict connection-scoped signalling bridge and
 # live queued-control exchange over the encrypted media transport.
 nereus_add_test(tst_media_peer)

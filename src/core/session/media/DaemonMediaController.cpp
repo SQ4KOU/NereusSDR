@@ -2,12 +2,19 @@
 // src/core/session/media/DaemonMediaController.cpp  (NereusSDR)
 // =================================================================
 // no-port-check: NereusSDR-original. See DaemonMediaController.h.
+//
+// Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone line.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DaemonMediaController.h"
 #include "core/session/media/RemoteSpectrumContext.h"
 
 #include "core/FFTEngine.h"
+#include "core/MoxController.h"
+#include "core/safety/TransmitHolder.h"
+#include "core/session/RemoteKeying.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/DaemonAudioSender.h"
 #include "core/session/media/MediaPeer.h"
@@ -435,6 +442,23 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
     // The command gate and accepted-state notification are both installed
     // before capability publication can advertise budget enforcement.
     m_server->setDisplayBudgetEnforcementEnabled(true);
+
+    // iPhone app plan Task 36 (R-IOS-13): keys wait on the microphone line,
+    // VOX armed follows the operator's VOX and the session's permission,
+    // and starvation is watched while the device is keyed on its line.
+    if (m_server->remoteKeying() != nullptr) {
+        m_server->remoteKeying()->setMicUplink(micUplink());
+    }
+    connect(&m_radioModel->transmitModel(), &TransmitModel::voxEnabledChanged, this,
+            [this](bool) { refreshMicVoxArmed(); });
+    if (m_server->transmitHolder() != nullptr) {
+        connect(m_server->transmitHolder(), &TransmitHolder::changed, this,
+                &DaemonMediaController::refreshMicVoxArmed);
+    }
+    connect(m_radioModel, &RadioModel::keyedByChanged, this,
+            &DaemonMediaController::refreshMicWatching);
+    connect(m_radioModel, &RadioModel::remoteMicInUseChanged, this,
+            [this](bool) { refreshMicWatching(); });
 }
 
 DaemonMediaController::~DaemonMediaController()
@@ -446,6 +470,9 @@ DaemonMediaController::~DaemonMediaController()
         m_server->disconnect(this);
         m_server->setPs3DisplayAdmissionHandler({});
         m_server->setDisplayBudgetEnforcementEnabled(false);
+        if (m_server->remoteKeying() != nullptr) {
+            m_server->remoteKeying()->setMicUplink({});
+        }
     }
     // As onSessionEnded(): clear the session while the pacer session is
     // live, then end the pacer and its initialised flag together, so the
@@ -1013,6 +1040,20 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
             return false;
         }
     }
+    // iPhone app plan Task 36 (R-IOS-13): remoteTxVersion, from a peer the
+    // Core told remoteTxVersion (its hello declared remoteTx at minor 11);
+    // only then does the offer carry the microphone line.
+    const bool declaresRemoteTx = control.contains(QStringLiteral("remoteTxVersion"));
+    if (declaresRemoteTx) {
+        legacyShape.remove(QStringLiteral("remoteTxVersion"));
+        quint32 remoteTxVersion = 0;
+        if (!m_server || !m_server->remoteTxAvailableForMedia()
+            || !exactUnsigned(control.value(QStringLiteral("remoteTxVersion")),
+                              remoteTxVersion, /*nonzero=*/true)
+            || remoteTxVersion < 1) {
+            return false;
+        }
+    }
     if (!exactKeys(legacyShape, {"op", "connectionId"})
         || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))) {
         return false;
@@ -1081,12 +1122,25 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
             if (m_headphones.revision != 0) {
                 reconcileHeadphonesAudio();
             }
+            // Task 36: whether the line agreed the lossless format is known
+            // once both descriptions are.
+            if (m_peer.get() != peer || m_epoch != peerEpoch) { return; }
+            if (m_micReceiver) {
+                m_micReceiver->setLosslessNegotiated(peer->micLosslessNegotiated());
+            }
+        }
+    });
+    // Task 36: the microphone line's packets go to its receiver.
+    connect(peer, &MediaPeer::micRtpReceived, this,
+            [this, peer, peerEpoch](const QByteArray& packet) {
+        if (m_peer.get() == peer && m_epoch == peerEpoch && m_micReceiver) {
+            m_micReceiver->submit(packet);
         }
     });
     const bool offerLossless = declaresAudioProfile && m_audioLosslessAllowed;
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId,
                      m_audioTargetBitrate, offerLossless, declaresReceiverAudio,
-                     declaresHeadphonesMix)) {
+                     declaresHeadphonesMix, declaresRemoteTx)) {
         m_displayDiagnosticsTimer.stop();
         m_peer.reset();
         sendRejected(connectionId, 0, 0, QStringLiteral("The Core could not start audio and display."));
@@ -1094,7 +1148,107 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     }
     m_receiverAudioNegotiated = declaresReceiverAudio;
     m_headphonesMixNegotiated = declaresHeadphonesMix;
+    if (declaresRemoteTx) {
+        startMicLine(peer);
+    }
     return true;
+}
+
+// ---- iPhone app plan Task 36 (R-IOS-13): the microphone line ---------------
+
+void DaemonMediaController::startMicLine(MediaPeer* peer)
+{
+    stopMicLine();
+    if (!m_radioModel || m_radioModel->remoteMicFeed() == nullptr || !m_server) {
+        return;
+    }
+    const MonotonicClock clock = m_monotonicClock;
+    RemoteMicReceiver::Clock ms;
+    if (clock) {
+        ms = [clock]() { return clock() / 1'000'000; };
+    }
+    m_micReceiver = std::make_unique<RemoteMicReceiver>(m_radioModel->remoteMicFeed(), nullptr, ms);
+    if (!m_micReceiver->start(peer->micAudioSsrc(), peer->micLosslessNegotiated())) {
+        m_micReceiver.reset();
+        return;
+    }
+    m_micDeviceId = m_server->mediaSessionDeviceId();
+    m_radioModel->setRemoteMicDevice(m_micDeviceId);
+    refreshMicVoxArmed();
+    refreshMicWatching();
+    qCInfo(lcDaemonMedia) << "Microphone line open for" << m_micDeviceId;
+}
+
+void DaemonMediaController::stopMicLine()
+{
+    if (!m_micReceiver && m_micDeviceId.isEmpty()) {
+        return;
+    }
+    if (m_micReceiver) {
+        m_micReceiver->stop();
+    }
+    m_micReceiver.reset();
+    m_micDeviceId.clear();
+    if (m_radioModel) {
+        // The ring goes out of use with the device (priming and VOX with it).
+        m_radioModel->setRemoteMicDevice({});
+    }
+}
+
+void DaemonMediaController::refreshMicVoxArmed()
+{
+    if (!m_radioModel || !m_server || !m_micReceiver) {
+        return;
+    }
+    // VOX armed for the device: the operator's VOX is on and its session
+    // may transmit now (transmit unheld, or held by it). Its client then
+    // streams the microphone unkeyed and VOX listens to it.
+    m_radioModel->setRemoteMicVoxArmed(m_radioModel->transmitModel().voxEnabled()
+                                       && m_server->mediaSessionTxPermitted());
+}
+
+void DaemonMediaController::refreshMicWatching()
+{
+    if (!m_micReceiver || !m_radioModel) {
+        return;
+    }
+    // Starvation is watched while the device is keyed on its line.
+    const MoxController* mox = m_radioModel->moxController();
+    const bool keyed = mox != nullptr && mox->isMox() && m_radioModel->remoteMicInUse()
+        && m_radioModel->keyedBy().deviceId == m_micDeviceId;
+    m_micReceiver->setWatching(keyed);
+}
+
+RemoteKeying::MicUplink DaemonMediaController::micUplink()
+{
+    RemoteKeying::MicUplink uplink;
+    const QPointer<DaemonMediaController> self(this);
+    uplink.carriesMic = [self](const QByteArray& deviceId) {
+        return self && self->m_micReceiver && self->m_micReceiver->isRunning()
+            && !deviceId.isEmpty() && deviceId == self->m_micDeviceId;
+    };
+    uplink.prime = [self](const QByteArray& deviceId, std::function<void(bool)> done) {
+        if (!self || !self->m_micReceiver || deviceId != self->m_micDeviceId
+            || !self->m_radioModel) {
+            done(false);
+            return;
+        }
+        // The ring is the source while the key waits, so the buffer fills.
+        self->m_radioModel->setRemoteMicPriming(true);
+        self->m_micReceiver->awaitReady(std::move(done));
+    };
+    uplink.endPriming = [self](const QByteArray& deviceId) {
+        if (!self || deviceId != self->m_micDeviceId) {
+            return;
+        }
+        if (self->m_micReceiver) {
+            self->m_micReceiver->cancelWait();
+        }
+        if (self->m_radioModel) {
+            self->m_radioModel->setRemoteMicPriming(false);
+        }
+    };
+    return uplink;
 }
 
 bool DaemonMediaController::acceptPeerControl(const QJsonObject& control)
@@ -3330,6 +3484,8 @@ void DaemonMediaController::clearSession()
     resetReceiverAudioSession();
     // R-R3-45: and the headphones mix's.
     resetHeadphonesAudioSession();
+    // Task 36: and the microphone line; the ring goes out of use with it.
+    stopMicLine();
     if (m_peer) {
         logDisplayDiagnostics(true);
     }

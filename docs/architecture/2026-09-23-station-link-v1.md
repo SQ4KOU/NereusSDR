@@ -2302,7 +2302,7 @@ Client to station:
 | `headphones-audio` | `headphonesMixVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision` | none | none |
 | `keyframe` | `remoteMediaVersion` | `connectionId`, `contextGeneration`, `endpointId`, `op` | none | none |
 | `receiver-audio` | `receiverAudioVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision`, `sliceId` | none | none |
-| `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `receiverAudioVersion` with receiverAudioVersion | none |
+| `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `receiverAudioVersion` with receiverAudioVersion; `remoteTxVersion` with remoteTxVersion | none |
 | `subscribe` | `remoteMediaVersion` | `centreHz`, `connectionId`, `endpointId`, `fftSize`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `pixels`, `revision`, `sliceId`, `spanHz`, `tier`, `trace`, `waterfall`, `wideSpanFactor`, `windowType` | `activePeakHold` with displayExtrasVersion; `averageTimeMs` with displayExtrasVersion; `calibrationOffsetDb` with displayExtrasVersion; `extendedView` with remoteWidebandDisplayVersion; `noiseFloor` with displayExtrasVersion; `normalize` with displayExtrasVersion; `peakBlobs` with displayExtrasVersion; `waterfallAverageTimeMs` with displayExtrasVersion; `waterfallLevels` with displayExtrasVersion | `activePeakHold`: {enabled, fallDbPerSec, holdMs}; `noiseFloor`: {enabled, shiftDb}; `peakBlobs`: {count, fallDbPerSec, holdMs, insideOnly}; `trace`: {averageAlpha, averageMode, detector}; `waterfall`: {averageAlpha, averageMode, detector}; `waterfallLevels`: {highDbm, lowDbm, mode, offsetDb} |
 | `unsubscribe` | `remoteMediaVersion` | `connectionId`, `endpointId`, `op` | `revision` with remoteDisplayBudgetVersion | none |
 
@@ -3251,8 +3251,9 @@ iPhone app plan Task 34 (R-IOS-02, R-IOS-03, R-IOS-13; the several-devices
 design, rulings 7.4, 8.1 to 8.5, 8.8, 8.13 and 8.15). This section is the
 Core's side of remote transmit that exists today. Keying from a device
 (`tx.key`, `tx.unkey`, `tx.tune`, `tx.twoTone`, section 18.6) came with
-Task 35; `txState` arrives with Task 39 and taking transmit (`tx.take`)
-with Task 77.
+Task 35, and the microphone line with keying on a filled buffer (section
+18.6) with Task 36; `txState` arrives with Task 39 and taking transmit
+(`tx.take`) with Task 77.
 
 ### 18.1 Who may transmit
 
@@ -3432,6 +3433,23 @@ keys until it sends a new `tx.key`: no replay, no resume.
 
 An accepted `tx.unkey`, and an accepted TUNE or two-tone off, carry no
 values.
+
+**Keying on a filled buffer (Task 36).** A device whose media connection
+carries the microphone line (its media `start` carried `remoteTxVersion`;
+remote media control document, Microphone line) sends its microphone while
+it transmits. Its `tx.key`, in a mode that transmits the microphone (every
+mode but CWL and CWU), is answered once the line's buffer holds its 60 ms
+target, and then keys; when the buffer has not filled within 250 ms the key
+is refused `micNotReady`. The holder's own refusals come first, at once.
+Copies of a waiting key, and a new `tx.key` from the same device, get the
+waiting key's answer; a `tx.unkey` from the device while its key waits
+answers that key `keyEnded`, and it never keys. `tx.tune` and
+`tx.twoTone` use no microphone and key at once, as does a key from a device
+without the line (the Core's own source then). While a device is keyed on
+its line, or has VOX armed, the transmitter takes that line instead of the
+Core's configured microphone; at unkey the configured source returns with
+the line's buffer empty. A VOX key while the device has VOX armed is that
+device's, as a VOX key while it holds transmit already is.
 
 **Programs through a remote window.** A remote window's TCI server
 forwards an app's `trx:N,true` as `tx.key {trigger:"tci"}` and its

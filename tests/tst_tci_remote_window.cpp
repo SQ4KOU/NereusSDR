@@ -47,6 +47,12 @@
 //                                    trx:N,false releases only this
 //                                    window's key. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 36 (R-IOS-13): the
+//                                    lock holder's transmit audio goes to
+//                                    the window's microphone line (the
+//                                    forwarder's audio), and a real window
+//                                    sends it to the Core. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #ifdef HAVE_WEBSOCKETS
@@ -55,7 +61,9 @@
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/TciBinaryFrame.h"
 #include "core/TciServer.h"
+#include "core/session/media/RemoteMicReceiver.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/DaemonMediaController.h"
@@ -1127,6 +1135,54 @@ private slots:
         QVERIFY(!texts(text).contains(QStringLiteral("vfo:0,0,7074000;")));
         QCOMPARE(qint64(stationSlice->frequency()), qint64(14074000));
         QCOMPARE(qint64(remoteSlice->frequency()), qint64(14074000));
+        app.close();
+        tci.stop();
+    }
+
+    // iPhone app plan Task 36 (R-IOS-13): through a remote window, the app
+    // holding the TX audio lock (its key accepted by the Core) has its
+    // transmit audio handed to the window's microphone line, not to the
+    // window's own TX ring; before the key is accepted nothing is handed.
+    void aProgramsTransmitAudioGoesToTheMicrophoneLine()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        TciServer tci(&remote);
+        FakeCoreTransmit core;
+        int handedFrames = 0;
+        int handedRate = 0;
+        TciServer::RemoteTransmit forward = core.forwarder();
+        forward.audio = [&handedFrames, &handedRate](const float*, int frames, int, int rate) {
+            handedFrames += frames;
+            handedRate = rate;
+        };
+        tci.setRemoteTransmit(forward);
+        QVERIFY(tci.start(0));
+        QWebSocket app;
+        QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+        QVERIFY(connectClient(app, tci.port()));
+        QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("ready;")), 3000);
+
+        const auto frame = [] {
+            std::vector<float> samples(512, 0.1f);   // 256 stereo frames
+            return TciBinaryFrame::buildStreamPayload(
+                0, 12000, static_cast<int>(TciSampleType::Float32),
+                static_cast<int>(samples.size()),
+                static_cast<int>(TciStreamType::TxAudioStream), 2, samples.data());
+        };
+        // Not keyed: the audio is not the app's to send.
+        app.sendBinaryMessage(frame());
+        QTest::qWait(100);
+        QCOMPARE(handedFrames, 0);
+
+        app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+        QTRY_COMPARE_WITH_TIMEOUT(core.keys, 1, 3000);
+        core.accept(7);
+        QCOMPARE(tci.activeTxClientCount(), 1);
+        app.sendBinaryMessage(frame());
+        app.sendBinaryMessage(frame());
+        QTRY_COMPARE_WITH_TIMEOUT(handedFrames, 512, 3000);
+        QCOMPARE(handedRate, 12000);
+        QCOMPARE(tci.peekTxRingSize(), 0);
         app.close();
         tci.stop();
     }

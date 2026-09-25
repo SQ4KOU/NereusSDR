@@ -156,6 +156,11 @@
 //                epoch; setTune for a remote device's key; PttSource::Remote
 //                while a device is keyed. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 36 (R-IOS-13): the station's
+//                microphone source follows a remote device (RemoteMicFeed)
+//                while it transmits or has VOX armed; PttSource::Vox for a
+//                device's VOX key. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -343,6 +348,8 @@ class PsccPump;
 class PaProfileManager;
 // 3M-1c TX pump architecture redesign — TxWorkerThread.
 class TxWorkerThread;
+// iPhone app plan Task 36: the remote microphone ring.
+class RemoteMicFeed;
 // Stage C2 filter preset editor — user-override layer over Thetis defaults.
 class FilterPresetStore;
 
@@ -1570,6 +1577,34 @@ public:
     /// The next keying epoch (each call advances it; never 0).
     quint32 advanceKeyingEpoch();
     quint32 keyingEpoch() const { return m_keyingEpoch; }
+
+    // ── iPhone app plan Task 36 (R-IOS-13): the remote microphone ──────
+    //
+    // The station's microphone source follows a remote device while it
+    // transmits: the transmit pump takes the device's microphone line
+    // (remoteMicFeed()) instead of the operator's configured source while
+    //   - the device is keyed (keyedBy() names it and MOX is on: its own
+    //     key, its program's key, or a VOX key attributed to it),
+    //   - it has VOX armed (setRemoteMicVoxArmed: VOX on and its session
+    //     permitted to transmit), or
+    //   - its key is waiting for the buffer to fill (setRemoteMicPriming).
+    // Otherwise the operator's source applies, and every change empties
+    // the ring, so at unkey nothing of the device's audio is left. Local
+    // only; the Core's media controller names the device and drives the
+    // priming and VOX inputs.
+
+    /// The ring the transmit pump pulls (null on a remote window's model).
+    RemoteMicFeed* remoteMicFeed() const { return m_remoteMicFeed.get(); }
+    /// The device whose media carries a microphone line now; empty for none.
+    void setRemoteMicDevice(const QByteArray& deviceId);
+    QByteArray remoteMicDevice() const { return m_remoteMicDevice; }
+    void setRemoteMicPriming(bool priming);
+    void setRemoteMicVoxArmed(bool armed);
+    /// The pump takes the remote device's microphone now.
+    bool remoteMicInUse() const { return m_remoteMicInUse; }
+    /// The device whose microphone VOX listens to now (its VOX key is its
+    /// own), or empty.
+    QByteArray remoteVoxDevice() const;
 
     /// The lowest slice id not in use (the next letter a new slice takes),
     /// or -1 when every id with a channel is in use.
@@ -3617,6 +3652,8 @@ signals:
     void transmitStopped(QString message);
     // iPhone app plan Task 35: keyedBy() changed.
     void keyedByChanged();
+    // iPhone app plan Task 36: remoteMicInUse() changed.
+    void remoteMicInUseChanged(bool inUse);
     // Phase 3Q-1: parametrized — state passed so UI consumers can act without
     // a secondary RadioModel::connectionState() read under race conditions.
     // Existing no-arg slot connections (ConnectionPanel, MainWindow, SpectrumWidget)
@@ -4994,6 +5031,18 @@ private:
     // iPhone app plan Task 35.
     KeyedBy m_keyedBy;
     quint32 m_keyingEpoch{0};
+    // iPhone app plan Task 36: the remote microphone ring (Local only; it
+    // outlives the transmit pump, which holds a plain pointer to it) and
+    // what puts it in use.
+    std::unique_ptr<RemoteMicFeed> m_remoteMicFeed;
+    QByteArray m_remoteMicDevice;
+    bool m_remoteMicPriming{false};
+    bool m_remoteMicVoxArmed{false};
+    bool m_remoteMicInUse{false};
+    // The device keyed on its line: if the line goes away mid-key, the
+    // ring stays the source (silence) until that key ends, so a remote key
+    // never falls back to the station's own microphone.
+    QByteArray m_remoteMicKeyedDevice;
     // Set while setTune(true, keyer) runs: the keyer TUNE asks and keys for.
     const KeyerIdentity* m_tuneKeyer{nullptr};
     // iPhone app Task 73 (ruling 5.11): the frequency the FreeDV Reporter
@@ -5145,6 +5194,9 @@ private:
     // on pcCaptureRequired().
     bool pcCaptureGatesKeying() const;
     bool generatedKeyInFlight() const;
+    // iPhone app plan Task 36: recomputes remoteMicInUse() and puts the
+    // ring in or out of use.
+    void updateRemoteMicSource();
     bool pcCaptureReady() const;
     void onCaptureStatusChanged(const CaptureSupervisor::Status& status);
     // R-R3-36: true only across the m_moxController->setTune(true) call in

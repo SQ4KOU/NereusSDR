@@ -257,6 +257,12 @@
 //                keys TUNE for a remote device; PttSource::Remote while a
 //                device is keyed. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 36 (R-IOS-13): the remote
+//                microphone ring (RemoteMicFeed) the transmit pump takes
+//                while a remote device transmits or has VOX armed; the PC
+//                microphone check stands aside for it; PttSource::Vox for a
+//                device's VOX key. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -501,6 +507,7 @@ warren@wpratt.com
 // 3M-1c TX pump architecture redesign — dedicated worker thread for
 // TX DSP pump (replaces D.1/E.1/L.4 chain).
 #include "core/TxWorkerThread.h"
+#include "core/session/media/RemoteMicReceiver.h"
 // 3M-1b L.1: concrete mic-source strategy objects.
 #include "core/audio/PcMicSource.h"
 #include "core/audio/PortAudioBus.h"
@@ -1251,6 +1258,15 @@ RadioModel::RadioModel(Role role, QObject* parent)
     //udRX2StepAttData.Enabled = true; //[2.10.3.6]MW0LGE att_fixes  [console.cs:29648]
     // Display.TXAttenuatorOffset = 0; //[2.10.3.6]MW0LGE att_fixes  [console.cs:29659]
     m_moxController = new MoxController(this);
+
+    // iPhone app plan Task 36 (R-IOS-13): the remote microphone ring, on the
+    // Core's model only. Its source follows who is keyed and MOX itself.
+    if (m_role == Role::Local) {
+        m_remoteMicFeed = std::make_unique<RemoteMicFeed>();
+        connect(this, &RadioModel::keyedByChanged, this, &RadioModel::updateRemoteMicSource);
+        connect(m_moxController, &MoxController::stateChanged, this,
+                [this](MoxState) { updateRemoteMicSource(); });
+    }
 
     // R-R3-36: record whether the key-up now committing is Tune or
     // two-tone keying. moxChanging fires synchronously inside setMox(true),
@@ -9653,18 +9669,96 @@ void RadioModel::setKeyedBy(const KeyedBy& keyedBy)
     if (role() != Role::Local || m_keyedBy == keyedBy) {
         return;
     }
+    const bool wasRemoteVox = m_keyedBy.trigger == QByteArrayLiteral("vox")
+        && !m_keyedBy.isEmpty()
+        && m_keyedBy.deviceId != QByteArray(KeyerIdentity::kStationDeviceId);
     m_keyedBy = keyedBy;
     // The Radio Status page's PTT source: a paired device's key is Remote.
     // Only Remote is set and cleared here; the other sources are not this
     // record's.
     const bool remote = !keyedBy.isEmpty()
         && keyedBy.deviceId != QByteArray(KeyerIdentity::kStationDeviceId);
-    if (remote) {
+    // iPhone app plan Task 36: a device's VOX key (VOX listening to its
+    // microphone) shows as VOX, attributed to it by keyedBy.
+    const bool remoteVox = remote && keyedBy.trigger == QByteArrayLiteral("vox");
+    if (remoteVox) {
+        m_radioStatus.setActivePttSource(PttSource::Vox);
+    } else if (remote) {
         m_radioStatus.setActivePttSource(PttSource::Remote);
-    } else if (m_radioStatus.activePttSource() == PttSource::Remote) {
+    } else if (m_radioStatus.activePttSource() == PttSource::Remote
+               || (m_radioStatus.activePttSource() == PttSource::Vox && wasRemoteVox)) {
         m_radioStatus.setActivePttSource(PttSource::None);
     }
     emit keyedByChanged();
+}
+
+// iPhone app plan Task 36 (R-IOS-13): the remote microphone source.
+void RadioModel::setRemoteMicDevice(const QByteArray& deviceId)
+{
+    if (m_role != Role::Local || m_remoteMicDevice == deviceId) {
+        return;
+    }
+    m_remoteMicDevice = deviceId;
+    if (deviceId.isEmpty()) {
+        m_remoteMicPriming = false;
+        m_remoteMicVoxArmed = false;
+    }
+    updateRemoteMicSource();
+}
+
+void RadioModel::setRemoteMicPriming(bool priming)
+{
+    if (m_role != Role::Local || m_remoteMicPriming == priming) {
+        return;
+    }
+    m_remoteMicPriming = priming;
+    updateRemoteMicSource();
+}
+
+void RadioModel::setRemoteMicVoxArmed(bool armed)
+{
+    if (m_role != Role::Local || m_remoteMicVoxArmed == armed) {
+        return;
+    }
+    m_remoteMicVoxArmed = armed;
+    updateRemoteMicSource();
+}
+
+QByteArray RadioModel::remoteVoxDevice() const
+{
+    return m_remoteMicVoxArmed ? m_remoteMicDevice : QByteArray();
+}
+
+void RadioModel::updateRemoteMicSource()
+{
+    if (!m_remoteMicFeed) {
+        return;
+    }
+    const bool mox = m_moxController != nullptr && m_moxController->isMox();
+    const bool keyedByDevice =
+        !m_remoteMicDevice.isEmpty() && mox && m_keyedBy.deviceId == m_remoteMicDevice;
+    // A key that started on a device's line stays on the ring until it
+    // ends, even if the line goes away meanwhile: the transmitter then
+    // hears silence, never the station's own microphone.
+    if (keyedByDevice) {
+        m_remoteMicKeyedDevice = m_remoteMicDevice;
+    } else if (!mox || m_keyedBy.deviceId != m_remoteMicKeyedDevice) {
+        m_remoteMicKeyedDevice.clear();
+    }
+    const bool lineLostMidKey = !m_remoteMicKeyedDevice.isEmpty() && !keyedByDevice;
+    const bool inUse = lineLostMidKey
+        || (!m_remoteMicDevice.isEmpty()
+            && (keyedByDevice || m_remoteMicVoxArmed || m_remoteMicPriming));
+    if (inUse == m_remoteMicInUse) {
+        return;
+    }
+    m_remoteMicInUse = inUse;
+    // Every change empties the ring: nothing of the device's audio is left
+    // when the operator's source returns, and a new key starts from silence.
+    m_remoteMicFeed->setInUse(inUse);
+    qCInfo(lcDsp) << "Transmit microphone:" << (inUse ? "the remote device" : "the station's own")
+                  << m_remoteMicDevice;
+    emit remoteMicInUseChanged(inUse);
 }
 
 quint32 RadioModel::advanceKeyingEpoch()
@@ -12164,6 +12258,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                 m_txWorker->setTxChannel(m_txChannel);
                 m_txWorker->setAudioEngine(m_audioEngine);
                 m_txWorker->setMicSource(m_txMicSource.get());
+                // iPhone app plan Task 36: the remote microphone ring,
+                // which outlives the worker.
+                m_txWorker->setRemoteMicFeed(m_remoteMicFeed.get());
                 // R-R3-39: the TX channel stays on this thread. Its setters
                 // post their WDSP calls to the transmit lane (applied even
                 // while no mic block arrives); the worker only runs the
@@ -13616,6 +13713,12 @@ void RadioModel::installBandPlanMoxCheck()
 bool RadioModel::pcCaptureGatesKeying() const
 {
     if (!pcCaptureRequired()) {
+        return false;
+    }
+    // iPhone app plan Task 36: a remote device's microphone is the source
+    // now; the PC microphone is not read, so its readiness does not gate
+    // the key and its loss does not release it.
+    if (m_remoteMicInUse) {
         return false;
     }
     // TCI audio: the TX worker takes TCI audio instead of the microphone

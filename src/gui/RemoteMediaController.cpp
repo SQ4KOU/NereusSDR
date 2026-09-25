@@ -1,10 +1,18 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
+// Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone uplink
+//               (see RemoteMediaController.h). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
 #include "core/AudioDeviceConfig.h"
 #include "core/AudioEngine.h"
+#include "core/Resampler.h"
+#include "core/audio/CaptureSupervisor.h"
+#include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteAudioReceiver.h"
+#include "core/session/media/RemoteMicReceiver.h"
 #include "core/ClarityController.h"
 #include "core/FFTEngine.h"
 #include "core/session/StationClient.h"
@@ -606,6 +614,25 @@ struct RemoteMediaController::Private {
     QString allocationCacheIdentity;
     std::optional<RemoteDisplayAllocation> cachedAllocation;
     QString cachedAllocationError;
+    // iPhone app plan Task 36: the microphone uplink. The lease holds the
+    // capture helper open only while the uplink runs; the rest belongs to
+    // the current media connection.
+    bool holdsTransmit = false;
+    bool micKeyDown = false;
+    bool voxArmed = false;
+    bool micRunning = false;
+    QTimer* micTimer = nullptr;
+    CaptureSupervisor::Lease micLease;
+    std::unique_ptr<RemoteMicEncoder> micEncoder;
+    std::vector<float> micPending;
+    std::vector<float> micScratch;
+    quint16 micSequence = 0;
+    quint32 micTimestamp = 0;
+    quint64 micPacketsSent = 0;
+    std::vector<float> programPending;
+    qint64 programUntilMs = -1;
+    std::unique_ptr<Resampler> programResampler;
+    int programRateHz = 0;
 };
 
 RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* model,
@@ -781,6 +808,14 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         // refreshes the status once start() returns.
         if (!d->preparingAudio) { requestAudio(); }
     });
+    // Task 36: the microphone uplink's pump. It runs only while this media
+    // connection has a microphone line; it pulls audio only while the
+    // uplink runs.
+    d->micTimer = new QTimer(this);
+    d->micTimer->setInterval(kMicPumpIntervalMs);
+    connect(d->micTimer, &QTimer::timeout, this, &RemoteMediaController::reconcileMicUplink);
+    d->micEncoder = std::make_unique<RemoteMicEncoder>();
+    d->micScratch.resize(static_cast<size_t>(RemoteMicConfig::kOpusFrameSamples));
     d->timer = new QTimer(this);
     d->timer->setInterval(100);
     connect(d->timer, &QTimer::timeout, this, &RemoteMediaController::refreshSubscriptions);
@@ -1230,6 +1265,172 @@ bool RemoteMediaController::headphonesMixNegotiated() const
     return audioProfileNegotiated() && d->client->capabilities().headphonesMixVersion >= 1;
 }
 
+// ── iPhone app plan Task 36 (R-IOS-13): the microphone uplink ──────────────
+
+bool RemoteMediaController::micLineNegotiated() const
+{
+    return d->client && d->client->capabilities().remoteTxVersion >= 1;
+}
+
+void RemoteMediaController::setHoldsTransmit(bool holds)
+{
+    if (d->holdsTransmit == holds) {
+        return;
+    }
+    d->holdsTransmit = holds;
+    reconcileMicUplink();
+}
+
+void RemoteMediaController::setMicKeyDown(bool down)
+{
+    if (d->micKeyDown == down) {
+        return;
+    }
+    d->micKeyDown = down;
+    reconcileMicUplink();
+}
+
+void RemoteMediaController::setVoxArmed(bool armed)
+{
+    if (d->voxArmed == armed) {
+        return;
+    }
+    d->voxArmed = armed;
+    reconcileMicUplink();
+}
+
+bool RemoteMediaController::micUplinkRunning() const
+{
+    return d->micRunning;
+}
+
+quint64 RemoteMediaController::micPacketsSent() const
+{
+    return d->micPacketsSent;
+}
+
+bool RemoteMediaController::micUplinkWanted() const
+{
+    if (!micLineNegotiated() || !d->peer || !d->peer->isReady() || d->peer->micAudioSsrc() == 0
+        || !d->model || d->model->audioEngine() == nullptr) {
+        return false;
+    }
+    // VOX armed: the Core's VOX is on and this session may transmit now.
+    const bool voxArmed = d->voxArmed && d->client->capabilities().txPermitted;
+    return d->holdsTransmit || d->micKeyDown || voxArmed;
+}
+
+void RemoteMediaController::reconcileMicUplink()
+{
+    const bool wanted = micUplinkWanted();
+    if (wanted != d->micRunning) {
+        d->micRunning = wanted;
+        if (wanted) {
+            // The capture helper opens on the microphone chosen in Audio >
+            // Devices, only now.
+            d->micLease = d->model->audioEngine()->acquireCaptureDemand(
+                CaptureSupervisor::Demand::RemoteWindow);
+            qCInfo(lcRemoteMedia) << "Microphone uplink started";
+        } else {
+            d->micLease.release();
+            d->micPending.clear();
+            d->programPending.clear();
+            d->programUntilMs = -1;
+            qCInfo(lcRemoteMedia) << "Microphone uplink stopped";
+        }
+    }
+    if (!d->micRunning) {
+        return;
+    }
+    // A program's audio, while it keeps coming, replaces the microphone:
+    // what the microphone captured meanwhile is drained and dropped.
+    const bool program = d->clock.elapsed() < d->programUntilMs;
+    AudioEngine* engine = d->model->audioEngine();
+    for (;;) {
+        const int got = engine->pullTxMic(d->micScratch.data(),
+                                          static_cast<int>(d->micScratch.size()));
+        if (got <= 0) {
+            break;
+        }
+        if (!program) {
+            d->micPending.insert(d->micPending.end(), d->micScratch.begin(),
+                                 d->micScratch.begin() + got);
+        }
+    }
+    sendMicAudio(program ? d->programPending : d->micPending);
+}
+
+void RemoteMediaController::sendMicAudio(std::vector<float>& pending)
+{
+    const float* mono = pending.data();
+    const int frames = static_cast<int>(pending.size());
+    // Whole packets only; the rest waits for the next pump.
+    const bool lossless = d->peer && d->peer->micLosslessNegotiated()
+        && d->audioProfileChoice == RemoteAudioProfile::Lossless && !d->losslessFallback;
+    const int packetFrames = lossless ? PcmAudioCodecConfig::kPacketFrames
+                                      : RemoteMicConfig::kOpusFrameSamples;
+    const quint32 ssrc = d->peer ? d->peer->micAudioSsrc() : 0;
+    int sent = 0;
+    const QPointer<RemoteMediaController> self(this);
+    while (ssrc != 0 && frames - sent >= packetFrames) {
+        const float* frame = mono + sent;
+        QByteArray packet;
+        if (lossless) {
+            // The window's microphone in both channels (the Core takes their
+            // mean).
+            QVector<float> stereo(packetFrames * 2);
+            for (int i = 0; i < packetFrames; ++i) {
+                const float sample = std::clamp(frame[i], -1.0f, 1.0f);
+                stereo[2 * i] = sample;
+                stereo[2 * i + 1] = sample;
+            }
+            packet = PcmAudioPacketiser{}.encode(stereo, d->micSequence, d->micTimestamp, ssrc).packet;
+        } else {
+            packet = d->micEncoder->encode(frame, d->micSequence, d->micTimestamp, ssrc);
+        }
+        ++d->micSequence;
+        d->micTimestamp += static_cast<quint32>(packetFrames);
+        sent += packetFrames;
+        if (!packet.isEmpty() && d->peer && d->peer->sendMicRtp(packet)) {
+            ++d->micPacketsSent;
+        }
+        if (!self) {
+            return;
+        }
+    }
+    pending.erase(pending.begin(), pending.begin() + std::min<size_t>(pending.size(),
+                                                                      static_cast<size_t>(sent)));
+}
+
+void RemoteMediaController::pushProgramAudio(const float* samples, int frames, int channels,
+                                             int sampleRateHz)
+{
+    if (samples == nullptr || frames <= 0 || channels < 1 || channels > 2 || sampleRateHz <= 0
+        || !micLineNegotiated()) {
+        return;
+    }
+    // The left channel, as the Core's own TCI transmit takes it.
+    std::vector<float> mono(static_cast<size_t>(frames));
+    for (int f = 0; f < frames; ++f) {
+        mono[static_cast<size_t>(f)] = channels == 2 ? samples[2 * f] : samples[f];
+    }
+    if (sampleRateHz != RemoteMicConfig::kSampleRate) {
+        if (!d->programResampler || d->programRateHz != sampleRateHz) {
+            d->programResampler = std::make_unique<Resampler>(
+                sampleRateHz, RemoteMicConfig::kSampleRate, std::max(frames, 4096));
+            d->programRateHz = sampleRateHz;
+        }
+        const QByteArray out = d->programResampler->process(mono.data(), frames);
+        const auto* resampled = reinterpret_cast<const float*>(out.constData());
+        mono.assign(resampled, resampled + out.size() / static_cast<qsizetype>(sizeof(float)));
+    }
+    d->programUntilMs = d->clock.elapsed() + kProgramAudioHoldMs;
+    if (!d->micRunning) {
+        return;
+    }
+    d->programPending.insert(d->programPending.end(), mono.begin(), mono.end());
+}
+
 QString RemoteMediaController::headphonesProblem() const
 {
     return d->headphonesProblem;
@@ -1472,6 +1673,15 @@ void RemoteMediaController::stop()
 {
     d->establishTimer->stop();
     d->awaitingDescription = false;
+    // Task 36: the microphone line goes with the media connection; the
+    // capture helper closes.
+    d->micTimer->stop();
+    d->micLease.release();
+    d->micRunning = false;
+    d->micPending.clear();
+    d->programPending.clear();
+    d->programUntilMs = -1;
+    d->micPacketsSent = 0;
     d->ps3Generation = 0;
     d->ps3Assembler.reset(0);
     d->timer->stop();
@@ -1726,10 +1936,12 @@ void RemoteMediaController::start()
     // R-R3-43: the receiver stream ids are declared only when this GUI will
     // say so in its start below.
     // R-R3-45: likewise the headphones mix's stream id.
+    // Task 36: likewise the microphone line.
+    const bool micLine = micLineNegotiated();
     const bool started = peer->start(IMediaTransport::Role::Answerer, d->connectionId,
                                      IMediaTransport::kDefaultAudioTargetBitrate,
                                      /*offerLosslessAudio=*/false, receiverAudioNegotiated(),
-                                     headphonesMixNegotiated());
+                                     headphonesMixNegotiated(), micLine);
     if (!self) { return; }
     d->startingPeer = false;
     d->receiverSsrcs = started && startedPeer ? startedPeer->receiverAudioSsrcs() : QList<quint32>{};
@@ -1781,6 +1993,14 @@ void RemoteMediaController::start()
     // R-R3-45: likewise the headphones mix, only to a Core that offers it.
     if (headphonesMixNegotiated()) {
         startControl.insert(QStringLiteral("headphonesMixVersion"), 1);
+    }
+    // Task 36: likewise the microphone line, only to a Core that takes it.
+    if (micLine) {
+        startControl.insert(QStringLiteral("remoteTxVersion"), 1);
+        d->micSequence = 0;
+        d->micTimestamp = 0;
+        d->micEncoder->reset();
+        d->micTimer->start();
     }
     send(startControl);
     if (!self) { return; }

@@ -28,6 +28,12 @@
 // before the headphones mix (no headphonesMixVersion), and
 // attachRemoteHeadphones() gives the remote window a paced headphones
 // device beside its speakers.
+// iPhone app plan Task 36 (R-IOS-13): declareRemoteTx makes the window's
+// hello declare remoteTx 1 (the desktop's own does not yet: that comes with
+// its transmit controls), so the Core tells it remoteTxVersion and the media
+// connection gets the microphone line; grantTransmit makes the Core's
+// capabilities say txPermitted, as for a paired device, so VOX armed can be
+// shown over the token sign-in.
 //
 // =================================================================
 
@@ -99,15 +105,18 @@ public:
 
     void sendText(const QByteArray& wire) override
     {
-        const bool mayRewrite = (m_helloMinor && wire.contains("\"hello\""))
+        const bool mayRewrite = ((m_helloMinor || declareRemoteTx) && wire.contains("\"hello\""))
+            || (grantTransmit && wire.contains("\"capabilities\""))
             || (forgeNextAudioContext && wire.contains("\"audio-context\""))
             || ((hideAudioProfile || hideAudioClock || hideReceiverAudio || hideHeadphonesMix)
                 && wire.contains("\"capabilities\""));
         SessionMessage message;
         if (mayRewrite && SessionMessages::decode(wire, &message)) {
-            if ((hideAudioProfile || hideAudioClock || hideReceiverAudio || hideHeadphonesMix)
+            if ((hideAudioProfile || hideAudioClock || hideReceiverAudio || hideHeadphonesMix
+                 || grantTransmit)
                 && message.kind == SessionMessageKind::Capabilities) {
                 StationCapabilities capabilities = StationCapabilities::fromUpdates(message.updates);
+                if (grantTransmit) { capabilities.txPermitted = true; }
                 if (hideAudioProfile) { capabilities.audioProfileVersion = 0; }
                 if (hideAudioClock) { capabilities.audioClockVersion = 0; }
                 if (hideReceiverAudio) { capabilities.receiverAudioVersion = 0; }
@@ -115,6 +124,18 @@ public:
                 ++hiddenAudioProfiles;
                 LoopbackTransport::sendText(SessionMessages::encode(
                     SessionMessages::capabilities(capabilities.toUpdates())));
+                return;
+            }
+            if (declareRemoteTx && message.kind == SessionMessageKind::Hello) {
+                // Task 36: the window's hello declaring remoteTx, as its
+                // transmit controls will; everything else it said is kept.
+                QHash<QByteArray, int> features = message.features;
+                features.insert(QByteArrayLiteral("remoteTx"), 1);
+                QList<quint16> majors = message.supportedMajors;
+                if (majors.isEmpty()) { majors.append(message.protocolMajor); }
+                LoopbackTransport::sendText(SessionMessages::encode(SessionMessages::hello(
+                    message.protocolMajor, m_helloMinor.value_or(message.protocolMinor),
+                    message.settingsSchemaVersion, message.peerName, majors, features)));
                 return;
             }
             if (m_helloMinor && message.kind == SessionMessageKind::Hello) {
@@ -145,6 +166,8 @@ public:
     bool hideAudioClock = false;
     bool hideReceiverAudio = false;
     bool hideHeadphonesMix = false;
+    bool declareRemoteTx = false;
+    bool grantTransmit = false;
 
 private:
     std::optional<quint16> m_helloMinor;
@@ -274,6 +297,8 @@ struct RemoteAudioSessionHarness {
         station->hideAudioClock = hideAudioClock;
         station->hideReceiverAudio = hideReceiverAudio;
         station->hideHeadphonesMix = hideHeadphonesMix;
+        station->grantTransmit = grantTransmit;
+        clientEnd->declareRemoteTx = declareRemoteTx;
         stationLink = station;
         station->linkTo(clientEnd);
         client.startSession(clientEnd, server.token());
@@ -306,6 +331,10 @@ struct RemoteAudioSessionHarness {
     // Set before connectSession(): the Core appears to predate the
     // headphones mix (R-R3-45).
     bool hideHeadphonesMix = false;
+    // Task 36: set before connectSession(): the window's hello declares
+    // remoteTx 1; the Core's capabilities say txPermitted.
+    bool declareRemoteTx = false;
+    bool grantTransmit = false;
 
     // R-R3-45: the remote window's headphones, a paced fake device the test
     // renders like the speakers. Open, so the window can play the Core's

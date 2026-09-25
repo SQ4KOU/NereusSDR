@@ -63,6 +63,11 @@
 //                only after the Core admits the key; trx:N,false releases
 //                only this window's own key. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 36 (R-IOS-13): through a remote
+//                window the lock holder's transmit audio goes to the Core
+//                on the window's microphone line (RemoteTransmit::audio).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 
 #pragma once
 #ifdef HAVE_WEBSOCKETS
@@ -175,6 +180,12 @@ public:
         std::function<void(std::function<void(const RemoteKeyAnswer&)> answer)> key;
         /// Sends tx.unkey {epoch}.
         std::function<void(quint32 epoch)> unkey;
+        /// iPhone app plan Task 36 (R-IOS-13): the app's transmit audio,
+        /// sent on the window's microphone line in place of the microphone
+        /// (samples interleaved `channels`, at `sampleRate`). Only the app
+        /// holding the TX audio lock (taken once the Core accepted its key)
+        /// reaches it. Unset, the audio goes where it always went.
+        std::function<void(const float* samples, int frames, int channels, int sampleRate)> audio;
     };
     /// Remote window only; an empty forwarder (no key) turns it off.
     void setRemoteTransmit(RemoteTransmit forward);

@@ -831,6 +831,8 @@ QJsonObject guiToCoreOps()
         {QStringLiteral("audioProfileVersion"), {QStringLiteral("audioProfileVersion")}},
         {QStringLiteral("receiverAudioVersion"), {QStringLiteral("receiverAudioVersion")}},
         {QStringLiteral("headphonesMixVersion"), {QStringLiteral("headphonesMixVersion")}},
+        // iPhone app plan Task 36: the microphone line.
+        {QStringLiteral("remoteTxVersion"), {QStringLiteral("remoteTxVersion")}},
     }));
     // MediaPeer.cpp acceptControl: hasExactKeys for description / candidate.
     ops.insert(QStringLiteral("description"),
