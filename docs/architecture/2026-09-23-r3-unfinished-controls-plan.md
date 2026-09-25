@@ -80,7 +80,7 @@ goes.
 | conn-history | Setup > Diagnostics > Connection Quality 60-second history | Hide; after R4 |
 | logging | Setup > Diagnostics > Logging: log level, open and clear, categories | Hide; after R4 |
 | siggen | Setup > Diagnostics > Signal Generator and Hardware Tests | Hide |
-| netdiag-local | Network Diagnostics with a local radio: Jitter, Loss, Gap | Hide those rows for a local radio; after R4 |
+| netdiag-local | Network Diagnostics with a local radio: Jitter, Loss, Gap | Built (remote-window parity Task 6): measured per connection (RadioLinkStats), shown in both windows |
 | dsp-rate | Setup > Audio > Advanced DSP rate and block size | Hide |
 | vax-feedback | Setup > Audio > Advanced VAX feedback tuning | Remove |
 | iq-to-vax | Setup > Audio > Advanced Send IQ to VAX, TX Monitor to VAX | Hide |

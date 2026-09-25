@@ -9,6 +9,7 @@
 #include "ConnectionState.h"
 #include "RadioDiscovery.h"
 #include "HardwareProfile.h"
+#include "RadioLinkStats.h"
 
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -150,6 +151,15 @@ public:
     // Drives the ConnectionSegment "X ms" latency readout (sub-PR-2).
     void notePingSent();
     void notePingReceived();
+
+    // R-R3-32 / R-R3-49 (parity Task 6): the link's datagram counters (UDP
+    // packets seen, packet loss, jitter, packet gap), one source for Network
+    // Diagnostics in a local window and the Core's station telemetry. Safe
+    // from any thread (RadioLinkStats: atomics written only by this
+    // connection's receive path).
+    RadioLinkStats::Snapshot linkStats() const
+    { return m_linkStats.snapshot(RadioLinkStats::nowUs()); }
+    const RadioLinkStats& linkStatsCounters() const { return m_linkStats; }
 
 public slots:
     // Owner-thread observation used by the daemon telemetry collector. The
@@ -705,6 +715,10 @@ private:
 
 protected:
     void setState(ConnectionState newState);
+
+    // R-R3-32 (parity Task 6): written only from the receive path on this
+    // connection's thread; see linkStats().
+    RadioLinkStats m_linkStats;
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};
     RadioInfo m_radioInfo;

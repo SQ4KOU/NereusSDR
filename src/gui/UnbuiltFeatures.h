@@ -29,6 +29,9 @@
 //                                    container buttons and the review's
 //                                    unfinished controls. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (remote-window parity Task 6): LocalNetworkStats
+//                 retired; the rows are measured and shown. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -79,7 +82,6 @@ enum class UnbuiltFeature {
     ConnectionHistory,// Setup > Diagnostics > Connection Quality 60 s history (built after R4)
     Logging,          // Setup > Diagnostics > Logging: log level, open and clear, categories (built after R4)
     SignalGenerator,  // Setup > Diagnostics > Signal Generator and Hardware Tests
-    LocalNetworkStats,// Network Diagnostics with a local radio: Jitter, Packet loss, Packet gap (built after R4)
     DspRate,          // Setup > Audio > Advanced DSP sample rate and block size
     IqToVax,          // Setup > Audio > Advanced Send IQ to VAX, TX Monitor to VAX
     MuteVaxDuringTx,  // Setup > Audio > Advanced Mute VAX during TX on other slice (built after R4)

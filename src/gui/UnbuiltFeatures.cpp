@@ -177,8 +177,6 @@ const QList<Entry>& all()
          QStringLiteral("Setup > Diagnostics > Logging: log level, open and clear, categories")},
         {F::SignalGenerator, QStringLiteral("siggen"),
          QStringLiteral("Setup > Diagnostics > Signal Generator and Hardware Tests")},
-        {F::LocalNetworkStats, QStringLiteral("netdiag-local"),
-         QStringLiteral("Network Diagnostics with a local radio: Jitter, Loss, Gap")},
         {F::DspRate, QStringLiteral("dsp-rate"),
          QStringLiteral("Setup > Audio > Advanced DSP rate and block size")},
         {F::IqToVax, QStringLiteral("iq-to-vax"),

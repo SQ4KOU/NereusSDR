@@ -837,6 +837,7 @@ set(CORE_SOURCES
     src/core/SupportBundle.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
+    src/core/RadioLinkStats.cpp
     src/core/TciProtocol.cpp
     src/core/TciSendQueue.cpp
     src/core/TciVfoCoalescer.cpp
