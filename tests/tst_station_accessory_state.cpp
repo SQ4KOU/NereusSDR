@@ -852,7 +852,7 @@ private slots:
             }
             AppSettings settings(dir.filePath(QStringLiteral("t-%1-%2-%3.settings")
                                                   .arg(owns).arg(minor).arg(onAir)));
-            StationServer server(&station, settings, dir.path());
+            StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
             if (onAir) {
                 station.transmitModel().setMox(true);
             }
