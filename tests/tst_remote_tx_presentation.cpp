@@ -31,6 +31,7 @@
 #include "gui/applets/TxEqDialog.h"
 #include "gui/widgets/ScrollableLabel.h"
 #include "gui/widgets/VfoWidget.h"
+#include "core/MoxController.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -238,6 +239,30 @@ private slots:
         QTRY_COMPARE(offset->value(), -150);
         stationSlice->setXitEnabled(false);
         QTRY_VERIFY(!xit->isChecked());
+        // Group B fix wave: on the air, as in Thetis, XIT and the TX antenna
+        // still change (console.cs udXIT_ValueChanged retunes with
+        // updateVFOFreqs(_mox); an Alex TX antenna applies at once with
+        // tx = _mox), from a remote window as from a local one.
+        MoxController* const mox = station.moxController();
+        QVERIFY(mox);
+        mox->setMoxCheck({});
+        mox->setMox(true);
+        QTRY_VERIFY(window.radioModel()->isCoreOnAir());
+        QVERIFY(xit->isEnabled() && offset->isEnabled() && zero->isEnabled());
+        xit->click();
+        QTRY_VERIFY(stationSlice->xitEnabled());
+        offset->setValue(120);
+        QTRY_COMPARE(stationSlice->xitHz(), 120);
+        const QString txAntenna = stationSlice->txAntenna() == QStringLiteral("ANT2")
+            ? QStringLiteral("ANT3") : QStringLiteral("ANT2");
+        window.radioModel()->sliceById(id)->setTxAntenna(txAntenna);
+        QTRY_COMPARE(stationSlice->txAntenna(), txAntenna);
+        mox->setMox(false);
+        QTRY_VERIFY(!window.radioModel()->isCoreOnAir());
+        xit->click();
+        QTRY_VERIFY(!stationSlice->xitEnabled());
+        stationSlice->setXitHz(-150);
+        QTRY_COMPARE(offset->value(), -150);
         action->trigger();
         auto* eq = window.findChild<QPushButton*>(QStringLiteral("TxEqButton"));
         // R-R3-49 (parity Task 2): the EQ toggle is a transmit setting, live

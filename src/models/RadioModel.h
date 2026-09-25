@@ -5187,6 +5187,12 @@ private:
     // Stable WDSP RX identity stopped at MOX entry. Release restores this
     // exact channel even if listening focus changes before key-up.
     int m_moxStoppedRxChannel{-1};
+    // Group B fix wave: whether onMoxHardwareFlipped last put the Alex
+    // relays on the TX routing, and for which band; an antenna changed
+    // meanwhile is applied on that routing, as Thetis applies it with
+    // tx = _mox.
+    bool m_alexRoutingTx{false};
+    NereusSDR::Band m_alexRoutingTxBand{NereusSDR::Band::Band20m};
 
     // Phase 3F Sub-Epic C: TX-slice arbiter (single-TX invariant + RF-safe
     // handoff). QObject child of RadioModel (Qt parent ownership). Wired

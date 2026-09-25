@@ -422,6 +422,60 @@ private slots:
         model.injectConnectionForTest(nullptr);
         delete mock;
     }
+
+    // Group B fix wave: a TX antenna change while the radio transmits, as
+    // Thetis applies it: setup.cs ProcessAlexAntRadioButton sets the band's
+    // TX antenna and console.AlexAntCtrlEnabled re-runs
+    // UpdateAlexAntSelection(RX1Band, _mox, ...) at once, so the relays
+    // take the new antenna on the TX routing (tx = true), never the
+    // receive routing mid-transmission. The out-on-TX flags only set
+    // Alex's statics there (chkRxOutOnTx / chkEXT1OutOnTx /
+    // chkEXT2OutOnTx), so they reach the relays at the next MOX edge.
+    void txAntennaChangedWhileTransmittingKeepsTheTxRouting() {
+        RadioModel model;
+        model.setCapsForTest(/*hasAlex=*/true);
+        model.addSlice(QStringLiteral("pan-0"));
+        auto* mock = new MockConnection();
+        model.injectConnectionForTest(mock);
+        const Band band = model.lastBand();
+
+        model.onMoxHardwareFlipped(true);
+        QVERIFY(!mock->calls.isEmpty());
+        QVERIFY(mock->calls.last().tx);
+        mock->calls.clear();
+
+        model.alexControllerMutable().setTxAnt(band, 2);
+        QVERIFY(!mock->calls.isEmpty());
+        QVERIFY(mock->calls.last().tx);
+        QCOMPARE(mock->calls.last().txAnt, 2);
+        QCOMPARE(mock->calls.last().trxAnt, 2);
+
+        // A flag while transmitting waits for the next MOX edge.
+        mock->calls.clear();
+        model.alexControllerMutable().setRxOutOnTx(true);
+        QVERIFY(mock->calls.isEmpty());
+
+        // Back on receive: the receive routing, with the new TX antenna kept
+        // for the next transmission.
+        model.onMoxHardwareFlipped(false);
+        QVERIFY(!mock->calls.isEmpty());
+        QVERIFY(!mock->calls.last().tx);
+        mock->calls.clear();
+        model.onMoxHardwareFlipped(true);
+        QVERIFY(mock->calls.last().tx);
+        QCOMPARE(mock->calls.last().txAnt, 2);
+        QVERIFY(mock->calls.last().rxOut);
+
+        // Off the air a TX antenna change keeps the receive routing.
+        model.onMoxHardwareFlipped(false);
+        mock->calls.clear();
+        model.alexControllerMutable().setTxAnt(band, 3);
+        QVERIFY(!mock->calls.isEmpty());
+        QVERIFY(!mock->calls.last().tx);
+
+        model.injectConnectionForTest(nullptr);
+        delete mock;
+    }
 };
 
 QTEST_MAIN(TestAntennaRoutingModel)

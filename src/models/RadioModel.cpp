@@ -258,6 +258,13 @@
 //   2026-09-25 - R-R3-49 (group B fix wave, M2): startStationLanScan runs
 //                one scan per device; a request while it listens joins it.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (group B fix wave): an Alex antenna changed
+//                while the radio transmits is applied on the TX routing, as
+//                Thetis's AlexAntCtrlEnabled applies it with tx = _mox
+//                (console.cs:14944-14961 [v2.10.3.15]); the out-on-TX flags
+//                wait for the next MOX edge (setup.cs:15459-15470,
+//                16520-16544 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -943,8 +950,21 @@ RadioModel::RadioModel(Role role, QObject* parent)
         // load-time's 14-per-band emit burst collapses to one write.
         m_alexControllerDirty = true;
         scheduleSettingsSave();
-        if (b != m_lastBand) { return; }
-        applyAlexAntennaForBand(b);
+        // Group B fix wave: while the radio transmits, the transmit band's
+        // TX routing, as Thetis applies an antenna change at once with
+        // tx = _mox:
+        // From Thetis console.cs:14944-14961 [v2.10.3.15] AlexAntCtrlEnabled
+        //   Alex.getAlex().UpdateAlexAntSelection(RX1Band, _mox, alex_ant_ctrl_enabled, false);
+        // (setup.cs:13815-13830 ProcessAlexAntRadioButton sets the band's
+        // antenna, then console.AlexAntCtrlEnabled = true.) Sending the
+        // receive routing here would move the relays to receive mid-TX.
+        if (m_alexRoutingTx) {
+            if (b == m_alexRoutingTxBand) { applyAlexAntennaForBand(b, /*isTx=*/true); }
+            if (b != m_lastBand) { return; }
+        } else {
+            if (b != m_lastBand) { return; }
+            applyAlexAntennaForBand(b);
+        }
         // T13 — keep the slice's cached ANT labels in sync so UI
         // surfaces reading slice->rxAntenna() see the current-band value.
         //
@@ -1040,6 +1060,14 @@ RadioModel::RadioModel(Role role, QObject* parent)
     auto reapplyAndPersist = [this]() {
         m_alexControllerDirty = true;
         scheduleSettingsSave();
+        // Group B fix wave: while the radio transmits a flag waits for the
+        // next MOX edge (onMoxHardwareFlipped applies it), as Thetis's only
+        // set Alex's statics there:
+        // From Thetis setup.cs:15459-15470 [v2.10.3.15] chkRxOutOnTx_CheckedChanged
+        //   Alex.RxOutOnTx = chkRxOutOnTx.Checked;
+        // (and setup.cs:16520-16544 for Ext1OutOnTx and Ext2OutOnTx). The
+        // receive routing is never sent mid-transmission.
+        if (m_alexRoutingTx) { return; }
         Band b = m_activeSlice
                    ? bandFromFrequency(m_activeSlice->frequency())
                    : m_lastBand;
@@ -18912,6 +18940,10 @@ void RadioModel::onMoxHardwareFlipped(bool isTx)
     const Band band = txSlice
                         ? bandFromFrequency(txSlice->frequency())
                         : m_lastBand;
+    // Group B fix wave: the routing the relays now hold, for an antenna
+    // changed while the radio transmits (see the antennaChanged connect).
+    m_alexRoutingTx = isTx;
+    m_alexRoutingTxBand = band;
     if (isTx) {
         // Defensive authority reconciliation: a listening slice may have
         // changed its stored TX antenna before becoming TX-bound.
