@@ -249,6 +249,16 @@ void P2CodecOrionMkII::composeCmdHighPriority(const CodecContext& ctx, quint8 bu
     // From Thetis network.c:1014 [@501e3f5]
     buf[345] = static_cast<quint8>(ctx.p2DriveLevel);
 
+    // Plan Task 14: the Open Collector outputs. No codec wrote this byte, so
+    // equipment switched by the OC pins got no band data on Protocol 2.
+    // From Thetis ChannelMaster/network.c:1030-1031 [v2.10.3.15]
+    //   // Open Collector Outputs
+    //   packetbuf[1401] = (prn->oc_output << 1) & 0xfe;
+    // (The byte before it, not ported here, carries its own tag:
+    //   packetbuf[1400] = xvtr_enable | (!audioamp_enable) << 1 | atu_tune << 2; //MW0LGE_22b  // user_dig_in was gettin overwritten by 1025 packet read
+    // network.c:1027 [v2.10.3.15].)
+    buf[1401] = static_cast<quint8>((ctx.ocByte << 1) & 0xfe);
+
     // From Thetis network.c:1037-1038 [@501e3f5] — Mercury Attenuator
     buf[1403] = static_cast<quint8>(ctx.p2Rx1Preamp << 1 | ctx.rxPreamp[0]);
 

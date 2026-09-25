@@ -939,6 +939,7 @@ void P2RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
         return;
     }
     m_rx[receiverIndex].frequency = static_cast<int>(frequencyHz);
+    m_lastRetunedDdc = receiverIndex;
 
     // Update Alex HPF/LPF based on new frequency
     // From Thetis console.cs:6830-7234 [@501e3f5] — auto-select band filters
@@ -1369,6 +1370,87 @@ quint8 P2RadioConnection::effectiveRxHpfBitsAdc0() const
 quint8 P2RadioConnection::effectiveLpfBitsAlex0() const
 {
     return static_cast<quint8>(m_mox ? m_alex.lpfBitsTx : m_alex.lpfBitsRx);
+}
+
+// ---------------------------------------------------------------------------
+// setLiveReceiverSlots: which DDCs carry a live receiver.
+//
+// Phase 3F section 16.3.2, plan Task 14. Thetis takes the OC band from RX1
+// (VFO A). Slice A can be closed in NereusSDR, so the live receiver on the
+// LOWEST DDC stands in for RX1, as on Protocol 1
+// (P1RadioConnection::setLiveReceiverSlots). On the G2 slice A is DDC2 and
+// slice B DDC3 (P2CodecOrionMkII::applyDdcAssignment), so with A open this
+// is A. The PureSignal and diversity DDC0/DDC1 pair is not a receiver and
+// never appears in the mask. An empty mask keeps the previous stand-in.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setLiveReceiverSlots(quint32 slotMask)
+{
+    m_liveSlotMask = slotMask;
+    if (slotMask == 0) {
+        return;
+    }
+    int lowest = 0;
+    while (lowest < 31 && (slotMask & (1u << lowest)) == 0) { ++lowest; }
+    if (lowest < kMaxRxStreams && lowest != m_rx1Slot) {
+        m_rx1Slot = lowest;
+        if (m_running) {
+            sendCmdHighPriority();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setReceiverVfoFrequencies: each DDC's slice VFO, for the OC band.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot)
+{
+    bool changed = false;
+    for (int ddc = 0; ddc < kMaxRxStreams; ++ddc) {
+        const quint64 hz = (ddc < vfoHzBySlot.size()) ? vfoHzBySlot.at(ddc) : 0;
+        if (m_rxVfoHz[static_cast<size_t>(ddc)] != hz) {
+            m_rxVfoHz[static_cast<size_t>(ddc)] = hz;
+            changed = true;
+        }
+    }
+    if (changed && m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ocBandFrequencyHz: the frequency whose band selects the OC outputs.
+//
+// Plan Task 14. The rule is Penny.cs's, which Thetis applies on every
+// protocol before NetworkIO.SetOCBits hands the bits to network.c:
+//   From Thetis HPSDR/Penny.cs:174-177 [v2.10.3.15]
+//     if (tx && VFOBTX)
+//         bits = TXABitMasks[idxb];
+//     else if (tx)
+//         bits = TXABitMasks[idx];
+//     else bits = RXABitMasks[idx];
+// Keyed: the transmitting slice's frequency plus XIT (m_tx[0], fed by
+// RadioModel::pushTxFrequencyFromTxSlice, the frequency the Alex transmit
+// low-pass uses). Unkeyed: the RX1 stand-in's VFO, falling back to its DDC
+// centre when no VFO has been told. Thetis's band is the VFO's:
+//   From Thetis console.cs:29101-29106 [v2.10.3.15] (HdwMOXChanged)
+//     Band lo_band = BandByFreq(XVTRForm.TranslateFreq(VFOAFreq), rx1_xvtr_index, current_region);
+//     Band lo_bandb = BandByFreq(XVTRForm.TranslateFreq(VFOBFreq), rx2_xvtr_index, current_region);
+//     if (penny_ext_ctrl_enabled) //MW0LGE_21k
+//     {
+//         int bits = Penny.getPenny().UpdateExtCtrl(lo_band, lo_bandb, _mox, _tuning, SetupForm.TestIMD, chkExternalPA.Checked); //MW0LGE_21j
+// A transmit frequency of 0 has never been pushed, and keeps the receive
+// band.
+// ---------------------------------------------------------------------------
+quint64 P2RadioConnection::ocBandFrequencyHz() const
+{
+    if (m_mox && m_tx[0].frequency > 0) {
+        return static_cast<quint64>(m_tx[0].frequency);
+    }
+    const auto slot = static_cast<size_t>(rx1Ddc());
+    if (m_rxVfoHz[slot] != 0) {
+        return m_rxVfoHz[slot];
+    }
+    return m_rx[slot].frequency > 0 ? static_cast<quint64>(m_rx[slot].frequency) : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -2915,12 +2997,16 @@ CodecContext P2RadioConnection::buildCodecContext() const
     ctx.p2SaturnBpfLpfBits = 0;
 
     // OC output byte — sourced from OcMatrix when wired; legacy 0 otherwise.
-    // No P2 codec reads ctx.ocByte yet; populated here symmetrically with P1
-    // so Phase F P2 OC wiring can consume it without further changes.
     // Phase 3P-D Task 3 — From Thetis HPSDR/Penny.cs:117-132 [@501e3f5]
-    if (m_ocMatrix) {
-        const quint64 rx0Hz = static_cast<quint64>(m_rx[0].frequency);
-        const Band currentBand = bandFromFrequency(static_cast<double>(rx0Hz));
+    //
+    // Plan Task 14: the codecs now write it to high-priority byte 1401
+    // (P2CodecOrionMkII::composeCmdHighPriority, network.c:1031). The band
+    // was DDC0's centre, which on the G2 is not a receiver at all; it is now
+    // the transmitting slice's band while keyed and the RX1 stand-in's VFO
+    // band while not (ocBandFrequencyHz). Only a board with OC outputs
+    // (ocOutputCount, every Protocol 2 row) drives the pins.
+    if (m_ocMatrix && m_caps && m_caps->ocOutputCount > 0) {
+        const Band currentBand = bandFromFrequency(static_cast<double>(ocBandFrequencyHz()));
         ctx.ocByte = m_ocMatrix->maskFor(currentBand, m_mox);  // 3M-1a E.7: was m_tx[0].pttOut != 0
     } else {
         ctx.ocByte = 0;
