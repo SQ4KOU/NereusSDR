@@ -33,6 +33,10 @@
 //                                    ranges the page and the command share.
 //                                    Enforcement is unchanged. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 34 (R-IOS-13):
+//                                    lastDenial(), the kind of the last
+//                                    refusal (amplifier in standby or SWR).
+//                                    AI-assisted via Anthropic Claude Code.
 
 #pragma once
 
@@ -90,6 +94,13 @@ public:
     ///   4. Otherwise        -> returns true.
     bool evaluateTxRequest(bool ampPresent, bool ampInOperate, float currentSwr);
 
+    /// iPhone app plan Task 34 (R-IOS-13): why the last evaluateTxRequest
+    /// refused (Block mode), so MoxController can name the refusal the link
+    /// carries: the amplifier in standby (fix operateAmp) or the SWR over
+    /// its limit. None after an allowed request.
+    enum class Denial { None, AmpStandby, Swr };
+    Denial lastDenial() const { return m_lastDenial; }
+
 public slots:
     void setMode(Mode m);
     void setGraceMs(int ms);
@@ -122,6 +133,8 @@ private:
     qint64 m_ampLastOperateMs{0};
     // Previous operate state tracked to detect rising edge only.
     bool   m_prevAmpInOperate{false};
+    // Task 34: the last refusal's kind.
+    Denial m_lastDenial{Denial::None};
 };
 
 }  // namespace NereusSDR

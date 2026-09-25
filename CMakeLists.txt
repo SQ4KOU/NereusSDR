@@ -997,6 +997,10 @@ set(CORE_SOURCES
     src/core/safety/BandPlanGuard.cpp
     src/core/safety/SwrProtectionController.cpp
     src/core/safety/TxInhibitMonitor.cpp
+    src/core/safety/TxRefusal.cpp
+    src/core/safety/StationTxGate.cpp
+    src/core/safety/UnkeyGate.cpp
+    src/core/safety/TransmitHolder.cpp
     src/core/safety/safety_constants.cpp
     src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp

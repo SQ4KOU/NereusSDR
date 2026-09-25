@@ -177,6 +177,14 @@
 //                 PA trip (N3). isTciPttHeld() for TciServer's TX audio
 //                 lock. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-25 - iPhone app plan Task 34 (R-IOS-02, R-IOS-13, rulings
+//                 8.8 and 8.13): the keying gate (setKeyingGate), asked on
+//                 every press edge and every remote key before the PTT
+//                 mode or MOX changes; KeyerIdentity and
+//                 setMox(bool, const KeyerIdentity&); a release unkeys only
+//                 its keyer's key; every refusal also as a TxRefusal
+//                 (moxRefused). NereusSDR-original. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -191,6 +199,7 @@
 #include "core/PttMode.h"
 #include "core/WdspTypes.h"
 #include "core/safety/BandPlanGuard.h"
+#include "core/safety/TxRefusal.h"
 // Phase 3P-II Task 87: TxInterlockPolicy gate in setMox(true).
 #include "core/TxInterlockPolicy.h"
 
@@ -218,6 +227,39 @@ enum class MoxState {
     TxToRxInFlight,    // mox_delay (SSB/FM 10ms) or key_up_delay (CW 10ms) in-flight clear
     TxToRxBreakIn,     // reserved: break-in settle; not started in 3M-1a (3M-2 CW QSK)
     TxToRxFlush,       // waiting for ptt_out_delay (20 ms) before RX channels on
+};
+
+// ---------------------------------------------------------------------------
+// KeyerIdentity: who a key is for (iPhone app plan Task 34, ruling 8.13).
+//
+// The station device is the operating position at the radio: the radio's
+// own PTT and the Core's local callers of setMox(bool) (the MOX and TUNE
+// buttons, two-tone, a local TCI or CAT server). A remote device keys with
+// setMox(bool, const KeyerIdentity&) and its own device id.
+// ---------------------------------------------------------------------------
+struct KeyerIdentity {
+    /// The device the key is for: a device id as the Core's session
+    /// registry knows it, or kStationDeviceId.
+    QByteArray deviceId;
+    /// The keying source (PttMode::Mic for the radio's own PTT, Tci, Cat,
+    /// Vox, Manual for TUNE, None for a MOX button or a remote key).
+    PttMode source{PttMode::None};
+    /// A program's key (TCI, CAT): it never takes transmit (D58, D63).
+    bool program{false};
+
+    /// The same id as SliceOwnership::stationDevice().
+    static constexpr char kStationDeviceId[] = "station";
+    static KeyerIdentity station(PttMode source);
+    bool isStation() const { return deviceId == kStationDeviceId; }
+    bool operator==(const KeyerIdentity& other) const = default;
+};
+
+// The keying gate's answer (ruling 8.13): admit the key; refuse it with a
+// reason; or take transmit first, then key if the press is still down.
+enum class KeyingVerdict { Admit, Refuse, Take };
+struct KeyingAnswer {
+    KeyingVerdict verdict{KeyingVerdict::Admit};
+    TxRefusal refusal;
 };
 
 // ---------------------------------------------------------------------------
@@ -344,6 +386,45 @@ public:
     // contract.
     using MoxCheckFn = std::function<safety::BandPlanGuard::MoxCheckResult()>;
     void setMoxCheck(MoxCheckFn check);
+
+    // ── iPhone app plan Task 34: the keying gate (rulings 8.8, 8.13) ────────
+    //
+    // setKeyingGate: asked on every press edge and every remote key, with
+    // the source and the keyer, before the PTT mode or MOX changes. It sits
+    // beside the band-plan check and the interlock below: TX inhibit and the
+    // PA trip first, then this gate, then the band plan, then the interlock.
+    // A Core that serves devices installs it (StationServer, from
+    // TransmitHolder); with none installed every key is admitted as before,
+    // so a desktop on its own is unchanged. Unkeying is never asked.
+    //
+    // A PTT source (mic, CAT, VOX, TCI) asks at its press edge in
+    // tryPollKey, before its mode is set; a refused or taken press is held
+    // off until the source is released, so a level every status frame
+    // repeats acts once per edge. setMox(true) asks for the local callers
+    // (the station device); setMox(true, keyer) for a remote key.
+    using KeyingGateFn = std::function<KeyingAnswer(PttMode source, const KeyerIdentity& keyer)>;
+    void setKeyingGate(KeyingGateFn gate);
+    bool hasKeyingGate() const noexcept { return static_cast<bool>(m_keyingGate); }
+
+    // The keyer of the key now on (station() while unkeyed).
+    const KeyerIdentity& currentKeyer() const noexcept { return m_currentKeyer; }
+
+    // The last refusal, as moxRefused sent it.
+    const TxRefusal& lastRefusal() const noexcept { return m_lastRefusal; }
+
+    // A take the gate asked for has ended (ruling 8.9): with `took` true
+    // and the keyer's press still down, the press keys now, as a new key
+    // through the gate. A station PTT source is still down when its level
+    // is; a remote keyer's press is its caller's to send again.
+    void onTakeFinished(const KeyerIdentity& keyer, bool took);
+
+    // A station key that starts more than MOX (TUNE, two-tone) asks the gate
+    // before it changes anything, so a refused start never releases or rides
+    // another device's key. True when admitted (the gate's side effects
+    // apply: transmit unheld becomes the station's); false after reporting
+    // the refusal through moxRejected / moxRefused. Always true with no
+    // gate installed.
+    bool admitStationKey(PttMode source);
 
     // ── Setter ───────────────────────────────────────────────────────────────
     // setPttMode: idempotent; emits pttModeChanged on actual transition.
@@ -905,6 +986,14 @@ public slots:
     // call — that would regress Codex P2.
     void setMox(bool on);
 
+    // iPhone app plan Task 34 (ruling 8.13): a remote device's key and its
+    // release. On: the keying gate is asked with the keyer (and its
+    // source) before anything changes; an admitted key is the keyer's.
+    // Off: unkeys only when the key now on is this keyer's; another
+    // keyer's key is left alone (ruling 8.5). The Core's safety stops and
+    // local callers use setMox(false), which unkeys whoever is keyed.
+    void setMox(bool on, const KeyerIdentity& keyer);
+
     // Task 33: the TX channel's unkey drain has finished (RadioModel relays
     // TxChannel::txDrained for the drain it requested). Ignored unless the
     // walk is waiting for it.
@@ -926,6 +1015,12 @@ signals:
     // NOT emitted when no MoxCheckFn is installed (bypass — backwards-compat).
     // NOT emitted for setMox(false) — release is never rejected.
     void moxRejected(QString reason);
+
+    // iPhone app plan Task 34 (R-IOS-13): every refusal moxRejected reports,
+    // as the TxRefusal the link carries (its code, its sentence, its fix).
+    // Emitted right after moxRejected, or alone when a held source's repeat
+    // refusal is quiet.
+    void moxRefused(const NereusSDR::TxRefusal& refusal);
 
     // ── Phase signals (Codex P1) ──────────────────────────────────────────────
     //
@@ -1144,6 +1239,10 @@ private slots:
 private:
     // Task 33: the drain is done (or its wait timed out): start mox_delay.
     void finishTxDrainWait();
+    // Task 34: a refusal, as moxRejected(reason) and moxRefused(refusal);
+    // `quiet` (a held source's repeat, M3) records it and says nothing.
+    void reportRefusal(const QString& reason, const TxRefusal& refusal, bool quiet);
+    static TxRefusal refusalForCheck(const safety::BandPlanGuard::MoxCheckResult& result);
     // isVoiceMode: true for the 8 voice-family DSP modes.
     //
     // Voice family (per Thetis CMSetTXAVoxRun, cmaster.cs:1043-1050
@@ -1405,6 +1504,14 @@ private:
     // Task 33: StopAllTx's latch (Thetis _stop_all_tx). pollPtt consumes it
     // against the PTT source levels (m_micPtt, m_catPtt, m_voxPtt, m_tciPtt).
     bool m_stopAllTxLatched{false};
+
+    // iPhone app plan Task 34: the keying gate, who the key now on is for,
+    // and the keyer a gate-admitted setMox(true) keys for.
+    KeyingGateFn  m_keyingGate;
+    KeyerIdentity m_currentKeyer{KeyerIdentity::station(PttMode::None)};
+    KeyerIdentity m_admittedKeyer{KeyerIdentity::station(PttMode::None)};
+    bool          m_keyAdmitted{false};
+    TxRefusal     m_lastRefusal;
 };
 
 } // namespace NereusSDR

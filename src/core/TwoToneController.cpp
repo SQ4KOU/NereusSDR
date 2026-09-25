@@ -35,6 +35,11 @@
 //                took (N1). A start with TUN on turns TUN off through its
 //                own TUN-off path first, then keys (item 6, ported from
 //                console.cs:44805-44813 [v2.10.3.15]).
+//   2026-09-25 : iPhone app plan Task 34 (R-IOS-02, ruling 8.5), by
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                A start asks the keying gate first (admitStationKey), so a
+//                refused two-tone never releases or rides another device's
+//                key. NereusSDR-original.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation flow
@@ -200,6 +205,13 @@ void TwoToneController::setActive(bool on)
             qCWarning(lcDsp).noquote()
                 << "TwoToneController: missing dependencies (tx/txChannel/mox); "
                    "cannot activate.";
+            return;
+        }
+
+        // iPhone app plan Task 34 (ruling 8.5): two-tone is a station key.
+        // Asked before anything releases MOX, so a refused start never
+        // unkeys, or rides on, another device's key.
+        if (!m_moxController->admitStationKey(PttMode::None)) {
             return;
         }
 

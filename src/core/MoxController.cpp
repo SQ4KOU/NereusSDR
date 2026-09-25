@@ -125,6 +125,16 @@
 //                 release that falls back to another source runs the MOX
 //                 pre-check first (M6, R-R3-36). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Task 34 merge with the gaps lane: StopAllTx's latch is read
+//                 in pollPtt's receive branch (console.cs:25479-25492
+//                 [v2.10.3.15]); clearManualMox clears the manual key too.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 34 (R-IOS-02, R-IOS-13, rulings 8.5,
+//                 8.8, 8.13): the keying gate at the press edge (tryPollKey)
+//                 and in setMox; setMox(bool, KeyerIdentity); releases by
+//                 keyer; admitStationKey; onTakeFinished; every refusal
+//                 also as a TxRefusal (moxRefused). NereusSDR-original.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -300,6 +310,119 @@ void MoxController::finishTxDrainWait()
 // Must be called from the main thread before the first setMox() call, matching
 // MoxController's main-thread-only contract.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// iPhone app plan Task 34: the keying gate (rulings 8.8, 8.13).
+// ---------------------------------------------------------------------------
+KeyerIdentity KeyerIdentity::station(PttMode source)
+{
+    KeyerIdentity keyer;
+    keyer.deviceId = QByteArray(kStationDeviceId);
+    keyer.source = source;
+    keyer.program = source == PttMode::Tci || source == PttMode::Cat;
+    return keyer;
+}
+
+void MoxController::setKeyingGate(KeyingGateFn gate)
+{
+    m_keyingGate = std::move(gate);
+}
+
+void MoxController::setMox(bool on, const KeyerIdentity& keyer)
+{
+    if (!on) {
+        // Ruling 8.5: a release unkeys only its keyer's key. Unkeying is
+        // never asked of the gate.
+        if (m_mox && m_currentKeyer.deviceId == keyer.deviceId) {
+            setMox(false);
+        }
+        return;
+    }
+    if (m_mox) {
+        // Already keyed: this keyer's repeat runs the safety effects again
+        // (Codex P2); another keyer's key is not replaced.
+        if (m_currentKeyer.deviceId == keyer.deviceId) {
+            setMox(true);
+        }
+        return;
+    }
+    if (m_keyingGate) {
+        const KeyingAnswer answer = m_keyingGate(keyer.source, keyer);
+        if (answer.verdict != KeyingVerdict::Admit) {
+            if (answer.verdict == KeyingVerdict::Refuse) {
+                reportRefusal(answer.refusal.text, answer.refusal, /*quiet=*/false);
+            }
+            return;
+        }
+    }
+    m_keyAdmitted = true;
+    m_admittedKeyer = keyer;
+    setMox(true);
+    m_keyAdmitted = false;
+}
+
+void MoxController::onTakeFinished(const KeyerIdentity& keyer, bool took)
+{
+    // Ruling 8.9: the press that asked for the take keys only if it is
+    // still down; a press released meanwhile keys nothing. Only a station
+    // PTT source is followed here; a remote keyer sends its key again.
+    if (!took || !keyer.isStation()) {
+        return;
+    }
+    const quint8 bit = keyer.source == PttMode::Tci ? kRefusedTci
+                     : keyer.source == PttMode::Cat ? kRefusedCat
+                     : keyer.source == PttMode::Mic ? kRefusedMic
+                     : keyer.source == PttMode::Vox ? kRefusedVox
+                                                    : 0;
+    if (bit == 0 || !isLevelHeld(bit)) {
+        return;
+    }
+    clearHeldBits(bit);
+    pollPtt();
+}
+
+bool MoxController::admitStationKey(PttMode source)
+{
+    if (!m_keyingGate) {
+        return true;
+    }
+    const KeyerIdentity keyer = KeyerIdentity::station(source);
+    if (m_mox && m_currentKeyer.isStation()) {
+        return true;   // the station's own key is on: nothing to ask
+    }
+    const KeyingAnswer answer = m_keyingGate(source, keyer);
+    if (m_mox || answer.verdict != KeyingVerdict::Admit) {
+        // Another device's key is on, or the gate refused or took.
+        const TxRefusal refusal = answer.refusal.isEmpty() ? TxRefusals::changingHands()
+                                                           : answer.refusal;
+        if (answer.verdict != KeyingVerdict::Take) {
+            reportRefusal(refusal.text, refusal, /*quiet=*/false);
+        }
+        return false;
+    }
+    return true;
+}
+
+TxRefusal MoxController::refusalForCheck(const safety::BandPlanGuard::MoxCheckResult& result)
+{
+    if (result.refusalCode == TxRefusals::kMicNotReady) {
+        return TxRefusals::micNotReady();
+    }
+    if (result.refusalCode == TxRefusals::kStationReceiveOnly) {
+        return TxRefusals::stationReceiveOnly();
+    }
+    return TxRefusals::bandPlan(result.reason);
+}
+
+void MoxController::reportRefusal(const QString& reason, const TxRefusal& refusal, bool quiet)
+{
+    m_lastRefusal = refusal;
+    if (quiet) {
+        return;
+    }
+    emit moxRejected(reason);
+    emit moxRefused(refusal);
+}
+
 void MoxController::setMoxCheck(MoxCheckFn check)
 {
     m_moxCheck = std::move(check);
@@ -634,12 +757,52 @@ void MoxController::setMox(bool on)
     // never reach this: the gate in pollPtt skips them silently, as
     // Thetis's PollPTT does.
     if (on && (m_paTripped || m_txInhibited)) {
-        emit moxRejected(m_paTripped
+        // Task 34: the same refusal as a TxRefusal (paProtection or, for
+        // the TX inhibit input, interlock).
+        reportRefusal(m_paTripped
             ? QStringLiteral("The amplifier has tripped. Reset it before transmitting.")
-            : QStringLiteral("Transmit is inhibited."));
+            : QStringLiteral("Transmit is inhibited."),
+            m_paTripped ? TxRefusals::paProtection() : TxRefusals::txInhibited(),
+            /*quiet=*/false);
         if (!m_mox) {
             dropPttOnUnkey();
         }
+        return;
+    }
+
+    // ── iPhone app plan Task 34: the keying gate (rulings 8.8, 8.13) ──────────
+    //
+    // Who may key: asked with the source and the keyer before MOX changes,
+    // beside the band plan below and the interlock after it. A PTT source
+    // asked already at its press edge (tryPollKey, before its mode was
+    // set), and a remote key in setMox(on, keyer); both arrive here with
+    // m_keyAdmitted set. Any other key here is the station device's: the
+    // MOX and TUNE buttons, two-tone, a local caller. A repeated
+    // setMox(true) while keyed is not a key, so it is not asked.
+    if (on && !m_mox && m_keyingGate && !m_keyAdmitted) {
+        const KeyerIdentity keyer = KeyerIdentity::station(m_pttMode);
+        const KeyingAnswer answer = m_keyingGate(m_pttMode, keyer);
+        if (answer.verdict != KeyingVerdict::Admit) {
+            if (answer.verdict == KeyingVerdict::Refuse) {
+                reportRefusal(answer.refusal.text, answer.refusal, m_quietRefusal);
+            }
+            // A refused or taken key ends as every refused key does.
+            dropPttOnUnkey();
+            return;
+        }
+    }
+    // Task 34 (ruling 8.5): while another device's key is on, a station
+    // key (the MOX or TUNE button, two-tone) never rides on it: the carrier
+    // is that device's. Refused with the gate's words; nothing changes.
+    if (on && m_mox && !m_keyAdmitted && !m_currentKeyer.isStation()) {
+        KeyingAnswer answer;
+        if (m_keyingGate) {
+            answer = m_keyingGate(m_pttMode, KeyerIdentity::station(m_pttMode));
+        }
+        reportRefusal(answer.refusal.isEmpty() ? TxRefusals::changingHands().text
+                                               : answer.refusal.text,
+                      answer.refusal.isEmpty() ? TxRefusals::changingHands() : answer.refusal,
+                      /*quiet=*/false);
         return;
     }
 
@@ -664,9 +827,9 @@ void MoxController::setMox(bool on)
             // until it is pressed again (m_notQueuedHeld).
             m_lastRefusalNotQueued = result.notQueued;
             // Task 7 fix wave, M3: a held source's repeat refusal is quiet.
-            if (!m_quietRefusal) {
-                emit moxRejected(result.reason);
-            }
+            // Task 34: its TxRefusal by the code the check names (none: the
+            // band plan).
+            reportRefusal(result.reason, refusalForCheck(result), m_quietRefusal);
             // Thetis refuses a key by unchecking chkMOX, which runs the
             // TX-to-RX branch of chkMOX_CheckedChanged2 (PTT mode NONE, CAT
             // and TCI PTT dropped). Only from receive: a repeated
@@ -721,9 +884,14 @@ void MoxController::setMox(bool on)
         }
         if (!allowed) {
             // denied() signal already emitted by the policy (unless quiet).
-            if (!m_quietRefusal) {
-                emit moxRejected(QStringLiteral("TX interlock blocked: %1").arg(deniedReason));
-            }
+            // Task 34: the amplifier in standby and the SWR over its limit
+            // have refusals of their own (ampStandby offers operateAmp).
+            const TxInterlockPolicy::Denial denial = m_interlockPolicy->lastDenial();
+            reportRefusal(QStringLiteral("TX interlock blocked: %1").arg(deniedReason),
+                          denial == TxInterlockPolicy::Denial::AmpStandby ? TxRefusals::ampStandby()
+                          : denial == TxInterlockPolicy::Denial::Swr      ? TxRefusals::swr()
+                                                                          : TxRefusals::interlock(),
+                          m_quietRefusal);
             // A refused key ends like a Thetis refusal (see above).
             if (!m_mox) {
                 dropPttOnUnkey();
@@ -769,6 +937,10 @@ void MoxController::setMox(bool on)
 
     // ── Step 3: Commit new MOX state ─────────────────────────────────────────
     m_mox = on;
+    // Task 34: who this key is for (the gate admitted it for them, or the
+    // station device's own key); an unkey leaves nobody's key on.
+    m_currentKeyer = on ? (m_keyAdmitted ? m_admittedKeyer : KeyerIdentity::station(m_pttMode))
+                        : KeyerIdentity::station(PttMode::None);
 
     // ── Step 4: Start timer-driven walk ───────────────────────────────────────
     // Cancel any timers still running from a previous (rapid) transition.
@@ -902,13 +1074,49 @@ void MoxController::dropPttOnUnkey()
 // ---------------------------------------------------------------------------
 void MoxController::tryPollKey(PttMode mode, quint8 refusedBit)
 {
-    setPttMode(mode);
     if (m_mox) {
+        // Task 34 (ruling 8.5): a station source never renames another
+        // keyer's key, or its release would unkey that keyer.
+        if (m_currentKeyer.isStation()) {
+            setPttMode(mode);
+        }
         return;
     }
+    // ── Task 34: the keying gate, at the press edge (ruling 8.8) ─────────────
+    // Asked before the mode is set, so a refused press leaves the PTT mode
+    // as it was. A refused or taken press is held off until its source is
+    // released (m_notQueuedHeld): the radio repeats its PTT level on every
+    // status frame, and the gate acts once per edge. A refused app level
+    // (CAT, TCI) is dropped, so the app is answered that nothing keyed.
+    if (m_keyingGate) {
+        const KeyerIdentity keyer = KeyerIdentity::station(mode);
+        const KeyingAnswer answer = m_keyingGate(mode, keyer);
+        if (answer.verdict != KeyingVerdict::Admit) {
+            if (answer.verdict == KeyingVerdict::Refuse) {
+                reportRefusal(answer.refusal.text, answer.refusal,
+                              (m_refusedHeld & refusedBit) != 0);
+            }
+            m_refusedHeld |= refusedBit;
+            if (isLevelHeld(refusedBit)) {
+                m_notQueuedHeld |= refusedBit;
+            }
+            if (answer.verdict == KeyingVerdict::Refuse) {
+                if (refusedBit == kRefusedCat) {
+                    m_catPtt = false;
+                } else if (refusedBit == kRefusedTci) {
+                    m_tciPtt = false;
+                }
+            }
+            return;
+        }
+        m_admittedKeyer = keyer;
+        m_keyAdmitted = true;
+    }
+    setPttMode(mode);
     m_quietRefusal = (m_refusedHeld & refusedBit) != 0;
     m_lastRefusalNotQueued = false;
     setMox(true);
+    m_keyAdmitted = false;
     m_quietRefusal = false;
     if (m_mox) {
         m_refusedHeld &= static_cast<quint8>(~refusedBit);
@@ -1062,6 +1270,12 @@ void MoxController::pollPtt()
         return;
     }
 
+    // Task 34 (ruling 8.5): the station's sources release only the station
+    // device's own key; a remote keyer's key is its own to release.
+    if (!m_currentKeyer.isStation()) {
+        return;
+    }
+
     switch (m_pttMode) {
     case PttMode::Tci:
         // From Thetis console.cs:25562-25581 [v2.10.3.15]
@@ -1095,7 +1309,7 @@ void MoxController::pollPtt()
             if (m_moxCheck) {
                 const auto admit = m_moxCheck();
                 if (!admit.ok) {
-                    emit moxRejected(admit.reason);
+                    reportRefusal(admit.reason, refusalForCheck(admit), /*quiet=*/false);
                     // M3: that source, still held, is not told again.
                     const quint8 bit = (fallback == PttMode::Cat) ? kRefusedCat
                                      : (fallback == PttMode::Mic) ? kRefusedMic
@@ -1262,12 +1476,18 @@ void MoxController::onMoxButton(bool on)
         m_manualKey = true;
         setMox(true);
         // A refused key leaves chkMOX unchecked, so chkMOX_Click takes its
-        // else branch: _manual_mox = false.
-        if (!m_mox) {
+        // else branch: _manual_mox = false. Task 34: so does a key refused
+        // while another device's key is on (MOX stays on, not the
+        // station's).
+        if (!m_mox || !m_currentKeyer.isStation()) {
             setManualKey(false);
         }
     } else {
-        setMox(false);
+        // Task 34 (ruling 8.5): the station's MOX button releases only the
+        // station device's own key.
+        if (m_currentKeyer.isStation()) {
+            setMox(false);
+        }
         setManualKey(false);
     }
 }

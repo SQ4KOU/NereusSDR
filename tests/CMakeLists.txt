@@ -7457,6 +7457,15 @@ nereus_add_test(tst_station_devices
 # redial arithmetic) over an injected clock, and several devices signed in
 # at once over the in-process loopback.
 nereus_add_test(tst_device_session_registry EXTRA_LABELS session)
+# iPhone app plan Task 34 (R-IOS-13, R-IOS-02, R-IOS-03): transmit
+# refusals, the station transmit gate, the unkey-confirmed gate, the
+# transmit holder and its transfer, the keying gate on press edges, and the
+# on-air refusals.
+nereus_add_test(tst_tx_refusal)
+nereus_add_test(tst_station_tx_gate)
+nereus_add_test(tst_unkey_gate)
+nereus_add_test(tst_transmit_holder)
+nereus_add_test(tst_keying_gate)
 nereus_add_test(tst_station_multi_session
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)

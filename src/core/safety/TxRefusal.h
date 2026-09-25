@@ -1,0 +1,110 @@
+// no-port-check: NereusSDR-original.
+// =================================================================
+// src/core/safety/TxRefusal.h  (NereusSDR)
+// =================================================================
+//
+// iPhone app plan Task 34 (R-IOS-13, R-IOS-02, D60): why the Core refused
+// a key or a change while someone transmits, as one record the link
+// carries: a stable code an app keys its screens on, the plain sentence the
+// Core shows, and the fix an app may offer (a button that does it).
+//
+// The codes and their sentences are the link document's Transmit section
+// (docs/architecture/2026-09-23-station-link-v1.md). Every sentence passes
+// OperatorWording::isPlain (tst_tx_refusal holds them to it, with device
+// names such as "Grant's iPhone" put in).
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-25: original implementation for NereusSDR by J.J. Boyd
+//               (KG4VCF), iPhone app plan Task 34 (R-IOS-13), with
+//               AI-assisted implementation via Anthropic Claude Code.
+// =================================================================
+#pragma once
+
+#include <QByteArray>
+#include <QMetaType>
+#include <QString>
+
+namespace NereusSDR {
+
+struct TxRefusal {
+    /// The refusal's stable name (notReady, otherDeviceHolds, ...). Empty
+    /// for no refusal.
+    QByteArray code;
+    /// The sentence the operator reads.
+    QString text;
+    /// What an app may offer to fix it (takeTransmit, operateAmp), or empty.
+    QByteArray fix;
+
+    bool isEmpty() const { return code.isEmpty(); }
+    bool operator==(const TxRefusal& other) const = default;
+};
+
+namespace TxRefusals {
+
+// ---- Codes (the link document's Transmit section) -------------------------
+inline constexpr char kNotReady[] = "notReady";
+inline constexpr char kStationReceiveOnly[] = "stationReceiveOnly";
+inline constexpr char kBandPlan[] = "bandPlan";
+inline constexpr char kInterlock[] = "interlock";
+inline constexpr char kAmpStandby[] = "ampStandby";
+inline constexpr char kPaProtection[] = "paProtection";
+inline constexpr char kSwr[] = "swr";
+inline constexpr char kOtherDeviceHolds[] = "otherDeviceHolds";
+inline constexpr char kProgramNeedsTransmit[] = "programNeedsTransmit";
+inline constexpr char kMicNotReady[] = "micNotReady";
+/// The design's "Transmit is changing hands." (ruling 8.2 step 1).
+inline constexpr char kChangingHands[] = "changingHands";
+/// The design's "The radio did not confirm it stopped transmitting."
+/// (ruling 8.2 step 2).
+inline constexpr char kStopNotConfirmed[] = "stopNotConfirmed";
+/// Ruling 7.4 (D60): a change refused while the holder is on the air.
+inline constexpr char kHolderOnAir[] = "holderOnAir";
+
+// ---- Fixes ----------------------------------------------------------------
+inline constexpr char kFixTakeTransmit[] = "takeTransmit";
+inline constexpr char kFixOperateAmp[] = "operateAmp";
+
+// ---- The refusals ---------------------------------------------------------
+
+/// The device's sign-in has not finished (its snapshot is not complete).
+TxRefusal notReady();
+/// The app does not declare remote transmit (code notReady).
+TxRefusal appCannotTransmit();
+/// The device signed in without a paired device key (code notReady).
+TxRefusal deviceNotPaired();
+/// The Core's remote_transmit is deny.
+TxRefusal stationReceiveOnly();
+/// A band-plan or mode refusal, in the band plan's own words.
+TxRefusal bandPlan(const QString& reason);
+/// The radio's TX inhibit input holds transmit off.
+TxRefusal txInhibited();
+/// The transmit interlock refused, for a reason other than the two below.
+TxRefusal interlock();
+/// The interlock refused because the amplifier is in standby.
+TxRefusal ampStandby();
+/// The amplifier (PA) protection has tripped.
+TxRefusal paProtection();
+/// The interlock refused because the SWR is over its limit.
+TxRefusal swr();
+/// Another device holds transmit. `holderName` as the Core sends it, or
+/// "Radio" after the radio's own PTT took transmit.
+TxRefusal otherDeviceHolds(const QString& holderName);
+/// A program's key while its device does not hold transmit.
+TxRefusal programNeedsTransmit();
+/// The PC microphone is not ready.
+TxRefusal micNotReady();
+/// Every key during a transfer of transmit.
+TxRefusal changingHands();
+/// Every key after a transfer that ended with MOX still on, until it
+/// reads off.
+TxRefusal stopNotConfirmed();
+/// A change from another device while the holder is on the air.
+/// `radioPtt` true when the radio's own PTT holds transmit.
+TxRefusal holderOnAir(const QString& holderShortName, bool radioPtt);
+
+} // namespace TxRefusals
+
+} // namespace NereusSDR
+
+Q_DECLARE_METATYPE(NereusSDR::TxRefusal)
