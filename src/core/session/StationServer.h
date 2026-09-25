@@ -1039,6 +1039,18 @@ private:
     bool handleSliceRetune(SessionTransport* transport, const SessionMessage& message);
     /// confirm.proceed, confirm.cancel, notice.takeBack.
     SessionMessage answerConfirm(const SessionMessage& invoke, int id, int choice);
+    /// Fix wave I2: the slices `question` names (the written slice, a
+    /// `sliceId` argument, the slices in `moving`).
+    QList<int> slicesNamedBy(const ConfirmStep::Question& question) const;
+    /// Fix wave I2: a slice a question names closed or changed owner; the
+    /// question can no longer be proceeded.
+    void dropQuestionsNaming(int sliceId);
+    /// Fix wave I2: the refusal for a question whose slices are no longer
+    /// the requester's: "changed since you asked" for a shared setting,
+    /// "what this change reaches has changed" for any other kind.
+    static QString changedSinceAskedReason(const QString& kind);
+    /// The shared setting's "changed since you asked" words.
+    static QString sharedTargetChangedReason();
     /// Ruling 10.2's refusal for an older window left with no slice at
     /// admission; empty when it has one or is not an older window.
     QString olderWindowWithoutSliceReason(SessionTransport* transport) const;

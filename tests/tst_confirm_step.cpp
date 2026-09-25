@@ -732,6 +732,68 @@ private slots:
                     .isEmpty());
     }
 
+    // Fix wave I2: A's question names A's slice 0. B takes that slice
+    // (the slice cap is full) and B's new slice gets the lowest free id,
+    // 0. A's proceed is refused as changed, and B's slice is untouched.
+    void aProceedWhoseSliceWasTakenAndItsIdReusedIsRefused()
+    {
+        Shared s(2, 2);
+        QCOMPARE(s.core.model->slices().size(), 2);
+        QCOMPARE(s.core.model->sliceOwnership()->mark(0).owner, s.a.key.fingerprint());
+        const quint32 writeId = 1901;
+        s.appA->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "slice:0",
+            {MirrorUpdate{0, "nbMode", MirrorWireKind::Enum, QVariant(static_cast<int>(NbMode::NB))}},
+            writeId)));
+        const QJsonObject asked = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(asked.value(QStringLiteral("kind")).toString(), QStringLiteral("sharedSetting"));
+        QCOMPARE(s.core.model->sliceById(0)->nbMode(), NbMode::Off);
+
+        // B takes A's slice 0; B's new slice takes id 0.
+        QCOMPARE(s.core.invoke(s.appB, "addSlice", {utf8("initialPanId", QString())})
+                     .value(QStringLiteral("accepted")).toBool(true),
+                 false);
+        const QJsonObject take = waitForLast(s.appB, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(take.value(QStringLiteral("kind")).toString(), QStringLiteral("takeSlice"));
+        QCOMPARE(take.value(QStringLiteral("choices")).toArray().first().toObject()
+                     .value(QStringLiteral("sliceId")).toInt(),
+                 0);
+        QVERIFY(s.proceed(s.appB, take.value(QStringLiteral("id")).toInteger(), 0)
+                    .value(QStringLiteral("accepted")).toBool(false));
+        QCOMPARE(s.core.model->sliceOwnership()->mark(0).owner, s.b.key.fingerprint());
+        QCOMPARE(s.core.model->sliceById(0)->nbMode(), NbMode::Off);
+
+        // A proceeds: refused, and B's slice 0 keeps its blanker.
+        const QJsonObject done = s.proceed(s.appA, asked.value(QStringLiteral("id")).toInteger());
+        QCOMPARE(done.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(done.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("That setting changed since you asked. Make the change again."));
+        QCOMPARE(s.core.model->sliceById(0)->nbMode(), NbMode::Off);
+        QCOMPARE(s.core.model->sliceOwnership()->mark(0).owner, s.b.key.fingerprint());
+    }
+
+    // Fix wave I2: a slice a question names that passes to another owner
+    // drops the question, even when it is still live, and ownership is
+    // checked again at proceed.
+    void aProceedWhoseSliceChangedOwnerIsRefused()
+    {
+        Shared s;
+        const quint32 writeId = 1902;
+        s.appA->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "slice:0",
+            {MirrorUpdate{0, "nbMode", MirrorWireKind::Enum, QVariant(static_cast<int>(NbMode::NB))}},
+            writeId)));
+        const QJsonObject asked = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(asked.value(QStringLiteral("kind")).toString(), QStringLiteral("sharedSetting"));
+        // Slice 0 passes to B (as a take-back or adoption would move it).
+        s.core.model->sliceOwnership()->setOwner(0, s.b.key.fingerprint());
+        const QJsonObject done = s.proceed(s.appA, asked.value(QStringLiteral("id")).toInteger());
+        QCOMPARE(done.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(done.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("That setting changed since you asked. Make the change again."));
+        QCOMPARE(s.core.model->sliceById(0)->nbMode(), NbMode::Off);
+    }
+
     void theSliceCapFullOffersTheSliceChooser()
     {
         Shared s(2, 2);

@@ -1080,6 +1080,14 @@ whoever changed it, the requester included, the proceed is refused with "That se
 since you asked. Make the change again." A new write from the requester to the same target
 cancels its open request.
 
+**Ruling 7.6a** (fix wave I2, 2026-09-25). Every slice a request names (the written slice, a
+`sliceId` argument, the slices a move carries) must still be the requester's at proceed; a
+slice id is handed out lowest free first (ruling 5.5), so a slice closed within the 60 s may
+be another device's under the same id. A request whose slice closes or passes to another
+owner is dropped at once, and its proceed is refused as changed ("That setting changed since
+you asked. Make the change again." for `sharedSetting`, "What this change reaches has
+changed. Make the change again." for the other kinds); nothing is applied.
+
 An older window gets the refusal only, with the reason "This change would affect iPhone.
 Update NereusSDR to confirm changes that affect other devices." (D59). The older-window
 reasons do not say "computer": a phone that has not yet declared the feature meets them too.

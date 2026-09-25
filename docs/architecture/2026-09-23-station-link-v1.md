@@ -1908,6 +1908,14 @@ carries no readback. The question is always sent after the answer to the
 request that raised it. A `sharedSetting` proceed is also refused "That
 setting changed since you asked. Make the change again." when what the
 change acts on moved since the question was asked, whoever moved it.
+Every slice a question names (the written slice, a `sliceId` argument, the
+slices a move carries) must still be the asking device's at proceed. A
+question whose slice closes or passes to another owner is dropped at once,
+since the Core hands the lowest free id to the next slice; its later
+`confirm.proceed` is refused as changed ("That setting changed since you
+asked. Make the change again." for a `sharedSetting`, "What this change
+reaches has changed. Make the change again." for any other kind) and
+changes nothing, and its `confirm.cancel` is accepted.
 
 **`notice`** (Core to device, `sessionHolderVersion` 1 only): `id`,
 `kind`, `reason`, `secondsAgo` (whole seconds since it happened, measured

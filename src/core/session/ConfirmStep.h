@@ -110,6 +110,10 @@ public:
         QString target;
         QString targetValue;
         QJsonObject change;
+        /// Fix wave I2: the requester's slices the question names (the
+        /// written object, a `sliceId` argument, the slices in `moving`).
+        /// Each must still be the requester's at proceed.
+        QList<int> namedSlices;
     };
 
     struct Notice {
@@ -135,6 +139,13 @@ public:
     std::optional<Question> answer(const QByteArray& device, qint64 id);
     const Question* openQuestion(const QByteArray& device) const;
     void dropQuestion(const QByteArray& device);
+    /// Fix wave I2: drops every open question that names `sliceId` (it
+    /// closed or changed owner), remembering each so its answer is told
+    /// what it reaches changed. Returns the devices whose question went.
+    QList<QByteArray> dropQuestionsNaming(int sliceId);
+    /// The kind of `device`'s question `id` dropped by dropQuestionsNaming,
+    /// forgotten on read; nullopt when it was not.
+    std::optional<QString> takeDroppedAsChanged(const QByteArray& device, qint64 id);
     /// Ruling 7.5: whether `question`, asked at askedAtMs, has expired at
     /// `nowMs` (60 s after it was sent, that instant included).
     static bool expired(const Question& question, qint64 nowMs)
@@ -159,6 +170,9 @@ public:
 private:
     qint64 m_lastId = 0;
     QHash<QByteArray, Question> m_questions;
+    /// Per device, the question dropped because a slice it named went:
+    /// its id and kind.
+    QHash<QByteArray, QPair<qint64, QString>> m_droppedAsChanged;
     QHash<QByteArray, QList<Notice>> m_takeBack;
     QHash<QByteArray, QList<Notice>> m_pending;
 };

@@ -20,6 +20,33 @@ namespace NereusSDR {
 void ConfirmStep::ask(const Question& question)
 {
     m_questions.insert(question.device, question);
+    m_droppedAsChanged.remove(question.device);
+}
+
+QList<QByteArray> ConfirmStep::dropQuestionsNaming(int sliceId)
+{
+    QList<QByteArray> devices;
+    for (auto it = m_questions.begin(); it != m_questions.end();) {
+        if (it->namedSlices.contains(sliceId)) {
+            devices.append(it.key());
+            m_droppedAsChanged.insert(it.key(), qMakePair(it->id, it->kind));
+            it = m_questions.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    return devices;
+}
+
+std::optional<QString> ConfirmStep::takeDroppedAsChanged(const QByteArray& device, qint64 id)
+{
+    const auto it = m_droppedAsChanged.constFind(device);
+    if (it == m_droppedAsChanged.cend() || it->first != id) {
+        return std::nullopt;
+    }
+    const QString kind = it->second;
+    m_droppedAsChanged.remove(device);
+    return kind;
 }
 
 std::optional<ConfirmStep::Question> ConfirmStep::answer(const QByteArray& device, qint64 id)
@@ -42,6 +69,7 @@ const ConfirmStep::Question* ConfirmStep::openQuestion(const QByteArray& device)
 void ConfirmStep::dropQuestion(const QByteArray& device)
 {
     m_questions.remove(device);
+    m_droppedAsChanged.remove(device);
 }
 
 void ConfirmStep::keepTakeBack(const Notice& notice)
@@ -90,6 +118,7 @@ int ConfirmStep::pendingCount(const QByteArray& device) const
 void ConfirmStep::forgetDevice(const QByteArray& device)
 {
     m_questions.remove(device);
+    m_droppedAsChanged.remove(device);
     m_takeBack.remove(device);
     m_pending.remove(device);
 }

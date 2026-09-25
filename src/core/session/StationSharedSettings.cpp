@@ -974,6 +974,11 @@ QSet<QString> StationServer::sharedShown(const QList<DisturbanceCheck::Affected>
     return shown;
 }
 
+QString StationServer::sharedTargetChangedReason()
+{
+    return QString::fromLatin1(kTargetChangedReason);
+}
+
 bool StationServer::handleSharedSetting(SessionTransport* transport, const SessionMessage& message)
 {
     if (m_radioModel.isNull() || m_radioModel->role() != RadioModel::Role::Local) {

@@ -727,6 +727,7 @@ void StationServer::sendQuestion(SessionTransport* transport, ConfirmStep::Quest
     } else if (question.original.kind == SessionMessageKind::SettingsWrite) {
         prompt.forSettingsKey = QString::fromUtf8(question.original.objectKey);
     }
+    question.namedSlices = slicesNamedBy(question);
     m_confirm->ask(question);
     const SessionMessage request =
         SessionMessages::confirmRequest(prompt, QString::fromLatin1(kWaitingReason));
@@ -1157,6 +1158,45 @@ QString StationServer::olderWindowWithoutSliceReason(SessionTransport* transport
 
 // ── Answers: confirm.proceed, confirm.cancel, notice.takeBack ───────────
 
+QList<int> StationServer::slicesNamedBy(const ConfirmStep::Question& question) const
+{
+    QList<int> ids;
+    const SessionMessage& original = question.original;
+    if (original.kind == SessionMessageKind::PropertyWrite
+        && original.objectKey.startsWith("slice:")) {
+        bool ok = false;
+        const int id = original.objectKey.mid(6).toInt(&ok);
+        if (ok) {
+            ids.append(id);
+        }
+    } else if (original.kind == SessionMessageKind::CommandInvoke
+               && question.held != ConfirmStep::Held::TakeBack) {
+        int id = -1;
+        if (readInt(original.arguments, "sliceId", &id) && id >= 0) {
+            ids.append(id);
+        }
+    }
+    for (int id : question.moving) {
+        if (!ids.contains(id)) {
+            ids.append(id);
+        }
+    }
+    return ids;
+}
+
+void StationServer::dropQuestionsNaming(int sliceId)
+{
+    if (m_confirm) {
+        m_confirm->dropQuestionsNaming(sliceId);
+    }
+}
+
+QString StationServer::changedSinceAskedReason(const QString& kind)
+{
+    return kind == QLatin1String("sharedSetting") ? sharedTargetChangedReason()
+                                                  : QString::fromLatin1(kChangedReason);
+}
+
 SessionMessage StationServer::answerConfirm(const SessionMessage& invoke, int id, int choice)
 {
     const auto refuse = [&invoke](const QString& reason) {
@@ -1173,6 +1213,15 @@ SessionMessage StationServer::answerConfirm(const SessionMessage& invoke, int id
     if (invoke.commandVerb == "notice.takeBack") {
         return askTakeBack(transport, invoke, id);
     }
+    // Fix wave I2: a question dropped because a slice it named closed or
+    // changed owner is answered as changed; cancelling it changes nothing.
+    if (const std::optional<QString> dropped = m_confirm->takeDroppedAsChanged(device, id)) {
+        if (invoke.commandVerb == "confirm.cancel") {
+            return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, true,
+                                                  QString(), {});
+        }
+        return refuse(changedSinceAskedReason(*dropped));
+    }
     const std::optional<ConfirmStep::Question> question = m_confirm->answer(device, id);
     if (!question) {
         return refuse(QString::fromLatin1(kNoQuestionReason));
@@ -1186,6 +1235,15 @@ SessionMessage StationServer::answerConfirm(const SessionMessage& invoke, int id
     // was sent; a later proceed changes nothing.
     if (ConfirmStep::expired(*question, m_deviceSessions->now())) {
         return refuse(QString::fromLatin1(kExpiredReason));
+    }
+    // Fix wave I2: every slice the question names is still the
+    // requester's. A slice id is reused (lowest free first), so a slice
+    // closed meanwhile may be another device's now under the same id.
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    for (int sliceId : question->namedSlices) {
+        if (!ownership->isLive(sliceId) || ownership->mark(sliceId).owner != device) {
+            return refuse(changedSinceAskedReason(question->kind));
+        }
     }
     if (question->kind == QLatin1String("sharedSetting")) {
         return proceedSharedSetting(transport, *question, invoke);

@@ -1313,6 +1313,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         });
         connect(radioModel, &RadioModel::sliceRemoved, m_connectedDevices.get(),
                 &ConnectedDevicesFacade::refresh);
+        // Fix wave I2: a question naming a slice that closed can no longer
+        // be proceeded (its id may soon be another device's).
+        connect(radioModel, &RadioModel::sliceRemoved, this,
+                [this](int sliceId) { dropQuestionsNaming(sliceId); });
     }
 
     m_heartbeatTimer = new QTimer(this);
@@ -4275,6 +4279,9 @@ void StationServer::onSliceOwnerChanged(int sliceId, const QByteArray& oldOwner,
     if (m_radioModel.isNull()) {
         return;
     }
+    // Fix wave I2: a question naming a slice that changed owner can no
+    // longer be proceeded.
+    dropQuestionsNaming(sliceId);
     // The markers name the new owner before any view is given one.
     m_markers->refreshOwners();
     m_connectedDevices->refresh();
