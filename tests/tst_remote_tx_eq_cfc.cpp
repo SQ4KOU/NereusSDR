@@ -34,10 +34,12 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QSemaphore>
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QTemporaryDir>
+#include <QThread>
 
 #include <cmath>
 #include <functional>
@@ -238,6 +240,28 @@ std::vector<double> coreCurveFreqs(const TransmitModel& tx, std::vector<double>*
     return f;
 }
 
+// A five-point parametric curve whose gains are all `gainDb`.
+QString flatParametricBlob(double gainDb)
+{
+    QJsonArray points;
+    for (int i = 0; i < 5; ++i) {
+        QJsonObject p;
+        p.insert(QStringLiteral("frequency_hz"), 100.0 + 700.0 * i);
+        p.insert(QStringLiteral("gain_db"), gainDb);
+        p.insert(QStringLiteral("q"), 2.0);
+        points.append(p);
+    }
+    QJsonObject root;
+    root.insert(QStringLiteral("band_count"), 5);
+    root.insert(QStringLiteral("parametric_eq"), true);
+    root.insert(QStringLiteral("global_gain_db"), 0.0);
+    root.insert(QStringLiteral("frequency_min_hz"), 100.0);
+    root.insert(QStringLiteral("frequency_max_hz"), 2900.0);
+    root.insert(QStringLiteral("points"), points);
+    return ParaEqEnvelope::encode(
+        QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)));
+}
+
 QList<QSpinBox*> groupSpins(QWidget* page, const QString& title)
 {
     for (QGroupBox* group : page->findChildren<QGroupBox*>()) {
@@ -273,6 +297,7 @@ private slots:
     void legacyBoxSeedsFromThisComputersOldValue();
     void txProfileCarriesTheLegacyBox();
     void newReasonsArePlain();
+    void curveIsReadOnTheMainThreadAndHandedByValue();
 
 private:
     QTemporaryDir m_securityDir;
@@ -983,6 +1008,65 @@ void TstRemoteTxEqCfc::newReasonsArePlain()
         QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
         QVERIFY(!reason.contains(QChar(0x2014)));
     }
+}
+
+// Group A fix wave, I1: the TX channel runs on its own thread on a Core. The
+// EQ curve must be read from the model on the main thread when it changes
+// and handed to the channel by value; a push that decodes the model on the
+// channel's thread reads the main thread's string while the main thread
+// reassigns it. The channel's thread is held while the curve changes twice,
+// with a probe queued between the two changes: the first push must carry
+// the first curve.
+void TstRemoteTxEqCfc::curveIsReadOnTheMainThreadAndHandedByValue()
+{
+    auto core = makeStationRadioModel();
+    TxChannel channel(1);
+    core->wireTransmitChainForTest(&channel);
+    TransmitModel& tx = core->transmitModel();
+    tx.setTxEqParaEqData(flatParametricBlob(0.0));
+    tx.setTxEqUseLegacy(false);
+
+    QThread worker;
+    worker.start();
+    channel.moveToThread(&worker);
+
+    QSemaphore release;
+    QSemaphore held;
+    QMetaObject::invokeMethod(&channel, [&]() {
+        held.release();
+        release.acquire();
+    });
+    held.acquire();
+
+    std::vector<double> firstGains;
+    tx.setTxEqParaEqData(flatParametricBlob(6.0));
+    QMetaObject::invokeMethod(&channel, [&]() {
+        firstGains = channel.lastTxEqProfileGainsForTest();
+    });
+    tx.setTxEqParaEqData(flatParametricBlob(-6.0));
+    release.release();
+
+    // A burst of writes while the channel's thread runs free.
+    for (int i = 0; i < 400; ++i) {
+        tx.setTxEqParaEqData(flatParametricBlob((i % 2) ? 3.0 : -3.0));
+    }
+    tx.setTxEqParaEqData(flatParametricBlob(-6.0));
+
+    std::vector<double> lastGains;
+    QMetaObject::invokeMethod(&channel, [&]() {
+        lastGains = channel.lastTxEqProfileGainsForTest();
+        channel.moveToThread(QCoreApplication::instance()->thread());
+    }, Qt::BlockingQueuedConnection);
+    worker.quit();
+    worker.wait();
+
+    // The first push carries the +6 dB curve it was made for, not the
+    // -6 dB one the model held by the time the channel's thread ran.
+    QVERIFY(firstGains.size() > 1);
+    QVERIFY2(firstGains.at(1) > 0.0, "the push read the model on the channel's thread");
+    QVERIFY(lastGains.size() > 1);
+    QVERIFY(lastGains.at(1) < 0.0);
+    core->injectTxChannelForTest(nullptr);
 }
 
 QTEST_MAIN(TstRemoteTxEqCfc)

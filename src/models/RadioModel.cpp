@@ -558,6 +558,7 @@ warren@wpratt.com
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <tuple>
 #include <vector>
@@ -4221,18 +4222,38 @@ void RadioModel::wireTransmitProcessingChain()
     // every EQ change — the Graph10 wrapper stays available for a
     // future "reset to default freqs" UX.
 
-    auto pushLegacyEqProfile = [this]() {
-        if (!m_txChannel) { return; }
-        std::vector<double> freqs10(10, 0.0);
-        std::vector<double> gains11(11, 0.0);
-        gains11[0] = static_cast<double>(m_transmitModel.txEqPreamp());
+    // R-R3-49 (group A fix wave, I1): every value the helpers below hand
+    // the TX channel is read from TransmitModel HERE, on the main thread,
+    // and posted by value to the channel's thread. The channel lives on
+    // TxWorkerThread once connectToRadio moves it; a lambda running there
+    // must never read the model (txEqParaEqData() returns a reference to
+    // the main thread's QString, which the main thread reassigns). The
+    // connects below use RadioModel as their context for the same reason.
+    // With the channel on the main thread (tests, the initial sync before
+    // moveToThread) the post runs at once.
+    auto postToTx = [this](std::function<void(TxChannel*)> apply) {
+        TxChannel* const ch = m_txChannel;
+        if (!ch) { return; }
+        QMetaObject::invokeMethod(ch, [ch, apply = std::move(apply)]() { apply(ch); });
+    };
+
+    struct TxEqArrays {
+        std::vector<double> freqs;
+        std::vector<double> gains;
+    };
+
+    auto buildLegacyEqProfile = [this]() {
+        TxEqArrays a;
+        a.freqs.assign(10, 0.0);
+        a.gains.assign(11, 0.0);
+        a.gains[0] = static_cast<double>(m_transmitModel.txEqPreamp());
         for (int i = 0; i < 10; ++i) {
-            freqs10[static_cast<std::size_t>(i)] =
+            a.freqs[static_cast<std::size_t>(i)] =
                 static_cast<double>(m_transmitModel.txEqFreq(i));
-            gains11[static_cast<std::size_t>(i + 1)] =
+            a.gains[static_cast<std::size_t>(i + 1)] =
                 static_cast<double>(m_transmitModel.txEqBand(i));
         }
-        m_txChannel->setTxEqProfile(freqs10, gains11);
+        return a;
     };
 
     // R-R3-49 (parity Task 4): the curve the Legacy EQ box picks. Thetis
@@ -4243,20 +4264,24 @@ void RadioModel::wireTransmitProcessingChain()
     // (ParaEqCurve, moved out of the dialog), so a window, local or
     // remote, only changes the model. A saved value with no curve gives
     // the panel's flat default curve, as the dialog did.
-    auto pushEqProfile = [this, pushLegacyEqProfile]() {
-        if (!m_txChannel) { return; }
+    auto buildEqProfile = [this, buildLegacyEqProfile]() {
         if (m_transmitModel.txEqUseLegacy()) {
-            pushLegacyEqProfile();
-            return;
+            return buildLegacyEqProfile();
         }
         ParaEqCurve::Curve curve;
         if (!ParaEqCurve::txEqCurveFromParaEqData(m_transmitModel.txEqParaEqData(), curve)) {
             curve = ParaEqCurve::defaultTxEqCurve();
         }
-        std::vector<double> freqs10;
-        std::vector<double> gains11;
-        ParaEqCurve::sampleTxEqProfile(curve, freqs10, gains11);
-        m_txChannel->setTxEqProfile(freqs10, gains11);
+        TxEqArrays a;
+        ParaEqCurve::sampleTxEqProfile(curve, a.freqs, a.gains);
+        return a;
+    };
+
+    auto pushEqProfile = [this, buildEqProfile, postToTx]() {
+        if (!m_txChannel) { return; }
+        postToTx([a = buildEqProfile()](TxChannel* ch) {
+            ch->setTxEqProfile(a.freqs, a.gains);
+        });
     };
 
     // CFC profile rebuild — mirrors pushEqProfile above.  CFC operates
@@ -4267,21 +4292,32 @@ void RadioModel::wireTransmitProcessingChain()
     // controls aren't yet exposed on the user surface (CFCParaEQData
     // schema column is currently an opaque blob).  cfcomp.c:669-682
     // [v2.10.3.13] documents the NULL semantic.
-    auto pushCfcProfile = [this]() {
-        if (!m_txChannel) { return; }
+    struct TxCfcArrays {
+        std::vector<double> F;
+        std::vector<double> G;
+        std::vector<double> E;
+    };
+    auto buildCfcProfile = [this]() {
         constexpr int kCfcBands = 10;
-        std::vector<double> F(kCfcBands);
-        std::vector<double> G(kCfcBands);
-        std::vector<double> E(kCfcBands);
+        TxCfcArrays a;
+        a.F.resize(kCfcBands);
+        a.G.resize(kCfcBands);
+        a.E.resize(kCfcBands);
         for (int i = 0; i < kCfcBands; ++i) {
-            F[static_cast<std::size_t>(i)] =
+            a.F[static_cast<std::size_t>(i)] =
                 static_cast<double>(m_transmitModel.cfcEqFreq(i));
-            G[static_cast<std::size_t>(i)] =
+            a.G[static_cast<std::size_t>(i)] =
                 static_cast<double>(m_transmitModel.cfcCompression(i));
-            E[static_cast<std::size_t>(i)] =
+            a.E[static_cast<std::size_t>(i)] =
                 static_cast<double>(m_transmitModel.cfcPostEqBandGain(i));
         }
-        m_txChannel->setTxCfcProfile(F, G, E, /*Qg=*/{}, /*Qe=*/{});
+        return a;
+    };
+    auto pushCfcProfile = [this, buildCfcProfile, postToTx]() {
+        if (!m_txChannel) { return; }
+        postToTx([a = buildCfcProfile()](TxChannel* ch) {
+            ch->setTxCfcProfile(a.F, a.G, a.E, /*Qg=*/{}, /*Qe=*/{});
+        });
     };
 
     // Full-chain push — mirrors all 27 connect lambdas below by reading
@@ -4294,69 +4330,101 @@ void RadioModel::wireTransmitProcessingChain()
     // already-loaded live keys, so signal-driven sync isn't reliable).
     // Covers EQ + Leveler + ALC (3M-3a-i) AND CFC + CPDR + CESSB +
     // PhRot (3M-3a-ii Batch 3) — full 28-property TX-chain restore.
-    auto pushTxProcessingChain = [this, pushEqProfile, pushCfcProfile]() {
+    // R-R3-49 (group A fix wave, I1): the whole chain is read here on the
+    // main thread and applied in one post, in the same order as before.
+    auto pushTxProcessingChain = [this, buildEqProfile, buildCfcProfile, postToTx]() {
         if (!m_txChannel) { return; }
-        m_txChannel->setTxEqRunning(m_transmitModel.txEqEnabled());
-        pushEqProfile();
-        m_txChannel->setTxEqNc(m_transmitModel.txEqNc());
-        m_txChannel->setTxEqMp(m_transmitModel.txEqMp());
-        m_txChannel->setTxEqCtfmode(m_transmitModel.txEqCtfmode());
-        m_txChannel->setTxEqWintype(m_transmitModel.txEqWintype());
-        m_txChannel->setTxLevelerOn(m_transmitModel.txLevelerOn());
-        m_txChannel->setTxLevelerTopDb(
-            static_cast<double>(m_transmitModel.txLevelerMaxGain()));
-        m_txChannel->setTxLevelerDecayMs(m_transmitModel.txLevelerDecay());
-        m_txChannel->setTxAlcMaxGainDb(
-            static_cast<double>(m_transmitModel.txAlcMaxGain()));
-        m_txChannel->setTxAlcDecayMs(m_transmitModel.txAlcDecay());
+        const TransmitModel& tm = m_transmitModel;
+        postToTx([eqOn = tm.txEqEnabled(),
+                  eq = buildEqProfile(),
+                  eqNc = tm.txEqNc(),
+                  eqMp = tm.txEqMp(),
+                  eqCtfmode = tm.txEqCtfmode(),
+                  eqWintype = tm.txEqWintype(),
+                  levOn = tm.txLevelerOn(),
+                  levTopDb = static_cast<double>(tm.txLevelerMaxGain()),
+                  levDecay = tm.txLevelerDecay(),
+                  alcMaxDb = static_cast<double>(tm.txAlcMaxGain()),
+                  alcDecay = tm.txAlcDecay(),
+                  phrotOn = tm.phaseRotatorEnabled(),
+                  phrotReverse = tm.phaseReverseEnabled(),
+                  phrotHz = static_cast<double>(tm.phaseRotatorFreqHz()),
+                  phrotStages = tm.phaseRotatorStages(),
+                  cfcOn = tm.cfcEnabled(),
+                  cfcPostEqOn = tm.cfcPostEqEnabled(),
+                  cfcPrecompDb = static_cast<double>(tm.cfcPrecompDb()),
+                  cfcPrePeqDb = static_cast<double>(tm.cfcPostEqGainDb()),
+                  cfc = buildCfcProfile(),
+                  cpdrOn = tm.cpdrOn(),
+                  cpdrDb = static_cast<double>(tm.cpdrLevelDb()),
+                  amCarrier = tm.amCarrierLevel(),
+                  cessbOn = tm.cessbOn(),
+                  dexpOn = tm.dexpEnabled(),
+                  dexpTau = tm.dexpDetectorTauMs(),
+                  dexpAttack = tm.dexpAttackTimeMs(),
+                  dexpRelease = tm.dexpReleaseTimeMs(),
+                  dexpExpansion = tm.dexpExpansionRatioDb(),
+                  dexpHysteresis = tm.dexpHysteresisRatioDb(),
+                  dexpLookAheadOn = tm.dexpLookAheadEnabled(),
+                  dexpLookAheadMs = tm.dexpLookAheadMs(),
+                  dexpLowCut = tm.dexpLowCutHz(),
+                  dexpHighCut = tm.dexpHighCutHz(),
+                  dexpScfOn = tm.dexpSideChannelFilterEnabled()](TxChannel* ch) {
+            ch->setTxEqRunning(eqOn);
+            ch->setTxEqProfile(eq.freqs, eq.gains);
+            ch->setTxEqNc(eqNc);
+            ch->setTxEqMp(eqMp);
+            ch->setTxEqCtfmode(eqCtfmode);
+            ch->setTxEqWintype(eqWintype);
+            ch->setTxLevelerOn(levOn);
+            ch->setTxLevelerTopDb(levTopDb);
+            ch->setTxLevelerDecayMs(levDecay);
+            ch->setTxAlcMaxGainDb(alcMaxDb);
+            ch->setTxAlcDecayMs(alcDecay);
 
-        // ── 3M-3a-ii Batch 3 — Phase Rotator (4) ──
-        m_txChannel->setStageRunning(TxChannel::Stage::PhRot,
-            m_transmitModel.phaseRotatorEnabled());
-        m_txChannel->setTxPhrotReverse(m_transmitModel.phaseReverseEnabled());
-        m_txChannel->setTxPhrotCornerHz(
-            static_cast<double>(m_transmitModel.phaseRotatorFreqHz()));
-        m_txChannel->setTxPhrotNstages(m_transmitModel.phaseRotatorStages());
+            // ── 3M-3a-ii Batch 3 — Phase Rotator (4) ──
+            ch->setStageRunning(TxChannel::Stage::PhRot, phrotOn);
+            ch->setTxPhrotReverse(phrotReverse);
+            ch->setTxPhrotCornerHz(phrotHz);
+            ch->setTxPhrotNstages(phrotStages);
 
-        // ── 3M-3a-ii Batch 3 — CFC scalars (4) ──
-        m_txChannel->setTxCfcRunning(m_transmitModel.cfcEnabled());
-        m_txChannel->setTxCfcPostEqRunning(m_transmitModel.cfcPostEqEnabled());
-        m_txChannel->setTxCfcPrecompDb(
-            static_cast<double>(m_transmitModel.cfcPrecompDb()));
-        m_txChannel->setTxCfcPrePeqDb(
-            static_cast<double>(m_transmitModel.cfcPostEqGainDb()));
+            // ── 3M-3a-ii Batch 3 — CFC scalars (4) ──
+            ch->setTxCfcRunning(cfcOn);
+            ch->setTxCfcPostEqRunning(cfcPostEqOn);
+            ch->setTxCfcPrecompDb(cfcPrecompDb);
+            ch->setTxCfcPrePeqDb(cfcPrePeqDb);
 
-        // ── 3M-3a-ii Batch 3 — CFC profile arrays (1 helper) ──
-        pushCfcProfile();
+            // ── 3M-3a-ii Batch 3 — CFC profile arrays (1 helper) ──
+            ch->setTxCfcProfile(cfc.F, cfc.G, cfc.E, /*Qg=*/{}, /*Qe=*/{});
 
-        // ── 3M-3a-ii Batch 3 — CPDR (2) ──
-        m_txChannel->setTxCpdrOn(m_transmitModel.cpdrOn());
-        m_txChannel->setTxCpdrGainDb(
-            static_cast<double>(m_transmitModel.cpdrLevelDb()));
+            // ── 3M-3a-ii Batch 3 — CPDR (2) ──
+            ch->setTxCpdrOn(cpdrOn);
+            ch->setTxCpdrGainDb(cpdrDb);
 
-        // ── AM / SAM / DSB carrier level (1) ──
-        m_txChannel->setTxAmCarrierLevel(m_transmitModel.amCarrierLevel());
+            // ── AM / SAM / DSB carrier level (1) ──
+            ch->setTxAmCarrierLevel(amCarrier);
 
-        // ── 3M-3a-ii Batch 3 — CESSB (1) ──
-        m_txChannel->setTxCessbOn(m_transmitModel.cessbOn());
+            // ── 3M-3a-ii Batch 3 — CESSB (1) ──
+            ch->setTxCessbOn(cessbOn);
 
-        // ── 3M-3a-iii Tasks 7-10 — DEXP (11) ──
-        // Initial-sync push for the 11 DEXP TM properties so a
-        // freshly-loaded profile (or a setActiveProfile invocation
-        // whose setters short-circuit on no-op writes) has its DEXP
-        // state reflected at WDSP. Mirrors the EQ/Lev/ALC + CFC/PhRot
-        // initial-sync rationale documented above (~line 1869-1898).
-        m_txChannel->setDexpRun(m_transmitModel.dexpEnabled());
-        m_txChannel->setDexpDetectorTau(m_transmitModel.dexpDetectorTauMs());
-        m_txChannel->setDexpAttackTime(m_transmitModel.dexpAttackTimeMs());
-        m_txChannel->setDexpReleaseTime(m_transmitModel.dexpReleaseTimeMs());
-        m_txChannel->setDexpExpansionRatio(m_transmitModel.dexpExpansionRatioDb());
-        m_txChannel->setDexpHysteresisRatio(m_transmitModel.dexpHysteresisRatioDb());
-        m_txChannel->setDexpRunAudioDelay(m_transmitModel.dexpLookAheadEnabled());
-        m_txChannel->setDexpAudioDelay(m_transmitModel.dexpLookAheadMs());
-        m_txChannel->setDexpLowCut(m_transmitModel.dexpLowCutHz());
-        m_txChannel->setDexpHighCut(m_transmitModel.dexpHighCutHz());
-        m_txChannel->setDexpRunSideChannelFilter(m_transmitModel.dexpSideChannelFilterEnabled());
+            // ── 3M-3a-iii Tasks 7-10 — DEXP (11) ──
+            // Initial-sync push for the 11 DEXP TM properties so a
+            // freshly-loaded profile (or a setActiveProfile invocation
+            // whose setters short-circuit on no-op writes) has its DEXP
+            // state reflected at WDSP. Mirrors the EQ/Lev/ALC + CFC/PhRot
+            // initial-sync rationale documented above (~line 1869-1898).
+            ch->setDexpRun(dexpOn);
+            ch->setDexpDetectorTau(dexpTau);
+            ch->setDexpAttackTime(dexpAttack);
+            ch->setDexpReleaseTime(dexpRelease);
+            ch->setDexpExpansionRatio(dexpExpansion);
+            ch->setDexpHysteresisRatio(dexpHysteresis);
+            ch->setDexpRunAudioDelay(dexpLookAheadOn);
+            ch->setDexpAudioDelay(dexpLookAheadMs);
+            ch->setDexpLowCut(dexpLowCut);
+            ch->setDexpHighCut(dexpHighCut);
+            ch->setDexpRunSideChannelFilter(dexpScfOn);
+        });
     };
 
     // 1. txEqEnabledChanged → setTxEqRunning.
@@ -4368,35 +4436,35 @@ void RadioModel::wireTransmitProcessingChain()
     // 2. txEqPreampChanged → rebuild full Profile (preamp lives in
     //    G[0] of the SetTXAEQProfile vector).
     connect(&m_transmitModel, &TransmitModel::txEqPreampChanged,
-            m_txChannel, [pushEqProfile](int /*dB*/) {
+            this, [pushEqProfile](int /*dB*/) {
         pushEqProfile();
     });
 
     // 3. txEqBandChanged → rebuild full Profile (any single band
     //    edit pushes the whole 10-band shape).
     connect(&m_transmitModel, &TransmitModel::txEqBandChanged,
-            m_txChannel, [pushEqProfile](int /*idx*/, int /*dB*/) {
+            this, [pushEqProfile](int /*idx*/, int /*dB*/) {
         pushEqProfile();
     });
 
     // 4. txEqFreqChanged → rebuild full Profile (custom-freq path).
     connect(&m_transmitModel, &TransmitModel::txEqFreqChanged,
-            m_txChannel, [pushEqProfile](int /*idx*/, int /*Hz*/) {
+            this, [pushEqProfile](int /*idx*/, int /*Hz*/) {
         pushEqProfile();
     });
 
     // 4a. R-R3-49 (parity Task 4): the Legacy EQ box, the parametric
     //     curve and the EQ enable push the curve the box picks.
     connect(&m_transmitModel, &TransmitModel::txEqUseLegacyChanged,
-            m_txChannel, [pushEqProfile](bool /*on*/) {
+            this, [pushEqProfile](bool /*on*/) {
         pushEqProfile();
     });
     connect(&m_transmitModel, &TransmitModel::txEqParaEqDataChanged,
-            m_txChannel, [pushEqProfile](const QString& /*data*/) {
+            this, [pushEqProfile](const QString& /*data*/) {
         pushEqProfile();
     });
     connect(&m_transmitModel, &TransmitModel::txEqEnabledChanged,
-            m_txChannel, [pushEqProfile](bool /*on*/) {
+            this, [pushEqProfile](bool /*on*/) {
         pushEqProfile();
     });
 
@@ -4512,19 +4580,19 @@ void RadioModel::wireTransmitProcessingChain()
     // 22. cfcEqFreqChanged → rebuild full CFC Profile (any single
     //     band edit pushes the whole 10-band F[]/G[]/E[] vector).
     connect(&m_transmitModel, &TransmitModel::cfcEqFreqChanged,
-            m_txChannel, [pushCfcProfile](int /*idx*/, int /*Hz*/) {
+            this, [pushCfcProfile](int /*idx*/, int /*Hz*/) {
         pushCfcProfile();
     });
 
     // 23. cfcCompressionChanged → rebuild full CFC Profile (G[]).
     connect(&m_transmitModel, &TransmitModel::cfcCompressionChanged,
-            m_txChannel, [pushCfcProfile](int /*idx*/, int /*dB*/) {
+            this, [pushCfcProfile](int /*idx*/, int /*dB*/) {
         pushCfcProfile();
     });
 
     // 24. cfcPostEqBandGainChanged → rebuild full CFC Profile (E[]).
     connect(&m_transmitModel, &TransmitModel::cfcPostEqBandGainChanged,
-            m_txChannel, [pushCfcProfile](int /*idx*/, int /*dB*/) {
+            this, [pushCfcProfile](int /*idx*/, int /*dB*/) {
         pushCfcProfile();
     });
 
@@ -4651,15 +4719,15 @@ void RadioModel::wireTransmitProcessingChain()
         m_txChannel->setPostGenToneMag(mag);
     });
 
-    // Profile-activation resync.  Receiver = m_txChannel so this
-    // becomes a QueuedConnection once moveToThread runs below; the
-    // helper executes on TxWorkerThread for race-free WDSP setter
-    // calls.  Triggered by user-driven profile picks (TxEqDialog,
+    // Profile-activation resync.  R-R3-49 (group A fix wave, I1): the
+    // context is RadioModel, so the helper reads the model on the main
+    // thread and posts the values to the TX channel's thread (see
+    // postToTx above).  Triggered by user-driven profile picks (TxEqDialog,
     // TxProfileSetupPage) — see design comment above for why
     // signal-driven sync via setActiveProfile alone isn't reliable.
     if (m_micProfileMgr) {
         connect(m_micProfileMgr, &MicProfileManager::activeProfileChanged,
-                m_txChannel, [pushTxProcessingChain](const QString& /*name*/) {
+                this, [pushTxProcessingChain](const QString& /*name*/) {
             pushTxProcessingChain();
         });
     }
@@ -4711,11 +4779,10 @@ void RadioModel::wireTransmitProcessingChain()
     // Thread-affinity note (PR #253 review): this call lives at the
     // initial-sync site (main thread, before m_txChannel->moveToThread
     // below), NOT inside pushTxProcessingChain.  pushTxProcessingChain
-    // is reused by the activeProfileChanged connect at line ~4111
-    // whose receiver is m_txChannel; after moveToThread that lambda
-    // body executes on the TX worker thread, and a MoxController
-    // mutation from there would race the main-thread TM -> Mox
-    // setters.  Profile changes don't need the re-prime anyway: the
+    // is reused by the activeProfileChanged connect above, and its
+    // posted half executes on the TX worker thread after moveToThread;
+    // a MoxController mutation from there would race the main-thread
+    // TM -> Mox setters.  Profile changes don't need the re-prime anyway: the
     // TM -> Mox -> TxChannel signal chain handles per-property
     // updates through recompute()'s computed-value guard.
     //
