@@ -186,6 +186,11 @@
 //   2026-09-24 - R-R3-49 fix wave: setTgxlOperateForStation(true) sends
 //                bypass=0 then operate=1 (remoteTgxlControlVersion 3).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): stationOnAirRefusal (the Tuner
+//                Genius check now calls it), isCoreOnAir / coreOnAirChanged
+//                in a window, and the TX half of the remote DSP > Options
+//                apply. NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1107,6 +1112,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
                 [publishTransmitting](bool) { publishTransmitting(false); });
     }
 
+    // R-R3-49 (parity Task 1): isCoreOnAir() follows the radio's
+    // `transmitting`, the transmit model's TUNE and PureSignal's two-tone.
+    connect(this, &RadioModel::transmittingChanged, this,
+            [this](bool) { updateCoreOnAir(); });
+    connect(&m_transmitModel, &TransmitModel::tuneChanged, this,
+            [this](bool) { updateCoreOnAir(); });
+    if (m_pureSignalFacade) {
+        connect(m_pureSignalFacade, &PureSignalSessionFacade::statusChanged,
+                this, &RadioModel::updateCoreOnAir);
+    }
+
     // ── Remote-daemon R2 Task 20: arm the MOX refusal for Role::Remote ──
     //
     // On a Role::Local model the pre-check is installed from inside
@@ -1444,6 +1460,13 @@ RadioModel::RadioModel(Role role, QObject* parent)
                 m_generatedKeyLive = active && m_moxController != nullptr
                                      && m_moxController->isMox();
             });
+    // R-R3-49 (parity Task 1): PureSignal's facade is built before this
+    // controller exists (above), so its own twoToneActiveChanged connect
+    // never happens and the Core's `twoToneOn` would not follow the test.
+    // Refresh it here so a window hears two-tone start and stop.
+    if (m_pureSignalFacade) {
+        m_pureSignalFacade->followTwoToneController();
+    }
 
     // ── Stage C2: FilterPresetStore ───────────────────────────────────────────
     // Wraps Thetis-verbatim defaults from SliceModel::presetsForMode with a
@@ -3739,18 +3762,30 @@ bool RadioModel::readTgxlSettingsForStation(QString* reason)
 // the air (operator decision D60). NereusSDR-original; no Thetis logic.
 // ---------------------------------------------------------------------------
 
-bool RadioModel::stationTgxlControlAllowed(QString* reason) const
+// R-R3-49 (parity Task 1): the Core's one on-the-air refusal, shared by
+// the Tuner Genius switches and every window change that keys nothing.
+QString RadioModel::onAirReason()
 {
-    if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
+    return QStringLiteral("The radio is on the air. Try again when it stops.");
+}
+
+bool RadioModel::stationOnAirRefusal(QString* reason) const
+{
     // On the air: MOX (the controller's or the transmit model's), TUNE, or
     // the two-tone test. The controller's MOX flag clears as its TX to RX
     // handover starts (about 30 ms of TxToRxInFlight and TxToRxFlush), so
-    // a switch also waits until the controller is back in Rx.
+    // a change also waits until the controller is back in Rx.
     const bool onAir = mox() || m_transmitModel.isMox() || isTune() || m_transmitModel.isTune()
         || (m_moxController && m_moxController->state() != MoxState::Rx)
         || (m_twoToneController && m_twoToneController->isActive());
-    if (onAir) {
-        if (reason) { *reason = QStringLiteral("The radio is on the air. Try again when it stops."); }
+    if (onAir && reason) { *reason = onAirReason(); }
+    return onAir;
+}
+
+bool RadioModel::stationTgxlControlAllowed(QString* reason) const
+{
+    if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
+    if (stationOnAirRefusal(reason)) {
         return false;
     }
     if (!m_tgxlConnection || !m_tgxlConnection->isConnected() || !m_tunerModel) {
@@ -3935,6 +3970,23 @@ bool RadioModel::isTransmitting() const
     // R-R3-49: a remote window holds the Core's value as it last heard it.
     if (m_role == Role::Remote) { return m_remoteTransmitting; }
     return m_transmitting;
+}
+
+bool RadioModel::isCoreOnAir() const
+{
+    // R-R3-49 (parity Task 1): the Core's real MOX (`transmitting`), its
+    // TUNE (the mirrored transmit model's), and PureSignal's two-tone.
+    return isTransmitting() || m_transmitModel.isTune()
+        || (m_pureSignalFacade && m_pureSignalFacade->twoToneOn());
+}
+
+void RadioModel::updateCoreOnAir()
+{
+    const bool now = isCoreOnAir();
+    if (now != m_coreOnAir) {
+        m_coreOnAir = now;
+        emit coreOnAirChanged(now);
+    }
 }
 
 bool RadioModel::rfKitEnabled() const
@@ -18625,18 +18677,18 @@ static constexpr int kDspOptionsApplyCoalesceMs = 50;
 
 namespace {
 
-// The DSP > Options mode group of an RX per-mode key, or an empty string for
-// any other key. Keys are DspOptions<Setting><Group>Rx as DspOptionsPage's
-// buildUI writes them and RxChannel::onModeChanged reads them.
-QString rxDspOptionsGroupForKey(const QString& key)
+// The DSP > Options mode group of a per-mode key ending in `suffix` ("Rx"
+// or "Tx"), or an empty string for any other key. Keys are
+// DspOptions<Setting><Group><Rx|Tx> as DspOptionsPage's buildUI writes them
+// and RxChannel::onModeChanged / TxChannel::onModeChanged read them.
+QString dspOptionsGroupForKey(const QString& key, QLatin1String suffix)
 {
     static const QLatin1String kPrefix("DspOptions");
-    static const QLatin1String kSuffix("Rx");
-    if (!key.startsWith(kPrefix) || !key.endsWith(kSuffix)) {
+    if (!key.startsWith(kPrefix) || !key.endsWith(suffix)) {
         return QString();
     }
     const QString body = key.mid(kPrefix.size(),
-                                 key.size() - kPrefix.size() - kSuffix.size());
+                                 key.size() - kPrefix.size() - suffix.size());
     static const QStringList kSettings{QStringLiteral("BufferSize"),
                                        QStringLiteral("FilterSize"),
                                        QStringLiteral("FilterType")};
@@ -18659,11 +18711,18 @@ void RadioModel::scheduleRemoteDspOptionsApply(const QString& key)
     if (!ownsLocalDsp()) {
         return;
     }
-    const QString group = rxDspOptionsGroupForKey(key);
-    if (group.isEmpty()) {
+    const QString group = dspOptionsGroupForKey(key, QLatin1String("Rx"));
+    // R-R3-49 (parity Task 1): a TX key queues its group for the TX channel.
+    const QString txGroup = dspOptionsGroupForKey(key, QLatin1String("Tx"));
+    if (group.isEmpty() && txGroup.isEmpty()) {
         return;
     }
-    m_pendingDspOptionsGroups.insert(group);
+    if (!group.isEmpty()) {
+        m_pendingDspOptionsGroups.insert(group);
+    }
+    if (!txGroup.isEmpty()) {
+        m_pendingDspOptionsTxGroups.insert(txGroup);
+    }
 
     if (m_dspOptionsApplyTimer == nullptr) {
         m_dspOptionsApplyTimer = new QTimer(this);
@@ -18681,6 +18740,28 @@ void RadioModel::scheduleRemoteDspOptionsApply(const QString& key)
 
 void RadioModel::flushRemoteDspOptionsApply()
 {
+    // R-R3-49 (parity Task 1): the TX half. The same apply the local page
+    // makes (rebuildDspOptionsForMode's TxChannel::onModeChanged), for the
+    // TX-bound slice's mode, as the mode-change handler applies it. It sets
+    // the TX channel's buffer, filter size and filter type only.
+    if (!m_pendingDspOptionsTxGroups.isEmpty()) {
+        const QSet<QString> txGroups = m_pendingDspOptionsTxGroups;
+        m_pendingDspOptionsTxGroups.clear();
+        if (const SliceModel* txSlice = txBoundSlice()) {
+            const DSPMode mode = txSlice->dspMode();
+            if (txGroups.contains(dspOptionsModeGroup(mode))) {
+                if (m_dspOptionsTxApplyObserverForTest) {
+                    m_dspOptionsTxApplyObserverForTest(mode);
+                }
+                if (m_txChannel) {
+                    const qint64 txElapsed = m_txChannel->onModeChanged(mode);
+                    if (txElapsed > 0) {
+                        emit dspChangeMeasured(txElapsed);
+                    }
+                }
+            }
+        }
+    }
     if (m_pendingDspOptionsGroups.isEmpty()) {
         return;
     }

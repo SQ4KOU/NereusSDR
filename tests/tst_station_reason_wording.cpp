@@ -82,6 +82,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-47: the Tuner Genius's
 //                                    antenna, operate and bypass reasons.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 1): the Core's
+//                                    on-the-air refusal and the window's
+//                                    transmit settings reason.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -631,6 +635,9 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("result.reason"),
           QStringLiteral("m_settingsServer->otherRadioRefusal(key)"),
           QStringLiteral("refusal"),
+          // R-R3-49 (parity Task 1): RadioModel::stationOnAirRefusal's
+          // reason (RadioModel::onAirReason, scanned below).
+          QStringLiteral("onAir"),
           // A code windows compare, not a reason (section 17).
           QStringLiteral("m_displayBudgetReason")}},
         // command.result for every verb.
@@ -786,6 +793,8 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("readTgxlSettingsForStation"),
           // R-R3-49: the Tuner Genius's antenna, operate and bypass.
           QStringLiteral("stationTgxlControlAllowed"),
+          // R-R3-49 (parity Task 1): the Core's one on-the-air refusal.
+          QStringLiteral("onAirReason"), QStringLiteral("stationOnAirRefusal"),
           QStringLiteral("setTgxlAntennaForStation"), QStringLiteral("setTgxlOperateForStation"),
           QStringLiteral("setTgxlBypassForStation"), QStringLiteral("setNnrDiagnosticMode"),
           QStringLiteral("applyNnrModelSelection"), QStringLiteral("addNotchFromStation"),
@@ -808,7 +817,10 @@ const QList<ReasonSource>& reasonSources()
           // notchConstantsArePlain below.
           QStringLiteral("text"), QStringLiteral("result.reason"),
           QStringLiteral("outcome.reason"), QStringLiteral("kUnknownNotchReason"),
-          QStringLiteral("kNotchListBusyReason")}},
+          QStringLiteral("kNotchListBusyReason"),
+          // R-R3-49 (parity Task 1): onAirReason, a function of this file
+          // scanned here.
+          QStringLiteral("onAirReason()")}},
     };
     return sources;
 }
@@ -850,6 +862,8 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/session/IStationLink.h", "tgxlDeviceSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "tgxlControlUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/session/IStationLink.h", "transmitSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "filterPolicyUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},

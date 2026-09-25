@@ -85,6 +85,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 fix wave: tgxlOperateAppliesWhole
 //                                    (remoteTgxlControlVersion 3).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 1):
+//                                    transmitSettingsUnavailableReason.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -278,6 +281,10 @@ public:
     { return QStringLiteral("This Core does not let this app change the Power Genius's own settings. Updating the Core may help."); }
     static QString tgxlDeviceSettingsUnavailableReason()
     { return QStringLiteral("This Core does not let this app change the Tuner Genius's own settings. Updating the Core may help."); }
+    /// R-R3-49 (parity Task 1): a window's reason for its transmit settings
+    /// on a Core without transmitSettingsVersion.
+    static QString transmitSettingsUnavailableReason()
+    { return QStringLiteral("This Core does not let this app change transmit settings. Updating the Core may help."); }
 
     virtual CommandOutcome requestApplyNnrModels(quint32)
     { return { false, QStringLiteral("NNR model application is not supported by this link to the Core.") }; }

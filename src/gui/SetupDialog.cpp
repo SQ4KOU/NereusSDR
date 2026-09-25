@@ -117,6 +117,10 @@
 //                 window through the Core; the TCI Server page shows the
 //                 Core's station TCI server. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: R-R3-49 (parity Task 1): setTransmitSettingsPermitted,
+//                 pushed to every realized page beside the transmit
+//                 permission. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -230,6 +234,7 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
     : QDialog(parent), m_model(model)
 {
     m_transmitPermitted = model && model->ownsLocalDsp();
+    m_transmitSettingsPermitted = m_transmitPermitted;
     m_transmitReason = tr("Remote transmit controls are not available from this Core yet.");
     m_localUnavailableReason = tr(
         "These settings control audio and signal processing on this computer. "
@@ -819,6 +824,13 @@ void SetupDialog::setTransmitPermitted(bool permitted, const QString& reason)
     refreshTransmitPresentation();
 }
 
+void SetupDialog::setTransmitSettingsPermitted(bool permitted, const QString& reason)
+{
+    m_transmitSettingsPermitted = permitted;
+    m_transmitSettingsReason = reason;
+    refreshTransmitPresentation();
+}
+
 void SetupDialog::refreshTransmitPresentation()
 {
     // The reason a page is unavailable, if it is. The transmit reason wins
@@ -863,6 +875,9 @@ void SetupDialog::refreshTransmitPresentation()
         }
         for (SetupPage* setupPage : setupPages) {
             setupPage->setTransmitPermitted(m_transmitPermitted, m_transmitReason);
+            // R-R3-49 (parity Task 1): the transmit settings that key nothing.
+            setupPage->setTransmitSettingsPermitted(m_transmitSettingsPermitted,
+                                                    m_transmitSettingsReason);
             // R-R3-21: a Mixed page gates its own Core controls.
             setupPage->setStationSettingsAvailable(!stationBlocked, m_stationReason);
         }

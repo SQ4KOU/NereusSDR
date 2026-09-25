@@ -108,6 +108,11 @@
 //   2026-09-24 -- R-R3-49: the Options page gates the Network Watchdog with
 //                 the Region (both the Core's). J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24 -- R-R3-49 (parity Task 1): DSP > Options' TX combos, the TX
+//                 applet's RF Power and TX filter and the RX applet's
+//                 Shift-click follow the transmit settings gate, not the
+//                 keying gate. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -3511,7 +3516,9 @@ private slots:
 
     void remoteDspOptionsTransmitCombosFollowThePermission()
     {
-        const QString reason = QStringLiteral("Remote transmit is unavailable");
+        // R-R3-49 (parity Task 1): the nine TX combos follow the transmit
+        // settings gate; the keying gate no longer holds them.
+        const QString reason = QStringLiteral("The radio is on the air. Try again when it stops.");
         const QStringList txKeys = {
             QStringLiteral("DspOptionsBufferSizePhoneTx"),
             QStringLiteral("DspOptionsBufferSizeFmTx"),
@@ -3526,7 +3533,8 @@ private slots:
 
         RadioModel remote(RadioModel::Role::Remote);
         SetupDialog dialog(&remote);
-        dialog.setTransmitPermitted(false, reason);
+        dialog.setTransmitPermitted(false, QStringLiteral("Remote transmit is unavailable"));
+        dialog.setTransmitSettingsPermitted(false, reason);
         // "Options" is also a General leaf; select the one under DSP.
         auto* tree = dialog.findChild<QTreeWidget*>();
         QVERIFY(tree != nullptr);
@@ -3558,16 +3566,37 @@ private slots:
         QVERIFY(phoneRx != nullptr);
         QVERIFY(phoneRx->isEnabled());
 
+        // The keying gate alone does not open them.
         dialog.setTransmitPermitted(true);
+        for (const QString& key : txKeys) {
+            QVERIFY2(!page->findChild<QComboBox*>(key)->isEnabled(), qPrintable(key));
+        }
+        // Keying still refused, settings taken: the combos are live.
+        dialog.setTransmitPermitted(false, QStringLiteral("Remote transmit is unavailable"));
+        dialog.setTransmitSettingsPermitted(true);
         for (const QString& key : txKeys) {
             auto* combo = page->findChild<QComboBox*>(key);
             QVERIFY2(combo->isEnabled(), qPrintable(key));
             QVERIFY(combo->toolTip() != reason);
             QVERIFY(combo->accessibleDescription().isEmpty());
         }
+        // A combo change writes the key the Core's settings proxy carries.
+        auto* first = page->findChild<QComboBox*>(txKeys.first());
+        const QString firstBefore = first->currentText();
+        QTest::keyClick(first, Qt::Key_Down);
+        QVERIFY(first->currentText() != firstBefore);
+        QCOMPARE(AppSettings::instance().value(txKeys.first()).toString(), first->currentText());
 
+        // A page built on its own for a remote model starts denied, with the
+        // Core reason.
         DspOptionsPage standalone(&remote);
-        QVERIFY(!standalone.findChild<QComboBox*>(txKeys.first())->isEnabled());
+        auto* standaloneCombo = standalone.findChild<QComboBox*>(txKeys.first());
+        QVERIFY(!standaloneCombo->isEnabled());
+        QCOMPARE(standaloneCombo->toolTip(),
+                 QStringLiteral("This Core does not let this app change transmit settings. "
+                                "Updating the Core may help."));
+        QVERIFY2(OperatorWording::isPlain(standaloneCombo->toolTip()),
+                 qPrintable(standaloneCombo->toolTip()));
 
         RadioModel local;
         DspOptionsPage localPage(&local);
@@ -3740,9 +3769,11 @@ private slots:
 
     // ====================================================================
     // R-R3-21 fix wave: the RX applet's Shift-click on a filter preset also
-    // matches the TX passband. That half is a transmit write.
+    // matches the TX passband. R-R3-49 (parity Task 1): that half is a
+    // transmit setting. It follows the transmit settings gate and, when the
+    // gate is closed, says why instead of skipping silently.
     // ====================================================================
-    void remoteRxAppletShiftClickLeavesTheTxFilterAlone()
+    void remoteRxAppletShiftClickFollowsTheTransmitSettingsGate()
     {
         RadioModel remote(RadioModel::Role::Remote);
         SliceModel slice(0);
@@ -3753,18 +3784,43 @@ private slots:
         const int lowBefore = tx.filterLow();
         const int highBefore = tx.filterHigh();
         QSignalSpy txFilterChanged(&tx, &TransmitModel::filterChanged);
-        int presets = 0;
-        for (QPushButton* b : applet.findChildren<QPushButton*>()) {
-            if (!b->isCheckable() || !b->toolTip().contains(QStringLiteral(" Hz to "))) {
-                continue;
+        QSignalSpy refused(&applet, &RxApplet::transmitSettingRefused);
+        const auto shiftClickEveryPreset = [&applet] {
+            int presets = 0;
+            for (QPushButton* b : applet.findChildren<QPushButton*>()) {
+                if (!b->isCheckable() || !b->toolTip().contains(QStringLiteral(" Hz to "))) {
+                    continue;
+                }
+                ++presets;
+                QTest::mouseClick(b, Qt::LeftButton, Qt::ShiftModifier);
             }
-            ++presets;
-            QTest::mouseClick(b, Qt::LeftButton, Qt::ShiftModifier);
-        }
+            return presets;
+        };
+        // A remote window starts with the gate closed: the Core reason.
+        const int presets = shiftClickEveryPreset();
         QVERIFY(presets > 1);
         QCOMPARE(txFilterChanged.count(), 0);
         QCOMPARE(tx.filterLow(), lowBefore);
         QCOMPARE(tx.filterHigh(), highBefore);
+        QCOMPARE(refused.count(), presets);
+        QCOMPARE(refused.last().at(0).toString(),
+                 QStringLiteral("This Core does not let this app change transmit settings. "
+                                "Updating the Core may help."));
+
+        // On the air: the on-air reason.
+        const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+        applet.setTransmitSettingsPermitted(false, onAir);
+        shiftClickEveryPreset();
+        QCOMPARE(txFilterChanged.count(), 0);
+        QCOMPARE(refused.last().at(0).toString(), onAir);
+
+        // Open (the Core takes it, off the air): the TX passband moves, as
+        // in a local window, with the keying gate still closed.
+        refused.clear();
+        applet.setTransmitSettingsPermitted(true);
+        shiftClickEveryPreset();
+        QVERIFY(txFilterChanged.count() > 0);
+        QCOMPARE(refused.count(), 0);
 
         // Local direct mode: the same Shift-click moves the TX passband,
         // so the remote half above is not vacuous.
@@ -3782,6 +3838,78 @@ private slots:
             QTest::mouseClick(b, Qt::LeftButton, Qt::ShiftModifier);
         }
         QVERIFY(localTxFilterChanged.count() > 0);
+    }
+
+    // ====================================================================
+    // R-R3-49 (parity Task 1): the TX applet's RF Power and TX filter follow
+    // the transmit settings gate; MOX, TUNE, VOX and 2-Tone keep the keying
+    // gate.
+    // ====================================================================
+    void remoteTxAppletSettingsFollowTheTransmitSettingsGate()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        TxApplet applet(&remote);
+        const auto findButton = [&applet](const QString& accessibleName) {
+            for (QPushButton* button : applet.findChildren<QPushButton*>()) {
+                if (button->accessibleName() == accessibleName) {
+                    return button;
+                }
+            }
+            return static_cast<QPushButton*>(nullptr);
+        };
+        QSpinBox* low = nullptr;
+        QSpinBox* high = nullptr;
+        for (QSpinBox* spin : applet.findChildren<QSpinBox*>()) {
+            if (spin->accessibleName() == QStringLiteral("TX filter low cutoff")) { low = spin; }
+            if (spin->accessibleName() == QStringLiteral("TX filter high cutoff")) { high = spin; }
+        }
+        QVERIFY(low && high);
+        QPushButton* const mox = findButton(QStringLiteral("MOX transmit"));
+        QPushButton* const tune = findButton(QStringLiteral("Tune carrier"));
+        QVERIFY(mox && tune);
+        QSlider* const power = applet.rfPowerSlider();
+
+        // A remote window starts with both closed; the settings say the Core
+        // reason.
+        const QString coreReason = QStringLiteral(
+            "This Core does not let this app change transmit settings. Updating the Core may help.");
+        for (QWidget* w : std::initializer_list<QWidget*>{power, low, high}) {
+            QVERIFY(!w->isEnabled());
+            QCOMPARE(w->toolTip(), coreReason);
+        }
+
+        // Settings open, keying closed.
+        applet.setTransmitPermitted(false, QStringLiteral("Remote transmit is unavailable"));
+        applet.setTransmitSettingsPermitted(true);
+        for (QWidget* w : std::initializer_list<QWidget*>{power, low, high}) {
+            QVERIFY(w->isEnabled());
+            QVERIFY(w->toolTip() != coreReason);
+        }
+        QVERIFY(!mox->isEnabled());
+        QVERIFY(!tune->isEnabled());
+        QVERIFY(!applet.tunePowerSlider()->isEnabled());
+        QVERIFY(!applet.twoToneButton()->isEnabled());
+
+        // The window's own model takes the change; the link sends it on.
+        const int target = power->value() == 30 ? 31 : 30;
+        power->setValue(target);
+        QCOMPARE(remote.transmitModel().power(), target);
+        high->setValue(2600);
+        QCOMPARE(remote.transmitModel().filterHigh(), 2600);
+
+        // On the air: the settings grey with the on-air reason.
+        const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+        applet.setTransmitSettingsPermitted(false, onAir);
+        for (QWidget* w : std::initializer_list<QWidget*>{power, low, high}) {
+            QVERIFY(!w->isEnabled());
+            QCOMPARE(w->toolTip(), onAir);
+            QVERIFY2(OperatorWording::isPlain(w->toolTip()), qPrintable(w->toolTip()));
+        }
+
+        // Local: both open, nothing pushed.
+        RadioModel local;
+        TxApplet localApplet(&local);
+        QVERIFY(localApplet.rfPowerSlider()->isEnabled());
     }
 
     // ====================================================================
@@ -3960,6 +4088,28 @@ private slots:
             QVERIFY(rxXit != nullptr);
             QVERIFY(!rxXit->isEnabled());
             QCOMPARE(rxXit->toolTip(), remoteReason);
+
+            // R-R3-49 (parity Task 1): the TX applet's RF Power follows the
+            // transmit settings gate. The Core offers transmitSettingsVersion
+            // 1 and its radio is off the air, so it is live; keying the
+            // Core's radio greys it with the on-air reason within a delta,
+            // and it comes back when the radio stops.
+            auto* const txApplet = window->findChild<TxApplet*>();
+            QVERIFY(txApplet != nullptr);
+            QVERIFY(client->transmitSettingsAvailable());
+            QTRY_VERIFY(txApplet->rfPowerSlider()->isEnabled());
+            QVERIFY(!txApplet->tunePowerSlider()->isEnabled());
+            MoxController* const coreMox = station.moxController();
+            QVERIFY(coreMox != nullptr);
+            coreMox->setMoxCheck({});
+            coreMox->setMox(true);
+            QTRY_VERIFY(window->radioModel()->isCoreOnAir());
+            QTRY_VERIFY(!txApplet->rfPowerSlider()->isEnabled());
+            QCOMPARE(txApplet->rfPowerSlider()->toolTip(),
+                     QStringLiteral("The radio is on the air. Try again when it stops."));
+            coreMox->setMox(false);
+            QTRY_VERIFY(!window->radioModel()->isCoreOnAir());
+            QTRY_VERIFY(txApplet->rfPowerSlider()->isEnabled());
 
             // The RADE applet's profile combo and Reset vocoder get it too.
             auto* const rade = window->findChild<RadeApplet*>();

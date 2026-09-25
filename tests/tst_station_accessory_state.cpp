@@ -24,6 +24,8 @@
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-24: R-R3-49 fix wave: remoteTgxlControlVersion 3. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-49 (parity Task 1): transmitSettingsVersion now travels
+// last. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QFile>
 #include <QJsonArray>
@@ -636,19 +638,22 @@ private slots:
         for (const SessionMessage& m : current) {
             if (m.kind == SessionMessageKind::Capabilities) {
                 caps = StationCapabilities::fromUpdates(m.updates);
-                QCOMPARE(m.updates.at(m.updates.size() - 5).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 6).name,
                          QByteArrayLiteral("remotePgxlControlVersion"));
-                QCOMPARE(m.updates.at(m.updates.size() - 4).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 5).name,
                          QByteArrayLiteral("remoteRfKitControlVersion"));
                 // R-R3-48: then the station TCI server's version.
-                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 4).name,
                          QByteArrayLiteral("stationTciVersion"));
                 // R-R3-47: then the accessory records' version.
-                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
                          QByteArrayLiteral("accessoryDataVersion"));
-                // R-R3-47: the Tuner Genius's own settings travel last.
-                QCOMPARE(m.updates.constLast().name,
+                // R-R3-47: then the Tuner Genius's own settings.
+                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
                          QByteArrayLiteral("remoteTgxlControlVersion"));
+                // R-R3-49 (parity Task 1): the transmit settings travel last.
+                QCOMPARE(m.updates.constLast().name,
+                         QByteArrayLiteral("transmitSettingsVersion"));
             }
             if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "amplifier") {
                 sawAmplifier = true;

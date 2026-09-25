@@ -85,6 +85,11 @@
 //                 row, with a plain notice when the headphones are chosen
 //                 and not open. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 : R-R3-49 (parity Task 1): setTransmitSettingsPermitted.
+//                 RF Power and the TX filter low and high follow the
+//                 transmit settings gate in a remote window; the keying
+//                 controls keep setTransmitPermitted. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -286,6 +291,13 @@ public slots:
     // not alter TransmitModel, station settings, or the displayed state of an
     // already-authoritative control.
     void setTransmitPermitted(bool permitted, const QString& unavailableReason = QString());
+    // R-R3-49 (parity Task 1): the transmit settings that key nothing (RF
+    // Power, TX filter low and high). In a remote window MainWindow
+    // supplies true while the Core takes them (transmitSettingsVersion)
+    // and its radio is off the air, and the reason otherwise. Widget
+    // availability only, as setTransmitPermitted.
+    void setTransmitSettingsPermitted(bool permitted,
+                                      const QString& unavailableReason = QString());
 public:
 
     // ── Test accessors ──────────────────────────────────────────────────────
@@ -513,6 +525,7 @@ private:
     // Defaults to local-direct behaviour. Remote MainWindow wiring replaces it
     // after handshake/capability evaluation.
     bool m_transmitPermitted{true};
+    bool m_transmitSettingsPermitted{true};
 };
 
 } // namespace NereusSDR

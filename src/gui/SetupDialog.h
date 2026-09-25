@@ -77,6 +77,10 @@ public:
     // Navigate to a page by its label text (e.g. "AGC/ALC").
     void selectPage(const QString& label);
     void setTransmitPermitted(bool permitted, const QString& reason = QString());
+    // R-R3-49 (parity Task 1): the transmit settings gate, pushed to every
+    // realized page (SetupPage::setTransmitSettingsPermitted). True in a
+    // local window; MainWindow pushes it in a remote one.
+    void setTransmitSettingsPermitted(bool permitted, const QString& reason = QString());
 
     // R-R3-21 / R-R3-10 / R-R3-17: whether the Core's settings can be
     // changed from this window. MainWindow pushes it (applyRemoteRoleGating):
@@ -282,6 +286,8 @@ private:
     QLabel*         m_transmitNotice = nullptr;
     bool            m_transmitPermitted = false;
     QString         m_transmitReason;
+    bool            m_transmitSettingsPermitted = false;  // R-R3-49
+    QString         m_transmitSettingsReason;              // R-R3-49
     // R-R3-21: the visible reason for a page the local-DSP gate disabled.
     // Shown above the page (objectName "setupLocalUnavailable") and as the
     // page's and its tree leaf's tooltip. Never shown in local direct mode,

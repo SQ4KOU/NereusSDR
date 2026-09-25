@@ -29,6 +29,9 @@
 //                 Core's while the remote window is disconnected.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): setTransmitSettingsPermitted
+//                 hook. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "SetupPage.h"
@@ -114,6 +117,10 @@ void SetupPage::syncFromModel()
 // ── Section helper ────────────────────────────────────────────────────────────
 
 void SetupPage::setTransmitPermitted(bool /*permitted*/, const QString& /*reason*/)
+{
+}
+
+void SetupPage::setTransmitSettingsPermitted(bool /*permitted*/, const QString& /*reason*/)
 {
 }
 

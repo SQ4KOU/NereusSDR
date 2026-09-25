@@ -80,6 +80,9 @@
 //                remoteTgxlControlVersion 1 (the amp's and tuner's own
 //                settings), the latter last in the minor-11 block. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsVersion, last
+//                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -161,9 +164,17 @@ struct StationCapabilities {
     /// R-R3-47 / R-R3-22: 1 means the Core sends its Tuner Genius's own
     /// settings (the tgxl* properties of `accessorySettings`) and takes the
     /// setTgxlName, setTgxlNetwork, saveTgxlSettings and readTgxlSettings
-    /// commands. Sent last in the same minor-11 block. 0: a window cannot
+    /// commands. Sent in the same minor-11 block. 0: a window cannot
     /// change the tuner's own settings on this Core and says so.
     int remoteTgxlControlVersion = 0;
+    /// R-R3-49 (parity Task 1): 1 means a receive-only Core takes a
+    /// `transmit` write of any property but the keying set (mox, tune,
+    /// voxEnabled, twoToneActive) and a DspOptions<Setting><Mode>Tx settings
+    /// write or remove while its radio is off the air, and applies it at
+    /// once; each is refused while the radio is on the air. Sent last in
+    /// the same minor-11 block. 0: a window's transmit settings stay greyed
+    /// and say the Core cannot take them.
+    int transmitSettingsVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

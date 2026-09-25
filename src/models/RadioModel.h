@@ -92,6 +92,11 @@
 //                (MoxController, any source, through the TX to RX
 //                handover), Core to window. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): stationOnAirRefusal, the Core's
+//                one on-the-air refusal; isCoreOnAir / coreOnAirChanged in
+//                a window; the TX half of the remote DSP > Options apply.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1632,6 +1637,22 @@ public:
     // holds the Core's value as it last heard it.
     bool isTransmitting() const;
 
+    // R-R3-49 (parity Task 1): the Core's one on-the-air refusal. True,
+    // with "The radio is on the air. Try again when it stops." in `reason`,
+    // while the radio is keyed (MoxController from any source, through its
+    // TX to RX handover; or the transmit model's MOX latch), TUNE is on, or
+    // the two-tone test runs. False otherwise. Every change a window asks
+    // the Core for that keys nothing is checked here before it is applied.
+    bool stationOnAirRefusal(QString* reason) const;
+    // The sentence stationOnAirRefusal gives, for a window's own gate.
+    static QString onAirReason();
+
+    // R-R3-49 (parity Task 1): in a remote window, the Core's radio is on
+    // the air as the Core last reported it: its `transmitting`, the
+    // mirrored transmit model's TUNE, or PureSignal's two-tone. Nothing
+    // here keys; a window greys what waits while this is true.
+    bool isCoreOnAir() const;
+
     // Phase 3F Sub-Epic C: TX-slice arbiter (single-TX invariant + RF-safe
     // handoff). Owned by RadioModel (Qt parent), wired to slice list +
     // MoxController during construction. MAC injected + load() driven on
@@ -2292,12 +2313,19 @@ public:
     // The Core's StationServer calls this after it accepts a settings write
     // or remove of a key from a remote window. RX per-mode keys
     // (DspOptions{BufferSize,FilterSize,FilterType}{Phone,Cw,Dig,Fm}Rx)
-    // queue their mode group; every other key, TX keys included, is
-    // ignored. After kDspOptionsApplyCoalesceMs the queued groups are
-    // applied once: each slice whose current mode is in a queued group
-    // re-runs the mode-change apply (RxChannel::onModeChanged) on its own
-    // channel, so a buffer or filter change takes effect without a mode
-    // change. A burst of keys yields one apply per slice.
+    // queue their mode group; every other key is ignored. After
+    // kDspOptionsApplyCoalesceMs the queued groups are applied once: each
+    // slice whose current mode is in a queued group re-runs the mode-change
+    // apply (RxChannel::onModeChanged) on its own channel, so a buffer or
+    // filter change takes effect without a mode change. A burst of keys
+    // yields one apply per slice.
+    //
+    // R-R3-49 (parity Task 1): TX per-mode keys
+    // (DspOptions{BufferSize,FilterSize,FilterType}{Phone,Dig,Fm}Tx) queue
+    // their group too, and when the TX-bound slice's mode is in it the TX
+    // channel re-runs its mode-change apply (TxChannel::onModeChanged), the
+    // local page's own TX apply (rebuildDspOptionsForMode). It sets the TX
+    // channel's buffer and filter only; it never keys.
     //
     // Local operation never calls this: DspOptionsPage applies its own
     // edits through rebuildDspOptionsForMode. No-op on a remote-role model.
@@ -2331,6 +2359,13 @@ public:
     void setDspOptionsApplyObserverForTest(std::function<void(int, DSPMode)> observer)
     {
         m_dspOptionsApplyObserverForTest = std::move(observer);
+    }
+    // Test-only: observe each TX apply the coalesced flush makes, with the
+    // TX-bound slice's mode. Called before the TxChannel apply, so it
+    // reports the target even when no TX channel exists.
+    void setDspOptionsTxApplyObserverForTest(std::function<void(DSPMode)> observer)
+    {
+        m_dspOptionsTxApplyObserverForTest = std::move(observer);
     }
 
     // Phase 3Q Sub-PR-4 D.3: Hover tooltip for the TitleBar ConnectionSegment.
@@ -3303,6 +3338,8 @@ signals:
     void rfKitEnabledChanged(bool enabled);
     // R-R3-49: isTransmitting() changed.
     void transmittingChanged(bool transmitting);
+    // R-R3-49 (parity Task 1): isCoreOnAir() changed.
+    void coreOnAirChanged(bool onAir);
     // Fires on each transition to Connected with the RadioInfo of the live
     // connection. HardwarePage (Phase 3I) listens to this to repopulate
     // sub-tabs with per-radio fields.
@@ -3834,6 +3871,10 @@ private:
     QSet<QString> m_pendingHardwareReloads;
     std::function<void(const QString&)> m_hardwareApplyObserverForTest;
     std::function<void(int, DSPMode)> m_dspOptionsApplyObserverForTest;
+    // R-R3-49 (parity Task 1): the TX groups queued by a window's
+    // DspOptions<Setting><Mode>Tx write, and the test observer.
+    QSet<QString> m_pendingDspOptionsTxGroups;
+    std::function<void(DSPMode)> m_dspOptionsTxApplyObserverForTest;
 
     // The connect-time DDC seed, factored out of the wireSliceSignals
     // singleShot so it can be driven without a live connection. Commands the
@@ -5383,6 +5424,9 @@ private:
     // Core's value as a remote window last heard it.
     bool m_transmitting{false};
     bool m_remoteTransmitting{false};
+    // R-R3-49 (parity Task 1): isCoreOnAir() as last announced.
+    bool m_coreOnAir{false};
+    void updateCoreOnAir();
     bool m_remoteFourO3AListening{false};
     QString m_remoteFourO3AListenerError;
     QTimer* m_accessoryBandTimer{nullptr};

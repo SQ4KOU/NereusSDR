@@ -387,6 +387,7 @@ change shows as surface drift and as a change to this table.
 | `stationTciVersion` | 1 |
 | `accessoryDataVersion` | 1 |
 | `remoteTgxlControlVersion` | 3 |
+| `transmitSettingsVersion` | 1 |
 
 <!-- /surface -->
 
@@ -423,7 +424,27 @@ When a feature is off, its version is 0:
   `setTgxlOperate` with `on` true put the tuner in operate whole (bypass
   off and operate on, from the one command);
   `remoteRfKitControlVersion` 3 adds `resetRfKitError`, the RF-Kit
-  amplifier's Reset amp error. `remoteTgxlControlVersion` is the last
+  amplifier's Reset amp error.
+- `transmitSettingsVersion`: sent only at agreed minor 11, and 0 on a
+  station with no radio model. At 1 a receive-only Core takes a
+  `property.write` on `transmit` of any property except the keying set
+  (`mox`, `tune`, `voxEnabled`, `twoToneActive`), and a `settings.write`
+  or `settings.remove` of a DSP > Options TX key
+  (`DspOptions<Setting><Mode>Tx`), while its radio is off the air, and
+  applies it at once (a DSP > Options TX key reaches the Core's TX channel
+  when the TX slice's mode is in its group). Version 1 covers the
+  `transmit` properties mirrored today: `power`, `micGain`, `filterLow`,
+  `filterHigh`, `lineInGain`, `userDigOut`, `pureSig`,
+  `forceAttwhenPSAoff`, `forceAttwhenPowerChangesWhenPSAon`,
+  `forceAttwhenPowerChangesWhenPSAonAndDecreased`, `antiVoxTauMs`,
+  `antiVoxRun` and `paSettingsBypass`. Each is refused while the radio is
+  on the air (section 7.3). The keying set stays refused on a receive-only
+  Core, on and off the air, and so do raw settings writes of
+  `hardware/<mac>/tx/...`, `powerByBand` and `tunePowerByBand` (the
+  `transmit` object owns them). A window whose Core sends 0 keeps its
+  transmit settings unavailable. A peer below agreed minor 11 is never
+  offered it, and a receive-only Core refuses its transmit writes and DSP >
+  Options TX keys as before. `transmitSettingsVersion` is the last
   capabilities entry.
 - `stationTciVersion`: sent only at agreed minor 11, and 0 unless the Core
   runs a station TCI server.
@@ -498,6 +519,7 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 | 45 | `stationTciVersion` | `i64` |
 | 46 | `accessoryDataVersion` | `i64` |
 | 47 | `remoteTgxlControlVersion` | `i64` |
+| 48 | `transmitSettingsVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1025,6 +1047,14 @@ Notes on the keys:
   minor 11 on a Core that runs a station TCI server
   (`StationServer::sendToSession`). An older peer never sees their schema
   either.
+- **`transmit`.** Every property is `bidirectional` on the wire, but a
+  receive-only Core takes only the transmit settings: at
+  `transmitSettingsVersion` 1, a write of any property except `mox`,
+  `tune`, `voxEnabled` and `twoToneActive`, and only while its radio is
+  off the air (section 7.3). The Core also publishes its real transmit
+  state as `radio`'s `transmitting` (outbound); a window reads "on the
+  air" from it, the mirrored `transmit.tune`, and `pureSignal`'s
+  `twoToneOn`.
 - **Unknown classes.** A client that receives a schema for a class it does
   not know records the difference and drops that class's objects and
   deltas.
@@ -1047,9 +1077,19 @@ property in one write, an unknown property or a wrong wire kind, an
 `outbound` property, a read-only object (`ioBoard`, `amplifier`, `rfkit`,
 `stationTci`, `accessoryData`, `accessorySettings`), a `stepAtt` or `alexAntennas` write from a peer below minor
 11 or while the Core has no controller behind it, a raw write of `radio`'s
-`rfKitEnabled` (changed only with `setRfKitEnabled`), transmit
-configuration on a receive-only station, and DSP settings from a peer that
-did not negotiate them (`StationServer::handlePropertyWrite`).
+`rfKitEnabled` (changed only with `setRfKitEnabled`), the keying
+`transmit` properties (`mox`, `tune`, `voxEnabled`, `twoToneActive`) on a
+receive-only station, whether or not the station mirrors them ("Transmit
+configuration is unavailable on this receive-only Core."), any
+`transmit` property on a receive-only station from a peer below agreed
+minor 11 (it was never offered `transmitSettingsVersion`; the same
+reason), any other `transmit` property on a receive-only station while
+its radio is on the air ("The radio is on the air. Try again when it stops.": keyed through
+its `MoxController` from any source, a hardware PTT included, until the
+hand-back to receive ends; TUNE on; or the two-tone test running), and
+DSP settings from a peer that did not negotiate them
+(`StationServer::handlePropertyWrite`). The on-air check is read once for
+the whole write, before anything in it is applied.
 A write to an `outbound` property is refused before anything is applied,
 with the reason "The Core sets this itself; it cannot be changed from
 here.", unless one of the earlier, more specific refusals above applies
@@ -1190,7 +1230,13 @@ The station refuses a write to a key outside the station scope ("Each app
 keeps this setting itself; the Core does not store it."), to another radio's `hardware/<mac>/` keys ("These settings
 are for a radio this Core is not connected to."), an out-of-range
 `SwrProtectionLimit` ("Choose an SWR protection limit from 1.0 to 5.0."), and transmit-side keys on a receive-only
-station.
+station ("Transmit configuration is unavailable on this receive-only
+Core."). At `transmitSettingsVersion` 1 a receive-only station takes the
+DSP > Options TX keys (`DspOptions<Setting><Mode>Tx`,
+`StationServer::isTransmitSettingKeyAcceptedOffAir`) while its radio is off
+the air, and refuses a write or remove of one while it is on the air ("The
+radio is on the air. Try again when it stops."), handing back its own
+value.
 
 ### 8.2 Keys the Core owns by code
 
@@ -1889,8 +1935,8 @@ same on every machine.
 | `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
-| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound |
-| `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry |
+| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason |
+| `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key taken off the air and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false |
 | `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot |

@@ -1,0 +1,579 @@
+// no-port-check: NereusSDR-original. R-R3-49 (parity Task 1): the transmit
+// settings gate. Loopback link, no RF and no hardware: nothing here keys a
+// radio. "On the air" keys the Core's own MoxController (and its two-tone
+// controller against a test TxChannel) with the receive-only MOX pre-check
+// lifted, as tst_tgxl_station_identity and tst_remote_peripherals do.
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 1): a
+//                                    receive-only Core takes a transmit
+//                                    setting while its radio is off the
+//                                    air, refuses it while it is on the
+//                                    air, and still refuses the keying
+//                                    set. A window's on-the-air state
+//                                    follows the Core. AI-assisted via
+//                                    Anthropic Claude Code.
+// =================================================================
+
+#include <QtTest/QtTest>
+#include <QCoreApplication>
+#include <QFile>
+#include <QSignalSpy>
+#include <QTemporaryDir>
+
+#include <memory>
+
+#include "core/AppSettings.h"
+#include "core/ConnectionState.h"
+#include "core/HardwareProfile.h"
+#include "core/MoxController.h"
+#include "core/TwoToneController.h"
+#include "core/TxChannel.h"
+#include "core/session/IStationLink.h"
+#include "core/session/MirrorSchema.h"
+#include "core/session/PureSignalSessionFacade.h"
+#include "core/session/SessionMessages.h"
+#include "core/session/StationCapabilities.h"
+#include "core/session/StationClient.h"
+#include "core/session/StationServer.h"
+#include "core/settings/SettingsProxy.h"
+#include "fakes/LoopbackTransport.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
+#include "models/TransmitModel.h"
+
+using namespace NereusSDR;
+using NereusSDR::Test::LoopbackTransport;
+
+namespace {
+
+const QString kOnAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+const QString kReceiveOnly =
+    QStringLiteral("Transmit configuration is unavailable on this receive-only Core.");
+
+std::unique_ptr<RadioModel> makeStationRadioModel()
+{
+    auto model = std::make_unique<RadioModel>();
+    model->setBoardForTest(HPSDRHW::HermesLite);
+    RadioInfo info;
+    info.macAddress = QStringLiteral("AA:BB:CC:DD:EE:01");
+    info.name = QStringLiteral("Bench HL2");
+    info.boardType = HPSDRHW::HermesLite;
+    model->setLastRadioInfoForTest(info);
+    model->setConnectionStateForTest(ConnectionState::Connected);
+    model->addSlice(QStringLiteral("pan-0"));
+    return model;
+}
+
+// A receive-only Core and one window, handshake complete.
+struct Session {
+    explicit Session(const QString& securityDir, QObject* parent)
+        : settings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")))
+    {
+        core = makeStationRadioModel();
+        server = std::make_unique<StationServer>(core.get(), settings, securityDir);
+        client = std::make_unique<StationClient>(&window, &proxy);
+        coreEnd = new LoopbackTransport(QStringLiteral("station-end"), parent);
+        windowEnd = new LoopbackTransport(QStringLiteral("client-end"), parent);
+        coreEnd->linkTo(windowEnd);
+    }
+    bool connect()
+    {
+        QSignalSpy completed(client.get(), &StationClient::handshakeComplete);
+        client->startSession(windowEnd, server->token());
+        server->acceptTransport(coreEnd);
+        return completed.wait(5000) || completed.count() == 1;
+    }
+    // A raw `transmit` write the way any app can send it, and the Core's
+    // answer for it.
+    SessionPropertyResult writeTransmit(const QByteArray& name, MirrorWireKind kind,
+                                        const QVariant& value)
+    {
+        const quint32 writeId = ++m_nextWriteId;
+        MirrorUpdate update;
+        update.ordinal = 1;
+        update.name = name;
+        update.kind = kind;
+        update.value = value;
+        windowEnd->sendText(SessionMessages::encode(
+            SessionMessages::propertyWrite(QByteArrayLiteral("transmit"), {update}, writeId)));
+        SessionPropertyResult found;
+        const bool arrived = QTest::qWaitFor([&] {
+            for (const QByteArray& wire : windowEnd->received()) {
+                SessionMessage message;
+                if (!SessionMessages::decode(wire, &message)
+                    || message.kind != SessionMessageKind::PropertyResult
+                    || message.writeId != writeId) {
+                    continue;
+                }
+                for (const SessionPropertyResult& result : message.propertyResults) {
+                    if (result.property == name) {
+                        found = result;
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }, 3000);
+        if (!arrived) {
+            found.reason = QStringLiteral("no property.result arrived");
+        }
+        return found;
+    }
+
+    QTemporaryDir settingsDir;
+    AppSettings settings;
+    std::unique_ptr<RadioModel> core;
+    std::unique_ptr<StationServer> server;
+    RadioModel window{RadioModel::Role::Remote};
+    SettingsProxy proxy;
+    std::unique_ptr<StationClient> client;
+    LoopbackTransport* coreEnd = nullptr;
+    LoopbackTransport* windowEnd = nullptr;
+    quint32 m_nextWriteId = 90000;
+};
+
+}  // namespace
+
+class TstTransmitSettingsGate : public QObject {
+    Q_OBJECT
+
+private slots:
+    void initTestCase();
+    void cleanupTestCase();
+
+    void coreOffersTransmitSettingsVersion();
+    void olderCoreOffersNoTransmitSettings();
+    void olderAppIsNotOfferedTransmitSettings();
+    void keyingSetStaysRefusedOnAndOffTheAir();
+    void settingAppliedOffTheAirAndReturnsToTheWindow();
+    void settingRefusedWhileOnTheAir();
+    void onAirRefusalIsTheTgxlRefusal();
+    void dspOptionsTxKeyTakenOffTheAirAndApplied();
+    void dspOptionsTxKeyRefusedWhileOnTheAir();
+    void transmitHardwareKeysStayRefused();
+    void windowOnAirFollowsTheCore();
+
+private:
+    QTemporaryDir m_securityDir;
+};
+
+void TstTransmitSettingsGate::initTestCase()
+{
+    QVERIFY(m_securityDir.isValid());
+    const QString profile = QStringLiteral("transmit-settings-gate-%1")
+                                .arg(QCoreApplication::applicationPid());
+    AppSettings::setProfileOverride(profile);
+    AppSettings::instance().clear();
+    // As CoreInit's migrations leave it, so the window's settings proxy
+    // starts as it does in the app.
+    AppSettings::instance().setValue(QStringLiteral("SettingsSchemaVersion"), QStringLiteral("7"));
+}
+
+void TstTransmitSettingsGate::cleanupTestCase()
+{
+    const QString path = AppSettings::instance().filePath();
+    QFile::remove(path);
+    QFile::remove(path + QStringLiteral(".bak"));
+}
+
+void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    QVERIFY(s.core->receiveOnlyStationPolicy());
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 1);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 1);
+    QVERIFY(s.client->transmitSettingsAvailable());
+    QVERIFY(s.client->transmitSettingsAvailable(1));
+    QVERIFY(!s.client->transmitSettingsAvailable(2));
+    QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
+        QStringLiteral("DspOptionsBufferSizePhoneTx")));
+    QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
+        QStringLiteral("DspOptionsFilterTypeDigTx")));
+    QVERIFY(!StationServer::isTransmitSettingKeyAcceptedOffAir(
+        QStringLiteral("DspOptionsBufferSizePhoneRx")));
+    QVERIFY(!StationServer::isTransmitSettingKeyAcceptedOffAir(
+        QStringLiteral("hardware/aa:bb:cc:dd:ee:01/tx/power")));
+    QCOMPARE(IStationLink::transmitSettingsUnavailableReason(),
+             QStringLiteral("This Core does not let this app change transmit settings. "
+                            "Updating the Core may help."));
+}
+
+void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
+{
+    // A Core from before transmitSettingsVersion sends the minor-11 block
+    // without it: the window reads 0 and keeps every transmit setting
+    // greyed with the Core reason.
+    StationCapabilities caps;
+    caps.radioIdentityEntries = true;
+    caps.remoteTgxlControlVersion = 3;
+    caps.transmitSettingsVersion = 1;
+    QList<MirrorUpdate> updates = caps.toUpdates();
+    QCOMPARE(updates.last().name, QByteArrayLiteral("transmitSettingsVersion"));
+    QCOMPARE(StationCapabilities::fromUpdates(updates).transmitSettingsVersion, 1);
+    updates.removeLast();
+    QCOMPARE(updates.last().name, QByteArrayLiteral("remoteTgxlControlVersion"));
+    const StationCapabilities older = StationCapabilities::fromUpdates(updates);
+    QCOMPARE(older.transmitSettingsVersion, 0);
+    QCOMPARE(older.remoteTgxlControlVersion, 3);
+}
+
+void TstTransmitSettingsGate::olderAppIsNotOfferedTransmitSettings()
+{
+    // An app below minor 11 is never sent transmitSettingsVersion, so a
+    // receive-only Core refuses its transmit writes as before.
+    auto core = makeStationRadioModel();
+    QTemporaryDir dir;
+    AppSettings settings(dir.filePath(QStringLiteral("older.settings")));
+    settings.setValue(QStringLiteral("DspOptionsBufferSizePhoneTx"), QStringLiteral("1024"));
+    StationServer server(core.get(), settings, m_securityDir.path());
+    auto* coreEnd = new LoopbackTransport(QStringLiteral("core"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("older-app"), this);
+    coreEnd->linkTo(peer);
+    server.acceptTransport(coreEnd);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, quint16(kRadioIdentitySessionProtocolMinor - 1), 0,
+        QStringLiteral("older-app"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    const auto received = [peer](SessionMessageKind kind) {
+        QList<SessionMessage> found;
+        for (const QByteArray& wire : peer->received()) {
+            SessionMessage message;
+            if (SessionMessages::decode(wire, &message) && message.kind == kind) {
+                found.append(message);
+            }
+        }
+        return found;
+    };
+    QTRY_VERIFY(!received(SessionMessageKind::SnapshotComplete).isEmpty());
+    for (const SessionMessage& caps : received(SessionMessageKind::Capabilities)) {
+        for (const MirrorUpdate& u : caps.updates) {
+            QVERIFY(u.name != "transmitSettingsVersion");
+        }
+    }
+
+    const int power = core->transmitModel().power();
+    peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+        QByteArrayLiteral("transmit"),
+        {MirrorUpdate{2, "power", MirrorWireKind::Int64, QVariant(qlonglong(power == 40 ? 41 : 40))}},
+        77)));
+    QTRY_VERIFY(!received(SessionMessageKind::PropertyResult).isEmpty());
+    const SessionMessage result = received(SessionMessageKind::PropertyResult).first();
+    QCOMPARE(result.propertyResults.size(), 1);
+    QVERIFY(!result.propertyResults.first().accepted);
+    QCOMPARE(result.propertyResults.first().reason, kReceiveOnly);
+    QCOMPARE(core->transmitModel().power(), power);
+
+    peer->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+        QStringLiteral("DspOptionsBufferSizePhoneTx"), QStringLiteral("2048"),
+        QStringLiteral("older-app"))));
+    QTRY_VERIFY(!received(SessionMessageKind::SettingsReject).isEmpty());
+    QCOMPARE(received(SessionMessageKind::SettingsReject).first().reason, kReceiveOnly);
+    QCOMPARE(settings.value(QStringLiteral("DspOptionsBufferSizePhoneTx")).toString(),
+             QStringLiteral("1024"));
+}
+
+void TstTransmitSettingsGate::keyingSetStaysRefusedOnAndOffTheAir()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    TransmitModel& coreTx = s.core->transmitModel();
+    MoxController* const mox = s.core->moxController();
+    QVERIFY(mox);
+
+    const auto expectKeyingRefused = [&] {
+        for (const QByteArray& name : {QByteArrayLiteral("mox"), QByteArrayLiteral("tune"),
+                                       QByteArrayLiteral("voxEnabled"),
+                                       QByteArrayLiteral("twoToneActive")}) {
+            const SessionPropertyResult result =
+                s.writeTransmit(name, MirrorWireKind::Bool, QVariant(true));
+            QVERIFY2(!result.accepted, name.constData());
+            QCOMPARE(result.reason, kReceiveOnly);
+        }
+    };
+    // Off the air.
+    expectKeyingRefused();
+    if (QTest::currentTestFailed()) { return; }
+    QVERIFY(!coreTx.isMox());
+    QVERIFY(!coreTx.isTune());
+    QVERIFY(!coreTx.voxEnabled());
+    QVERIFY(!mox->isMox());
+
+    // On the air (the Core's own MoxController, pre-check lifted).
+    mox->setMoxCheck({});
+    mox->setMox(true);
+    QTRY_VERIFY(s.core->isTransmitting());
+    expectKeyingRefused();
+    if (QTest::currentTestFailed()) { return; }
+    QVERIFY(!coreTx.isTune());
+    QVERIFY(!coreTx.voxEnabled());
+    mox->setMox(false);
+    QTRY_VERIFY(mox->state() == MoxState::Rx);
+}
+
+void TstTransmitSettingsGate::settingAppliedOffTheAirAndReturnsToTheWindow()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    TransmitModel& coreTx = s.core->transmitModel();
+    TransmitModel& windowTx = s.window.transmitModel();
+    QVERIFY(!s.core->isTransmitting());
+
+    // Through the window's own model, as the TX applet's RF Power slider.
+    const int power = coreTx.power() == 37 ? 38 : 37;
+    windowTx.setPower(power);
+    QTRY_COMPARE(coreTx.power(), power);
+    QTRY_COMPARE(windowTx.power(), power);
+
+    // The TX passband, as the TX applet's spin boxes and Shift-click.
+    windowTx.setFilterLow(200);
+    windowTx.setFilterHigh(2700);
+    QTRY_COMPARE(coreTx.filterLow(), 200);
+    QTRY_COMPARE(coreTx.filterHigh(), 2700);
+    QTRY_COMPARE(windowTx.filterLow(), 200);
+    QTRY_COMPARE(windowTx.filterHigh(), 2700);
+
+    // A raw write from any app gets an accepted result.
+    const int again = power + 1;
+    const SessionPropertyResult result =
+        s.writeTransmit(QByteArrayLiteral("power"), MirrorWireKind::Int64,
+                        QVariant(qlonglong(again)));
+    QVERIFY2(result.accepted, qPrintable(result.reason));
+    QCOMPARE(coreTx.power(), again);
+}
+
+void TstTransmitSettingsGate::settingRefusedWhileOnTheAir()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    TransmitModel& coreTx = s.core->transmitModel();
+    TransmitModel& windowTx = s.window.transmitModel();
+    const int settled = coreTx.power();
+    const int requested = settled == 21 ? 22 : 21;
+
+    const auto expectRefused = [&](const char* how) {
+        const SessionPropertyResult result =
+            s.writeTransmit(QByteArrayLiteral("power"), MirrorWireKind::Int64,
+                            QVariant(qlonglong(requested)));
+        QVERIFY2(!result.accepted, how);
+        QCOMPARE(result.reason, kOnAir);
+        QCOMPARE(coreTx.power(), settled);
+        // The window's own write settles back on the Core's value.
+        windowTx.setPower(requested);
+        QTest::qWait(150);
+        QCOMPARE(coreTx.power(), settled);
+        QTRY_COMPARE(windowTx.power(), settled);
+    };
+
+    // TUNE (the Core's transmit model), before the pre-check is lifted.
+    coreTx.setTune(true);
+    expectRefused("tune");
+    if (QTest::currentTestFailed()) { return; }
+    coreTx.setTune(false);
+
+    MoxController* const mox = s.core->moxController();
+    QVERIFY(mox);
+    mox->setMoxCheck({});
+    // MOX through the Core's MoxController.
+    mox->setMox(true);
+    QTRY_VERIFY(mox->state() == MoxState::Tx);
+    expectRefused("mox");
+    if (QTest::currentTestFailed()) { return; }
+    mox->setMox(false);
+    QTRY_VERIFY(mox->state() == MoxState::Rx);
+
+    // A hardware PTT press.
+    mox->onMicPttFromRadio(true);
+    QVERIFY(mox->isMox());
+    expectRefused("hardware ptt");
+    if (QTest::currentTestFailed()) { return; }
+    mox->onMicPttFromRadio(false);
+    QTRY_VERIFY(mox->state() == MoxState::Rx);
+
+    // The two-tone test, keyed by its controller.
+    {
+        TxChannel tx(/*channelId=*/1);
+        TwoToneController* const twoTone = s.core->twoToneController();
+        QVERIFY(twoTone);
+        twoTone->setTxChannel(&tx);
+        twoTone->setSettleDelaysMs(0, 0);
+        twoTone->setActive(true);
+        QTRY_VERIFY(twoTone->isActive());
+        expectRefused("two-tone");
+        if (QTest::currentTestFailed()) { return; }
+        twoTone->setActive(false);
+        QTRY_VERIFY(!twoTone->isActive());
+        QTRY_VERIFY(mox->state() == MoxState::Rx);
+        twoTone->setTxChannel(nullptr);
+    }
+
+    // The TX to RX handover: MOX is off but the controller is still
+    // walking back to receive.
+    mox->setTimerIntervals(0, 0, 0, /*keyUpMs=*/300, /*pttOutMs=*/300, 0);
+    mox->setMox(true);
+    QTRY_VERIFY(mox->state() == MoxState::Tx);
+    mox->setMox(false);
+    QVERIFY(!mox->isMox());
+    QVERIFY(mox->state() != MoxState::Rx);
+    {
+        const SessionPropertyResult result =
+            s.writeTransmit(QByteArrayLiteral("power"), MirrorWireKind::Int64,
+                            QVariant(qlonglong(requested)));
+        QVERIFY(!result.accepted);
+        QCOMPARE(result.reason, kOnAir);
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(mox->state() == MoxState::Rx, 2000);
+
+    // Off the air again: taken.
+    const SessionPropertyResult result =
+        s.writeTransmit(QByteArrayLiteral("power"), MirrorWireKind::Int64,
+                        QVariant(qlonglong(requested)));
+    QVERIFY2(result.accepted, qPrintable(result.reason));
+    QCOMPARE(coreTx.power(), requested);
+}
+
+void TstTransmitSettingsGate::onAirRefusalIsTheTgxlRefusal()
+{
+    RadioModel core;
+    core.setReceiveOnlyStationPolicy(true);
+    QString reason;
+    QVERIFY(!core.stationOnAirRefusal(&reason));
+    QVERIFY(reason.isEmpty());
+    core.transmitModel().setTune(true);
+    QVERIFY(core.stationOnAirRefusal(&reason));
+    QCOMPARE(reason, kOnAir);
+    QCOMPARE(RadioModel::onAirReason(), kOnAir);
+    core.transmitModel().setTune(false);
+    QVERIFY(!core.stationOnAirRefusal(nullptr));
+}
+
+void TstTransmitSettingsGate::dspOptionsTxKeyTakenOffTheAirAndApplied()
+{
+    const QString txKey = QStringLiteral("DspOptionsBufferSizePhoneTx");
+    Session s(m_securityDir.path(), this);
+    s.settings.setValue(txKey, QStringLiteral("1024"));
+    QList<DSPMode> txApplies;
+    s.core->setDspOptionsTxApplyObserverForTest(
+        [&txApplies](DSPMode mode) { txApplies.append(mode); });
+    QVERIFY(s.connect());
+    QVERIFY(s.proxy.ready());
+    SliceModel* txSlice = s.core->txBoundSlice();
+    QVERIFY(txSlice);
+    txSlice->setDspMode(DSPMode::USB);
+
+    QSignalSpy rejected(&s.proxy, &SettingsProxy::valueRejected);
+    s.proxy.setValue(txKey, QStringLiteral("2048"));
+    QTRY_COMPARE(s.settings.value(txKey).toString(), QStringLiteral("2048"));
+    QTRY_COMPARE(txApplies.size(), 1);
+    QCOMPARE(txApplies.first(), DSPMode::USB);
+    QCOMPARE(rejected.count(), 0);
+
+    // A key for a group the TX slice is not in is saved, not applied now.
+    s.proxy.setValue(QStringLiteral("DspOptionsBufferSizeFmTx"), QStringLiteral("512"));
+    QTRY_COMPARE(s.settings.value(QStringLiteral("DspOptionsBufferSizeFmTx")).toString(),
+                 QStringLiteral("512"));
+    QTest::qWait(120);
+    QCOMPARE(txApplies.size(), 1);
+
+    // A remove returns it to its default, applied the same way.
+    s.proxy.remove(txKey);
+    QTRY_VERIFY(!s.settings.contains(txKey));
+    QTRY_COMPARE(txApplies.size(), 2);
+    QCOMPARE(rejected.count(), 0);
+}
+
+void TstTransmitSettingsGate::dspOptionsTxKeyRefusedWhileOnTheAir()
+{
+    const QString txKey = QStringLiteral("DspOptionsFilterSizePhoneTx");
+    Session s(m_securityDir.path(), this);
+    s.settings.setValue(txKey, QStringLiteral("4096"));
+    QList<DSPMode> txApplies;
+    s.core->setDspOptionsTxApplyObserverForTest(
+        [&txApplies](DSPMode mode) { txApplies.append(mode); });
+    QVERIFY(s.connect());
+    QVERIFY(s.proxy.ready());
+
+    MoxController* const mox = s.core->moxController();
+    mox->setMoxCheck({});
+    mox->setMox(true);
+    QTRY_VERIFY(mox->state() == MoxState::Tx);
+
+    QSignalSpy rejected(&s.proxy, &SettingsProxy::valueRejected);
+    QSignalSpy toast(&s.window, &RadioModel::sliceAddRejected);
+    s.proxy.setValue(txKey, QStringLiteral("8192"));
+    QTRY_COMPARE(rejected.count(), 1);
+    QCOMPARE(rejected.first().at(0).toString(), txKey);
+    QCOMPARE(rejected.first().at(1).toString(), QStringLiteral("4096"));
+    QCOMPARE(s.settings.value(txKey).toString(), QStringLiteral("4096"));
+    QCOMPARE(s.proxy.value(txKey, QString()).toString(), QStringLiteral("4096"));
+    QCOMPARE(toast.count(), 1);
+    QCOMPARE(toast.first().at(0).toString(), kOnAir);
+
+    s.proxy.remove(txKey);
+    QTRY_COMPARE(rejected.count(), 2);
+    QVERIFY(s.settings.contains(txKey));
+    QCOMPARE(s.proxy.value(txKey, QString()).toString(), QStringLiteral("4096"));
+    QTest::qWait(120);
+    QVERIFY(txApplies.isEmpty());
+
+    mox->setMox(false);
+    QTRY_VERIFY(mox->state() == MoxState::Rx);
+}
+
+void TstTransmitSettingsGate::transmitHardwareKeysStayRefused()
+{
+    Session s(m_securityDir.path(), this);
+    const QString key = QStringLiteral("hardware/AA:BB:CC:DD:EE:01/tx/micGainDb");
+    s.settings.setValue(key, QStringLiteral("3"));
+    QVERIFY(s.connect());
+    QVERIFY(s.proxy.ready());
+    QSignalSpy rejected(&s.proxy, &SettingsProxy::valueRejected);
+    s.proxy.setValue(key, QStringLiteral("9"));
+    QTRY_COMPARE(rejected.count(), 1);
+    QCOMPARE(s.settings.value(key).toString(), QStringLiteral("3"));
+}
+
+void TstTransmitSettingsGate::windowOnAirFollowsTheCore()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    QVERIFY(!s.window.isCoreOnAir());
+    QSignalSpy onAir(&s.window, &RadioModel::coreOnAirChanged);
+
+    // The Core's MOX, reported as `transmitting`.
+    MoxController* const mox = s.core->moxController();
+    mox->setMoxCheck({});
+    mox->setMox(true);
+    QTRY_VERIFY(s.window.isCoreOnAir());
+    QCOMPARE(onAir.last().at(0).toBool(), true);
+    mox->setMox(false);
+    QTRY_VERIFY(!s.window.isCoreOnAir());
+    QCOMPARE(onAir.last().at(0).toBool(), false);
+
+    // The Core's TUNE, reported on the mirrored transmit model.
+    s.core->transmitModel().setTune(true);
+    QTRY_VERIFY(s.window.isCoreOnAir());
+    s.core->transmitModel().setTune(false);
+    QTRY_VERIFY(!s.window.isCoreOnAir());
+
+    // PureSignal's two-tone, reported by the facade.
+    {
+        TxChannel tx(/*channelId=*/1);
+        TwoToneController* const twoTone = s.core->twoToneController();
+        twoTone->setTxChannel(&tx);
+        twoTone->setSettleDelaysMs(0, 0);
+        twoTone->setActive(true);
+        QTRY_VERIFY(twoTone->isActive());
+        QTRY_VERIFY(s.window.pureSignalFacade()->twoToneOn());
+        QVERIFY(s.window.isCoreOnAir());
+        twoTone->setActive(false);
+        QTRY_VERIFY(!twoTone->isActive());
+        QTRY_VERIFY(!s.window.isCoreOnAir());
+        twoTone->setTxChannel(nullptr);
+    }
+    QTRY_VERIFY(mox->state() == MoxState::Rx);
+}
+
+QTEST_MAIN(TstTransmitSettingsGate)
+#include "tst_transmit_settings_gate.moc"

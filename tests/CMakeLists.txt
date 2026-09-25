@@ -7270,6 +7270,12 @@ nereus_add_test(tst_session_transport_telemetry
 
 nereus_add_test(tst_station_session
     fakes/LoopbackTransport.cpp)
+# R-R3-49 (parity Task 1): a receive-only Core takes a transmit setting off
+# the air, refuses it on the air and still refuses the keying set; a
+# window's on-the-air state follows the Core. Loopback only, no RF.
+nereus_add_test(tst_transmit_settings_gate
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 
 # iPhone app plan, Task 1 (R-IOS-01): the link's surface, captured from the
 # code (LinkSurface.cpp) and guarded against tests/data/link/v1/surface.json.

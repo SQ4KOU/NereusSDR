@@ -356,9 +356,9 @@ private slots:
     void aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmptyString();
     void schemaSkewIsCaughtByNameComparison();
     void receiveOnlyStationBlocksRemoteBandRecall();
-    void receiveOnlyStationRefusesTransmitPropertyWrites();
-    void receiveOnlyStationRefusesTransmitDspOptionsSettingsWrites();
-    void receiveOnlyStationRefusesTransmitDspOptionsSettingsRemoves();
+    void receiveOnlyStationRefusesTransmitKeyingWrites();
+    void receiveOnlyStationTakesTransmitDspOptionsSettingsWrites();
+    void receiveOnlyStationTakesTransmitDspOptionsSettingsRemoves();
     void acceptedReceiveDspOptionsWriteAppliesToMatchingSlices();
     void receiveOnlyPolicySurvivesRadioTeardown();
     void nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors();
@@ -3319,12 +3319,15 @@ void TstStationSession::receiveOnlyStationBlocksRemoteBandRecall()
     settings.remove(QStringLiteral("TGXL_AutoTuneMemoryRecall"));
 }
 
-void TstStationSession::receiveOnlyStationRefusesTransmitPropertyWrites()
+void TstStationSession::receiveOnlyStationRefusesTransmitKeyingWrites()
 {
     // R-R3-25 applies at the authenticated StationServer boundary too.
     // TransmitModel is mirrored bidirectionally for later phases, but an R3
-    // receive-only server must reject those writes and return authoritative
-    // accepted-state results rather than adopting the client's optimistic state.
+    // receive-only server must reject the keying writes (mox, tune) and
+    // return authoritative accepted-state results rather than adopting the
+    // client's optimistic state. R-R3-49 (parity Task 1): a transmit
+    // setting such as power is taken while the radio is off the air
+    // (transmitSettingsVersion 1; tst_transmit_settings_gate has the rest).
     QTemporaryDir settingsDir;
     QVERIFY(settingsDir.isValid());
     AppSettings stationSettings(
@@ -3368,12 +3371,12 @@ void TstStationSession::receiveOnlyStationRefusesTransmitPropertyWrites()
     // radio socket emitted RF in the uncorrected implementation.
     QVERIFY(!stationTx.isMox());
     QVERIFY(!stationTx.isTune());
-    QCOMPARE(stationTx.power(), settledPower);
+    QTRY_COMPARE(stationTx.power(), requestedPower);
 
     QTRY_VERIFY(clientEnd->receivedKinds().contains(QByteArrayLiteral("property.result")));
     QTRY_VERIFY(!clientTx.isMox());
     QTRY_VERIFY(!clientTx.isTune());
-    QTRY_COMPARE(clientTx.power(), settledPower);
+    QTRY_COMPARE(clientTx.power(), requestedPower);
 }
 
 void TstStationSession::nr3CannotRunIsRefusedOnTheCoreAndInTheWindow()
@@ -4203,14 +4206,14 @@ void TstStationSession::olderAppIgnoresTheNotchesObjectGolden()
     removeLocalNotchKeys();
 }
 
-void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsWrites()
+void TstStationSession::receiveOnlyStationTakesTransmitDspOptionsSettingsWrites()
 {
     // R-R3-21. The DSP > Options TX combos write station transmit settings:
-    // DspOptions keys are Station-scoped (SettingsScope.cpp), so a remote
-    // window's write would otherwise land in the Core's store. A receive-only
-    // Core refuses them for the same reason it refuses direct TransmitModel
-    // writes, and the GUI learns it through the ordinary settings rejection.
-    // Receive DSP options are still the operator's to change.
+    // DspOptions keys are Station-scoped (SettingsScope.cpp). R-R3-49
+    // (parity Task 1): a receive-only Core takes them while its radio is
+    // off the air (transmitSettingsVersion 1) and refuses them while it is
+    // on the air (tst_transmit_settings_gate). Receive DSP options are the
+    // operator's to change as before.
     const QString txKey = QStringLiteral("DspOptionsBufferSizePhoneTx");
     const QString rxKey = QStringLiteral("DspOptionsBufferSizePhoneRx");
 
@@ -4243,27 +4246,22 @@ void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsWrite
     QSignalSpy rejected(&proxy, &SettingsProxy::valueRejected);
     QSignalSpy toast(&clientModel, &RadioModel::sliceAddRejected);
     proxy.setValue(txKey, QStringLiteral("2048"));
-    QTRY_COMPARE(rejected.count(), 1);
-    QCOMPARE(rejected.first().at(0).toString(), txKey);
-    QCOMPARE(rejected.first().at(1).toString(), QStringLiteral("1024"));
-    QCOMPARE(stationSettings.value(txKey).toString(), QStringLiteral("1024"));
-    QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("1024"));
-    QCOMPARE(toast.count(), 1);
-    QCOMPARE(toast.first().at(0).toString(),
-             QStringLiteral("Transmit configuration is unavailable on this receive-only Core."));
+    QTRY_COMPARE(stationSettings.value(txKey).toString(), QStringLiteral("2048"));
+    QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("2048"));
+    QCOMPARE(rejected.count(), 0);
+    QCOMPARE(toast.count(), 0);
 
     proxy.setValue(rxKey, QStringLiteral("2048"));
     QTRY_COMPARE(stationSettings.value(rxKey).toString(), QStringLiteral("2048"));
-    QCOMPARE(rejected.count(), 1);
-    QCOMPARE(stationSettings.value(txKey).toString(), QStringLiteral("1024"));
+    QCOMPARE(rejected.count(), 0);
 }
 
-void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsRemoves()
+void TstStationSession::receiveOnlyStationTakesTransmitDspOptionsSettingsRemoves()
 {
-    // R-R3-21. A remove resets a DSP > Options TX setting to its default,
-    // so a receive-only Core refuses it exactly as it refuses a write to
-    // the same key, and hands its own value back so the remote cache
-    // settles on it. Removing a receive DSP option is still allowed.
+    // R-R3-21. A remove resets a DSP > Options TX setting to its default.
+    // R-R3-49 (parity Task 1): a receive-only Core takes it as it takes a
+    // write to the same key, while the radio is off the air. Removing a
+    // receive DSP option is allowed as before.
     const QString txKey = QStringLiteral("DspOptionsBufferSizePhoneTx");
     const QString rxKey = QStringLiteral("DspOptionsBufferSizePhoneRx");
 
@@ -4297,20 +4295,15 @@ void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsRemov
     QSignalSpy toast(&clientModel, &RadioModel::sliceAddRejected);
     proxy.remove(txKey);
     QVERIFY(!proxy.contains(txKey));
-    QTRY_COMPARE(rejected.count(), 1);
-    QCOMPARE(rejected.first().at(0).toString(), txKey);
-    QCOMPARE(rejected.first().at(1).toString(), QStringLiteral("1024"));
-    QVERIFY(stationSettings.contains(txKey));
-    QCOMPARE(stationSettings.value(txKey).toString(), QStringLiteral("1024"));
-    QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("1024"));
-    QCOMPARE(toast.count(), 1);
-    QCOMPARE(toast.first().at(0).toString(),
-             QStringLiteral("Transmit configuration is unavailable on this receive-only Core."));
+    QTRY_VERIFY(!stationSettings.contains(txKey));
+    QTest::qWait(50);
+    QCOMPARE(rejected.count(), 0);
+    QCOMPARE(toast.count(), 0);
+    QVERIFY(!proxy.contains(txKey));
 
     proxy.remove(rxKey);
     QTRY_VERIFY(!stationSettings.contains(rxKey));
-    QCOMPARE(rejected.count(), 1);
-    QCOMPARE(stationSettings.value(txKey).toString(), QStringLiteral("1024"));
+    QCOMPARE(rejected.count(), 0);
 }
 
 void TstStationSession::acceptedReceiveDspOptionsWriteAppliesToMatchingSlices()
@@ -4318,8 +4311,9 @@ void TstStationSession::acceptedReceiveDspOptionsWriteAppliesToMatchingSlices()
     // R-R3-21. A DSP > Options RX write or remove from a remote window takes
     // effect on the Core at once: the Core re-runs the mode-change apply for
     // each slice in the key's mode group instead of waiting for the next
-    // mode change. A refused TX key, an unrelated key and a local write to
-    // the Core's own store apply nothing.
+    // mode change. A TX key (R-R3-49, parity Task 1: taken off the air; its
+    // TX apply is tst_transmit_settings_gate's), an unrelated key and a
+    // local write to the Core's own store apply nothing to a receive slice.
     const QString phoneRx = QStringLiteral("DspOptionsBufferSizePhoneRx");
     const QString cwRx = QStringLiteral("DspOptionsFilterSizeCwRx");
     const QString phoneTx = QStringLiteral("DspOptionsBufferSizePhoneTx");
@@ -4366,10 +4360,11 @@ void TstStationSession::acceptedReceiveDspOptionsWriteAppliesToMatchingSlices()
     QTRY_COMPARE(applied.size(), 1);
     QCOMPARE(applied.first(), qMakePair(phoneSlice->sliceIndex(), DSPMode::USB));
 
-    // Refused TX write and an unrelated accepted key: nothing applied.
+    // A TX write and an unrelated accepted key: no receive slice applies.
     QSignalSpy rejected(&proxy, &SettingsProxy::valueRejected);
     proxy.setValue(phoneTx, QStringLiteral("2048"));
-    QTRY_COMPARE(rejected.count(), 1);
+    QTRY_COMPARE(stationSettings.value(phoneTx).toString(), QStringLiteral("2048"));
+    QCOMPARE(rejected.count(), 0);
     proxy.setValue(unrelated, QStringLiteral("True"));
     QTRY_COMPARE(stationSettings.value(unrelated).toString(), QStringLiteral("True"));
     QTest::qWait(200);
@@ -5162,7 +5157,8 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     // radioHardwareVersion (R-R3-46, Task 2) follows in the same block, then
     // remotePgxlControlVersion and remoteRfKitControlVersion (R-R3-47), then
     // stationTciVersion (R-R3-48), then accessoryDataVersion (R-R3-47), then
-    // remoteTgxlControlVersion (R-R3-47, the Tuner Genius's own settings).
+    // remoteTgxlControlVersion (R-R3-47, the Tuner Genius's own settings),
+    // then transmitSettingsVersion (R-R3-49, parity Task 1).
     StationCapabilities sent = g21kCaps();
     sent.radioHardwareVersion = 1;
     sent.remotePgxlControlVersion = 1;
@@ -5170,9 +5166,10 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     sent.stationTciVersion = 1;
     sent.accessoryDataVersion = 1;
     sent.remoteTgxlControlVersion = 1;
+    sent.transmitSettingsVersion = 1;
     const QList<MirrorUpdate> updates = sent.toUpdates();
     const int model = updateIndexOf(updates, "hpsdrModel");
-    QCOMPARE(model, int(updates.size()) - 9);
+    QCOMPARE(model, int(updates.size()) - 10);
     QCOMPARE(updateIndexOf(updates, "radioProtocol"), model + 1);
     QCOMPARE(updateIndexOf(updates, "radioAddress"), model + 2);
     QCOMPARE(updateIndexOf(updates, "radioHardwareVersion"), model + 3);
@@ -5181,6 +5178,7 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     QCOMPARE(updateIndexOf(updates, "stationTciVersion"), model + 6);
     QCOMPARE(updateIndexOf(updates, "accessoryDataVersion"), model + 7);
     QCOMPARE(updateIndexOf(updates, "remoteTgxlControlVersion"), model + 8);
+    QCOMPARE(updateIndexOf(updates, "transmitSettingsVersion"), model + 9);
     const StationCapabilities received = StationCapabilities::fromUpdates(updates);
     QVERIFY(received.radioIdentityEntries);
     QCOMPARE(received.radioHardwareVersion, 1);
@@ -5189,6 +5187,7 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     QCOMPARE(received.stationTciVersion, 1);
     QCOMPARE(received.accessoryDataVersion, 1);
     QCOMPARE(received.remoteTgxlControlVersion, 1);
+    QCOMPARE(received.transmitSettingsVersion, 1);
     QCOMPARE(received.hpsdrModel, HPSDRModel::ANAN_G2_1K);
     QCOMPARE(received.radioProtocol, 2);
     QCOMPARE(received.radioAddress, QStringLiteral("192.168.1.50"));
@@ -5279,16 +5278,18 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
     for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
                              "radioHardwareVersion", "remotePgxlControlVersion",
                              "remoteRfKitControlVersion", "stationTciVersion",
-                             "accessoryDataVersion", "remoteTgxlControlVersion"}) {
+                             "accessoryDataVersion", "remoteTgxlControlVersion",
+                             "transmitSettingsVersion"}) {
         QCOMPARE(updateIndexOf(older, name), -1);
     }
-    // Byte for byte: the minor-11 descriptor without the nine (and the
+    // Byte for byte: the minor-11 descriptor without the ten (and the
     // display budget reason, which is not sent here) is the minor-10 one.
     QList<MirrorUpdate> stripped = current;
     for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
                              "radioHardwareVersion", "remotePgxlControlVersion",
                              "remoteRfKitControlVersion", "stationTciVersion",
-                             "accessoryDataVersion", "remoteTgxlControlVersion"}) {
+                             "accessoryDataVersion", "remoteTgxlControlVersion",
+                             "transmitSettingsVersion"}) {
         stripped.removeAt(updateIndexOf(stripped, name));
     }
     QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)),

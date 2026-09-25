@@ -37,6 +37,9 @@
 //                 reads the Core's real MOX (the radio's `transmitting`).
 //                 STANDBY to OPERATE is one request on a Core at
 //                 remoteTgxlControlVersion 3.
+//   2026-09-24  R-R3-49 (parity Task 1) by J.J. Boyd (KG4VCF), with
+//                 AI-assisted transformation via Anthropic Claude Code.
+//                 coreOnAir() reads RadioModel::isCoreOnAir().
 // =================================================================
 
 #include "TunerApplet.h"
@@ -97,20 +100,14 @@ TunerApplet::TunerApplet(RadioModel* model, TunerModel* tunerModel, QWidget* par
         setTunerModel(tunerModel);
     }
     // R-R3-49 / R-R3-47: in a remote window ANT and OPERATE follow the
-    // Core's offer (the link's capabilities) and its transmit state (the
-    // radio's `transmitting`, the Core's real MOX; the mirrored transmit
-    // model's TUNE; and PureSignal's two-tone).
+    // Core's offer (the link's capabilities) and its transmit state
+    // (RadioModel::isCoreOnAir: the radio's `transmitting`, the Core's real
+    // MOX; the mirrored transmit model's TUNE; and PureSignal's two-tone).
     if (model && model->role() == RadioModel::Role::Remote) {
         connect(model, &RadioModel::stationLinkStateChanged,
                 this, &TunerApplet::updateActuatingControls);
-        connect(model, &RadioModel::transmittingChanged,
+        connect(model, &RadioModel::coreOnAirChanged,
                 this, &TunerApplet::updateActuatingControls);
-        connect(&model->transmitModel(), &TransmitModel::tuneChanged,
-                this, &TunerApplet::updateActuatingControls);
-        if (PureSignalSessionFacade* facade = model->pureSignalFacade()) {
-            connect(facade, &PureSignalSessionFacade::statusChanged,
-                    this, &TunerApplet::updateActuatingControls);
-        }
     }
     updateActuatingControls();
     updateStationAvailability();
@@ -436,13 +433,10 @@ bool TunerApplet::remoteTunerControl() const
 
 bool TunerApplet::coreOnAir() const
 {
-    if (!m_model) { return false; }
-    // R-R3-49: the Core's own MoxController state, which it publishes as
-    // the radio's `transmitting`. The mirrored transmit model's mox latch
-    // is not read: the Core never writes it while its controller exists.
-    const TransmitModel& tx = m_model->transmitModel();
-    const PureSignalSessionFacade* facade = m_model->pureSignalFacade();
-    return m_model->isTransmitting() || tx.isTune() || (facade && facade->twoToneOn());
+    // R-R3-49 (parity Task 1): the window's one on-the-air state. The
+    // mirrored transmit model's mox latch is not read: the Core never
+    // writes it while its controller exists.
+    return m_model && m_model->isCoreOnAir();
 }
 
 // R-R3-49 / R-R3-47: a remote window asks the Core, which switches its own

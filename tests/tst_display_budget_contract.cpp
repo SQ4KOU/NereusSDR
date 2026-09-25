@@ -731,7 +731,9 @@ private slots:
                                    "accessoryDataVersion",
                                    // R-R3-47: the Tuner Genius's own
                                    // settings.
-                                   "remoteTgxlControlVersion"});
+                                   "remoteTgxlControlVersion",
+                                   // R-R3-49: the transmit settings.
+                                   "transmitSettingsVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -767,7 +769,8 @@ private slots:
                                            QByteArrayLiteral("remoteRfKitControlVersion"),
                                            QByteArrayLiteral("stationTciVersion"),
                                            QByteArrayLiteral("accessoryDataVersion"),
-                                           QByteArrayLiteral("remoteTgxlControlVersion")}) {
+                                           QByteArrayLiteral("remoteTgxlControlVersion"),
+                                           QByteArrayLiteral("transmitSettingsVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

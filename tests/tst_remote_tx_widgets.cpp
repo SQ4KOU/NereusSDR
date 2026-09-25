@@ -3,6 +3,12 @@
 // Verifies that the Phone/CW and VFO presentation gates suppress their
 // TX-only writers in remote receive mode while preserving local/re-enabled
 // interaction and authoritative model-to-widget updates.
+//
+// 2026-09-24: R-R3-49 (parity Task 1): the flag's filter-preset
+// Shift-click hands the TX passband match to the window in a remote window
+// too, whatever the keying gate says; MainWindow's transmit settings gate
+// then applies it or says why. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -244,6 +250,38 @@ private slots:
         QVERIFY(localMenu.enabled);
         QCOMPARE(handoffSpy.count(), 2);
         QCOMPARE(handoffSpy.at(1).first().toInt(), 3);
+    }
+
+    // R-R3-49 (parity Task 1): the TX passband match is a transmit setting,
+    // not a key. The remote flag still asks for it with the keying gate
+    // closed; MainWindow decides with transmitSettingsPermitted().
+    void remoteVfoShiftClickStillAsksForTheTxPassband()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        VfoWidget vfo;
+        vfo.setSliceIndex(0);
+        vfo.setRadioModel(&remote);
+        vfo.setMode(DSPMode::USB);
+        vfo.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&vfo));
+        vfo.showTab(VfoWidget::Tab::Mode);
+
+        QSignalSpy match(&vfo, &VfoWidget::txFilterMatchRequested);
+        QPushButton* preset = nullptr;
+        for (QPushButton* b : vfo.findChildren<QPushButton*>()) {
+            if (b->isCheckable() && !b->isChecked() && b->isVisible()
+                && b->toolTip().contains(QStringLiteral(" Hz to "))) {
+                preset = b;
+                break;
+            }
+        }
+        QVERIFY(preset != nullptr);
+        QTest::mouseClick(preset, Qt::LeftButton, Qt::ShiftModifier);
+        QCOMPARE(match.count(), 1);
+        const int low = match.first().at(0).toInt();
+        const int high = match.first().at(1).toInt();
+        QVERIFY(low >= 0);
+        QVERIFY(high > low);
     }
 };
 

@@ -48,6 +48,10 @@
 // MOX click and the radio's PTT input) and the window greys ANT and OPERATE
 // from the radio's `transmitting`; a raw write of it is refused. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-49 (parity Task 1): the applet's "on the air" is
+// RadioModel::isCoreOnAir(); the Core's two-tone test and its TUNE grey ANT
+// and OPERATE in the window too. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 
 #include <QtTest>
 
@@ -86,9 +90,12 @@
 #include "core/StationTgxlController.h"
 #include "core/LanDiscovery.h"
 #include "core/MoxController.h"
+#include "core/TwoToneController.h"
+#include "core/TxChannel.h"
 #include "core/AppSettings.h"
 #include "core/Rf2ksConnection.h"
 #include "core/session/IStationLink.h"
+#include "core/session/PureSignalSessionFacade.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
@@ -3411,6 +3418,36 @@ void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
         expectOffAir();
         if (QTest::currentTestFailed()) { return; }
     }
+
+    // R-R3-49 (parity Task 1): the Core's TUNE and its two-tone test put
+    // the radio on the air too; the window hears both (isCoreOnAir).
+    station.transmitModel().setTune(true);
+    QTRY_VERIFY(window.isCoreOnAir());
+    expectOnAir();
+    if (QTest::currentTestFailed()) { return; }
+    station.transmitModel().setTune(false);
+    QTRY_VERIFY(!window.isCoreOnAir());
+    expectOffAir();
+    if (QTest::currentTestFailed()) { return; }
+    {
+        TxChannel tx(/*channelId=*/1);
+        TwoToneController* const twoTone = station.twoToneController();
+        QVERIFY(twoTone);
+        twoTone->setTxChannel(&tx);
+        twoTone->setSettleDelaysMs(0, 0);
+        twoTone->setActive(true);
+        QTRY_VERIFY(twoTone->isActive());
+        QTRY_VERIFY(window.pureSignalFacade()->twoToneOn());
+        expectOnAir();
+        if (QTest::currentTestFailed()) { return; }
+        twoTone->setActive(false);
+        QTRY_VERIFY(!twoTone->isActive());
+        QTRY_VERIFY(mox->state() == MoxState::Rx);
+        twoTone->setTxChannel(nullptr);
+    }
+    QTRY_VERIFY(!window.isCoreOnAir());
+    expectOffAir();
+    if (QTest::currentTestFailed()) { return; }
 
     // The link gone: back to the transmit gate, with its reason.
     stationEnd->closeLink(QStringLiteral("test: Core lost"));

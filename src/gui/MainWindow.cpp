@@ -128,6 +128,12 @@
 //                blocking Linux audio first-run dialog
 //                (firstRunPromptsBarredForTestRun). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsPermitted(). The
+//                TX applet's RF Power and TX filter, the RX applet's and
+//                flag's Shift-click TX passband match and DSP > Options' TX
+//                combos follow it; applyRemoteRoleGating runs again when
+//                the Core's radio goes on or off the air. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1315,6 +1321,10 @@ void MainWindow::ensureRemoteSession()
         });
         connect(m_radioModel, &RadioModel::stationLinkStateChanged,
                 this, &MainWindow::applyRemoteRoleGating);
+        // R-R3-49 (parity Task 1): the transmit settings grey while the
+        // Core's radio is on the air and come back when it stops.
+        connect(m_radioModel, &RadioModel::coreOnAirChanged,
+                this, &MainWindow::applyRemoteRoleGating);
         m_remoteMedia = new RemoteMediaController(m_stationClient, m_radioModel,
                                                m_panStack, m_stationClient);
         m_remoteTelemetry = new RemoteTelemetryController(
@@ -2130,9 +2140,9 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     newFlag->setNbMode(slice->nbMode());   // initial sync
     connect(newFlag, &VfoWidget::txFilterMatchRequested, this,
             [this](int audioLow, int audioHigh) {
-        if (!transmitControlsPermitted()) {
-            showToast(tr("Remote transmit controls are not available from this Core yet."),
-                      ToastSeverity::Info, 3000);
+        // R-R3-49 (parity Task 1): the TX passband is a transmit setting.
+        if (!transmitSettingsPermitted()) {
+            showToast(transmitSettingsReason(), ToastSeverity::Info, 3000);
             return;
         }
         m_radioModel->transmitModel().setFilterLow(audioLow);
@@ -6480,6 +6490,12 @@ void MainWindow::populateDefaultMeter()
     connect(m_rxApplet, &RxApplet::sliceActivationRequested, this,
             [this](int sliceId) {
         if (m_radioModel) { m_radioModel->setActiveSliceById(sliceId); }
+    });
+    // R-R3-49 (parity Task 1): a Shift-click that could not also set the TX
+    // passband says why, as the VFO flag's does.
+    connect(m_rxApplet, &RxApplet::transmitSettingRefused, this,
+            [this](const QString& reason) {
+        showToast(reason, ToastSeverity::Info, 3000);
     });
 
     auto refreshSliceTabs = [this]() {
@@ -11252,6 +11268,9 @@ SetupDialog* MainWindow::createSetupDialog()
     auto* dialog = new SetupDialog(m_radioModel, this);
     dialog->setTransmitPermitted(transmitControlsPermitted(),
         tr("Remote transmit controls are not available from this Core yet."));
+    // R-R3-49 (parity Task 1): the transmit settings that key nothing.
+    dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(),
+                                         transmitSettingsReason());
     dialog->setStationSettingsAvailable(stationSettingsAvailable(), stationSettingsReason());
     seedReceiverAudioNote(dialog, [this] { return receiverAudioNoteFor(m_remoteMedia); });
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -11329,6 +11348,27 @@ bool MainWindow::transmitControlsPermitted() const
             && m_stationClient->capabilities().txPermitted));
 }
 
+bool MainWindow::transmitSettingsPermitted(int minVersion) const
+{
+    // R-R3-49 (parity Task 1): the Core decides; this only says whether a
+    // change is worth sending. The Core still refuses one that races a key.
+    return m_radioModel && (m_radioModel->ownsLocalDsp()
+        || (m_stationClient && m_stationClient->isHandshakeComplete()
+            && m_stationClient->transmitSettingsAvailable(minVersion)
+            && !m_radioModel->isCoreOnAir()));
+}
+
+QString MainWindow::transmitSettingsReason(int minVersion) const
+{
+    if (transmitSettingsPermitted(minVersion)) {
+        return QString();
+    }
+    if (m_radioModel && m_radioModel->isCoreOnAir()) {
+        return RadioModel::onAirReason();
+    }
+    return IStationLink::transmitSettingsUnavailableReason();
+}
+
 void MainWindow::applyRemoteRoleGating()
 {
     if (m_radioModel == nullptr || m_radioModel->ownsLocalDsp()) {
@@ -11341,8 +11381,13 @@ void MainWindow::applyRemoteRoleGating()
         && m_stationClient->isConnectionActive();
     const bool transmitPermitted = transmitControlsPermitted();
     const QString transmitReason = tr("Remote transmit controls are not available from this Core yet.");
+    // R-R3-49 (parity Task 1): the transmit settings that key nothing, live
+    // while the Core takes them and its radio is off the air.
+    const bool settingsPermitted = transmitSettingsPermitted();
+    const QString settingsReason = transmitSettingsReason();
     if (m_txApplet) {
         m_txApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+        m_txApplet->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
     }
     if (m_phoneCwApplet) {
         m_phoneCwApplet->setTransmitPermitted(transmitPermitted, transmitReason);
@@ -11354,6 +11399,7 @@ void MainWindow::applyRemoteRoleGating()
     // R-R3-21: the RX applet's XIT row and TX passband Shift-click.
     if (m_rxApplet) {
         m_rxApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+        m_rxApplet->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
     }
     // R-R3-21: the RADE applet's profile combo writes the TX mic profile.
     if (m_radeApplet) {
@@ -11372,6 +11418,7 @@ void MainWindow::applyRemoteRoleGating()
     const bool stationAvailable = stationSettingsAvailable();
     for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
         dialog->setTransmitPermitted(transmitPermitted, transmitReason);
+        dialog->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
         dialog->setStationSettingsAvailable(stationAvailable, stationSettingsReason());
     }
     if (m_actTxEqualizer) {

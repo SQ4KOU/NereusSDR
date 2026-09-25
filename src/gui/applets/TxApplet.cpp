@@ -64,6 +64,11 @@
 //                 row, with a plain notice when the headphones are chosen
 //                 and not open. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 : R-R3-49 (parity Task 1): setTransmitSettingsPermitted.
+//                 RF Power and the TX filter low and high follow the
+//                 transmit settings gate in a remote window; the keying
+//                 controls keep setTransmitPermitted. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -179,6 +184,7 @@
 #include "core/MoxController.h"
 #include "core/PureSignal.h"
 #include "core/RadioStatus.h"
+#include "core/session/IStationLink.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/TwoToneController.h"
 #include "core/TxChannel.h"
@@ -213,6 +219,39 @@ namespace {
 QString monitorSpeakersCaption()   { return QStringLiteral("SPEAKERS"); }
 QString monitorHeadphonesCaption() { return QStringLiteral("PHONES"); }
 
+// Disable a control with `reason` as its tooltip, remembering what it had,
+// or put back what it had. Shared by the keying gate and the transmit
+// settings gate, which hold disjoint controls. No model state is written.
+void gateTransmitControl(QWidget* control, bool permitted, const QString& reason)
+{
+    if (!control) { return; }
+
+    static constexpr auto kSavedTooltip = "TxAppletSavedTransmitTooltip";
+    static constexpr auto kSavedDescription = "TxAppletSavedTransmitDescription";
+    static constexpr auto kSavedEnabled = "TxAppletSavedTransmitEnabled";
+    if (!permitted) {
+        if (!control->property(kSavedTooltip).isValid()) {
+            control->setProperty(kSavedTooltip, control->toolTip());
+            control->setProperty(kSavedDescription, control->accessibleDescription());
+            control->setProperty(kSavedEnabled, control->isEnabled());
+        }
+        control->setEnabled(false);
+        control->setToolTip(reason);
+        control->setAccessibleDescription(reason);
+        return;
+    }
+
+    if (control->property(kSavedTooltip).isValid()) {
+        control->setEnabled(control->property(kSavedEnabled).toBool());
+        control->setToolTip(control->property(kSavedTooltip).toString());
+        control->setAccessibleDescription(
+            control->property(kSavedDescription).toString());
+        control->setProperty(kSavedTooltip, QVariant());
+        control->setProperty(kSavedDescription, QVariant());
+        control->setProperty(kSavedEnabled, QVariant());
+    }
+}
+
 } // namespace
 
 TxApplet::TxApplet(RadioModel* model, QWidget* parent)
@@ -222,6 +261,7 @@ TxApplet::TxApplet(RadioModel* model, QWidget* parent)
     wireControls();
     if (model && model->role() == RadioModel::Role::Remote) {
         setTransmitPermitted(false);
+        setTransmitSettingsPermitted(false);
     }
 }
 
@@ -2172,35 +2212,11 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
         : unavailableReason;
 
     const auto apply = [permitted, &reason](QWidget* control) {
-        if (!control) { return; }
-
-        static constexpr auto kSavedTooltip = "TxAppletSavedTransmitTooltip";
-        static constexpr auto kSavedDescription = "TxAppletSavedTransmitDescription";
-        static constexpr auto kSavedEnabled = "TxAppletSavedTransmitEnabled";
-        if (!permitted) {
-            if (!control->property(kSavedTooltip).isValid()) {
-                control->setProperty(kSavedTooltip, control->toolTip());
-                control->setProperty(kSavedDescription, control->accessibleDescription());
-                control->setProperty(kSavedEnabled, control->isEnabled());
-            }
-            control->setEnabled(false);
-            control->setToolTip(reason);
-            control->setAccessibleDescription(reason);
-            return;
-        }
-
-        if (control->property(kSavedTooltip).isValid()) {
-            control->setEnabled(control->property(kSavedEnabled).toBool());
-            control->setToolTip(control->property(kSavedTooltip).toString());
-            control->setAccessibleDescription(
-                control->property(kSavedDescription).toString());
-            control->setProperty(kSavedTooltip, QVariant());
-            control->setProperty(kSavedDescription, QVariant());
-            control->setProperty(kSavedEnabled, QVariant());
-        }
+        gateTransmitControl(control, permitted, reason);
     };
 
-    apply(m_rfPowerSlider);
+    // R-R3-49 (parity Task 1): RF Power and the TX filter low and high
+    // follow setTransmitSettingsPermitted; this gate keeps the rest.
     apply(m_tunePwrSlider);
     apply(m_tuneBtn);
     apply(m_moxBtn);
@@ -2215,11 +2231,25 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
     apply(m_eqBtn);
     apply(m_cfcBtn);
     apply(m_profileCombo);
-    apply(m_txFilterLowSpin);
-    apply(m_txFilterHighSpin);
     apply(m_twoToneBtn);
     apply(m_psaBtn);
     syncPsaFromFacade();
+}
+
+// R-R3-49 (parity Task 1): the transmit settings that key nothing. In a
+// remote window they are live while the Core takes them and its radio is
+// off the air; the Core refuses a change that races a key anyway.
+void TxApplet::setTransmitSettingsPermitted(bool permitted, const QString& unavailableReason)
+{
+    m_transmitSettingsPermitted = permitted;
+    const QString reason = unavailableReason.isEmpty()
+        ? IStationLink::transmitSettingsUnavailableReason()
+        : unavailableReason;
+    for (QWidget* control : {static_cast<QWidget*>(m_rfPowerSlider),
+                             static_cast<QWidget*>(m_txFilterLowSpin),
+                             static_cast<QWidget*>(m_txFilterHighSpin)}) {
+        gateTransmitControl(control, permitted, reason);
+    }
 }
 
 // ---------------------------------------------------------------------------

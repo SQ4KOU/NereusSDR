@@ -121,6 +121,9 @@
 //   2026-09-24 - R-R3-49 fix wave: tgxlOperateAppliesWhole
 //                (remoteTgxlControlVersion 3). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsAvailable
+//                (transmitSettingsVersion). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -3543,6 +3546,14 @@ bool StationClient::tgxlControlAvailable() const
 {
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.remoteTgxlControlVersion >= 2;
+}
+
+bool StationClient::transmitSettingsAvailable(int minVersion) const
+{
+    // R-R3-49 (parity Task 1): the Core takes this window's transmit
+    // settings while its radio is off the air.
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.transmitSettingsVersion >= std::max(minVersion, 1);
 }
 
 bool StationClient::tgxlOperateAppliesWhole() const

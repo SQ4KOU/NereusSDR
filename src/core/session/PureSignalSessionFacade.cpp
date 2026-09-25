@@ -176,6 +176,15 @@ PureSignalSessionFacade::PureSignalSessionFacade(RadioModel* radio, PureSignal* 
     setCoordinator(coordinator ? coordinator : radio ? radio->pureSignal() : nullptr);
 }
 
+void PureSignalSessionFacade::followTwoToneController()
+{
+    if (!m_radio || !m_radio->twoToneController()) {
+        return;
+    }
+    connect(m_radio->twoToneController(), &TwoToneController::twoToneActiveChanged,
+            this, &PureSignalSessionFacade::refreshStatus, Qt::UniqueConnection);
+}
+
 PureSignalSessionFacade::~PureSignalSessionFacade()
 {
     if (remote() && m_ampViewSubscribed) {
