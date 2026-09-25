@@ -107,6 +107,15 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08):
 //                                    pairing.open and pairing.close.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
+//                                    setTunePowerForTxBand
+//                                    (transmitSettingsVersion 2).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3):
+//                                    txProfile.select, txProfile.save,
+//                                    txProfile.delete and rade.resetVocoder
+//                                    (transmitSettingsVersion 3).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -386,6 +395,19 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"setTgxlBypass", {arg("on", kBool)}, "remoteTgxlControlVersion", 2,
          kRadioIdentitySessionProtocolMinor},
+        // The TX applet's Tune Power slider (R-R3-49, parity Task 2).
+        {"setTunePowerForTxBand", {arg("watts", kInt)}, "transmitSettingsVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
+        // The TX profile combos, Setup > Audio > TX Profile and the RADE
+        // applet's Reset vocoder (R-R3-49, parity Task 3).
+        {"txProfile.select", {arg("name", kUtf8)}, "transmitSettingsVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
+        {"txProfile.save", {arg("name", kUtf8)}, "transmitSettingsVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
+        {"txProfile.delete", {arg("name", kUtf8)}, "transmitSettingsVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
+        {"rade.resetVocoder", {}, "transmitSettingsVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
         // The Core's RF-Kit RF2K-S and the station TCI server (R-R3-47,
         // R-R3-48).
         {"configureRfKit", {arg("host", kUtf8), arg("port", kInt)},
@@ -649,6 +671,13 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     } else if (invoke.commandVerb == "setTgxlAntenna" || invoke.commandVerb == "setTgxlOperate"
                || invoke.commandVerb == "setTgxlBypass") {
         handleTgxlControl(invoke);
+    } else if (invoke.commandVerb == "setTunePowerForTxBand") {
+        handleTunePowerForTxBand(invoke);
+    } else if (invoke.commandVerb == "txProfile.select" || invoke.commandVerb == "txProfile.save"
+               || invoke.commandVerb == "txProfile.delete") {
+        handleTxProfile(invoke);
+    } else if (invoke.commandVerb == "rade.resetVocoder") {
+        handleRadeResetVocoder(invoke);
     } else if (invoke.commandVerb == "requestIoBoardProbe") {
         handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "setAlexRxAntenna") {
@@ -1713,6 +1742,84 @@ void SessionCommandDispatcher::handleTgxlControl(const SessionMessage& invoke)
         return;
     }
     emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's Tune
+// Power slider. The Core sets its transmit band's tune power and the tune
+// drive source to the tune slider, as the local slider does; the window
+// sees both on the `transmit` object. Refused while the radio is on the air
+// and outside the tune power range; nothing changes then. Keys nothing.
+void SessionCommandDispatcher::handleTunePowerForTxBand(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    int watts = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "watts" })
+        || !hasWireKind(invoke.arguments, "watts", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "watts", &watts) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to change the tune power was not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setTunePowerForTxBandForStation(watts, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change the tune power.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 3, transmitSettingsVersion 3): the TX profile
+// combos and Setup > Audio > TX Profile, through the Core's own
+// MicProfileManager as the local controls use it. The Core's active profile
+// and list come back on `transmit`. Refused while the radio is on the air;
+// nothing changes then. Keys nothing.
+void SessionCommandDispatcher::handleTxProfile(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QString name;
+    if (!hasExactlyArguments(invoke.arguments, { "name" })
+        || !findUtf8Argument(invoke.arguments, "name", &name)) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request for the transmit profile was not understood."), {});
+        return;
+    }
+    QString reason;
+    bool done = false;
+    if (verb == "txProfile.select") {
+        done = m_radioModel->selectTxProfileForStation(name, &reason);
+    } else if (verb == "txProfile.save") {
+        done = m_radioModel->saveTxProfileForStation(name, &reason);
+    } else {
+        done = m_radioModel->deleteTxProfileForStation(name, &reason);
+    }
+    if (!done) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change the transmit profile.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 3): the RADE applet's Reset vocoder, on the Core's
+// RADE channel as the local button does. Keys nothing.
+void SessionCommandDispatcher::handleRadeResetVocoder(const SessionMessage& invoke)
+{
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to reset the RADE vocoder was not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->resetRadeVocoderForStation(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not reset the RADE vocoder.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
 }
 
 void SessionCommandDispatcher::handleDisconnectPgxl(const SessionMessage& invoke)

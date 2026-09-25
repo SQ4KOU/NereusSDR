@@ -19,6 +19,9 @@
 //   2026-09-23 - R-R3-21: static high-resolution filter fan-out helpers
 //                 for startup. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): the nine TX combos follow the
+//                 transmit settings gate. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -135,10 +138,12 @@ public:
         return m_highResFilterChars;
     }
 
-    // R-R3-21: the TX combos (buffer size, filter size and filter type for
-    // SSB/AM, FM and Digital) follow the transmit permission; the RX combos
-    // and the rest of the page do not.
-    void setTransmitPermitted(bool permitted, const QString& reason) override;
+    // R-R3-49 (parity Task 1): the TX combos (buffer size, filter size
+    // and filter type for SSB/AM, FM and Digital) follow the transmit
+    // settings gate: a Core at transmitSettingsVersion 1 takes them while
+    // its radio is off the air. The RX combos and the rest of the page do
+    // not follow it.
+    void setTransmitSettingsPermitted(bool permitted, const QString& reason) override;
 
 private:
     void buildUI();

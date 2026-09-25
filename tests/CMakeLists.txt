@@ -377,6 +377,14 @@ if(TARGET wdsp_static)
     set_source_files_properties(WdspCfcProbe.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(tst_wdsp210_cfc_compat PRIVATE ${FFTW3_INCLUDE_DIRS})
     target_compile_definitions(tst_wdsp210_cfc_compat PRIVATE WDSP_STATIC_BUILD)
+    # R-R3-49 (group A fix wave): the TX EQ's Q path ported from Thetis's
+    # WDSP. A profile without Q builds the impulse the WDSP 2.10 eq.c built
+    # before (WdspEqReference.h); one with Q builds a finite, non-flat
+    # impulse for 5, 10 and 18 points and keeps its Q through a rebuild.
+    nereus_add_test(tst_wdsp_txa_eq_q WdspEqProbe.c EXTRA_LABELS core)
+    set_source_files_properties(WdspEqProbe.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(tst_wdsp_txa_eq_q PRIVATE ${FFTW3_INCLUDE_DIRS})
+    target_compile_definitions(tst_wdsp_txa_eq_q PRIVATE WDSP_STATIC_BUILD)
 endif()
 
 # ── Issue #75: receiver leak across disconnect/reconnect ──────────────────
@@ -2743,6 +2751,11 @@ nereus_add_test(tst_phone_applet_vax_toggle)
 # and model → UI), the m_updatingFromModel echo guard, and the
 # instance() singleton pattern.
 nereus_add_test(tst_tx_eq_dialog)
+
+# R-R3-49 (parity Task 4, group A fix wave): the TX EQ arrays the TX
+# channel gets, as Thetis's sendTXDspUpdate and setTXEQProfile hand them to
+# WDSP, worked by hand from Thetis's code.
+nereus_add_test(tst_para_eq_curve)
 
 # ── Phase 3M-3a-ii Batch 6 Task A: TxCfcDialog (10-band CFC editor) ──────
 # Verifies the modeless 10-band CFC editor launched from the [CFC]
@@ -7369,6 +7382,53 @@ nereus_add_test(tst_session_transport_telemetry
 
 nereus_add_test(tst_station_session
     fakes/LoopbackTransport.cpp)
+# R-R3-49 (parity Task 1): a receive-only Core takes a transmit setting off
+# the air, refuses it on the air and still refuses the keying set; a
+# window's on-the-air state follows the Core. Loopback only, no RF.
+nereus_add_test(tst_transmit_settings_gate
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+# R-R3-49 (parity Task 2): the TX and Phone/CW applets' settings from a
+# remote window: round trips to the Core's TX chain (a test TxChannel, no
+# WDSP channel), range and on-air refusals, the Tune Power command and the
+# applets. Loopback only, no RF, no audio device.
+nereus_add_test(tst_transmit_model_properties
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+
+# R-R3-49 (parity Task 4): the TX EQ, CFC, phase rotator, CESSB, leveler and
+# ALC settings from a remote window: round trips to the Core's TX channel (a
+# test TxChannel, no WDSP channel), band arrays refused whole, on-air
+# refusals, the EQ and CFC dialogs and Setup > DSP > CFC and AGC/ALC, and a
+# local window's curves unchanged. Loopback only, no RF, no audio device.
+nereus_add_test(tst_remote_tx_eq_cfc
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+
+# R-R3-49 (parity Task 5): Setup > Transmit > Power, DEXP/VOX and Test >
+# Two-Tone IMD from a remote window: the SWR protection keys applied to the
+# Core's live controller, ATT on TX on `stepAtt`, the version 5 `transmit`
+# settings with their range and on-air refusals, the three pages, and
+# nothing on them keying the radio. Loopback only, no RF, no audio device.
+nereus_add_test(tst_remote_transmit_setup_pages
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+
+# R-R3-49 (parity Task 3; iPhone plan Task 40): the Core's TX profiles on the
+# `transmit` object, a window's profile manager as a mirror that never saves,
+# and txProfile.select / save / delete with their refusals. Loopback only, no
+# RF, no audio device.
+nereus_add_test(tst_tx_profile_select
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+
+# R-R3-49 (parity Task 3): a remote window's profile combos (TX, Phone/CW,
+# RADE), Setup > Audio > TX Profile and TX Input's radio microphone, and
+# RADE's Reset vocoder, against an in-process Core. Loopback only, no RF, no
+# audio device.
+nereus_add_test(tst_remote_tx_profiles
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 
 # iPhone app plan, Task 1 (R-IOS-01): the link's surface, captured from the
 # code (LinkSurface.cpp) and guarded against tests/data/link/v1/surface.json.
@@ -7873,3 +7933,18 @@ if(_label_names)
     endforeach()
     message(STATUS "NereusSDR: per-label test targets: ${_label_names}")
 endif()
+
+# R-R3-32 / R-R3-49 (remote-window parity Task 6): the radio link's datagram
+# counters (UDP packets seen, packet loss, RFC 3550 jitter, packet gap), as a
+# unit and from fake radios on both protocols.
+nereus_add_test(tst_radio_link_stats fakes/P1FakeRadio.cpp fakes/P2FakeRadio.cpp)
+target_compile_definitions(tst_radio_link_stats PRIVATE NEREUS_BUILD_TESTS)
+
+# R-R3-46 / R-R3-49 / R-R3-32 (remote-window parity Task 6): Setup > PA,
+# Radio Status's PA card and the HW meters in a remote window; the PA keys
+# taken by the Core off the air and applied at once; the Core's TX inhibit
+# mirrored. Loopback only, no RF, no audio device.
+nereus_add_test(tst_remote_pa_pages
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_pa_pages PRIVATE NEREUS_BUILD_TESTS)

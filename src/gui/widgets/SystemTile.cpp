@@ -10,6 +10,7 @@
 
 #include <QLabel>
 #include <QMouseEvent>
+#include <QStringList>
 #include <QVBoxLayout>
 
 namespace NereusSDR {
@@ -111,7 +112,23 @@ void SystemTile::refreshPaRow()
     m_paRow->setVisible(true);
 
     setCursor(m_hasTemp ? Qt::PointingHandCursor : Qt::ArrowCursor);
-    setToolTip(m_hasTemp ? tr("Click to toggle °C / °F") : QString());
+    QStringList tip;
+    if (!m_paSourceNote.isEmpty()) {
+        tip << m_paSourceNote;
+    }
+    if (m_hasTemp) {
+        tip << tr("Click to toggle °C / °F");
+    }
+    setToolTip(tip.join(QLatin1Char('\n')));
+}
+
+void SystemTile::setPaSourceNote(const QString& note)
+{
+    if (m_paSourceNote == note) {
+        return;
+    }
+    m_paSourceNote = note;
+    refreshPaRow();
 }
 
 void SystemTile::mousePressEvent(QMouseEvent* event)

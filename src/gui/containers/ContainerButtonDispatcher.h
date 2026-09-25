@@ -24,7 +24,9 @@
 // Transmit buttons (MON, TUN, MOX, 2TON, PS-A) work as the TX applet's do
 // with a radio connected here. With no radio, TUN, MOX and 2TON are
 // unavailable. In a remote window they show the transmit reason and change
-// nothing (remote transmit comes later).
+// nothing (remote transmit comes later), except MON, a transmit setting
+// that keys nothing: it toggles the Core's MON while the Core takes
+// transmit settings and its radio is off the air (R-R3-49).
 //
 // The dispatcher holds no state of its own: every lit state is read from
 // the target each time apply() runs.
@@ -33,6 +35,10 @@
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-49, R-R3-21). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2): MON follows
+//                                    the transmit settings gate in a
+//                                    remote window (the Core's monEnabled).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -68,6 +74,10 @@ public:
         // controls, and the reason shown when it does not.
         std::function<bool()> transmitPermitted;
         QString remoteTransmitReason;
+        // R-R3-49 (parity Task 2): remote windows, whether the Core takes
+        // this window's transmit settings now (off the air), and why not.
+        std::function<bool()> transmitSettingsPermitted;
+        std::function<QString()> transmitSettingsReason;
         // The panadapter that shows a slice (Peak, CTUN).
         std::function<SpectrumWidget*(SliceModel*)> spectrumFor;
         // This computer's VAX outputs (VAX 1, VAX 2). May be null.

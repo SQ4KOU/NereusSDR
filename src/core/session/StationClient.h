@@ -250,6 +250,16 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 1):
+//                                    transmitSettingsAvailable.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
+//                                    requestTunePowerForTxBand.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the TX
+//                                    profile requests and
+//                                    requestRadeResetVocoder.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -572,6 +582,11 @@ public:
     bool tgxlDeviceSettingsAvailable() const override;
     bool tgxlControlAvailable() const override;
     bool tgxlOperateAppliesWhole() const override;
+    /// R-R3-49 (parity Task 1): the link is ready at minor 11 and the Core
+    /// offers transmitSettingsVersion at least `minVersion` (1 or more): it
+    /// takes this window's transmit settings while its radio is off the
+    /// air. False: IStationLink::transmitSettingsUnavailableReason().
+    bool transmitSettingsAvailable(int minVersion = 1) const;
     bool stationTciAvailable() const override;
     bool coreServesTciOnThisComputer() const override;
     int coreStationTciStored() const override;
@@ -707,6 +722,14 @@ public:
     CommandOutcome requestTgxlAntenna(int port) override;
     CommandOutcome requestTgxlOperate(bool on) override;
     CommandOutcome requestTgxlBypass(bool on) override;
+    // R-R3-49 (parity Task 2): see IStationLink.
+    CommandOutcome requestTunePowerForTxBand(int watts) override;
+    // R-R3-49 (parity Task 3): see IStationLink. Sent only to a Core at
+    // transmitSettingsVersion 3.
+    CommandOutcome requestTxProfileSelect(const QString& name) override;
+    CommandOutcome requestTxProfileSave(const QString& name) override;
+    CommandOutcome requestTxProfileDelete(const QString& name) override;
+    CommandOutcome requestRadeResetVocoder() override;
     CommandOutcome requestApplyNnrModels(quint32 revision) override;
     bool nnrControlAvailable() const override;
     // R-R3-21: the Core advertised dspAssetVersion 2 on a session that

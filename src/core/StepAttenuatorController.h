@@ -25,6 +25,14 @@
 //                 set it through the Core.  NereusSDR-original; no new
 //                 Thetis logic.  J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25: R-R3-49 (parity Task 5): attOnTxEnabledChanged and
+//                 forceAttWhenPsOffChanged, so the Core's mirrored step
+//                 attenuator follows every change of either, PureSignal's
+//                 own included.  NereusSDR-original; no new Thetis logic.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25: R-R3-49 (group A fix wave, M6): ATT on TX, its value and
+//                 Force ATT schedule the Core's debounced save.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -269,12 +277,26 @@ public:
     //
     // ATT-on-TX master enable (Thetis _m_bATTonTX, console.cs:19041 [v2.10.3.13]).
     // When false, TX ATT is cleared to 0 dB on MOX-on.
-    void setAttOnTxEnabled(bool on) { m_attOnTxEnabled = on; }
+    // R-R3-49 (parity Task 5): emits attOnTxEnabledChanged on a change.
+    void setAttOnTxEnabled(bool on)
+    {
+        if (m_attOnTxEnabled == on) { return; }
+        m_attOnTxEnabled = on;
+        emit attOnTxEnabledChanged(on);
+        scheduleSave();  // R-R3-49 (group A fix wave, M6): saved at once on the Core
+    }
     bool attOnTxEnabled() const noexcept { return m_attOnTxEnabled; }
 
     // Force-31-dB when PS-A is off (Thetis _forceATTwhenPSAoff,
     // console.cs:29285 [v2.10.3.13] //MW0LGE [2.9.0.7] added).
-    void setForceAttWhenPsOff(bool on) { m_forceAttWhenPsOff = on; }
+    // R-R3-49 (parity Task 5): emits forceAttWhenPsOffChanged on a change.
+    void setForceAttWhenPsOff(bool on)
+    {
+        if (m_forceAttWhenPsOff == on) { return; }
+        m_forceAttWhenPsOff = on;
+        emit forceAttWhenPsOffChanged(on);
+        scheduleSave();  // R-R3-49 (group A fix wave, M6): saved at once on the Core
+    }
     bool forceAttWhenPsOff() const noexcept { return m_forceAttWhenPsOff; }
 
     // PS-A active state: true when PureSignal auto-cal is ON.
@@ -441,6 +463,11 @@ signals:
     // bench-fix 2026-05-23 (JJ Boyd): added so the new spinbox can mirror
     // AutoAtt's adjustments without a polling timer.
     void attOnTxValueChanged(int dB);
+
+    // R-R3-49 (parity Task 5): ATT on TX and Force ATT changed (by Setup,
+    // by the Core's mirrored step attenuator, or by PureSignal).
+    void attOnTxEnabledChanged(bool on);
+    void forceAttWhenPsOffChanged(bool on);
 
 private:
     static constexpr int kMaxAdcs = 3;

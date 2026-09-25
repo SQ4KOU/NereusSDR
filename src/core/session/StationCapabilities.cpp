@@ -46,6 +46,9 @@
 //   2026-09-24 - iPhone app Task 20 (R-IOS-27): displayExtrasVersion,
 //                last in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsVersion, last
+//                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -152,8 +155,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         updates.append(intEntry("pairingVersion", pairingVersion));
         // iPhone app Task 19: the catalogue.
         updates.append(intEntry("stationCatalogVersion", stationCatalogVersion));
-        // iPhone app Task 20: display extras, last.
+        // iPhone app Task 20: display extras.
         updates.append(intEntry("displayExtrasVersion", displayExtrasVersion));
+        // R-R3-49 (parity Task 1): the transmit settings a receive-only
+        // Core takes while the radio is off the air, last.
+        updates.append(intEntry("transmitSettingsVersion", transmitSettingsVersion));
     }
     return updates;
 }
@@ -340,7 +346,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "deviceAdminVersion"
                    || u.name == "pairingVersion"
                    || u.name == "stationCatalogVersion"
-                   || u.name == "displayExtrasVersion") {
+                   || u.name == "displayExtrasVersion"
+                   || u.name == "transmitSettingsVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -365,8 +372,10 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.stationCatalogVersion = version;
                 } else if (u.name == "displayExtrasVersion") {
                     caps.displayExtrasVersion = version;
-                } else {
+                } else if (u.name == "remoteTgxlControlVersion") {
                     caps.remoteTgxlControlVersion = version;
+                } else {
+                    caps.transmitSettingsVersion = version;
                 }
             }
         } else if (u.name == "settingsSchemaVersion") {

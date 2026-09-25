@@ -50,6 +50,10 @@
 //                 setting at startup and when the receive channel appears,
 //                 not only when this page opens. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): the nine TX combos follow the
+//                 transmit settings gate instead of the transmit
+//                 permission; the Core applies them to its TX channel.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -102,6 +106,7 @@
 #include "core/AppSettings.h"
 #include "core/RxChannel.h"
 #include "core/WdspEngine.h"
+#include "core/session/IStationLink.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "gui/StyleConstants.h"
@@ -270,22 +275,24 @@ DspOptionsPage::DspOptionsPage(RadioModel* model, QWidget* parent)
 
     // R-R3-21: on a remote-station model the TX combos write the station's
     // transmit settings (the DspOptions keys are station-scoped,
-    // SettingsScope.cpp), so they start unavailable and follow the transmit
-    // permission SetupDialog pushes. A receive-only Core also refuses those
-    // writes itself (StationServer::handleSettingsWrite).
+    // SettingsScope.cpp), so they start unavailable. R-R3-49 (parity Task
+    // 1): they follow the transmit settings gate SetupDialog pushes; the
+    // Core takes them while its radio is off the air, applies them to its
+    // TX channel, and refuses them while it is on the air
+    // (StationServer::handleSettingsWrite).
     if (model && !model->ownsLocalDsp()) {
-        setTransmitPermitted(false, QString());
+        setTransmitSettingsPermitted(false, QString());
     }
 }
 
-void DspOptionsPage::setTransmitPermitted(bool permitted, const QString& reason)
+void DspOptionsPage::setTransmitSettingsPermitted(bool permitted, const QString& reason)
 {
     gateTransmitControls({m_bufPhoneTx, m_bufFmTx, m_bufDigTx,
                           m_filtSizePhoneTx, m_filtSizeFmTx, m_filtSizeDigTx,
                           m_filtTypePhoneTx, m_filtTypeFmTx, m_filtTypeDigTx},
                          permitted,
                          reason.isEmpty()
-                             ? tr("Remote transmit controls are not available from this Core yet.")
+                             ? IStationLink::transmitSettingsUnavailableReason()
                              : reason);
 }
 

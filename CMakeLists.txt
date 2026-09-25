@@ -857,6 +857,7 @@ set(CORE_SOURCES
     src/core/SupportBundle.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
+    src/core/RadioLinkStats.cpp
     src/core/TciProtocol.cpp
     src/core/TciSendQueue.cpp
     src/core/TciVfoCoalescer.cpp
@@ -906,6 +907,8 @@ set(CORE_SOURCES
     src/core/MoxController.cpp
     src/core/MicProfileManager.cpp
     src/core/ParaEqEnvelope.cpp
+    src/core/ParaEqCurve.cpp
+    src/core/ParaEqCurve.h
     src/core/TwoToneController.cpp
     src/core/TxSliceArbiter.cpp
     src/core/TxSliceArbiter.h

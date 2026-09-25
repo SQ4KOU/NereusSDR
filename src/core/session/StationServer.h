@@ -218,6 +218,16 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 20 (R-IOS-27):
 //                                    displayExtrasVersion 1. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 1):
+//                                    transmitSettingsVersion and
+//                                    isTransmitSettingKeyAcceptedOffAir.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
+//                                    transmitSettingsVersion 2.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3):
+//                                    transmitSettingsVersion 3.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -601,6 +611,22 @@ public:
     // verbs; from 2, R-R3-49, setTgxlAntenna, setTgxlOperate and
     // setTgxlBypass); 0 otherwise.
     int tgxlControlVersion() const;
+    // R-R3-49 (parity Task 1): transmitSettingsVersion. 1 on a Core with a
+    // radio model: a receive-only Core takes a `transmit` write outside the
+    // keying set (mox, tune, voxEnabled, twoToneActive) and a key on
+    // isTransmitSettingKeyAcceptedOffAir's list while its radio is off the
+    // air, and refuses each while it is on the air; 0 otherwise. 2 (parity
+    // Task 2): also the TX and Phone/CW applets' settings on `transmit`,
+    // each refused outside its range, and setTunePowerForTxBand. 3 (parity
+    // Task 3): also the radio microphone settings, the Core's TX profiles
+    // (activeTxProfile, txProfilesJson), the txProfile verbs and
+    // rade.resetVocoder.
+    int transmitSettingsVersion() const;
+    // R-R3-49 (parity Task 1): the one list of transmit settings keys a
+    // receive-only Core takes while its radio is off the air (today the
+    // DSP > Options TX keys, DspOptions<Setting><Mode>Tx). Every other
+    // transmit-side key a receive-only Core refuses stays refused.
+    static bool isTransmitSettingKeyAcceptedOffAir(const QString& key);
     // R-R3-47: remoteRfKitControlVersion. 3 on a Core that owns its
     // accessories (the `rfkit` object with its interface, antenna, tuner
     // and band-follow rows, the configureRfKit, disconnectRfKit and
@@ -649,6 +675,18 @@ signals:
     void peerHeartbeatTimeout(const QString& peer);
 
 private:
+    /// R-R3-49 (parity Task 1): the on-air reason for a settings write or
+    /// remove of a key on isTransmitSettingKeyAcceptedOffAir's list on a
+    /// receive-only Core; empty when the key may be applied now.
+    QString transmitSettingOnAirRefusal(const QString& key) const;
+    /// R-R3-49 (parity Task 1): this peer agreed minor 11 and was offered
+    /// transmitSettingsVersion 1.
+    bool transmitSettingsOffered(SessionTransport* transport) const;
+    /// Whether a receive-only Core refuses a settings write or remove of
+    /// `key` from this peer as transmit configuration (with
+    /// kReceiveOnlyTransmitReason).
+    bool receiveOnlyRefusesKey(SessionTransport* transport, const QString& key) const;
+
     /// Per-connection state. Deliberately small: everything that is not
     /// per-CONNECTION (the mirror, the registry, the dispatcher, the
     /// settings server) is shared, because there is only ever one

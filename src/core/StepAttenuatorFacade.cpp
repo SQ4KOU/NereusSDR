@@ -16,6 +16,9 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  A remote window's availability
 //                                    (R-R3-46, R-R3-21). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 5): ATT on TX,
+//                                    its value and Force ATT.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/StepAttenuatorFacade.h"
@@ -99,6 +102,10 @@ void StepAttenuatorFacade::bindController(StepAttenuatorController* controller)
     follow(&C::overloadStatusChanged);
     follow(&C::adcLinkedChanged);
     follow(&C::settingsReloaded);
+    // R-R3-49 (parity Task 5).
+    follow(&C::attOnTxEnabledChanged);
+    follow(&C::attOnTxValueChanged);
+    follow(&C::forceAttWhenPsOffChanged);
     refresh();
 }
 
@@ -361,6 +368,81 @@ void StepAttenuatorFacade::setAutoAttHoldMs(int ms)
     publish(next);
 }
 
+// ── R-R3-49 (parity Task 5): ATT on TX, its value and Force ATT ──────────
+
+bool StepAttenuatorFacade::isTransmitSetting(const QByteArray& property)
+{
+    return property == "attOnTxEnabled" || property == "attOnTxValue"
+        || property == "forceAttWhenPsOff";
+}
+
+QString StepAttenuatorFacade::transmitSettingRefusal(const QByteArray& property,
+                                                     const QVariant& value) const
+{
+    if (property != "attOnTxValue") {
+        return {};
+    }
+    bool ok = false;
+    const qlonglong dB = value.toLongLong(&ok);
+    if (ok && dB >= m_values.minDb && dB <= kMaxAttOnTxDb) {
+        return {};
+    }
+    return QStringLiteral("Choose an ATT on TX value from %1 to %2 dB.")
+        .arg(m_values.minDb).arg(kMaxAttOnTxDb);
+}
+
+void StepAttenuatorFacade::setAttOnTxEnabled(bool on)
+{
+    if (!beginEdit("attOnTxEnabled")) {
+        return;
+    }
+    if (StepAttenuatorController* c = m_controller.data()) {
+        c->setAttOnTxEnabled(on);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.attOnTxEnabled = on;
+    publish(next);
+}
+
+void StepAttenuatorFacade::setAttOnTxValue(int dB)
+{
+    if (!beginEdit("attOnTxValue")) {
+        return;
+    }
+    if (StepAttenuatorController* c = m_controller.data()) {
+        // The controller clamps to [minAttenuation, 31] (setup.cs:3999-4008
+        // through StepAttenuatorController::setAttOnTxValue).
+        const int lo = c->minAttenuation();
+        if (dB < lo || dB > kMaxAttOnTxDb) {
+            settle("attOnTxValue", QStringLiteral("Choose an ATT on TX value from %1 to %2 dB.")
+                                       .arg(lo).arg(kMaxAttOnTxDb));
+        }
+        c->setAttOnTxValue(dB);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.attOnTxValue = dB;
+    publish(next);
+}
+
+void StepAttenuatorFacade::setForceAttWhenPsOff(bool on)
+{
+    if (!beginEdit("forceAttWhenPsOff")) {
+        return;
+    }
+    if (StepAttenuatorController* c = m_controller.data()) {
+        c->setForceAttWhenPsOff(on);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.forceAttWhenPsOff = on;
+    publish(next);
+}
+
 void StepAttenuatorFacade::refresh()
 {
     const StepAttenuatorController* c = m_controller.data();
@@ -383,6 +465,9 @@ void StepAttenuatorFacade::refresh()
     next.overloadAdc0 = overloadWireLevel(c->overloadLevel(0));
     next.overloadAdc1 = overloadWireLevel(c->overloadLevel(1));
     next.adcLinked = c->adcLinked();
+    next.attOnTxEnabled = c->attOnTxEnabled();
+    next.attOnTxValue = c->attOnTxValue();
+    next.forceAttWhenPsOff = c->forceAttWhenPsOff();
     publish(next);
 }
 
@@ -404,6 +489,13 @@ void StepAttenuatorFacade::publish(const Values& next)
     }
     if (before.autoAttHoldMs != next.autoAttHoldMs) {
         emit autoAttHoldMsChanged(next.autoAttHoldMs);
+    }
+    if (before.attOnTxEnabled != next.attOnTxEnabled) {
+        emit attOnTxEnabledChanged(next.attOnTxEnabled);
+    }
+    if (before.attOnTxValue != next.attOnTxValue) { emit attOnTxValueChanged(next.attOnTxValue); }
+    if (before.forceAttWhenPsOff != next.forceAttWhenPsOff) {
+        emit forceAttWhenPsOffChanged(next.forceAttWhenPsOff);
     }
     if (before.minDb != next.minDb) { emit minDbChanged(next.minDb); }
     if (before.maxDb != next.maxDb) { emit maxDbChanged(next.maxDb); }

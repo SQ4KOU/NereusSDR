@@ -15,6 +15,11 @@
 //   2026-04-20 — Original implementation for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 / R-R3-46 (parity Task 6): PA Temp, PA Current
+//                and PA Voltage (set at last) from RadioModel::paReadings(),
+//                the Core's in a remote window and said so; unavailable,
+//                never 0, when absent. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "RadioStatusPage.h"
@@ -177,20 +182,18 @@ RadioStatusPage::RadioStatusPage(RadioModel* model, QWidget* parent)
     // ── Wire signals if model present ─────────────────────────────────────
     if (m_model) {
         RadioStatus& rs = m_model->radioStatus();
-        connect(&rs, &RadioStatus::paTemperatureChanged,
-                this, &RadioStatusPage::onPaTemperatureChanged);
+        // R-R3-32 / R-R3-46 (parity Task 6): PA temperature, current and
+        // voltage come from the one PA reading source (the Core's in a
+        // remote window).
+        connect(m_model, &RadioModel::paReadingsChanged,
+                this, &RadioStatusPage::refreshPaReadings);
         // Live re-format on °C / °F toggle. The progress bar stays in
         // °C; only the text label converts.
         connect(&PaTempUnitNotifier::instance(),
                 &PaTempUnitNotifier::unitChanged, this,
                 [this](PaTempUnit /*unit*/) {
-            if (m_paTemperatureLabel) {
-                m_paTemperatureLabel->setText(
-                    PaTempUnitNotifier::format(m_paTempLastCelsius));
-            }
+            refreshPaReadings();
         });
-        connect(&rs, &RadioStatus::paCurrentChanged,
-                this, &RadioStatusPage::onPaCurrentChanged);
         connect(&rs, &RadioStatus::powerChanged,
                 this, &RadioStatusPage::onPowerChanged);
         connect(&rs, &RadioStatus::pttChanged,
@@ -203,6 +206,7 @@ RadioStatusPage::RadioStatusPage(RadioModel* model, QWidget* parent)
         // Populate initial state
         onIssuesChanged();
         refreshPttPills();
+        refreshPaReadings();
     }
 
     // ── Uptime timer ──────────────────────────────────────────────────────
@@ -310,6 +314,7 @@ void RadioStatusPage::buildPaStatusCard(QFrame* card)
         "font-size: 10px; font-weight: bold; color: %1; border: none;"
     ).arg(QLatin1String(Style::kAccent)));
     v->addWidget(title);
+    m_paTitleLabel = title;
 
     // ── Temperature row ───────────────────────────────────────────────────
     {
@@ -690,6 +695,44 @@ void RadioStatusPage::onPaCurrentChanged(double amps)
         fill = Style::kGaugeWarning;
     }
     m_paCurrentBar->setStyleSheet(progressBarStyle(fill));
+}
+
+void RadioStatusPage::refreshPaReadings()
+{
+    if (!m_model || !m_paTemperatureLabel || !m_paCurrentLabel || !m_paVoltageLabel) { return; }
+    const RadioModel::PaReadings readings = m_model->paReadings();
+    const bool fromCore = m_model->paReadingsFromCore();
+    // R-R3-32: a remote window's readings are the Core's, and say so.
+    const QString source = fromCore ? tr("From the Core") : QString();
+    if (m_paTitleLabel) {
+        m_paTitleLabel->setText(fromCore ? tr("PA Status, from the Core") : tr("PA Status"));
+    }
+    const QString unavailable = tr("Unavailable");
+    if (readings.paTemperatureCelsius) {
+        onPaTemperatureChanged(*readings.paTemperatureCelsius);
+    } else {
+        m_paTemperatureLabel->setText(unavailable);
+        m_paTempBar->setValue(0);
+        m_paTempBar->setStyleSheet(progressBarStyle(Style::kGaugeNormal));
+    }
+    if (readings.paCurrentAmps) {
+        onPaCurrentChanged(*readings.paCurrentAmps);
+    } else {
+        m_paCurrentLabel->setText(unavailable);
+        m_paCurrentBar->setValue(0);
+        m_paCurrentBar->setStyleSheet(progressBarStyle(Style::kGaugeNormal));
+    }
+    // PA Voltage: the PA row's volts as the System tile shows them (the
+    // supply volts on the ANAN-G2E, the PA drain volts elsewhere).
+    const RadioModel::PaRowVolts row = m_model->paRowVolts();
+    m_paVoltageLabel->setText(row.volts ? QStringLiteral("%1 V").arg(*row.volts, 0, 'f', 1)
+                                        : unavailable);
+    m_paVoltageLabel->setStyleSheet(QStringLiteral(
+        "font-size: 10px; font-weight: bold; color: %1; border: none;"
+    ).arg(QLatin1String(row.volts ? Style::kTextPrimary : Style::kTextInactive)));
+    for (QLabel* label : {m_paTemperatureLabel, m_paCurrentLabel, m_paVoltageLabel}) {
+        label->setToolTip(source);
+    }
 }
 
 void RadioStatusPage::onPowerChanged(double forward, double reflected, double swr)

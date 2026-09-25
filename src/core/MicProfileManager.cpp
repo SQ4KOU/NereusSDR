@@ -22,6 +22,15 @@
 //                 factory profiles on first launch (port of
 //                 database.cs AddTXProfileTable bIndcludeExtraProfiles
 //                 block, lines 4545-9354 [v2.10.3.13]).
+//   2026-09-25 - R-R3-49 (parity Task 3): a remote window's manager
+//                 mirrors the Core's profiles and asks the Core to select,
+//                 save and delete (setStationMirror and friends); it never
+//                 touches AppSettings. NereusSDR-original. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): the EQUseLegacy key (the TX EQ
+//                 dialog's Legacy EQ box), default True as every Thetis
+//                 factory profile sets it (database.cs:4552 [v2.10.3.15]).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived handler logic
@@ -62,7 +71,7 @@ QString activeKey(const QString& mac)
 }
 
 // ---------------------------------------------------------------------------
-// 107 live-field keys captured per profile.  Order matches the table in the
+// 108 live-field keys captured per profile.  Order matches the table in the
 // chunk-F + 3M-3a-i / ii / iii task specs (tools/script-friendly: sorted by
 // group).
 //   23 mic/VOX/MON/two-tone   (3M-1c F)
@@ -72,6 +81,7 @@ QString activeKey(const QString& mac)
 // +  2 FilterLow/FilterHigh   (Plan 4 Cluster A D1)
 // +  2 line_in_gain/user_dig_out (P1 full-parity Task 2.4)
 // + 11 DEXP envelope/ratios/look-ahead/SCF (3M-3a-iii Tasks 7-10)
+// +  1 EQUseLegacy            (R-R3-49 parity Task 4)
 // ---------------------------------------------------------------------------
 const QStringList& liveKeyList()
 {
@@ -143,6 +153,10 @@ const QStringList& liveKeyList()
         // the TX EQ slot.  No Thetis database.cs row — TXProfile column ships
         // empty until ucParametricEq populates it.
         QStringLiteral("TXParaEQData"),
+        // The TX EQ dialog's Legacy EQ box (1), R-R3-49 (parity Task 4).
+        // Thetis keeps it with the TX profile: setup.cs:3615 [v2.10.3.15]
+        //   dr["EQUseLegacy"] = console.EQForm.UsingLegacyEQ;
+        QStringLiteral("EQUseLegacy"),
         // Leveler (3 keys) — database.cs:4584-4588 [v2.10.3.13].
         QStringLiteral("Lev_On"),
         QStringLiteral("Lev_MaxGain"),
@@ -804,6 +818,10 @@ MicProfileManager::~MicProfileManager() = default;
 
 void MicProfileManager::setMacAddress(const QString& mac)
 {
+    // R-R3-49 (parity Task 3): a mirror keeps no profiles on this computer.
+    if (isStationMirror()) {
+        return;
+    }
     m_mac = mac;
 }
 
@@ -848,7 +866,7 @@ void MicProfileManager::writeActiveKey(const QString& name)
 
 void MicProfileManager::load()
 {
-    if (m_mac.isEmpty()) {
+    if (isStationMirror() || m_mac.isEmpty()) {
         return;
     }
 
@@ -888,6 +906,9 @@ void MicProfileManager::load()
 
 QStringList MicProfileManager::profileNames() const
 {
+    if (isStationMirror()) {
+        return m_stationNames;  // the Core's, in its order
+    }
     QStringList names = readManifest();
     std::sort(names.begin(), names.end());
     return names;
@@ -895,6 +916,9 @@ QStringList MicProfileManager::profileNames() const
 
 QString MicProfileManager::activeProfileName() const
 {
+    if (isStationMirror()) {
+        return m_stationActive;
+    }
     const QString active = readActiveKey();
     if (active.isEmpty()) {
         return QStringLiteral("Default");
@@ -944,6 +968,12 @@ void MicProfileManager::removeProfileKeys(const QString& name)
 
 bool MicProfileManager::saveProfile(const QString& rawName, const TransmitModel* tx)
 {
+    if (isStationMirror()) {
+        // R-R3-49 (parity Task 3): the Core saves its own transmit settings
+        // under this name (txProfile.save), with the same comma rule.
+        return !rawName.isEmpty()
+            && m_stationRequester(StationRequest::Save, rawName);
+    }
     if (m_mac.isEmpty() || tx == nullptr) {
         return false;
     }
@@ -973,6 +1003,17 @@ bool MicProfileManager::saveProfile(const QString& rawName, const TransmitModel*
 
 bool MicProfileManager::deleteProfile(const QString& name)
 {
+    if (isStationMirror()) {
+        // R-R3-49 (parity Task 3): the last-profile rule answers here as it
+        // does locally (the page shows its own words); the Core checks it
+        // again. Otherwise the Core deletes it (txProfile.delete); a request
+        // that is not sent has already said why.
+        if (m_stationNames.size() <= 1) {
+            return false;
+        }
+        m_stationRequester(StationRequest::Delete, name);
+        return true;
+    }
     if (m_mac.isEmpty()) {
         return false;
     }
@@ -1013,6 +1054,16 @@ bool MicProfileManager::deleteProfile(const QString& name)
 
 bool MicProfileManager::setActiveProfile(const QString& name, TransmitModel* tx)
 {
+    if (isStationMirror()) {
+        // R-R3-49 (parity Task 3): the Core applies it (txProfile.select) and
+        // reports its active profile back; nothing changes here until then.
+        // Not sent, the combos go back to the Core's profile at once.
+        if (name.isEmpty() || !m_stationRequester(StationRequest::Select, name)) {
+            emit activeProfileChanged(m_stationActive);
+            return false;
+        }
+        return true;
+    }
     if (m_mac.isEmpty() || tx == nullptr) {
         return false;
     }
@@ -1034,6 +1085,9 @@ bool MicProfileManager::setActiveProfile(const QString& name, TransmitModel* tx)
 
 bool MicProfileManager::saveActiveProfile(TransmitModel* tx)
 {
+    if (isStationMirror()) {
+        return saveProfile(activeProfileName(), tx);
+    }
     if (m_mac.isEmpty() || tx == nullptr) {
         return false;
     }
@@ -1046,7 +1100,8 @@ bool MicProfileManager::saveActiveProfile(TransmitModel* tx)
 
 bool MicProfileManager::isActiveProfileModified(const TransmitModel* tx) const
 {
-    if (m_mac.isEmpty() || tx == nullptr) {
+    // A mirror holds no stored profile values to compare with.
+    if (isStationMirror() || m_mac.isEmpty() || tx == nullptr) {
         return false;
     }
     const QString name = readActiveKey();
@@ -1067,6 +1122,43 @@ bool MicProfileManager::isActiveProfileModified(const TransmitModel* tx) const
     const int storedHigh = stored.value(QStringLiteral("FilterHigh"),
                                          QStringLiteral("2900")).toString().toInt();
     return (tx->filterLow() != storedLow || tx->filterHigh() != storedHigh);
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-49 (parity Task 3): a remote window's mirror of the Core's profiles.
+// NereusSDR-original.
+// ---------------------------------------------------------------------------
+
+void MicProfileManager::setStationMirror(StationRequester requester)
+{
+    m_stationRequester = std::move(requester);
+    m_mac.clear();
+}
+
+void MicProfileManager::applyStationProfiles(const QStringList& names)
+{
+    if (!isStationMirror() || names == m_stationNames) {
+        return;
+    }
+    m_stationNames = names;
+    emit profileListChanged();
+}
+
+void MicProfileManager::applyStationActiveProfile(const QString& name)
+{
+    if (!isStationMirror() || name == m_stationActive) {
+        return;
+    }
+    m_stationActive = name;
+    emit activeProfileChanged(name);
+    emit profileModifiedChanged(false);
+}
+
+void MicProfileManager::reportStationRequestRefused()
+{
+    if (isStationMirror()) {
+        emit activeProfileChanged(m_stationActive);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1141,6 +1233,11 @@ QHash<QString, QVariant> MicProfileManager::defaultProfileValues()
     // No Thetis database.cs row; column ships empty.  Phase 3M-3a-ii follow-up
     // Batch 6.
     out.insert(QStringLiteral("TXParaEQData"),   QString());
+    // R-R3-49 (parity Task 4): From Thetis database.cs:4552 [v2.10.3.15]:
+    //   dr["EQUseLegacy"] = true;
+    // Every factory profile in database.cs sets it true too (4787 through
+    // 9199), so no factory profile overrides it.
+    out.insert(QStringLiteral("EQUseLegacy"),    QStringLiteral("True"));
     out.insert(QStringLiteral("Lev_On"),         QStringLiteral("True"));    // database.cs:4584
     out.insert(QStringLiteral("Lev_MaxGain"),    QStringLiteral("15"));      // database.cs:4586
     out.insert(QStringLiteral("Lev_Decay"),      QStringLiteral("100"));     // database.cs:4588
@@ -1263,6 +1360,8 @@ QHash<QString, QVariant> MicProfileManager::captureLiveValues(const TransmitMode
     // TX EQ blob (1) — opaque QString fits QVariant directly.  Phase 3M-3a-ii
     // follow-up Batch 6.
     out.insert(QStringLiteral("TXParaEQData"), tx->txEqParaEqData());
+    out.insert(QStringLiteral("EQUseLegacy"),
+               tx->txEqUseLegacy() ? QStringLiteral("True") : QStringLiteral("False"));
     out.insert(QStringLiteral("Lev_On"),
                tx->txLevelerOn() ? QStringLiteral("True") : QStringLiteral("False"));
     out.insert(QStringLiteral("Lev_MaxGain"), QString::number(tx->txLevelerMaxGain()));
@@ -1408,6 +1507,12 @@ void MicProfileManager::applyValuesToModel(const QHash<QString, QVariant>& value
     // TX EQ blob (1) — opaque QString; empty default (no Thetis row).  Phase
     // 3M-3a-ii follow-up Batch 6.
     tx->setTxEqParaEqData(take(QStringLiteral("TXParaEQData"), QString()));
+    // R-R3-49 (parity Task 4): From Thetis setup.cs:9318 [v2.10.3.15]:
+    //   console.EQForm.UsingLegacyEQ = (bool)dr["EQUseLegacy"];
+    // (the restore above it: // diable the vacs, so we can make changes without them trying to re-init etc MW0LGE_21dk5
+    //  [original inline comment from setup.cs:9313])
+    tx->setTxEqUseLegacy(take(QStringLiteral("EQUseLegacy"), QStringLiteral("True"))
+                             != QLatin1String("False"));
     tx->setTxLevelerOn(take(QStringLiteral("Lev_On"), QStringLiteral("True"))
                             == QLatin1String("True"));
     tx->setTxLevelerMaxGain(take(QStringLiteral("Lev_MaxGain"), QStringLiteral("15")).toInt());

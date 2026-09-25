@@ -23,6 +23,10 @@
 //                 meter keeps WDSP's -400 zero-power floor as a number.
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
 //                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 (remote-window parity Task 6): the hardware
+//                 telemetry bindings treat the sentinel as no reading
+//                 (isHardwareTelemetryBinding). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -181,6 +185,11 @@ bool isReceiveSignalBinding(int bindingId)
 {
     return (bindingId >= MeterBinding::SignalPeak && bindingId <= MeterBinding::AgcAvg)
         || bindingId == MeterBinding::SignalMaxBin;
+}
+
+bool isHardwareTelemetryBinding(int bindingId)
+{
+    return bindingId >= MeterBinding::HwVolts && bindingId <= MeterBinding::HwTemperature;
 }
 
 QString MeterItem::noReadingText(MeterUnit unit)

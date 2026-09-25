@@ -95,6 +95,9 @@
 //   2026-09-24 - iPhone app Task 20 (R-IOS-27): displayExtrasVersion,
 //                last in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsVersion, last
+//                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -176,7 +179,7 @@ struct StationCapabilities {
     /// R-R3-47 / R-R3-22: 1 means the Core sends its Tuner Genius's own
     /// settings (the tgxl* properties of `accessorySettings`) and takes the
     /// setTgxlName, setTgxlNetwork, saveTgxlSettings and readTgxlSettings
-    /// commands. Sent last in the same minor-11 block. 0: a window cannot
+    /// commands. Sent in the same minor-11 block. 0: a window cannot
     /// change the tuner's own settings on this Core and says so.
     int remoteTgxlControlVersion = 0;
     /// iPhone app Task 12 (R-IOS-08): 1 means the Core has its own identity
@@ -212,6 +215,14 @@ struct StationCapabilities {
     /// an NSDX datagram beside each NSDC frame (display extras v1). Sent
     /// last in the same minor-11 block, after stationCatalogVersion.
     int displayExtrasVersion = 0;
+    /// R-R3-49 (parity Task 1): 1 means a receive-only Core takes a
+    /// `transmit` write of any property but the keying set (mox, tune,
+    /// voxEnabled, twoToneActive) and a DspOptions<Setting><Mode>Tx settings
+    /// write or remove while its radio is off the air, and applies it at
+    /// once; each is refused while the radio is on the air. Sent last in
+    /// the same minor-11 block. 0: a window's transmit settings stay greyed
+    /// and say the Core cannot take them.
+    int transmitSettingsVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered
@@ -257,8 +268,9 @@ struct StationCapabilities {
     int remoteCtunVersion = 0;
     /// 1: radio and audio telemetry. 2: adds the Core host section (CPU,
     /// memory, temperature). 3: adds the receivers section (each receiver's
-    /// processing load and input wait). Negotiated minor still gates each
-    /// version.
+    /// processing load and input wait). 4 (remote-window parity Task 6,
+    /// minor 11): adds the radio's PA readings and link quality to the
+    /// radio section. Negotiated minor still gates each version.
     int stationTelemetryVersion = 0;
     int remoteTgxlConfigVersion = 0;
     int remoteFourO3AControlVersion = 0;

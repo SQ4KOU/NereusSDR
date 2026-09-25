@@ -237,6 +237,33 @@
 //   2026-09-23 - R-R3-46 fix wave: setHpsdrModel moved out of line; the
 //                 tune power is clamped at the settings load (2026-09-24).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): the TX and Phone/CW applets'
+//                 settings as mirrored Q_PROPERTYs (transmitSettingsVersion
+//                 2), the Core's tune power for its transmit band
+//                 (tunePowerForTxBand, setTunePowerForTxBand) and the tune
+//                 drive source on the link, and settingRangeRefusal().
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the radio microphone settings as
+//                 mirrored Q_PROPERTYs (transmitSettingsVersion 3) and the
+//                 Core's TX profiles (activeTxProfile, txProfilesJson).
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): TX EQ, CFC, phase rotator,
+//                 CESSB, leveler and ALC settings as mirrored Q_PROPERTYs
+//                 (transmitSettingsVersion 4), the band arrays as JSON on
+//                 the link, and txEqUseLegacy (Thetis EQUseLegacy, the TX
+//                 EQ dialog's Legacy EQ box, eqform.cs:988 and setup.cs:
+//                 3615, 9318 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 5): Setup > Transmit > Power,
+//                 DEXP/VOX and Test > Two-Tone IMD settings as mirrored
+//                 Q_PROPERTYs (transmitSettingsVersion 5): the per-band
+//                 power and tune power as JSON objects keyed by band,
+//                 the DEXP timing, look-ahead and side-channel filter, the
+//                 anti-VOX gain and the two-tone settings; the tune drive
+//                 source becomes writable. NereusSDR-original. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -245,8 +272,12 @@
 #include "core/WdspTypes.h"
 #include "core/audio/CompositeTxMicRouter.h"
 
+#include <QByteArray>
+#include <QMetaType>
 #include <QObject>
 #include <QString>
+#include <QStringList>
+#include <QVariant>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -593,6 +624,46 @@ public:
         return m_tuneDrivePowerSource;
     }
     void setTuneDrivePowerSource(DrivePowerSource source);
+
+    // ── R-R3-49 (parity Task 2): tune power for the transmit band ─────────
+    //
+    // The band the Core transmits on (its transmit slice's band, as the
+    // TUNE path reads it), set by RadioModel. tunePowerForTxBand() is that
+    // band's tunePowerForBand(); in a remote window it is the Core's value,
+    // applied by applyStationValue(). NereusSDR-original.
+    int  tunePowerForTxBand() const noexcept { return m_tunePowerForTxBand; }
+    void setTuneTxBand(Band band);
+    /// What the TX applet's Tune Power slider does locally: the transmit
+    /// band's tune power, and the tune drive source to TuneSlider. False,
+    /// changing nothing, before the transmit band is known.
+    bool setTunePowerForTxBand(int watts);
+    /// The Tune Power range for this radio: 0 to 99 on a Hermes Lite 2,
+    /// else 0 to 100 (setTunePower / setTunePowerForBand).
+    int  tunePowerMax() const noexcept;
+    /// A window: the Core's tunePowerForTxBand or tuneDrivePowerSource as
+    /// it reported them. A plain state apply; nothing is saved or sent.
+    bool applyStationValue(const QByteArray& propertyName, const QVariant& value);
+    /// A window: the Core refused a Tune Power change; the slider shows the
+    /// Core's value again.
+    void reportTunePowerForTxBandRefused();
+    /// The plain words a Core gives for a value outside a mirrored
+    /// setting's range, or empty when `value` is in range (or the property
+    /// has no range here). `propertyName` is the property's name on the
+    /// link; the range is the setter's own.
+    QString settingRangeRefusal(const QByteArray& propertyName, const QVariant& value) const;
+
+    // ── R-R3-49 (parity Task 3): the Core's TX profiles on the link ───────
+    //
+    // The active profile's name and the profile list as a JSON array of
+    // names. The Core sets both from its MicProfileManager; a window has
+    // them from the Core (applyStationValue). NereusSDR-original.
+    QString activeTxProfile() const { return m_activeTxProfile; }
+    QString txProfilesJson() const { return m_txProfilesJson; }
+    /// The Core: its MicProfileManager's active profile and list.
+    void setStationTxProfiles(const QString& active, const QStringList& names);
+    /// The names in txProfilesJson(), in order (empty when it is not a
+    /// JSON array of strings).
+    static QStringList txProfileNamesFromJson(const QString& json);
 
     // ── Fixed tune power (#167 Phase 3C) ──────────────────────────────────
     //
@@ -1015,6 +1086,201 @@ public:
 
     Q_PROPERTY(bool paSettingsBypass READ paSettingsBypass WRITE setPaSettingsBypass
                                      NOTIFY paSettingsBypassChanged)
+
+    // ── R-R3-49 (parity Task 2): the TX and Phone/CW applets' settings ────
+    //
+    // Mirrored on the `transmit` object (transmitSettingsVersion 2), each
+    // under its setter's name and type and NOTIFY on its existing signal.
+    // Declared after paSettingsBypass so the earlier ordinals stay put. A
+    // window writes them while the Core's radio is off the air; the Core
+    // refuses a value outside the setter's range (settingRangeRefusal) and
+    // any write while it is on the air. None keys the radio.
+    Q_PROPERTY(int   tunePower      READ tunePower      WRITE setTunePower
+                                    NOTIFY tunePowerChanged)
+    Q_PROPERTY(int   voxThresholdDb READ voxThresholdDb WRITE setVoxThresholdDb
+                                    NOTIFY voxThresholdDbChanged)
+    Q_PROPERTY(int   voxHangTimeMs  READ voxHangTimeMs  WRITE setVoxHangTimeMs
+                                    NOTIFY voxHangTimeMsChanged)
+    Q_PROPERTY(bool  monEnabled     READ monEnabled     WRITE setMonEnabled
+                                    NOTIFY monEnabledChanged)
+    Q_PROPERTY(float monitorVolume  READ monitorVolume  WRITE setMonitorVolume
+                                    NOTIFY monitorVolumeChanged)
+    Q_PROPERTY(bool  txLevelerOn    READ txLevelerOn    WRITE setTxLevelerOn
+                                    NOTIFY txLevelerOnChanged)
+    Q_PROPERTY(bool  txEqEnabled    READ txEqEnabled    WRITE setTxEqEnabled
+                                    NOTIFY txEqEnabledChanged)
+    Q_PROPERTY(bool  cfcEnabled     READ cfcEnabled     WRITE setCfcEnabled
+                                    NOTIFY cfcEnabledChanged)
+    Q_PROPERTY(bool  cpdrOn         READ cpdrOn         WRITE setCpdrOn
+                                    NOTIFY cpdrOnChanged)
+    Q_PROPERTY(int   cpdrLevelDb    READ cpdrLevelDb    WRITE setCpdrLevelDb
+                                    NOTIFY cpdrLevelDbChanged)
+    Q_PROPERTY(int   amCarrierLevel READ amCarrierLevel WRITE setAmCarrierLevel
+                                    NOTIFY amCarrierLevelChanged)
+    Q_PROPERTY(bool  dexpEnabled    READ dexpEnabled    WRITE setDexpEnabled
+                                    NOTIFY dexpEnabledChanged)
+    Q_PROPERTY(int   micGainDb      READ micGainDb      WRITE setMicGainDb
+                                    NOTIFY micGainDbChanged)
+    // The Core's tune power for its transmit band (the band of the slice
+    // that transmits), which the TX applet's Tune Power slider shows, and
+    // the tune drive source. No WRITE: both change only through the
+    // setTunePowerForTxBand command, which sets them together as the local
+    // slider does.
+    Q_PROPERTY(int tunePowerForTxBand READ tunePowerForTxBand
+                                      NOTIFY tunePowerForTxBandChanged)
+    // R-R3-49 (parity Task 5, transmitSettingsVersion 5): the drive source
+    // is also Setup > Transmit > Power's Tune group, so it is writable.
+    Q_PROPERTY(NereusSDR::DrivePowerSource tuneDrivePowerSource
+               READ tuneDrivePowerSource WRITE setTuneDrivePowerSource
+               NOTIFY tuneDrivePowerSourceChanged)
+
+    // ── R-R3-49 (parity Task 3): the radio's microphone input, TX profiles ─
+    //
+    // Mirrored on `transmit` (transmitSettingsVersion 3), after
+    // tuneDrivePowerSource so the earlier ordinals stay put. The seven
+    // microphone settings are Setup > Audio > TX Input's radio microphone
+    // groups, under their setters' names and types (lineInBoost is the
+    // setter's double, in dB). None keys the radio.
+    Q_PROPERTY(bool   micBoost       READ micBoost       WRITE setMicBoost
+                                     NOTIFY micBoostChanged)
+    Q_PROPERTY(bool   micXlr         READ micXlr         WRITE setMicXlr
+                                     NOTIFY micXlrChanged)
+    Q_PROPERTY(bool   micTipRing     READ micTipRing     WRITE setMicTipRing
+                                     NOTIFY micTipRingChanged)
+    Q_PROPERTY(bool   micBias        READ micBias        WRITE setMicBias
+                                     NOTIFY micBiasChanged)
+    Q_PROPERTY(bool   micPttDisabled READ micPttDisabled WRITE setMicPttDisabled
+                                     NOTIFY micPttDisabledChanged)
+    Q_PROPERTY(bool   lineIn         READ lineIn         WRITE setLineIn
+                                     NOTIFY lineInChanged)
+    Q_PROPERTY(double lineInBoost    READ lineInBoost    WRITE setLineInBoost
+                                     NOTIFY lineInBoostChanged)
+    // The Core's active TX profile and its profile list (a JSON array of
+    // names, in the Core's order). No WRITE: they change through the
+    // txProfile.select / save / delete commands. On the Core, RadioModel
+    // keeps them from its MicProfileManager (setStationTxProfiles); in a
+    // window they are the Core's report (applyStationValue).
+    Q_PROPERTY(QString activeTxProfile READ activeTxProfile
+                                       NOTIFY activeTxProfileChanged)
+    Q_PROPERTY(QString txProfilesJson  READ txProfilesJson
+                                       NOTIFY txProfilesJsonChanged)
+
+    // ── R-R3-49 (parity Task 4): TX EQ, CFC, phase rotator, CESSB, leveler
+    // and ALC ────────────────────────────────────────────────────────────
+    //
+    // Mirrored on `transmit` (transmitSettingsVersion 4), after
+    // txProfilesJson so the earlier ordinals stay put, each under its
+    // setter's name and type. The ten-value bands go on the link as a
+    // compact JSON array of whole numbers (txEqBandsJson and the rest),
+    // refused whole when it is the wrong length or a value is out of range
+    // (settingRangeRefusal). txEqUseLegacy is the TX EQ dialog's Legacy EQ
+    // box, which Thetis keeps with the TX profile (EQUseLegacy). None keys
+    // the radio.
+    Q_PROPERTY(bool    txEqUseLegacy         READ txEqUseLegacy         WRITE setTxEqUseLegacy
+                                             NOTIFY txEqUseLegacyChanged)
+    Q_PROPERTY(int     txEqPreamp            READ txEqPreamp            WRITE setTxEqPreamp
+                                             NOTIFY txEqPreampChanged)
+    Q_PROPERTY(QString txEqBandsJson         READ txEqBandsJson         WRITE setTxEqBandsJson
+                                             NOTIFY txEqBandsJsonChanged)
+    Q_PROPERTY(QString txEqFreqsJson         READ txEqFreqsJson         WRITE setTxEqFreqsJson
+                                             NOTIFY txEqFreqsJsonChanged)
+    Q_PROPERTY(int     txEqNc                READ txEqNc                WRITE setTxEqNc
+                                             NOTIFY txEqNcChanged)
+    Q_PROPERTY(bool    txEqMp                READ txEqMp                WRITE setTxEqMp
+                                             NOTIFY txEqMpChanged)
+    Q_PROPERTY(int     txEqCtfmode           READ txEqCtfmode           WRITE setTxEqCtfmode
+                                             NOTIFY txEqCtfmodeChanged)
+    Q_PROPERTY(int     txEqWintype           READ txEqWintype           WRITE setTxEqWintype
+                                             NOTIFY txEqWintypeChanged)
+    Q_PROPERTY(QString txEqParaEqData        READ txEqParaEqData        WRITE setTxEqParaEqData
+                                             NOTIFY txEqParaEqDataChanged)
+    Q_PROPERTY(QString cfcCompressionJson    READ cfcCompressionJson    WRITE setCfcCompressionJson
+                                             NOTIFY cfcCompressionJsonChanged)
+    Q_PROPERTY(QString cfcEqFreqJson         READ cfcEqFreqJson         WRITE setCfcEqFreqJson
+                                             NOTIFY cfcEqFreqJsonChanged)
+    Q_PROPERTY(QString cfcPostEqBandGainJson READ cfcPostEqBandGainJson WRITE setCfcPostEqBandGainJson
+                                             NOTIFY cfcPostEqBandGainJsonChanged)
+    Q_PROPERTY(bool    cfcPostEqEnabled      READ cfcPostEqEnabled      WRITE setCfcPostEqEnabled
+                                             NOTIFY cfcPostEqEnabledChanged)
+    Q_PROPERTY(int     cfcPostEqGainDb       READ cfcPostEqGainDb       WRITE setCfcPostEqGainDb
+                                             NOTIFY cfcPostEqGainDbChanged)
+    Q_PROPERTY(int     cfcPrecompDb          READ cfcPrecompDb          WRITE setCfcPrecompDb
+                                             NOTIFY cfcPrecompDbChanged)
+    Q_PROPERTY(QString cfcParaEqData         READ cfcParaEqData         WRITE setCfcParaEqData
+                                             NOTIFY cfcParaEqDataChanged)
+    Q_PROPERTY(bool    phaseRotatorEnabled   READ phaseRotatorEnabled   WRITE setPhaseRotatorEnabled
+                                             NOTIFY phaseRotatorEnabledChanged)
+    Q_PROPERTY(int     phaseRotatorFreqHz    READ phaseRotatorFreqHz    WRITE setPhaseRotatorFreqHz
+                                             NOTIFY phaseRotatorFreqHzChanged)
+    Q_PROPERTY(int     phaseRotatorStages    READ phaseRotatorStages    WRITE setPhaseRotatorStages
+                                             NOTIFY phaseRotatorStagesChanged)
+    Q_PROPERTY(bool    phaseReverseEnabled   READ phaseReverseEnabled   WRITE setPhaseReverseEnabled
+                                             NOTIFY phaseReverseEnabledChanged)
+    Q_PROPERTY(bool    cessbOn               READ cessbOn               WRITE setCessbOn
+                                             NOTIFY cessbOnChanged)
+    Q_PROPERTY(int     txLevelerMaxGain      READ txLevelerMaxGain      WRITE setTxLevelerMaxGain
+                                             NOTIFY txLevelerMaxGainChanged)
+    Q_PROPERTY(int     txLevelerDecay        READ txLevelerDecay        WRITE setTxLevelerDecay
+                                             NOTIFY txLevelerDecayChanged)
+    Q_PROPERTY(int     txAlcMaxGain          READ txAlcMaxGain          WRITE setTxAlcMaxGain
+                                             NOTIFY txAlcMaxGainChanged)
+    Q_PROPERTY(int     txAlcDecay            READ txAlcDecay            WRITE setTxAlcDecay
+                                             NOTIFY txAlcDecayChanged)
+
+    // ── R-R3-49 (parity Task 5): Power, DEXP/VOX and two-tone settings ────
+    //
+    // Mirrored on `transmit` (transmitSettingsVersion 5), after txAlcDecay
+    // so the earlier ordinals stay put, each under its setter's name and
+    // its getter's type. The per-band power and tune power go on the link
+    // as a compact JSON object of whole watts keyed by band (bandKeyName:
+    // "160m" .. "6m", "GEN", "WWV", "XVTR"), all 14 bands in every write
+    // (refused whole otherwise). None keys the radio: the two-tone
+    // settings are read when a two-tone test starts, which stays with
+    // remote transmit (twoToneActive is in the keying set).
+    Q_PROPERTY(QString powerByBandJson       READ powerByBandJson       WRITE setPowerByBandJson
+                                             NOTIFY powerByBandJsonChanged)
+    Q_PROPERTY(QString tunePowerByBandJson   READ tunePowerByBandJson   WRITE setTunePowerByBandJson
+                                             NOTIFY tunePowerByBandJsonChanged)
+    Q_PROPERTY(double  dexpAttackTimeMs      READ dexpAttackTimeMs      WRITE setDexpAttackTimeMs
+                                             NOTIFY dexpAttackTimeMsChanged)
+    Q_PROPERTY(double  dexpDetectorTauMs     READ dexpDetectorTauMs     WRITE setDexpDetectorTauMs
+                                             NOTIFY dexpDetectorTauMsChanged)
+    Q_PROPERTY(double  dexpExpansionRatioDb  READ dexpExpansionRatioDb  WRITE setDexpExpansionRatioDb
+                                             NOTIFY dexpExpansionRatioDbChanged)
+    Q_PROPERTY(double  dexpHighCutHz         READ dexpHighCutHz         WRITE setDexpHighCutHz
+                                             NOTIFY dexpHighCutHzChanged)
+    Q_PROPERTY(double  dexpHysteresisRatioDb READ dexpHysteresisRatioDb WRITE setDexpHysteresisRatioDb
+                                             NOTIFY dexpHysteresisRatioDbChanged)
+    Q_PROPERTY(bool    dexpLookAheadEnabled  READ dexpLookAheadEnabled  WRITE setDexpLookAheadEnabled
+                                             NOTIFY dexpLookAheadEnabledChanged)
+    Q_PROPERTY(double  dexpLookAheadMs       READ dexpLookAheadMs       WRITE setDexpLookAheadMs
+                                             NOTIFY dexpLookAheadMsChanged)
+    Q_PROPERTY(double  dexpLowCutHz          READ dexpLowCutHz          WRITE setDexpLowCutHz
+                                             NOTIFY dexpLowCutHzChanged)
+    Q_PROPERTY(double  dexpReleaseTimeMs     READ dexpReleaseTimeMs     WRITE setDexpReleaseTimeMs
+                                             NOTIFY dexpReleaseTimeMsChanged)
+    Q_PROPERTY(bool    dexpSideChannelFilterEnabled READ dexpSideChannelFilterEnabled
+                                             WRITE setDexpSideChannelFilterEnabled
+                                             NOTIFY dexpSideChannelFilterEnabledChanged)
+    Q_PROPERTY(int     antiVoxGainDb         READ antiVoxGainDb         WRITE setAntiVoxGainDb
+                                             NOTIFY antiVoxGainDbChanged)
+    Q_PROPERTY(int     twoToneFreq1          READ twoToneFreq1          WRITE setTwoToneFreq1
+                                             NOTIFY twoToneFreq1Changed)
+    Q_PROPERTY(int     twoToneFreq2          READ twoToneFreq2          WRITE setTwoToneFreq2
+                                             NOTIFY twoToneFreq2Changed)
+    Q_PROPERTY(double  twoToneLevel          READ twoToneLevel          WRITE setTwoToneLevel
+                                             NOTIFY twoToneLevelChanged)
+    Q_PROPERTY(int     twoTonePower          READ twoTonePower          WRITE setTwoTonePower
+                                             NOTIFY twoTonePowerChanged)
+    Q_PROPERTY(bool    twoTonePulsed         READ twoTonePulsed         WRITE setTwoTonePulsed
+                                             NOTIFY twoTonePulsedChanged)
+    Q_PROPERTY(bool    twoToneInvert         READ twoToneInvert         WRITE setTwoToneInvert
+                                             NOTIFY twoToneInvertChanged)
+    Q_PROPERTY(int     twoToneFreq2Delay     READ twoToneFreq2Delay     WRITE setTwoToneFreq2Delay
+                                             NOTIFY twoToneFreq2DelayChanged)
+    Q_PROPERTY(NereusSDR::DrivePowerSource twoToneDrivePowerSource
+               READ twoToneDrivePowerSource WRITE setTwoToneDrivePowerSource
+               NOTIFY twoToneDrivePowerSourceChanged)
 
     /// Bypass PA settings flag. false (default) = use board-specific table.
     bool paSettingsBypass() const noexcept { return m_paSettingsBypass; }
@@ -1666,6 +1932,27 @@ public:
     /// (3M-3a-ii Batch 2) for the TX EQ slot in TXProfile.
     const QString& txEqParaEqData() const noexcept { return m_txEqParaEqData; }
 
+    // ── R-R3-49 (parity Task 4): the Legacy EQ box and the band arrays ────
+    //
+    /// The TX EQ dialog's Legacy EQ box: true, the ten-band EQ reaches the
+    /// TX channel; false, the parametric curve in txEqParaEqData does.
+    /// Default true, as Thetis chkLegacyEQ.Checked = true at eqform.cs:988
+    /// [v2.10.3.15]; saved with the TX profile (EQUseLegacy).
+    bool txEqUseLegacy() const noexcept { return m_txEqUseLegacy; }
+    /// The ten TX EQ band gains / centres, and the ten CFC compression
+    /// levels / centres / post-EQ gains, as a compact JSON array of whole
+    /// numbers (the link's form). NereusSDR-original.
+    QString txEqBandsJson() const;
+    QString txEqFreqsJson() const;
+    QString cfcCompressionJson() const;
+    QString cfcEqFreqJson() const;
+    QString cfcPostEqBandGainJson() const;
+    /// R-R3-49 (parity Task 5): the per-band power and tune power as the
+    /// link's compact JSON object of whole watts keyed by bandKeyName, for
+    /// the 14 bands 160m .. XVTR. NereusSDR-original.
+    QString powerByBandJson() const;
+    QString tunePowerByBandJson() const;
+
     // ── Range constants (Thetis Designer setup.Designer.cs [v2.10.3.13]) ──
     //
     // Leveler MaxGain: 0..20 dB (udDSPLevelerThreshold:38718-38738).
@@ -1694,6 +1981,14 @@ public:
     // FFT-bin boundary math; Thetis itself sets defaults from 32 Hz.
     static constexpr int kTxEqFreqHzMin          =   10;
     static constexpr int kTxEqFreqHzMax          = 22000;
+    // R-R3-49 (parity Task 4): the ranges a window may send for the EQ
+    // settings whose setters do not clamp, from the TX EQ dialog's own
+    // controls (Nc spin box 32 to 8192; the Cutoff and Window combos'
+    // two items). Thetis does not show these on TX.
+    static constexpr int kTxEqNcMin              =   32;
+    static constexpr int kTxEqNcMax              = 8192;
+    static constexpr int kTxEqCtfmodeMax         =    1;
+    static constexpr int kTxEqWintypeMax         =    1;
 
 public slots:
     void setTxEqEnabled(bool on);
@@ -1714,6 +2009,23 @@ public slots:
     /// Opaque parametric-EQ blob for the TX EQ (3M-3a-ii follow-up Batch 6).
     /// No validation — pass-through for round-trip.  Mirrors setCfcParaEqData.
     void setTxEqParaEqData(const QString& data);
+    /// R-R3-49 (parity Task 4): the Legacy EQ box (see txEqUseLegacy()).
+    void setTxEqUseLegacy(bool on);
+    /// R-R3-49 (parity Task 4): all ten values from the link's JSON array,
+    /// each through its per-band setter. A value that is not a JSON array of
+    /// ten whole numbers changes nothing (the Core refuses it first with
+    /// settingRangeRefusal).
+    void setTxEqBandsJson(const QString& json);
+    void setTxEqFreqsJson(const QString& json);
+    void setCfcCompressionJson(const QString& json);
+    void setCfcEqFreqJson(const QString& json);
+    void setCfcPostEqBandGainJson(const QString& json);
+    /// R-R3-49 (parity Task 5): every band from the link's JSON object,
+    /// through setPowerForBand / setTunePowerForBand. A value that is not a
+    /// JSON object of the 14 band keys, each a whole number, changes
+    /// nothing (the Core refuses it first with settingRangeRefusal).
+    void setPowerByBandJson(const QString& json);
+    void setTunePowerByBandJson(const QString& json);
 
     // ── Phase Rotator setters (3M-3a-ii Batch 2) ─────────────────────────
     void setPhaseRotatorEnabled(bool on);
@@ -1797,6 +2109,18 @@ signals:
     void txEqWintypeChanged(int wintype);
     /// 3M-3a-ii follow-up Batch 6 — TX EQ parametric blob round-trip.
     void txEqParaEqDataChanged(const QString& data);
+    // R-R3-49 (parity Task 4): the Legacy EQ box and the link's arrays
+    // (emitted beside the per-band signals).
+    void txEqUseLegacyChanged(bool on);
+    void txEqBandsJsonChanged(const QString& json);
+    void txEqFreqsJsonChanged(const QString& json);
+    void cfcCompressionJsonChanged(const QString& json);
+    void cfcEqFreqJsonChanged(const QString& json);
+    void cfcPostEqBandGainJsonChanged(const QString& json);
+    // R-R3-49 (parity Task 5): emitted beside powerByBandChanged /
+    // tunePowerByBandChanged, and after a load() restores the arrays.
+    void powerByBandJsonChanged(const QString& json);
+    void tunePowerByBandJsonChanged(const QString& json);
 
     // ── Phase Rotator signals (3M-3a-ii Batch 2) ─────────────────────────
     void phaseRotatorEnabledChanged(bool on);
@@ -2004,7 +2328,14 @@ signals:
     void twoToneActiveChanged(bool active);
     /// Emitted when tuneDrivePowerSource() changes.  Mirrors Thetis
     /// TuneDrivePowerOrigin setter at console.cs:46554-46575 [v2.10.3.13].
-    void tuneDrivePowerSourceChanged(DrivePowerSource source);
+    void tuneDrivePowerSourceChanged(NereusSDR::DrivePowerSource source);
+    /// R-R3-49 (parity Task 2): tunePowerForTxBand() changed (a new
+    /// transmit band, that band's tune power, or the Core's report).
+    void tunePowerForTxBandChanged(int watts);
+    /// R-R3-49 (parity Task 3): the Core's active TX profile or its profile
+    /// list changed.
+    void activeTxProfileChanged(const QString& name);
+    void txProfilesJsonChanged(const QString& json);
     /// Emitted when tunePower() (fixed) changes.  Mirrors Thetis
     /// tune_power setter at console.cs:17229-17242 [v2.10.3.13].
     void tunePowerChanged(int watts);
@@ -2108,7 +2439,7 @@ signals:
     void twoTonePulsedChanged(bool on);
 
     // ── Two-tone drive-power source signal (3M-1c B.3) ─────────────────────
-    void twoToneDrivePowerSourceChanged(DrivePowerSource source);
+    void twoToneDrivePowerSourceChanged(NereusSDR::DrivePowerSource source);
 
 private:
     bool m_mox{false};
@@ -2145,6 +2476,17 @@ private:
     // HF amateur + GEN/WWV/XVTR only (Band::SwlFirst == 14).  Phase 3L
     // SWL bands inherit ham-band values — no separate per-SWL TX power.
     std::array<int, static_cast<std::size_t>(Band::SwlFirst)> m_tunePowerByBand{};
+    // R-R3-49 (parity Task 2): the transmit band and its tune power.
+    // m_tuneTxBandKnown is false until RadioModel sets the band (always, on
+    // a window), so a window's own per-band copy never overwrites the
+    // Core's value.
+    Band m_tuneTxBand{Band::Band20m};
+    bool m_tuneTxBandKnown{false};
+    int  m_tunePowerForTxBand{50};
+    // R-R3-49 (parity Task 3): the Core's TX profiles (see activeTxProfile).
+    QString m_activeTxProfile;
+    QString m_txProfilesJson{QStringLiteral("[]")};
+    void refreshTunePowerForTxBand();
 
     // Per-band normal-mode power storage.
     // From Thetis console.cs:1813-1814 [v2.10.3.13] — power_by_band default
@@ -2416,6 +2758,7 @@ private:
     // Empty by default (no Thetis database.cs default — TXProfile column
     // ships empty until the ucParametricEq dialog populates it).
     QString m_txEqParaEqData;
+    bool    m_txEqUseLegacy = true;  // R-R3-49 (parity Task 4); eqform.cs:988
 
     // ── CFC / CPDR / CESSB / Phase Rotator (3M-3a-ii Batch 2) ────────────
     //

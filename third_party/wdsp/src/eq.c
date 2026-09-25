@@ -1,3 +1,77 @@
+// 2026-09-25: the TX EQ's Q-factor parametric path is ported from Thetis's
+// own WDSP. Thetis's eq.c notices, with Richard Samphire's dual-licensing
+// statement, are retained below for that code. The TAPR header after them
+// records the WDSP 2.10 baseline. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
+
+// =================================================================
+// third_party/wdsp/src/eq.c  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/wdsp/eq.c @ v2.10.3.15 (commit 3759d096):
+//   eq_impulse's "parametric eq with Q factor" branch and its ctfmode 0
+//   rolloff, the defines it uses, and SetTXAEQProfile's Q argument.
+//   Original licence header (GPLv2+ and the Samphire dual-licensing
+//   statement) preserved verbatim below. See
+//   docs/attribution/WDSP-PROVENANCE.md for the scope.
+// =================================================================
+
+/*  eq.c
+
+This file is part of a program that implements a Software-Defined Radio.
+
+Copyright (C) 2013, 2016, 2017, 2025 Warren Pratt, NR0V
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at  
+
+warren@wpratt.com
+mw0lge@grange-lane.co.uk - Richard Samphire (c) 2026
+
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+//
+// =============================================================================
+// Modification history (NereusSDR):
+//   2026-09-25 - R-R3-49 (group A fix wave): SetTXAEQProfile takes Q as
+//                Thetis's does (dsp.cs:788, wdsp/eq.c:780 [v2.10.3.15]).
+//                A non-null Q is kept on the TX EQ's impulse builder and
+//                every rebuild of that EQ takes Thetis's Q branch, ported
+//                verbatim (eq_impulse_q below); a null Q, and the graphic
+//                EQ setters, keep WDSP 2.10's path unchanged. No
+//                NereusSDR-original DSP. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code. GPLv2+ upstream combined under
+//                NereusSDR's GPLv3 (the MW0LGE dual-licence clause is
+//                unaffected).
+// =============================================================================
+
 /*  eq.c
 
 This file is part of a program that implements a Software-Defined Radio.
@@ -26,6 +100,18 @@ warren@pratt.one
 
 #include "comm.h"
 
+// From Thetis wdsp/eq.c:42-51 [v2.10.3.15], used by eq_impulse_q below.
+// -- used in the parametric EQ code
+#define TAIL_MIX 0.15//0.08		// the blend between the main filter lobe and the tail
+#define TAIL_SCALE 2.5		// how wide the tail is relative to the main lobe
+#define BW_REF_HZ 1000.0	// reference bandwidth for Q factor calculations (Hz). Q of 1 spreads +-1000Hz
+#define EDGE_WEIGHT 0.05	// the edge detection threshold for the EQ's frequency boundaries
+#define MIN_SIGMA 1.0e-12	// minimum allowed bandwidth (sdev in Hz)
+#define FWHM_TO_SIGMA (1.0 / sqrt(2.0 * log(2.0)))  // ~0.425  // Full-Width Half-Maximum (FWHM) to standard deviation for a Gaussian
+#define MIN_MAG 1.0e-100	// numerical underflow point
+#define MID_NORM(k) ((double)(k) / (double)mid)		// bin index to 0-1
+// --
+
 int fEQcompare (const void * a, const void * b)
 {
 	if (*(double*)a < *(double*)b)
@@ -34,6 +120,17 @@ int fEQcompare (const void * a, const void * b)
 		return 0;
 	else
 		return 1;
+}
+
+// From Thetis wdsp/eq.c:64-72 [v2.10.3.15], used by eq_impulse_q below.
+static int fEQcompare3(const void* a, const void* b)
+{
+	const double* da = (const double*)a;
+	const double* db = (const double*)b;
+
+	if (da[0] < db[0]) return -1;
+	if (da[0] > db[0]) return 1;
+	return 0;
 }
 
 typedef struct _eqimp
@@ -48,6 +145,10 @@ typedef struct _eqimp
 	double* sary;
 	NURBS pnurbs;
 	FSAMP pfsamp;
+	// NereusSDR (R-R3-49 group A fix wave): the Q factors of a parametric
+	// profile (Thetis EQP's Q), and whether one is set.
+	double* Q;
+	int useQ;
 } eqimp, *EQIMP;
 
 EQIMP create_eqimp(int nfreqs, int nc, int wintype, int max_freqs)
@@ -67,11 +168,14 @@ EQIMP create_eqimp(int nfreqs, int nc, int wintype, int max_freqs)
 		EQ_MAXIMUM_U_VALUES,
 		EQ_MAXIMUM_FPTS);
 	a->pfsamp = create_fsamp(a->nc, a->wintype);
+	a->Q = (double*)malloc0((a->max_freqs + 1) * sizeof(double));
+	a->useQ = 0;
 	return a;
 }
 
 void destroy_eqimp(EQIMP a)
 {
+	_aligned_free(a->Q);
 	destroy_fsamp(a->pfsamp);
 	destroy_nurbs(a->pnurbs);
 	_aligned_free(a->sary);
@@ -88,6 +192,193 @@ void setWintype_eqimp (EQIMP a, int wintype)
 	a->pfsamp  = create_fsamp (a->nc, wintype);
 }
 
+// NereusSDR (R-R3-49 group A fix wave): keep a parametric profile's Q
+// factors (Q[1..nfreqs], Q[0] unused) for every later rebuild, as Thetis's
+// EQP keeps a->Q; a null Q clears them (wdsp/eq.c:787-800 [v2.10.3.15]).
+static void setQ_eqimp (EQIMP a, int nfreqs, double* Q)
+{
+	if (Q != NULL && nfreqs >= 1 && nfreqs <= a->max_freqs)
+	{
+		memcpy (a->Q, Q, (nfreqs + 1) * sizeof (double));
+		a->useQ = 1;
+	}
+	else
+		a->useQ = 0;
+}
+
+// Thetis's eq_impulse with a non-null Q: the Q branch and the ctfmode 0
+// rolloff, verbatim, into this impulse builder's buffers in place of
+// Thetis's per-call ones (A is zeroed first, as Thetis's malloc0 leaves
+// it), then the builder's frequency sampler as eq_impulse below uses it
+// (Thetis: fir_fsamp). Thetis's impulse cache is not ported.
+// From Thetis wdsp/eq.c:74-342 [v2.10.3.15].
+static void eq_impulse_q (EQIMP a, int N, int nfreqs, double* F, double* G, double* Q,
+	double samplerate, double scale, int ctfmode, double* impulse)
+{
+	double* fp = a->fp;
+	double* A = a->A;
+	double gpreamp;
+	int i, j;
+	int mid = N / 2;
+	memset (A, 0, (mid + 1) * sizeof (double));
+
+	{
+	// parametric eq with Q factor - Richard Samphire (c) 2026 - MW0LGE
+	// note atm, first/last entry should be on edges of required filter due to
+	// Q not being applied outside these
+	// original implentation is commented out below
+	double nyquist_hz = samplerate * 0.5;
+	double bin_offset = (N & 1) ? 0.0 : 0.5;
+	double bin_hz = (mid > 0) ? (nyquist_hz / (double)mid) : 0.0;
+	double tail_norm = 1.0 / (1.0 + TAIL_MIX);
+	double min_fwhm_bins = 2.0;
+	double q_sharpen = 1.0;
+	int a_count = (N & 1) ? (mid + 1) : mid;
+	double low_fc_hz = 1.0e300;
+	double high_fc_hz = -1.0e300;
+	double tail_coeff = TAIL_MIX;// *tail_norm;
+	double tail_scale_inv = 1.0 / TAIL_SCALE;
+
+	double* fc_hz = (double*)malloc0((nfreqs + 1) * sizeof(double));
+	double* sigma_inv = (double*)malloc0((nfreqs + 1) * sizeof(double));
+	double* gain_db = (double*)malloc0((nfreqs + 1) * sizeof(double));
+	double* sary = (double*)malloc0(3 * nfreqs * sizeof(double));
+	// dont worry about the above failing, nothing in WDSP does
+
+	fp[0] = 0.0;
+	fp[nfreqs + 1] = 1.0;
+	gpreamp = G[0];
+
+	// compute filter parameters
+	for (i = 1, j = 0; i <= nfreqs; i++, j += 3)
+	{
+		double fc_norm = fmin(fmax(2.0 * F[i] / samplerate, 0.0), 1.0); // clamp
+		double qi = (Q[i] > 0.0) ? Q[i] : 1.0;
+
+		sary[j + 0] = fc_norm;
+		sary[j + 1] = G[i];
+		sary[j + 2] = qi;
+	}
+
+	qsort(sary, nfreqs, 3 * sizeof(double), fEQcompare3);
+
+	// and use them
+	for (i = 1, j = 0; i <= nfreqs; i++, j += 3)
+	{
+		double fc_norm = sary[j + 0];
+		double fci_hz = fc_norm * nyquist_hz;
+		double qi = sary[j + 2];
+		double fwhm_hz = (q_sharpen * BW_REF_HZ) / qi;
+		double min_fwhm_hz = min_fwhm_bins * bin_hz;
+
+		if (fwhm_hz < min_fwhm_hz) fwhm_hz = min_fwhm_hz;
+
+		double sig = (0.5 * fwhm_hz) * FWHM_TO_SIGMA;
+		if (sig < MIN_SIGMA) sig = MIN_SIGMA;
+
+		fc_hz[i] = fci_hz;
+		sigma_inv[i] = 1.0 / sig; // reciprocal
+		gain_db[i] = sary[j + 1];
+
+		// track min/max
+		if (fci_hz < low_fc_hz) low_fc_hz = fci_hz;
+		if (fci_hz > high_fc_hz) high_fc_hz = fci_hz;
+	}
+
+	// bounds
+	if (nfreqs > 0)
+	{
+		fp[1] = low_fc_hz / nyquist_hz;
+		fp[nfreqs] = high_fc_hz / nyquist_hz;
+
+		if (fp[1] < 0.0) fp[1] = 0.0;
+		if (fp[1] > 1.0) fp[1] = 1.0;
+		if (fp[nfreqs] < 0.0) fp[nfreqs] = 0.0;
+		if (fp[nfreqs] > 1.0) fp[nfreqs] = 1.0;
+	}
+
+	// magnitude response
+	for (i = 0; i < a_count; i++)
+	{
+		double f_hz = ((double)i + bin_offset) * bin_hz;
+		double gdb = gpreamp;
+
+		// track min/max
+		if (f_hz >= low_fc_hz && f_hz <= high_fc_hz)
+		{
+			for (j = 1; j <= nfreqs; j++)
+			{
+				double df = f_hz - fc_hz[j];
+				double x0 = df * sigma_inv[j];
+				double w0 = exp(-0.5 * x0 * x0);
+
+				// tail sigma
+				double x1 = df * sigma_inv[j] * tail_scale_inv;
+				double w1 = exp(-0.5 * x1 * x1);
+
+				double w = (w0 + tail_coeff * w1) * tail_norm;
+				gdb += gain_db[j] * w;
+			}
+		}
+
+		//linear
+		A[i] = pow(10.0, gdb * 0.05) * scale;
+	}
+
+	_aligned_free(sary);
+	_aligned_free(gain_db);
+	_aligned_free(sigma_inv);
+	_aligned_free(fc_hz);
+	}
+
+	if (ctfmode == 0)
+	{
+		// refactored - eq magnitude beyond active range using 4th-order rolloff (high-pass below, low-pass above)
+		int low, high, high_limit;
+		double lowmag, highmag, flow4, fhigh4;
+		double f_inv = 1.0 / (double)mid;
+
+		// bounds odd/even
+		if (N & 1)
+		{
+			low = (int)(fp[1] * mid);
+			high = (int)(fp[nfreqs] * mid + 0.5);
+			high_limit = mid;
+		}
+		else
+		{
+			low = (int)(fp[1] * mid - 0.5);
+			high = (int)(fp[nfreqs] * mid - 0.5);
+			high_limit = mid - 1;
+		}
+
+		lowmag = A[low];
+		highmag = A[high];
+		flow4 = pow(MID_NORM(low), 4.0);
+		fhigh4 = pow(MID_NORM(high), 4.0);
+
+		// low edge
+		for (int k = low - 1; k >= 0; k--)
+		{
+			double f4 = pow(MID_NORM(k), 4.0);
+			lowmag *= f4 / flow4;
+			if (lowmag < MIN_MAG) lowmag = MIN_MAG;
+			A[k] = lowmag;
+		}
+
+		// high edge
+		for (int k = high + 1; k <= high_limit; k++)
+		{
+			double f4 = pow(MID_NORM(k), 4.0);
+			highmag *= fhigh4 / f4;
+			if (highmag < MIN_MAG) highmag = MIN_MAG;
+			A[k] = highmag;
+		}
+	}
+
+	fsamp_exec (a->pfsamp, A, impulse, 1, 1.0);
+}
+
 #ifndef M_LN2_10
 #define M_LN2_10 3.32192809488736234787
 #endif
@@ -98,13 +389,24 @@ void eq_impulse (EQIMP a, int N, int nfreqs, double* F, double* G,
 {
 	NURBS pnurbs = a->pnurbs;
 	FSAMP pfsamp = a->pfsamp;
-	double* fp = a->fp;
-	double* gp = a->gp;
-	double* A  = a->A;
-	double* sary = a->sary;
+	double* fp;
+	double* gp;
+	double* A;
+	double* sary;
 	double gpreamp, f, frac;
 	int i, j, k;
 	int mid, low, high;
+	// NereusSDR (R-R3-49 group A fix wave): a profile set with Q takes
+	// Thetis's Q branch, for every rebuild (wdsp/eq.c:120 [v2.10.3.15]).
+	if (a->useQ)
+	{
+		eq_impulse_q (a, N, nfreqs, F, G, a->Q, samplerate, scale, ctfmode, impulse);
+		return;
+	}
+	fp = a->fp;
+	gp = a->gp;
+	A  = a->A;
+	sary = a->sary;
 	fp[0] = 0.0;
 	fp[nfreqs + 1] = 1.0;
 	gpreamp = G[0];
@@ -609,8 +911,12 @@ void SetTXAEQMP (int channel, int mp)
 	return;
 }
 
+// NereusSDR (R-R3-49 group A fix wave): Q as Thetis's SetTXAEQProfile
+// takes it (dsp.cs:788, wdsp/eq.c:780-806 [v2.10.3.15]): Q[1..nfreqs] with
+// the profile, or null for none. A Q profile is built whatever the spline
+// settings, as Thetis builds it.
 PORT
-void SetTXAEQProfile (int channel, int nfreqs, double* F, double* G)
+void SetTXAEQProfile (int channel, int nfreqs, double* F, double* G, double* Q)
 {
 	EQP a = txa[channel].eqp.p;
 	NURBS b = a->peqimp->pnurbs;
@@ -618,7 +924,8 @@ void SetTXAEQProfile (int channel, int nfreqs, double* F, double* G)
 	a->nfreqs = nfreqs;
 	memcpy (a->F, F, (nfreqs + 1) * sizeof (double));
 	memcpy (a->G, G, (nfreqs + 1) * sizeof (double));
-	if (!checkSplineInputs (a->nfreqs, b->p, b->r, b->umethod, b->W))
+	setQ_eqimp (a->peqimp, nfreqs, Q);
+	if (a->peqimp->useQ || !checkSplineInputs (a->nfreqs, b->p, b->r, b->umethod, b->W))
 	{
 		eq_impulse(a->peqimp, a->nc, a->nfreqs, a->F, a->G, a->samplerate,
 			1.0 / (2.0 * a->size), a->ctfmode, a->wintype, a->deg, a->impulse);
@@ -668,6 +975,9 @@ void SetTXAGrphEQ (int channel, int *txeq)
 	EQP a = txa[channel].eqp.p;
 	NURBS b = a->peqimp->pnurbs;
 	EnterCriticalSection (&a->csEQ);
+	// NereusSDR (R-R3-49 group A fix wave): no Q, as Thetis sets a->Q
+	// to NULL here (wdsp/eq.c:839-852 [v2.10.3.15]).
+	setQ_eqimp (a->peqimp, 0, NULL);
 	a->nfreqs = 4;
 	a->F[1] =  150.0;
 	a->F[2] =  400.0;
@@ -695,6 +1005,9 @@ void SetTXAGrphEQ10 (int channel, int *txeq)
 	EQP a = txa[channel].eqp.p;
 	NURBS b = a->peqimp->pnurbs;
 	EnterCriticalSection (&a->csEQ);
+	// NereusSDR (R-R3-49 group A fix wave): no Q, as Thetis sets a->Q
+	// to NULL here (wdsp/eq.c:868-884 [v2.10.3.15]).
+	setQ_eqimp (a->peqimp, 0, NULL);
 	a->nfreqs = 10;
 	a->F[1]  =    32.0;
 	a->F[2]  =    63.0;

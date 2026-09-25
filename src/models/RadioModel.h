@@ -92,6 +92,31 @@
 //                (MoxController, any source, through the TX to RX
 //                handover), Core to window. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): stationOnAirRefusal, the Core's
+//                one on-the-air refusal; isCoreOnAir / coreOnAirChanged in
+//                a window; the TX half of the remote DSP > Options apply.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): setTunePowerForTxBandForStation,
+//                refreshTransmitTuneBand and wireTransmitChainForTest.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the TX profile commands
+//                (selectTxProfileForStation, saveTxProfileForStation,
+//                deleteTxProfileForStation), resetRadeVocoderForStation,
+//                scopeTxProfiles and the Core's profiles published on
+//                `transmit`; a window's profile manager mirrors them.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 / R-R3-46 / R-R3-49 (parity Task 6): paReadings,
+//                the one PA reading source for every window (the Core's in
+//                a remote window, applyCorePaReadings); the Core's TX
+//                inhibit mirrored as `txInhibited`. NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 5): applySwrProtectionSetting, the
+//                SWR protection settings applied to the live controller
+//                when they change, not only at start. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -370,6 +395,10 @@ class RadioModel : public QObject {
     // the moment MoxController starts a key (its MOX button, a hardware
     // PTT, CAT, TCI, TUNE or two-tone) until its TX to RX handover ends.
     Q_PROPERTY(bool transmitting READ isTransmitting NOTIFY transmittingChanged)
+    // R-R3-49 (parity Task 6, carried from gaps Task 13): the Core's TX
+    // inhibit (TxInhibitMonitor::inhibited()), Core to window only, so a
+    // remote window's TX badge shows the Core's inhibit.
+    Q_PROPERTY(bool txInhibited READ isTxInhibited NOTIFY txInhibitedChanged)
 
 
 public:
@@ -616,6 +645,18 @@ public:
     void setNetworkWatchdogEnabled(bool enabled);
     void applyNetworkWatchdog(bool enabled);
 
+    // R-R3-49 (parity Task 5): Setup > Transmit > Power's SWR Protection
+    // group (SwrProtectionEnabled, SwrProtectionLimit,
+    // SwrTuneProtectionEnabled, TunePowerSwrIgnore, WindBackPowerSwr),
+    // applied to this model's SwrProtectionController at once, as Thetis
+    // applies each box when it changes. `value` is the saved string; an
+    // invalid QVariant (the key removed) applies the default the
+    // constructor reads. The local page calls it after saving; the Core
+    // calls it for a window's accepted change (StationServer). False for
+    // any other key.
+    bool applySwrProtectionSetting(const QString& key, const QVariant& value);
+    static bool isSwrProtectionSettingKey(const QString& key);
+
     // Sub-components
     RadioConnection*  connection()       { return m_connection; }
     const RadioConnection* connection() const { return m_connection; }
@@ -849,6 +890,40 @@ public:
     // Phase 3P-H Task 2.
     const RadioStatus& radioStatus()        const { return m_radioStatus; }
     RadioStatus&       radioStatus()              { return m_radioStatus; }
+
+    // R-R3-32 / R-R3-46 (parity Task 6): the radio's PA readings, the one
+    // source every window's PA row, Radio Status, PA Values and the HW
+    // Volts, Amps and Temperature meters read. A local window takes them
+    // from its own connection and RadioStatus; a remote window holds the
+    // Core's (applyCorePaReadings, from station telemetry version 4). Each
+    // is absent when the radio has none, has not reported it, or (in a
+    // remote window) the Core's telemetry is out of date: never a 0
+    // standing in for "unknown".
+    struct PaReadings {
+        std::optional<double> paVolts;              // PA drain volts (user ADC0)
+        std::optional<double> supplyVolts;          // supply volts
+        std::optional<double> paCurrentAmps;        // PA current
+        std::optional<double> paTemperatureCelsius; // PA temperature
+        bool operator==(const PaReadings&) const = default;
+    };
+    PaReadings paReadings() const;
+    // True in a remote window, whose readings come from the Core.
+    bool paReadingsFromCore() const { return m_role == Role::Remote; }
+    // The PA row's volts, as the System tile and Radio Status show them:
+    // the supply volts on the ANAN-G2E, whose user ADC0 is dark (2026-05-25
+    // G2E bench finding), the PA drain volts on every other board.
+    struct PaRowVolts {
+        std::optional<double> volts;
+        bool supply = false;   // true: supply volts ("PSU"), else PA volts ("PA")
+    };
+    PaRowVolts paRowVolts() const;
+    // Remote window only: the Core's latest readings, or all absent when
+    // its telemetry is out of date or the session ended.
+    void applyCorePaReadings(const PaReadings& readings);
+
+    // R-R3-49 (parity Task 6): the radio's TX inhibit. Local: this model's
+    // TxInhibitMonitor. Remote: the Core's, as the window last heard it.
+    bool isTxInhibited() const;
 
     // Settings hygiene validation — single instance owned here.
     // Call validate() after each successful connect.
@@ -1567,6 +1642,11 @@ public:
     /// (`key` is the settings key), coalesced, so the window never saves a
     /// stale cell back over a newer Core value. A no-op on a Local model.
     void scheduleRemoteOcReload(const QString& key);
+    // R-R3-46 / R-R3-49 (parity Task 6): in a remote window, a key of the
+    // Core's radio's PA profiles (hardware/<mac>/pa/...) or PA forward-power
+    // table (hardware/<mac>/paCalibration/...) reloads the window's copies,
+    // coalesced; an empty key reloads them whatever changed.
+    void scheduleRemotePaReload(const QString& key);
 
     /// R-R3-46: ask the radio's HL2 I/O board to identify itself (three
     /// I2C reads). Locally the P1 connection enqueues them; a remote window
@@ -1631,6 +1711,26 @@ public:
     // (MoxController::isMox(), or its state is not Rx). A remote window
     // holds the Core's value as it last heard it.
     bool isTransmitting() const;
+
+    // R-R3-49 (parity Task 1): the Core's one on-the-air refusal. True,
+    // with "The radio is on the air. Try again when it stops." in `reason`,
+    // while the radio is keyed (MoxController from any source, through its
+    // TX to RX handover; or the transmit model's MOX latch), TUNE is on, or
+    // the two-tone test runs. False otherwise. Every change a window asks
+    // the Core for that keys nothing is checked here before it is applied.
+    bool stationOnAirRefusal(QString* reason) const;
+    // The sentence stationOnAirRefusal gives, for a window's own gate.
+    static QString onAirReason();
+
+    // R-R3-49 (parity Task 1): in a remote window, the Core's radio is on
+    // the air as the Core last reported it: its `transmitting`, the
+    // mirrored transmit model's TUNE, or PureSignal's two-tone. Nothing
+    // here keys; a window greys what waits while this is true.
+    bool isCoreOnAir() const;
+    // R-R3-49: the window's copy of the Core's `transmitting` goes back to
+    // false when the session ends, so a Core that does not send it never
+    // inherits an old "on the air".
+    void clearRemoteTransmittingState();
 
     // Phase 3F Sub-Epic C: TX-slice arbiter (single-TX invariant + RF-safe
     // handoff). Owned by RadioModel (Qt parent), wired to slice list +
@@ -2093,6 +2193,33 @@ public:
     bool setTgxlAntennaForStation(int port, QString* reason);
     bool setTgxlOperateForStation(bool on, QString* reason);
     bool setTgxlBypassForStation(bool on, QString* reason);
+    // R-R3-49 (parity Task 2, transmitSettingsVersion 2): a window's Tune
+    // Power slider. Sets the tune power for the band the Core transmits on
+    // and the tune drive source to the tune slider, as the local slider
+    // does. Refused, changing nothing, while the radio is on the air and
+    // outside the tune power range.
+    bool setTunePowerForTxBandForStation(int watts, QString* reason);
+    // R-R3-49 (parity Task 3, transmitSettingsVersion 3): a window's TX
+    // profile combos and Setup > Audio > TX Profile. Select applies the
+    // profile as the local combo does; save stores the Core's current
+    // transmit settings under the name, overwriting only that name, as the
+    // local Save does; delete removes it, never the last one. Each is
+    // refused, changing nothing, while the radio is on the air, and select
+    // and delete for a name the Core does not have. The Core's active
+    // profile and list come back on `transmit` (activeTxProfile,
+    // txProfilesJson). None keys the radio.
+    bool selectTxProfileForStation(const QString& name, QString* reason);
+    bool saveTxProfileForStation(const QString& name, QString* reason);
+    bool deleteTxProfileForStation(const QString& name, QString* reason);
+    // R-R3-49 (parity Task 3): the RADE applet's Reset vocoder. Clears the
+    // RADE transmit vocoder of the active slice's RADE channel
+    // (RadeChannel::resetTx), as the local button does. Keys nothing.
+    // Refused while the radio is on the air and with no RADE channel.
+    bool resetRadeVocoderForStation(QString* reason);
+    // R-R3-49 (parity Task 3): scope the TX profile bank to a radio's MAC and
+    // load it, as a connect does (empty: no radio), then publish the
+    // profiles on `transmit`. The Core only; a window mirrors the Core's.
+    void scopeTxProfiles(const QString& mac);
 
     // Phase 3G-9b: one-shot profile that sets the 7 smooth-default recipe
     // values on SpectrumWidget. Called from the constructor exactly once
@@ -2292,12 +2419,19 @@ public:
     // The Core's StationServer calls this after it accepts a settings write
     // or remove of a key from a remote window. RX per-mode keys
     // (DspOptions{BufferSize,FilterSize,FilterType}{Phone,Cw,Dig,Fm}Rx)
-    // queue their mode group; every other key, TX keys included, is
-    // ignored. After kDspOptionsApplyCoalesceMs the queued groups are
-    // applied once: each slice whose current mode is in a queued group
-    // re-runs the mode-change apply (RxChannel::onModeChanged) on its own
-    // channel, so a buffer or filter change takes effect without a mode
-    // change. A burst of keys yields one apply per slice.
+    // queue their mode group; every other key is ignored. After
+    // kDspOptionsApplyCoalesceMs the queued groups are applied once: each
+    // slice whose current mode is in a queued group re-runs the mode-change
+    // apply (RxChannel::onModeChanged) on its own channel, so a buffer or
+    // filter change takes effect without a mode change. A burst of keys
+    // yields one apply per slice.
+    //
+    // R-R3-49 (parity Task 1): TX per-mode keys
+    // (DspOptions{BufferSize,FilterSize,FilterType}{Phone,Dig,Fm}Tx) queue
+    // their group too, and when the TX-bound slice's mode is in it the TX
+    // channel re-runs its mode-change apply (TxChannel::onModeChanged), the
+    // local page's own TX apply (rebuildDspOptionsForMode). It sets the TX
+    // channel's buffer and filter only; it never keys.
     //
     // Local operation never calls this: DspOptionsPage applies its own
     // edits through rebuildDspOptionsForMode. No-op on a remote-role model.
@@ -2331,6 +2465,13 @@ public:
     void setDspOptionsApplyObserverForTest(std::function<void(int, DSPMode)> observer)
     {
         m_dspOptionsApplyObserverForTest = std::move(observer);
+    }
+    // Test-only: observe each TX apply the coalesced flush makes, with the
+    // TX-bound slice's mode. Called before the TxChannel apply, so it
+    // reports the target even when no TX channel exists.
+    void setDspOptionsTxApplyObserverForTest(std::function<void(DSPMode)> observer)
+    {
+        m_dspOptionsTxApplyObserverForTest = std::move(observer);
     }
 
     // Phase 3Q Sub-PR-4 D.3: Hover tooltip for the TitleBar ConnectionSegment.
@@ -2664,6 +2805,12 @@ public:
     // WDSP-init lambda inside connectToRadio() (see "createTxChannel(kTxChannelId)"
     // around RadioModel.cpp:1514).
     void injectTxChannelForTest(class TxChannel* ch) { m_txChannel = ch; }
+
+    // R-R3-49 (parity Task 2): inject `channel` and run the Core's transmit
+    // chain wiring (TransmitModel to TxChannel, MON to the audio engine)
+    // that connectToRadio() runs once WDSP is up, so a test can check a
+    // setting reached the TX channel's own state. No WDSP channel, no RF.
+    void wireTransmitChainForTest(class TxChannel* channel);
 
     // Phase 4 Agent 4A of issue #167 — test seam to inject the HPSDRModel
     // hardware profile directly. setBoardForTest(HPSDRHW::OrionMKII) maps
@@ -3303,6 +3450,12 @@ signals:
     void rfKitEnabledChanged(bool enabled);
     // R-R3-49: isTransmitting() changed.
     void transmittingChanged(bool transmitting);
+    // R-R3-49 (parity Task 1): isCoreOnAir() changed.
+    void coreOnAirChanged(bool onAir);
+    // R-R3-32 (parity Task 6): paReadings() changed.
+    void paReadingsChanged();
+    // R-R3-49 (parity Task 6): isTxInhibited() changed.
+    void txInhibitedChanged(bool inhibited);
     // Fires on each transition to Connected with the RadioInfo of the live
     // connection. HardwarePage (Phase 3I) listens to this to repopulate
     // sub-tabs with per-radio fields.
@@ -3683,6 +3836,17 @@ private:
     // switch the Core's Tuner Genius now (not the Core's tuner, the radio
     // on the air, or no tuner admitted).
     bool stationTgxlControlAllowed(QString* reason) const;
+    // R-R3-49 (parity Task 2): the transmit band for tunePowerForTxBand,
+    // and the Core's transmit chain wiring (moved from connectToRadio()).
+    void refreshTransmitTuneBand();
+    // R-R3-49 (parity Task 3): the Core's MicProfileManager's active profile
+    // and list onto `transmit` (activeTxProfile, txProfilesJson).
+    void publishTxProfiles();
+    // R-R3-49 (parity Task 3): a window's profile manager mirrors the Core's
+    // profiles and asks the Core through the station link.
+    void mirrorTxProfilesFromStation();
+    void wireMicAndMonitorToTransmit();
+    void wireTransmitProcessingChain();
 
     // Phase 3Q-1: drives the RadioModel-level connection state machine.
     // Guards against redundant transitions (no emit if state unchanged).
@@ -3834,6 +3998,10 @@ private:
     QSet<QString> m_pendingHardwareReloads;
     std::function<void(const QString&)> m_hardwareApplyObserverForTest;
     std::function<void(int, DSPMode)> m_dspOptionsApplyObserverForTest;
+    // R-R3-49 (parity Task 1): the TX groups queued by a window's
+    // DspOptions<Setting><Mode>Tx write, and the test observer.
+    QSet<QString> m_pendingDspOptionsTxGroups;
+    std::function<void(DSPMode)> m_dspOptionsTxApplyObserverForTest;
 
     // The connect-time DDC seed, factored out of the wireSliceSignals
     // singleShot so it can be driven without a live connection. Commands the
@@ -5383,6 +5551,21 @@ private:
     // Core's value as a remote window last heard it.
     bool m_transmitting{false};
     bool m_remoteTransmitting{false};
+    // R-R3-49 (parity Task 6): the Core's TX inhibit as a remote window
+    // last heard it.
+    bool m_remoteTxInhibited{false};
+    // R-R3-32 (parity Task 6): the Core's PA readings in a remote window,
+    // and in a local one whether a telemetry sample has reported the PA
+    // current and the PA temperature since connect.
+    PaReadings m_corePaReadings;
+    bool m_paCurrentReported{false};
+    bool m_paTemperatureReported{false};
+    // R-R3-46 (parity Task 6): the remote window's PA reload.
+    QTimer* m_remotePaReloadTimer{nullptr};
+    void reloadRemotePaState();
+    // R-R3-49 (parity Task 1): isCoreOnAir() as last announced.
+    bool m_coreOnAir{false};
+    void updateCoreOnAir();
     bool m_remoteFourO3AListening{false};
     QString m_remoteFourO3AListenerError;
     QTimer* m_accessoryBandTimer{nullptr};

@@ -130,6 +130,10 @@ LOCAL_AUDIO_ALLOWLIST = {
     # container VAX 1 / VAX 2 buttons, which open and close this computer's
     # VAX outputs as Setup > Audio > VAX does (R-R3-49).
     "src/gui/MainWindow.cpp": 4,
+    # The TX applet's MON output pair (Speakers / Phones): this computer's
+    # monitor routing, a window-scope setting, live in a remote window as
+    # in a local one (R-R3-49, parity Task 2).
+    "src/gui/applets/TxApplet.cpp": 1,
 }
 
 # A double-quoted C++ string literal, escapes included. Removed from a line

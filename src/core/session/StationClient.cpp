@@ -124,6 +124,26 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsAvailable
+//                (transmitSettingsVersion), and the radio's `transmitting`
+//                cleared when the session ends. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): requestTunePowerForTxBand
+//                (transmitSettingsVersion 2), the Core's tunePowerForTxBand
+//                and tuneDrivePowerSource applied as plain state, and a
+//                refused Tune Power change shows the Core's value again.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the TX profile requests and
+//                requestRadeResetVocoder (transmitSettingsVersion 3); a
+//                refused profile request shows the Core's profile again.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 / R-R3-46 / R-R3-49 (parity Task 6): the radio's
+//                PA readings and link quality kept only from a Core at
+//                minor 11 and stationTelemetryVersion 4; the Core's
+//                `txInhibited` applied as plain state; the Core's PA
+//                profiles and PA table reloaded in the window as their keys
+//                arrive. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -133,6 +153,7 @@
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/security/DeviceAuthenticator.h"
 #include "core/security/StationIdentity.h"
+#include "core/MicProfileManager.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionEndReasons.h"
@@ -1208,6 +1229,9 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
             // can arrive, so a disconnected station is never presented as
             // still listening on this machine.
             m_radioModel->clearRemoteFourO3AState();
+            // R-R3-49: likewise the Core's transmit state, so a Core that
+            // does not send `transmitting` never inherits "on the air".
+            m_radioModel->clearRemoteTransmittingState();
             if (TunerModel* const tuner = m_radioModel->tunerModel()) {
                 TunerModel::StationConnectionState disconnected;
                 disconnected.configuredHost = tuner->configuredHost();
@@ -1456,6 +1480,12 @@ void StationClient::onTransportText(const QByteArray& wire)
             if (m_agreedMinor < kReceiverLoadSessionProtocolMinor
                 || m_capabilities.stationTelemetryVersion < 3) {
                 message.telemetry.receivers.reset();
+            }
+            // R-R3-32 (parity Task 6): and the radio's PA readings and link
+            // quality only from one that negotiated version 4.
+            if (m_agreedMinor < kReceiverLoadSessionProtocolMinor
+                || m_capabilities.stationTelemetryVersion < 4) {
+                message.telemetry.radio.clearRadioStatus();
             }
             emit telemetryReceived(message.telemetry, m_sessionEpoch);
         }
@@ -2131,6 +2161,8 @@ void StationClient::handleSettingsSnapshot(const SessionMessage& message)
         for (auto it = data.constBegin(); it != data.constEnd(); ++it) {
             m_radioModel->scheduleRemoteOcReload(it.key());
         }
+        // R-R3-46 (parity Task 6): and its PA profiles and PA table, once.
+        m_radioModel->scheduleRemotePaReload(QString());
         // Follow-up 6: pages showing the Core's settings re-read them.
         m_radioModel->reportStationSettingChanged(QString());
     }
@@ -2194,6 +2226,8 @@ void StationClient::handleSettingsValue(const SessionMessage& message)
     // window's copy, so its next save cannot send a stale cell back.
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteOcReload(key);
+        // R-R3-46 (parity Task 6): likewise the PA profiles and PA table.
+        m_radioModel->scheduleRemotePaReload(key);
         // Follow-up 6: another window's (or the Core's) change reaches the
         // pages that show it.
         m_radioModel->reportStationSettingChanged(key);
@@ -2214,6 +2248,8 @@ void StationClient::handleSettingsReject(const SessionMessage& message)
     // R-R3-46: a refused OC cell settles the window's copy on the Core's.
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteOcReload(QString::fromUtf8(message.objectKey));
+        // R-R3-46 (parity Task 6): a refused PA write settles on the Core's.
+        m_radioModel->scheduleRemotePaReload(QString::fromUtf8(message.objectKey));
     }
     if (!message.reason.isEmpty() && m_radioModel) {
         m_radioModel->reportStationSliceCommandRejected(message.reason);
@@ -2679,6 +2715,8 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("RadioModel.rfKitEnabled"),
         // R-R3-49: likewise the Core's transmit state; it never keys here.
         QByteArrayLiteral("RadioModel.transmitting"),
+        // R-R3-49 (parity Task 6): likewise the Core's TX inhibit.
+        QByteArrayLiteral("RadioModel.txInhibited"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),
         QByteArrayLiteral("SliceModel.signalAverageDbm"),
@@ -2749,6 +2787,12 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
     if (className == "TunerModel") {
         auto* tuner = qobject_cast<TunerModel*>(target);
         return tuner != nullptr && tuner->applyStationValue(propertyName, native);
+    }
+    // R-R3-49 (parity Task 2): the Core's tune power for its transmit band
+    // and tune drive source, plain state; they change only by command.
+    if (className == "TransmitModel") {
+        auto* tx = qobject_cast<TransmitModel*>(target);
+        return tx != nullptr && tx->applyStationValue(propertyName, native);
     }
     // R-R3-47 / R-R3-22: plain state applies; never a command to an amp.
     if (className == "AmplifierModel") {
@@ -3546,6 +3590,55 @@ StationClient::CommandOutcome StationClient::requestTgxlBypass(bool on)
                        QStringLiteral("the Tuner Genius bypass"));
 }
 
+// R-R3-49 (parity Task 2): the TX applet's Tune Power slider. A Core
+// below transmitSettingsVersion 2 is not asked.
+StationClient::CommandOutcome StationClient::requestTunePowerForTxBand(int watts)
+{
+    if (!transmitSettingsAvailable(2)) {
+        return IStationLink::requestTunePowerForTxBand(watts);
+    }
+    return sendCommand("setTunePowerForTxBand", -1, { intArgument("watts", watts) },
+                       QStringLiteral("the tune power"));
+}
+
+// R-R3-49 (parity Task 3): the TX profile combos, Setup > Audio > TX
+// Profile and the RADE applet's Reset vocoder. A Core below
+// transmitSettingsVersion 3 is not asked.
+StationClient::CommandOutcome StationClient::requestTxProfileSelect(const QString& name)
+{
+    if (!transmitSettingsAvailable(3)) {
+        return IStationLink::requestTxProfileSelect(name);
+    }
+    return sendCommand("txProfile.select", -1, { stringArgument("name", name) },
+                       QStringLiteral("the transmit profile"));
+}
+
+StationClient::CommandOutcome StationClient::requestTxProfileSave(const QString& name)
+{
+    if (!transmitSettingsAvailable(3)) {
+        return IStationLink::requestTxProfileSave(name);
+    }
+    return sendCommand("txProfile.save", -1, { stringArgument("name", name) },
+                       QStringLiteral("the transmit profile"));
+}
+
+StationClient::CommandOutcome StationClient::requestTxProfileDelete(const QString& name)
+{
+    if (!transmitSettingsAvailable(3)) {
+        return IStationLink::requestTxProfileDelete(name);
+    }
+    return sendCommand("txProfile.delete", -1, { stringArgument("name", name) },
+                       QStringLiteral("the transmit profile"));
+}
+
+StationClient::CommandOutcome StationClient::requestRadeResetVocoder()
+{
+    if (!transmitSettingsAvailable(3)) {
+        return IStationLink::requestRadeResetVocoder();
+    }
+    return sendCommand("rade.resetVocoder", -1, {}, QStringLiteral("the RADE vocoder reset"));
+}
+
 StationClient::CommandOutcome StationClient::requestDisconnectTgxl()
 {
     if (!remoteTgxlConfigAvailable()) {
@@ -3639,6 +3732,18 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             m_radioModel->reportStationAccessoryRefusal(device, reason, message.commandId);
         } else {
             m_radioModel->reportStationSliceCommandRejected(reason);
+        }
+        // R-R3-49 (parity Task 2): a refused Tune Power change leaves the
+        // Core's value; the slider shows it again.
+        if (pending.verb == "setTunePowerForTxBand") {
+            m_radioModel->transmitModel().reportTunePowerForTxBandRefused();
+        }
+        // R-R3-49 (parity Task 3): a refused profile request leaves the
+        // Core's profile; every profile combo shows it again.
+        if (pending.verb.startsWith("txProfile.")) {
+            if (MicProfileManager* profiles = m_radioModel->micProfileManager()) {
+                profiles->reportStationRequestRefused();
+            }
         }
         // R-R3-46 fix wave: a refused band antenna leaves the window's
         // values as the Core's; the Setup tab that showed the click re-reads.
@@ -3793,6 +3898,14 @@ bool StationClient::tgxlControlAvailable() const
 {
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.remoteTgxlControlVersion >= 2;
+}
+
+bool StationClient::transmitSettingsAvailable(int minVersion) const
+{
+    // R-R3-49 (parity Task 1): the Core takes this window's transmit
+    // settings while its radio is off the air.
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.transmitSettingsVersion >= std::max(minVersion, 1);
 }
 
 bool StationClient::tgxlOperateAppliesWhole() const

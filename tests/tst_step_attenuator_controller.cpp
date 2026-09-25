@@ -768,6 +768,49 @@ private slots:
     }
 
     // ─────────────────────────────────────────────────────────────────────
+    // R-R3-49 (group A fix wave, M6): ATT on TX, its value and Force ATT,
+    // changed on the Core from a remote window, are saved at once, not at
+    // teardown, so a Core that loses power keeps them.
+    // ─────────────────────────────────────────────────────────────────────
+    void debouncedSaveWritesAttOnTxAndForceAtt()
+    {
+        auto& s = AppSettings::instance();
+        const QString mac = QStringLiteral("aa:bb:cc:de:ad:49");
+        s.clearHardwareValues(mac);
+
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.loadSettings(mac);
+        ctrl.setDebouncedSaveEnabled(true);
+        ctrl.flushPendingSave();
+
+        const bool attOnTx = !ctrl.attOnTxEnabled();
+        ctrl.setAttOnTxEnabled(attOnTx);
+        QVERIFY(ctrl.savePending());
+        QTRY_VERIFY(!ctrl.savePending());
+        QCOMPARE(s.hardwareValue(mac, QStringLiteral("options/stepAtt/attOnTxEnabled")).toString(),
+                 attOnTx ? QStringLiteral("True") : QStringLiteral("False"));
+
+        const bool force = !ctrl.forceAttWhenPsOff();
+        ctrl.setForceAttWhenPsOff(force);
+        QVERIFY(ctrl.savePending());
+        ctrl.flushPendingSave();
+        QCOMPARE(s.hardwareValue(mac, QStringLiteral("options/stepAtt/forceAttWhenPsOff")).toString(),
+                 force ? QStringLiteral("True") : QStringLiteral("False"));
+
+        const int value = ctrl.attOnTxValue() == 17 ? 18 : 17;
+        ctrl.setAttOnTxValue(value);
+        QVERIFY(ctrl.savePending());
+        ctrl.flushPendingSave();
+        StepAttenuatorController reloaded;
+        reloaded.setTickTimerEnabled(false);
+        reloaded.loadSettings(mac);
+        QCOMPARE(reloaded.attOnTxValue(), value);
+        QCOMPARE(reloaded.attOnTxEnabled(), attOnTx);
+        QCOMPARE(reloaded.forceAttWhenPsOff(), force);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
     // R-R3-46: a band change restores that band's attenuation and preamp
     // and, with setBandRestoreToRadio(true) (the Core and a local window),
     // sends them to the radio, as Thetis's RX1Band setter does

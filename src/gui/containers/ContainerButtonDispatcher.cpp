@@ -13,6 +13,10 @@
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-49, R-R3-21). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2): MON follows
+//                                    the transmit settings gate in a
+//                                    remote window (the Core's monEnabled).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/containers/ContainerButtonDispatcher.h"
@@ -131,7 +135,14 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
         break;
     case Id::Mon:
         st.on = m_model->transmitModel().monEnabled();
-        if (transmitBlockedRemotely()) { unavailable(remoteReason); }
+        // R-R3-49 (parity Task 2): a transmit setting, not a key. A remote
+        // window toggles the Core's monEnabled while the Core takes it.
+        if (!m_model->ownsLocalDsp()
+            && !(m_hooks.transmitSettingsPermitted && m_hooks.transmitSettingsPermitted())) {
+            const QString reason = m_hooks.transmitSettingsReason
+                ? m_hooks.transmitSettingsReason() : QString();
+            unavailable(reason.isEmpty() ? remoteReason : reason);
+        }
         break;
     case Id::Tun:
     case Id::Mox:

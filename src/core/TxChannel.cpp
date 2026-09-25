@@ -328,6 +328,18 @@ warren@wpratt.com
 //                 Source: Thetis wdsp/calcc.c:891-1132 [v2.10.3.13] +
 //                 Thetis cmaster.cs:143-147 [v2.10.3.13].  AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): setTxEqRunning records its
+//                 last value for the test read-back. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): the EQ profile, EQ globals, CFC
+//                 profile and phase rotator run record their last values
+//                 for the test read-back. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (group A fix wave): setTxEqProfile(F, G, Q) hands
+//                 SetTXAEQProfile the arrays Thetis's sendTXDspUpdate and
+//                 setTXEQProfile do, Q included (eqform.cs:3041-3072
+//                 [v2.10.3.15]); the ten-band overload calls it with no Q.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -1168,6 +1180,9 @@ void TxChannel::setVoxListening(bool on)
 void TxChannel::setStageRunning(Stage s, bool run)
 {
     const int r = run ? 1 : 0;
+    if (s == Stage::PhRot) {
+        m_phaseRotatorRunLast = run;  // R-R3-49 (parity Task 4): test read-back only
+    }
 
 #ifdef HAVE_WDSP
     // Null-guard: same sentinel as stageRunning() / setTuneTone() / setRunning().
@@ -3611,6 +3626,7 @@ void TxChannel::setPostGenToneMag(double mag)
 
 void TxChannel::setTxEqRunning(bool on)
 {
+    m_txEqRunningLast = on;  // R-R3-49 (parity Task 2): test read-back only
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/eq.c:742-747 [v2.10.3.13] — SetTXAEQRun(channel, run).
@@ -3653,36 +3669,53 @@ void TxChannel::setTxEqProfile(const std::vector<double>& freqs10,
                          << gains11.size() << "— ignoring call";
         return;
     }
-
-#ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
-    // From Thetis wdsp/eq.c:779-804 [v2.10.3.13] — SetTXAEQProfile(channel, nfreqs, F[], G[]).
-    // F is 1-indexed inside WDSP (F[0] is the unused pad slot), G is 0-indexed
-    // (G[0] = preamp).  Both buffers must be at least nfreqs+1 entries; we
-    // build them fresh on the stack.  (Q vector is exclusive to the parametric
-    // SetTXAGrphEQProfile variant — graphic EQ doesn't take a Q.)
-    //
-    // Mirrors the create_eqp call at wdsp/TXA.c:111-127 [v2.10.3.13]:
+    // From Thetis wdsp/TXA.c:111-127 [v2.10.3.13], the create_eqp call shape:
     //   double default_F[11] = {0.0,  32.0, ...};  // F[0] = 0.0 pad
     //   double default_G[11] = {0.0, -12.0, ...};  // G[0] = preamp (0 by default)
     //   //double default_G[11] =   {0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,    0.0,    0.0,    0.0,     0.0};
     //   create_eqp(..., 10, default_F, default_G, ...);
-    constexpr int kNfreqs = 10;
-    double F[kNfreqs + 1];
-    double G[kNfreqs + 1];
-    F[0] = 0.0;  // WDSP F[0] pad slot
-    for (int i = 0; i < kNfreqs; ++i) {
-        F[i + 1] = freqs10[static_cast<std::size_t>(i)];
+    std::vector<double> F(11, 0.0);  // F[0] is WDSP's pad slot
+    for (std::size_t i = 0; i < 10; ++i) {
+        F[i + 1] = freqs10[i];
     }
-    for (int i = 0; i < kNfreqs + 1; ++i) {
-        G[i] = gains11[static_cast<std::size_t>(i)];
+    setTxEqProfile(F, gains11, {});
+}
+
+void TxChannel::setTxEqProfile(const std::vector<double>& F, const std::vector<double>& G,
+                               const std::vector<double>& Q)
+{
+    // R-R3-49 (group A fix wave): the arrays Thetis hands WDSP. nfreqs is
+    // at most WDSP's EQ_MAXIMUM_CONTROL_POINTS (256), which the TX EQ's
+    // F/G/Q buffers hold (third_party/wdsp/src/eq.c create_eqp).
+    constexpr std::size_t kMaxEqPoints = 256;
+    if (F.size() < 2 || F.size() > kMaxEqPoints + 1 || G.size() != F.size()
+        || (!Q.empty() && Q.size() != F.size())) {
+        qCWarning(lcDsp) << "TxChannel::setTxEqProfile: F, G and Q sizes" << F.size()
+                         << G.size() << Q.size() << "are not a profile; ignoring call";
+        return;
     }
-    SetTXAEQProfile(m_channelId, kNfreqs, F, G);
+    m_txEqProfileFLast = F;  // R-R3-49: test read-back only
+    m_txEqProfileGLast = G;
+    m_txEqProfileQLast = Q;
+    ++m_txEqProfilePushCount;
+
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    // From Thetis eqform.cs:3067-3071 [v2.10.3.15]:
+    //   WDSP.SetTXAEQProfile(WDSP.id(1, 0), nfreqs, Fptr, Gptr,
+    //                        _state.TX_ParametricEQ ? Qptr : null);
+    // SetTXAEQProfile copies the arrays; it takes non-const pointers.
+    std::vector<double> f = F;
+    std::vector<double> g = G;
+    std::vector<double> q = Q;
+    const int nfreqs = static_cast<int>(F.size()) - 1;
+    SetTXAEQProfile(m_channelId, nfreqs, f.data(), g.data(), q.empty() ? nullptr : q.data());
 #endif
 }
 
 void TxChannel::setTxEqNc(int nc)
 {
+    m_txEqNcLast = nc;  // R-R3-49 (parity Task 4): test read-back only
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/eq.c:750-764 [v2.10.3.13] — SetTXAEQNC(channel, nc).
@@ -3695,6 +3728,7 @@ void TxChannel::setTxEqNc(int nc)
 
 void TxChannel::setTxEqMp(bool mp)
 {
+    m_txEqMpLast = mp;  // R-R3-49 (parity Task 4): test read-back only
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/eq.c:767-776 [v2.10.3.13] — SetTXAEQMP(channel, mp).
@@ -3707,6 +3741,7 @@ void TxChannel::setTxEqMp(bool mp)
 
 void TxChannel::setTxEqCtfmode(int mode)
 {
+    m_txEqCtfmodeLast = mode;  // R-R3-49 (parity Task 4): test read-back only
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/eq.c:807-816 [v2.10.3.13] — SetTXAEQCtfmode(channel, mode).
@@ -3719,6 +3754,7 @@ void TxChannel::setTxEqCtfmode(int mode)
 
 void TxChannel::setTxEqWintype(int wintype)
 {
+    m_txEqWintypeLast = wintype;  // R-R3-49 (parity Task 4): test read-back only
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/eq.c:819-828 [v2.10.3.13] — SetTXAEQWintype(channel, wintype).
@@ -3887,6 +3923,10 @@ void TxChannel::setTxCfcProfile(const std::vector<double>& F,
                          << "— ignoring call";
         return;
     }
+    // R-R3-49 (parity Task 4): test read-back only.
+    m_txCfcProfileFLast = F;
+    m_txCfcProfileGLast = G;
+    m_txCfcProfileELast = E;
 
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;

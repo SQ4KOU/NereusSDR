@@ -54,6 +54,10 @@ public:
     Ps3ActionResult executeAction(Ps3Action action, const QVariantMap& arguments,
                                   quint32 operationId);
     void setCoordinator(PureSignal* coordinator);
+    /// R-R3-49 (parity Task 1): follow the station's two-tone controller
+    /// (`twoToneOn`). RadioModel builds this facade before that controller,
+    /// so it calls this once the controller exists.
+    void followTwoToneController();
     void setRemoteRequestHandler(RemoteRequestHandler handler);
     void setRemoteCapabilities(bool available, bool canActuate);
     void receiveRemoteActionResult(quint32 operationId, const QByteArray& verb, Ps3ActionPhase phase,

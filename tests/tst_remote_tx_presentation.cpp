@@ -1,4 +1,13 @@
 // no-port-check: NereusSDR-original. Negotiated GUI availability, no RF/DSP logic.
+// 2026-09-24: R-R3-49 (parity Task 2): the TX applet's EQ toggle is a
+// transmit setting, live in a remote window off the air. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 3): Audio > TX Profile follows the
+// transmit settings gate, not remote transmit. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 5): Transmit > Power and DEXP/VOX open
+// without remote transmit and gate their settings on version 5. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest>
 #include <QAction>
 #include <QDir>
@@ -67,9 +76,18 @@ private slots:
         // only its controls held for the radio follow the permission
         // (tst_remote_gui_gating, remoteTxInputKeepsThisComputersMicrophoneUsable).
         // Transmit > TX Profiles (a page that only says it moved) is not
-        // registered while it is on the unbuilt list (R-R3-49).
-        for (const char* label : {"TX Profile", "Power",
-                                  "Speech Processor", "DEXP/VOX"}) {
+        // registered while it is on the unbuilt list (R-R3-49). Audio > TX
+        // Profile follows the transmit settings gate since parity Task 3
+        // (tst_remote_tx_profiles, setupOpensTxProfileWithoutRemoteTransmit).
+        // Transmit > Speech Processor opens since parity Task 4: it shows the
+        // Core's TX chain and opens the editors, each on the Core's gate
+        // (tst_remote_tx_eq_cfc).
+        // R-R3-49 (parity Task 5): Transmit > Power and DEXP/VOX open too.
+        // The Core mirrors their settings and each page gates its own
+        // controls on transmitSettingsVersion 5 (Enable VOX keeps the
+        // transmit permission); the case now proves that gate
+        // (tst_remote_transmit_setup_pages covers the open gate).
+        for (const char* label : {"Power", "DEXP/VOX"}) {
             QTest::newRow(label) << QString::fromLatin1(label);
         }
     }
@@ -83,10 +101,10 @@ private slots:
         QWidget* page = dialog.realizedPageForTest(label);
         QVERIFY(page);
         const bool resourceUnavailable = remote.localDspHandOutCount() > before;
-        QVERIFY(!page->isEnabled());
+        QVERIFY(!resourceUnavailable);
+        QVERIFY(page->isEnabled());
         auto* notice = dialog.findChild<QLabel*>(QStringLiteral("setupTransmitUnavailable"));
-        QVERIFY(notice && !notice->isHidden());
-        QVERIFY(notice->text().contains(QStringLiteral("Core")));
+        QVERIFY(notice && notice->isHidden());
 
         const int power = remote.transmitModel().power();
         const int micGain = remote.transmitModel().micGainDb();
@@ -113,12 +131,19 @@ private slots:
                 QVERIFY(dialog.grab().save(captures + QStringLiteral("/remote-tx-setup.png")));
             }
         }
-        dialog.setTransmitPermitted(true);
-        QCOMPARE(page->isEnabled(), !resourceUnavailable);
+        // The version 5 gate opens the settings without remote transmit, and
+        // closing it puts them back with its reason.
+        dialog.setTransmitSettingsPermitted(true, QString(), 5);
+        for (QSlider* slider : page->findChildren<QSlider*>()) {
+            QVERIFY(slider->isEnabled());
+        }
+        dialog.setTransmitSettingsPermitted(false, QStringLiteral("Permission withdrawn"), 5);
+        for (QSlider* slider : page->findChildren<QSlider*>()) {
+            QVERIFY(!slider->isEnabled());
+            QCOMPARE(slider->toolTip(), QStringLiteral("Permission withdrawn"));
+        }
+        QVERIFY(page->isEnabled());
         QVERIFY(notice->isHidden());
-        dialog.setTransmitPermitted(false, QStringLiteral("Permission withdrawn"));
-        QVERIFY(!page->isEnabled());
-        QCOMPARE(notice->text(), QStringLiteral("Permission withdrawn"));
 
         RadioModel local;
         SetupDialog localDialog(&local);
@@ -187,18 +212,29 @@ private slots:
         QVERIFY(xit && zero && offset && rit);
         QVERIFY(!xit->isEnabled() && !zero->isEnabled() && !offset->isEnabled());
         QVERIFY(rit->isEnabled());
+        // R-R3-49 (parity Task 4): Tools > TX Equalizer opens in a remote
+        // window; opening it writes nothing.
         auto* action = window.findChild<QAction*>(QStringLiteral("toolsTxEqualizer"));
-        QVERIFY(action && !action->isEnabled());
+        QVERIFY(action && action->isEnabled());
         QVERIFY(!action->toolTip().isEmpty());
+        // The dialog it opens takes the Core's gate: open off the air.
+        QTRY_VERIFY(TxEqDialog::settingsPermitted());
         stationLink->clearReceived();
         xit->click();
         zero->click();
         offset->setValue(400);
         action->trigger();
         auto* eq = window.findChild<QPushButton*>(QStringLiteral("TxEqButton"));
-        QVERIFY(eq && !eq->isEnabled());
+        // R-R3-49 (parity Task 2): the EQ toggle is a transmit setting, live
+        // off the air. Parity Task 4: its right-click opens the TX equalizer
+        // dialog (the one Tools opened above).
+        QVERIFY(eq);
+        QTRY_VERIFY(eq->isEnabled());
+        TxEqDialog* const eqDialog = window.findChild<TxEqDialog*>();
+        QVERIFY(eqDialog);
+        eqDialog->hide();
         QMetaObject::invokeMethod(eq, "customContextMenuRequested", Q_ARG(QPoint, QPoint()));
-        QVERIFY(!window.findChild<TxEqDialog*>());
+        QVERIFY(eqDialog->isVisible());
 
         // A real accepted RX write is the drain barrier, and proves that
         // suppressing TX gestures has not disabled all slice controls.
@@ -233,9 +269,13 @@ private slots:
         QVERIFY(setup);
         setup->selectPage(QStringLiteral("Power"));
         QWidget* powerPage = setup->realizedPageForTest(QStringLiteral("Power"));
-        QVERIFY(powerPage && !powerPage->isEnabled());
+        // R-R3-49 (parity Task 5): Transmit > Power opens without remote
+        // transmit; its settings follow transmitSettingsVersion 5.
+        QVERIFY(powerPage && powerPage->isEnabled());
         auto* proc = window.findChild<QPushButton*>(QStringLiteral("PhoneCwProcButton"));
-        QVERIFY(proc && !proc->isEnabled());
+        // R-R3-49 (parity Task 2): PROC and EQ are transmit settings: live
+        // off the air whatever txPermitted says.
+        QVERIFY(proc && proc->isEnabled());
         const quint32 epoch = client->sessionEpoch();
         const ConnectionState radioState = window.radioModel()->connectionState();
         StationCapabilities capabilities = client->capabilities();
@@ -252,13 +292,17 @@ private slots:
             SessionMessages::capabilities(capabilities.toUpdates())));
         QTRY_VERIFY(!client->capabilities().txPermitted);
         QTRY_VERIFY(!xit->isEnabled());
-        QVERIFY(!action->isEnabled());
-        QVERIFY(!proc->isEnabled() && !eq->isEnabled());
-        QVERIFY(!powerPage->isEnabled());
+        // R-R3-49 (parity Task 4): TX Equalizer stays available.
+        QVERIFY(action->isEnabled());
+        QVERIFY(proc->isEnabled() && eq->isEnabled());
+        QVERIFY(powerPage->isEnabled());
         QCOMPARE(client->sessionEpoch(), epoch);
         QCOMPARE(window.radioModel()->connectionState(), radioState);
         client->disconnectFromStation(QStringLiteral("test complete"));
-        QVERIFY(!action->isEnabled());
+        // R-R3-49 (parity Task 4): the entry stays; the dialog it opens is
+        // greyed with the reason while no Core takes a change.
+        QVERIFY(action->isEnabled());
+        QVERIFY(!TxEqDialog::settingsPermitted());
     }
 };
 

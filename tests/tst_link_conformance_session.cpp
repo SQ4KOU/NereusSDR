@@ -14,6 +14,8 @@
 //   radio            "static": a RadioModel reporting an HL2 connected
 //                    (MAC AA:BB:CC:DD:EE:01), with no radio behind it and its
 //                    slice meter pump stopped, so nothing changes on its own;
+//                    its TX profile bank is that radio's, as a connect makes
+//                    it (the factory profiles, "Default" active);
 //                    "connectable": ConnectableRadioModel, a RadioModel
 //                    connected to the P1 fake radio, WDSP channels and all
 //   board            the static radio's model: "hermesLite2" (the HL2 on
@@ -103,6 +105,10 @@
 //                                    two (the catalogue's schema and
 //                                    object). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the static
+//                                    station's TX profile bank is its
+//                                    radio's, as a connect makes it.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -229,6 +235,9 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         }
         station->model->setLastRadioInfoForTest(info);
         station->model->setConnectionStateForTest(ConnectionState::Connected);
+        // R-R3-49 (parity Task 3): the radio's TX profile bank, as a connect
+        // scopes and loads it.
+        station->model->scopeTxProfiles(info.macAddress);
         // No WDSP channels, so the pump would write its no-reading value to
         // every slice on each poll, on real time. Stopped, nothing changes
         // on its own and every delta in a fixture is one the script caused.

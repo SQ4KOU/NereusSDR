@@ -18,6 +18,12 @@
 //                Ports PollPAPWR (console.cs:25933-26120 [v2.10.3.13])
 //                and UIMOXChangedFalse reset (console.cs:29191-29195
 //                [v2.10.3.13]).
+//   2026-09-25 - R-R3-49 (parity Task 5): read-back accessors for the
+//                five settings (limit, windBackEnabled,
+//                tunePowerSwrIgnore, disableOnTune beside isEnabled) so
+//                the Core's live values can be checked. NereusSDR-original;
+//                no new Thetis logic. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs ---
@@ -169,6 +175,12 @@ public:
 
     /// Most recently computed SWR value (after floor clamp). 1.0 when clean.
     float measuredSwr() const noexcept;
+
+    /// R-R3-49 (parity Task 5): the settings as last set.
+    float limit() const noexcept { return m_limit; }
+    bool  windBackEnabled() const noexcept { return m_windBackEnabled; }
+    float tunePowerSwrIgnore() const noexcept { return m_tunePowerSwrIgnore; }
+    bool  disableOnTune() const noexcept { return m_disableOnTune; }
 
 signals:
     void protectFactorChanged(float factor);

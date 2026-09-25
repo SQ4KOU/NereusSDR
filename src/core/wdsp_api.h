@@ -1141,12 +1141,13 @@ void SetTXAEQRun(int channel, int run);
 void SetTXAEQNC(int channel, int nc);
 // From Thetis wdsp/eq.c:767-776 [v2.10.3.13] — SetTXAEQMP (minimum-phase flag).
 void SetTXAEQMP(int channel, int mp);
-// From Thetis wdsp/eq.c:779-804 [v2.10.3.13] — SetTXAEQProfile.
+// From Thetis wdsp/eq.c:780-806 [v2.10.3.15] and dsp.cs:787-788: SetTXAEQProfile.
 //   F[0..nfreqs] freqs Hz (F[0] unused / preamp pad)
 //   G[0..nfreqs] gains dB (G[0] = preamp)
-// (Graphic-EQ form — no Q vector. The parametric variant
-//  SetTXAGrphEQ10 / SetTXAGrphEQProfile takes Q separately.)
-void SetTXAEQProfile(int channel, int nfreqs, double* F, double* G);
+//   Q[0..nfreqs] Q factors (Q[0] unused), or nullptr: the legacy EQ and the
+//   parametric panel with Q factors off pass nullptr (eqform.cs:3041-3072).
+// R-R3-49 (group A fix wave): the vendored eq.c takes Q as Thetis's does.
+void SetTXAEQProfile(int channel, int nfreqs, double* F, double* G, double* Q);
 // From Thetis wdsp/eq.c:807-816 [v2.10.3.13] — SetTXAEQCtfmode.
 void SetTXAEQCtfmode(int channel, int mode);
 // From Thetis wdsp/eq.c:819-828 [v2.10.3.13] — SetTXAEQWintype.

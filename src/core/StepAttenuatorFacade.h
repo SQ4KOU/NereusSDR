@@ -33,6 +33,12 @@
 //                                    why) for the RX applet and Setup
 //                                    (R-R3-46, R-R3-21). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 5): Setup >
+//                                    Transmit > Power's ATT on TX, its
+//                                    value and Force ATT (attOnTxEnabled,
+//                                    attOnTxValue, forceAttWhenPsOff),
+//                                    transmitSettingsVersion 5.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -72,6 +78,17 @@ class StepAttenuatorFacade final : public QObject {
     Q_PROPERTY(int overloadAdc0 READ overloadAdc0 NOTIFY overloadAdc0Changed)
     Q_PROPERTY(int overloadAdc1 READ overloadAdc1 NOTIFY overloadAdc1Changed)
     Q_PROPERTY(bool adcLinked READ adcLinked NOTIFY adcLinkedChanged)
+    // R-R3-49 (parity Task 5, transmitSettingsVersion 5): Setup > Transmit >
+    // Power's ATT on TX, its value in dB (the current transmit band's) and
+    // Force ATT on TX to 31 when PS-A is off. Transmit settings: a
+    // receive-only Core takes them only while its radio is off the air.
+    // Declared last so the earlier ordinals stay put.
+    Q_PROPERTY(bool attOnTxEnabled READ attOnTxEnabled WRITE setAttOnTxEnabled
+               NOTIFY attOnTxEnabledChanged)
+    Q_PROPERTY(int attOnTxValue READ attOnTxValue WRITE setAttOnTxValue
+               NOTIFY attOnTxValueChanged)
+    Q_PROPERTY(bool forceAttWhenPsOff READ forceAttWhenPsOff WRITE setForceAttWhenPsOff
+               NOTIFY forceAttWhenPsOffChanged)
 
 public:
     /// True when an edit may go ahead; otherwise false with a plain reason.
@@ -81,6 +98,17 @@ public:
     /// them (GeneralOptionsPage: 1..3600 s).
     static constexpr int kMinAutoAttTimeMs = 1000;
     static constexpr int kMaxAutoAttTimeMs = 3600 * 1000;
+    /// R-R3-49 (parity Task 5): the top of the ATT on TX value, from
+    /// StepAttenuatorController::setAttOnTxValue (Thetis setup.cs:3999
+    /// clamps above 31). The bottom is minDb, the Core's attenuator minimum
+    /// (0, or -28 on the HL2).
+    static constexpr int kMaxAttOnTxDb = 31;
+
+    /// R-R3-49 (parity Task 5): the plain range refusal for a write of one
+    /// of the three transmit settings; empty when the value is in range.
+    QString transmitSettingRefusal(const QByteArray& property, const QVariant& value) const;
+    /// The three transmit settings on this object.
+    static bool isTransmitSetting(const QByteArray& property);
 
     explicit StepAttenuatorFacade(RadioModel* radio, QObject* parent = nullptr);
     ~StepAttenuatorFacade() override;
@@ -118,6 +146,9 @@ public:
     bool autoAttUndo() const { return m_values.autoAttUndo; }
     int autoAttUndoDelayMs() const { return m_values.autoAttUndoDelayMs; }
     int autoAttHoldMs() const { return m_values.autoAttHoldMs; }
+    bool attOnTxEnabled() const { return m_values.attOnTxEnabled; }
+    int attOnTxValue() const { return m_values.attOnTxValue; }
+    bool forceAttWhenPsOff() const { return m_values.forceAttWhenPsOff; }
     int minDb() const { return m_values.minDb; }
     int maxDb() const { return m_values.maxDb; }
     bool autoAttApplied() const { return m_values.autoAttApplied; }
@@ -134,6 +165,9 @@ public:
     void setAutoAttUndo(bool on);
     void setAutoAttUndoDelayMs(int ms);
     void setAutoAttHoldMs(int ms);
+    void setAttOnTxEnabled(bool on);
+    void setAttOnTxValue(int dB);
+    void setForceAttWhenPsOff(bool on);
 
 signals:
     void enabledChanged(bool on);
@@ -145,6 +179,9 @@ signals:
     void autoAttUndoChanged(bool on);
     void autoAttUndoDelayMsChanged(int ms);
     void autoAttHoldMsChanged(int ms);
+    void attOnTxEnabledChanged(bool on);
+    void attOnTxValueChanged(int dB);
+    void forceAttWhenPsOffChanged(bool on);
     void minDbChanged(int dB);
     void maxDbChanged(int dB);
     void autoAttAppliedChanged(bool applied);
@@ -167,6 +204,11 @@ private:
         bool autoAttUndo{false};
         int autoAttUndoDelayMs{5000};
         int autoAttHoldMs{2000};
+        // StepAttenuatorController's defaults (m_attOnTxEnabled,
+        // m_forceAttWhenPsOff true).
+        bool attOnTxEnabled{true};
+        int attOnTxValue{0};
+        bool forceAttWhenPsOff{true};
         int minDb{0};
         int maxDb{31};
         bool autoAttApplied{false};

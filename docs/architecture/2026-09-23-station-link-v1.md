@@ -689,7 +689,7 @@ change shows as surface drift and as a change to this table.
 | `spectrumGrantVersion` | 1 |
 | `remoteDisplayBudgetVersion` | 1 |
 | `remoteCtunVersion` | 1 |
-| `stationTelemetryVersion` | 3 |
+| `stationTelemetryVersion` | 4 |
 | `remoteTgxlConfigVersion` | 1 |
 | `remoteFourO3AControlVersion` | 1 |
 | `wdspVersion` | 210 |
@@ -715,6 +715,7 @@ change shows as surface drift and as a change to this table.
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 1 |
+| `transmitSettingsVersion` | 6 |
 
 <!-- /surface -->
 
@@ -726,7 +727,9 @@ When a feature is off, its version is 0:
   unless media is enabled.
 - `remoteDisplayBudgetVersion`: 0 unless media and budget enforcement are
   on and a budget has been computed.
-- `stationTelemetryVersion`: 0 unless telemetry is enabled.
+- `stationTelemetryVersion`: 0 unless telemetry is enabled. At 4 the
+  radio section also carries, for a peer at agreed minor 11, the Core's
+  PA readings and radio link quality (section 10).
 - `remoteTgxlConfigVersion`, `remoteFourO3AControlVersion`: 0 unless the
   Core owns its accessories.
 - `wdspVersion`, `wdspCompatibilityVersion`, `nnrVersion`,
@@ -780,13 +783,80 @@ When a feature is off, its version is 0:
   Core that has it: the read-only `catalog` object (section 7.4) goes to
   every peer at minor 11. A Core from before it sends neither the entry
   nor the object.
-- `displayExtrasVersion`: sent only at agreed minor 11, last. 1 while the
+- `displayExtrasVersion`: sent only at agreed minor 11. 1 while the
   Core's media is enabled: a `subscribe` operation (section 11) may then
   carry the display extras fields, and the Core sends an NSDX datagram
   beside each NSDC frame of an endpoint that asks for a section
   ([display extras v1](2026-09-23-display-extras-v1.md)). 0 otherwise; a
   Core from before it sends no entry and refuses the fields as keys it
   cannot read.
+- `transmitSettingsVersion`: sent only at agreed minor 11, and 0 on a
+  station with no radio model. At 1 a receive-only Core takes a
+  `property.write` on `transmit` of any property except the keying set
+  (`mox`, `tune`, `voxEnabled`, `twoToneActive`), and a `settings.write`
+  or `settings.remove` of a DSP > Options TX key
+  (`DspOptions<Setting><Mode>Tx`), while its radio is off the air, and
+  applies it at once (a DSP > Options TX key reaches the Core's TX channel
+  when the TX slice's mode is in its group). Version 1 covers the
+  `transmit` properties mirrored today: `power`, `micGain`, `filterLow`,
+  `filterHigh`, `lineInGain`, `userDigOut`, `pureSig`,
+  `forceAttwhenPSAoff`, `forceAttwhenPowerChangesWhenPSAon`,
+  `forceAttwhenPowerChangesWhenPSAonAndDecreased`, `antiVoxTauMs`,
+  `antiVoxRun` and `paSettingsBypass`. At 2 it also covers the TX and
+  Phone/CW applets' settings on `transmit`: `tunePower`, `voxThresholdDb`,
+  `voxHangTimeMs`, `monEnabled`, `monitorVolume`, `txLevelerOn`,
+  `txEqEnabled`, `cfcEnabled`, `cpdrOn`, `cpdrLevelDb`, `amCarrierLevel`,
+  `dexpEnabled` and `micGainDb`, each refused outside its range with the
+  range in plain words (section 7.3); the read-only `tunePowerForTxBand`
+  and `tuneDrivePowerSource`; and the command `setTunePowerForTxBand`
+  (section 9.1). At 3 it also covers the radio's microphone input on
+  `transmit` (Setup > Audio > TX Input): `micBoost`, `micXlr`,
+  `micTipRing`, `micBias`, `micPttDisabled`, `lineIn` and `lineInBoost`,
+  `lineInBoost` refused outside its range (section 7.3); the Core's TX
+  profiles, the read-only `activeTxProfile` and `txProfilesJson`; and the
+  commands `txProfile.select`, `txProfile.save`, `txProfile.delete` and
+  `rade.resetVocoder` (section 9.1). At 4 it also covers the TX EQ, CFC,
+  phase rotator, CESSB, leveler and ALC settings on `transmit` (the TX EQ
+  and CFC dialogs, Setup > DSP > CFC and AGC/ALC's TX Leveler and TX ALC):
+  `txEqUseLegacy`, `txEqPreamp`, `txEqBandsJson`, `txEqFreqsJson`,
+  `txEqNc`, `txEqMp`, `txEqCtfmode`, `txEqWintype`, `txEqParaEqData`,
+  `cfcCompressionJson`, `cfcEqFreqJson`, `cfcPostEqBandGainJson`,
+  `cfcPostEqEnabled`, `cfcPostEqGainDb`, `cfcPrecompDb`, `cfcParaEqData`,
+  `phaseRotatorEnabled`, `phaseRotatorFreqHz`, `phaseRotatorStages`,
+  `phaseReverseEnabled`, `cessbOn`, `txLevelerMaxGain`, `txLevelerDecay`,
+  `txAlcMaxGain` and `txAlcDecay`, each refused outside its range and a
+  band array refused whole (section 7.3). At 5 it also covers Setup >
+  Transmit > Power, Transmit > DEXP/VOX and Test > Two-Tone IMD: on
+  `transmit`, `tuneDrivePowerSource` becomes two-way, and
+  `powerByBandJson`, `tunePowerByBandJson`, `dexpAttackTimeMs`,
+  `dexpDetectorTauMs`, `dexpExpansionRatioDb`, `dexpHighCutHz`,
+  `dexpHysteresisRatioDb`, `dexpLookAheadEnabled`, `dexpLookAheadMs`,
+  `dexpLowCutHz`, `dexpReleaseTimeMs`, `dexpSideChannelFilterEnabled`,
+  `antiVoxGainDb`, `twoToneFreq1`, `twoToneFreq2`, `twoToneLevel`,
+  `twoTonePower`, `twoTonePulsed`, `twoToneInvert`, `twoToneFreq2Delay`
+  and `twoToneDrivePowerSource`, each refused outside its range and a band
+  map refused whole (section 7.3); on `stepAtt`, `attOnTxEnabled`,
+  `attOnTxValue` and `forceAttWhenPsOff`; and the Power page's SWR
+  Protection and External TX Inhibit keys (`SwrProtectionEnabled`,
+  `SwrProtectionLimit`, `SwrTuneProtectionEnabled`, `TunePowerSwrIgnore`,
+  `WindBackPowerSwr`, `TxInhibitMonitorEnabled`,
+  `TxInhibitMonitorReversed`), taken while the radio is off the air
+  (section 8), the SWR Protection keys applied to the Core's SWR
+  protection at once. At 6 it also covers Setup > PA: the PA profiles
+  (`hardware/<mac>/pa/...`: PA Gain's profiles, per-band gains, adjust
+  matrix and max power) and the PA forward-power table
+  (`hardware/<mac>/paCalibration/...`: the Watt Meter page), taken while
+  the radio is off the air (section 8) and applied to the Core's PA
+  profiles and calibration at once. PA Gain's auto-calibrate sweep keys
+  the radio and waits for remote transmit. Each is refused while the radio
+  is on the air (section 7.3). The keying set stays refused on a receive-only
+  Core, on and off the air, and so do raw settings writes of
+  `hardware/<mac>/tx/...`, `powerByBand` and `tunePowerByBand` (the
+  `transmit` object owns them). A window whose Core sends 0 keeps its
+  transmit settings unavailable. A peer below agreed minor 11 is never
+  offered it, and a receive-only Core refuses its transmit writes and DSP >
+  Options TX keys as before. `transmitSettingsVersion` is the last
+  capabilities entry.
 
 `txPermitted` is always false today: remote transmit is R4.
 
@@ -858,6 +928,7 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 | 50 | `pairingVersion` | `i64` |
 | 51 | `stationCatalogVersion` | `i64` |
 | 52 | `displayExtrasVersion` | `i64` |
+| 53 | `transmitSettingsVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1053,7 +1124,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (20 properties)
+**RadioModel** (21 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1077,6 +1148,7 @@ An enum property lists the values its domain allows.
 | 17 | `rxFilter1Band` | `i64` | outbound |  |
 | 18 | `rxFilter1Reason` | `utf8` | outbound |  |
 | 19 | `transmitting` | `bool` | outbound |  |
+| 20 | `txInhibited` | `bool` | outbound |  |
 
 **RfKitModel** (30 properties)
 
@@ -1293,7 +1365,7 @@ An enum property lists the values its domain allows.
 | 3 | `stationAddress` | `utf8` | outbound |  |
 | 4 | `error` | `utf8` | outbound |  |
 
-**StepAttenuatorFacade** (15 properties)
+**StepAttenuatorFacade** (18 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1312,8 +1384,11 @@ An enum property lists the values its domain allows.
 | 12 | `overloadAdc0` | `i64` | outbound |  |
 | 13 | `overloadAdc1` | `i64` | outbound |  |
 | 14 | `adcLinked` | `bool` | outbound |  |
+| 15 | `attOnTxEnabled` | `bool` | bidirectional |  |
+| 16 | `attOnTxValue` | `i64` | bidirectional |  |
+| 17 | `forceAttWhenPsOff` | `bool` | bidirectional |  |
 
-**TransmitModel** (15 properties)
+**TransmitModel** (85 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1332,6 +1407,76 @@ An enum property lists the values its domain allows.
 | 12 | `antiVoxTauMs` | `i64` | bidirectional |  |
 | 13 | `antiVoxRun` | `bool` | bidirectional |  |
 | 14 | `paSettingsBypass` | `bool` | bidirectional |  |
+| 15 | `tunePower` | `i64` | bidirectional |  |
+| 16 | `voxThresholdDb` | `i64` | bidirectional |  |
+| 17 | `voxHangTimeMs` | `i64` | bidirectional |  |
+| 18 | `monEnabled` | `bool` | bidirectional |  |
+| 19 | `monitorVolume` | `f64` | bidirectional |  |
+| 20 | `txLevelerOn` | `bool` | bidirectional |  |
+| 21 | `txEqEnabled` | `bool` | bidirectional |  |
+| 22 | `cfcEnabled` | `bool` | bidirectional |  |
+| 23 | `cpdrOn` | `bool` | bidirectional |  |
+| 24 | `cpdrLevelDb` | `i64` | bidirectional |  |
+| 25 | `amCarrierLevel` | `i64` | bidirectional |  |
+| 26 | `dexpEnabled` | `bool` | bidirectional |  |
+| 27 | `micGainDb` | `i64` | bidirectional |  |
+| 28 | `tunePowerForTxBand` | `i64` | outbound |  |
+| 29 | `tuneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
+| 30 | `micBoost` | `bool` | bidirectional |  |
+| 31 | `micXlr` | `bool` | bidirectional |  |
+| 32 | `micTipRing` | `bool` | bidirectional |  |
+| 33 | `micBias` | `bool` | bidirectional |  |
+| 34 | `micPttDisabled` | `bool` | bidirectional |  |
+| 35 | `lineIn` | `bool` | bidirectional |  |
+| 36 | `lineInBoost` | `f64` | bidirectional |  |
+| 37 | `activeTxProfile` | `utf8` | outbound |  |
+| 38 | `txProfilesJson` | `utf8` | outbound |  |
+| 39 | `txEqUseLegacy` | `bool` | bidirectional |  |
+| 40 | `txEqPreamp` | `i64` | bidirectional |  |
+| 41 | `txEqBandsJson` | `utf8` | bidirectional |  |
+| 42 | `txEqFreqsJson` | `utf8` | bidirectional |  |
+| 43 | `txEqNc` | `i64` | bidirectional |  |
+| 44 | `txEqMp` | `bool` | bidirectional |  |
+| 45 | `txEqCtfmode` | `i64` | bidirectional |  |
+| 46 | `txEqWintype` | `i64` | bidirectional |  |
+| 47 | `txEqParaEqData` | `utf8` | bidirectional |  |
+| 48 | `cfcCompressionJson` | `utf8` | bidirectional |  |
+| 49 | `cfcEqFreqJson` | `utf8` | bidirectional |  |
+| 50 | `cfcPostEqBandGainJson` | `utf8` | bidirectional |  |
+| 51 | `cfcPostEqEnabled` | `bool` | bidirectional |  |
+| 52 | `cfcPostEqGainDb` | `i64` | bidirectional |  |
+| 53 | `cfcPrecompDb` | `i64` | bidirectional |  |
+| 54 | `cfcParaEqData` | `utf8` | bidirectional |  |
+| 55 | `phaseRotatorEnabled` | `bool` | bidirectional |  |
+| 56 | `phaseRotatorFreqHz` | `i64` | bidirectional |  |
+| 57 | `phaseRotatorStages` | `i64` | bidirectional |  |
+| 58 | `phaseReverseEnabled` | `bool` | bidirectional |  |
+| 59 | `cessbOn` | `bool` | bidirectional |  |
+| 60 | `txLevelerMaxGain` | `i64` | bidirectional |  |
+| 61 | `txLevelerDecay` | `i64` | bidirectional |  |
+| 62 | `txAlcMaxGain` | `i64` | bidirectional |  |
+| 63 | `txAlcDecay` | `i64` | bidirectional |  |
+| 64 | `powerByBandJson` | `utf8` | bidirectional |  |
+| 65 | `tunePowerByBandJson` | `utf8` | bidirectional |  |
+| 66 | `dexpAttackTimeMs` | `f64` | bidirectional |  |
+| 67 | `dexpDetectorTauMs` | `f64` | bidirectional |  |
+| 68 | `dexpExpansionRatioDb` | `f64` | bidirectional |  |
+| 69 | `dexpHighCutHz` | `f64` | bidirectional |  |
+| 70 | `dexpHysteresisRatioDb` | `f64` | bidirectional |  |
+| 71 | `dexpLookAheadEnabled` | `bool` | bidirectional |  |
+| 72 | `dexpLookAheadMs` | `f64` | bidirectional |  |
+| 73 | `dexpLowCutHz` | `f64` | bidirectional |  |
+| 74 | `dexpReleaseTimeMs` | `f64` | bidirectional |  |
+| 75 | `dexpSideChannelFilterEnabled` | `bool` | bidirectional |  |
+| 76 | `antiVoxGainDb` | `i64` | bidirectional |  |
+| 77 | `twoToneFreq1` | `i64` | bidirectional |  |
+| 78 | `twoToneFreq2` | `i64` | bidirectional |  |
+| 79 | `twoToneLevel` | `f64` | bidirectional |  |
+| 80 | `twoTonePower` | `i64` | bidirectional |  |
+| 81 | `twoTonePulsed` | `bool` | bidirectional |  |
+| 82 | `twoToneInvert` | `bool` | bidirectional |  |
+| 83 | `twoToneFreq2Delay` | `i64` | bidirectional |  |
+| 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 
 **TunerModel** (21 properties)
 
@@ -1450,6 +1595,119 @@ Notes on the keys:
   either is refused as any `outbound` write is. Today's desktop window
   holds no object for the key and drops it, as it does any class it does
   not know.
+- **`transmit`.** Every property is `bidirectional` on the wire, but a
+  receive-only Core takes only the transmit settings: at
+  `transmitSettingsVersion` 1, a write of any property except `mox`,
+  `tune`, `voxEnabled` and `twoToneActive`, and only while its radio is
+  off the air (section 7.3). The Core also publishes its real transmit
+  state as `radio`'s `transmitting` (outbound); a window reads "on the
+  air" from it, the mirrored `transmit.tune`, and `pureSignal`'s
+  `twoToneOn`. `radio`'s `txInhibited` (bool, outbound) is the Core's TX
+  inhibit (its `TxInhibitMonitor`); a window's TX indicator shows it. It
+  needs no capability: a window that does not know it ignores it. A window
+  clears its copy of `transmitting` and `txInhibited` when the session
+  ends.
+- **`transmit` at `transmitSettingsVersion` 2.** Each property carries its
+  setter's type: `tunePower` (i64, the fixed tune power Setup uses, 0 to
+  100 W, 0 to 99 on a Hermes Lite 2), `voxThresholdDb` (i64, -80 to 0 dB),
+  `voxHangTimeMs` (i64, 1 to 2000 ms), `monEnabled` (bool), `monitorVolume`
+  (f64, 0.0 to 1.0; a window's slider shows it as 0 to 100),
+  `txLevelerOn`, `txEqEnabled`, `cfcEnabled`, `cpdrOn` (bool; `cpdrOn` is
+  PROC), `cpdrLevelDb` (i64, 0 to 20 dB), `amCarrierLevel` (i64, 0 to 100
+  percent), `dexpEnabled` (bool) and `micGainDb` (i64, -50 to 70 dB).
+  `tunePowerForTxBand` (i64, outbound) is the tune power for the band the
+  Core transmits on (its transmit slice's band, as TUNE reads it), which
+  the TX applet's Tune Power slider shows; it follows the transmit slice
+  across bands. `tuneDrivePowerSource` (enum: 0 the drive slider, 1 the
+  tune slider, 2 the fixed tune power) is where TUNE takes its power from.
+  At version 2 both change only through `setTunePowerForTxBand`, and
+  `tuneDrivePowerSource` is outbound; at version 5 it is two-way (Setup >
+  Transmit > Power's Tune group), and `tunePowerForTxBand` stays outbound. None of these
+  keys the radio. The MON output choice (speakers or phones) is not on the
+  link: it is each window's own audio routing.
+- **`transmit` at `transmitSettingsVersion` 3.** The radio's microphone
+  input, each under its setter's name and type: `micBoost` (bool, the
+  +20 dB mic boost), `micXlr` (bool, XLR rather than the 3.5 mm jack on a
+  radio with both), `micTipRing` (bool, true when the tip is the mic),
+  `micBias` (bool), `micPttDisabled` (bool, true when the mic's PTT is
+  ignored), `lineIn` (bool, Line In rather than Mic In) and `lineInBoost`
+  (f64, the Line In gain, -34.5 to 12.0 dB). The mic source is not among
+  them. `activeTxProfile` (utf8, outbound) is the Core's active TX
+  profile, and `txProfilesJson` (utf8, outbound) its TX profiles as a JSON
+  array of names in the Core's order (for example
+  `["AM","Default","Default DX"]`); a station with no radio sends `""` and
+  `[]`. Both change only through the `txProfile.*` commands (or at the
+  Core). TX and mic profiles are one set. A window never keeps its own
+  copy of the Core's profiles: its profile combos and Setup > Audio > TX
+  Profile show these two and ask the Core. None of these keys the radio.
+- **`transmit` at `transmitSettingsVersion` 4.** The TX EQ, CFC, phase
+  rotator, CESSB, leveler and ALC settings, each under its setter's name
+  and type. `txEqUseLegacy` (bool, default true) is the TX EQ dialog's
+  Legacy EQ box: true, the ten-band EQ reaches the TX channel; false, the
+  parametric curve in `txEqParaEqData` does. The Core applies the curve
+  itself, whichever window changed it, and it is saved with the TX profile
+  (Thetis's `EQUseLegacy`). `txEqPreamp` (i64, -12 to 15 dB),
+  `txEqBandsJson` (utf8, the ten band gains, each -12 to 15 dB),
+  `txEqFreqsJson` (utf8, the ten band centres, each 10 to 22000 Hz),
+  `txEqNc` (i64, 32 to 8192), `txEqMp` (bool), `txEqCtfmode` (i64, 0
+  peaking or 1 notch), `txEqWintype` (i64, 0 Blackman-Harris or 1 Hann),
+  `txEqParaEqData` (utf8, the parametric curve as Thetis saves it: gzip,
+  then base64url, of the curve's JSON; empty for none). `cfcCompressionJson`
+  (utf8, the ten compression levels, each 0 to 16 dB), `cfcEqFreqJson`
+  (utf8, the ten band centres, each 0 to 20000 Hz),
+  `cfcPostEqBandGainJson` (utf8, the ten post-EQ gains, each -24 to 24 dB),
+  `cfcPostEqEnabled` (bool), `cfcPostEqGainDb` (i64, -24 to 24 dB),
+  `cfcPrecompDb` (i64, 0 to 16 dB), `cfcParaEqData` (utf8, as
+  `txEqParaEqData`). A non-empty `txEqParaEqData` or `cfcParaEqData` the
+  Core cannot read as a curve is refused ("The Core could not read that
+  equalizer curve. Save the curve again and retry.") and changes nothing. `phaseRotatorEnabled` (bool), `phaseRotatorFreqHz`
+  (i64, 10 to 2000 Hz), `phaseRotatorStages` (i64, 2 to 16),
+  `phaseReverseEnabled` (bool), `cessbOn` (bool), `txLevelerMaxGain` (i64,
+  0 to 20 dB), `txLevelerDecay` (i64, 1 to 5000 ms), `txAlcMaxGain` (i64, 0
+  to 120 dB) and `txAlcDecay` (i64, 1 to 50 ms). Each ten-value array is a
+  compact JSON array of ten whole numbers in band order (for example
+  `[-12,-12,-12,-1,1,4,9,12,-10,-10]`); an array of any other length, or
+  with a value that is not a whole number or is out of range, is refused
+  whole and changes nothing. None of these keys the radio.
+- **`transmit` at `transmitSettingsVersion` 5.** Setup > Transmit > Power,
+  Transmit > DEXP/VOX and Test > Two-Tone IMD, each under its setter's
+  name and its getter's type. `tuneDrivePowerSource` becomes two-way.
+  `powerByBandJson` and `tunePowerByBandJson` (utf8) are the per-band power
+  and tune power in whole watts, a compact JSON object keyed by the app's
+  band key for the 14 bands (`160m`, `80m`, `60m`, `40m`, `30m`, `20m`,
+  `17m`, `15m`, `12m`, `10m`, `6m`, `GEN`, `WWV`, `XVTR`); the Core writes
+  its keys in its own order, and a window reads it as an object. A write
+  carries all 14 bands, each a whole number from 0 to 100 W (tune power 0
+  to 99 on a Hermes Lite 2); a map with a band missing, a key that is not
+  a band, or a value that is not a whole number or is out of range is
+  refused whole and changes nothing. A map the Core takes reads back as
+  the same object in the Core's key order, and is accepted.
+  `dexpAttackTimeMs` (f64, 2 to 100 ms), `dexpDetectorTauMs` (f64, 1 to 100
+  ms), `dexpExpansionRatioDb` (f64, 0.0 to 30.0 dB), `dexpHighCutHz` and
+  `dexpLowCutHz` (f64, 100 to 10000 Hz, the VOX trigger filter),
+  `dexpHysteresisRatioDb` (f64, 0.0 to 10.0 dB), `dexpLookAheadEnabled`
+  (bool), `dexpLookAheadMs` (f64, 10 to 999 ms), `dexpReleaseTimeMs` (f64, 2
+  to 1000 ms), `dexpSideChannelFilterEnabled` (bool), `antiVoxGainDb` (i64,
+  -60 to 60 dB). `twoToneFreq1` and `twoToneFreq2` (i64, -20000 to 20000
+  Hz), `twoToneLevel` (f64, -96 to 0 dB), `twoTonePower` (i64, 0 to 100
+  percent), `twoTonePulsed` and `twoToneInvert` (bool), `twoToneFreq2Delay`
+  (i64, 0 to 1000 ms) and `twoToneDrivePowerSource` (enum, as
+  `tuneDrivePowerSource`). The two-tone settings are read when a two-tone
+  test starts; the test itself (`twoToneActive`) and Enable VOX
+  (`voxEnabled`) stay in the keying set. None of these keys the radio. The
+  Core's runtime SWR foldback (Thetis's `NetworkIO.SWRProtect`) is not a
+  setting and is not on the link.
+- **`stepAtt` at `transmitSettingsVersion` 5.** Setup > Transmit > Power's
+  `attOnTxEnabled` (bool, ATT on TX), `attOnTxValue` (i64, the ATT on TX
+  value in dB for the Core's transmit band, from the Core's attenuator
+  minimum to 31: 0 to 31, -28 to 31 on a Hermes Lite 2) and
+  `forceAttWhenPsOff` (bool, Force ATT on Tx to 31 when PS-A is off),
+  declared after `adcLinked`. The Core applies each through its step
+  attenuator, as the local page does; `attOnTxValue` also follows
+  PureSignal's AutoAtt. They are transmit settings: a receive-only Core
+  takes them from a peer offered `transmitSettingsVersion` while its radio
+  is off the air (section 7.3). Changing `attOnTxValue` with ATT on TX on
+  sets the radio's TX attenuator; it keys nothing.
 - **Unknown classes.** A client that receives a schema for a class it does
   not know records the difference and drops that class's objects and
   deltas.
@@ -1472,9 +1730,56 @@ property in one write, an unknown property or a wrong wire kind, an
 `outbound` property, a read-only object (`ioBoard`, `amplifier`, `rfkit`,
 `stationTci`, `accessoryData`, `accessorySettings`), a `stepAtt` or `alexAntennas` write from a peer below minor
 11 or while the Core has no controller behind it, a raw write of `radio`'s
-`rfKitEnabled` (changed only with `setRfKitEnabled`), transmit
-configuration on a receive-only station, and DSP settings from a peer that
-did not negotiate them (`StationServer::handlePropertyWrite`).
+`rfKitEnabled` (changed only with `setRfKitEnabled`), the keying
+`transmit` properties (`mox`, `tune`, `voxEnabled`, `twoToneActive`) on a
+receive-only station, whether or not the station mirrors them ("Transmit
+configuration is unavailable on this receive-only Core."), any
+`transmit` property on a receive-only station from a peer below agreed
+minor 11 (it was never offered `transmitSettingsVersion`; the same
+reason), any other `transmit` property on a receive-only station while
+its radio is on the air ("The radio is on the air. Try again when it stops.": keyed through
+its `MoxController` from any source, a hardware PTT included, until the
+hand-back to receive ends; TUNE on; or the two-tone test running), a
+`transmit` setting outside its setter's range, with the range ("Choose a
+tune power from 0 to 100 W.", "Choose a VOX level from -80 to 0 dB.",
+"Choose a VOX delay from 1 to 2000 ms.", "Choose a monitor level from 0.0
+to 1.0.", "Choose a PROC level from 0 to 20 dB.", "Choose an AM carrier
+level from 0 to 100 percent.", "Choose a mic level from -50 to 70 dB.",
+"Choose a Line In gain from -34.5 to 12.0 dB.", "Choose a TX EQ preamp
+from -12 to 15 dB.", "Choose a TX EQ Nc from 32 to 8192.", "Choose a TX EQ
+cutoff of 0 (peaking) or 1 (notch).", "Choose a TX EQ window of 0
+(Blackman-Harris) or 1 (Hann).", "Choose a CFC pre-compression from 0 to 16
+dB.", "Choose a CFC post-EQ gain from -24 to 24 dB.", "Choose a phase
+rotator frequency from 10 to 2000 Hz.", "Choose from 2 to 16 phase rotator
+stages.", "Choose a leveler maximum gain from 0 to 20 dB.", "Choose a
+leveler decay from 1 to 5000 ms.", "Choose an ALC maximum gain from 0 to
+120 dB.", "Choose an ALC decay from 1 to 50 ms."; a ten-value array of
+the wrong length or with a value out of range is refused whole: "Choose
+ten TX EQ band levels, each from -12 to 15 dB.", "Choose ten TX EQ band
+centres, each from 10 to 22000 Hz.", "Choose ten CFC compression levels,
+each from 0 to 16 dB.", "Choose ten CFC band centres, each from 0 to 20000
+Hz.", "Choose ten CFC post-EQ band levels, each from -24 to 24 dB.";
+at `transmitSettingsVersion` 5, "Choose a DEXP attack time from 2 to 100
+ms.", "Choose a DEXP detector time from 1 to 100 ms.", "Choose a DEXP
+release time from 2 to 1000 ms.", "Choose a DEXP expansion ratio from 0.0
+to 30.0 dB.", "Choose a DEXP hysteresis ratio from 0.0 to 10.0 dB.",
+"Choose a look-ahead time from 10 to 999 ms.", "Choose a VOX trigger
+filter cut from 100 to 10000 Hz.", "Choose an anti-VOX gain from -60 to 60
+dB.", "Choose a tone frequency from -20000 to 20000 Hz.", "Choose a
+two-tone level from -96 to 0 dB.", "Choose a two-tone power from 0 to 100
+percent.", "Choose a second tone delay from 0 to 1000 ms.", and a band map
+refused whole: "Choose a power from 0 to 100 W for each of the 14 bands.",
+"Choose a tune power from 0 to 100 W for each of the 14 bands."; a Hermes
+Lite 2 says "Choose a tune power from 0 to 99." and "Choose a tune power
+from 0 to 99 for each of the 14 bands."), `stepAtt`'s `attOnTxEnabled`,
+`attOnTxValue` and `forceAttWhenPsOff` on a receive-only station from a
+peer not offered `transmitSettingsVersion` (the receive-only reason) or
+while its radio is on the air (the on-air reason), and `attOnTxValue`
+outside the Core's range ("Choose an ATT on TX value from 0 to 31 dB.", on
+a Hermes Lite 2 from -28), and
+DSP settings from a peer that did not negotiate them
+(`StationServer::handlePropertyWrite`). The on-air check is read once for
+the whole write, before anything in it is applied.
 A write to an `outbound` property is refused before anything is applied,
 with the reason "The Core sets this itself; it cannot be changed from
 here.", unless one of the earlier, more specific refusals above applies
@@ -1696,7 +2001,34 @@ The station refuses a write to a key outside the station scope ("Each app
 keeps this setting itself; the Core does not store it."), to another radio's `hardware/<mac>/` keys ("These settings
 are for a radio this Core is not connected to."), an out-of-range
 `SwrProtectionLimit` ("Choose an SWR protection limit from 1.0 to 5.0."), and transmit-side keys on a receive-only
-station.
+station ("Transmit configuration is unavailable on this receive-only
+Core."). At `transmitSettingsVersion` 1 a receive-only station takes the
+DSP > Options TX keys (`DspOptions<Setting><Mode>Tx`,
+`StationServer::isTransmitSettingKeyAcceptedOffAir`) while its radio is off
+the air, and refuses a write or remove of one while it is on the air ("The
+radio is on the air. Try again when it stops."), handing back its own
+value. At `transmitSettingsVersion` 5 the same holds for Setup >
+Transmit > Power's SWR Protection keys (`SwrProtectionEnabled`,
+`SwrProtectionLimit`, `SwrTuneProtectionEnabled`, `TunePowerSwrIgnore`,
+`WindBackPowerSwr`) and External TX Inhibit keys
+(`TxInhibitMonitorEnabled`, `TxInhibitMonitorReversed`), on any peer. A
+value the page's own control cannot hold is refused with the Core's value
+handed back: `TunePowerSwrIgnore` outside 5 to 50 ("Choose a tune power
+to ignore from 5 to 50 W."), a box that is not `True` or `False` ("The
+Core expected this box to be on or off."). A taken SWR Protection key, or
+its removal, applies to the Core's SWR protection at once (a removal
+returns the default: off, limit 2.0, tune power to ignore 35 W). A taken
+External TX Inhibit key is stored on the Core, whose TX inhibit gate
+follows it (the receiver and transmit gaps plan, Task 13). At
+`transmitSettingsVersion` 6 the same off-air rule holds for Setup > PA's
+keys, `hardware/<mac>/pa/...` (the PA profiles: the profile list
+`pa/profile/_names`, each profile `pa/profile/<name>`, and the active
+profile `pa/profile/active`) and `hardware/<mac>/paCalibration/...` (the
+PA forward-power table, `boardClass` and `calPoint1` to `calPoint10`),
+from a peer at agreed minor 11. A taken key, or its removal, applies to
+the Core's PA profiles or calibration at once, and a window reloads its
+copies of both when those keys change. The rest of the transmit-side
+hardware keys stay refused.
 
 ### 8.2 Keys the Core owns by code
 
@@ -1786,6 +2118,11 @@ refused.
 | `setTgxlAntenna` | `port` i64 | `remoteTgxlControlVersion` | 2 | 11 |
 | `setTgxlOperate` | `on` bool | `remoteTgxlControlVersion` | 2 | 11 |
 | `setTgxlBypass` | `on` bool | `remoteTgxlControlVersion` | 2 | 11 |
+| `setTunePowerForTxBand` | `watts` i64 | `transmitSettingsVersion` | 2 | 11 |
+| `txProfile.select` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
+| `txProfile.save` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
+| `txProfile.delete` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
+| `rade.resetVocoder` | none | `transmitSettingsVersion` | 3 | 11 |
 | `configureRfKit` | `host` utf8, `port` i64 | `remoteRfKitControlVersion` | 2 | 11 |
 | `disconnectRfKit` | none | `remoteRfKitControlVersion` | 2 | 11 |
 | `setRfKitEnabled` | `enabled` bool | `remoteRfKitControlVersion` | 2 | 11 |
@@ -1833,7 +2170,7 @@ refused.
 The table's capability columns are the gate the desktop client applies
 before sending (section 6.2).
 
-Four command groups need a sentence beyond the table:
+Six command groups need a sentence beyond the table:
 
 - **The filter policy.** `setAlexBpfMode` sets one receive filter chain's
   filter policy (`chain` 0 or 1; `mode` 0 Auto, 1 Force filter, 2 Force
@@ -1864,6 +2201,43 @@ Four command groups need a sentence beyond the table:
   antenna on a tuner with no antenna switch or a port outside 1 to 3.
   The reasons are in
   [remote accessory control version 1](2026-09-23-remote-accessory-control-v1.md).
+- **The Tune Power slider.** `setTunePowerForTxBand` (`watts`, 0 to 100,
+  0 to 99 on a Hermes Lite 2) does what the TX applet's Tune Power slider
+  does in a local window: it sets the tune power for the band the Core
+  transmits on and sets the tune drive source to the tune slider, so TUNE
+  uses that power. The Core reports both on `transmit`
+  (`tunePowerForTxBand`, `tuneDrivePowerSource`). It keys nothing, so a
+  receive-only Core takes it, but it is refused while the radio is on the
+  air ("The radio is on the air. Try again when it stops."), outside the
+  tune power range ("Choose a tune power from 0 to 100 W.", or "Choose a
+  tune power from 0 to 99." on a Hermes Lite 2), and when not understood
+  ("The request to change the tune power was not understood."). A peer
+  below agreed minor 11 gets "Update this app to change the tune power on
+  this Core."
+- **TX profiles and the RADE vocoder.** `txProfile.select` (`name`)
+  applies the named TX profile on the Core as the TX applet's profile
+  combo does in a local window: its settings become the Core's transmit
+  settings and it becomes the active profile. `txProfile.save` (`name`)
+  saves the Core's current transmit settings under the name, as Setup >
+  Audio > TX Profile's Save... does: a new name adds a profile, the name
+  of an existing one overwrites that profile only, and a comma in the name
+  becomes `_`. `txProfile.delete` (`name`) deletes the profile; deleting
+  the active one makes another active, as locally. The Core reports its
+  active profile and list on `transmit` (`activeTxProfile`,
+  `txProfilesJson`). `rade.resetVocoder` (no arguments) clears the RADE
+  transmit vocoder of the Core's active slice, as the RADE applet's Reset
+  vocoder does. None keys the radio, so a receive-only Core takes them,
+  but each is refused while the radio is on the air ("The radio is on the
+  air. Try again when it stops."). The other refusals: "There is no
+  transmit profile called <name>." (select and delete), "Give the transmit
+  profile a name." (save with a blank name), "The Core has no radio to
+  keep transmit profiles for." (save before the Core has a radio), "It is
+  not possible to delete the last remaining TX profile." (the local page's
+  own words), "RADE is not running on the Core's active slice." (reset
+  with no RADE channel), "The request for the transmit profile was not
+  understood." and "The request to reset the RADE vocoder was not
+  understood." A peer below agreed minor 11 gets "Update this app to
+  change transmit profiles on this Core."
 - **One TCI switch.** The Core keeps one TCI switch and port for its own
   TCI server (`setStationTci`, the `stationTci` object). A desktop window
   connected to a Core with `stationTciVersion` 1 shows that switch and
@@ -1932,7 +2306,24 @@ is never a command. The client drops a message whose `sequence` is not
 higher than the last, or whose `sampledElapsedMs` went backwards, and
 ignores host fields unless the agreed minor is at least 10 and the version
 at least 2, and receiver fields unless the minor is at least 11 and the
-version at least 3. A message over 16 KiB is refused.
+version at least 3, and the radio section's PA readings and link quality
+unless the minor is at least 11 and the version at least 4. A message
+over 16 KiB is refused.
+
+At version 4 (remote-window parity Task 6) the radio section carries, each
+absent when the radio has none or has not reported it and all absent while
+the radio is not connected: `paVolts` (the PA drain volts, user ADC0),
+`supplyVolts`, `paCurrentAmps` and `paTemperatureCelsius` (the Core's
+`RadioModel::paReadings()`), `packetLossPercent` (lost over received plus
+lost in the last 5 seconds, from the sequence errors Thetis counts, one
+per mismatch), `jitterMs` (RFC 3550 section 6.4.1 interarrival jitter of
+the lowest active receive stream), `packetGapMs` (the longest interval
+between two datagrams from the radio in the last second), `sampleRateHz`
+and `udpPacketsSeen` (datagrams from the radio since it connected). Volts,
+amps, jitter and gap are finite and not negative, the loss is 0 to 100, a
+temperature is not below absolute zero, and the counts are whole numbers.
+A window shows each as the Core's, and one that is absent or out of date
+as unavailable, never 0.
 
 <!-- surface:telemetry -->
 <!-- Generated by scripts/render-link-tables.py from tests/data/link/v1/surface.json. Do not edit by hand. -->
@@ -1944,6 +2335,7 @@ Message kind `station.metrics.v1`.
 | 1 | 3 | 15 | `audio.active`, `audio.contextGeneration`, `audio.encodeFailuresPerSecond`, `audio.encodedPacketsPerSecond`, `audio.sendAcceptedPerSecond`, `audio.sendRejectedPerSecond`, `audio.sourceDropsPerSecond`, `audio.sourceFramesPerSecond`, `radio.connected`, `radio.rttAgeMs`, `radio.rttMs`, `radio.rxMbps`, `radio.txMbps`, `sampledElapsedMs`, `sequence` |
 | 2 | 10 | 22 | `host.hottestZoneCelsius`, `host.hottestZoneName`, `host.memoryAvailableKiB`, `host.memoryTotalKiB`, `host.processCpuPercent`, `host.processResidentKiB`, `host.systemCpuPercent` |
 | 3 | 11 | 26 | `receivers[].inputDelayMs`, `receivers[].loadPercent`, `receivers[].skippedInputMs`, `receivers[].sliceId` |
+| 4 | 11 | 35 | `radio.jitterMs`, `radio.paCurrentAmps`, `radio.paTemperatureCelsius`, `radio.paVolts`, `radio.packetGapMs`, `radio.packetLossPercent`, `radio.sampleRateHz`, `radio.supplyVolts`, `radio.udpPacketsSeen` |
 
 <!-- /surface -->
 
@@ -2668,8 +3060,8 @@ same on every machine.
 | `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false, `code` `takenOver` |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
-| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound |
-| `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry |
+| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand`; at `transmitSettingsVersion` 3, a write of `micBoost` and `lineInBoost` taken, and `lineInBoost` out of range refused with its range beside a write of the outbound `activeTxProfile`; at `transmitSettingsVersion` 4, a write of `txEqBandsJson`, `txEqUseLegacy` and `txLevelerDecay` taken, and a nine-value `txEqBandsJson`, a `cfcCompressionJson` with a value out of range and `txAlcDecay` out of range each refused whole with its range |
+| `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |
 | `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot |

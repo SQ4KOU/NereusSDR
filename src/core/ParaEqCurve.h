@@ -1,0 +1,259 @@
+// =================================================================
+// src/core/ParaEqCurve.h  (NereusSDR)
+// =================================================================
+//
+// Ported from Thetis source:
+//   Project Files/Source/Console/ucParametricEq.cs (the response curve,
+//   PointsFromJson and GetDefaults) and
+//   Project Files/Source/Console/eqform.cs (the TX EQ panel's widget
+//   limits, ParaEQTXData's setter, sendTXDspUpdate and setTXEQProfile),
+//   original licences from Thetis source are included below.
+//   Sole author of ucParametricEq.cs: Richard Samphire (MW0LGE).
+//
+// Declarations; the implementation is in ParaEqCurve.cpp.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-25 - R-R3-49 (parity Task 4): the TX EQ parametric curve
+//                 moved out of the GUI (ParametricEqWidget's response
+//                 curve, TxEqDialog's sampling onto the TX channel's ten
+//                 bands) into src/core, so the Core applies the curve
+//                 saved in txEqParaEqData to its own TX channel. Same
+//                 numbers as the dialog (tst_para_eq_curve).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
+//   2026-09-25 - R-R3-49 (group A fix wave): the TX EQ reaches WDSP as
+//                 Thetis sends it. The Core decodes a saved curve as
+//                 Thetis's transmit path does (PointsFromJson, GetDefaults
+//                 for a blank or broken value) and builds the arrays of
+//                 sendTXDspUpdate (every point's F and G, Q when the panel
+//                 uses Q factors) and of setTXEQProfile for the legacy EQ.
+//                 The ten-point sampling, the widget-load port and the
+//                 point ordering it needed are gone. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+// =================================================================
+
+// --- From ucParametricEq.cs ---
+/*  ucParametricEq.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2020-2026 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+// --- From eqform.cs ---
+//=================================================================
+// eqform.cs
+//=================================================================
+// PowerSDR is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to:
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//=================================================================
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
+#pragma once
+
+#include <QString>
+
+#include <array>
+#include <cmath>
+#include <vector>
+
+namespace NereusSDR {
+
+namespace ParaEqCurve {
+
+// The TX EQ panel's widget limits a saved curve is clamped to. From Thetis
+// eqform.cs:946-970 [v2.10.3.15] (ucParametricEq1's property block);
+// TxEqDialog applies the same values to its widget.
+inline constexpr double kTxEqDbMin = -24.0;   // cs:960
+inline constexpr double kTxEqDbMax =  24.0;   // cs:959
+inline constexpr double kTxEqQMin  =   0.2;   // cs:970
+inline constexpr double kTxEqQMax  =  20.0;   // cs:969
+
+// ucParametricEq.GetDefaults' default arguments, as eqform's
+// ParaEQTXData setter calls it for a value it cannot load. From Thetis
+// ucParametricEq.cs:1107-1131 [v2.10.3.15].
+inline constexpr int    kTxEqDefaultBandCount = 10;
+inline constexpr double kTxEqDefaultMinHz     = 0.0;
+inline constexpr double kTxEqDefaultMaxHz     = 4000.0;
+inline constexpr double kTxEqDefaultQ         = 4.0;
+
+// From Thetis ucParametricEq.cs:2983-2988 [v2.10.3.15].
+inline double clamp(double v, double lo, double hi)
+{
+    if (v < lo) { return lo; }
+    if (v > hi) { return hi; }
+    return v;
+}
+
+// The response curve in dB at `frequencyHz`. From Thetis
+// ucParametricEq.cs:2694-2748 [v2.10.3.15]. Two branches:
+//   - graphic EQ (!parametricEq): straight lines between adjacent points,
+//     clamped to the first and last gain at the edges;
+//   - parametric: a Gaussian per point, FWHM = span / (q*3) (at least
+//     span/6000), sigma = FWHM / 2.3548200450309493, summed unweighted.
+// A template over the point type: ParametricEqWidget's EqPoint (the
+// panel's display) uses it.
+template <typename PointList>
+double responseDb(const PointList& points, bool parametricEq,
+                  double frequencyMinHz, double frequencyMaxHz,
+                  double qMin, double qMax, double frequencyHz)
+{
+    if (!parametricEq) {
+        if (points.isEmpty()) { return 0.0; }
+        const double f = frequencyHz;
+        if (f <= points.first().frequencyHz) { return points.first().gainDb; }
+        if (f >= points.last().frequencyHz)  { return points.last().gainDb; }
+
+        for (int i = 1; i < points.size(); ++i) {
+            const auto& left  = points.at(i - 1);
+            const auto& right = points.at(i);
+            if (f <= right.frequencyHz) {
+                const double denom = right.frequencyHz - left.frequencyHz;
+                if (denom <= 0.0000001) { return right.gainDb; }
+                double t = (f - left.frequencyHz) / denom;
+                if (t < 0.0) { t = 0.0; }
+                if (t > 1.0) { t = 1.0; }
+                return left.gainDb + ((right.gainDb - left.gainDb) * t);
+            }
+        }
+        return points.last().gainDb;
+    }
+
+    double span = frequencyMaxHz - frequencyMinHz;
+    if (span <= 0.0) { span = 1.0; }
+
+    double sum = 0.0;
+    for (const auto& p : points) {
+        const double q = clamp(p.q, qMin, qMax);
+        double fwhm = span / (q * 3.0);
+        const double minFwhm = span / 6000.0;
+        if (fwhm < minFwhm) { fwhm = minFwhm; }
+        const double sigma = fwhm / 2.3548200450309493;
+        const double d = (frequencyHz - p.frequencyHz) / sigma;
+        const double w = std::exp(-0.5 * d * d);
+        sum += p.gainDb * w;
+    }
+    return sum;
+}
+
+/// The TX EQ's parametric points as Thetis's EQ form holds them for WDSP
+/// (eqform.cs ParaEQState's TX_F, TX_G, TX_Q, TX_Preamp, TX_minHz,
+/// TX_maxHz, TX_ParametricEQ and TX_BandCount).
+struct TxEqPoints {
+    std::vector<double> f;
+    std::vector<double> g;
+    std::vector<double> q;
+    double preampDb     = 0.0;
+    double minHz        = kTxEqDefaultMinHz;
+    double maxHz        = kTxEqDefaultMaxHz;
+    bool   parametricEq = true;
+    int    bandCount    = kTxEqDefaultBandCount;
+};
+
+/// ucParametricEq.PointsFromJson with the TX panel's limits: the points of
+/// a saved curve's JSON, each clamped and rounded as Thetis does, in the
+/// saved order, the first and last locked to the range's ends. False,
+/// leaving `out` alone, when Thetis would not load it.
+bool pointsFromJson(const QString& json, TxEqPoints& out);
+
+/// ucParametricEq.GetDefaults with its default arguments: ten flat points
+/// from 0 to 4000 Hz, Q 4, parametric, no preamp.
+TxEqPoints defaultTxEqPoints();
+
+/// The points a saved txEqParaEqData value holds (the gzip and base64url
+/// envelope Thetis saves, or raw JSON from an early NereusSDR build).
+/// False when it holds none Thetis would load.
+bool loadTxEqPoints(const QString& paraEqData, TxEqPoints& out);
+
+/// eqform.cs ParaEQTXData's setter: the saved value's points, or
+/// GetDefaults' when it holds none (a blank or broken value).
+TxEqPoints txEqPointsFromParaEqData(const QString& paraEqData);
+
+/// The arrays Thetis hands WDSP's SetTXAEQProfile(channel, nfreqs, F, G, Q):
+/// nfreqs = F.size() - 1; F[0] = 0 and G[0] = the preamp; Q[0] = 0, and
+/// `q` empty when Thetis passes no Q.
+struct TxEqProfile {
+    std::vector<double> f;
+    std::vector<double> g;
+    std::vector<double> q;
+};
+
+/// eqform.cs sendTXDspUpdate: every point's F and G, and Q when the panel
+/// uses Q factors.
+TxEqProfile txEqProfileFromPoints(const TxEqPoints& points);
+
+/// eqform.cs setTXEQProfile, the legacy ten-band EQ: the band centres and
+/// gains and the preamp, no Q.
+TxEqProfile legacyTxEqProfile(int preampDb, const std::array<int, 10>& bandGainsDb,
+                              const std::array<int, 10>& bandFreqsHz);
+
+} // namespace ParaEqCurve
+
+} // namespace NereusSDR

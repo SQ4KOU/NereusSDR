@@ -150,6 +150,10 @@
 //                 relative to the rade_n_features_in_out() threshold
 //                 and verify resetTx() actually flushes feature state.
 //                 AI tooling: Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): test seam
+//                 resetTxCountForTest() so a test sees a window's Reset
+//                 vocoder reach the Core's channel. NereusSDR-original.
+//                 AI tooling: Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -244,6 +248,9 @@ public:
     // state on MOX release.
     int txFeatureAccumSizeForTest() const;
 
+    // Test seam (R-R3-49, parity Task 3). How many times resetTx() ran.
+    int resetTxCountForTest() const { return m_resetTxCountForTest; }
+
 public slots:
     // Sideband selection hook.  Set true for RADE_U (upper) and false
     // for RADE_L (lower).  Stored on the channel; not yet consumed by
@@ -325,6 +332,7 @@ private:
     // Test seam counter: incremented every time rade_tx() runs in
     // txEncode(). Cleared on start() and on resetTx().
     int                  m_radeTxCallCount{0};
+    int                  m_resetTxCountForTest{0};  // R-R3-49 parity Task 3
 
     // Resampler chain. The AetherSDR client owns four resamplers
     // (24kHz<->8kHz for the modem leg and 24kHz<->16kHz for the

@@ -15,6 +15,9 @@
 //   2026-05-04 — Issue #175 Wave 1: dropped misplaced AM TX / Carrier
 //                 Level stub from AmSamSetupPage (control belongs at
 //                 Thetis grpTXAM on tpTransmit, not the DSP/AM tab).
+//   2026-09-25 - R-R3-49 (parity Task 4): AgcAlcSetupPage and CfcSetupPage
+//                 override setTransmitSettingsPermittedAt for version 4.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -108,9 +111,11 @@ class AgcAlcSetupPage : public SetupPage {
 public:
     explicit AgcAlcSetupPage(RadioModel* model, QWidget* parent = nullptr);
 
-    // R-R3-21: the TX Leveler and TX ALC groups follow the transmit
-    // permission; the receive AGC groups on the page do not.
-    void setTransmitPermitted(bool permitted, const QString& reason) override;
+    // R-R3-49 (parity Task 4): the TX Leveler and TX ALC groups follow the
+    // transmit settings gate at version 4; the receive AGC groups on the
+    // page do not.
+    void setTransmitSettingsPermittedAt(int version, bool permitted,
+                                        const QString& reason) override;
 
 private:
     void updateCustomGating(AGCMode mode);
@@ -228,6 +233,11 @@ class CfcSetupPage : public SetupPage {
     Q_OBJECT
 public:
     explicit CfcSetupPage(RadioModel* model, QWidget* parent = nullptr);
+
+    // R-R3-49 (parity Task 4): the phase rotator, CFC and CESSB settings
+    // follow the transmit settings gate at version 4.
+    void setTransmitSettingsPermittedAt(int version, bool permitted,
+                                        const QString& reason) override;
 
 signals:
     /// Emitted when the [Configure CFC bands…] button is clicked.  Batch 6

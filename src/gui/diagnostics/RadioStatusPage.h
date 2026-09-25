@@ -53,6 +53,10 @@ public:
 private slots:
     void onPaTemperatureChanged(double celsius);
     void onPaCurrentChanged(double amps);
+    // R-R3-32 / R-R3-46 (parity Task 6): the PA card from
+    // RadioModel::paReadings() (this window's radio, or the Core's), an
+    // absent reading shown as unavailable.
+    void refreshPaReadings();
     void onPowerChanged(double forward, double reflected, double swr);
     void onPttChanged();
     void onIssuesChanged();
@@ -82,6 +86,7 @@ private:
     QLabel*       m_paTemperatureLabel{nullptr};
     QLabel*       m_paCurrentLabel{nullptr};
     QLabel*       m_paVoltageLabel{nullptr};
+    QLabel*       m_paTitleLabel{nullptr};
     QProgressBar* m_paTempBar{nullptr};
     QProgressBar* m_paCurrentBar{nullptr};
 

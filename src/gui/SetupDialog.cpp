@@ -121,6 +121,33 @@
 //                 a Core page; the presets live on the Core. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-24: R-R3-49 (parity Task 1): setTransmitSettingsPermitted,
+//                 pushed to every realized page beside the transmit
+//                 permission. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
+//   2026-09-25: R-R3-49 (parity Task 3): the transmit settings gate per
+//                 transmitSettingsVersion (setTransmitSettingsPermitted's
+//                 minVersion); Audio > TX Profile no longer waits for
+//                 remote transmit, and gates its own controls. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-09-25: R-R3-49 (parity Task 4): DSP > CFC and Transmit > Speech
+//                 Processor no longer wait for remote transmit; CFC gates
+//                 its own controls at transmitSettingsVersion 4. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-09-25: R-R3-49 / R-R3-46 (parity Task 6): PA > PA Gain, Watt
+//                 Meter and PA Values no longer wait for remote transmit;
+//                 each gates its own controls at transmitSettingsVersion 6
+//                 (the auto-calibrate sweep keeps the transmit permission).
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
+//   2026-09-25: R-R3-49 (parity Task 5): Transmit > Power, Transmit >
+//                 DEXP/VOX and Test > Two-Tone IMD no longer wait for remote
+//                 transmit; each gates its own controls at
+//                 transmitSettingsVersion 5 (Enable VOX keeps the transmit
+//                 permission). J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -234,6 +261,7 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
     : QDialog(parent), m_model(model)
 {
     m_transmitPermitted = model && model->ownsLocalDsp();
+    m_transmitSettingsPermitted = m_transmitPermitted;
     m_transmitReason = tr("Remote transmit controls are not available from this Core yet.");
     m_localUnavailableReason = tr(
         "These settings control audio and signal processing on this computer. "
@@ -823,6 +851,20 @@ void SetupDialog::setTransmitPermitted(bool permitted, const QString& reason)
     refreshTransmitPresentation();
 }
 
+void SetupDialog::setTransmitSettingsPermitted(bool permitted, const QString& reason,
+                                               int minVersion)
+{
+    if (minVersion <= 1) {
+        m_transmitSettingsPermitted = permitted;
+        m_transmitSettingsReason = reason;
+    } else {
+        // R-R3-49 (parity Task 3): a later version's settings, pushed to the
+        // pages through SetupPage::setTransmitSettingsPermittedAt.
+        m_transmitSettingsGates.insert(minVersion, TransmitSettingsGate{permitted, reason});
+    }
+    refreshTransmitPresentation();
+}
+
 void SetupDialog::refreshTransmitPresentation()
 {
     // The reason a page is unavailable, if it is. The transmit reason wins
@@ -867,6 +909,15 @@ void SetupDialog::refreshTransmitPresentation()
         }
         for (SetupPage* setupPage : setupPages) {
             setupPage->setTransmitPermitted(m_transmitPermitted, m_transmitReason);
+            // R-R3-49 (parity Task 1): the transmit settings that key nothing.
+            setupPage->setTransmitSettingsPermitted(m_transmitSettingsPermitted,
+                                                    m_transmitSettingsReason);
+            // R-R3-49 (parity Task 3): each later version's settings.
+            for (auto gate = m_transmitSettingsGates.cbegin();
+                 gate != m_transmitSettingsGates.cend(); ++gate) {
+                setupPage->setTransmitSettingsPermittedAt(gate.key(), gate->permitted,
+                                                          gate->reason);
+            }
             // R-R3-21: a Mixed page gates its own Core controls.
             setupPage->setStationSettingsAvailable(!stationBlocked, m_stationReason);
         }
@@ -1106,13 +1157,16 @@ void SetupDialog::buildTree()
     //
     // R-R3-46 / R-R3-10: the three are transmit settings. A remote window
     // now knows the Core's radio, so they are shown for a radio that has
-    // them, and follow the transmit permission with its reason until remote
-    // transmit arrives (requiresTransmit). Local mode is always permitted.
+    // them. R-R3-49 (parity Task 6): no longer held whole for remote
+    // transmit. The Core takes their settings while its radio is off the
+    // air, so each page gates its own controls on transmitSettingsVersion
+    // 6; PA Gain's auto-calibrate sweep, which keys the radio, keeps the
+    // transmit permission. Local mode is always permitted.
     m_paGainItem = registerPage(m_paCategoryItem, "PA Gain", SetupScope::Core, [this]() -> QWidget* {
         m_paGainPage = new PaGainByBandPage(m_model);
         m_paGainPage->applyCapabilityVisibility(capsForModel(m_model));
         return m_paGainPage;
-    }, /*requiresTransmit=*/true);
+    });
 
     m_paWattMeterItem = registerPage(m_paCategoryItem, "Watt Meter", SetupScope::Core,
                                      [this]() -> QWidget* {
@@ -1142,13 +1196,13 @@ void SetupDialog::buildTree()
                     }
                 });
         return m_paWattMeterPage;
-    }, /*requiresTransmit=*/true);
+    });
 
     m_paValuesItem = registerPage(m_paCategoryItem, "PA Values", SetupScope::Core, [this]() -> QWidget* {
         m_paValuesPage = new PaValuesPage(m_model);
         m_paValuesPage->applyCapabilityVisibility(capsForModel(m_model));
         return m_paValuesPage;
-    }, /*requiresTransmit=*/true);
+    });
 
     // Cache the registry index so the Watt Meter cross-wire above can realize
     // the PA Values page without a label lookup on every button press.
@@ -1197,6 +1251,11 @@ void SetupDialog::buildTree()
                  [this] { return wrapWithAudioBackendStrip(new AudioAdvancedPage(m_model)); });
     // Phase 3M-1c J.3: TX Profile editor.
     //
+    // R-R3-49 (parity Task 3): no longer held for remote transmit. In a
+    // remote window the manager mirrors the Core's profiles and the page
+    // gates its own controls on transmitSettingsVersion 3
+    // (TxProfileSetupPage::setTransmitSettingsPermittedAt).
+    //
     // 3M-1c L.1 update: RadioModel now constructs MicProfileManager in its
     // ctor (per RadioModel::m_micProfileMgr in RadioModel.cpp), so this page
     // gets the live manager pointer at SetupDialog construction time.  The
@@ -1209,7 +1268,7 @@ void SetupDialog::buildTree()
             m_model,
             m_model ? m_model->micProfileManager() : nullptr,
             m_model ? &m_model->transmitModel() : nullptr);
-    }, true);
+    });
 
     tick("Audio");
 
@@ -1233,15 +1292,16 @@ void SetupDialog::buildTree()
     // instance is shared with the [CFC] right-click on the TxApplet).
     //
     // R-R3-21: a transmit page. Phase Rotator, CFC and CESSB are all TXA
-    // stages, and the [Configure CFC bands] button opens the TX CFC editor,
-    // so the page follows the negotiated transmit permission like the six
-    // Transmit/Audio TX leaves.
+    // stages, and the [Configure CFC bands] button opens the TX CFC editor.
+    // R-R3-49 (parity Task 4): no longer held for remote transmit. The Core
+    // mirrors every setting on it; the page gates its own controls on
+    // transmitSettingsVersion 4 (CfcSetupPage::setTransmitSettingsPermittedAt).
     registerPage(dsp, "CFC", SetupScope::Core, [this]() -> QWidget* {
         auto* cfcPage = new CfcSetupPage(m_model);
         connect(cfcPage, &CfcSetupPage::openCfcDialogRequested,
                 this,    &SetupDialog::cfcDialogRequested);
         return cfcPage;
-    }, true);
+    });
 
     registerPage(dsp, "TNF", SetupScope::Core, [this] { return new MnfSetupPage(m_model); });
     // Stage C2: user-customisable filter preset editor (10 slots × 12 modes).
@@ -1317,7 +1377,10 @@ void SetupDialog::buildTree()
 
     // ── Transmit ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* transmit = addCategory("Transmit");
-    registerPage(transmit, "Power", SetupScope::Core,       [this] { return new PowerPage(m_model);      }, true);
+    // R-R3-49 (parity Task 5): no longer held for remote transmit. The Core
+    // mirrors every setting on it; the page gates its own controls on
+    // transmitSettingsVersion 5 (PowerPage::setTransmitSettingsPermittedAt).
+    registerPage(transmit, "Power", SetupScope::Core,       [this] { return new PowerPage(m_model);      });
     if (UnbuiltFeatures::isBuilt(UnbuiltFeature::TxProfilesLeaf)) {
         registerPage(transmit, "TX Profiles", SetupScope::Core,
                      [this] { return new TxProfilesPage(m_model); }, true);
@@ -1327,6 +1390,9 @@ void SetupDialog::buildTree()
     // openSetupRequested(category, page) signal feeds straight back into
     // selectPage() so the cross-link buttons jump within the same dialog
     // instance — no MainWindow round-trip required.
+    // R-R3-49 (parity Task 4): no longer held for remote transmit. The page
+    // shows the Core's TX chain and opens the TX EQ dialog and the pages
+    // that change it, each of which follows the Core's gate.
     registerPage(transmit, "Speech Processor", SetupScope::Core, [this]() -> QWidget* {
         auto* speechPage = new SpeechProcessorPage(m_model);
         connect(speechPage, &SpeechProcessorPage::openSetupRequested,
@@ -1334,7 +1400,7 @@ void SetupDialog::buildTree()
             selectPage(page);
         });
         return speechPage;
-    }, true);
+    });
 
     // Note: Setup → Transmit → PureSignal page retired in Phase 3M-4 Task 14
     // (no Thetis equivalent; PsForm at Tools > PureSignal is the entire PS
@@ -1347,7 +1413,10 @@ void SetupDialog::buildTree()
     // from the legacy DSP > VOX/DEXP placeholder above (line 245), which
     // remains a lightweight 4-control disabled stub for back-compat with
     // the Thetis tpDSPVOX tab IA.
-    registerPage(transmit, "DEXP/VOX", SetupScope::Core, [this] { return new DexpVoxPage(m_model); }, true);
+    // R-R3-49 (parity Task 5): no longer held for remote transmit. Enable VOX
+    // follows the transmit permission; the rest follows
+    // transmitSettingsVersion 5 (DexpVoxPage).
+    registerPage(transmit, "DEXP/VOX", SetupScope::Core, [this] { return new DexpVoxPage(m_model); });
 
     // 2026-05-22 menu cleanup: the standalone "PGXL Interlock" entry that
     // previously lived here is removed. The same controls live under
@@ -1470,10 +1539,13 @@ void SetupDialog::buildTree()
     // ── Test ──────────────────────────────────────────────────────────────────
     // Phase 3M-1c H.1: top-level Test category for the Two-Tone IMD page.
     QTreeWidgetItem* test = addCategory("Test");
-    // R-R3-21: a transmit page. Every control writes the TransmitModel's
-    // two-tone test settings, which drive a keyed two-tone transmission.
-    registerPage(test, "Two-Tone IMD", SetupScope::Core, [this] { return new TestTwoTonePage(m_model); },
-                 true);
+    // R-R3-21: every control writes the TransmitModel's two-tone test
+    // settings, which a keyed two-tone transmission reads when it starts.
+    // R-R3-49 (parity Task 5): no longer held for remote transmit. The
+    // settings key nothing; the page gates them on transmitSettingsVersion
+    // 5, and the two-tone start (the TX applet's 2-Tone) keeps the transmit
+    // permission.
+    registerPage(test, "Two-Tone IMD", SetupScope::Core, [this] { return new TestTwoTonePage(m_model); });
 
     tick("Test");
 

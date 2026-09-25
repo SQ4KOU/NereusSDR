@@ -28,6 +28,9 @@
 //                 2026-09-24: before a radio loads, setBand only notes the
 //                 band, and markSettingsUnloaded drops the band memory.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25: R-R3-49 (group A fix wave, M6): ATT on TX, its value and
+//                 Force ATT schedule the Core's debounced save.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -521,6 +524,10 @@ void StepAttenuatorController::setAttOnTxValue(int dB)
     // own bound setter.
     if (dB != oldValue) {
         emit attOnTxValueChanged(dB);
+        // R-R3-49 (group A fix wave, M6): the Core saves the operator's
+        // change at once (scheduleSave skips a move made while keyed, such
+        // as PureSignal's auto-attenuate).
+        scheduleSave();
     }
 
     // From Thetis console.cs:10613-10622 TxAttenData setter [v2.10.3.13]:

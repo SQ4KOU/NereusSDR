@@ -3,6 +3,16 @@
 // Verifies that the Phone/CW and VFO presentation gates suppress their
 // TX-only writers in remote receive mode while preserving local/re-enabled
 // interaction and authoritative model-to-widget updates.
+//
+// 2026-09-24: R-R3-49 (parity Task 1): the flag's filter-preset
+// Shift-click hands the TX passband match to the window in a remote window
+// too, whatever the keying gate says; MainWindow's transmit settings gate
+// then applies it or says why. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
+//
+// 2026-09-24: R-R3-49 (parity Task 2): the Phone/CW applet's mic level,
+// PROC, AM carrier and DEXP follow the transmit settings gate. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -152,17 +162,52 @@ private slots:
         remote.transmitModel().setCpdrOn(true);
         QCOMPARE(proc->isChecked(), true);
 
-        // The TX gate must not erase the independent mic-mute rule while it
-        // is active; changing that model value must leave the control gated.
+        // The gate must not erase the independent mic-mute rule while it is
+        // active; changing that model value must leave the control gated.
+        // R-R3-49 (parity Task 2): the mic level is a transmit setting, so
+        // it follows setTransmitSettingsPermitted, not the keying gate.
         remote.transmitModel().setMicMute(false);
         QVERIFY(!mic->isEnabled());
-        applet.setTransmitPermitted(true);
+        applet.setTransmitSettingsPermitted(true);
         QVERIFY(!mic->isEnabled());
-        applet.setTransmitPermitted(false);
+        applet.setTransmitSettingsPermitted(false);
         remote.transmitModel().setMicMute(true);
         QVERIFY(!mic->isEnabled());
         applet.setTransmitPermitted(true);
+        QVERIFY(!mic->isEnabled());
+        applet.setTransmitSettingsPermitted(true);
         QVERIFY(mic->isEnabled());
+    }
+
+    // R-R3-49 (parity Task 2): the mic level, PROC and its level, AM carrier
+    // and DEXP follow the transmit settings gate; the mic profile, mic
+    // source and VAX keep the keying gate.
+    void remotePhoneSettingsFollowTheTransmitSettingsGate()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        PhoneCwApplet applet(&remote);
+        auto* proc = button(applet, QStringLiteral("PhoneCwProcButton"));
+        auto* procSlider = applet.findChild<QSlider*>(QStringLiteral("PhoneCwProcSlider"));
+        auto* dexp = button(applet, QStringLiteral("PhoneCwDexpButton"));
+        auto* vax = buttonByText(applet, QStringLiteral("VAX"));
+        QVERIFY(proc && procSlider && dexp && vax);
+        const QString coreReason = QStringLiteral(
+            "This Core does not let this app change transmit settings. Updating the Core may help.");
+        QCOMPARE(proc->toolTip(), coreReason);
+
+        applet.setTransmitSettingsPermitted(true);
+        QVERIFY(proc->isEnabled());
+        QVERIFY(procSlider->isEnabled());
+        QVERIFY(dexp->isEnabled());
+        QVERIFY(!vax->isEnabled());
+        const bool before = remote.transmitModel().cpdrOn();
+        proc->click();
+        QCOMPARE(remote.transmitModel().cpdrOn(), !before);
+
+        const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+        applet.setTransmitSettingsPermitted(false, onAir);
+        QVERIFY(!proc->isEnabled());
+        QCOMPARE(proc->toolTip(), onAir);
     }
 
     void phoneGateRestoresLocalInteraction()
@@ -172,10 +217,10 @@ private slots:
         auto* proc = button(applet, QStringLiteral("PhoneCwProcButton"));
         QVERIFY(proc && proc->isEnabled());
 
-        applet.setTransmitPermitted(false, QStringLiteral("remote reason"));
+        applet.setTransmitSettingsPermitted(false, QStringLiteral("remote reason"));
         QVERIFY(!proc->isEnabled());
         QCOMPARE(proc->toolTip(), QStringLiteral("remote reason"));
-        applet.setTransmitPermitted(true);
+        applet.setTransmitSettingsPermitted(true);
         QVERIFY(proc->isEnabled());
 
         const bool before = local.transmitModel().cpdrOn();
@@ -244,6 +289,38 @@ private slots:
         QVERIFY(localMenu.enabled);
         QCOMPARE(handoffSpy.count(), 2);
         QCOMPARE(handoffSpy.at(1).first().toInt(), 3);
+    }
+
+    // R-R3-49 (parity Task 1): the TX passband match is a transmit setting,
+    // not a key. The remote flag still asks for it with the keying gate
+    // closed; MainWindow decides with transmitSettingsPermitted().
+    void remoteVfoShiftClickStillAsksForTheTxPassband()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        VfoWidget vfo;
+        vfo.setSliceIndex(0);
+        vfo.setRadioModel(&remote);
+        vfo.setMode(DSPMode::USB);
+        vfo.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&vfo));
+        vfo.showTab(VfoWidget::Tab::Mode);
+
+        QSignalSpy match(&vfo, &VfoWidget::txFilterMatchRequested);
+        QPushButton* preset = nullptr;
+        for (QPushButton* b : vfo.findChildren<QPushButton*>()) {
+            if (b->isCheckable() && !b->isChecked() && b->isVisible()
+                && b->toolTip().contains(QStringLiteral(" Hz to "))) {
+                preset = b;
+                break;
+            }
+        }
+        QVERIFY(preset != nullptr);
+        QTest::mouseClick(preset, Qt::LeftButton, Qt::ShiftModifier);
+        QCOMPARE(match.count(), 1);
+        const int low = match.first().at(0).toInt();
+        const int high = match.first().at(1).toInt();
+        QVERIFY(low >= 0);
+        QVERIFY(high > low);
     }
 };
 

@@ -687,13 +687,6 @@ QMap<F, QList<Surface>> surfaces()
                named(QStringLiteral("diagCategoriesGroup")))};
     map[F::SignalGenerator] = {setupPage(QStringLiteral("Signal Generator")),
                                setupPage(QStringLiteral("Hardware Tests"))};
-    map[F::LocalNetworkStats] = {
-        Surface{QStringLiteral("Network Diagnostics Jitter"), Host::NetDiag,
-                [](Hosts& h) { return textShown(h.networkDiagnostics(), QStringLiteral("Jitter")); }},
-        Surface{QStringLiteral("Network Diagnostics Packet loss"), Host::NetDiag,
-                [](Hosts& h) { return textShown(h.networkDiagnostics(), QStringLiteral("Packet loss")); }},
-        Surface{QStringLiteral("Network Diagnostics Packet gap"), Host::NetDiag,
-                [](Hosts& h) { return textShown(h.networkDiagnostics(), QStringLiteral("Packet gap")); }}};
     map[F::DspRate] = {onPage(QStringLiteral("Advanced"), QStringLiteral("DSP group"),
                               named(QStringLiteral("audioAdvancedDspGroup")))};
     map[F::IqToVax] = {onPage(QStringLiteral("Advanced"), QStringLiteral("Send IQ to VAX"), text(QStringLiteral("Send IQ to VAX"))),

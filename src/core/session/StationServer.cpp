@@ -235,6 +235,51 @@
 //                                    displayExtrasVersion 1 last in the
 //                                    minor-11 block. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 1):
+//                                    transmitSettingsVersion 1. A
+//                                    receive-only Core takes a transmit
+//                                    setting (a `transmit` write outside
+//                                    the keying set, a DspOptions*Tx key)
+//                                    while the radio is off the air and
+//                                    refuses it while it is on the air.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
+//                                    transmitSettingsVersion 2: the TX
+//                                    and Phone/CW applets' settings on
+//                                    `transmit`, a value outside a
+//                                    setting's range refused in plain
+//                                    words, and setTunePowerForTxBand.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3):
+//                                    transmitSettingsVersion 3: the radio
+//                                    microphone settings and the Core's TX
+//                                    profiles on `transmit`, the Line In
+//                                    gain range, the txProfile verbs and
+//                                    rade.resetVocoder.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 4):
+//                                    transmitSettingsVersion 4: the TX EQ,
+//                                    CFC, phase rotator, CESSB, leveler and
+//                                    ALC settings on `transmit`.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 5):
+//                                    transmitSettingsVersion 5: Setup >
+//                                    Transmit > Power, DEXP/VOX and Test >
+//                                    Two-Tone IMD on `transmit`, ATT on TX
+//                                    and Force ATT on `stepAtt`; the SWR
+//                                    protection and External TX Inhibit keys
+//                                    taken off the air, the SWR protection
+//                                    applied to the Core's controller at
+//                                    once.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-32 (parity Task 6):
+//                                    transmitSettingsVersion 6: Setup > PA's
+//                                    pa/ and paCalibration/ keys taken off
+//                                    the air and applied at once;
+//                                    stationTelemetryVersion 4: the radio's
+//                                    PA readings and link quality for a
+//                                    peer at minor 11.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -574,10 +619,20 @@ constexpr const char* kRfKitSwitchWriteReason =
     "Update this app to turn the RF-Kit amplifier on or off on this Core.";
 
 // The one reason a receive-only Core gives for every transmit
-// configuration write it refuses: direct TransmitModel property writes and
-// the DSP > Options TX settings keys alike (R-R3-21).
+// configuration write it refuses: the keying `transmit` properties and the
+// transmit-side hardware keys alike (R-R3-21). R-R3-49 (parity Task 1): the
+// other transmit settings are taken while the radio is off the air.
 constexpr const char* kReceiveOnlyTransmitReason =
     "Transmit configuration is unavailable on this receive-only Core.";
+
+// R-R3-49 (parity Task 1): the `transmit` properties that key the radio or
+// arm it to key. A receive-only Core refuses a write of any of them, on and
+// off the air, whether or not it mirrors the property; every other
+// `transmit` property is a setting (transmitSettingsVersion 1).
+bool isTransmitKeyingProperty(const QByteArray& name)
+{
+    return name == "mox" || name == "tune" || name == "voxEnabled" || name == "twoToneActive";
+}
 
 // R-IOS-01: the one reason for a write to a property MirrorPolicy marks
 // outbound (the station's own readings and derived values, and properties
@@ -678,7 +733,74 @@ bool isTransmitHardwareKey(const QString& rawKey)
         || area == QLatin1String("powerbyband") || area == QLatin1String("tunepowerbyband");
 }
 
+// R-R3-49 (parity Task 5): Setup > Transmit > Power's SWR Protection and
+// External TX Inhibit groups, Station keys (SettingsScope.cpp) that gate
+// the Core's own transmitting. Taken while the radio is off the air.
+bool isPowerPageTransmitKey(const QString& key)
+{
+    return RadioModel::isSwrProtectionSettingKey(key)
+        || key == QLatin1String("TxInhibitMonitorEnabled")
+        || key == QLatin1String("TxInhibitMonitorReversed");
+}
+
+// R-R3-46 / R-R3-49 (parity Task 6): Setup > PA's keys, the PA profiles
+// (hardware/<mac>/pa/..., PaProfileManager: PA Gain's profiles, per-band
+// gains, adjust matrix and max power) and the PA forward-power table
+// (hardware/<mac>/paCalibration/..., CalibrationController: the Watt Meter
+// page). Taken while the radio is off the air and applied at once
+// (RadioModel::scheduleRemoteHardwareApply). The Calibration tab's own
+// copies of its transmit fields (paCalibration/cal/...) are Hardware
+// Config's, not the PA pages', and stay refused.
+bool isPaPageTransmitKey(const QString& rawKey)
+{
+    const QStringList parts = rawKey.toLower().split(QLatin1Char('/'));
+    if (parts.size() < 4 || parts[0] != QLatin1String("hardware")) {
+        return false;
+    }
+    if (parts[2] == QLatin1String("pa")) {
+        return true;
+    }
+    return parts[2] == QLatin1String("pacalibration") && parts[3] != QLatin1String("cal");
+}
+
+// R-R3-49 (parity Task 5): the plain refusal for a Power page key's value
+// the page's own control cannot hold; empty when it can. The boxes write
+// "True" or "False"; the page's udTunePowerSwrIgnore spin box holds 5 to
+// 50 W (PowerPage::buildSwrProtectionGroup).
+// SwrProtectionLimit keeps SettingsProxyServer's own range check.
+QString powerPageKeyValueRefusal(const QString& key, const QVariant& value)
+{
+    if (!isPowerPageTransmitKey(key) || key == QLatin1String("SwrProtectionLimit")) {
+        return {};
+    }
+    const QString text = value.toString();
+    if (key == QLatin1String("TunePowerSwrIgnore")) {
+        bool ok = false;
+        const int watts = text.toInt(&ok);
+        return ok && watts >= 5 && watts <= 50
+            ? QString()
+            : QStringLiteral("Choose a tune power to ignore from 5 to 50 W.");
+    }
+    return text == QLatin1String("True") || text == QLatin1String("False")
+        ? QString()
+        : QStringLiteral("The Core expected this box to be on or off.");
+}
+
+// R-R3-49 (parity Task 5): true when both values are the same JSON object.
+// The Core writes a band map (powerByBandJson, tunePowerByBandJson) back with
+// its keys in its own order, so a map it took whole reads back as the same
+// object, not the same text.
+bool sameJsonObject(const QVariant& a, const QVariant& b)
+{
+    const QJsonDocument left = QJsonDocument::fromJson(a.toString().toUtf8());
+    const QJsonDocument right = QJsonDocument::fromJson(b.toString().toUtf8());
+    return left.isObject() && right.isObject() && left == right;
+}
+
 // Every settings key a receive-only Core refuses as transmit configuration.
+// R-R3-49 (parity Task 1): from a peer offered transmitSettingsVersion 1,
+// the keys StationServer::isTransmitSettingKeyAcceptedOffAir lists are
+// taken off the air instead (StationServer::receiveOnlyRefusesKey).
 bool isReceiveOnlyRefusedKey(const QString& key)
 {
     return isTransmitDspOptionsKey(key) || isTransmitHardwareKey(key);
@@ -1833,6 +1955,31 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                     : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
             break;
         }
+        // R-R3-49 (parity Task 2): the Tune Power slider's command came
+        // with transmitSettingsVersion 2, in the same minor-11 block.
+        if (message.commandVerb == "setTunePowerForTxBand"
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || transmitSettingsVersion() < 2)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change the tune power on this Core.")
+                    : QStringLiteral("This Core cannot change its transmit settings."), {}));
+            break;
+        }
+        // R-R3-49 (parity Task 3): the TX profile verbs and the RADE vocoder
+        // reset came with transmitSettingsVersion 3, in the minor-11 block.
+        if ((message.commandVerb.startsWith("txProfile.")
+             || message.commandVerb == "rade.resetVocoder")
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || transmitSettingsVersion() < 3)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change transmit profiles on this Core.")
+                    : QStringLiteral("This Core cannot change its transmit settings."), {}));
+            break;
+        }
         if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")
             && it->agreedMinor < kRemoteTgxlConfigSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
@@ -2846,12 +2993,31 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     const bool radioWrite = message.objectKey == QByteArray(kRadioKey);
     const bool receiveOnlyTransmitWrite = message.objectKey == QByteArray(kTransmitKey)
         && !m_radioModel.isNull() && m_radioModel->receiveOnlyStationPolicy();
+    // R-R3-49 (parity Task 1): a peer offered transmitSettingsVersion 1 may
+    // change a transmit setting on a receive-only Core; it waits while the
+    // radio is on the air (the Core's one on-air refusal), read once for the
+    // batch before anything in it is applied. Any other peer is refused
+    // every `transmit` write, as before.
+    const bool transmitSettingsWrite = receiveOnlyTransmitWrite
+        && transmitSettingsOffered(transport);
+    QString onAirRefusal;
+    if (transmitSettingsWrite) {
+        m_radioModel->stationOnAirRefusal(&onAirRefusal);
+    }
     // R-R3-25: the tuner's operate, bypass and antenna, and the amplifier's
     // operate, on a receive-only Core.
     const bool receiveOnlyStation = !m_radioModel.isNull()
         && m_radioModel->receiveOnlyStationPolicy();
     const bool tunerWrite = message.objectKey == QByteArray(kTunerKey);
     const bool amplifierWrite = message.objectKey == QByteArray(kAmplifierKey);
+    // R-R3-49 (parity Task 5): `stepAtt`'s ATT on TX, its value and Force
+    // ATT are transmit settings (transmitSettingsVersion 5). A receive-only
+    // Core takes them from a peer offered the transmit settings, off the
+    // air only; the on-air check is read once for the batch.
+    QString stepAttOnAir;
+    if (stepAttWrite && receiveOnlyStation) {
+        m_radioModel->stationOnAirRefusal(&stepAttOnAir);
+    }
     // R-IOS-01: the class MirrorPolicy's direction table is keyed by.
     QByteArray outboundClass;
     if (const QObject* target = m_mirror->watchedObject(message.objectKey)) {
@@ -2864,13 +3030,20 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             continue;
         }
         requested.insert(update.name);
+        // R-R3-49 (parity Task 1): the keying set is refused first, whether
+        // or not this Core mirrors the property, on and off the air.
+        if (receiveOnlyTransmitWrite
+            && (!transmitSettingsWrite || isTransmitKeyingProperty(update.name))) {
+            refusals.insert(update.name, QString::fromLatin1(kReceiveOnlyTransmitReason));
+            continue;
+        }
         const auto known = previous.constFind(update.name);
         if (known == previous.cend() || known->kind != update.kind) {
             refusals.insert(update.name, QStringLiteral("The Core does not have this setting, or not in this form."));
             continue;
         }
-        if (receiveOnlyTransmitWrite) {
-            refusals.insert(update.name, QString::fromLatin1(kReceiveOnlyTransmitReason));
+        if (transmitSettingsWrite && !onAirRefusal.isEmpty()) {
+            refusals.insert(update.name, onAirRefusal);
             continue;
         }
         if (receiveOnlyStation
@@ -2883,6 +3056,22 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         if (!stepAttRefusal.isEmpty()) {
             refusals.insert(update.name, stepAttRefusal);
             continue;
+        }
+        if (stepAttWrite && StepAttenuatorFacade::isTransmitSetting(update.name)) {
+            if (receiveOnlyStation && !transmitSettingsOffered(transport)) {
+                refusals.insert(update.name, QString::fromLatin1(kReceiveOnlyTransmitReason));
+                continue;
+            }
+            if (!stepAttOnAir.isEmpty()) {
+                refusals.insert(update.name, stepAttOnAir);
+                continue;
+            }
+            const QString range = m_radioModel->stepAttFacade()
+                ->transmitSettingRefusal(update.name, update.value);
+            if (!range.isEmpty()) {
+                refusals.insert(update.name, range);
+                continue;
+            }
         }
         if (radioWrite && update.name == "rfKitEnabled") {
             refusals.insert(update.name, QString::fromLatin1(kRfKitSwitchWriteReason));
@@ -2902,6 +3091,16 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
                                 ? SliceModel::activeWriteReason()
                                 : QString::fromLatin1(kOutboundWriteReason));
             continue;
+        }
+        // R-R3-49 (parity Task 2): a transmit setting outside its setter's
+        // range is refused with the range, rather than clamped silently.
+        if (message.objectKey == QByteArray(kTransmitKey) && !m_radioModel.isNull()) {
+            const QString range = m_radioModel->transmitModel()
+                .settingRangeRefusal(update.name, update.value);
+            if (!range.isEmpty()) {
+                refusals.insert(update.name, range);
+                continue;
+            }
         }
         const MirrorApplyResult result = m_mirror->applyInbound(message.objectKey, update.name, update.value);
         if (!result.accepted) {
@@ -2931,7 +3130,10 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             result.value = actual.value(update.name);
         }
         result.reason = refusals.value(update.name);
-        if (result.reason.isEmpty() && (!result.hasValue || result.value.value != update.value)) {
+        const bool sameMap = message.objectKey == QByteArray(kTransmitKey) && result.hasValue
+            && sameJsonObject(result.value.value, update.value);
+        if (result.reason.isEmpty()
+            && (!result.hasValue || (result.value.value != update.value && !sameMap))) {
             // R-R3-46: the attenuator says in plain words why it kept
             // another value (its range, what this radio offers).
             if (stepAttWrite && !m_radioModel.isNull()) {
@@ -2987,13 +3189,32 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
     // refuses direct TransmitModel writes (handlePropertyWrite above), and
     // hands back its own value so the remote combo settles on it. R-R3-46:
     // so it does for the transmit side of Hardware Config and the PA pages.
-    if (isReceiveOnlyRefusedKey(key) && !m_radioModel.isNull()
-        && m_radioModel->receiveOnlyStationPolicy()) {
+    if (receiveOnlyRefusesKey(transport, key)) {
         const QString reason = QString::fromLatin1(kReceiveOnlyTransmitReason);
         const QVariant restored = m_settings.value(key);
         qCWarning(lcStation) << "Refused remote settings write" << key << ":" << reason;
         send(transport, SessionMessages::settingsReject(key, restored.isValid(),
                                                         restored.toString(), reason));
+        return;
+    }
+    // R-R3-49 (parity Task 1): a transmit setting a receive-only Core takes
+    // off the air (DSP > Options TX) waits while the radio is on the air,
+    // and the Core hands back its own value so the combo settles on it.
+    if (const QString onAir = transmitSettingOnAirRefusal(key); !onAir.isEmpty()) {
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings write" << key << ":" << onAir;
+        send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                        restored.toString(), onAir));
+        return;
+    }
+    // R-R3-49 (parity Task 5): a Power page key the page's own control
+    // could not have written is refused, and the Core's value handed back.
+    if (const QString range = powerPageKeyValueRefusal(key, message.updates.first().value);
+        !range.isEmpty()) {
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings write" << key << ":" << range;
+        send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                        restored.toString(), range));
         return;
     }
     const SettingsApplyResult result =
@@ -3018,6 +3239,9 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
         // tune memory, antenna names, a fault history) reaches the Core's
         // live objects now, not at the next restart.
         m_radioModel->applyRemoteAccessorySetting(key);
+        // R-R3-49 (parity Task 5): so does an SWR protection setting, to the
+        // Core's SwrProtectionController, as the local page's change does.
+        m_radioModel->applySwrProtectionSetting(key, m_settings.value(key));
     }
 }
 
@@ -3044,13 +3268,21 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
     // receive-only Core refuses it exactly as it refuses a write to the same
     // key (handleSettingsWrite above) and hands back its own value (R-R3-21).
     // R-R3-46: the same for a transmit-side hardware key.
-    if (isReceiveOnlyRefusedKey(key) && !m_radioModel.isNull()
-        && m_radioModel->receiveOnlyStationPolicy()) {
+    if (receiveOnlyRefusesKey(m_session, key)) {
         const QString reason = QString::fromLatin1(kReceiveOnlyTransmitReason);
         const QVariant restored = m_settings.value(key);
         qCWarning(lcStation) << "Refused remote settings remove" << key << ":" << reason;
         sendToSession(SessionMessages::settingsReject(key, restored.isValid(),
                                                       restored.toString(), reason));
+        return;
+    }
+    // R-R3-49 (parity Task 1): the same wait for a remove while the radio
+    // is on the air.
+    if (const QString onAir = transmitSettingOnAirRefusal(key); !onAir.isEmpty()) {
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings remove" << key << ":" << onAir;
+        sendToSession(SessionMessages::settingsReject(key, restored.isValid(),
+                                                      restored.toString(), onAir));
         return;
     }
     // SettingsProxyServer has no remove path of its own: AppSettings::
@@ -3080,6 +3312,8 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
         m_radioModel->scheduleRemoteDspOptionsApply(key);
         m_radioModel->scheduleRemoteHardwareApply(key);
         m_radioModel->applyRemoteAccessorySetting(key);
+        // R-R3-49 (parity Task 5): the SWR protection default, at once.
+        m_radioModel->applySwrProtectionSetting(key, QVariant());
     }
 }
 
@@ -3287,6 +3521,9 @@ bool StationServer::sendTelemetry(const StationTelemetrySnapshot& snapshot,
     // sections it negotiated, without "receivers".
     if (peer == m_peers.cend() || peer->agreedMinor < kReceiverLoadSessionProtocolMinor) {
         message.telemetry.receivers.reset();
+        // R-R3-32 (parity Task 6): and without the radio's PA readings and
+        // link quality (stationTelemetryVersion 4, minor 11).
+        message.telemetry.radio.clearRadioStatus();
     }
     const QByteArray wire = SessionMessages::encode(message);
     if (wire.isEmpty()) { return false; }
@@ -3397,6 +3634,83 @@ int StationServer::pgxlControlVersion() const
     return accessoryStatusVersion() >= 1 ? 3 : 0;
 }
 
+// R-R3-49 (parity Task 1): the one list of transmit settings keys a
+// receive-only Core takes while its radio is off the air. Today the
+// DSP > Options TX combos (DspOptions<Setting><Mode>Tx); later tasks add
+// their keys here.
+bool StationServer::isTransmitSettingKeyAcceptedOffAir(const QString& key)
+{
+    // R-R3-49 (parity Task 5): and Setup > Transmit > Power's SWR Protection
+    // and External TX Inhibit keys.
+    // R-R3-46 / R-R3-49 (parity Task 6): and Setup > PA's PA profiles and
+    // PA forward-power table.
+    return isTransmitDspOptionsKey(key) || isPowerPageTransmitKey(key)
+        || isPaPageTransmitKey(key);
+}
+
+bool StationServer::transmitSettingsOffered(SessionTransport* transport) const
+{
+    // Sent only at agreed minor 11 (the minor-11 capabilities block).
+    return transport != nullptr
+        && m_peers.value(transport).agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && transmitSettingsVersion() >= 1;
+}
+
+bool StationServer::receiveOnlyRefusesKey(SessionTransport* transport,
+                                          const QString& key) const
+{
+    if (m_radioModel.isNull() || !m_radioModel->receiveOnlyStationPolicy()
+        || !isReceiveOnlyRefusedKey(key)) {
+        return false;
+    }
+    // R-R3-49 (parity Task 1): a key on the off-air list, from a peer that
+    // was offered it, is the on-air check's (transmitSettingOnAirRefusal).
+    return !(isTransmitSettingKeyAcceptedOffAir(key) && transmitSettingsOffered(transport));
+}
+
+QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
+{
+    QString reason;
+    if (m_radioModel.isNull() || !m_radioModel->receiveOnlyStationPolicy()
+        || !isTransmitSettingKeyAcceptedOffAir(key)) {
+        return reason;
+    }
+    m_radioModel->stationOnAirRefusal(&reason);
+    return reason;
+}
+
+int StationServer::transmitSettingsVersion() const
+{
+    // 1: `transmit` writes outside the keying set and the DspOptions*Tx
+    // keys, taken off the air and refused on it (R-R3-49, parity Task 1).
+    // 2: the TX and Phone/CW applets' settings on `transmit` (tunePower,
+    // the VOX level and delay, MON and its level, LEV, EQ, CFC, PROC and
+    // its level, AM carrier, DEXP, mic level), tunePowerForTxBand and
+    // tuneDrivePowerSource, and setTunePowerForTxBand (parity Task 2).
+    // 3: the radio microphone settings (micBoost, micXlr, micTipRing,
+    // micBias, micPttDisabled, lineIn, lineInBoost), the Core's TX profiles
+    // (activeTxProfile, txProfilesJson), txProfile.select / save / delete
+    // and rade.resetVocoder (parity Task 3).
+    // 4: the TX EQ (txEqUseLegacy, txEqPreamp, txEqBandsJson,
+    // txEqFreqsJson, txEqNc, txEqMp, txEqCtfmode, txEqWintype,
+    // txEqParaEqData), CFC (cfcCompressionJson, cfcEqFreqJson,
+    // cfcPostEqBandGainJson, cfcPostEqEnabled, cfcPostEqGainDb,
+    // cfcPrecompDb, cfcParaEqData), phase rotator, CESSB, leveler and ALC
+    // settings; a band array is refused whole (parity Task 4).
+    // 5: Setup > Transmit > Power (tuneDrivePowerSource writable,
+    // powerByBandJson, tunePowerByBandJson; ATT on TX, its value and Force
+    // ATT on `stepAtt`; the SWR Protection and External TX Inhibit keys
+    // taken off the air), DEXP/VOX (the DEXP timings, look-ahead,
+    // side-channel filter and antiVoxGainDb) and Test > Two-Tone IMD (the
+    // two-tone settings) (parity Task 5).
+    // 6: Setup > PA (PA Gain's profiles, per-band gains, adjust matrix and
+    // max power; the Watt Meter's PA forward-power table): the
+    // hardware/<mac>/pa/... and hardware/<mac>/paCalibration/... keys taken
+    // off the air and applied to the Core's PA profiles and calibration at
+    // once (parity Task 6).
+    return m_radioModel.isNull() ? 0 : 6;
+}
+
 int StationServer::tgxlControlVersion() const
 {
     // 2: the tuner's antenna, operate and bypass (setTgxlAntenna,
@@ -3497,8 +3811,10 @@ StationCapabilities StationServer::buildCapabilities() const
             caps.pairingVersion = pairingVersion();
             // iPhone app Task 19: the catalogue.
             caps.stationCatalogVersion = stationCatalogVersion();
-            // iPhone app Task 20: display extras, last.
+            // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = displayExtrasVersion();
+            // R-R3-49 (parity Task 1): the transmit settings, last.
+            caps.transmitSettingsVersion = transmitSettingsVersion();
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();
@@ -3553,7 +3869,9 @@ StationCapabilities StationServer::buildCapabilities() const
         }
     }
     caps.remoteCtunVersion = 1;
-    caps.stationTelemetryVersion = m_telemetryEnabled ? 3 : 0;
+    // 4 (R-R3-32, parity Task 6): the radio section also carries the Core's
+    // PA readings and radio link quality, for a peer at minor 11.
+    caps.stationTelemetryVersion = m_telemetryEnabled ? 4 : 0;
     caps.remoteTgxlConfigVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.remoteFourO3AControlVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.propertyResultVersion = 1;

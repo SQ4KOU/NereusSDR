@@ -92,6 +92,18 @@
 //               to standard output (the journal on a packaged Core). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 1): the Core's
+//                                    on-the-air refusal and the window's
+//                                    transmit settings reason.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2): the transmit
+//                                    settings' range refusals and the Tune
+//                                    Power command's reasons.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the TX
+//                                    profile commands' and the RADE vocoder
+//                                    reset's reasons.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -643,8 +655,14 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("result.reason"),
           QStringLiteral("m_settingsServer->otherRadioRefusal(key)"),
           QStringLiteral("refusal"),
+          // R-R3-49 (parity Task 1): RadioModel::stationOnAirRefusal's
+          // reason (RadioModel::onAirReason, scanned below).
+          QStringLiteral("onAir"),
           // A code windows compare, not a reason (section 17).
-          QStringLiteral("m_displayBudgetReason")}},
+          QStringLiteral("m_displayBudgetReason"),
+          // R-R3-49 (parity Task 5): powerPageKeyValueRefusal's literals,
+          // this file's own, scanned here.
+          QStringLiteral("range")}},
         // command.result for every verb.
         // The device's name ("Power Genius", "Tuner Genius") and what the
         // request asked, both this file's own literals
@@ -719,7 +737,10 @@ const QList<ReasonSource>& reasonSources()
         {"src/core/accessories/AlexAntennaFacade.cpp", {}, {}, 6, {}, {QStringLiteral("kept")}},
         // The attenuator's range in dB.
         {"src/core/StepAttenuatorFacade.cpp", {}, {}, 6,
-         {QStringLiteral("lo"), QStringLiteral("hi")}, {QStringLiteral("kept")}},
+         {QStringLiteral("lo"), QStringLiteral("hi"),
+          // R-R3-49 (parity Task 5): the ATT on TX value's range in dB.
+          QStringLiteral("m_values.minDb"), QStringLiteral("kMaxAttOnTxDb")},
+         {QStringLiteral("kept")}},
         {"src/core/IoBoardHl2Facade.cpp", {}, {}, 1},
         // A receiver count, and a frequency in MHz.
         {"src/core/SliceStreamAllocator.cpp", {}, {}, 4,
@@ -806,8 +827,19 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("readTgxlSettingsForStation"),
           // R-R3-49: the Tuner Genius's antenna, operate and bypass.
           QStringLiteral("stationTgxlControlAllowed"),
+          // R-R3-49 (parity Task 1): the Core's one on-the-air refusal.
+          QStringLiteral("onAirReason"), QStringLiteral("stationOnAirRefusal"),
           QStringLiteral("setTgxlAntennaForStation"), QStringLiteral("setTgxlOperateForStation"),
-          QStringLiteral("setTgxlBypassForStation"), QStringLiteral("setNnrDiagnosticMode"),
+          QStringLiteral("setTgxlBypassForStation"),
+          // R-R3-49 (parity Task 2): the Tune Power slider's command.
+          QStringLiteral("setTunePowerForTxBandForStation"),
+          // R-R3-49 (parity Task 3): the TX profile commands and the RADE
+          // vocoder reset.
+          QStringLiteral("selectTxProfileForStation"),
+          QStringLiteral("saveTxProfileForStation"),
+          QStringLiteral("deleteTxProfileForStation"),
+          QStringLiteral("resetRadeVocoderForStation"),
+          QStringLiteral("setNnrDiagnosticMode"),
           QStringLiteral("applyNnrModelSelection"), QStringLiteral("addNotchFromStation"),
           QStringLiteral("moveNotchFromStation"), QStringLiteral("setNotchActiveFromStation"),
           QStringLiteral("deleteNotchFromStation"), QStringLiteral("requestIoBoardProbe"),
@@ -820,15 +852,56 @@ const QList<ReasonSource>& reasonSources()
           "There is no station session."},
          20,
          // sliceCapReason: the radio's product label and the slice count,
-         // worded "1 slice" or "N slices" from its own literals.
-         {QStringLiteral("radioLabel, slices"), QStringLiteral("slices"), QStringLiteral("cap")},
+         // worded "1 slice" or "N slices" from its own literals. R-R3-49
+         // (parity Task 3): name, the transmit profile's own name.
+         {QStringLiteral("radioLabel, slices"), QStringLiteral("slices"), QStringLiteral("cap"),
+          QStringLiteral("name")},
          {// The refuse lambdas' parameter (literals of these functions),
           // the facades' and allocators' results (scanned), and the notch
           // refusals, constants of this file checked in
           // notchConstantsArePlain below.
           QStringLiteral("text"), QStringLiteral("result.reason"),
           QStringLiteral("outcome.reason"), QStringLiteral("kUnknownNotchReason"),
-          QStringLiteral("kNotchListBusyReason")}},
+          QStringLiteral("kNotchListBusyReason"),
+          // R-R3-49 (parity Task 1): onAirReason, a function of this file
+          // scanned here.
+          QStringLiteral("onAirReason()"),
+          // R-R3-49 (parity Task 2): TransmitModel::settingRangeRefusal,
+          // scanned below.
+          QStringLiteral("range")}},
+        // R-R3-49 (parity Task 2): a transmit setting's range, in
+        // property.result and setTunePowerForTxBand's command.result. The
+        // inserts are the setters' own range numbers.
+        {"src/models/TransmitModel.cpp", {QStringLiteral("settingRangeRefusal")}, {}, 7,
+         {QStringLiteral("hi"), QStringLiteral("kVoxThresholdDbMin"),
+          QStringLiteral("kVoxThresholdDbMax"), QStringLiteral("kVoxHangTimeMsMin"),
+          QStringLiteral("kVoxHangTimeMsMax"), QStringLiteral("kCpdrLevelDbMin"),
+          QStringLiteral("kCpdrLevelDbMax"), QStringLiteral("kAmCarrierLevelMin"),
+          QStringLiteral("kAmCarrierLevelMax"), QStringLiteral("kMicGainDbMin"),
+          QStringLiteral("kMicGainDbMax"),
+          // R-R3-49 (parity Task 4): the TX EQ, CFC, phase rotator, leveler
+          // and ALC ranges, and the ten-value band arrays' ranges.
+          QStringLiteral("kTxEqPreampDbMin"), QStringLiteral("kTxEqPreampDbMax"),
+          QStringLiteral("kTxEqNcMin"), QStringLiteral("kTxEqNcMax"),
+          QStringLiteral("kCfcPrecompDbMin"), QStringLiteral("kCfcPrecompDbMax"),
+          QStringLiteral("kCfcPostEqGainDbMin"), QStringLiteral("kCfcPostEqGainDbMax"),
+          QStringLiteral("kPhaseRotatorFreqHzMin"), QStringLiteral("kPhaseRotatorFreqHzMax"),
+          QStringLiteral("kPhaseRotatorStagesMin"), QStringLiteral("kPhaseRotatorStagesMax"),
+          QStringLiteral("kTxLevelerMaxGainDbMin"), QStringLiteral("kTxLevelerMaxGainDbMax"),
+          QStringLiteral("kTxLevelerDecayMsMin"), QStringLiteral("kTxLevelerDecayMsMax"),
+          QStringLiteral("kTxAlcMaxGainDbMin"), QStringLiteral("kTxAlcMaxGainDbMax"),
+          QStringLiteral("kTxAlcDecayMsMin"), QStringLiteral("kTxAlcDecayMsMax"),
+          QStringLiteral("kTxEqBandDbMin"), QStringLiteral("kTxEqBandDbMax"),
+          QStringLiteral("kTxEqFreqHzMin"), QStringLiteral("kTxEqFreqHzMax"),
+          QStringLiteral("kCfcCompressionDbMin"), QStringLiteral("kCfcCompressionDbMax"),
+          QStringLiteral("kCfcEqFreqHzMin"), QStringLiteral("kCfcEqFreqHzMax"),
+          QStringLiteral("kCfcPostEqBandGainDbMin"), QStringLiteral("kCfcPostEqBandGainDbMax"),
+          // R-R3-49 (parity Task 5): the anti-VOX gain and two-tone ranges.
+          QStringLiteral("kAntiVoxGainDbMin"), QStringLiteral("kAntiVoxGainDbMax"),
+          QStringLiteral("kTwoToneFreq1HzMin"), QStringLiteral("kTwoToneFreq1HzMax"),
+          QStringLiteral("kTwoToneFreq2HzMin"), QStringLiteral("kTwoToneFreq2HzMax"),
+          QStringLiteral("kTwoTonePowerMin"), QStringLiteral("kTwoTonePowerMax"),
+          QStringLiteral("kTwoToneFreq2DelayMsMin"), QStringLiteral("kTwoToneFreq2DelayMsMax")}},
     };
     return sources;
 }
@@ -868,6 +941,9 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/accessories/AlexAntennaFacade.h", "windowUnavailableReason",
          "a remote window's own reason the antenna rows show"},
         {"src/core/TciServer.h", "operatorNoticeReason", "a remote window's own TCI notice"},
+        {"src/models/RadioModel.cpp", "mirrorTxProfilesFromStation",
+         "a window's TX profile requests: it shows the link's own reason for a request it "
+         "could not send"},
         {"src/models/RadioModel.cpp", "noStationReason",
          "a remote window's own notice when it has no link to the Core"},
         {"src/models/RadioModel.cpp", "reportStationAccessoryRefusal",
@@ -877,6 +953,8 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/session/IStationLink.h", "tgxlDeviceSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "tgxlControlUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/session/IStationLink.h", "transmitSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "filterPolicyUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},

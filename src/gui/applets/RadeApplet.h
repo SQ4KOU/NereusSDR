@@ -13,6 +13,9 @@
 //                with AI-assisted implementation via Anthropic Claude
 //                Code.  Structural pattern follows PhoneCwApplet
 //                (NereusSDR PhoneCwApplet, GPLv2).
+//   2026-09-25 - R-R3-49 (parity Task 3): setTxProfilePermitted; a remote
+//                window's Reset vocoder resets the Core's. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #pragma once
 
@@ -69,6 +72,12 @@ public:
     // the station computer once it is permitted. Local direct mode is
     // unchanged.
     void setTransmitPermitted(bool permitted, const QString& reason = QString());
+    // R-R3-49 (parity Task 3): the profile combo and, in a remote window,
+    // Reset vocoder. There the combo lists the Core's profiles and selects
+    // through the Core, and Reset vocoder asks the Core to reset its RADE
+    // transmit vocoder (transmitSettingsVersion 3); both are live while its
+    // radio is off the air. Neither keys the radio.
+    void setTxProfilePermitted(bool permitted, const QString& reason = QString());
 
     // Test seams (Phase 3R L2).  Exposed so tst_rade_applet can verify
     // text / colour / wiring without depending on widget geometry.
@@ -136,6 +145,8 @@ private:
 
     bool    m_transmitPermitted{true};
     QString m_transmitReason;
+    bool    m_txProfilePermitted{true};
+    QString m_txProfileReason;
 };
 
 }  // namespace NereusSDR

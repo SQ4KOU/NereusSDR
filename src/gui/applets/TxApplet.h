@@ -85,6 +85,23 @@
 //                 row, with a plain notice when the headphones are chosen
 //                 and not open. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 : R-R3-49 (parity Task 1): setTransmitSettingsPermitted.
+//                 RF Power and the TX filter low and high follow the
+//                 transmit settings gate in a remote window; the keying
+//                 controls keep setTransmitPermitted. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 : R-R3-49 (parity Task 2): setTransmitChainSettingsPermitted
+//                 for Tune Power, the VOX level and delay, MON, its level
+//                 and output, LEV, EQ and CFC. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : R-R3-49 (parity Task 3): setTxProfilePermitted for the
+//                 profile combo, which picks the Core's profiles in a
+//                 remote window. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-25 : R-R3-49 (parity Task 4): setTxProcessingPermitted for the
+//                 CFC dialog; the EQ and CFC right-clicks open their
+//                 dialogs in a remote window. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -286,6 +303,40 @@ public slots:
     // not alter TransmitModel, station settings, or the displayed state of an
     // already-authoritative control.
     void setTransmitPermitted(bool permitted, const QString& unavailableReason = QString());
+    // R-R3-49 (parity Task 1): the transmit settings that key nothing (RF
+    // Power, TX filter low and high). In a remote window MainWindow
+    // supplies true while the Core takes them (transmitSettingsVersion)
+    // and its radio is off the air, and the reason otherwise. Widget
+    // availability only, as setTransmitPermitted.
+    void setTransmitSettingsPermitted(bool permitted,
+                                      const QString& unavailableReason = QString());
+    // R-R3-49 (parity Task 2): the rest of this applet's transmit settings
+    // (Tune Power, the VOX level and delay, MON and its level, the MON
+    // output pair, LEV, EQ, CFC), live while the Core takes them
+    // (transmitSettingsVersion 2) and its radio is off the air. The VOX
+    // button, TUNE, MOX, 2-Tone, PS-A and the profile stay on
+    // setTransmitPermitted.
+    void setTransmitChainSettingsPermitted(bool permitted,
+                                           const QString& unavailableReason = QString());
+    // R-R3-49 (parity Task 3): the profile combo. In a remote window it
+    // lists the Core's profiles and selects through the Core
+    // (transmitSettingsVersion 3), live while its radio is off the air.
+    void setTxProfilePermitted(bool permitted,
+                               const QString& unavailableReason = QString());
+    // R-R3-49 (group A fix wave, M3): whether an RF Power move also writes
+    // the per-band power and the tune drive source (powerByBandJson and
+    // tuneDrivePowerSource on the link), which a Core takes from
+    // transmitSettingsVersion 5. MainWindow supplies false for an older
+    // Core, which would refuse them on every move. Always true locally.
+    void setPowerByBandPermitted(bool permitted) { m_powerByBandPermitted = permitted; }
+    // R-R3-49 (parity Task 4): the CFC dialog (transmitSettingsVersion 4).
+    // The EQ and CFC right-clicks open their dialogs in any window; this
+    // greys the CFC dialog with the reason while a remote window cannot
+    // change it (the TX EQ dialog takes TxEqDialog::setSettingsPermitted).
+    void setTxProcessingPermitted(bool permitted,
+                                  const QString& unavailableReason = QString());
+    // The CFC dialog, once a right-click or Setup has built it.
+    TxCfcDialog* cfcDialog() const { return m_cfcDialog; }
 public:
 
     // ── Test accessors ──────────────────────────────────────────────────────
@@ -513,6 +564,17 @@ private:
     // Defaults to local-direct behaviour. Remote MainWindow wiring replaces it
     // after handshake/capability evaluation.
     bool m_transmitPermitted{true};
+    bool m_transmitSettingsPermitted{true};
+    bool m_transmitChainSettingsPermitted{true};
+    bool m_txProfilePermitted{true};
+    bool m_txProcessingPermitted{true};   // R-R3-49 (parity Task 4)
+    bool m_powerByBandPermitted{true};    // R-R3-49 (group A fix wave, M3)
+    QString m_txProcessingReason;
+    // R-R3-49 (parity Task 2): a remote window's Tune Power slider asks the
+    // Core (setTunePowerForTxBand) and shows the Core's tunePowerForTxBand.
+    bool remoteTunePower() const;
+    int  shownTunePower(Band band) const;
+    void requestRemoteTunePower(int watts);
 };
 
 } // namespace NereusSDR

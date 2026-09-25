@@ -231,7 +231,7 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
     case SessionMessageKind::StationTelemetry: {
         SessionMessage m;
         m.kind = SessionMessageKind::StationTelemetry;
-        m.telemetry = sampleTelemetry(3);
+        m.telemetry = sampleTelemetry(4);
         return m;
     }
     // iPhone app Task 14: the pair.* kinds. Placeholders, never a real key,
@@ -596,7 +596,8 @@ QJsonObject captureSettingsScope()
 
 // ── telemetry ────────────────────────────────────────────────────────────
 
-// Version 1: radio and audio. 2: adds host. 3: adds receivers
+// Version 1: radio and audio. 2: adds host. 3: adds receivers. 4: adds the
+// radio's PA readings and link quality in the radio section
 // (StationCapabilities.h stationTelemetryVersion; StationServer::
 // sendTelemetry strips host below kCoreHostTelemetrySessionProtocolMinor and
 // receivers below kReceiverLoadSessionProtocolMinor). Every optional field
@@ -636,6 +637,17 @@ StationTelemetrySnapshot sampleTelemetry(int version)
         receiver.skippedInputMs = 1;
         s.receivers = QVector<StationReceiverTelemetry>{receiver};
     }
+    if (version >= 4) {
+        s.radio.paVolts = 1.0;
+        s.radio.supplyVolts = 1.0;
+        s.radio.paCurrentAmps = 1.0;
+        s.radio.paTemperatureCelsius = 1.0;
+        s.radio.packetLossPercent = 1.0;
+        s.radio.jitterMs = 1.0;
+        s.radio.packetGapMs = 1.0;
+        s.radio.sampleRateHz = 1;
+        s.radio.udpPacketsSeen = 1;
+    }
     return s;
 }
 
@@ -661,11 +673,13 @@ void flattenPaths(const QString& prefix, const QJsonValue& value, QStringList* o
 
 QJsonObject captureTelemetry()
 {
+    // Version 4 (remote-window parity Task 6) needs minor 11, as 3 does.
     const quint16 minors[] = {kStationTelemetrySessionProtocolMinor,
                               kCoreHostTelemetrySessionProtocolMinor,
+                              kReceiverLoadSessionProtocolMinor,
                               kReceiverLoadSessionProtocolMinor};
     QJsonArray versions;
-    for (int version = 1; version <= 3; ++version) {
+    for (int version = 1; version <= 4; ++version) {
         const std::optional<QJsonObject> payload =
             StationTelemetryCodec::encode(sampleTelemetry(version));
         QStringList paths;

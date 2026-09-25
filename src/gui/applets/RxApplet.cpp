@@ -41,6 +41,10 @@
 //   2026-09-24 - iPhone app follow-up (R-IOS-06): the SQL slider's range
 //                 comes from ControlRanges.h too. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): the filter-preset Shift-click TX
+//                 passband match follows setTransmitSettingsPermitted and
+//                 says why when it cannot. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -157,6 +161,7 @@
 #include "core/StepAttenuatorController.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexController.h"
+#include "core/session/IStationLink.h"
 #include "gui/ComboStyle.h"
 #include "gui/StyleConstants.h"
 #include "gui/styles/PopupMenuStyle.h"
@@ -235,6 +240,7 @@ RxApplet::RxApplet(SliceModel* slice, RadioModel* model, QWidget* parent)
     // handshake grants it, as TxApplet and the VFO flag do.
     if (m_model && !m_model->ownsLocalDsp()) {
         setTransmitPermitted(false);
+        setTransmitSettingsPermitted(false);
     }
 
     // R-R3-46 / R-R3-21: a remote window has no attenuator of its own. The
@@ -1257,8 +1263,13 @@ void RxApplet::rebuildFilterButtons(DSPMode mode)
             // values to TX audio Hz: LSB family flips magnitude order, USB
             // family is identity, symmetric uses (0, |high|).
             if (QGuiApplication::keyboardModifiers() & Qt::ShiftModifier) {
-                // R-R3-21: the TX passband match is a transmit write.
-                if (!m_model || !m_transmitPermitted) { return; }
+                // R-R3-49 (parity Task 1): the TX passband match is a
+                // transmit setting; when it cannot be made, say why.
+                if (!m_model) { return; }
+                if (!m_transmitSettingsPermitted) {
+                    emit transmitSettingRefused(m_transmitSettingsReason);
+                    return;
+                }
                 const bool isSymmetric =
                     mode == DSPMode::AM || mode == DSPMode::SAM
                  || mode == DSPMode::DSB || mode == DSPMode::FM
@@ -1500,6 +1511,17 @@ void RxApplet::setTransmitPermitted(bool permitted, const QString& reason)
             control->setProperty(kSavedEnabled, QVariant());
         }
     }
+}
+
+// R-R3-49 (parity Task 1): the transmit settings gate. Only the
+// Shift-click TX passband match reads it; no control is disabled, because
+// the preset buttons are receive controls.
+void RxApplet::setTransmitSettingsPermitted(bool permitted, const QString& reason)
+{
+    m_transmitSettingsPermitted = permitted;
+    m_transmitSettingsReason = reason.isEmpty()
+        ? IStationLink::transmitSettingsUnavailableReason()
+        : reason;
 }
 
 // HL2 / Atlas / bare-ADC SKUs have no antenna relay; the buttons

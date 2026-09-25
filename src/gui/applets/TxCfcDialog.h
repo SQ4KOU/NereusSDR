@@ -37,6 +37,10 @@
 //                 frmCFCConfig.cs:218-306 [v2.10.3.13].  50ms QTimer-
 //                 driven bar chart fed by Task 7
 //                 TxChannel::getCfcDisplayCompression wrapper.
+//   2026-09-25 - R-R3-49 (parity Task 4): setSettingsPermitted greys the
+//                 controls with a reason in a remote window while the Core
+//                 cannot take a CFC change. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -90,6 +94,7 @@
 
 class QButtonGroup;
 class QCheckBox;
+class QLabel;
 class QDoubleSpinBox;
 class QHideEvent;
 class QPushButton;
@@ -167,6 +172,13 @@ public:
     // after the dialog was lazy-created).  Null is allowed — the bar chart
     // simply skips the WDSP poll until a TxChannel is available.
     void setTxChannel(TxChannel* tx);
+
+    // R-R3-49 (parity Task 4): whether this window may change CFC now. A
+    // remote window's TxApplet sets it from the Core's
+    // transmitSettingsVersion 4 and the Core's on-the-air state; closed,
+    // every control greys and the reason shows at the top.
+    void setSettingsPermitted(bool permitted, const QString& reason);
+    QLabel* settingsReasonLabel() const { return m_settingsReasonLabel; }
 
     // ── Widget accessors for tests ────────────────────────────────────────
 
@@ -337,6 +349,7 @@ private:
 
     // ── Bar chart timer + scratch buffer ─────────────────────────────────
     QTimer*         m_barChartTimer    = nullptr;
+    QLabel*         m_settingsReasonLabel = nullptr;  // R-R3-49 (parity Task 4)
     bool            m_barChartBusy     = false;  // mirrors Thetis _busy
 
     // Scratch storage for a single tick of WDSP CFC display data.

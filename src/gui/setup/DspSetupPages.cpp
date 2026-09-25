@@ -32,6 +32,11 @@
 //                 threshold ranges come from ControlRanges.h, which the
 //                 Core's catalogue reads too. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): AGC/ALC's TX Leveler and TX ALC
+//                 groups and every CFC page setting follow the transmit
+//                 settings gate at version 4 (the Core mirrors them)
+//                 instead of the transmit permission. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -87,6 +92,7 @@
 #include "core/RadioConnection.h"
 #include "core/RxChannel.h"
 #include "core/WdspEngine.h"
+#include "core/session/IStationLink.h"
 #include "core/wdsp_api.h"
 #include "models/NotchModel.h"
 #include "models/RadioModel.h"
@@ -458,21 +464,23 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
         m_txAlcDecaySpin->setValue(ms);
     });
 
-    // R-R3-21: TX Leveler and TX ALC settings stay in this window's own
-    // TransmitModel on a remote-station model (the Core mirrors neither),
-    // so both groups start unavailable there and follow the transmit
-    // permission SetupDialog pushes.
+    // R-R3-49 (parity Task 4): the Core mirrors the TX Leveler and TX ALC
+    // settings (transmitSettingsVersion 4). In a remote window both groups
+    // start closed until SetupDialog pushes that gate, then change the
+    // Core's values while its radio is off the air.
     if (!model->ownsLocalDsp()) {
-        setTransmitPermitted(false, QString());
+        setTransmitSettingsPermittedAt(4, false, QString());
     }
 }
 
-void AgcAlcSetupPage::setTransmitPermitted(bool permitted, const QString& reason)
+void AgcAlcSetupPage::setTransmitSettingsPermittedAt(int version, bool permitted,
+                                                     const QString& reason)
 {
+    if (version != 4) {
+        return;
+    }
     gateTransmitControls({m_txLevelerGrp, m_txAlcGrp}, permitted,
-        reason.isEmpty()
-            ? tr("Remote transmit controls are not available from this Core yet.")
-            : reason);
+        reason.isEmpty() ? IStationLink::transmitSettingsUnavailableReason() : reason);
 }
 
 // From Thetis v2.10.3.13 setup.cs:5046-5076 — CustomRXAGCEnabled
@@ -2366,6 +2374,27 @@ CfcSetupPage::CfcSetupPage(RadioModel* model, QWidget* parent)
         QSignalBlocker b(m_cessbEnableChk);
         m_cessbEnableChk->setChecked(on);
     });
+
+    // R-R3-49 (parity Task 4): every setting here is on the Core's
+    // `transmit` object (transmitSettingsVersion 4). In a remote window they
+    // start closed until SetupDialog pushes that gate. [Configure CFC
+    // bands] stays live: the dialog shows why it is greyed.
+    if (!model->ownsLocalDsp()) {
+        setTransmitSettingsPermittedAt(4, false, QString());
+    }
+}
+
+void CfcSetupPage::setTransmitSettingsPermittedAt(int version, bool permitted,
+                                                  const QString& reason)
+{
+    if (version != 4) {
+        return;
+    }
+    gateTransmitControls({m_phRotEnableChk, m_phRotReverseChk, m_phRotFreqSpin,
+                          m_phRotStagesSpin, m_cfcEnableChk, m_cfcPostEqEnableChk,
+                          m_cfcPrecompSpin, m_cfcPostEqGainSpin, m_cessbEnableChk},
+        permitted,
+        reason.isEmpty() ? IStationLink::transmitSettingsUnavailableReason() : reason);
 }
 
 // ── MNF editor ranges ─────────────────────────────────────────────────────────
