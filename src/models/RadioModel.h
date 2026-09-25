@@ -2434,6 +2434,9 @@ public:
     // through it, so keeping the two in lockstep here is what keeps those
     // 24 sites working rather than just the pointer-consuming ones.
     void wireWidebandConnectionForTest() { wireWidebandConnection(); }
+    // The production ReceiverManager -> connection pushes, for a test that
+    // injects a connection (injectConnectionForTest does no wiring).
+    void wireReceiverManagerHardwarePushesForTest() { wireReceiverManagerHardwarePushes(); }
     void injectConnectionForTest(RadioConnection* conn) {
         m_connection = conn;
         setConnectionState(conn != nullptr ? ConnectionState::Connected
@@ -3776,6 +3779,10 @@ private:
 
     void connectToRadioImpl(const RadioInfo& info, bool preserveSlices);
     void wireConnectionSignals(int wdspInSize);
+    // The ReceiverManager -> RadioConnection hardware pushes (live slots,
+    // receiver count, per-slot frequency). Part of wireConnectionSignals;
+    // separate so a test can install exactly the production wiring.
+    void wireReceiverManagerHardwarePushes();
     void wireWidebandConnection();
     /// Wire one slice's property changes to its OWN WDSP channel and to the
     /// radio. Call for every slice, not just the active one: this used to

@@ -11722,6 +11722,39 @@ void RadioModel::disconnectFromRadio()
     teardownConnection();
 }
 
+void RadioModel::wireReceiverManagerHardwarePushes()
+{
+    // The live slots go first, in the order ReceiverManager emits them, so a
+    // Protocol 1 connection has the slot set before the count and the
+    // frequencies that follow a rebuild (Phase 3F section 16.3.2).
+    connect(m_receiverManager, &ReceiverManager::hardwareSlotsChanged,
+            this, [this](quint32 slotMask) {
+        if (m_connection) {
+            QMetaObject::invokeMethod(m_connection, [conn = m_connection, slotMask]() {
+                conn->setLiveReceiverSlots(slotMask);
+            });
+        }
+    });
+
+    connect(m_receiverManager, &ReceiverManager::hardwareReceiverCountChanged,
+            this, [this](int count) {
+        if (m_connection) {
+            QMetaObject::invokeMethod(m_connection, [conn = m_connection, count]() {
+                conn->setActiveReceiverCount(count);
+            });
+        }
+    });
+
+    connect(m_receiverManager, &ReceiverManager::hardwareFrequencyChanged,
+            this, [this](int hwIndex, quint64 freq) {
+        if (m_connection) {
+            QMetaObject::invokeMethod(m_connection, [conn = m_connection, hwIndex, freq]() {
+                conn->setReceiverFrequency(hwIndex, freq);
+            });
+        }
+    });
+}
+
 void RadioModel::wireConnectionSignals(int wdspInSize)
 {
     if (!m_connection) {
@@ -12028,23 +12061,7 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     });
 
     // ReceiverManager → RadioConnection (hardware updates)
-    connect(m_receiverManager, &ReceiverManager::hardwareReceiverCountChanged,
-            this, [this](int count) {
-        if (m_connection) {
-            QMetaObject::invokeMethod(m_connection, [conn = m_connection, count]() {
-                conn->setActiveReceiverCount(count);
-            });
-        }
-    });
-
-    connect(m_receiverManager, &ReceiverManager::hardwareFrequencyChanged,
-            this, [this](int hwIndex, quint64 freq) {
-        if (m_connection) {
-            QMetaObject::invokeMethod(m_connection, [conn = m_connection, hwIndex, freq]() {
-                conn->setReceiverFrequency(hwIndex, freq);
-            });
-        }
-    });
+    wireReceiverManagerHardwarePushes();
 
     // H.5: P1/P2 status-frame mic_ptt → MoxController PTT-source dispatch.
     // Source: Thetis console.cs:25426 [v2.10.3.13] PollPTT:

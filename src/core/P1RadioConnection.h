@@ -194,6 +194,21 @@ public slots:
     // they combine. Restarts the ep6 stream when the announced count moves.
     void setActiveReceiverCount(int count) override;
 
+    // Which frame slots carry a live receiver (bit n = slot n). Phase 3F
+    // section 16.3.2.
+    //
+    // The receive filters: Thetis derives the Alex high-pass, the receive
+    // half of the low-pass and the OC outputs from RX1, and its RX1 always
+    // exists. Routing by frame slot means slice A can be closed while slice
+    // B keeps slot 1 (slot 2 on the Orion class). The live receiver in the
+    // LOWEST slot then stands in for RX1, and keeps that role until a
+    // receiver comes back on a lower slot.
+    //
+    // An empty mask (every stream suspended, as the HermesII class does
+    // while PureSignal transmits) leaves the stand-in where it was, so the
+    // filters do not move for a state that lasts one transmission.
+    void setLiveReceiverSlots(quint32 slotMask) override;
+
     void setSampleRate(int sampleRate) override;
 
     // Task 1.6: live-apply a sample-rate change to a running P1 connection.
@@ -639,6 +654,18 @@ private:
     int     m_codecRxCount{1};   ///< DDC configuration axis (PureSignal, diversity)
     int     m_panRxCount{1};     ///< panadapter axis
 
+    // The live frame slots and the slot standing in for Thetis's RX1. See
+    // setLiveReceiverSlots. m_rx1Slot starts at 0, so until a mask arrives,
+    // and whenever slot 0 is live, every filter reads exactly what it read
+    // before routing by frame slot.
+    quint32 m_liveSlotMask{0};
+    int     m_rx1Slot{0};
+
+    // Recompute the receive-side Alex selections (m_alexHpfBits and
+    // m_alexLpfBitsRx) from the RX1 stand-in. `changedSlot` is the frame slot
+    // whose frequency just moved, or -1 when the stand-in itself moved.
+    void recomputeReceiveFilters(int changedSlot);
+
     // HL2 mic decimation state.  At sample rates above 48 kHz the radio
     // embeds one mic sample per I/Q sample group in EP6 frames (so mic
     // arrives at 192 kHz when sampleRate=192000); we decimate to 48 kHz
@@ -1031,6 +1058,7 @@ public:
     }
     bool forceBank4NextForTest() const { return m_forceBank4Next; }
     int  psNDdcForTest() const { return m_psNDdc; }
+    int  rx1SlotForTest() const { return m_rx1Slot; }
     int  activeRxCountForTest() const { return m_activeRxCount; }
     quint16 adcCtrlForTest() const { return m_adcCtrl; }
     quint16 p1AdcCntrlForTest() const { return m_p1AdcCntrl; }

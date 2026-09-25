@@ -903,7 +903,66 @@ void P1RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
 {
     if (receiverIndex < 0 || receiverIndex >= 7) { return; }
     m_rxFreqHz[receiverIndex] = frequencyHz;
+    recomputeReceiveFilters(receiverIndex);
+}
+
+// ---------------------------------------------------------------------------
+// setLiveReceiverSlots: which frame slots carry a live receiver.
+//
+// Phase 3F section 16.3.2. Thetis takes every receive-side filter selection
+// from RX1: the high-pass (UpdateRX1DDSFreq -> setAlex1HPF(_rx1_dds_freq)),
+// the receive low-pass (UpdateAlexTXFilter -> setAlexLPF(rx1_dds_freq_mhz))
+// and the OC outputs (ExtCtrlEnable(lo_band = band of VFOAFreq, ...)):
+//   From Thetis console.cs:15398-15403 [v2.10.3.15]
+//     private void UpdateRX1DDSFreq()
+//     {
+//         if (initializing) return;
+//         setAlex1HPF(_rx1_dds_freq);
+//         UpdateAlexTXFilter();
+//         UpdateAlexRXFilter();
+// Thetis's RX1 cannot be closed. NereusSDR's slice A can, and routing by
+// frame slot then leaves slice B on slot 1 (slot 2 on the Orion class) with
+// slot 0 holding A's last frequency. Reading slot 0 kept every one of those
+// filters on A's band: with A on 40 m closed and B on 20 m, a 40 m low-pass
+// sat in front of B.
+//
+// The ruling for the multi-slice case: the live receiver in the LOWEST slot
+// stands in for RX1, until a receiver returns on a lower slot. With slot 0
+// live this is slot 0, so every state Thetis itself can reach is unchanged.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setLiveReceiverSlots(quint32 slotMask)
+{
+    m_liveSlotMask = slotMask;
+
+    // The RX1 stand-in. An empty mask keeps the previous one: see the
+    // declaration.
+    if (slotMask != 0) {
+        int lowest = 0;
+        while (lowest < 31 && (slotMask & (1u << lowest)) == 0) { ++lowest; }
+        // m_rxFreqHz holds seven slots; a slot beyond it has no frequency
+        // this connection could read, so it cannot stand in.
+        if (lowest < 7 && lowest != m_rx1Slot) {
+            m_rx1Slot = lowest;
+            recomputeReceiveFilters(-1);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// recomputeReceiveFilters: the receive-side Alex selections, from the RX1
+// stand-in (m_rx1Slot, see setLiveReceiverSlots).
+// ---------------------------------------------------------------------------
+void P1RadioConnection::recomputeReceiveFilters(int changedSlot)
+{
+    // The RX1 stand-in's frequency. Zero means it has never been tuned.
+    const quint64 rx1Hz = m_rxFreqHz[m_rx1Slot];
+    // The frequency that just moved: the changed slot's, or the stand-in's
+    // when the stand-in itself moved.
+    const quint64 frequencyHz = (changedSlot >= 0) ? m_rxFreqHz[changedSlot] : rx1Hz;
+    if (frequencyHz == 0) { return; }
+
     // RX0 drives the Alex HPF bank — recompute on every change.
+    // (Phase 3F section 16.3.2: "RX0" is now the RX1 stand-in, m_rx1Slot.)
     // Source: console.cs:6830-6942 [@501e3f5]
     // Upstream tags preserved: //N1GP (from cited console.cs:6830) [v2.10.3.15]
     // Upstream inline attribution preserved verbatim:
@@ -935,11 +994,11 @@ void P1RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
     // filterCaps() rather than m_caps: the connect-time push runs before
     // connectToRadio assigns m_caps. See the declaration for why.
     const BoardCapabilities* const fcaps = filterCaps();
-    if (receiverIndex == 0
+    if ((changedSlot < 0 || changedSlot == m_rx1Slot) && rx1Hz != 0
         && (   (fcaps && fcaps->hasAlexFilters)
             || m_hardwareProfile.model == HPSDRModel::HERMESLITE)) {
         m_alexHpfBits = codec::alex::computeRxPreselector(
-            double(frequencyHz) / 1e6,
+            double(rx1Hz) / 1e6,
             fcaps ? fcaps->board : HPSDRHW::Unknown);
     }
 
@@ -974,7 +1033,9 @@ void P1RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
     if (!m_mox
         && (   (fcaps && fcaps->hasAlexFilters)
             || m_hardwareProfile.model == HPSDRModel::HERMESLITE)) {
-        // m_rxFreqHz[0] / [1] are Thetis's rx1_dds_freq_mhz / rx2_dds_freq_mhz.
+        // m_rxFreqHz[m_rx1Slot] / [1] are Thetis's rx1_dds_freq_mhz /
+        // rx2_dds_freq_mhz; m_rx1Slot is 0 whenever slot 0 is live (Phase 3F
+        // section 16.3.2, see setLiveReceiverSlots).
         // A zero frequency means that receiver has never been tuned, which is
         // the state chkRX2.Checked reports as unchecked; upstream's rx1 is
         // always tuned by the time this runs, so the fallback below only
@@ -988,8 +1049,8 @@ void P1RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
         // maximum, so a stale entry can only ever hold the corner HIGHER
         // than needed. Too wide costs some out-of-band rejection; too narrow
         // would cost the whole band, and cannot happen here.
-        const double rx1Mhz = (m_rxFreqHz[0] != 0)
-            ? double(m_rxFreqHz[0]) / 1e6
+        const double rx1Mhz = (rx1Hz != 0)
+            ? double(rx1Hz) / 1e6
             : double(frequencyHz) / 1e6;
         const double rx2Mhz = double(m_rxFreqHz[1]) / 1e6;
         const bool rx2Live  = (m_rxFreqHz[1] != 0);
@@ -1002,7 +1063,7 @@ void P1RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
             // Receive-side counterpart of the setTxFrequency line. Logged on
             // change so a bench can see whether a band button actually
             // reaches the receive filter path at all.
-            qCDebug(lcConnection) << "P1::setReceiverFrequency rx" << receiverIndex
+            qCDebug(lcConnection) << "P1::setReceiverFrequency rx" << changedSlot
                                   << "rxLpf=" << Qt::hex << newRxLpf << Qt::dec
                                   << "hpf=" << Qt::hex << m_alexHpfBits << Qt::dec
                                   << "for" << bandLabel(bandFromFrequency(
@@ -2496,8 +2557,18 @@ CodecContext P1RadioConnection::buildCodecContext() const
     // byte-identical: empty matrix → maskFor()==0 == m_ocOutput==0.
     // Phase 3P-D Task 3 — From Thetis HPSDR/Penny.cs:117-132 [@501e3f5]
     // setBandABitMask — OC mask derived per-band at transmit time.
+    //
+    // The band is RX1's, as in Thetis (lo_band = the band of VFOAFreq):
+    //   From mi0bot-Thetis console.cs:14986-14988 [@c26a8a4]
+    //     Band lo_band = BandByFreq(XVTRForm.TranslateFreq(VFOAFreq), rx1_xvtr_index, current_region);
+    //     Band lo_bandb = BandByFreq(XVTRForm.TranslateFreq(VFOBFreq), rx2_xvtr_index, current_region);
+    //     int bits = Penny.getPenny().ExtCtrlEnable(lo_band, lo_bandb, _mox, value, _tuning, SetupForm.TestIMD, chkExternalPA.Checked); // MW0LGE_21j
+    // and RX1 is the stand-in slot, not slot 0 (Phase 3F section 16.3.2,
+    // setLiveReceiverSlots). On the HL2 this byte drives the N2ADR filter
+    // board, so reading slot 0 after slice A was closed left the board on
+    // A's band.
     if (m_ocMatrix) {
-        const Band currentBand = bandFromFrequency(static_cast<double>(m_rxFreqHz[0]));
+        const Band currentBand = bandFromFrequency(static_cast<double>(m_rxFreqHz[m_rx1Slot]));
         ctx.ocByte = m_ocMatrix->maskFor(currentBand, m_mox);
     } else {
         ctx.ocByte = m_ocOutput;
@@ -2566,7 +2637,7 @@ CodecContext P1RadioConnection::buildCodecContext() const
     }
 
     if (ctx.ocByte != m_lastOcByteLogged) {
-        const int bandIdx = int(bandFromFrequency(static_cast<double>(m_rxFreqHz[0])));
+        const int bandIdx = int(bandFromFrequency(static_cast<double>(m_rxFreqHz[m_rx1Slot])));
         qDebug("HL2 ocByte=0x%02X band=%d mox=%d (matrix=%p)",
                ctx.ocByte, bandIdx, int(m_mox),
                static_cast<const void*>(m_ocMatrix));

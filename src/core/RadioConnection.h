@@ -221,6 +221,13 @@ public slots:
     virtual void setActiveReceiverCount(int count) = 0;
     virtual void setSampleRate(int sampleRate) = 0;
 
+    // Which hardware receivers are live: bit n set means a receiver is
+    // routed to hardware index n (ReceiverManager::hardwareSlotsChanged).
+    // Protocol 1 uses it to pick the receiver that stands in for Thetis's
+    // RX1 when slice A is closed, and to announce every slot in use.
+    // Non-pure so existing test mocks compile unchanged; P1 overrides.
+    virtual void setLiveReceiverSlots(quint32 /*slotMask*/) {}
+
     // --- Hardware Control ---
     virtual void setAttenuator(int dB) = 0;
     virtual void setPreamp(bool enabled) = 0;

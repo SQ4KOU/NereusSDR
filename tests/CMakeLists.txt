@@ -1870,6 +1870,13 @@ nereus_add_test(tst_alex_tx_lpf_source)
 # NereusSDR-original: no Thetis port.
 nereus_add_test(tst_p1_alex_lpf_word_source)
 
+# Phase 3F section 16.3.2: with slice A closed, the live receiver in the lowest
+# frame slot stands in for Thetis's RX1 as the source of the Protocol 1
+# receive filters (high-pass, receive low-pass, OC outputs / the HL2's N2ADR
+# board). Routing by frame slot left all three reading slot 0, A's last
+# frequency. NereusSDR-original: no Thetis port.
+nereus_add_test(tst_p1_rx_filter_follows_live_receiver)
+
 # ── A band change must retune the DDC even while CTUN holds it ───────────────
 # CTUN pins the DDC via ReceiverManager::m_ddcFreqLocked so a VFO nudge inside
 # the pinned window moves the slice shift instead of retuning hardware. A band
