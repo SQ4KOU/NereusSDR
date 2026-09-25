@@ -1476,6 +1476,22 @@ void P2RadioConnection::setHpfBypassOnPs(bool on)
 }
 
 // ---------------------------------------------------------------------------
+// setAlexHpfBypass: "HPF Bypass" (plan Task 14 fix wave). Sent at once:
+// Thetis's setter re-applies the high-pass (console.cs:18793-18803
+// AlexHPFBypass [v2.10.3.15]).
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setAlexHpfBypass(bool on)
+{
+    if (on == m_alexHpfBypass) {
+        return;
+    }
+    RadioConnection::setAlexHpfBypass(on);
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // setReceiverVfoFrequencies: each DDC's slice VFO, for the OC band.
 // ---------------------------------------------------------------------------
 void P2RadioConnection::setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot)
@@ -3056,6 +3072,7 @@ CodecContext P2RadioConnection::buildCodecContext() const
     //   From Thetis console.cs:6843-6848 [v2.10.3.15] (setAlexHPF)
     //     if (_mox && disable_hpf_on_tx)
     //     { NetworkIO.SetAlexHPFBits(0x20); ... return; }
+    // "HPF Bypass" (fix wave): 0x20 keyed or not (console.cs:6850-6855).
     //
     // SetAlexHPFBits writes prbpfilter (Alex0) only (netInterface.c:604-621
     // [v2.10.3.15]); Alex1's high-pass is not touched. Alex1 mirrors Alex0's

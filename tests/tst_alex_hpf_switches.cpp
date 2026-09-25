@@ -19,6 +19,15 @@
 // and setBPF1ForOrionIISaturn runs only for Orion MkII, Saturn and
 // HermesC10 (setAlex1HPF, console.cs:6827-6836).
 //
+// HPF Bypass (the master switch, chkAlexHPFBypass "ByPass/55 MHz HPF"):
+//   From Thetis setup.cs:15374-15379 [v2.10.3.15]
+//     chkAlexHPFBypass_CheckedChanged -> console.AlexHPFBypass = ...
+//   From Thetis console.cs:18793-18803 [v2.10.3.15]
+//     AlexHPFBypass { set { alex_hpf_bypass = value; ... setAlex1HPF(freq); ... } }
+//   From Thetis console.cs:6850-6855 and 6965-6970 [v2.10.3.15]
+//     if (alex_hpf_bypass) { NetworkIO.SetAlexHPFBits(0x20); ... return; }
+// keyed or not, on every Alex board.
+//
 // Each switch is driven from the Setup tab on the Core, and from a remote
 // window's write arriving at the Core (scheduleRemoteHardwareApply).
 // =================================================================
@@ -93,6 +102,16 @@ quint8 p2Alex1Hpf(P2RadioConnection& conn)
 quint8 p1Hpf(const P1RadioConnection& conn)
 {
     return quint8(conn.captureBank10ForTest()[3]) & 0x7F;
+}
+
+QCheckBox* boxNamed(AntennaAlexAlex1Tab& tab, const QString& text)
+{
+    for (QCheckBox* box : tab.findChildren<QCheckBox*>()) {
+        if (box->text() == text) {
+            return box;
+        }
+    }
+    return nullptr;
 }
 
 void prepareCore(RadioModel& model, HPSDRHW board, RadioConnection* conn)
@@ -235,6 +254,105 @@ private slots:
         conn.setMox(false);
 
         core.injectConnectionForTest(nullptr);
+    }
+    // ── HPF Bypass (master): keyed or not, both protocols ────────────────
+    void masterBypass_followsTheSetupTab_data()
+    {
+        QTest::addColumn<int>("protocol");
+        QTest::addColumn<int>("board");
+        QTest::newRow("P1 Angelia (high-pass ladder)") << 1 << int(HPSDRHW::Angelia);
+        QTest::newRow("P1 Orion MkII (band-pass)")     << 1 << int(HPSDRHW::OrionMKII);
+        QTest::newRow("P2 Saturn (G2)")                << 2 << int(HPSDRHW::Saturn);
+        QTest::newRow("P2 Orion (ANAN-200D)")          << 2 << int(HPSDRHW::Orion);
+    }
+    void masterBypass_followsTheSetupTab()
+    {
+        QFETCH(int, protocol);
+        QFETCH(int, board);
+        const HPSDRHW hw = HPSDRHW(board);
+        ConnectedP1 p1;
+        ConnectedP2 p2;
+        RadioConnection* conn = nullptr;
+        if (protocol == 1) {
+            p1.setBoardForTest(hw);
+            p1.setReceiverFrequency(0, k40mHz);
+            conn = &p1;
+        } else {
+            p2.setBoardForTest(hw);
+            p2.setReceiverFrequency(2, k40mHz);
+            conn = &p2;
+        }
+        auto hpf = [&]() { return protocol == 1 ? p1Hpf(p1) : p2Alex0Hpf(p2); };
+        const quint8 filtered = hpf();
+        QVERIFY(filtered != kBypass);
+        const quint8 alex1 = protocol == 2 ? p2Alex1Hpf(p2) : 0;
+
+        RadioModel model;
+        prepareCore(model, hw, conn);
+        AntennaAlexAlex1Tab tab(&model);
+        tab.restoreSettings(kMac);
+        QCheckBox* box = boxNamed(tab, QStringLiteral("HPF Bypass (master)"));
+        QVERIFY(box);
+        QVERIFY(!box->isChecked());  // Thetis's default
+
+        box->setChecked(true);
+        QCOMPARE(hpf(), kBypass);
+        if (protocol == 2) {
+            QCOMPARE(p2Alex1Hpf(p2), alex1);
+        }
+        conn->setMox(true);
+        QCOMPARE(hpf(), kBypass);
+        conn->setMox(false);
+
+        box->setChecked(false);
+        QCOMPARE(hpf(), filtered);
+
+        model.injectConnectionForTest(nullptr);
+    }
+
+    // ── HPF Bypass (master) from a remote window ─────────────────────────
+    void masterBypass_remoteWindowWrite_reachesTheCore()
+    {
+        ConnectedP1 conn;
+        conn.setBoardForTest(HPSDRHW::Angelia);
+        conn.setReceiverFrequency(0, k40mHz);
+        const quint8 filtered = p1Hpf(conn);
+
+        RadioModel core;
+        prepareCore(core, HPSDRHW::Angelia, &conn);
+        QStringList reloads;
+        core.setHardwareApplyObserverForTest([&reloads](const QString& name) { reloads << name; });
+
+        const QString key =
+            QStringLiteral("hardware/%1/alex/master/hpfBypass").arg(kMac);
+        AppSettings::instance().setValue(key, QStringLiteral("True"));
+        core.scheduleRemoteHardwareApply(key);
+        QTRY_COMPARE(reloads, QStringList{QStringLiteral("alex")});
+        QCOMPARE(p1Hpf(conn), kBypass);
+
+        reloads.clear();
+        AppSettings::instance().setValue(key, QStringLiteral("False"));
+        core.scheduleRemoteHardwareApply(key);
+        QTRY_COMPARE(reloads, QStringList{QStringLiteral("alex")});
+        QCOMPARE(p1Hpf(conn), filtered);
+
+        core.injectConnectionForTest(nullptr);
+    }
+
+    // ── The HL2 has no Alex board: the master switch leaves it alone ─────
+    void masterBypass_hl2IsUntouched()
+    {
+        ConnectedP1 conn;
+        conn.setBoardForTest(HPSDRHW::HermesLite);
+        conn.setReceiverFrequency(0, k40mHz);
+        const quint8 before = p1Hpf(conn);
+        codec::alex::Alex1HpfSwitches sw;
+        sw.hpfBypass = true;
+        QCOMPARE(codec::alex::applyAlex1HpfSwitches(before, HPSDRHW::HermesLite,
+                                                    false, false, sw),
+                 kBypass);  // the rule itself would bypass...
+        conn.setAlexHpfBypass(true);
+        QCOMPARE(p1Hpf(conn), before);  // ...but the HL2 has no Alex board
     }
 };
 

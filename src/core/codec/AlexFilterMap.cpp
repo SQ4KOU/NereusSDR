@@ -17,7 +17,7 @@
 //                Anthropic Claude Code.
 //   2026-09-25: applyAlex1HpfSwitches: the Alex tab's high-pass
 //                switches (HPF Bypass on TX, HPF Bypass on PureSignal
-//                feedback) applied to the RX1 high-pass word as Thetis's
+//                feedback, HPF Bypass) applied to the RX1 high-pass word as Thetis's
 //                setAlexHPF / setBPF1ForOrionIISaturn apply them. Plan
 //                Task 14 fix wave (R-R3-49). J.J. Boyd (KG4VCF), with
 //                AI-assisted transformation via Anthropic Claude Code.
@@ -251,6 +251,14 @@ quint8 applyAlex1HpfSwitches(quint8 selected, NereusSDR::HPSDRHW board,
     const bool bandPassBoard = usesBpf1Preselector(board);
     if (keyed && (switches.hpfBypassOnTx
                   || (bandPassBoard && switches.hpfBypassOnPs && pureSignalRunning))) {
+        return kBypass;
+    }
+    // From Thetis console.cs:6850-6855 [v2.10.3.15] (setAlexHPF), and the
+    // same at 6965-6970 (setBPF1ForOrionIISaturn):
+    //   if (alex_hpf_bypass)
+    //   {
+    //       NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
+    if (switches.hpfBypass) {
         return kBypass;
     }
     return selected;

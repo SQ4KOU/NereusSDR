@@ -454,8 +454,19 @@ public slots:
         codec::alex::Alex1HpfSwitches sw;
         sw.hpfBypassOnTx = m_hpfBypassOnTx;
         sw.hpfBypassOnPs = m_hpfBypassOnPs;
+        sw.hpfBypass     = m_alexHpfBypass;
         return sw;
     }
+
+    /// "HPF Bypass" (the Alex tab's master switch, Thetis chkAlexHPFBypass
+    /// "ByPass/55 MHz HPF"). An Alex board's high-pass word is 0x20, keyed
+    /// or not:
+    ///   From Thetis console.cs:6850-6855 [v2.10.3.15] (setAlexHPF)
+    ///     if (alex_hpf_bypass)
+    ///     { NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF ... return; }
+    /// Default false, as Thetis (console.cs:18793 alex_hpf_bypass = false).
+    virtual void setAlexHpfBypass(bool on) { m_alexHpfBypass = on; }
+    bool alexHpfBypass() const noexcept { return m_alexHpfBypass; }
 
     /// Hardware mic-jack PTT disable flag (Orion/ANAN front-panel PTT).
     ///
@@ -864,6 +875,10 @@ protected:
     // "HPF Bypass on TX" (setHpfBypassOnTx). Written and read on the
     // connection thread.
     bool m_hpfBypassOnTx{false};
+
+    // "HPF Bypass" (setAlexHpfBypass). Written and read on the connection
+    // thread.
+    bool m_alexHpfBypass{false};
 
     // Shared state for setMicPTTDisabled (3M-1b G.5; renamed for issue #182
     // to match Thetis MicPTTDisabled / mic_ptt_disabled storage name exactly).

@@ -19044,6 +19044,8 @@ void RadioModel::scheduleRemoteHardwareApply(const QString& key)
     } else if (rest.compare(QLatin1String("alex/master/hpfBypassOnTx"),
                             Qt::CaseInsensitive) == 0
                || rest.compare(QLatin1String("alex/master/hpfBypassOnPs"),
+                               Qt::CaseInsensitive) == 0
+               || rest.compare(QLatin1String("alex/master/hpfBypass"),
                                Qt::CaseInsensitive) == 0) {
         // Plan Task 14 and its fix wave: the Alex tab's high-pass switches,
         // applied to the connection.
@@ -19157,6 +19159,12 @@ void RadioModel::flushRemoteHardwareApply()
 //   From Thetis console.cs:18764-18773 [v2.10.3.15]
 //     public bool DisableHPFonPS
 //     { ... set { disable_hpf_on_ps = value; double freq = VFOAFreq; setAlex1HPF(freq); } }
+//   From Thetis setup.cs:15374-15379 [v2.10.3.15]
+//     private void chkAlexHPFBypass_CheckedChanged(object sender, EventArgs e)
+//     { console.AlexHPFBypass = chkAlexHPFBypass.Checked; ...
+//   From Thetis console.cs:18793-18803 [v2.10.3.15]
+//     public bool AlexHPFBypass
+//     { ... set { alex_hpf_bypass = value; double freq = VFOAFreq; setAlex1HPF(freq); ...
 // Thetis also runs the PureSignal handler once at start-up
 // (setup.cs:1079), so the saved value applies from the first packet; here
 // the connect path calls this. The connection composes the high-pass word
@@ -19180,10 +19188,12 @@ void RadioModel::applyAlexHpfSwitchSettings()
     const bool onTx = flag("alex/master/hpfBypassOnTx", "False");
     // Default True: chkDisableHPFonPSb.Checked = true (setup.designer.cs).
     const bool onPs = flag("alex/master/hpfBypassOnPs", "True");
+    const bool bypass = flag("alex/master/hpfBypass", "False");
     RadioConnection* conn = m_connection;
-    QMetaObject::invokeMethod(conn, [conn, onTx, onPs]() {
+    QMetaObject::invokeMethod(conn, [conn, onTx, onPs, bypass]() {
         conn->setHpfBypassOnTx(onTx);
         conn->setHpfBypassOnPs(onPs);
+        conn->setAlexHpfBypass(bypass);
     });
 }
 
