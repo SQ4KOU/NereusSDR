@@ -373,9 +373,14 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
                                                MediaPeer::TransportFactory peerFactory,
                                                MonotonicClock monotonicClock)
     : DaemonMediaController(server, radioModel, 0,
-                            std::make_shared<DaemonSharedSpectrum>(radioModel), parent,
-                            std::move(peerFactory), std::move(monotonicClock))
+                            // Its own engines, owned as a Qt child (below), so
+                            // they go with it and are found among its children.
+                            std::shared_ptr<DaemonSharedSpectrum>(
+                                new DaemonSharedSpectrum(radioModel),
+                                [](DaemonSharedSpectrum*) {}),
+                            parent, std::move(peerFactory), std::move(monotonicClock))
 {
+    m_shared->setParent(this);
     if (!m_server || !m_radioModel) {
         return;
     }
