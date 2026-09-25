@@ -30,6 +30,17 @@ StationLanAnnouncement announcement(int seed = 0)
             QStringLiteral("AA:BB:CC:DD:EE:FF"), true};
 }
 
+// iPhone app Task 16: what a Core sends now.
+StationLanAnnouncement announcementV2(int seed = 0)
+{
+    StationLanAnnouncement value = announcement(seed);
+    value.schema = kStationLanAnnouncementSchema;
+    value.identity = QByteArray(kStationLanIdentityBytes, static_cast<char>(0x30 + seed));
+    value.label = QStringLiteral("KG4VCF/shack");
+    value.pairing = StationLanPairing::Click;
+    return value;
+}
+
 QByteArray datagram(int seed = 0)
 {
     QString error;
@@ -184,10 +195,47 @@ private slots:
         QCOMPARE(changed.count(), 2);
     }
 
+    void schemaOneAndSchemaTwoAreBothRead()
+    {
+        // A Core from before Task 16 (schema 1) and one from after it
+        // (schema 2), heard on the same socket.
+        StationLanDiscovery discovery;
+        QVERIFY(discovery.start(0));
+        QUdpSocket sender;
+        QString error;
+        const StationLanAnnouncement newer = announcementV2(1);
+        sendLoopback(&sender, encodeStationLanAnnouncement(newer, &error), discovery.port());
+        sendLoopback(&sender, datagram(2), discovery.port());
+        QTRY_COMPARE(discovery.endpoints().size(), 2);
+        QList<StationLanAnnouncement> heard;
+        for (const StationLanEndpoint& endpoint : discovery.endpoints()) {
+            heard.append(endpoint.announcement);
+        }
+        QVERIFY(heard.contains(newer));
+        QVERIFY(heard.contains(announcement(2)));
+    }
+
     void announcerRejectsInvalidState()
     {
         StationLanAnnouncer announcer;
         announcer.update(QHostAddress::LocalHost, announcement());
+        QVERIFY(!announcer.isActive());
+        // A listener on loopback only is never announced, in either schema.
+        announcer.update(QHostAddress::LocalHost, announcementV2());
+        QVERIFY(!announcer.isActive());
+        announcer.update(QHostAddress::LocalHostIPv6, announcementV2());
+        QVERIFY(!announcer.isActive());
+
+        // A station sends schema 2 only: a schema-1 announcement is refused
+        // before anything is sent.
+        announcer.update(QHostAddress(QStringLiteral("192.0.2.200")), announcement());
+        QVERIFY(!announcer.isActive());
+        // Schema 2 is accepted. The listener address is TEST-NET-1, which no
+        // interface holds, so nothing reaches a network.
+        announcer.update(QHostAddress(QStringLiteral("192.0.2.200")), announcementV2());
+        QVERIFY(announcer.isActive());
+        QCOMPARE(announcer.announcement().schema, kStationLanAnnouncementSchema2);
+        announcer.stop();
         QVERIFY(!announcer.isActive());
 
         StationLanAnnouncement invalid = announcement();

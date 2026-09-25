@@ -35,6 +35,20 @@ QByteArray wire(const StationLanAnnouncement& announcement)
     return result;
 }
 
+// iPhone app Task 16: the same Core, announcing schema 2.
+StationLanAnnouncement valueV2(int seed = 0)
+{
+    StationLanAnnouncement announcement = value(seed);
+    announcement.schema = kStationLanAnnouncementSchema2;
+    announcement.claimed = true;
+    for (int i = 0; i < kStationLanIdentityBytes; ++i) {
+        announcement.identity.append(static_cast<char>((seed + 0x40 + i) & 0xff));
+    }
+    announcement.label = QStringLiteral("KG4VCF/shack");
+    announcement.pairing = StationLanPairing::Code;
+    return announcement;
+}
+
 int connectionOffset(const QByteArray& bytes)
 {
     return 8 + 95 + 1 + static_cast<quint8>(bytes.at(8 + 95));
@@ -92,9 +106,15 @@ private slots:
         QCOMPARE(error, QStringLiteral("Station LAN announcement has an invalid radio MAC."));
 
         QByteArray invalid = encoded;
-        invalid[4] = '\x02';
+        invalid[4] = '\x03';
         QVERIFY(!decodeStationLanAnnouncement(invalid, &error));
         QCOMPARE(error, QStringLiteral("Station LAN announcement has an unsupported schema."));
+        // iPhone app Task 16: schema 2 is known, but these bytes stop where
+        // schema 1 does, short of schema 2's fields.
+        invalid = encoded;
+        invalid[4] = '\x02';
+        QVERIFY(!decodeStationLanAnnouncement(invalid, &error));
+        QCOMPARE(error, QStringLiteral("Station LAN announcement is malformed."));
         invalid = encoded;
         invalid[5] = '\x02';
         QVERIFY(!decodeStationLanAnnouncement(invalid, &error));
@@ -133,6 +153,139 @@ private slots:
         invalid.append(QByteArray(kStationLanMaxDatagramBytes, 'x'));
         QVERIFY(!decodeStationLanAnnouncement(invalid, &error));
         QCOMPARE(error, QStringLiteral("Station LAN announcement is too large."));
+    }
+
+    void schemaTwoRoundTripSizesAndStrictRejections()
+    {
+        QString error;
+        const StationLanAnnouncement source = valueV2();
+        const QByteArray encoded = wire(source);
+        QCOMPARE(static_cast<quint8>(encoded.at(4)), kStationLanAnnouncementSchema2);
+        const auto decoded = decodeStationLanAnnouncement(encoded, &error);
+        QVERIFY2(decoded, qPrintable(error));
+        QCOMPARE(*decoded, source);
+        QCOMPARE(decoded->displayName(), QStringLiteral("KG4VCF/shack"));
+
+        // Schema 1 still decodes, with none of schema 2's fields.
+        const auto older = decodeStationLanAnnouncement(wire(value()), &error);
+        QVERIFY2(older, qPrintable(error));
+        QCOMPARE(older->schema, kStationLanAnnouncementSchema1);
+        QVERIFY(older->identity.isEmpty());
+        QVERIFY(older->label.isEmpty());
+        QCOMPARE(older->pairing, StationLanPairing::Closed);
+        QCOMPARE(older->displayName(), QStringLiteral("Rock 5C"));
+
+        // Every field at its limit: 479 bytes, and a label is never cut.
+        StationLanAnnouncement largest = valueV2();
+        largest.coreName = QString(kStationLanMaxCoreNameBytes, QLatin1Char('C'));
+        largest.radioName = QString(kStationLanMaxRadioNameBytes, QLatin1Char('R'));
+        largest.label = QString(32, QLatin1Char('K')) + QLatin1Char('/')
+            + QString(32, QLatin1Char('s'));
+        QCOMPARE(largest.label.size(), kStationLanMaxLabelBytes);
+        const QByteArray largestWire = wire(largest);
+        QCOMPARE(largestWire.size(), kStationLanMaxSchema2DatagramBytes);
+        QCOMPARE(*decodeStationLanAnnouncement(largestWire, &error), largest);
+        largest.label.append(QLatin1Char('x'));
+        QVERIFY(encodeStationLanAnnouncement(largest, &error).isEmpty());
+        QCOMPARE(error, QStringLiteral("Station LAN announcement has an invalid label."));
+
+        for (const QString& label : {QStringLiteral("KG4VCF shack"), QStringLiteral("KG4VCF/sh\u00e4ck"),
+                                     QStringLiteral("KG4VCF.shack")}) {
+            StationLanAnnouncement bad = valueV2();
+            bad.label = label;
+            QVERIFY2(encodeStationLanAnnouncement(bad, &error).isEmpty(), qPrintable(label));
+        }
+        StationLanAnnouncement shortIdentity = valueV2();
+        shortIdentity.identity.chop(1);
+        QVERIFY(encodeStationLanAnnouncement(shortIdentity, &error).isEmpty());
+        QCOMPARE(error, QStringLiteral("Station LAN announcement has an invalid identity."));
+        StationLanAnnouncement mixed = value();
+        mixed.label = QStringLiteral("KG4VCF");
+        QVERIFY(encodeStationLanAnnouncement(mixed, &error).isEmpty());
+        StationLanAnnouncement unknownSchema = valueV2();
+        unknownSchema.schema = 3;
+        QVERIFY(encodeStationLanAnnouncement(unknownSchema, &error).isEmpty());
+
+        // The schema-2 tail: claimed, 32 identity bytes, label, pairing.
+        const int tail = encoded.size() - 1 - static_cast<int>(source.label.size()) - 1
+            - kStationLanIdentityBytes - 1;
+        QByteArray invalid = encoded;
+        invalid[tail] = '\x02';
+        QVERIFY(!decodeStationLanAnnouncement(invalid, &error));
+        QCOMPARE(error, QStringLiteral("Station LAN announcement has an invalid claimed state."));
+        invalid = encoded;
+        invalid[invalid.size() - 1] = '\x03';
+        QVERIFY(!decodeStationLanAnnouncement(invalid, &error));
+        QCOMPARE(error, QStringLiteral("Station LAN announcement has an invalid pairing state."));
+        invalid = encoded;
+        invalid[tail + 1 + kStationLanIdentityBytes + 1] = ' ';
+        QVERIFY(!decodeStationLanAnnouncement(invalid, &error));
+        QCOMPARE(error, QStringLiteral("Station LAN announcement has an invalid label."));
+        QVERIFY(!decodeStationLanAnnouncement(encoded.chopped(1), &error));
+        // Schema 2 extends by appending: bytes after the known fields are
+        // ignored, up to the datagram bound.
+        const auto extended = decodeStationLanAnnouncement(encoded + QByteArray("\x01\x02\x03", 3), &error);
+        QVERIFY2(extended, qPrintable(error));
+        QCOMPARE(*extended, source);
+        QVERIFY(decodeStationLanAnnouncement(
+            encoded + QByteArray(kStationLanMaxDatagramBytes - encoded.size(), '\x7f'), &error));
+        QVERIFY(!decodeStationLanAnnouncement(
+            encoded + QByteArray(kStationLanMaxDatagramBytes - encoded.size() + 1, '\x7f'), &error));
+        QCOMPARE(error, QStringLiteral("Station LAN announcement is too large."));
+        // Schema 1 stays exact.
+        QVERIFY(!decodeStationLanAnnouncement(wire(value()) + '\x00', &error));
+        QCOMPARE(error, QStringLiteral("Station LAN announcement is malformed."));
+        invalid = encoded;
+        invalid[4] = '\x01'; // schema 1 with a schema-2 tail: bytes left over
+        QVERIFY(!decodeStationLanAnnouncement(invalid, &error));
+        QCOMPARE(error, QStringLiteral("Station LAN announcement is malformed."));
+        invalid = encoded;
+        invalid[4] = '\x03';
+        QVERIFY(!decodeStationLanAnnouncement(invalid, &error));
+        QCOMPARE(error, QStringLiteral("Station LAN announcement has an unsupported schema."));
+
+        QCOMPARE(stationLanPairingName(StationLanPairing::Click), QStringLiteral("click"));
+        QCOMPARE(stationLanPairingName(StationLanPairing::Code), QStringLiteral("code"));
+        QCOMPARE(stationLanPairingName(StationLanPairing::Closed), QStringLiteral("closed"));
+        QCOMPARE(stationLanPairingFromName(QStringLiteral("code")), StationLanPairing::Code);
+        QVERIFY(!stationLanPairingFromName(QStringLiteral("open")));
+    }
+
+    void schemaOneNeverOverwritesSchemaTwoFields()
+    {
+        StationLanCache cache;
+        const QHostAddress source(QStringLiteral("192.0.2.10"));
+        QString error;
+        QVERIFY2(cache.ingest(wire(valueV2()), source, 1, 100, &error), qPrintable(error));
+
+        // The same endpoint, now in schema 1 with a new radio name: the
+        // schema-1 fields move, schema 2's stay.
+        StationLanAnnouncement older = value();
+        older.radioName = QStringLiteral("Saturn G2E");
+        QVERIFY(cache.ingest(wire(older), source, 1, 200, &error));
+        QCOMPARE(cache.endpoints().size(), 1);
+        StationLanAnnouncement expected = valueV2();
+        expected.radioName = QStringLiteral("Saturn G2E");
+        QCOMPARE(cache.endpoints().first().announcement, expected);
+        QCOMPARE(cache.endpoints().first().lastSeenMs, 200);
+        // Nothing new: no change reported.
+        QVERIFY(!cache.ingest(wire(older), source, 1, 300, &error));
+        QCOMPARE(cache.endpoints().first().announcement, expected);
+
+        // Schema 2 replaces schema 2.
+        StationLanAnnouncement renamed = valueV2();
+        renamed.label = QStringLiteral("KG4VCF/portable");
+        renamed.claimed = false;
+        renamed.pairing = StationLanPairing::Click;
+        QVERIFY(cache.ingest(wire(renamed), source, 1, 400, &error));
+        QCOMPARE(cache.endpoints().first().announcement, renamed);
+
+        // Another endpoint of the same Core that only ever sent schema 1
+        // keeps schema 1.
+        const QHostAddress other(QStringLiteral("192.0.2.11"));
+        QVERIFY(cache.ingest(wire(value()), other, 1, 400, &error));
+        QCOMPARE(cache.endpoints().size(), 2);
+        QCOMPARE(cache.endpoints().last().announcement.schema, kStationLanAnnouncementSchema1);
     }
 
     void sourceScopeAndUrlRoundTrip()

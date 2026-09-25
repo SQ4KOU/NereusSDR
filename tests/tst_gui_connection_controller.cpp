@@ -38,6 +38,7 @@
 #include "gui/RemoteConnectionController.h"
 #include "models/RadioModel.h"
 #include "fakes/MainWindowTestSettings.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 
@@ -94,8 +95,10 @@ struct LoopbackCores final {
     // remote settings proxy. They are real StationServer models, not devices.
     RadioModel firstStation;
     RadioModel secondStation;
-    StationServer firstServer{&firstStation, firstSettings, firstDirectory.path()};
-    StationServer secondServer{&secondStation, secondSettings, secondDirectory.path()};
+    StationServer firstServer{&firstStation, firstSettings,
+                              NereusSDR::Test::seedUpgradedCoreToken(firstDirectory.path())};
+    StationServer secondServer{&secondStation, secondSettings,
+                               NereusSDR::Test::seedUpgradedCoreToken(secondDirectory.path())};
     QWebSocketServer firstListener{QStringLiteral("controller-A"), QWebSocketServer::NonSecureMode};
     QWebSocketServer secondListener{QStringLiteral("controller-B"), QWebSocketServer::NonSecureMode};
 

@@ -68,6 +68,7 @@
 #include "models/StationTciModel.h"
 #include "models/AccessoryDataModel.h"
 #include "models/AccessorySettingsModel.h"
+#include "core/session/StationDevicesFacade.h"
 
 using namespace NereusSDR;
 
@@ -877,7 +878,9 @@ private:
                  // R-R3-47 / R-R3-22: the Core's accessory records.
                  &AccessoryDataModel::staticMetaObject,
                  // R-R3-47 / R-R3-22: the amp's and tuner's own settings.
-                 &AccessorySettingsModel::staticMetaObject };
+                 &AccessorySettingsModel::staticMetaObject,
+                 // iPhone app Task 13 (R-IOS-08): the Core's paired devices.
+                 &StationDevicesFacade::staticMetaObject };
     }
 };
 

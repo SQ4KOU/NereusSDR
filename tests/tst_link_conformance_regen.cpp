@@ -29,6 +29,10 @@
 //                                    stateful decoders. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Part A (R-R3-03, R-IOS-01):
+//                                    three NSDC vectors both malformed and
+//                                    refused. AI-assisted transformation
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -43,6 +47,7 @@
 #include "core/dsp/Ps3Snapshot.h"
 #include "core/session/Ps3DisplayCodec.h"
 #include "core/session/StationLanAnnouncement.h"
+#include "core/session/DnsSdAdvertiser.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/OpusAudioCodec.h"
 
@@ -57,6 +62,9 @@ class TstLinkConformanceRegen : public QObject {
 private slots:
     void initTestCase();
     void writeLanAnnouncement();
+    void writeLanAnnouncement2();
+    void writeLanAnnouncement2Trailing();
+    void writeDnsSdTxt();
     void writePs3dFrame();
     void writeNsdcFrames();
     void writeOpusPackets();
@@ -103,6 +111,44 @@ void TstLinkConformanceRegen::writeLanAnnouncement()
     QVERIFY(write(QStringLiteral("lan-announcement"), bytes,
                   QJsonObject{{QStringLiteral("codec"), QStringLiteral("nrsc1")},
                               {QStringLiteral("expect"), LinkMediaVectors::toJson(value)}}));
+}
+
+void TstLinkConformanceRegen::writeLanAnnouncement2()
+{
+    const StationLanAnnouncement value = LinkMediaVectors::lanAnnouncement2();
+    QString error;
+    const QByteArray bytes = encodeStationLanAnnouncement(value, &error);
+    QVERIFY2(!bytes.isEmpty(), qPrintable(error));
+    QVERIFY(write(QStringLiteral("lan-announcement-2"), bytes,
+                  QJsonObject{{QStringLiteral("codec"), QStringLiteral("nrsc1")},
+                              {QStringLiteral("expect"), LinkMediaVectors::toJson(value)}}));
+}
+
+// Schema 2 extends by appending: the same Core with bytes after its known
+// fields, which a reader ignores (link document section 14.1).
+void TstLinkConformanceRegen::writeLanAnnouncement2Trailing()
+{
+    const StationLanAnnouncement value = LinkMediaVectors::lanAnnouncement2();
+    QString error;
+    const QByteArray known = encodeStationLanAnnouncement(value, &error);
+    QVERIFY2(!known.isEmpty(), qPrintable(error));
+    const QByteArray trailing = LinkMediaVectors::lanAnnouncementTrailingBytes();
+    QJsonObject expect = LinkMediaVectors::toJson(value);
+    expect.insert(QStringLiteral("ignoredTrailingBytes"), int(trailing.size()));
+    QVERIFY(write(QStringLiteral("lan-announcement-2-trailing"), known + trailing,
+                  QJsonObject{{QStringLiteral("codec"), QStringLiteral("nrsc1")},
+                              {QStringLiteral("expect"), expect}}));
+}
+
+void TstLinkConformanceRegen::writeDnsSdTxt()
+{
+    const DnsSdRecord record = LinkMediaVectors::dnsSdRecord();
+    QString error;
+    const QByteArray bytes = encodeDnsSdTxtRecord(record, &error);
+    QVERIFY2(!bytes.isEmpty(), qPrintable(error));
+    QVERIFY(write(QStringLiteral("dnssd-txt"), bytes,
+                  QJsonObject{{QStringLiteral("codec"), QStringLiteral("dnssd-txt")},
+                              {QStringLiteral("expect"), LinkMediaVectors::toJson(record)}}));
 }
 
 void TstLinkConformanceRegen::writePs3dFrame()
@@ -159,6 +205,22 @@ void TstLinkConformanceRegen::writeNsdcFrames()
                   expectation({full}, lost, afterFull)));
     QVERIFY(write(QStringLiteral("nsdc1-keyframe-after-loss"), keyframe,
                   expectation({full}, keyframe, afterFull)));
+
+    // Datagrams both malformed and refused: the structure is checked first
+    // (display codec document, "State and recovery"), so each rejects as
+    // malformed whatever the decoder's state would have refused it for.
+    QVERIFY(write(QStringLiteral("nsdc1-malformed-delta"),
+                  LinkMediaVectors::nsdcBadPlaneDelta(delta),
+                  expectation({}, LinkMediaVectors::nsdcBadPlaneDelta(delta), {})));
+    QVERIFY(write(QStringLiteral("nsdc1-malformed-stale-delta"),
+                  LinkMediaVectors::nsdcStaleTruncatedDelta(delta),
+                  expectation({full}, LinkMediaVectors::nsdcStaleTruncatedDelta(delta),
+                              afterFull)));
+    QVERIFY(write(QStringLiteral("nsdc1-malformed-keyframe"),
+                  LinkMediaVectors::nsdcBadBlockCountKeyframe(keyframe),
+                  expectation({full, lost}, LinkMediaVectors::nsdcBadBlockCountKeyframe(keyframe),
+                              {QStringLiteral("media-nsdc1-full"),
+                               QStringLiteral("media-nsdc1-delta-after-loss")})));
 }
 
 void TstLinkConformanceRegen::writeOpusPackets()

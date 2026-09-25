@@ -112,6 +112,15 @@
 //                                    Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-47: the Tuner Genius's antenna,
 //                                    operate and bypass verbs.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08):
+//                                    devices.revoke, station.rename,
+//                                    station.acknowledgeKeyBackup and
+//                                    station.retireToken, routed to the
+//                                    Core's StationDevicesFacade.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08):
+//                                    pairing.open and pairing.close, routed
+//                                    to the same facade.
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -124,6 +133,7 @@
 #include <utility>
 
 #include "core/session/SessionMessages.h"
+#include "core/session/StationDevicesFacade.h"
 
 namespace NereusSDR {
 
@@ -178,6 +188,11 @@ public:
     /// fired by the time dispatch() itself returns.
     void dispatch(const NereusSDR::SessionMessage& invoke);
     void setSessionOwner(const QString& owner);
+
+    /// iPhone app Task 13: the Core's device administration, which the
+    /// devices.* and station.* verbs act on. Not owned. Without one those
+    /// verbs are refused in plain words. They need no radio.
+    void setDeviceAdmin(StationDevicesFacade* devices) { m_deviceAdmin = devices; }
 
     /// R-IOS-01: every verb dispatch() routes, declared beside the routing
     /// rather than derived from it. A family routed by prefix ("ps3.",
@@ -246,11 +261,18 @@ private:
     // notch.delete against the Core's NotchModel.
     void handleNotchAction(const NereusSDR::SessionMessage& invoke);
     void handlePureSignalAction(const NereusSDR::SessionMessage& invoke);
+    // iPhone app Task 13 (R-IOS-08, deviceAdminVersion 1): devices.revoke,
+    // station.rename, station.acknowledgeKeyBackup, station.retireToken.
+    void handleDeviceAdmin(const NereusSDR::SessionMessage& invoke);
+    // iPhone app Task 14 (R-IOS-08, pairingVersion 1): pairing.open and
+    // pairing.close.
+    void handlePairingWindow(const NereusSDR::SessionMessage& invoke);
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
                     const QString& reason, const QList<QByteArray>& affectedKeys);
 
     QPointer<RadioModel> m_radioModel;
+    QPointer<StationDevicesFacade> m_deviceAdmin;
     QString m_sessionOwner{QStringLiteral("local")};
     struct PendingPureSignalCommand {
         quint32 commandId;

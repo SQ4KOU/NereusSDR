@@ -304,6 +304,57 @@ private slots:
         QCOMPARE(decoder.decode(oldPacket).disposition, DisplayCodecDisposition::Rejected);
         QCOMPARE(decoder.decode(oldPacket).reason, DisplayCodecReason::OldContext);
     }
+
+    // Structure is checked before the endpoint, context, generation,
+    // sequence and history rules: a packet that is both malformed and
+    // refused rejects as malformed, whatever state the decoder is in, and
+    // history is untouched.
+    void malformedAndRefusedPacketsRejectAsMalformed()
+    {
+        DisplayCodecEncoder encoder;
+        const QByteArray key = encoder.encode(makeFrame(1));
+        const QByteArray delta = encoder.encode(makeFrame(2));
+        const QByteArray lost = encoder.encode(makeFrame(3));
+        const QByteArray recovery = encoder.encode(makeFrame(4), true);
+        QVERIFY(!key.isEmpty() && !delta.isEmpty() && !lost.isEmpty() && !recovery.isEmpty());
+
+        // A delta with a malformed plane (block size code 4), to a fresh
+        // decoder that has no history.
+        QByteArray badPlaneDelta = delta;
+        badPlaneDelta[42] = 4;
+        DisplayCodecDecoder fresh;
+        DisplayCodecDecodeResult decoded = fresh.decode(badPlaneDelta);
+        QCOMPARE(decoded.disposition, DisplayCodecDisposition::Rejected);
+        QCOMPARE(decoded.reason, DisplayCodecReason::Malformed);
+        verifyAccepted(fresh, key);
+
+        // A stale delta (sequence 0, older than the accepted 1) cut short
+        // by one byte, after a keyframe was accepted.
+        QByteArray staleTruncated = delta;
+        staleTruncated[16] = 0;
+        staleTruncated[17] = 0;
+        staleTruncated[18] = 0;
+        staleTruncated[19] = 0;
+        staleTruncated.chop(1);
+        DisplayCodecDecoder afterKey;
+        verifyAccepted(afterKey, key);
+        decoded = afterKey.decode(staleTruncated);
+        QCOMPARE(decoded.disposition, DisplayCodecDisposition::Rejected);
+        QCOMPARE(decoded.reason, DisplayCodecReason::Malformed);
+        verifyAccepted(afterKey, delta);
+
+        // A keyframe whose first plane claims one block too many, to a
+        // decoder that needs a keyframe after a gap.
+        QByteArray badKeyframe = recovery;
+        badKeyframe[44] = static_cast<char>(static_cast<unsigned char>(badKeyframe.at(44)) + 1U);
+        DisplayCodecDecoder needsKeyframe;
+        verifyAccepted(needsKeyframe, key);
+        QCOMPARE(needsKeyframe.decode(lost).disposition, DisplayCodecDisposition::NeedKeyframe);
+        decoded = needsKeyframe.decode(badKeyframe);
+        QCOMPARE(decoded.disposition, DisplayCodecDisposition::Rejected);
+        QCOMPARE(decoded.reason, DisplayCodecReason::Malformed);
+        verifyAccepted(needsKeyframe, recovery);
+    }
 };
 
 QTEST_MAIN(TstDisplayCodec)

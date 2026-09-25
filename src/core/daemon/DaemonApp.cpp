@@ -42,6 +42,28 @@
 //               link majors setLinkMajors() names (a debug build's
 //               --test-link-majors), by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 12 (R-IOS-08): an empty remote_bind
+//               listens on every interface, IPv4 and IPv6; the pairing
+//               token is no longer created; pairing_lan_click reaches the
+//               station server. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 14 (R-IOS-08): the pairing code is printed
+//               on the Core's console. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 17 (R-IOS-08): the status page, the first
+//               start's label and page address, and the console socket.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24: the status page binds with the listener's dual-stack rule
+//               (iPhone app Task 17, R-IOS-08, R-R3-26). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R1-I2): a reopened pairing window
+//               lasts 10 minutes, five burned codes in a row close any window,
+//               and reopening starts afresh. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the pairing code is never printed
+//               to standard output (the journal on a packaged Core). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -60,8 +82,15 @@
 #include "core/StepAttenuatorController.h"
 #include "core/TxSliceArbiter.h"
 #include "core/WdspEngine.h"
+#include "core/daemon/StationControlCommands.h"
+#include "core/daemon/StationControlSocket.h"
 #include "core/session/StationServer.h"
 #include "core/session/StationLanAnnouncer.h"
+#include "core/session/DnsSdAdvertiser.h"
+#include "core/session/StationDevicesFacade.h"
+#include "core/security/DeviceStore.h"
+#include "core/security/PairingWindow.h"
+#include "core/security/StationIdentity.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -297,10 +326,18 @@ bool DaemonApp::start(const DaemonConfig& cfg)
 
 void DaemonApp::stop()
 {
+    // iPhone app Task 17: nothing answers the console or a browser once
+    // the Core is going away.
+    m_controlSocket.reset();
+    m_controlCommands.reset();
+    m_statusPage.reset();
     m_radioRecoveryEnabled = false;
     cancelRadioDiscovery();
     cancelStationServerListenRetry();
     m_stationAnnouncer.reset();
+    m_dnsSdAdvertiser.reset();
+    m_stationAnnouncement = {};
+    m_dnsSdRecord = {};
     if (m_radioConnectInProgress) {
         // A cold WDSP initialization pumps a nested event loop. Never delete
         // the RadioModel from inside its still-running connect stack. Its
@@ -440,6 +477,15 @@ void DaemonApp::applyStepAttenuatorConnection(const QString& mac)
 // failure is NOT a startup failure, matching this class's existing treatment
 // of a radio that cannot be found: a daemon that still demodulates locally is
 // more useful than one that refuses to boot.
+QHostAddress DaemonApp::listenerAddressFor(const QString& bind)
+{
+    // Empty is every interface (iPhone app Task 12); anything else is
+    // DaemonConfig::listenAddressFor's rule: "::" is dual stack too, and a
+    // specific address binds as given (R-R3-26).
+    return bind.isEmpty() ? QHostAddress(QHostAddress::Any)
+                          : DaemonConfig::listenAddressFor(bind);
+}
+
 void DaemonApp::startStationServer(const DaemonConfig& cfg)
 {
     cancelStationServerListenRetry();
@@ -455,17 +501,21 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
         return;
     }
 
-    const QHostAddress bind = DaemonConfig::listenAddressFor(cfg.remoteBind);
+    // iPhone app Task 12: an empty remote_bind (the default) is every
+    // interface, IPv4 and IPv6 (QHostAddress::Any is dual stack); so is "::"
+    // (R-R3-26, DaemonConfig::listenAddressFor).
+    const QHostAddress bind = listenerAddressFor(cfg.remoteBind);
     if (bind.isNull()) {
         qCWarning(lcApp) << "DaemonApp: remote_bind is not a valid address:"
                           << cfg.remoteBind << "- remote control not started";
         return;
     }
 
-    // Constructing it is what provisions the TLS certificate and the
-    // pairing token, and what prints the first-run pairing banner to stdout
-    // on the run that generates them (StationServer's constructor). Secrets
-    // are deliberately kept out of the normal log. AppSettings::instance()
+    // Constructing it is what provisions the TLS certificate and the Core's
+    // identity key (iPhone app Task 12: never a pairing token any more; an
+    // upgraded Core's existing token is loaded), and what prints the
+    // first-run banner to stdout on the run that creates the key
+    // (StationServer's constructor), deliberately not into the log. AppSettings::instance()
     // is the daemon's OWN store here -- server_main.cpp resolved the profile
     // before this point.
     m_stationServer = std::make_unique<StationServer>(m_radioModel.get(),
@@ -474,6 +524,41 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     // Set before listen() so the first authenticated client sees the media
     // capability, never a control-only session that cannot be upgraded.
     m_stationServer->setMediaEnabled(true);
+    // iPhone app Task 12: nereusd.conf's pairing_lan_click, read by the
+    // pairing window (Task 14) for the one-click pairing on this network.
+    m_stationServer->setPairingLanClickAllowed(cfg.pairingLanClickAllowed);
+    // iPhone app Task 17 (R-IOS-08): the status page, bound exactly where the
+    // listener binds: `bind` above, listenerAddressFor(remote_bind), which is
+    // DaemonConfig::listenAddressFor's rule (R-R3-26). A Core bound to one
+    // address shows its page, and its code while unclaimed, only there; "::"
+    // and an empty remote_bind take IPv4 and IPv6. It answers only this
+    // computer's own networks whatever the bind. Its failure to listen is
+    // logged, never fatal: the Core still runs and the console still shows
+    // the code.
+    if (cfg.statusPage) {
+        StationStatusPage::Sources sources;
+        sources.server = [this]() { return m_stationServer.get(); };
+        sources.radio = [this]() { return radioStatus(); };
+        sources.label = [this]() { return coreLabel(); };
+        m_statusPage = std::make_unique<StationStatusPage>(std::move(sources));
+        if (m_statusPage->listen(bind, static_cast<quint16>(cfg.statusPort))) {
+            qCInfo(lcApp) << "DaemonApp: status page on port" << m_statusPage->serverPort();
+        } else {
+            qCWarning(lcApp) << "DaemonApp: the status page could not listen on port"
+                              << cfg.statusPort << ":" << m_statusPage->lastError();
+            m_statusPage.reset();
+        }
+    }
+    // The first start's notice, beside the identity key banner the server
+    // printed (which names station-identity.pem's full path and asks for a
+    // backup): the Core's label and where its status page is, and how to
+    // get the pairing code (nereusd pairing show). Standard output, never
+    // the log, and never the code itself: on a packaged Core standard
+    // output is the journal (Part C fix wave).
+    if (m_stationServer->stationIdentity().wasCreatedThisRun()) {
+        StationServer::printToConsole(
+            StationStatusPage::formatFirstStartNotice(coreLabel(), statusPageAddress()));
+    }
     // R-R3-08/37/40: with display_adaptive on, the Core always advertises a
     // display budget, so apps plan in budget mode from the start and follow
     // it down when the Core is busy: the configured pair when there is one,
@@ -522,13 +607,34 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
         });
     }
     m_stationAnnouncer = std::make_unique<StationLanAnnouncer>();
+    if (!m_dnsSdAdvertiser) {
+        m_dnsSdAdvertiser = std::make_unique<DnsSdAdvertiser>();
+    }
+    connect(m_dnsSdAdvertiser.get(), &DnsSdAdvertiser::failed, this, [this]() {
+        // Let the next change try again rather than retrying at once.
+        m_dnsSdAttempt.reset();
+    });
     connect(m_stationServer.get(), &StationServer::listeningChanged,
             this, &DaemonApp::updateStationAnnouncement);
+    // iPhone app Task 16: the announcement and Bonjour carry the label, the
+    // claimed state and how the Core pairs, so a rename (Task 13), a claim
+    // or a change to the pairing window (Task 14) announces again.
+    if (StationDevicesFacade* devices = m_stationServer->devicesFacade()) {
+        connect(devices, &StationDevicesFacade::stationLabelChanged,
+                this, &DaemonApp::updateStationAnnouncement);
+        connect(devices, &StationDevicesFacade::devicesStateChanged,
+                this, &DaemonApp::updateStationAnnouncement);
+    }
+    if (PairingWindow* window = m_stationServer->pairingWindow()) {
+        connect(window, &PairingWindow::stateChanged,
+                this, &DaemonApp::updateStationAnnouncement);
+    }
     connect(m_radioModel.get(), &RadioModel::connectionStateChanged,
             this, &DaemonApp::updateStationAnnouncement);
     connect(m_radioModel.get(), &RadioModel::infoChanged,
             this, &DaemonApp::updateStationAnnouncement);
     m_stationListenBind = cfg.remoteBind;
+    m_stationListenArmed = true;
     m_stationListenPort = static_cast<quint16>(cfg.remotePort);
     attemptStationServerListen();
 }
@@ -548,6 +654,67 @@ QString announcementName(const QString& input, const QString& fallback)
     }
     return result.trimmed().isEmpty() ? fallback : result.trimmed();
 }
+}
+
+QString DaemonApp::coreLabel() const
+{
+    if (m_stationServer) {
+        if (const StationDevicesFacade* devices = m_stationServer->devicesFacade()) {
+            if (!devices->stationLabel().isEmpty()) {
+                return devices->stationLabel();
+            }
+        }
+    }
+    return announcementName(m_radioConfig.coreName.isEmpty() ? QHostInfo::localHostName()
+                                                             : m_radioConfig.coreName,
+                            QStringLiteral("Nereus Core"));
+}
+
+StationRadioStatus DaemonApp::radioStatus() const
+{
+    StationRadioStatus status;
+    if (m_radioModel && m_radioModel->isConnected()) {
+        status.connected = true;
+        status.model = m_radioModel->model();
+        status.name = m_radioModel->name();
+    }
+    return status;
+}
+
+QString DaemonApp::statusPageAddress() const
+{
+    if (!m_statusPage || !m_statusPage->isListening()) {
+        return {};
+    }
+    return StationStatusPage::addressForOperator(m_statusPage->serverAddress(),
+                                                 m_statusPage->serverPort());
+}
+
+StationControlReply DaemonApp::runControlCommand(const QStringList& args)
+{
+    if (!m_controlCommands) {
+        StationControlCommands::Sources sources;
+        sources.server = [this]() { return m_stationServer.get(); };
+        sources.radio = [this]() { return radioStatus(); };
+        sources.label = [this]() { return coreLabel(); };
+        sources.statusPageAddress = [this]() { return statusPageAddress(); };
+        m_controlCommands = std::make_unique<StationControlCommands>(std::move(sources));
+    }
+    return m_controlCommands->execute(args);
+}
+
+bool DaemonApp::startControlSocket(const QString& path)
+{
+    m_controlSocket = std::make_unique<StationControlSocket>(
+        [this](const QStringList& args) { return runControlCommand(args); });
+    if (!m_controlSocket->listen(path)) {
+        qCWarning(lcApp) << "DaemonApp: the console commands cannot reach this Core:"
+                          << m_controlSocket->lastError();
+        m_controlSocket.reset();
+        return false;
+    }
+    qCInfo(lcApp) << "DaemonApp: console commands answered at" << path;
+    return true;
 }
 
 static_assert(DisplayLoadGovernor::kLoadIntervalMs == ReceiverDspLoadSampler::kSampleIntervalMs,
@@ -639,11 +806,52 @@ bool DaemonApp::publishDisplayBudget(const std::optional<DisplayLoadDecision>& d
     return true;
 }
 
+bool DaemonApp::stationAnnouncedForTest() const
+{
+    return m_stationAnnouncer && m_stationAnnouncer->isActive();
+}
+
+bool DaemonApp::dnsSdAdvertisedForTest() const
+{
+    return m_dnsSdAdvertiser && m_dnsSdAdvertiser->isActive();
+}
+
+void DaemonApp::setDnsSdAdvertiserForTest(std::unique_ptr<DnsSdAdvertiser> advertiser)
+{
+    m_dnsSdAdvertiser = std::move(advertiser);
+}
+
+StationLanPairing DaemonApp::stationLanPairingFor(const StationServer& server)
+{
+    // The pairing window (link document section 3.6): an unclaimed Core
+    // pairs with one tap on its own network unless pairing_lan_click is
+    // deny; a reopened window pairs by code only; a closed one not at all.
+    const PairingWindow* window = server.pairingWindow();
+    if (server.pairingVersion() < 1 || window == nullptr) {
+        return StationLanPairing::Closed;
+    }
+    switch (window->state()) {
+    case PairingWindow::State::OpenUnclaimed:
+        return server.pairingLanClickAllowed() ? StationLanPairing::Click
+                                               : StationLanPairing::Code;
+    case PairingWindow::State::OpenReopened:
+        return StationLanPairing::Code;
+    case PairingWindow::State::ClosedClaimed:
+    case PairingWindow::State::ClosedUnclaimed:
+        break;
+    }
+    return StationLanPairing::Closed;
+}
+
 void DaemonApp::updateStationAnnouncement()
 {
     if (!m_stationAnnouncer) { return; }
     if (!m_stationServer || !m_stationServer->isListening() || !m_radioModel) {
         m_stationAnnouncer->stop();
+        if (m_dnsSdAdvertiser) { m_dnsSdAdvertiser->stop(); }
+        m_stationAnnouncement = {};
+        m_dnsSdRecord = {};
+        m_dnsSdAttempt.reset();
         return;
     }
     StationLanAnnouncement announcement;
@@ -658,12 +866,49 @@ void DaemonApp::updateStationAnnouncement()
     announcement.radioMac = m_radioModel->currentRadioMac().toUpper();
     if (announcement.radioMac.isEmpty()) { announcement.radioMac = m_selectedRadioMac.toUpper(); }
     if (announcement.radioMac.isEmpty()) { announcement.radioMac = QStringLiteral("00:00:00:00:00:00"); }
+    // iPhone app Task 16: schema 2, the only schema a station sends.
+    announcement.schema = kStationLanAnnouncementSchema;
+    announcement.identity = m_stationServer->stationIdentity().fingerprint();
+    if (const StationDevicesFacade* devices = m_stationServer->devicesFacade()) {
+        announcement.claimed = devices->claimed();
+        announcement.label = devices->stationLabel();
+    } else {
+        announcement.claimed = m_stationServer->deviceStore()->isClaimed();
+    }
+    announcement.pairing = stationLanPairingFor(*m_stationServer);
+    m_stationAnnouncement = announcement;
     m_stationAnnouncer->update(m_stationServer->serverAddress(), announcement);
+
+    // Bonjour follows the announcer's rule: only where the listener serves.
+    DnsSdRecord record;
+    record.instanceName = dnsSdInstanceName(announcement.displayName());
+    record.label = announcement.label;
+    record.identity = announcement.identity;
+    record.claimed = announcement.claimed;
+    record.pairing = announcement.pairing;
+    const std::optional<quint32> where = dnsSdInterfaceForListener(m_stationServer->serverAddress());
+    if (!where || !m_dnsSdAdvertiser) {
+        if (m_dnsSdAdvertiser) { m_dnsSdAdvertiser->stop(); }
+        m_dnsSdRecord = {};
+        m_dnsSdAttempt.reset();
+        return;
+    }
+    record.interfaceIndex = *where;
+    m_dnsSdRecord = record;
+    const quint16 port = m_stationServer->serverPort();
+    // Asked once per change: an advertiser that cannot (no Bonjour here, or
+    // the platform refused) is not asked again, and logged again, until what
+    // it would advertise changes.
+    if (m_dnsSdAdvertiser->isActive() || !m_dnsSdAttempt
+        || m_dnsSdAttempt->first != port || m_dnsSdAttempt->second != record) {
+        m_dnsSdAttempt = std::make_pair(port, record);
+        m_dnsSdAdvertiser->start(port, record);
+    }
 }
 
 void DaemonApp::attemptStationServerListen()
 {
-    if (!m_stationServer || m_stationListenPort == 0 || m_stationListenBind.isEmpty()) {
+    if (!m_stationServer || m_stationListenPort == 0 || !m_stationListenArmed) {
         return;
     }
     if (m_stationServer->isListening()) {
@@ -671,7 +916,7 @@ void DaemonApp::attemptStationServerListen()
         return;
     }
 
-    const QHostAddress bind = DaemonConfig::listenAddressFor(m_stationListenBind);
+    const QHostAddress bind = listenerAddressFor(m_stationListenBind);
     if (bind.isNull()) {
         // startStationServer validates before latching, so this is only a
         // defensive guard against future mutation. Invalid config never
@@ -700,7 +945,7 @@ void DaemonApp::attemptStationServerListen()
 
 void DaemonApp::scheduleStationServerListenRetry()
 {
-    if (!m_stationServer || m_stationListenPort == 0 || m_stationListenBind.isEmpty()) {
+    if (!m_stationServer || m_stationListenPort == 0 || !m_stationListenArmed) {
         return;
     }
 
@@ -722,6 +967,7 @@ void DaemonApp::cancelStationServerListenRetry()
         m_stationListenRetryTimer->stop();
     }
     m_stationListenBind.clear();
+    m_stationListenArmed = false;
     m_stationListenPort = 0;
     m_stationListenNextDelayMs = m_stationListenRetryInitialMs;
 }

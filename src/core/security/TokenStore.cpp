@@ -8,6 +8,10 @@
 //   2026-08-08: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: iPhone app Task 12: load only, never generate; retire().
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 17: moveDamagedAside(). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/TokenStore.h"
@@ -16,20 +20,15 @@
 
 #include <QByteArray>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QLoggingCategory>
-#include <QRandomGenerator>
-#include <QSaveFile>
 
 namespace NereusSDR {
 
 namespace {
 Q_LOGGING_CATEGORY(lcTokenStore, "nereus.tokenstore")
-
-// 256 bits. Base64url with no padding renders this as 43 characters,
-// which is one shell-safe, copy-pasteable word.
-constexpr int kTokenBytes = 32;
 
 // Longest token file this class will read. A token is 43 characters; the
 // bound exists so a corrupt or hostile file cannot make the daemon
@@ -68,23 +67,12 @@ TokenStore::TokenStore(const QString& directory)
         return;
     }
 
-    if (loadExisting()) {
-        m_valid = true;
-        return;
-    }
-    if (!m_lastError.isEmpty()) {
-        // loadExisting() found a file it could not read. Deliberately NOT
-        // regenerated over: overwriting a station's token would silently
-        // lock out every already-paired client, which is worse than
-        // refusing to come up authenticated. Same reasoning as
-        // CertificateStore::LoadResult::IoFailure.
-        return;
-    }
-
-    if (generateAndStore()) {
-        m_valid = true;
-        m_generatedThisRun = true;
-    }
+    // iPhone app Task 12: loaded when an earlier Core left one, never
+    // generated. A file that exists but cannot be read leaves the store
+    // invalid (DeviceStore::isClaimed() then still counts the Core as
+    // claimed), and is never replaced.
+    loadExisting();
+    m_valid = m_lastError.isEmpty();
 }
 
 QString TokenStore::defaultDirectory()
@@ -133,50 +121,43 @@ bool TokenStore::loadExisting()
     return true;
 }
 
-bool TokenStore::generateAndStore()
+bool TokenStore::retire()
 {
-    // ::system() is the OS CSPRNG. QRandomGenerator::global() is seeded
-    // from it but is a userspace PRNG whose state a long-lived process
-    // exposes to anything that can read its memory; for a shared secret
-    // the extra call cost is irrelevant and the distinction is not.
-    //
-    // Filled as quint32 words into a properly aligned local array rather
-    // than through a reinterpret_cast over QByteArray::data(), which
-    // would rest on an alignment guarantee QByteArray does not make.
-    quint32 words[kTokenBytes / sizeof(quint32)]{};
-    QRandomGenerator::system()->fillRange(words);
-    const QByteArray raw(reinterpret_cast<const char*>(words), kTokenBytes);
+    if (!isActive()) {
+        return m_valid;
+    }
+    QFile file(m_tokenPath);
+    if (file.exists() && !file.remove()) {
+        qCWarning(lcTokenStore) << "Could not retire the pairing token:" << file.errorString();
+        return false;
+    }
+    m_token.fill(QLatin1Char('\0'));
+    m_token.clear();
+    m_consecutiveFailures = 0;
+    return true;
+}
 
-    m_token = QString::fromLatin1(
-        raw.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
-
-    QSaveFile file(m_tokenPath);
-    if (!file.open(QIODevice::WriteOnly)) {
-        m_lastError = QStringLiteral("Could not open %1 for writing: %2")
-                          .arg(m_tokenPath, file.errorString());
-        m_token.clear();
+bool TokenStore::moveDamagedAside()
+{
+    if (m_valid) {
+        return true;
+    }
+    if (!QDir(m_directory).exists()) {
         return false;
     }
-    // Permissions are set on the QSaveFile's own temp file BEFORE
-    // commit(), never with a separate setPermissions() call afterwards:
-    // commit() renames the temp file into place and rename() does not
-    // alter permission bits, so doing it this way means no file ever
-    // exists under the final name at the temp file's default (often
-    // group-readable) permissions. Same reasoning, and same ordering, as
-    // CertificateStore::writePemFile().
-    if (!file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
-        file.cancelWriting();
-        m_lastError = QStringLiteral("Could not restrict permissions on %1").arg(m_tokenPath);
-        m_token.clear();
-        return false;
+    if (QFile::exists(m_tokenPath)) {
+        const QString aside = m_tokenPath + QStringLiteral(".damaged-")
+                              + QDateTime::currentDateTimeUtc().toString(
+                                  QStringLiteral("yyyyMMdd'T'HHmmsszzz'Z'"));
+        if (!QFile::rename(m_tokenPath, aside)) {
+            qCWarning(lcTokenStore) << "Could not move the damaged token file aside";
+            return false;
+        }
     }
-    const QByteArray payload = m_token.toUtf8();
-    if (file.write(payload) != payload.size() || !file.commit()) {
-        m_lastError = QStringLiteral("Could not write %1: %2")
-                          .arg(m_tokenPath, file.errorString());
-        m_token.clear();
-        return false;
-    }
+    m_token.clear();
+    m_lastError.clear();
+    m_valid = true;
+    m_consecutiveFailures = 0;
     return true;
 }
 

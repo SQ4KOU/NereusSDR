@@ -16,6 +16,7 @@
 #include "OperatorWording.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/RemoteAudioSessionHarness.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using Metric = TelemetryHistory::Metric;
@@ -64,7 +65,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setTelemetryEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
@@ -295,7 +296,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);
@@ -405,7 +406,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setTelemetryEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
@@ -508,7 +509,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setTelemetryEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
@@ -597,7 +598,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path()); // capability disabled
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path())); // capability disabled
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);
@@ -625,7 +626,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setTelemetryEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;

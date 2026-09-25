@@ -33,11 +33,10 @@
 //
 // ---- Never user-chosen ----
 //
-// There is no setToken(). 256 bits from QRandomGenerator::system() (the
-// OS CSPRNG, not the deterministic default engine), base64url without
-// padding, so the printed form is one copy-pasteable word with no shell
-// quoting hazard. An operator who wants a new token deletes the file;
-// the next daemon start generates and prints a fresh one.
+// There is no setToken(). An earlier Core generated its token as 256 bits
+// from QRandomGenerator::system() (the OS CSPRNG), base64url without
+// padding. Deleting the file no longer brings a fresh one: since iPhone
+// app Task 12 a Core without a token uses paired devices only.
 //
 // ---- Rate limiting ----
 //
@@ -56,7 +55,19 @@
 // independent of the candidate's length, so a caller cannot learn the
 // stored token's length by timing candidates of different sizes.
 //
-// SCOPE BOUNDARY: this class generates, persists and checks one shared
+// ---- iPhone app Task 12: the token is what an upgraded Core has ----
+//
+// Paired devices, each with its own key (DeviceStore, DeviceAuthenticator),
+// replace the token. A new Core creates NO token: this class only loads a
+// token an earlier Core generated, so an upgraded Core stays claimed
+// through it (DeviceStore::isClaimed()) and every window that still signs
+// in with it keeps working, enrolling its own device key as it does, until
+// the token is retired (retire(): the Remote Access page or the console).
+// After that, and on a Core that never had one, there is no token to
+// accept. Nothing in the Core generates one any more; the generation
+// described above is how the token on an upgraded Core came to be.
+//
+// SCOPE BOUNDARY: this class loads, retires and checks one shared
 // secret. It knows nothing about sockets, sessions, TLS, or who is
 // asking. Pairing, rotation, and per-client tokens are later phases (see
 // docs/architecture/2026-08-02-remote-station-identity-and-pairing-
@@ -68,6 +79,12 @@
 // Modification history (NereusSDR):
 //   2026-08-08: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-24: iPhone app Task 12 (R-IOS-08): no token is generated any
+//               more; isActive() and retire(). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 17: moveDamagedAside() for the console's
+//               reset. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
 // =================================================================
 
@@ -95,7 +112,9 @@ public:
     static constexpr int kDefaultLockoutMs = 60000;
 
     // directory is where the token file lives; it is created (mkpath,
-    // recursively) if it does not exist. Defaults to the daemon
+    // recursively) if it does not exist. The token is LOADED from there
+    // when an earlier Core left one; none is ever generated (see the header
+    // comment). Defaults to the daemon
     // profile's own config directory, the same place CertificateStore
     // keeps tls-cert.pem / tls-key.pem. Tests pass an explicit scratch
     // directory so a run never reads back, or overwrites, a real
@@ -112,27 +131,39 @@ public:
     // loser of a rename race accept a token that was not the one on disk.
     static QString defaultDirectory();
 
-    // True once a token is loaded or generated. False means lastError()
-    // names why: the directory could not be created, the file exists but
-    // could not be read, or it could not be written.
+    // False means lastError() names why: the directory could not be
+    // created or a token file exists but could not be read. A Core with no
+    // token file at all is valid and simply not active.
     bool isValid() const { return m_valid; }
 
     // Empty when isValid() is true.
     QString lastError() const { return m_lastError; }
 
-    // Empty when isValid() is false.
+    // Empty unless isActive().
     QString token() const { return m_token; }
+
+    // iPhone app Task 12: true while a token is loaded and not retired, so
+    // a window can still sign in with it (DeviceStore::isClaimed()).
+    bool isActive() const { return m_valid && !m_token.isEmpty(); }
+
+    // iPhone app Task 12: retires the token for good. The file is deleted
+    // and verify() refuses every candidate from then on. False (and the
+    // token stays active) when the file could not be deleted. Retiring a
+    // Core with no token is a success that changes nothing.
+    bool retire();
+
+    // iPhone app Task 17 (R-IOS-08): the console's `reset --unclaimed`. A
+    // token file that exists but could not be read keeps the Core claimed
+    // (DeviceStore::isClaimed()); this renames it to
+    // `station-token.damaged-<UTC time>` (never deleted) and leaves the
+    // store valid with no token. True when the store is valid afterwards;
+    // nothing to do on a valid store.
+    bool moveDamagedAside();
 
     // Absolute path this instance loads from / writes to. Always
     // populated, derived from the constructor's directory argument,
     // regardless of isValid().
     QString tokenPath() const { return m_tokenPath; }
-
-    // True only when THIS construction created the token, i.e. a genuine
-    // first run for this profile. StationServer gates its qCInfo banner
-    // on this so the secret is printed once, at the moment the operator
-    // needs to copy it, rather than into every log file forever.
-    bool wasGeneratedThisRun() const { return m_generatedThisRun; }
 
     // See the class comment for the three results and the constant-time
     // comparison. Not const: it maintains the failure counter.
@@ -156,12 +187,10 @@ public:
 
 private:
     bool loadExisting();
-    bool generateAndStore();
 
     QString m_directory;
     QString m_tokenPath;
     bool    m_valid{false};
-    bool    m_generatedThisRun{false};
     QString m_lastError;
     QString m_token;
 

@@ -8,6 +8,12 @@
 // deliberately has no station-session or radio ownership: it only persists
 // the operator's selection and the credentials needed to make a later
 // authenticated connection attempt.
+//
+// iPhone app Task 18 (R-IOS-08): stored as ConnectionTargets/V2, keyed by
+// `id` with `selectedId` as before, and each record gains the Core's
+// identity fingerprint (connection.identityFingerprint; empty for a Core
+// this computer has not paired with, which stays an address, token and
+// pin). A V1 document is migrated once on load and not read again.
 // =================================================================
 
 #pragma once

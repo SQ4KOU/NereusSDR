@@ -68,6 +68,7 @@ namespace NereusSDR {
 class StationServer;
 struct Ps3Snapshot;
 struct StationLanAnnouncement;
+struct DnsSdRecord;
 }
 
 namespace NereusSDR::Test {
@@ -162,11 +163,26 @@ public:
 /// encodes the expectation again to compare with the committed bytes.
 class LinkMediaVectors {
 public:
+    /// Schema 1, as a Core from before iPhone app Task 16 sends it.
     static NereusSDR::StationLanAnnouncement lanAnnouncement();
+    /// Task 16: schema 2, what a Core sends now: a claimed Core whose
+    /// window was reopened, so it pairs by code.
+    static NereusSDR::StationLanAnnouncement lanAnnouncement2();
+    /// Bytes a later writer might append to schema 2 (a field today's
+    /// reader does not know), for the lan-announcement-2-trailing vector.
+    static QByteArray lanAnnouncementTrailingBytes();
+    /// `schema`, schema 1's fields, and for schema 2 `claimed`, `identity`
+    /// (base64url of the 32 bytes, no padding), `label` and `pairing`
+    /// ("click", "code" or "closed").
     static QJsonObject toJson(const NereusSDR::StationLanAnnouncement& value);
     /// False, with `error` set, when `json` is not one announcement.
     static bool fromJson(const QJsonObject& json, NereusSDR::StationLanAnnouncement* value,
                          QString* error);
+
+    /// Task 16: the Bonjour record of the Core lanAnnouncement2() describes.
+    static NereusSDR::DnsSdRecord dnsSdRecord();
+    /// `serviceType` and `txt`, the TXT record's entries as strings.
+    static QJsonObject toJson(const NereusSDR::DnsSdRecord& record);
 
     static NereusSDR::Ps3Snapshot ps3Snapshot();
     /// Every decoded field of a PS3D frame; the eight value lists as arrays.
@@ -178,6 +194,15 @@ public:
     /// a keyframe, two deltas, and a keyframe the sender was asked for
     /// after the third was lost (encode it with requestKeyframe = true).
     static QList<NereusSDR::DisplayCodecFrame> nsdcFrames();
+    /// The malformed-and-refused vectors, each made from the station
+    /// encoder's own packet of nsdcFrames(): frame 2's delta with its trace
+    /// plane's block size code set to 4 (no such size); frame 2's delta with
+    /// sequence 0 (older than frame 1) and its last byte cut off; frame 4's
+    /// keyframe with its trace plane claiming one block more than its length
+    /// needs.
+    static QByteArray nsdcBadPlaneDelta(const QByteArray& delta);
+    static QByteArray nsdcStaleTruncatedDelta(const QByteArray& delta);
+    static QByteArray nsdcBadBlockCountKeyframe(const QByteArray& keyframe);
     /// A decode result as the vector's expectation holds it: disposition
     /// and reason by name, and the frame's fields when it was accepted.
     static QJsonObject toJson(const NereusSDR::DisplayCodecDecodeResult& result);

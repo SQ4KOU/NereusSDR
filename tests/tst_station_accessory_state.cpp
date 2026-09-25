@@ -62,6 +62,7 @@
 #include "models/SliceModel.h"
 
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::LoopbackTransport;
@@ -591,7 +592,7 @@ private slots:
                  {QStringLiteral("vac"), QStringLiteral("240")}});
             AppSettings settings(dir.filePath(QStringLiteral("s-%1-%2.settings")
                                                   .arg(owns).arg(minor)));
-            StationServer server(&station, settings, dir.path());
+            StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
             LoopbackTransport* peer = nullptr;
             connectRawPeer(this, server, minor, &peer);
             QTRY_VERIFY(snapshotDone(peer));
@@ -636,19 +637,28 @@ private slots:
         for (const SessionMessage& m : current) {
             if (m.kind == SessionMessageKind::Capabilities) {
                 caps = StationCapabilities::fromUpdates(m.updates);
-                QCOMPARE(m.updates.at(m.updates.size() - 5).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 8).name,
                          QByteArrayLiteral("remotePgxlControlVersion"));
-                QCOMPARE(m.updates.at(m.updates.size() - 4).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 7).name,
                          QByteArrayLiteral("remoteRfKitControlVersion"));
                 // R-R3-48: then the station TCI server's version.
-                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 6).name,
                          QByteArrayLiteral("stationTciVersion"));
                 // R-R3-47: then the accessory records' version.
-                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 5).name,
                          QByteArrayLiteral("accessoryDataVersion"));
-                // R-R3-47: the Tuner Genius's own settings travel last.
-                QCOMPARE(m.updates.constLast().name,
+                // R-R3-47: then the Tuner Genius's own settings.
+                QCOMPARE(m.updates.at(m.updates.size() - 4).name,
                          QByteArrayLiteral("remoteTgxlControlVersion"));
+                // iPhone app Task 12: then device sign-in by key.
+                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
+                         QByteArrayLiteral("stationIdentityVersion"));
+                // iPhone app Task 13: then device administration.
+                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
+                         QByteArrayLiteral("deviceAdminVersion"));
+                // iPhone app Task 14: pairing travels last.
+                QCOMPARE(m.updates.constLast().name,
+                         QByteArrayLiteral("pairingVersion"));
             }
             if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "amplifier") {
                 sawAmplifier = true;
@@ -751,7 +761,7 @@ private slots:
             }
             AppSettings settings(dir.filePath(QStringLiteral("v-%1-%2.settings")
                                                   .arg(owns).arg(minor)));
-            StationServer server(&station, settings, dir.path());
+            StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
             LoopbackTransport* peer = nullptr;
             connectRawPeer(this, server, minor, &peer);
             [&] { QTRY_VERIFY(snapshotDone(peer)); }();

@@ -55,6 +55,7 @@
 #include <QTemporaryDir>
 
 #include <memory>
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::ConnectableRadioModel;
@@ -194,7 +195,7 @@ void establishStreaming(TransitionHarness& h)
 
     h.settings = std::make_unique<AppSettings>(
         h.directory.filePath(QStringLiteral("station.settings")));
-    h.server = std::make_unique<StationServer>(&model, *h.settings, h.directory.path());
+    h.server = std::make_unique<StationServer>(&model, *h.settings, NereusSDR::Test::seedUpgradedCoreToken(h.directory.path()));
     h.client = std::make_unique<StationClient>(&h.remote, &h.settingsProxy);
     h.controller = std::make_unique<DaemonMediaController>(
         h.server.get(), &model, nullptr,

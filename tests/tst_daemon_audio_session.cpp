@@ -23,6 +23,7 @@
 
 #include <QPointer>
 #include <QTemporaryDir>
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 
@@ -110,7 +111,7 @@ struct Harness {
 
     Harness()
         : settings(directory.filePath(QStringLiteral("station.settings")))
-        , server(&radio, settings, directory.path())
+        , server(&radio, settings, NereusSDR::Test::seedUpgradedCoreToken(directory.path()))
         , controller(&server, &radio, nullptr,
                      [this](QObject* parent) -> IMediaTransport* {
                          mediaTransport = new FakeTransport(parent);

@@ -158,6 +158,20 @@
 //                                    R-R3-21): the accessory settings and
 //                                    RF-Kit reset refusals in plain words.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08,
+//                                    R-IOS-02, R-IOS-01): the Core's own
+//                                    identity key and paired devices; the
+//                                    hello carries the identity, its
+//                                    certificate binding and a per-
+//                                    connection challenge and declares
+//                                    deviceAuth 1; device sign-in with its
+//                                    own rate limits; a window signing in
+//                                    with the token enrols its device key;
+//                                    a Core without a token refuses token
+//                                    sign-in; an end code on every
+//                                    permanent end; stationIdentityVersion
+//                                    1. AI-assisted via Anthropic Claude
+//                                    Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 completion carry, review I1
 //                                    (R-R3-21, R-R3-38, R-IOS-01): the
 //                                    takeover and version reasons come from
@@ -171,6 +185,44 @@
 //                                    (setTgxlOperate on puts the tuner in
 //                                    OPERATE whole).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08): the
+//                                    `devices` object and deviceAdminVersion
+//                                    1 for a device at minor 11 whose hello
+//                                    declares deviceAuth; its four verbs; a
+//                                    removed device's connection and every
+//                                    token connection after the token is
+//                                    retired end at once (the requester's
+//                                    own just after its result); the plain
+//                                    refusal of a raw StationLabel remove.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08, D37):
+//                                    the pairing window; pair.start in LAN
+//                                    mode (unclaimed, allowed, on a
+//                                    directly connected network) and code
+//                                    mode (SPAKE2+EE, the code taken once
+//                                    and burned on anything but success);
+//                                    features.pairing and pairingVersion;
+//                                    pairing.open and pairing.close; the
+//                                    code on the console and only to a
+//                                    connection signed in with a paired
+//                                    device's key. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the pairing code is never printed
+//               to standard output (the journal on a packaged Core). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
+//   2026-09-24: Part C follow-up (R-IOS-08): IPv6 peers counted per /64
+//               in the handshake cap; pairing.open refused to a token
+//               session. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -180,6 +232,12 @@
 #include "core/HardwareProfile.h"
 #include "core/dsp/NnrSettings.h"
 #include "core/security/CertificateStore.h"
+#include "core/security/DeviceAuthenticator.h"
+#include "core/security/DeviceStore.h"
+#include "core/security/PairingCode.h"
+#include "core/security/PairingWindow.h"
+#include "core/security/SpakeExchange.h"
+#include "core/security/StationIdentity.h"
 #include "core/security/TokenStore.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
@@ -188,6 +246,7 @@
 #include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/StateMirror.h"
+#include "core/session/StationDevicesFacade.h"
 #include "core/settings/SettingsProxyServer.h"
 #include "core/settings/SettingsScope.h"
 #include "models/NotchModel.h"
@@ -210,10 +269,14 @@
 #include "models/AccessorySettingsModel.h"
 #include "models/TunerModel.h"
 
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLoggingCategory>
+#include <QNetworkInterface>
 #include <QSet>
 #include <QSslConfiguration>
 #include <QSslSocket>
+#include <QThread>
 #include <QTimer>
 #include <QWebSocket>
 #include <QWebSocketServer>
@@ -402,6 +465,48 @@ bool isAccessoryDataMessage(const SessionMessage& message)
 // 1): the amp's and tuner's own settings, read-only, for a peer at
 // kRadioIdentitySessionProtocolMinor on a Core that owns its accessories.
 constexpr const char* kAccessorySettingsKey = "accessorySettings";
+
+// iPhone app Task 13 (R-IOS-08, deviceAdminVersion 1): the Core's paired
+// devices and label, read-only, for a device at
+// kRadioIdentitySessionProtocolMinor whose hello declares deviceAuth. Any
+// other peer never sees the object, so its burst is today's.
+constexpr const char* kDevicesKey = "devices";
+
+bool isDevicesMessage(const SessionMessage& message)
+{
+    return message.objectKey == kDevicesKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "StationDevicesFacade");
+}
+
+bool isDeviceAdminVerb(const QByteArray& verb)
+{
+    return verb == "devices.revoke" || verb == "station.rename"
+        || verb == "station.acknowledgeKeyBackup" || verb == "station.retireToken";
+}
+
+// iPhone app Task 14 (R-IOS-08, pairingVersion 1): the pairing window's
+// verbs, for the same peers as the device administration verbs.
+bool isPairingVerb(const QByteArray& verb)
+{
+    return verb == "pairing.open" || verb == "pairing.close";
+}
+
+// The `devices` property that carries the pairing code.
+constexpr const char* kPairingCodeProperty = "pairingCode";
+
+// The settings the devices object reads: its label and key backup.
+bool isDevicesSettingsKey(const QString& key)
+{
+    return key.compare(QLatin1String("StationCallsign"), Qt::CaseInsensitive) == 0
+        || isCoreOwnedIdentitySettingsKey(key);
+}
+
+// iPhone app Task 13: why a connection ends when its device is removed, and
+// when the token it signed in with is retired (Task 12's pairing text).
+constexpr const char* kDeviceRemovedReason = "This device was removed from the Core.";
+constexpr const char* kPairingRequiredReason =
+    "This Core uses paired devices. Pair this device first.";
 
 bool isAccessorySettingsMessage(const SessionMessage& message)
 {
@@ -623,6 +728,28 @@ void writePairingBanner(const QString& banner)
 }
 } // namespace
 
+// iPhone app Task 14 (R-IOS-08): one connection's pairing, from its
+// pair.start until the connection ends.
+struct StationServer::PairingAttempt {
+    bool codeMode = false;
+    /// The device's key as pair.start sent it (base64url) and as SPKI DER.
+    QString publicKeyText;
+    QByteArray publicKeySpki;
+    QString name;
+    QString kind;
+    /// Code mode: the code this exchange started on, the exchange, and the
+    /// device's next message: its step 1, then its step 3, then its box.
+    quint64 codeSerial = 0;
+    std::unique_ptr<SpakeExchange> exchange;
+    int expecting = 1;
+    /// Waiting for the code's hash (a worker) before step 0 is sent.
+    bool awaitingHash = false;
+    /// The window gave this exchange the code: from here the code is
+    /// paired with or burned (dropPeer burns it unless `finished`).
+    bool codeTaken = false;
+    bool finished = false;
+};
+
 StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                              const QString& securityDirectory, QObject* parent,
                              const QList<quint16>& supportedMajors)
@@ -648,36 +775,91 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     }
 
     m_certificates = std::make_unique<CertificateStore>(m_securityDirectory);
+    // iPhone app Task 12: loaded when an earlier Core left one, never
+    // created (TokenStore.h).
     m_tokens = std::make_unique<TokenStore>(m_securityDirectory);
+    m_identity = std::make_unique<StationIdentity>(
+        StationIdentity::loadOrCreate(m_securityDirectory));
+    m_devices = std::make_unique<DeviceStore>(m_securityDirectory, m_tokens.get());
+    m_deviceAuth = std::make_unique<DeviceAuthenticator>(*m_devices, *m_identity);
+    // iPhone app Task 13 (R-IOS-08): the `devices` object. A device removed
+    // by anything (devices.revoke, the console, a reset) loses its
+    // connection at once; so does every connection signed in with the token
+    // once it is retired.
+    // iPhone app Task 14: the pairing window before the devices object, so
+    // it follows a change of the device store first and the object then
+    // counts the change once.
+    m_pairingWindow = std::make_unique<PairingWindow>(*m_devices);
+    m_pairingHasher = &SpakeExchange::storedData;
+    m_devicesFacade = std::make_unique<StationDevicesFacade>(
+        *m_devices, *m_tokens, *m_identity, m_settings, nullptr, m_pairingWindow.get());
+    connect(m_devices.get(), &DeviceStore::deviceRemoved, this, [this](const QByteArray& id) {
+        endAuthenticatedPeers([&id](const Peer& peer) { return peer.deviceId == id; },
+                              QString::fromLatin1(kDeviceRemovedReason),
+                              SessionEndCode::kDeviceRemoved);
+    });
+    connect(m_devicesFacade.get(), &StationDevicesFacade::tokenRetired, this, [this]() {
+        endAuthenticatedPeers([](const Peer& peer) { return peer.signedInWithToken; },
+                              QString::fromLatin1(kPairingRequiredReason),
+                              SessionEndCode::kPairingRequired);
+    });
+    if (m_certificates->isValid()) {
+        // The pin is the certificate's SHA-256 (CertificateStore), which is
+        // exactly the hash a device signs and the binding covers.
+        QString hex = m_certificates->fingerprintSha256();
+        hex.remove(QLatin1Char(':'));
+        m_certSha256 = QByteArray::fromHex(hex.toLatin1());
+    }
+    if (m_identity->isValid() && m_certSha256.size() == 32) {
+        m_certBinding = m_identity->certBinding(m_certSha256);
+        m_declaredFeatures.insert(QByteArrayLiteral("deviceAuth"), 1);
+        // iPhone app Task 14: pairing needs the identity key too (the
+        // device learns it from the Core's pair.accept or box). Declared by
+        // the Core only, and never asked of a client.
+        if (SpakeExchange::isAvailable()) {
+            m_declaredFeatures.insert(QByteArrayLiteral("pairing"), 1);
+        }
+    }
 
-    // Step 4: the token distribution mechanism parent section 7.1 requires
-    // be specified before R2. Printed ONCE, on the run that generates it,
-    // beside the certificate fingerprint the client pins (section 10.5) --
-    // the two things an operator has to carry to the client by hand, in
-    // one place, at the one moment they are new. Deliberately not repeated
-    // on later starts: a secret echoed into every log file forever is a
-    // different problem from a secret nobody can find.
-    if (m_tokens->wasGeneratedThisRun()) {
-        writePairingBanner(formatPairingBanner(m_tokens->token(),
-                                               m_certificates->fingerprintSha256(),
-                                               m_securityDirectory));
-        // The LOG gets a pointer, never either secret. Without this line a
-        // first run leaves no trace at all in the file an operator goes
-        // looking in, which is its own support problem; with it, the log
-        // says what happened and where the values went without carrying
-        // them. See writePairingBanner() for why they went to stdout.
+    // iPhone app Task 14 (R-IOS-08): the pairing window follows the device
+    // store (open with no timer while unclaimed). The `devices` object
+    // shows it, and the stored data for the old code is wiped. The code is
+    // never printed or logged (Part C fix wave: standard output is the
+    // journal on a packaged Core); `nereusd pairing show` gives it.
+    connect(m_pairingWindow.get(), &PairingWindow::codeChanged, this,
+            [this](const QString& code) {
+                if (m_pairingStoredSerial != m_pairingWindow->codeSerial() || code.isEmpty()) {
+                    SpakeExchange::wipe(m_pairingStored);
+                    m_pairingStoredSerial = 0;
+                }
+            });
+
+    // The first start of a Core: the TLS pin a window checks and where the
+    // identity key lives, with the prompt to back it up (pairing design
+    // section 3.2: losing it means every paired device pairs again).
+    // Printed ONCE, on the run that creates the key. There is no secret in
+    // it any more (a new Core has no token), but it still goes to stdout
+    // rather than the log: see writePairingBanner() for what the logging
+    // handler used to do to the fingerprint.
+    if (m_identity->wasCreatedThisRun()) {
+        writePairingBanner(formatFirstRunBanner(m_certificates->fingerprintSha256(),
+                                                m_identity->keyPath()));
         qCInfo(lcStation)
-            << "First run for this profile: a pairing token and a TLS certificate "
-               "fingerprint were generated and printed to stdout. Both are "
-               "deliberately kept out of this log file.";
+            << "First run for this profile: the Core's identity key was created and "
+               "its location and TLS certificate fingerprint were printed to stdout.";
+    }
+    if (!m_identity->isValid()) {
+        qCWarning(lcStation) << "The Core's identity key is unavailable:"
+                             << m_identity->lastError();
     }
     if (!m_tokens->isValid()) {
-        qCWarning(lcStation) << "Auth token unavailable:" << m_tokens->lastError();
+        qCWarning(lcStation) << "Pairing token unavailable:" << m_tokens->lastError();
     }
 
     m_mirror = new StateMirror(this);
     m_registry = new ObjectRegistry(radioModel, m_mirror, this);
     m_dispatcher = new SessionCommandDispatcher(radioModel, this);
+    m_dispatcher->setDeviceAdmin(m_devicesFacade.get());
     m_settingsServer = new SettingsProxyServer(settings, this);
     // R-R3-46: the Core applies hardware settings for its connected radio
     // only; a write naming any other radio's MAC is refused.
@@ -730,6 +912,20 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // default too rather than keep the last value it was given. The schema
     // v7 reset is not seen here: it runs in CoreInit before this server
     // exists, and the radio reads the reset value when it connects.
+    // iPhone app Task 13: the devices object's label follows StationCallsign
+    // until a rename, and its key backup follows its setting.
+    connect(m_settingsServer, &SettingsProxyServer::outboundValueChanged, this,
+            [this](const QString& key, const QVariant&, const QString&) {
+                if (isDevicesSettingsKey(key)) {
+                    m_devicesFacade->refresh();
+                }
+            });
+    connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
+            [this](const QString& key) {
+                if (isDevicesSettingsKey(key)) {
+                    m_devicesFacade->refresh();
+                }
+            });
     connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
             [this](const QString& key) {
                 if (key == QLatin1String("NetworkWatchdogEnabled") && m_radioModel) {
@@ -790,6 +986,11 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
 
 StationServer::~StationServer()
 {
+    // iPhone app Task 14: a pairing code being hashed finishes first; its
+    // result is dropped with this object.
+    if (m_pairingHashThread) {
+        m_pairingHashThread->wait();
+    }
     close();
 }
 
@@ -823,12 +1024,13 @@ bool StationServer::listen(const QHostAddress& address, quint16 port)
         qCWarning(lcStation) << "Refusing to listen:" << m_lastError;
         return false;
     }
-    if (!m_tokens->isValid()) {
-        // Listening with no token would accept nobody, forever, while
-        // looking healthy. Refuse loudly instead.
-        m_lastError = m_tokens->lastError().isEmpty()
-                          ? QStringLiteral("No authentication token available")
-                          : m_tokens->lastError();
+    if (!m_identity->isValid()) {
+        // iPhone app Task 12: listening without the Core's identity would
+        // accept no device, forever, while looking healthy (and a new Core
+        // has no token either). Refuse loudly instead.
+        m_lastError = m_identity->lastError().isEmpty()
+                          ? QStringLiteral("The Core's own key is unavailable")
+                          : m_identity->lastError();
         qCWarning(lcStation) << "Refusing to listen:" << m_lastError;
         return false;
     }
@@ -933,23 +1135,164 @@ QString StationServer::certificateFingerprint() const
     return m_certificates != nullptr ? m_certificates->fingerprintSha256() : QString();
 }
 
-QString StationServer::formatPairingBanner(const QString& token,
-                                           const QString& fingerprint,
-                                           const QString& storedIn)
+DeviceStore* StationServer::deviceStore() const
+{
+    return m_devices.get();
+}
+
+const StationIdentity& StationServer::stationIdentity() const
+{
+    return *m_identity;
+}
+
+StationDevicesFacade* StationServer::devicesFacade() const
+{
+    return m_devicesFacade.get();
+}
+
+int StationServer::deviceAdminVersion() const
+{
+    // The same condition as stationIdentityVersion: a Core that signs
+    // devices in by key can list and administer them.
+    return m_certBinding.isEmpty() ? 0 : 1;
+}
+
+PairingWindow* StationServer::pairingWindow() const
+{
+    return m_pairingWindow.get();
+}
+
+int StationServer::pairingVersion() const
+{
+    return m_declaredFeatures.value(QByteArrayLiteral("pairing"), 0) >= 1 ? 1 : 0;
+}
+
+void StationServer::printToConsole(const QString& text)
+{
+    writePairingBanner(text);
+}
+
+QString StationServer::addressKey(const QString& address)
+{
+    if (address.isEmpty()) {
+        return {};
+    }
+    QHostAddress host(address);
+    if (host.isNull()) {
+        return address;
+    }
+    bool mapped = false;
+    const quint32 ipv4 = host.toIPv4Address(&mapped);
+    if (mapped) {
+        // IPv4, and IPv4-mapped IPv6, by the full address.
+        return QHostAddress(ipv4).toString();
+    }
+    if (host.protocol() != QAbstractSocket::IPv6Protocol) {
+        return host.toString();
+    }
+    // Part C follow-up (R-IOS-08): an IPv6 host is handed a whole /64 and
+    // can dial from any address in it, so IPv6 peers are counted by their
+    // /64 prefix. A household on one /64 then shares the two connecting
+    // slots the way one behind IPv4 NAT does; signed-in sessions are not
+    // counted, and the refusal is retryable.
+    Q_IPV6ADDR bytes = host.toIPv6Address();
+    for (int i = 8; i < 16; ++i) {
+        bytes[i] = 0;
+    }
+    return QHostAddress(bytes).toString() + QStringLiteral("/64");
+}
+
+bool StationServer::isOnDirectNetwork(const QString& address)
+{
+    if (address.isEmpty()) {
+        return false;
+    }
+    QHostAddress peer(address);
+    if (peer.isNull()) {
+        return false;
+    }
+    if (peer.isLoopback()) {
+        return true;
+    }
+    bool mapped = false;
+    const quint32 ipv4 = peer.toIPv4Address(&mapped);
+    if (mapped) {
+        peer = QHostAddress(ipv4);
+    }
+    const QList<QNetworkInterface> interfaces = QNetworkInterface::allInterfaces();
+    for (const QNetworkInterface& interface : interfaces) {
+        const auto flags = interface.flags();
+        if (!flags.testFlag(QNetworkInterface::IsUp)
+            || !flags.testFlag(QNetworkInterface::IsRunning)) {
+            continue;
+        }
+        const QList<QNetworkAddressEntry> entries = interface.addressEntries();
+        for (const QNetworkAddressEntry& entry : entries) {
+            const int prefix = entry.prefixLength();
+            if (prefix < 0 || entry.ip().protocol() != peer.protocol()) {
+                continue;
+            }
+            // Scope ids are not part of the subnet question.
+            QHostAddress ip = entry.ip();
+            ip.setScopeId(QString());
+            QHostAddress candidate = peer;
+            candidate.setScopeId(QString());
+            if (candidate.isInSubnet(ip, prefix)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void StationServer::publishConnectedDevices()
+{
+    if (!m_devicesFacade) {
+        return;
+    }
+    QSet<QByteArray> connected;
+    for (const Peer& peer : std::as_const(m_peers)) {
+        if (peer.authenticated && !peer.deviceId.isEmpty()) {
+            connected.insert(peer.deviceId);
+        }
+    }
+    m_devicesFacade->setConnectedDevices(connected);
+}
+
+void StationServer::endAuthenticatedPeers(const std::function<bool(const Peer&)>& matches,
+                                          const QString& reason, const char* endCode)
+{
+    // Copied: dropPeer() erases from m_peers.
+    const QList<SessionTransport*> transports = m_peers.keys();
+    for (SessionTransport* transport : transports) {
+        const auto it = m_peers.constFind(transport);
+        if (it == m_peers.cend() || !it->authenticated || !matches(*it)) {
+            continue;
+        }
+        if (transport == m_dispatchingTransport) {
+            // Its own request did this: the result goes out first.
+            m_pendingEnd = std::make_pair(reason, QString::fromLatin1(endCode));
+            continue;
+        }
+        dropPeer(transport, reason, true, /*retryable=*/false, QString::fromLatin1(endCode));
+    }
+}
+
+QString StationServer::formatFirstRunBanner(const QString& fingerprint,
+                                            const QString& identityKeyPath)
 {
     return QStringLiteral(
                "\n"
                "  ============================================================\n"
-               "  NereusSDR Core: first run, pairing details\n"
+               "  NereusSDR Core: first run\n"
                "  ------------------------------------------------------------\n"
-               "  Token:       %1\n"
-               "  TLS SHA-256: %2\n"
-               "  Stored in:   %3\n"
+               "  TLS SHA-256:  %1\n"
+               "  Identity key: %2\n"
                "  ------------------------------------------------------------\n"
-               "  Give both to the client. They are printed once, here, on\n"
-               "  stdout, and are deliberately kept out of the log file.\n"
+               "  Back up the identity key file. It is this Core's identity:\n"
+               "  if it is lost, every paired device has to pair again.\n"
                "  ============================================================\n")
-        .arg(token, fingerprint, storedIn);
+        .arg(fingerprint, identityKeyPath);
 }
 
 bool StationServer::hasAuthenticatedSession() const
@@ -1006,9 +1349,39 @@ void StationServer::acceptTransport(SessionTransport* transport)
         return;
     }
 
+    // Part C fix wave (R1-M4): one address holds at most
+    // kMaxHandshakesPerAddress of the slots while it is still connecting,
+    // so a host on the internet cannot keep the phone out by holding every
+    // one of them. The same retryable refusal as the cap above.
+    const QString address = addressKey(transport->peerAddress());
+    if (!address.isEmpty()) {
+        int connecting = 0;
+        for (const Peer& other : std::as_const(m_peers)) {
+            if (!other.snapshotComplete && other.transport != nullptr
+                && addressKey(other.transport->peerAddress()) == address) {
+                ++connecting;
+            }
+        }
+        if (connecting >= kMaxHandshakesPerAddress) {
+            qCWarning(lcStation) << "Refusing connection from" << transport->peerDescription()
+                                 << ": that address already has" << connecting
+                                 << "connections still connecting";
+            const QString reason = QStringLiteral(
+                "The Core already has as many connections as it allows. Try again shortly.");
+            transport->sendText(SessionMessages::encode(
+                SessionMessages::sessionEnd(reason, /*retryable=*/true)));
+            transport->closeLink(reason);
+            transport->deleteLater();
+            return;
+        }
+    }
+
     Peer peer;
     peer.transport = transport;
     peer.description = transport->peerDescription();
+    // iPhone app Task 12: this connection's own challenge, so a signature
+    // made for another connection never verifies on this one.
+    peer.challenge = m_deviceAuth->newChallenge();
 
     // Finish-the-handshake-or-drop. Parented to the transport so it cannot
     // outlive the peer it is about, and stopped once this peer's snapshot
@@ -1066,11 +1439,21 @@ void StationServer::acceptTransport(SessionTransport* transport)
     // leaves unless it is the one major it speaks, so the newest there would
     // turn away every such client this station could still serve (spec D39).
     // A client that reads `majors` ignores `major`.
-    send(transport,
-         SessionMessages::hello(m_supportedMajors.first(), kSessionProtocolMinor,
-                                settingsSchemaVersionOf(m_settings),
-                                peerNameForThisProcess(), m_supportedMajors,
-                                m_declaredFeatures));
+    SessionMessage hello =
+        SessionMessages::hello(m_supportedMajors.first(), kSessionProtocolMinor,
+                               settingsSchemaVersionOf(m_settings), peerNameForThisProcess(),
+                               m_supportedMajors, m_declaredFeatures);
+    // iPhone app Task 12 (R-IOS-08): the Core's identity key, its binding
+    // to the certificate this connection presents, and the challenge a
+    // paired device signs. An older app ignores all three.
+    if (!m_certBinding.isEmpty()) {
+        hello.stationIdentity = SessionStationIdentity{
+            StationIdentity::toBase64Url(m_identity->publicKeySpki()),
+            StationIdentity::toBase64Url(m_certBinding),
+        };
+        hello.challenge = StationIdentity::toBase64Url(peer.challenge);
+    }
+    send(transport, hello);
 
     qCDebug(lcStation) << "Peer attached:" << peer.description;
 }
@@ -1082,7 +1465,7 @@ void StationServer::onTransportClosed(SessionTransport* transport)
 }
 
 void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
-                             bool sendSessionEnd, bool retryable)
+                             bool sendSessionEnd, bool retryable, const QString& endCode)
 {
     auto it = m_peers.find(transport);
     if (it == m_peers.end()) {
@@ -1091,9 +1474,18 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     const QString description = it->description;
 
     if (sendSessionEnd) {
-        send(transport, SessionMessages::sessionEnd(reason, retryable));
+        send(transport, SessionMessages::sessionEnd(reason, retryable, endCode));
     }
+    // iPhone app Task 14: a code this connection took and did not pair
+    // with is burned, however the connection ends (a wrong code, a device
+    // that gave up after its own step 3, a dropped link, the deadline).
+    const std::shared_ptr<PairingAttempt> pairing = it->pairing;
     m_peers.erase(it);
+    if (pairing && pairing->codeTaken && !pairing->finished) {
+        pairing->finished = true;
+        m_pairingWindow->pairingFailed();
+    }
+    publishConnectedDevices();
 
     if (m_session == transport) {
         m_session = nullptr;
@@ -1202,7 +1594,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
     SessionMessage message;
     if (!SessionMessages::decode(wire, &message)) {
         dropPeer(transport, QStringLiteral("The Core could not read a message from this app."), true,
-                 /*retryable=*/false);
+                 /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
         return;
     }
 
@@ -1213,6 +1605,22 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
     case SessionMessageKind::AuthRequest:
         handleAuthRequest(transport, message);
         return;
+    // iPhone app Task 14: pairing runs in place of a sign-in.
+    case SessionMessageKind::PairStart:
+        handlePairStart(transport, message);
+        return;
+    case SessionMessageKind::PairSpake:
+        handlePairSpake(transport, message);
+        return;
+    case SessionMessageKind::PairConfirm:
+        handlePairConfirm(transport, message);
+        return;
+    case SessionMessageKind::PairFail:
+        if (!it->authenticated) {
+            handlePairFailFromDevice(transport);
+            return;
+        }
+        break;
     default:
         break;
     }
@@ -1221,7 +1629,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
         // Everything below this line moves radio or settings state. A peer
         // that has not proved it holds the token gets exactly one answer.
         dropPeer(transport, QStringLiteral("This app sent a request before the Core had accepted its pairing token."), true,
-                 /*retryable=*/false);
+                 /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
         return;
     }
 
@@ -1378,7 +1786,61 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 QStringLiteral("Update this app to use C-Tune on this Core."), {}));
             break;
         }
-        m_dispatcher->dispatch(message);
+        // iPhone app Task 13 (R-IOS-08): the device administration verbs
+        // came with deviceAdminVersion 1, for a device at minor 11 that
+        // declares deviceAuth (the peers the `devices` object goes to).
+        if (isDeviceAdminVerb(message.commandVerb)
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || !peerDeclares(transport, QByteArrayLiteral("deviceAuth"), 1)
+                || deviceAdminVersion() < 1)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                deviceAdminVersion() < 1
+                    ? QStringLiteral("This Core cannot manage its paired devices.")
+                    : QStringLiteral("Update this app to manage this Core's paired devices."),
+                {}));
+            break;
+        }
+        // iPhone app Task 14 (R-IOS-08): the pairing window's verbs came
+        // with pairingVersion 1, for the same peers.
+        if (isPairingVerb(message.commandVerb)
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || !peerDeclares(transport, QByteArrayLiteral("deviceAuth"), 1)
+                || pairingVersion() < 1)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                pairingVersion() < 1
+                    ? QStringLiteral("This Core cannot pair new devices.")
+                    : QStringLiteral("Update this app to pair new devices with this Core."),
+                {}));
+            break;
+        }
+        // Part C follow-up (R-IOS-08): only a device signed in with its own
+        // key reopens pairing. A window signed in with the pairing token is
+        // refused before the dispatcher sees the verb; pairing.close stays
+        // open to it, since closing only narrows who can pair.
+        if (message.commandVerb == "pairing.open" && !peerSeesPairingCode(transport)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("Open pairing from a paired device or from the Core's console."),
+                {}));
+            break;
+        }
+        {
+            // A revoke of the requester's own device, or a token session
+            // retiring the token, ends this connection only after its
+            // result (sent synchronously by dispatch()) has gone out.
+            m_dispatchingTransport = transport;
+            m_pendingEnd.reset();
+            m_dispatcher->dispatch(message);
+            m_dispatchingTransport = nullptr;
+            if (m_pendingEnd) {
+                const auto [reason, code] = *m_pendingEnd;
+                m_pendingEnd.reset();
+                dropPeer(transport, reason, true, /*retryable=*/false, code);
+                return;
+            }
+        }
         break;
     case SessionMessageKind::MediaControl:
         if (transport == m_session && mediaAvailable()) {
@@ -1411,7 +1873,8 @@ void StationServer::handleHello(SessionTransport* transport, const SessionMessag
         return;
     }
     if (it->helloReceived) {
-        dropPeer(transport, QStringLiteral("This app started connecting twice on one connection."), true, /*retryable=*/false);
+        dropPeer(transport, QStringLiteral("This app started connecting twice on one connection."), true, /*retryable=*/false,
+                 QString::fromLatin1(SessionEndCode::kProtocolError));
         return;
     }
     it->helloReceived = true;
@@ -1432,7 +1895,8 @@ void StationServer::handleHello(SessionTransport* transport, const SessionMessag
         // NOT retryable: an incompatible wire contract does not become
         // compatible by being dialed again. The operator has to upgrade
         // one end.
-        dropPeer(transport, reason, true, /*retryable=*/false);
+        dropPeer(transport, reason, true, /*retryable=*/false,
+                 QString::fromLatin1(SessionEndCode::kLinkVersion));
         return;
     }
     it->agreedMajor = message.protocolMajor;
@@ -1468,50 +1932,600 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
         return;
     }
     if (!it->helloReceived) {
-        dropPeer(transport, QStringLiteral("This app sent its pairing token out of order."), true, /*retryable=*/false);
+        dropPeer(transport, QStringLiteral("This app sent its pairing token out of order."), true, /*retryable=*/false,
+                 QString::fromLatin1(SessionEndCode::kProtocolError));
         return;
     }
-    if (it->authenticated) {
-        dropPeer(transport, QStringLiteral("This app sent its pairing token out of order."), true, /*retryable=*/false);
+    // iPhone app Task 14: a pairing connection never signs in; the device
+    // signs in on a new connection once paired.
+    if (it->authenticated || it->pairing) {
+        dropPeer(transport, QStringLiteral("This app sent its pairing token out of order."), true, /*retryable=*/false,
+                 QString::fromLatin1(SessionEndCode::kProtocolError));
         return;
     }
 
     const QString description = it->description;
+    const QByteArray challenge = it->challenge;
+    const QString address = transport->peerAddress();
 
-    // The candidate token is never logged, at any level, on any path.
-    const TokenStore::VerifyResult result = m_tokens->verify(message.token);
-    if (result != TokenStore::VerifyResult::Accepted) {
-        // THE distinction TokenStore.h says the two results exist to
-        // preserve, carried through to the client's retry policy.
-        //
-        // RateLimited is retryable: it is transient BY CONSTRUCTION -- the
-        // lockout expires on TokenStore's own timer, and the refusal text
-        // literally says "try again later". Crucially, the rate limiter is
-        // global rather than per-peer (TokenStore.h:44-48 says so outright:
-        // a lockout refuses a connection "including one carrying the
-        // correct token"), so five bad guesses from anyone who can reach
-        // the port refuse the OPERATOR too. Marked permanent, that turned
-        // somebody else's failed guesses into the operator being locked
-        // out of their own station with no automatic recovery.
-        //
-        // Rejected is NOT retryable: the token is simply wrong, redialing
-        // cannot make it right, and a client that retried forever would
-        // feed the very rate limiter above and keep the station locked out
-        // on the operator's own behalf.
-        const bool rateLimited = result == TokenStore::VerifyResult::RateLimited;
-        const QString reason =
-            rateLimited
-                ? QStringLiteral("The Core is refusing pairing tokens for a while after too many wrong ones. Try again later.")
-                : QStringLiteral("The Core did not accept this app's pairing token. Check the token saved for this Core.");
-        send(transport, SessionMessages::authResult(false, reason, rateLimited));
+    // One refusal shape for every path below: auth.result carrying the
+    // reason, the retry advice and the end code, then the close. Nothing
+    // here ever logs a candidate token, a signature or a key.
+    const auto refuse = [this, transport, &description](const QString& reason, bool retryable,
+                                                        const char* code) {
+        const QString endCode = code != nullptr ? QString::fromLatin1(code) : QString();
+        send(transport, SessionMessages::authResult(false, reason, retryable, endCode));
         qCWarning(lcStation) << "Authentication refused for" << description << ":" << reason;
-        dropPeer(transport, reason, false, rateLimited);
+        dropPeer(transport, reason, false, retryable);
+    };
+
+    // iPhone app Task 12 (R-IOS-08): what a device sends, as the
+    // authenticator reads it. The address is the peer's own; over the
+    // relay (Part E) it is empty and the limits key on the introduction.
+    DeviceAuthRequest request;
+    if (message.device) {
+        request.id = message.device->id;
+        request.publicKey = message.device->publicKey;
+        request.name = message.device->name;
+        request.kind = message.device->kind;
+        request.signature = message.device->signature;
+        request.sourceAddress = address;
+    }
+
+    QByteArray deviceId;
+    if (message.device && message.token.isEmpty()) {
+        // ── A paired device signing in with its own key ──
+        //
+        // The device limiter only: the token's limiter is never consulted,
+        // so wrong tokens from anyone cannot lock out a device's key, and
+        // this path's failures never count against the token.
+        const AuthOutcome outcome = m_deviceAuth->verify(request, challenge, m_certSha256);
+        switch (outcome.result) {
+        case AuthOutcome::Result::Admitted:
+            deviceId = outcome.deviceId;
+            break;
+        case AuthOutcome::Result::RateLimited:
+            // Retryable: it clears by itself after the lockout.
+            refuse(QStringLiteral("The Core is refusing sign-ins from this device for a while after too many failed ones. Try again later."),
+                   /*retryable=*/true, nullptr);
+            return;
+        case AuthOutcome::Result::NotPaired:
+            refuse(QStringLiteral("This device is not paired with this Core. Pair it first."),
+                   /*retryable=*/false, SessionEndCode::kDeviceNotPaired);
+            return;
+        case AuthOutcome::Result::Proved:
+        case AuthOutcome::Result::ProofFailed:
+            refuse(QStringLiteral("This device could not prove it is paired with this Core."),
+                   /*retryable=*/false, SessionEndCode::kDeviceProofFailed);
+            return;
+        }
+    } else {
+        // ── The pairing token (a window from before paired devices) ──
+        //
+        // A Core with no token (a new one, or one whose token was retired)
+        // has nothing to check it against: the window has to pair. Refused
+        // before the token's limiter, which a token that cannot succeed
+        // must not feed.
+        if (!m_tokens->isActive()) {
+            refuse(QStringLiteral("This Core uses paired devices. Pair this device first."),
+                   /*retryable=*/false, SessionEndCode::kPairingRequired);
+            return;
+        }
+        const TokenStore::VerifyResult result = m_tokens->verify(message.token);
+        if (result != TokenStore::VerifyResult::Accepted) {
+            // THE distinction TokenStore.h says the two results exist to
+            // preserve, carried through to the client's retry policy.
+            //
+            // RateLimited is retryable: it is transient BY CONSTRUCTION --
+            // the lockout expires on TokenStore's own timer, and the
+            // refusal text literally says "try again later". Crucially, the
+            // rate limiter is global rather than per-peer (TokenStore.h:44-
+            // 48 says so outright: a lockout refuses a connection
+            // "including one carrying the correct token"), so five bad
+            // guesses from anyone who can reach the port refuse the
+            // OPERATOR's token too. Marked permanent, that turned somebody
+            // else's failed guesses into the operator being locked out of
+            // their own station with no automatic recovery. (A paired
+            // device's key is not refused by it: see above.)
+            //
+            // Rejected is NOT retryable: the token is simply wrong,
+            // redialing cannot make it right, and a client that retried
+            // forever would feed the very rate limiter above and keep the
+            // station locked out on the operator's own behalf.
+            if (result == TokenStore::VerifyResult::RateLimited) {
+                refuse(QStringLiteral("The Core is refusing pairing tokens for a while after too many wrong ones. Try again later."),
+                       /*retryable=*/true, nullptr);
+            } else {
+                refuse(QStringLiteral("The Core did not accept this app's pairing token. Check the token saved for this Core."),
+                       /*retryable=*/false, SessionEndCode::kWrongToken);
+            }
+            return;
+        }
+        if (message.device) {
+            // The token vouched for the connection; the device block has
+            // to prove its key signed THIS connection's transcript before
+            // the key is enrolled, so a token holder cannot enrol a key it
+            // does not hold. Enrolled once, as a computer, and from then on
+            // the window signs in with its key, typing nothing.
+            const AuthOutcome proof =
+                m_deviceAuth->verifyPossession(request, challenge, m_certSha256);
+            if (proof.result != AuthOutcome::Result::Proved) {
+                refuse(QStringLiteral("This device could not prove it is paired with this Core."),
+                       /*retryable=*/false, SessionEndCode::kDeviceProofFailed);
+                return;
+            }
+            deviceId = proof.deviceId;
+            if (!m_devices->find(deviceId)) {
+                PairedDevice device;
+                device.id = proof.deviceId;
+                device.publicKeySpki = proof.publicKeySpki;
+                device.name = DeviceStore::isValidName(message.device->name)
+                                  ? message.device->name
+                                  : QStringLiteral("Computer");
+                device.kind = QStringLiteral("computer");
+                device.enrolledThroughToken = true;
+                // Part C fix wave: its short name, when it sent a usable one.
+                if (DeviceStore::isValidShortName(message.device->shortName)) {
+                    device.shortName = message.device->shortName;
+                }
+                if (m_devices->add(device)) {
+                    qCInfo(lcStation) << "Enrolled the device key of" << description
+                                      << "signing in with the pairing token";
+                } else {
+                    // The token already admitted the window; not being able
+                    // to write the list must not lock it out. It enrols on
+                    // a later sign-in.
+                    qCWarning(lcStation) << "Could not enrol the device key of" << description;
+                    deviceId.clear();
+                }
+            }
+        }
+    }
+
+    it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
+    it->authenticated = true;
+    it->deviceId = deviceId;
+    // iPhone app Task 13: a token sign-in, enrolled or not, ends when the
+    // token is retired.
+    it->signedInWithToken = !(message.device && message.token.isEmpty());
+    // One change to the devices object for this sign-in, not two.
+    m_devicesFacade->holdRefresh();
+    if (!deviceId.isEmpty()) {
+        // lastSeen and lastAddress, on every authenticated connection, and
+        // the short name the device sent this time (Part C fix wave: it
+        // replaces the stored one when usable; outside the signed transcript).
+        m_devices->touch(deviceId, address,
+                         message.device ? message.device->shortName : QString());
+    }
+    publishConnectedDevices();
+    m_devicesFacade->resumeRefresh();
+    send(transport, SessionMessages::authResult(true, QString(), /*retryable=*/false));
+    promoteToSession(transport);
+}
+
+// ── Pairing (iPhone app Task 14, R-IOS-08) ───────────────────────────────
+//
+// A device that is not paired sends pair.start after its hello instead of
+// auth.request (the link document's Pairing section). Nothing on a pairing
+// connection signs in: it ends after pair.accept, the Core's pair.confirm,
+// or pair.fail, and the device then signs in by key on a new connection.
+//
+//   lan   one tap: only while the Core is unclaimed, only when
+//         pairing_lan_click allows it, and only from an address on one of
+//         the Core's directly connected networks. The device is added and
+//         pair.accept carries the Core's identity and label.
+//   code  SPAKE2+EE over the window's current code. The Core sends step 0,
+//         takes the code when the device's step 1 arrives (from there it
+//         is paired with or burned), answers step 2, checks step 3 (step
+//         4), opens the device's box (its key, name and kind, which win
+//         over pair.start's name and kind, and its key must be the one
+//         pair.start named), adds the device and answers with its own box
+//         (identity and label).
+//
+// Nothing here logs the code, a key or a box.
+
+void StationServer::sendPairFail(SessionTransport* transport, const QString& reason,
+                                 qint64 retryAfterMs)
+{
+    send(transport, SessionMessages::pairFail(reason, std::max<qint64>(0, retryAfterMs)));
+    qCInfo(lcStation) << "Pairing refused for" << m_peers.value(transport).description << ":"
+                      << reason;
+    // A code this connection took is burned here (dropPeer).
+    dropPeer(transport, reason, false, /*retryable=*/false);
+}
+
+void StationServer::startPairingHash()
+{
+    // One hash at a time; a finished one for an old code starts the next.
+    if (m_pairingHashThread) {
+        return;
+    }
+    const QString code = m_pairingWindow->currentCode();
+    if (code.isEmpty()) {
+        return;
+    }
+    const quint64 serial = m_pairingWindow->codeSerial();
+    m_pairingHashSerial = serial;
+    auto result = std::make_shared<QByteArray>();
+    // The code and the hash cross to the worker and back only in memory,
+    // never in a log line; the worker's copy of the code is overwritten
+    // once it is hashed.
+    auto codeCopy = std::make_shared<QString>(code);
+    auto* worker = QThread::create([result, codeCopy, hasher = m_pairingHasher]() {
+        *result = hasher(*codeCopy);
+        codeCopy->fill(QChar(u'\0'));
+    });
+    worker->setObjectName(QStringLiteral("StationPairingHash"));
+    m_pairingHashThread.reset(worker);
+    connect(worker, &QThread::finished, this, [this, worker, serial, result]() {
+        if (m_pairingHashThread.get() != worker) {
+            return;
+        }
+        worker->wait();
+        m_pairingHashThread.reset();
+        finishPairingHash(serial, *result);
+        SpakeExchange::wipe(*result);
+    });
+    worker->start();
+}
+
+void StationServer::finishPairingHash(quint64 serial, const QByteArray& stored)
+{
+    // Kept only while its code is still the window's current one.
+    if (serial == m_pairingWindow->codeSerial() && !m_pairingWindow->currentCode().isEmpty()
+        && !stored.isEmpty()) {
+        SpakeExchange::wipe(m_pairingStored);
+        m_pairingStored = stored;
+        m_pairingStoredSerial = serial;
+    }
+    bool anotherNeeded = false;
+    const QList<SessionTransport*> transports = m_peers.keys();
+    for (SessionTransport* transport : transports) {
+        const auto it = m_peers.constFind(transport);
+        if (it == m_peers.cend() || !it->pairing || !it->pairing->awaitingHash) {
+            continue;
+        }
+        const std::shared_ptr<PairingAttempt> attempt = it->pairing;
+        if (attempt->codeSerial == m_pairingStoredSerial && !m_pairingStored.isEmpty()) {
+            attempt->awaitingHash = false;
+            beginCodeExchange(transport);
+        } else if (attempt->codeSerial != m_pairingWindow->codeSerial()) {
+            attempt->awaitingHash = false;
+            sendPairFail(transport,
+                         QStringLiteral("The pairing code changed. Enter the code the Core "
+                                        "shows now."),
+                         m_pairingWindow->retryAfterMs());
+        } else if (serial == attempt->codeSerial) {
+            // Its own code's hash came back empty.
+            attempt->awaitingHash = false;
+            sendPairFail(transport, QStringLiteral("This Core cannot pair new devices."), 0);
+        } else {
+            anotherNeeded = true;
+        }
+    }
+    if (anotherNeeded) {
+        startPairingHash();
+    }
+}
+
+void StationServer::beginCodeExchange(SessionTransport* transport)
+{
+    const auto it = m_peers.constFind(transport);
+    if (it == m_peers.cend() || !it->pairing) {
+        return;
+    }
+    const std::shared_ptr<PairingAttempt> attempt = it->pairing;
+    attempt->exchange = std::make_unique<SpakeExchange>(SpakeExchange::Role::Station);
+    const QByteArray step0 = attempt->exchange->stationStep0(m_pairingStored);
+    if (step0.isEmpty()) {
+        sendPairFail(transport, QStringLiteral("This Core cannot pair new devices."), 0);
+        return;
+    }
+    attempt->expecting = 1;
+    send(transport, SessionMessages::pairSpake(0, StationIdentity::toBase64Url(step0)));
+}
+
+#ifdef NEREUS_BUILD_TESTS
+void StationServer::setPairingHasherForTest(std::function<QByteArray(const QString&)> hasher)
+{
+    m_pairingHasher = hasher ? std::move(hasher) : &SpakeExchange::storedData;
+}
+
+bool StationServer::isHashingPairingCodeForTest() const
+{
+    return m_pairingHashThread != nullptr;
+}
+#endif
+
+void StationServer::handlePairStart(SessionTransport* transport, const SessionMessage& message)
+{
+    auto it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
+    if (!it->helloReceived || it->authenticated || it->pairing) {
+        dropPeer(transport, QStringLiteral("This app started pairing out of order."), true,
+                 /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
+        return;
+    }
+    auto attempt = std::make_shared<PairingAttempt>();
+    it->pairing = attempt;
+    const QString address = transport->peerAddress();
+
+    if (pairingVersion() < 1) {
+        sendPairFail(transport, QStringLiteral("This Core cannot pair new devices."), 0);
+        return;
+    }
+    // The device, as pair.start names it. In code mode the name and kind
+    // inside its box win; its key must be this one.
+    const SessionPairDevice device = message.pairDevice.value_or(SessionPairDevice{});
+    bool keyOk = false;
+    attempt->publicKeyText = device.publicKey;
+    attempt->publicKeySpki = StationIdentity::fromBase64Url(device.publicKey, &keyOk);
+    attempt->name = device.name;
+    attempt->kind = device.kind;
+    if (!keyOk || !StationIdentity::isP256Spki(attempt->publicKeySpki)
+        || !DeviceStore::isValidName(attempt->name) || !DeviceStore::isKnownKind(attempt->kind)) {
+        sendPairFail(transport,
+                     QStringLiteral("The Core could not read this device's details. Update "
+                                    "this app."),
+                     0);
+        return;
+    }
+    if (m_devices->find(StationIdentity::fingerprintOf(attempt->publicKeySpki))) {
+        sendPairFail(transport,
+                     QStringLiteral("This device is already paired with this Core. Connect "
+                                    "to it instead."),
+                     0);
+        return;
+    }
+    if (!m_pairingWindow->isOpen()) {
+        sendPairFail(transport,
+                     QStringLiteral("This Core is not taking new devices. Open pairing on the "
+                                    "Core or on a paired device first."),
+                     0);
         return;
     }
 
-    it->authenticated = true;
-    send(transport, SessionMessages::authResult(true, QString(), /*retryable=*/false));
-    promoteToSession(transport);
+    if (message.pairMode == QLatin1String("lan")) {
+        // ── One tap ──
+        if (m_pairingWindow->state() != PairingWindow::State::OpenUnclaimed) {
+            sendPairFail(transport,
+                         QStringLiteral("One tap pairs only a Core with no paired devices. Use "
+                                        "the pairing code the Core shows."),
+                         0);
+            return;
+        }
+        if (!m_pairingLanClickAllowed) {
+            sendPairFail(transport,
+                         QStringLiteral("This Core pairs only with its code. Use the pairing "
+                                        "code the Core shows."),
+                         0);
+            return;
+        }
+        if (!isOnDirectNetwork(address)) {
+            sendPairFail(transport,
+                         QStringLiteral("One tap works only on the Core's own network. Use the "
+                                        "pairing code the Core shows."),
+                         0);
+            return;
+        }
+        PairedDevice paired;
+        paired.id = StationIdentity::fingerprintOf(attempt->publicKeySpki);
+        paired.publicKeySpki = attempt->publicKeySpki;
+        paired.name = attempt->name;
+        paired.kind = attempt->kind;
+        paired.lastAddress = address;
+        if (!m_devices->add(paired)) {
+            sendPairFail(transport,
+                         QStringLiteral("The Core could not save this device. Try again."), 0);
+            return;
+        }
+        attempt->finished = true;
+        m_pairingWindow->pairingSucceeded();
+        qCInfo(lcStation) << "Paired a device by one tap from" << it->description;
+        send(transport,
+             SessionMessages::pairAccept(
+                 SessionStationIdentity{StationIdentity::toBase64Url(m_identity->publicKeySpki()),
+                                        StationIdentity::toBase64Url(m_certBinding)},
+                 m_devicesFacade->stationLabel()));
+        dropPeer(transport, QStringLiteral("This device is paired with the Core."), false,
+                 /*retryable=*/false);
+        return;
+    }
+
+    // ── The code ──
+    attempt->codeMode = true;
+    if (m_pairingWindow->codeInUse()) {
+        sendPairFail(transport,
+                     QStringLiteral("Another device is pairing with this Core right now. Try "
+                                    "again shortly."),
+                     m_pairingWindow->retryAfterMs());
+        return;
+    }
+    if (m_pairingWindow->currentCode().isEmpty()) {
+        sendPairFail(transport,
+                     QStringLiteral("The Core is waiting before it shows a new pairing code. "
+                                    "Try again when the new code appears."),
+                     m_pairingWindow->retryAfterMs());
+        return;
+    }
+    attempt->codeSerial = m_pairingWindow->codeSerial();
+    if (m_pairingStoredSerial == attempt->codeSerial && !m_pairingStored.isEmpty()) {
+        beginCodeExchange(transport);
+        return;
+    }
+    // The code is hashed once (Argon2id) on a worker, never on this event
+    // loop, so no other device's session waits on it; step 0 follows when
+    // the hash is back (finishPairingHash).
+    attempt->awaitingHash = true;
+    startPairingHash();
+}
+
+void StationServer::handlePairSpake(SessionTransport* transport, const SessionMessage& message)
+{
+    auto it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
+    const std::shared_ptr<PairingAttempt> attempt = it->pairing;
+    if (!attempt || !attempt->codeMode || !attempt->exchange || attempt->finished
+        || attempt->awaitingHash || message.pairStep != attempt->expecting) {
+        dropPeer(transport, QStringLiteral("This app sent a pairing step out of order."), true,
+                 /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
+        return;
+    }
+    bool ok = false;
+    const QByteArray data = StationIdentity::fromBase64Url(message.pairData, &ok);
+
+    if (attempt->expecting == 1) {
+        // The Core commits to the code here: the window gives it to this
+        // exchange once, and from now on it is paired with or burned.
+        if (m_pairingStoredSerial != attempt->codeSerial || m_pairingStored.isEmpty()) {
+            sendPairFail(transport,
+                         QStringLiteral("The pairing code changed. Enter the code the Core "
+                                        "shows now."),
+                         m_pairingWindow->retryAfterMs());
+            return;
+        }
+        QByteArray stored = m_pairingStored;
+        if (!m_pairingWindow->takeCode(attempt->codeSerial)) {
+            SpakeExchange::wipe(stored);
+            sendPairFail(transport,
+                         QStringLiteral("Another device is pairing with this Core right now. "
+                                        "Try again shortly."),
+                         m_pairingWindow->retryAfterMs());
+            return;
+        }
+        attempt->codeTaken = true;
+        const QByteArray step2 =
+            ok ? attempt->exchange->stationStep2(stored, data) : QByteArray();
+        SpakeExchange::wipe(stored);
+        if (step2.isEmpty()) {
+            attempt->finished = true;
+            m_pairingWindow->pairingFailed();
+            sendPairFail(transport,
+                         QStringLiteral("The pairing code was not accepted. A new code will "
+                                        "appear on the Core."),
+                         m_pairingWindow->retryAfterMs());
+            return;
+        }
+        attempt->expecting = 3;
+        send(transport, SessionMessages::pairSpake(2, StationIdentity::toBase64Url(step2)));
+        return;
+    }
+
+    // Step 3: the device shows it held the same code (step 4).
+    if (!ok || !attempt->exchange->stationStep4(data)) {
+        attempt->finished = true;
+        m_pairingWindow->pairingFailed();
+        sendPairFail(transport,
+                     QStringLiteral("The pairing code was not right. A new code will appear on "
+                                    "the Core."),
+                     m_pairingWindow->retryAfterMs());
+        return;
+    }
+    attempt->expecting = 4;   // its box
+}
+
+void StationServer::handlePairConfirm(SessionTransport* transport, const SessionMessage& message)
+{
+    auto it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
+    const std::shared_ptr<PairingAttempt> attempt = it->pairing;
+    if (!attempt || !attempt->codeMode || !attempt->exchange || attempt->finished
+        || attempt->expecting != 4) {
+        dropPeer(transport, QStringLiteral("This app sent a pairing step out of order."), true,
+                 /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
+        return;
+    }
+    const auto refuse = [this, transport, &attempt](const QString& reason) {
+        attempt->finished = true;
+        m_pairingWindow->pairingFailed();
+        sendPairFail(transport, reason, m_pairingWindow->retryAfterMs());
+    };
+    // Part C fix wave (R1-M1): a window that closed (the operator's close,
+    // its ten minutes, or a close and reopen) since this exchange took the
+    // code pairs nothing; the code is burned.
+    if (!m_pairingWindow->holdsCode(attempt->codeSerial)) {
+        refuse(QStringLiteral("This Core is not taking new devices. Open pairing on the Core or "
+                              "on a paired device first."));
+        return;
+    }
+    bool ok = false;
+    const QByteArray box = StationIdentity::fromBase64Url(message.pairBox, &ok);
+    const std::optional<QByteArray> plain =
+        ok ? attempt->exchange->openConfirmation(box) : std::nullopt;
+    const QJsonObject contents =
+        plain ? QJsonDocument::fromJson(*plain).object() : QJsonObject{};
+    const QString boxKey = contents.value(QStringLiteral("publicKey")).toString();
+    const QString name = contents.value(QStringLiteral("name")).toString();
+    const QString kind = contents.value(QStringLiteral("kind")).toString();
+    // The key the device pairs is the one pair.start named, now vouched for
+    // by the code; the name and kind are the box's.
+    if (!plain || boxKey != attempt->publicKeyText || !DeviceStore::isValidName(name)
+        || !DeviceStore::isKnownKind(kind)) {
+        refuse(QStringLiteral("The Core could not read this device's details. Update this "
+                              "app."));
+        return;
+    }
+    PairedDevice paired;
+    paired.id = StationIdentity::fingerprintOf(attempt->publicKeySpki);
+    paired.publicKeySpki = attempt->publicKeySpki;
+    paired.name = name;
+    paired.kind = kind;
+    paired.lastAddress = transport->peerAddress();
+    if (!m_devices->add(paired)) {
+        refuse(QStringLiteral("The Core could not save this device. Try again."));
+        return;
+    }
+    attempt->finished = true;
+    m_pairingWindow->pairingSucceeded();
+    qCInfo(lcStation) << "Paired a device by code from" << it->description;
+    const QJsonObject station{
+        {QStringLiteral("identity"),
+         QJsonObject{
+             {QStringLiteral("publicKey"),
+              StationIdentity::toBase64Url(m_identity->publicKeySpki())},
+             {QStringLiteral("certBinding"), StationIdentity::toBase64Url(m_certBinding)},
+         }},
+        {QStringLiteral("label"), m_devicesFacade->stationLabel()},
+    };
+    const QByteArray sealed = attempt->exchange->sealConfirmation(
+        QJsonDocument(station).toJson(QJsonDocument::Compact));
+    send(transport, SessionMessages::pairConfirm(StationIdentity::toBase64Url(sealed)));
+    dropPeer(transport, QStringLiteral("This device is paired with the Core."), false,
+             /*retryable=*/false);
+}
+
+void StationServer::handlePairFailFromDevice(SessionTransport* transport)
+{
+    auto it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
+    const std::shared_ptr<PairingAttempt> attempt = it->pairing;
+    if (!attempt || !attempt->codeMode || attempt->finished) {
+        dropPeer(transport, QStringLiteral("This app sent a pairing step out of order."), true,
+                 /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
+        return;
+    }
+    // The device's step 3 failed: the codes differ. Its reason is not read
+    // (it is the device's own text). The code is burned, and the device is
+    // told when the next one appears.
+    if (attempt->codeTaken) {
+        attempt->finished = true;
+        m_pairingWindow->pairingFailed();
+    }
+    sendPairFail(transport,
+                 QStringLiteral("The pairing code was not right. A new code will appear on "
+                                "the Core."),
+                 m_pairingWindow->retryAfterMs());
 }
 
 void StationServer::promoteToSession(SessionTransport* transport)
@@ -1539,7 +2553,8 @@ void StationServer::promoteToSession(SessionTransport* transport)
         // radio between them indefinitely. Section 7.1 makes the token the
         // authority, so the most recent authenticated connection wins and
         // the displaced operator reconnects by hand.
-        dropPeer(m_session, reason, true, /*retryable=*/false);
+        dropPeer(m_session, reason, true, /*retryable=*/false,
+                 QString::fromLatin1(SessionEndCode::kTakenOver));
         emit sessionPreempted(displaced);
     }
 
@@ -1638,6 +2653,9 @@ void StationServer::buildMirror()
     // 1): the amp's and tuner's own settings. Sent only to a peer at minor
     // 11 on a Core that owns its accessories.
     m_mirror->watch(QByteArray(kAccessorySettingsKey), m_radioModel->accessorySettingsModel());
+    // iPhone app Task 13 (deviceAdminVersion 1): the Core's paired devices.
+    // Sent only to a device at minor 11 that declares deviceAuth.
+    m_mirror->watch(QByteArray(kDevicesKey), m_devicesFacade.get());
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
     for (int i = 0; i < pans.size(); ++i) {
         m_mirror->watch(panKey(i), pans.at(i));
@@ -1948,7 +2966,8 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
         // R-R3-46: so do the step attenuator and preamp keys.
         const bool plainReason = nr3Path || isModelOwnedNotchSettingsKey(key)
             || isModelOwnedStepAttenuatorSettingsKey(key)
-            || isModelOwnedAlexAntennaSettingsKey(key);
+            || isModelOwnedAlexAntennaSettingsKey(key)
+            || isCoreOwnedIdentitySettingsKey(key);
         sendToSession(SessionMessages::settingsReject(key, value.isValid(), value.toString(),
             plainReason ? modelOwnedSettingsRefusal(key)
                     : QStringLiteral("Change these settings with their own controls on this Core.")));
@@ -2007,11 +3026,46 @@ void StationServer::send(SessionTransport* transport, const SessionMessage& mess
     transport->sendText(SessionMessages::encode(message));
 }
 
-void StationServer::sendToSession(const SessionMessage& message)
+bool StationServer::peerSeesPairingCode(SessionTransport* transport) const
+{
+    const auto peer = m_peers.constFind(transport);
+    return peer != m_peers.cend() && peer->authenticated && !peer->signedInWithToken
+        && !peer->deviceId.isEmpty();
+}
+
+SessionMessage StationServer::withPairingCodeFor(SessionTransport* transport,
+                                                 const SessionMessage& message) const
+{
+    const bool devicesProperties =
+        (message.kind == SessionMessageKind::ObjectCreate
+         || message.kind == SessionMessageKind::Delta)
+        && isDevicesMessage(message);
+    const bool pairingOpenResult = message.kind == SessionMessageKind::CommandResult
+        && message.commandVerb == "pairing.open";
+    if ((!devicesProperties && !pairingOpenResult) || peerSeesPairingCode(transport)) {
+        return message;
+    }
+    // Any other connection (a window signed in with the old pairing token,
+    // whatever its hello declares) gets the code blanked.
+    SessionMessage blanked = message;
+    const QByteArray name = pairingOpenResult ? QByteArrayLiteral("code")
+                                              : QByteArray(kPairingCodeProperty);
+    for (MirrorUpdate& update : blanked.updates) {
+        if (update.name == name) {
+            update.value = QVariant(QString());
+        }
+    }
+    return blanked;
+}
+
+void StationServer::sendToSession(const SessionMessage& original)
 {
     if (m_session == nullptr) {
         return;
     }
+    // iPhone app Task 14: the pairing code only to a connection signed in
+    // with a paired device's key.
+    const SessionMessage message = withPairingCodeFor(m_session, original);
     switch (message.kind) {
     case SessionMessageKind::Schema:
     case SessionMessageKind::ObjectCreate:
@@ -2055,6 +3109,14 @@ void StationServer::sendToSession(const SessionMessage& message)
         if (isAccessorySettingsMessage(message)
             && (minor < kRadioIdentitySessionProtocolMinor
                 || (pgxlControlVersion() < 3 && tgxlControlVersion() < 1))) {
+            return;
+        }
+        // iPhone app Task 13: nor the devices object to anyone but a device
+        // that declares deviceAuth (today's desktop declares nothing).
+        if (isDevicesMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor
+                || !peerDeclares(m_session, QByteArrayLiteral("deviceAuth"), 1)
+                || deviceAdminVersion() < 1)) {
             return;
         }
         if (!needsNnrFit(message, minor)) {
@@ -2343,8 +3405,14 @@ StationCapabilities StationServer::buildCapabilities() const
             caps.stationTciVersion = stationTciVersion();
             // R-R3-47 / R-R3-22: the Core's accessory records and settings.
             caps.accessoryDataVersion = accessoryDataVersion();
-            // R-R3-47 / R-R3-22: the Tuner Genius's own settings, last.
+            // R-R3-47 / R-R3-22: the Tuner Genius's own settings.
             caps.remoteTgxlControlVersion = tgxlControlVersion();
+            // iPhone app Task 12 (R-IOS-08): device sign-in by key, last.
+            caps.stationIdentityVersion = m_certBinding.isEmpty() ? 0 : 1;
+            // iPhone app Task 13: the devices object and its verbs.
+            caps.deviceAdminVersion = deviceAdminVersion();
+            // iPhone app Task 14: pairing and the pairing window, last.
+            caps.pairingVersion = pairingVersion();
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();

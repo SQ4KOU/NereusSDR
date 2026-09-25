@@ -5284,17 +5284,688 @@
     font-weight: 600;
     color: #8090a0;
   }
+
+  /* ================= Several devices on one Core ================= */
+  /* Another device's slice on this band: read-only, so no flag and no fill.
+     The line keeps that slice's own colour, dashed; its label sits at the
+     foot of the spectrum, away from this phone's own flags. */
+  .pan__fx-pass {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: calc(var(--spec-h) - 13px);
+    box-sizing: border-box;
+    border-inline: 1px dashed rgba(128, 144, 160, 0.55);
+    background: rgba(128, 144, 160, 0.05);
+    pointer-events: none;
+  }
+
+  .pan__fx-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -1px;
+    width: 0;
+    border-left: 2px dashed var(--fx, #ff40ff);
+    opacity: 0.85;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .pan__fx-tri {
+    position: absolute;
+    top: 0;
+    left: -6px;
+    z-index: 2;
+    width: 12px;
+    height: 10px;
+    fill: #0a0a14;
+    stroke: var(--fx, #ff40ff);
+    stroke-width: 1.5;
+    pointer-events: none;
+  }
+
+  .scr .pan__fx-tag {
+    position: absolute;
+    top: calc(var(--spec-h) - 13px - 30px);
+    left: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    box-sizing: border-box;
+    padding: 0 7px 0 3px;
+    background: rgba(15, 15, 26, 0.9);
+    border: 1px dashed var(--fx, #ff40ff);
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #c8d8e8;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .pan__fx-tag .vfo__slice {
+    width: 16px;
+    height: 16px;
+    font-size: 10px;
+  }
+
+  .scr .pan__fx-tag .vfo__txb {
+    width: 24px;
+    height: 16px;
+    font-size: 9px;
+  }
+
+  .pan__fx-pop {
+    position: absolute;
+    top: calc(var(--spec-h) - 13px - 30px - 88px);
+    left: 0;
+    z-index: 7;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    width: 210px;
+    box-sizing: border-box;
+    padding: 9px 11px;
+    background: #0d1b28;
+    border: 1px solid #304050;
+    border-radius: 4px;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+    font-size: 12px;
+    line-height: 1.35;
+    color: #c8d8e8;
+    pointer-events: none;
+  }
+
+  .pan__fx-pop b {
+    font-size: 13px;
+    color: #e4eef8;
+  }
+
+  .pan__fx-pop span b {
+    font-family: Consolas, Menlo, monospace;
+    font-size: 12px;
+    color: #00e5ff;
+  }
+
+  .pan__fx-fine {
+    color: #8090a0;
+  }
+
+  /* The station is on the air from another device: its TX passband, like the
+     keyed phone's own, drawn on every device. */
+  .pan__tx.is-fx {
+    z-index: 1;
+  }
+
+  /* PTT while another device has transmit: the button names the holder. */
+  .scr .ptt.is-elsewhere {
+    background: #1c1a24;
+    border-color: #6a4048;
+  }
+
+  .scr .ptt.is-elsewhere b {
+    font-size: 16px;
+    color: #a07078;
+  }
+
+  .scr .ptt.is-elsewhere small {
+    color: #8090a0;
+  }
+
+  .scr .ptt.is-elsewhere.is-air {
+    border-color: #ff4444;
+    box-shadow: 0 0 0 3px rgba(255, 68, 68, 0.25), 0 6px 16px rgba(0, 0, 0, 0.5);
+  }
+
+  .scr .ptt.is-elsewhere.is-air b {
+    color: #ff8080;
+  }
+
+  .scr .ptt.is-elsewhere.is-air small {
+    color: #d09098;
+  }
+
+  .scr .ptt.is-empty {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
+  /* A question over the band covers the top bar too, as iOS sheets do. */
+  .scr .tdim.tdim--band {
+    z-index: 40;
+  }
+
+  .scr .tsheet.tsheet--band {
+    z-index: 41;
+  }
+
+  .scr .tsheet__note--lead {
+    font-size: 14px;
+    color: #c8d8e8;
+  }
+
+  .scr .tsheet__note b {
+    font-family: Consolas, Menlo, monospace;
+    font-weight: 700;
+    color: #00e5ff;
+  }
+
+  .tsheet__what .vfo__slice {
+    width: 18px;
+    height: 18px;
+  }
+
+  .tsheet__chg {
+    margin-left: auto;
+    font-family: Consolas, Menlo, monospace;
+    color: #8090a0;
+    white-space: nowrap;
+  }
+
+  .tsheet__chg s {
+    color: #607080;
+  }
+
+  .scr .tsheet__chg b {
+    color: #ffd700;
+  }
+
+  /* Pick one: a receiver to take, or a device whose place to take. */
+  .mcpick {
+    display: grid;
+    gap: 6px;
+  }
+
+  .scr .mcpick__row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    background: #0d1b28;
+    border: 1px solid #203040;
+    border-radius: 4px;
+    text-align: left;
+    color: #c8d8e8;
+    cursor: pointer;
+  }
+
+  .scr .mcpick__row.is-on {
+    background: #0d2236;
+    border-color: #0090e0;
+  }
+
+  .mcpick__dot {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    box-sizing: border-box;
+    border: 2px solid #405060;
+    border-radius: 50%;
+  }
+
+  .mcpick__row.is-on .mcpick__dot {
+    border-color: #0090e0;
+    background: radial-gradient(circle, #0090e0 0 3px, transparent 4px);
+  }
+
+  .mcpick__text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .mcpick__text b {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 15px;
+    color: #e4eef8;
+  }
+
+  .mcpick__text small {
+    font-size: 12px;
+    line-height: 1.35;
+    color: #8090a0;
+  }
+
+  .scr .mcpick__row.is-tx small {
+    color: #ff8080;
+  }
+
+  .scr .mcpick__row.is-tx.is-on {
+    background: #2a1014;
+    border-color: #ff4444;
+  }
+
+  .mcpick__row.is-tx.is-on .mcpick__dot {
+    border-color: #ff4444;
+    background: radial-gradient(circle, #ff4444 0 3px, transparent 4px);
+  }
+
+  /* A notice with an answer: Take it back */
+  .toast--act {
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .toast--act > span {
+    flex: 1 1 180px;
+  }
+
+  .toast--act .toast__dot {
+    align-self: flex-start;
+  }
+
+  .toast--act .rbtn {
+    min-width: 0;
+    height: 36px;
+    margin-left: auto;
+  }
+
+  .toast--info .toast__dot {
+    background: #5fa8ff;
+  }
+
+  .toast--warn .toast__dot {
+    background: #ddbb00;
+    box-shadow: 0 0 6px rgba(221, 187, 0, 0.6);
+  }
+
+  /* This phone's receiver went to another device: the band stops under a
+     notice, like a takeover, while the Core connection stays up. */
+  .tover.tover--phone {
+    top: 102px;
+    right: 0;
+    bottom: 77px;
+    padding: 0 26px;
+  }
+
+  .tover--phone .tover__word {
+    font-size: 24px;
+    letter-spacing: 4px;
+  }
+
+  .is-rxgone .pan,
+  .is-rxgone .zoom {
+    opacity: 0.4;
+  }
+
+  /* Setup > Devices: who is connected, and who has transmit */
+  .drow__text b .vfo__txb {
+    display: inline-grid;
+    margin-left: 6px;
+    vertical-align: 1px;
+    font-style: normal;
+  }
+
+  .drow__text span .vfo__slice {
+    font-style: normal;
+  }
+
+  .drow__text span .vfo__slice {
+    display: inline-grid;
+    width: 15px;
+    height: 15px;
+    margin-right: 2px;
+    font-size: 9px;
+    vertical-align: -3px;
+  }
+
+  .is-rxgone .vfo,
+  .is-rxgone .vfo-fold,
+  .is-rxgone .vfo-fbtns,
+  .is-rxgone .pan__vfo-line,
+  .is-rxgone .pan__tri,
+  .is-rxgone .pan__pass {
+    visibility: hidden;
+  }
+
+  /* Sub-heads inside the round's section */
+  .sect__sub {
+    margin: 30px 0 0;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
+
+  .is-placegone .vfo,
+  .is-placegone .vfo-fold,
+  .is-placegone .vfo-fbtns,
+  .is-placegone .pan__vfo-line,
+  .is-placegone .pan__tri,
+  .is-placegone .pan__pass,
+  .is-placegone .pan__tx {
+    visibility: hidden;
+  }
+
+  .is-rxgone [data-slice-btn] {
+    opacity: 0.4;
+  }
+
+  /* ================= States in between (round 2) ================= */
+  /* Another device that has dropped and is away: its marker greys out. */
+  .scr .pan__fx-tag.is-away {
+    border-color: #607080;
+    color: #8090a0;
+  }
+
+  .pan__fx-tag.is-away .vfo__slice {
+    opacity: 0.55;
+  }
+
+  .pan__fx-away {
+    font-weight: 600;
+    color: #ddbb00;
+  }
+
+  /* Transmit on its way to this phone: the PTT waits with a turning ring. */
+  .scr .ptt.is-moving {
+    background: #1c1a24;
+    border-color: #6a4048;
+  }
+
+  .scr .ptt.is-moving b {
+    font-size: 16px;
+    color: #a07078;
+  }
+
+  .scr .ptt.is-moving small {
+    color: #c8d8e8;
+  }
+
+  .scr .ptt.is-moving::after {
+    content: "";
+    position: absolute;
+    inset: -5px;
+    border: 3px solid transparent;
+    border-top-color: #ff8080;
+    border-radius: 50%;
+    animation: mc-turn 0.9s linear infinite;
+  }
+
+  @keyframes mc-turn {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* A slice held on the air by the radio's own mic: frequency greyed, locked. */
+  .vfo.is-held .vfo__freq {
+    color: #8090a0;
+  }
+
+  .vfo__held {
+    display: inline-grid;
+    place-items: center;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 3px;
+    background: #6a3030;
+    border: 1px solid #ff4444;
+    font-size: 10px;
+    font-weight: 700;
+    color: #ff8080;
+    white-space: nowrap;
+  }
+
+  .drow .pill--away,
+  .pill.pill--away {
+    background: #ddbb00;
+  }
+
+  /* On the air from the radio's mic: the band shows it as it shows a keyed phone,
+     the TX passband over the slice's own shading. */
+  .is-airheld .pan__pass {
+    background: transparent;
+  }
 </style>
 
 <header class="head">
   <div>
     <p class="eyebrow">NereusSDR on iPhone and iPad</p>
     <h1>The whole app</h1>
-    <p class="lede">New this round: the transmit time-out, first below, and your mic level on the band while keyed, beside RF power and SWR. Before that, long sessions. Everything after it is agreed with your calls applied: a hardware PTT button that keys a locked phone through Apple's Push to Talk, audio and data use with cellular at Balanced, when things aren't right with the app keeping the older link too, FreeDV Reporter where a tap tunes, Spot Hub as one page, the iPad held upright with the applets below the band, spots on the band that never start behind a flag, the takeover question, the station's side with a switch in the desktop app, first launch with a station required, the tuning dial you pick in Setup, the same layout turned sideways, a lock screen that never transmits from its screen, and before them your layout with NereusSDR's flags and one flag rule for both devices, the tap-to-toggle PTT, the desktop's Setup tree, the front end in the Modes tab, and the amp and tuner in the TX panel.</p>
+    <p class="lede">New this round, and kept: the notices and the states in between for several devices, first below. Then several devices on one Core at once, from your calls. Before them, the transmit time-out and your mic level on the band while keyed, then long sessions. Everything after that is agreed with your calls applied: a hardware PTT button that keys a locked phone through Apple's Push to Talk, audio and data use with cellular at Balanced, when things aren't right with the app keeping the older link too, FreeDV Reporter where a tap tunes, Spot Hub as one page, the iPad held upright with the applets below the band, spots on the band that never start behind a flag, the station's side with a switch in the desktop app, first launch with a station required, the tuning dial you pick in Setup, the same layout turned sideways, a lock screen that never transmits from its screen, and before them your layout with NereusSDR's flags and one flag rule for both devices, the tap-to-toggle PTT, the desktop's Setup tree, the front end in the Modes tab, and the amp and tuner in the TX panel.</p>
     <p class="note">Signals, station names, addresses and readings are examples. Each screen is its own phone; the tab bars don't switch screens. The iOS parts around NereusSDR's card (clock, status bar, the app behind the island) are drawn generic.</p>
   </div>
 </header>
 
+<section class="sect" aria-label="Several devices: states and notices">
+  <h2 class="sect__title">Several devices: states and notices</h2>
+  <p class="sect__note">What the screens in the next section don't show: the messages that appear over the band when something happens involving another device, and the states in between (a device that's away, transmit on its way, a slice held by the radio's mic). The same cast as the next section: this phone has slice A on 40 m, the MacBook has slices B and D and has transmit, the iPad has slice C on 20 m.</p>
+
+  <h3 class="sect__sub">Notices</h3>
+  <div class="board board--three board--align">
+    <section class="opt" aria-labelledby="w-mc-backplain">
+      <div class="opt__head">
+        <h2 id="w-mc-backplain">Back, without transmit</h2>
+        <p>The phone’s link dropped and it came back within 3 minutes. It didn’t have transmit, so there’s nothing about transmit to say.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-back-plain"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-backtaken">
+      <div class="opt__head">
+        <h2 id="w-mc-backtaken">Back, transmit taken meanwhile</h2>
+        <p>It had transmit, and the MacBook took it while the phone was away. The phone doesn’t get it back by itself; Take it back asks first.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-back-taken"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-backlate">
+      <div class="opt__head">
+        <h2 id="w-mc-backlate">Back after 3 minutes</h2>
+        <p>Away longer than 3 minutes: the Core saved its slices and brings them back, but transmit went free, so PTT reads Tap for whoever presses first.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-back-late"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-fifthlate">
+      <div class="opt__head">
+        <h2 id="w-mc-fifthlate">Back after 3 minutes, Core full</h2>
+        <p>Away longer than 3 minutes while four other devices filled the Core: the phone gets the fifth-device question, saying why.</p>
+      </div>
+      <div class="slot"><div class="phone" data-mc-fifth="late"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-slicelost">
+      <div class="opt__head">
+        <h2 id="w-mc-slicelost">A slice that couldn’t come back</h2>
+        <p>Coming back, one of the phone’s slices finds every receiver taken. Its frequency and settings wait on the Core.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-slice-lost"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-antenna">
+      <div class="opt__head">
+        <h2 id="w-mc-antenna">The antenna stays</h2>
+        <p>Your call: tuning across a band edge doesn’t switch the antenna while another device listens through it, and the phone says so.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-antenna"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-busy">
+      <div class="opt__head">
+        <h2 id="w-mc-busy">The Core is busy</h2>
+        <p>The same chip as when the connection is full, when it’s the Core’s processing that runs short instead.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-busy"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-shortfree">
+      <div class="opt__head">
+        <h2 id="w-mc-shortfree">Short, nobody has transmit</h2>
+        <p>With nobody holding transmit (or the radio’s mic holding it), no device keeps a full share, so the note says they share.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-short-free"></div></div>
+    </section>
+  </div>
+
+  <h3 class="sect__sub">The states in between</h3>
+  <div class="board board--three board--align">
+    <section class="opt" aria-labelledby="w-mc-away">
+      <div class="opt__head">
+        <h2 id="w-mc-away">A device that's away</h2>
+        <p>The MacBook's link dropped while it had transmit. The Core keeps transmit for it, unkeyed, for up to 3 minutes. Its label greys with "away", and taking transmit asks without the red button, since nobody is on the air.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-away"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-moving">
+      <div class="opt__head">
+        <h2 id="w-mc-moving">Transmit on its way</h2>
+        <p>Right after Unkey and take over, the Core unkeys the MacBook, then hands transmit over. For that moment PTT waits with a turning ring; once it reads Tap, one tap keys.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-moving"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-held">
+      <div class="opt__head">
+        <h2 id="w-mc-held">Held by the radio's mic</h2>
+        <p>On a Core with no desktop, the radio's own mic keys on the transmit slice, here this phone's slice A. The flag says ON AIR, the frequency greys, and tuning slice A waits until the press ends.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-radio-held"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-devaway">
+      <div class="opt__head">
+        <h2 id="w-mc-devaway">Away, on Devices</h2>
+        <p>Setup, Devices marks a device whose link dropped as away, with how long. It keeps its place and its slices for 3 minutes.</p>
+      </div>
+      <div class="slot"><div class="phone" data-screen="devices" data-variant="away"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-fifthaway">
+      <div class="opt__head">
+        <h2 id="w-mc-fifthaway">Away, for a fifth device</h2>
+        <p>A device that's away has been idle longest, so a fifth device's list starts on it.</p>
+      </div>
+      <div class="slot"><div class="phone" data-mc-fifth="away"></div></div>
+    </section>
+  </div>
+
+</section>
+
+<section class="sect" aria-label="Several devices at once">
+  <h2 class="sect__title">Several devices at once</h2>
+  <p class="sect__note">Your calls: up to four devices on one Core at the same time, each with its own slices and pans, and one of them holding transmit. Other devices’ slices show on your band, labelled and out of reach. Anything that would disturb another device asks first and names it, and that device is told, with Take it back. This replaces the takeover question: a second device now simply connects, and taking a place only comes up for a fifth. On every screen here this phone has slice A on 40 m, the MacBook at the shack has slices B (sharing this phone’s receiver) and D and has transmit, and the iPad has slice C on 20 m.</p>
+
+  <h3 class="sect__sub">Slices and transmit</h3>
+  <div class="board board--three board--align">
+    <section class="opt" aria-labelledby="w-mc-band">
+      <div class="opt__head">
+        <h2 id="w-mc-band">Another device’s slice</h2>
+        <p>The MacBook’s slice B on your band: a dashed line in B’s colour and a label with the device’s name, but no flag, so there’s nothing to drag. The label opens a note saying whose it is. TX on the label and the MacBook on your PTT button both say it has transmit.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-band"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-take-tx">
+      <div class="opt__head">
+        <h2 id="w-mc-take-tx">Taking transmit</h2>
+        <p>Tap PTT while another device has transmit, and it asks first. Whoever has transmit is the control operator. Take transmit, then tap PTT again to go on the air.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-take-tx"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-take-air">
+      <div class="opt__head">
+        <h2 id="w-mc-take-air">While it’s on the air</h2>
+        <p>Your call: the band shows the MacBook’s transmission, PTT turns red with its name, and the button says Unkey and take over. The Core unkeys the MacBook before transmit moves.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-take-tx-air"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-tx-taken">
+      <div class="opt__head">
+        <h2 id="w-mc-tx-taken">Transmit taken from you</h2>
+        <p>The device that had transmit is told who took it and when. Take it back asks the same question the other way.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-tx-taken"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-radio">
+      <div class="opt__head">
+        <h2 id="w-mc-radio">Taken at the radio</h2>
+        <p>Your call: pressing the radio’s own PTT, its mic or a footswitch, takes transmit with no question, because the press is the answer. Programs never take transmit this way; they transmit only while their own device has it. PTT names the radio until you take it back.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-radio-ptt"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-short">
+      <div class="opt__head">
+        <h2 id="w-mc-short">When the Core runs short</h2>
+        <p>Your call: the device with transmit keeps its full band and sound, and the others slow down first. The chip stays while it lasts, like the one on cellular.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-short"></div></div>
+    </section>
+  </div>
+
+  <h3 class="sect__sub">Receivers and shared settings</h3>
+  <div class="board board--three board--align">
+    <section class="opt" aria-labelledby="w-mc-rx">
+      <div class="opt__head">
+        <h2 id="w-mc-rx">Every receiver in use</h2>
+        <p>A new slice that fits no receiver’s window, with none free, means taking one. It lists who has each receiver and what they’re doing, and you pick.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-rx"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-rxgone">
+      <div class="opt__head">
+        <h2 id="w-mc-rxgone">Your receiver taken</h2>
+        <p>The other side: this phone’s slice closed, and it says who took the receiver and when. The connection stays up, and Take it back asks first.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-rxgone"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-move">
+      <div class="opt__head">
+        <h2 id="w-mc-move">Moving a shared receiver</h2>
+        <p>Your call: you and the MacBook share a receiver, so going to 20 m asks first. With a receiver free, it would say slice B moves there instead of closing.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-move"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-set">
+      <div class="opt__head">
+        <h2 id="w-mc-set">Shared settings</h2>
+        <p>Your call: any device can change what every device hears, like the attenuator here, but it asks first when another device’s slices would feel it, and names them.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-set"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-told">
+      <div class="opt__head">
+        <h2 id="w-mc-told">Told afterwards</h2>
+        <p>The device that didn’t ask gets a note saying who changed what. Nothing to answer.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="mc-told"></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-mc-devices">
+      <div class="opt__head">
+        <h2 id="w-mc-devices">Who’s connected</h2>
+        <p>Setup, Devices splits the devices connected now from the ones only paired, with each one’s slices and bands, and TX on the one with transmit.</p>
+      </div>
+      <div class="slot"><div class="phone" data-screen="devices"></div></div>
+    </section>
+  </div>
+
+  <h3 class="sect__sub">More than four</h3>
+  <div class="board board--three board--align">
+    <section class="opt" aria-labelledby="w-mc-fifth">
+      <div class="opt__head">
+        <h2 id="w-mc-fifth">A fifth device</h2>
+        <p>Your call: a fifth device picks one of the four to take the place of. It starts on the one idle longest. Picking the one on the air turns the button red, and the Core unkeys it first.</p>
+      </div>
+      <div class="slot"><div class="phone" data-mc-fifth></div></div>
+    </section>
+    <section class="opt" aria-labelledby="w-to-own">
+      <div class="opt__head">
+        <h2 id="w-to-own">Your own session</h2>
+        <p>After a lost link, the phone takes its own session back without asking: its slices, and transmit if no one took it meanwhile. You’re never locked out of your transmitter.</p>
+      </div>
+      <div class="slot"><div class="phone" data-placement="fit" data-scene="reclaim"></div></div>
+    </section>
+  </div>
+  <div class="board board--single">
+    <section class="opt" aria-labelledby="w-to-over">
+      <div class="opt__head">
+        <h2 id="w-to-over">On the device whose place was taken</h2>
+        <p>The iPad is told who took its place and when. Its band stops, its slices and settings stay on the Core, and Take it back asks the fifth-device question the other way.</p>
+      </div>
+      <div class="slot"><div class="tablet" data-placement="fit" data-template="tpl-ipad-col" data-scene="takenover"></div></div>
+    </section>
+  </div>
+</section>
 
 <section class="sect" aria-label="Transmit time-out">
   <h2 class="sect__title">Transmit time-out</h2>
@@ -5559,42 +6230,6 @@
         <p>Your call: spots start under the lowest flag and use only the rows that fit, with the rest in +N badges. Upright, that's still halfway down, as on the desktop.</p>
       </div>
       <div class="slot"><div class="phone phone--land" data-placement="fit" data-template="tpl-land" data-spots="below"></div></div>
-    </section>
-  </div>
-</section>
-<section class="sect" aria-label="Takeover">
-  <h2 class="sect__title">The takeover question</h2>
-  <p class="sect__note">Your call on the connecting screens was to ask first. The remote design lets a second connection take over at once, so a dropped phone can never lock you out. Asking first means the station must say who has the session, and whether they're on the air, before anything moves. A phone coming back to its own dropped session is the exception, and isn't asked.</p>
-  <div class="board board--three board--align">
-    <section class="opt" aria-labelledby="w-to-ask">
-      <div class="opt__head">
-        <h2 id="w-to-ask">The question</h2>
-        <p>Connect on a station another device is using. It says which device, how long, when it was last used, and what it's doing.</p>
-      </div>
-      <div class="slot"><div class="phone" data-takeover="ask"></div></div>
-    </section>
-    <section class="opt" aria-labelledby="w-to-tx">
-      <div class="opt__head">
-        <h2 id="w-to-tx">While it's transmitting</h2>
-        <p>Your call: taking over may cut a transmission off. The question says so in red, and taking over unkeys the other device first.</p>
-      </div>
-      <div class="slot"><div class="phone" data-takeover="tx"></div></div>
-    </section>
-    <section class="opt" aria-labelledby="w-to-own">
-      <div class="opt__head">
-        <h2 id="w-to-own">Your own session</h2>
-        <p>After a lost link, the phone takes its own session back without asking, so you're never locked out of your transmitter.</p>
-      </div>
-      <div class="slot"><div class="phone" data-placement="fit" data-scene="reclaim"></div></div>
-    </section>
-  </div>
-  <div class="board board--single">
-    <section class="opt" aria-labelledby="w-to-over">
-      <div class="opt__head">
-        <h2 id="w-to-over">On the other device</h2>
-        <p>The iPad is told who took over and when. Its band stops, its settings stay on the station, and Take it back asks the same question the other way.</p>
-      </div>
-      <div class="slot"><div class="tablet" data-placement="fit" data-template="tpl-ipad-col" data-scene="takenover"></div></div>
     </section>
   </div>
 </section>
@@ -6568,22 +7203,26 @@
         <button class="rbtn" type="button">Show me how</button>
       </div>
 
-      <p class="shead">Paired devices</p>
-      <div class="sgroup" data-devlist>
+      <p class="shead">Connected now</p>
+      <div class="sgroup">
         <div class="drow">
           <i class="pill pill--on" aria-hidden="true"></i>
-          <span class="drow__text"><b>JJ's iPhone</b><span>This phone · connected now</span></span>
+          <span class="drow__text"><b>JJ’s iPhone</b><span><i class="vfo__slice" style="background:#00d4ff">A</i> 40 m · this phone</span></span>
         </div>
         <div class="drow">
-          <i class="pill pill--stale" aria-hidden="true"></i>
-          <span class="drow__text"><b>MacBook Pro</b><span>Paired Aug 2 · last seen 3 minutes ago</span></span>
+          <i class="pill pill--on" aria-hidden="true"></i>
+          <span class="drow__text"><b>MacBook Pro<i class="vfo__txb is-on">TX</i></b><span><i class="vfo__slice" style="background:#ff40ff">B</i> 40 m · <i class="vfo__slice" style="background:#ffff00;color:#0a0a14">D</i> 17 m · 2 hours</span></span>
           <button class="revoke" type="button" data-revoke>Revoke</button>
         </div>
         <div class="drow">
-          <i class="pill pill--off" aria-hidden="true"></i>
-          <span class="drow__text"><b>iPad Pro</b><span>Paired Aug 9 · last seen yesterday</span></span>
+          <i class="pill pill--on" aria-hidden="true"></i>
+          <span class="drow__text"><b>iPad Pro</b><span><i class="vfo__slice" style="background:#40ff40;color:#0a0a14">C</i> 20 m · 40 minutes</span></span>
           <button class="revoke" type="button" data-revoke>Revoke</button>
         </div>
+      </div>
+
+      <p class="shead">Paired</p>
+      <div class="sgroup" data-devlist>
         <div class="drow">
           <i class="pill pill--off" aria-hidden="true"></i>
           <span class="drow__text"><b>Old ThinkPad</b><span>Paired Jun 30 · last seen 41 days ago</span></span>
@@ -6597,7 +7236,7 @@
         <output class="codebox__code">3-copper-lantern</output>
         <span class="codebox__fine">It works once. The pairing window closes when the new device pairs.</span>
       </div>
-      <p class="snote">Revoking drops that device at once, even mid-session. Only one device can be connected at a time.</p>
+      <p class="snote">Up to four devices can be connected at once. TX marks the one with transmit. Revoking drops that device at once, even mid-session.</p>
     </div>
     <nav class="tabbar" aria-label="Sections">
       <button class="tab" type="button">
@@ -7766,8 +8405,8 @@
 <template id="tpl-to-over">
   <div class="tover" role="status">
     <p class="tover__word">TAKEN OVER</p>
-    <p class="tover__lead">JJ's iPhone has the station now, since 19:51.</p>
-    <p class="tover__body">Your frequency and settings stay on the station, and this iPad stays paired. The band stops here until you take it back.</p>
+    <p class="tover__lead">JJ’s iPhone took this iPad’s place at 19:51.</p>
+    <p class="tover__body">Four devices were connected, which is as many as the Core takes. Your slices and settings stay on the Core, and this iPad stays paired. The band stops here until you take its place back.</p>
     <button class="rbtn rbtn--go" type="button" data-takeback>Take it back</button>
   </div>
 </template>
@@ -8505,6 +9144,162 @@ DX de N1ABC:     7246.5  F5ABC                             1939Z</pre>
       </button>
     </nav>
     <div class="homebar"></div>
+  </div>
+</template>
+
+<!-- Several devices on one Core. Another device's slice, drawn read-only on this band. -->
+<template id="tpl-mc-fx">
+  <div class="pan__fx-pass" data-fx-pass></div>
+  <div class="pan__tx pan__tx--spec is-fx" data-fx-txs hidden></div>
+  <div class="pan__tx pan__tx--wf is-fx" data-fx-txw hidden></div>
+  <div class="pan__fx-line" data-fx-line></div>
+  <svg class="pan__fx-tri" data-fx-tri viewBox="0 0 12 10" aria-hidden="true"><path d="M1 1h10L6 9z"/></svg>
+  <button class="pan__fx-tag" type="button" data-fx-tag aria-expanded="false"><span class="vfo__slice" data-fx-letter>B</span><span data-fx-name>MacBook Pro</span><span class="vfo__txb is-on" data-fx-txb>TX</span></button>
+  <div class="pan__fx-pop" data-fx-pop role="note" hidden>
+    <b data-fx-title>MacBook Pro’s slice B</b>
+    <span data-fx-where><b>7.249.000</b> LSB · has transmit</span>
+    <span class="pan__fx-fine">Only the MacBook can tune it or close it.</span>
+  </div>
+</template>
+
+<!-- Tapping PTT while another device has transmit. -->
+<template id="tpl-mc-tx">
+  <div class="tdim tdim--band" aria-hidden="true"></div>
+  <div class="tsheet tsheet--band" role="dialog" aria-label="Transmit is on another device">
+    <i class="dsheet__grab" aria-hidden="true"></i>
+    <p class="tsheet__kicker">MacBook Pro has transmit</p>
+    <div class="tsheet__who"><svg class="tsheet__dev" viewBox="0 0 40 40" aria-hidden="true"><rect x="8" y="9" width="24" height="16" rx="2"/><path d="M4 30h32l-2.5 3h-27z"/></svg><span><b>MacBook Pro</b><small>Connected 2 hours · last active 4 minutes ago</small></span></div>
+    <div class="tsheet__what"><span class="vfo__slice" style="background:#ff40ff">B</span><span>Listening on <b>7.249.000</b> LSB</span></div>
+    <p class="tsheet__note">Taking transmit makes you the control operator. The MacBook is told who took it and can take it back the same way. Its slices keep listening.</p>
+    <button class="wide wide--go" type="button" data-mc-go data-mc-busy="Taking transmit…">Take transmit</button>
+    <button class="wide" type="button" data-mc-cancel>Cancel</button>
+  </div>
+</template>
+
+<template id="tpl-mc-tx-air">
+  <div class="tdim tdim--band" aria-hidden="true"></div>
+  <div class="tsheet tsheet--band" role="dialog" aria-label="Another device is on the air">
+    <i class="dsheet__grab" aria-hidden="true"></i>
+    <p class="tsheet__kicker">MacBook Pro is on the air</p>
+    <div class="tsheet__who"><svg class="tsheet__dev" viewBox="0 0 40 40" aria-hidden="true"><rect x="8" y="9" width="24" height="16" rx="2"/><path d="M4 30h32l-2.5 3h-27z"/></svg><span><b>MacBook Pro</b><small>Connected 2 hours · last active just now</small></span></div>
+    <div class="tsheet__what is-tx"><span class="vfo__txb is-on">TX</span><span>Transmitting on <b>7.249.000</b> LSB</span><span class="tsheet__clock" data-mc-clock>0:42</span></div>
+    <p class="tsheet__note">Taking over unkeys the MacBook first, then gives transmit to this phone. The MacBook is told who took it.</p>
+    <button class="wide wide--mox" type="button" data-mc-go data-mc-busy="Unkeying the MacBook…">Unkey and take over</button>
+    <button class="wide" type="button" data-mc-cancel>Cancel</button>
+  </div>
+</template>
+
+<!-- A new slice fits no receiver's window, and none is free. -->
+<template id="tpl-mc-rx">
+  <div class="tdim tdim--band" aria-hidden="true"></div>
+  <div class="tsheet tsheet--band" role="dialog" aria-label="Every receiver is in use">
+    <i class="dsheet__grab" aria-hidden="true"></i>
+    <p class="tsheet__kicker">Every receiver is in use</p>
+    <p class="tsheet__note tsheet__note--lead">To listen on <b>21.200.000</b>, take a receiver from another device.</p>
+    <div class="mcpick" role="radiogroup" aria-label="Receivers in use" data-mc-pick>
+      <button class="mcpick__row is-on" type="button" role="radio" aria-checked="true" data-go-text="Take the iPad’s receiver"><i class="mcpick__dot" aria-hidden="true"></i><span class="mcpick__text"><b>Receiver 2 · iPad Pro</b><small>Slice C on 14.230.000 USB · listening · last active 12 minutes ago</small></span></button>
+      <button class="mcpick__row" type="button" role="radio" aria-checked="false" data-go-text="Take the MacBook’s receiver"><i class="mcpick__dot" aria-hidden="true"></i><span class="mcpick__text"><b>Receiver 3 · MacBook Pro</b><small>Slice D on 18.130.000 USB · listening · last active 4 minutes ago</small></span></button>
+    </div>
+    <p class="tsheet__note">The slice on it closes on that device, which is told who took the receiver and can take it back.</p>
+    <button class="wide wide--go" type="button" data-mc-go data-mc-busy="Taking the receiver…">Take the iPad’s receiver</button>
+    <button class="wide" type="button" data-mc-cancel>Cancel</button>
+  </div>
+</template>
+
+<!-- A change every device hears, asked first because it reaches another device's slice. -->
+<template id="tpl-mc-set">
+  <div class="tdim tdim--band" aria-hidden="true"></div>
+  <div class="tsheet tsheet--band" role="dialog" aria-label="This changes another device's receive">
+    <i class="dsheet__grab" aria-hidden="true"></i>
+    <p class="tsheet__kicker">This changes what the MacBook hears</p>
+    <div class="tsheet__what"><span>Attenuator, ADC 1</span><span class="tsheet__chg"><s>0 dB</s> → <b>20 dB</b></span></div>
+    <div class="tsheet__who"><svg class="tsheet__dev" viewBox="0 0 40 40" aria-hidden="true"><rect x="8" y="9" width="24" height="16" rx="2"/><path d="M4 30h32l-2.5 3h-27z"/></svg><span><b>MacBook Pro</b><small>Slice B on 7.249.000 LSB, through ADC 1</small></span></div>
+    <p class="tsheet__note">Every slice on ADC 1 hears through the attenuator, so the MacBook’s slice B drops 20 dB too. The MacBook is told you changed it.</p>
+    <button class="wide wide--go" type="button" data-mc-go data-mc-busy="Setting 20 dB…">Set 20 dB</button>
+    <button class="wide" type="button" data-mc-cancel>Cancel</button>
+  </div>
+</template>
+
+<!-- Moving a pan whose receiver another device shares. -->
+<template id="tpl-mc-move">
+  <div class="tdim tdim--band" aria-hidden="true"></div>
+  <div class="tsheet tsheet--band" role="dialog" aria-label="Another device shares this receiver">
+    <i class="dsheet__grab" aria-hidden="true"></i>
+    <p class="tsheet__kicker">The MacBook shares this receiver</p>
+    <div class="tsheet__who"><svg class="tsheet__dev" viewBox="0 0 40 40" aria-hidden="true"><rect x="8" y="9" width="24" height="16" rx="2"/><path d="M4 30h32l-2.5 3h-27z"/></svg><span><b>MacBook Pro</b><small>Slice B on 7.249.000 LSB · listening</small></span></div>
+    <p class="tsheet__note">Going to 20 m moves the receiver off 40 m. No other receiver is free, so the MacBook’s slice B closes, and the MacBook is told who moved it.</p>
+    <button class="wide wide--go" type="button" data-mc-go data-mc-busy="Moving to 20 m…">Go to 20 m</button>
+    <button class="wide" type="button" data-mc-cancel>Stay on 40 m</button>
+  </div>
+</template>
+
+<!-- This phone's receiver went to another device. -->
+<template id="tpl-mc-rxgone">
+  <div class="tover tover--phone" role="status">
+    <p class="tover__word">RECEIVER TAKEN</p>
+    <p class="tover__lead">The iPad took this band’s receiver at 19:54.</p>
+    <p class="tover__body">Slice A closed on this phone. Its frequency and settings are kept, so taking the receiver back puts it where it was.</p>
+    <button class="rbtn rbtn--go" type="button" data-mc-back>Take it back</button>
+  </div>
+</template>
+
+<!-- A fifth device: four are connected, which is as many as a Core takes. -->
+<template id="tpl-mc-fifth">
+  <div class="scr">
+    <div class="island"></div>
+    <div class="nav">
+      <span></span>
+      <h3 class="nav__title">Stations</h3>
+      <button class="nav__btn" type="button" aria-label="Add a station">+</button>
+    </div>
+    <div class="list">
+      <p class="list__head">Your stations</p>
+      <div class="row">
+        <i class="pill pill--on" aria-hidden="true"></i>
+        <div class="row__text"><b>KG4VCF/shack</b><span>ANAN-G2 · Saturn · 4 devices on it</span></div>
+        <button class="rbtn rbtn--go" type="button">Connect</button>
+      </div>
+      <div class="row">
+        <i class="pill pill--stale" aria-hidden="true"></i>
+        <div class="row__text"><b>KG4VCF/attic</b><span>ANAN-G2E · seen 3 minutes ago</span></div>
+        <button class="rbtn" type="button">Connect</button>
+      </div>
+      <div class="row">
+        <i class="pill pill--off" aria-hidden="true"></i>
+        <div class="row__text"><b>KG4VCF/field</b><span>Hermes Lite 2 · last seen 3 days ago</span></div>
+        <button class="rbtn" type="button">Connect</button>
+      </div>
+    </div>
+    <div class="tdim" aria-hidden="true"></div>
+    <div class="tsheet" role="dialog" aria-label="Four devices are connected">
+      <i class="dsheet__grab" aria-hidden="true"></i>
+      <p class="tsheet__kicker">Four devices are on KG4VCF/shack</p>
+      <p class="tsheet__note tsheet__note--lead">That’s as many as the Core takes. To connect, pick one for this phone to take the place of.</p>
+      <div class="mcpick" role="radiogroup" aria-label="Connected devices" data-mc-pick>
+        <button class="mcpick__row is-on" type="button" role="radio" aria-checked="true" data-go-text="Take the Mac mini’s place"><i class="mcpick__dot" aria-hidden="true"></i><span class="mcpick__text"><b>Mac mini</b><small>Listening on 3.573.000 USB · connected 3 hours · last active 50 minutes ago</small></span></button>
+        <button class="mcpick__row" type="button" role="radio" aria-checked="false" data-go-text="Take the iPad’s place"><i class="mcpick__dot" aria-hidden="true"></i><span class="mcpick__text"><b>iPad Pro</b><small>Listening on 14.230.000 USB · connected 40 minutes · last active 12 minutes ago</small></span></button>
+        <button class="mcpick__row" type="button" role="radio" aria-checked="false" data-go-text="Take the iPhone SE’s place"><i class="mcpick__dot" aria-hidden="true"></i><span class="mcpick__text"><b>iPhone SE</b><small>Listening on 7.074.000 USB · connected 20 minutes · last active 2 minutes ago</small></span></button>
+        <button class="mcpick__row is-tx" type="button" role="radio" aria-checked="false" data-go-text="Unkey and take the MacBook’s place"><i class="mcpick__dot" aria-hidden="true"></i><span class="mcpick__text"><b>MacBook Pro <span class="vfo__txb is-on">TX</span></b><small>Transmitting on 7.249.000 LSB · connected 2 hours</small></span></button>
+      </div>
+      <p class="tsheet__note">That device is told who took its place, and can take it back the same way.</p>
+      <button class="wide wide--go" type="button" data-mc-go data-mc-busy="Connecting…">Take the Mac mini’s place</button>
+      <button class="wide" type="button" data-mc-cancel>Cancel</button>
+    </div>
+    <div class="homebar"></div>
+  </div>
+</template>
+
+<!-- The device with transmit has dropped and is away: taking it asks, without red. -->
+<template id="tpl-mc-tx-away">
+  <div class="tdim tdim--band" aria-hidden="true"></div>
+  <div class="tsheet tsheet--band" role="dialog" aria-label="Take transmit from a device that is away">
+    <i class="dsheet__grab" aria-hidden="true"></i>
+    <p class="tsheet__kicker">Take transmit from the MacBook?</p>
+    <div class="tsheet__who"><svg class="tsheet__dev" viewBox="0 0 40 40" aria-hidden="true"><rect x="8" y="9" width="24" height="16" rx="2"/><path d="M4 30h32l-2.5 3h-27z"/></svg><span><b>MacBook Pro</b><small>Away for 40 seconds · its link dropped</small></span></div>
+    <div class="tsheet__what"><span class="vfo__slice" style="background:#ff40ff">B</span><span>Holding transmit, not on the air</span></div>
+    <p class="tsheet__note">The Core keeps transmit for a device that drops, for up to 3 minutes. Taking it now makes you the control operator; the MacBook is told when it comes back, with Take it back.</p>
+    <button class="wide wide--go" type="button" data-mc-go data-mc-busy="Taking transmit…">Take transmit</button>
+    <button class="wide" type="button" data-mc-cancel>Cancel</button>
   </div>
 </template>
 
@@ -11255,7 +12050,7 @@ DX de N1ABC:     7246.5  F5ABC                             1939Z</pre>
       var conn = p.root.querySelector('[data-conn]');
       if (conn) {
         conn.classList.add('is-lost-conn');
-        p.root.querySelector('[data-conn-text]').textContent = 'In use elsewhere';
+        p.root.querySelector('[data-conn-text]').textContent = 'Place taken';
         all(conn, ':scope > span:not([data-conn-text])').forEach(function (el) {
           el.hidden = true;
         });
@@ -11957,6 +12752,474 @@ DX de N1ABC:     7246.5  F5ABC                             1939Z</pre>
     p.wfWrap.appendChild(gap);
   });
 
+
+  /* ------------------------------------------------------------------ */
+  /* Several devices on one Core: another device's slice on this band,   */
+  /* transmit held elsewhere, receivers and places taken and given back  */
+  /* ------------------------------------------------------------------ */
+  // The cast on every screen: this phone owns slice A (7.236.400 LSB); the
+  // MacBook owns slice B (7.249.000 LSB, sharing this phone's receiver) and
+  // slice D on 17 m, and has transmit; the iPad owns slice C on 20 m.
+  var MC_B = { f: 7249000, lo: -3000, hi: -100, color: '#ff40ff' };
+
+  // Another device's slice: no flag, no fill, nothing to drag. Its label
+  // names the device and opens a note on tap.
+  function mcForeign(p) {
+    var frag = document.getElementById('tpl-mc-fx').content.cloneNode(true);
+    var fx = {
+      f: MC_B.f,
+      lo: MC_B.lo,
+      hi: MC_B.hi,
+      pass: frag.querySelector('[data-fx-pass]'),
+      txs: frag.querySelector('[data-fx-txs]'),
+      txw: frag.querySelector('[data-fx-txw]'),
+      line: frag.querySelector('[data-fx-line]'),
+      tri: frag.querySelector('[data-fx-tri]'),
+      tag: frag.querySelector('[data-fx-tag]'),
+      pop: frag.querySelector('[data-fx-pop]'),
+      txb: frag.querySelector('[data-fx-txb]'),
+      where: frag.querySelector('[data-fx-where]')
+    };
+    [fx.line, fx.tri, fx.tag].forEach(function (el) {
+      el.style.setProperty('--fx', MC_B.color);
+    });
+    frag.querySelector('[data-fx-letter]').style.background = MC_B.color;
+    fx.tag.setAttribute('aria-label', 'Slice B, the MacBook’s. Tap for details.');
+    fx.tag.addEventListener('pointerdown', function (e) {
+      e.stopPropagation();
+    });
+    fx.tag.addEventListener('click', function (e) {
+      e.stopPropagation();
+      mcPop(p, fx, fx.pop.hidden);
+    });
+    p.pan.addEventListener('pointerdown', function () {
+      mcPop(p, fx, false);
+    });
+    p.pan.appendChild(frag);
+    p.foreign = [fx];
+    return fx;
+  }
+
+  function mcPop(p, fx, open) {
+    fx.pop.hidden = !open;
+    fx.tag.setAttribute('aria-expanded', String(open));
+    p.place();
+  }
+
+  // Who has transmit, and whether they are on the air, as the band shows it.
+  function mcFxTx(fx, has, onAir) {
+    fx.txb.hidden = !has;
+    fx.txs.hidden = !onAir;
+    fx.txw.hidden = !onAir;
+    fx.where.innerHTML = '<b>7.249.000</b> LSB · ' + (onAir ? 'on the air' : has ? 'has transmit' : 'listening');
+  }
+
+  var mcBasePlace = Phone.prototype.place;
+  Phone.prototype.place = function () {
+    mcBasePlace.call(this);
+    var self = this;
+    if (!this.foreign || !this.W) {
+      return;
+    }
+    this.foreign.forEach(function (fx) {
+      var x = self.fx(fx.f);
+      fx.line.style.transform = 'translateX(' + x.toFixed(1) + 'px)';
+      fx.tri.style.transform = 'translateX(' + x.toFixed(1) + 'px)';
+      var x1 = self.fx(fx.f + fx.lo);
+      var x2 = self.fx(fx.f + fx.hi);
+      fx.pass.style.transform = 'translateX(' + x1.toFixed(1) + 'px)';
+      fx.pass.style.width = Math.max(2, x2 - x1).toFixed(1) + 'px';
+      var t1 = self.fx(fx.f - TX_HI);
+      var t2 = self.fx(fx.f - TX_LO);
+      fx.txs.style.transform = fx.txw.style.transform = 'translateX(' + t1.toFixed(1) + 'px)';
+      fx.txs.style.width = fx.txw.style.width = Math.max(4, t2 - t1).toFixed(1) + 'px';
+      var w = fx.tag.offsetWidth;
+      fx.tag.style.transform = 'translateX(' + clamp(x - w / 2, 4, Math.max(4, self.W - w - 4)).toFixed(1) + 'px)';
+      if (!fx.pop.hidden) {
+        var pw = fx.pop.offsetWidth;
+        fx.pop.style.transform = 'translateX(' + clamp(x - pw / 2, 6, Math.max(6, self.W - pw - 6)).toFixed(1) + 'px)';
+      }
+    });
+  };
+
+  // PTT names the device that has transmit; a tap asks to take it.
+  function mcHolder(p, who, onAir) {
+    p.mcHeldBy = who;
+    p.ptt.classList.toggle('is-elsewhere', !!who);
+    p.ptt.classList.toggle('is-air', !!who && !!onAir);
+    if (!who) {
+      p.ptt.setAttribute('aria-label', 'Push to talk, tap to key and tap again to unkey');
+      p.updateTx();
+      return;
+    }
+    // None of this phone's slices is the transmit slice while another device has transmit.
+    p.slices.forEach(function (s) {
+      s.txBtns.forEach(function (b) {
+        b.classList.remove('is-on');
+        b.setAttribute('aria-pressed', 'false');
+      });
+    });
+    p.ptt.querySelector('[data-ptt-label]').textContent = onAir ? 'TX' : 'PTT';
+    p.ptt.querySelector('[data-ptt-sub]').textContent = who;
+    p.ptt.setAttribute('aria-label', (onAir ? who + ' is on the air' : who + ' has transmit') + '. Tap to ask to take it.');
+  }
+
+  // Nobody holds transmit: no slice anywhere carries the TX mark.
+  function mcNobody(p) {
+    p.slices.forEach(function (s) {
+      s.txBtns.forEach(function (b) {
+        b.classList.remove('is-on');
+        b.setAttribute('aria-pressed', 'false');
+      });
+    });
+  }
+
+  // A question: Cancel and the dim close it; the answer runs after a beat.
+  function mcWire(sheet, dim, onGo) {
+    var go = sheet.querySelector('[data-mc-go]');
+    var goBusy = go.getAttribute('data-mc-busy');
+    var ctl = {
+      open: function () {
+        sheet.hidden = false;
+        dim.hidden = false;
+      },
+      close: function () {
+        sheet.hidden = true;
+        dim.hidden = true;
+      }
+    };
+    all(sheet, '[data-mc-cancel]').forEach(function (b) {
+      b.addEventListener('click', ctl.close);
+    });
+    dim.addEventListener('click', ctl.close);
+    var rows = all(sheet, '[data-mc-pick] .mcpick__row');
+    rows.forEach(function (r) {
+      r.addEventListener('click', function () {
+        rows.forEach(function (o) {
+          o.classList.toggle('is-on', o === r);
+          o.setAttribute('aria-checked', String(o === r));
+        });
+        var red = r.classList.contains('is-tx');
+        go.textContent = r.getAttribute('data-go-text');
+        go.classList.toggle('wide--mox', red);
+        go.classList.toggle('wide--go', !red);
+        go.setAttribute('data-mc-busy', red ? 'Unkeying the MacBook…' : goBusy);
+      });
+    });
+    go.addEventListener('click', function () {
+      if (go.disabled) {
+        return;
+      }
+      var text = go.textContent;
+      go.disabled = true;
+      go.textContent = go.getAttribute('data-mc-busy');
+      setTimeout(function () {
+        ctl.close();
+        go.disabled = false;
+        go.textContent = text;
+        if (onGo) {
+          onGo();
+        }
+      }, 1100);
+    });
+    return ctl;
+  }
+
+  function mcSheet(p, id, onGo) {
+    var frag = document.getElementById(id).content.cloneNode(true);
+    var dim = frag.querySelector('.tdim');
+    var sheet = frag.querySelector('.tsheet');
+    var clock = sheet.querySelector('[data-mc-clock]');
+    if (clock) {
+      var secs = 42;
+      setInterval(function () {
+        secs++;
+        clock.textContent = fmtSecs(secs);
+      }, 1000);
+    }
+    p.root.appendChild(frag);
+    return mcWire(sheet, dim, onGo);
+  }
+
+  // A notice on the band, with an answer when there is one.
+  function mcToast(p, kind, html, action, onAction) {
+    var toast = p.root.querySelector('[data-toast]');
+    toast.classList.add('toast--' + kind);
+    toast.querySelector('span').innerHTML = html;
+    if (action) {
+      toast.classList.add('toast--act');
+      var b = document.createElement('button');
+      b.className = 'rbtn rbtn--go';
+      b.type = 'button';
+      b.textContent = action;
+      b.addEventListener('click', function () {
+        onAction(b, toast);
+      });
+      toast.appendChild(b);
+    }
+    toast.hidden = false;
+    return toast;
+  }
+
+  phones.forEach(function (p) {
+    var scene = p.root.parentElement.getAttribute('data-scene') || '';
+    if (scene === 'reclaim') {
+      scene = 'mc-reclaim';
+    }
+    if (scene.indexOf('mc-') !== 0) {
+      return;
+    }
+    // This phone owns slice A only; B belongs to the MacBook.
+    var own = p.slices[1];
+    [own.passSpec, own.passWf, own.line, own.tri, own.flag, own.fbtns, own.fold].forEach(function (el) {
+      el.remove();
+    });
+    p.slices.splice(1, 1);
+
+    if (scene === 'mc-rxgone') {
+      // The iPad took the receiver: slice A closed here, the band stops.
+      p.frozen = true;
+      p.root.classList.add('is-rxgone');
+      p.ptt.classList.add('is-empty');
+      var over = document.getElementById('tpl-mc-rxgone').content.firstElementChild.cloneNode(true);
+      p.root.appendChild(over);
+      var back = over.querySelector('[data-mc-back]');
+      back.addEventListener('click', function () {
+        back.disabled = true;
+        back.textContent = 'Asking first…';
+        setTimeout(function () {
+          back.disabled = false;
+          back.textContent = 'Take it back';
+        }, 1600);
+      });
+      return;
+    }
+
+    var fx = mcForeign(p);
+    var ask = null;
+    p.ptt.addEventListener('click', function (e) {
+      if (p.mcHeldBy) {
+        e.stopImmediatePropagation();
+        if (ask) {
+          ask.open();
+        }
+      }
+    }, true);
+    function tookTransmit() {
+      mcFxTx(fx, false, false);
+      mcHolder(p, null);
+      p.place();
+    }
+
+    if (scene === 'mc-band') {
+      mcFxTx(fx, true, false);
+      mcHolder(p, 'MacBook', false);
+      ask = mcSheet(p, 'tpl-mc-tx', tookTransmit);
+      ask.close();
+      fx.pop.hidden = false;
+      fx.tag.setAttribute('aria-expanded', 'true');
+    } else if (scene === 'mc-take-tx') {
+      mcFxTx(fx, true, false);
+      mcHolder(p, 'MacBook', false);
+      ask = mcSheet(p, 'tpl-mc-tx', tookTransmit);
+    } else if (scene === 'mc-take-tx-air') {
+      mcFxTx(fx, true, true);
+      mcHolder(p, 'MacBook', true);
+      ask = mcSheet(p, 'tpl-mc-tx-air', tookTransmit);
+    } else if (scene === 'mc-tx-taken') {
+      mcFxTx(fx, true, false);
+      mcHolder(p, 'MacBook', false);
+      ask = mcSheet(p, 'tpl-mc-tx', function () {
+        tookTransmit();
+        p.root.querySelector('[data-toast]').hidden = true;
+      });
+      ask.close();
+      mcToast(p, 'warn', '<b>The MacBook took transmit at 19:55.</b> Your slice A keeps listening.', 'Take it back', function () {
+        ask.open();
+      });
+    } else if (scene === 'mc-radio-ptt') {
+      mcFxTx(fx, false, false);
+      mcHolder(p, 'Radio', false);
+      mcToast(p, 'warn', '<b>The radio’s own PTT took transmit at 19:53.</b> Someone keyed the mic or footswitch on the radio.', 'Take it back', function (b, toast) {
+        b.disabled = true;
+        b.textContent = 'Taking transmit…';
+        setTimeout(function () {
+          toast.hidden = true;
+          mcHolder(p, null);
+        }, 1100);
+      });
+    } else if (scene === 'mc-short') {
+      mcFxTx(fx, true, false);
+      mcHolder(p, 'MacBook', false);
+      ask = mcSheet(p, 'tpl-mc-tx', tookTransmit);
+      ask.close();
+      var chip = document.createElement('span');
+      chip.className = 'qchip';
+      chip.textContent = 'Sharing · 12 fps';
+      p.root.appendChild(chip);
+      mcToast(p, 'info', '<b>The Core’s connection is full.</b> The MacBook has transmit, so it keeps its full band and sound. This phone’s band slows to 12 frames a second until there’s room.');
+    } else if (scene === 'mc-rx') {
+      mcFxTx(fx, true, false);
+      mcHolder(p, 'MacBook', false);
+      mcSheet(p, 'tpl-mc-rx');
+    } else if (scene === 'mc-move') {
+      mcFxTx(fx, true, false);
+      mcHolder(p, 'MacBook', false);
+      mcSheet(p, 'tpl-mc-move');
+    } else if (scene === 'mc-set') {
+      mcFxTx(fx, true, false);
+      mcHolder(p, 'MacBook', false);
+      mcSheet(p, 'tpl-mc-set');
+    } else if (scene === 'mc-away') {
+      // The MacBook dropped while it held transmit: away, unkeyed, held for it.
+      mcFxTx(fx, true, false);
+      fx.tag.classList.add('is-away');
+      var away = document.createElement('span');
+      away.className = 'pan__fx-away';
+      away.textContent = 'away';
+      fx.tag.insertBefore(away, fx.txb);
+      fx.where.innerHTML = '<b>7.249.000</b> LSB · away for 40 s, holding transmit';
+      mcHolder(p, 'MacBook', false);
+      ask = mcSheet(p, 'tpl-mc-tx-away', tookTransmit);
+    } else if (scene === 'mc-moving') {
+      // Confirmed Unkey and take over: the Core unkeys the MacBook, then moves transmit.
+      mcFxTx(fx, true, true);
+      mcHolder(p, null);
+      p.ptt.classList.add('is-moving');
+      p.ptt.querySelector('[data-ptt-label]').textContent = 'PTT';
+      p.ptt.querySelector('[data-ptt-sub]').textContent = 'Wait';
+      p.ptt.setAttribute('aria-label', 'Transmit is on its way to this phone');
+      mcToast(p, 'info', '<b>Taking transmit from the MacBook.</b> The Core unkeys it first; PTT is yours in a moment.');
+    } else if (scene === 'mc-radio-held') {
+      // A Core with no desktop: the radio's own mic keys on the transmit slice,
+      // which is this phone's slice A. The slice is held until the press ends.
+      mcFxTx(fx, false, false);
+      mcHolder(p, 'Radio', true);
+      var a = p.slices[0];
+      a.flag.classList.add('is-held');
+      a.txBtns.forEach(function (b) {
+        b.classList.add('is-on');
+      });
+      var hdr = a.flag.querySelector('.vfo__hdr');
+      var held = document.createElement('span');
+      held.className = 'vfo__held';
+      held.textContent = 'ON AIR';
+      hdr.insertBefore(held, hdr.querySelector('.vfo__sp'));
+      p.root.classList.add('is-airheld');
+      p.txSpec.hidden = false;
+      p.txWf.hidden = false;
+      mcToast(p, 'warn', '<b>The radio’s own mic is on the air on slice A.</b> Tuning slice A waits until it stops.');
+    } else if (scene === 'mc-back-plain') {
+      // Back within 3 minutes; this phone didn't have transmit, the MacBook does.
+      mcFxTx(fx, true, false);
+      mcHolder(p, 'MacBook', false);
+      mcToast(p, 'info', '<b>Back on the air.</b> It was this phone’s own session, so it didn’t ask.');
+    } else if (scene === 'mc-back-taken') {
+      // Back within 3 minutes; the MacBook took transmit while this phone was away.
+      mcFxTx(fx, true, false);
+      mcHolder(p, 'MacBook', false);
+      ask = mcSheet(p, 'tpl-mc-tx', tookTransmit);
+      ask.close();
+      mcToast(p, 'warn', '<b>The MacBook took transmit while you were away,</b> at 19:55.', 'Take it back', function () {
+        ask.open();
+      });
+    } else if (scene === 'mc-back-late') {
+      // Back after more than 3 minutes: slices restored, transmit freed, nobody has it.
+      mcFxTx(fx, false, false);
+      mcNobody(p);
+      mcToast(p, 'info', '<b>Back after more than 3 minutes.</b> Your slices are back, and transmit was freed while you were away.');
+    } else if (scene === 'mc-slice-lost') {
+      mcFxTx(fx, true, false);
+      mcHolder(p, 'MacBook', false);
+      mcToast(p, 'warn', '<b>Slice E couldn’t come back:</b> every receiver is in use. Its frequency and settings are saved.');
+    } else if (scene === 'mc-antenna') {
+      mcFxTx(fx, true, false);
+      mcHolder(p, 'MacBook', false);
+      mcToast(p, 'info', '<b>The antenna stays on ANT1</b> while the MacBook listens on it.');
+    } else if (scene === 'mc-busy' || scene === 'mc-short-free') {
+      var busy = scene === 'mc-busy';
+      mcFxTx(fx, busy, false);
+      if (busy) {
+        mcHolder(p, 'MacBook', false);
+      } else {
+        mcNobody(p);
+      }
+      var chip2 = document.createElement('span');
+      chip2.className = 'qchip';
+      chip2.textContent = 'Sharing · 12 fps';
+      p.root.appendChild(chip2);
+      mcToast(p, 'info', busy
+        ? '<b>The Core is busy.</b> The MacBook has transmit, so it keeps its full band and sound. This phone’s band slows to 12 frames a second until there’s room.'
+        : '<b>The Core’s connection is full.</b> The devices share it, so this phone’s band slows to 12 frames a second until there’s room.');
+    } else if (scene === 'mc-reclaim') {
+      // Back after a lost link: slice A is back, and transmit with it, since
+      // nobody took it meanwhile. The MacBook's slice B is only listening.
+      mcFxTx(fx, false, false);
+      p.root.querySelector('[data-toast] span').innerHTML = '<b>Back on the air.</b> It was this phone’s own session, so it didn’t ask, and transmit was still yours.';
+    } else if (scene === 'mc-told') {
+      mcFxTx(fx, true, false);
+      mcHolder(p, 'MacBook', false);
+      ask = mcSheet(p, 'tpl-mc-tx', tookTransmit);
+      ask.close();
+      mcToast(p, 'info', '<b>The MacBook set the attenuator on ADC 1 to 20 dB</b> at 19:52. Your slice A hears through it too.');
+    }
+    p.place();
+  });
+
+  // A fifth device: pick whose place to take.
+  all(document, '.phone[data-mc-fifth]').forEach(function (frame) {
+    frame.appendChild(document.getElementById('tpl-mc-fifth').content.cloneNode(true));
+    var sheet = frame.querySelector('.tsheet');
+    var ctl = mcWire(sheet, frame.querySelector('.tdim'));
+    frame.querySelector('.row .rbtn--go').addEventListener('click', ctl.open);
+  });
+
+  // The iPad whose place was taken: it no longer has a session, so its
+  // slices are off the band. Its own slice was C, on every device.
+  phones.forEach(function (p) {
+    if (p.root.parentElement.getAttribute('data-scene') !== 'takenover') {
+      return;
+    }
+    p.root.classList.add('is-placegone');
+    p.sliceLetters.forEach(function (el) {
+      el.textContent = 'C';
+      el.style.background = '#40ff40';
+      el.style.color = '#0a0a14';
+    });
+  });
+
+  // Setup, Devices with the MacBook away (it dropped a minute ago).
+  all(document, '.phone[data-screen="devices"][data-variant="away"]').forEach(function (frame) {
+    var rows = all(frame, '.drow');
+    rows.forEach(function (row) {
+      var name = row.querySelector('.drow__text b');
+      if (name && name.textContent.indexOf('MacBook Pro') === 0) {
+        row.querySelector('.pill').className = 'pill pill--away';
+        var line = row.querySelector('.drow__text > span');
+        line.innerHTML = '<i class="vfo__slice" style="background:#ff40ff">B</i> 40 m · <i class="vfo__slice" style="background:#ffff00;color:#0a0a14">D</i> 17 m · away for 1 minute';
+      }
+    });
+  });
+
+  // A fifth device, with one of the four away: it comes first, since it has been idle longest.
+  all(document, '.phone[data-mc-fifth="away"]').forEach(function (frame) {
+    var rows = all(frame, '.mcpick__row');
+    var first = rows[0];
+    first.querySelector('.mcpick__text b').innerHTML = 'iPad Pro <span class="pan__fx-away">away</span>';
+    first.querySelector('.mcpick__text small').textContent = 'Away for 2 minutes · its link dropped';
+    first.setAttribute('data-go-text', 'Take the iPad’s place');
+    var second = rows[1];
+    second.querySelector('.mcpick__text b').textContent = 'Mac mini';
+    second.querySelector('.mcpick__text small').textContent = 'Listening on 3.573.000 USB · connected 3 hours · last active 50 minutes ago';
+    second.setAttribute('data-go-text', 'Take the Mac mini’s place');
+    frame.querySelector('[data-mc-go]').textContent = 'Take the iPad’s place';
+  });
+
+  // A fifth device's list when this phone was away more than 3 minutes.
+  all(document, '.phone[data-mc-fifth="late"]').forEach(function (frame) {
+    frame.querySelector('.tsheet__kicker').textContent = 'Your place went to another device';
+    frame.querySelector('.tsheet__note--lead').textContent = 'You were away more than 3 minutes, so your place went to another device. To connect, pick one to take the place of.';
+  });
 
   // A link ending in #<screen id> (the ids on each screen's heading) opens the
   // board at that screen, with room above for its section title. Runs once the

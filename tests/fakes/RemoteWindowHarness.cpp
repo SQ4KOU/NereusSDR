@@ -30,6 +30,7 @@
 #include "gui/SpectrumWidget.h"
 #include "gui/TitleBar.h"
 #include "gui/widgets/StationBlock.h"
+#include "UpgradedCoreToken.h"
 
 namespace NereusSDR::Test {
 
@@ -160,7 +161,8 @@ RemoteWindowHarness::RemoteWindowHarness()
 RemoteWindowHarness::RemoteWindowHarness(const Options& options)
     : m_options(options)
     , m_stationSettings(m_directory.filePath(QStringLiteral("station.settings")))
-    , m_server(&m_station, m_stationSettings, m_directory.path())
+    , m_server(&m_station, m_stationSettings,
+               NereusSDR::Test::seedUpgradedCoreToken(m_directory.path()))
     , m_listener(QStringLiteral("remote window harness"), QWebSocketServer::NonSecureMode)
 {
     // A real StationServer over a model that reports its radio connected,

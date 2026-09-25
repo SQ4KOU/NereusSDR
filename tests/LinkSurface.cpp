@@ -34,6 +34,22 @@
 //                                    R-R3-47): the `accessorySettings`
 //                                    class. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08): the
+//                                    `devices` class; the live session's
+//                                    client declares deviceAuth so the
+//                                    object is sent. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08): the
+//                                    five pair.* kinds' sample messages.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -64,8 +80,8 @@
 #include "core/StepAttenuatorController.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
-#include "core/security/TokenStore.h"
 #include "core/dsp/DspAssetService.h"
+#include "core/security/DeviceStore.h"
 #include "core/session/MirrorEnumDomain.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
@@ -74,6 +90,7 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
+#include "core/session/StationDevicesFacade.h"
 #include "core/session/StationServer.h"
 #include "core/session/StationTelemetry.h"
 #include "core/session/media/DisplayBudget.h"
@@ -97,6 +114,7 @@
 #include "models/TunerModel.h"
 
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 
 namespace NereusSDR::Test {
 
@@ -146,21 +164,36 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
     case SessionMessageKind::CommandResult:
         return SessionMessages::commandResult("removeSlice", 1, true, QString(), {"slice:0"},
                                               {sampleUpdate("revision")});
-    case SessionMessageKind::Hello:
+    case SessionMessageKind::Hello: {
         // With the Task 4 declarations, so `majors` and `features` are
-        // recorded (as optional: an older peer sends neither).
-        return SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 1,
-                                      QStringLiteral("link-surface"), {kSessionProtocolMajor},
-                                      {{"linkSurface", 1}});
+        // recorded (as optional: an older peer sends neither), and the
+        // Core's Task 12 `identity` and `challenge` (optional: a client's
+        // hello, and an older Core's, carry neither). Placeholders, not keys.
+        SessionMessage m =
+            SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 1,
+                                   QStringLiteral("link-surface"), {kSessionProtocolMajor},
+                                   {{"linkSurface", 1}});
+        m.stationIdentity = SessionStationIdentity{QStringLiteral("key"),
+                                                   QStringLiteral("binding")};
+        m.challenge = QStringLiteral("challenge");
+        return m;
+    }
     case SessionMessageKind::AuthRequest:
-        // A placeholder, never a real token.
-        return SessionMessages::authRequest(QStringLiteral("placeholder"));
+        // Placeholders, never a real token, key or signature. With Task 12's
+        // `device` (optional: a token sign-in carries none).
+        return SessionMessages::authRequest(
+            QStringLiteral("placeholder"),
+            SessionDeviceBlock{QStringLiteral("id"), QStringLiteral("key"),
+                               QStringLiteral("name"), QStringLiteral("phone"),
+                               QStringLiteral("signature"), QStringLiteral("short")});
     case SessionMessageKind::AuthResult:
-        return SessionMessages::authResult(false, QStringLiteral("refused"), true);
+        // With Task 12's end `code` (optional).
+        return SessionMessages::authResult(false, QStringLiteral("refused"), true,
+                                           QStringLiteral("code"));
     case SessionMessageKind::Capabilities:
         return SessionMessages::capabilities({sampleUpdate("remoteMediaVersion")});
     case SessionMessageKind::SessionEnd:
-        return SessionMessages::sessionEnd(QStringLiteral("ended"), true);
+        return SessionMessages::sessionEnd(QStringLiteral("ended"), true, QStringLiteral("code"));
     case SessionMessageKind::PropertyWrite:
         return SessionMessages::propertyWrite("slice:0", {sampleUpdate("frequency")}, 7);
     case SessionMessageKind::PropertyResult: {
@@ -197,6 +230,23 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
         m.telemetry = sampleTelemetry(3);
         return m;
     }
+    // iPhone app Task 14: the pair.* kinds. Placeholders, never a real key,
+    // code, share or box.
+    case SessionMessageKind::PairStart:
+        return SessionMessages::pairStart(
+            QStringLiteral("code"),
+            SessionPairDevice{QStringLiteral("key"), QStringLiteral("name"),
+                              QStringLiteral("phone")});
+    case SessionMessageKind::PairAccept:
+        return SessionMessages::pairAccept(
+            SessionStationIdentity{QStringLiteral("key"), QStringLiteral("binding")},
+            QStringLiteral("KG4VCF/shack"));
+    case SessionMessageKind::PairSpake:
+        return SessionMessages::pairSpake(1, QStringLiteral("share"));
+    case SessionMessageKind::PairConfirm:
+        return SessionMessages::pairConfirm(QStringLiteral("box"));
+    case SessionMessageKind::PairFail:
+        return SessionMessages::pairFail(QStringLiteral("refused"), 5000);
     }
     return std::nullopt;
 }
@@ -297,22 +347,22 @@ std::optional<QList<QByteArray>> liveSessionWire(
     model->addSlice(QStringLiteral("pan-0"));
     model->addPanadapter();
 
-    // Provision the throwaway token first, so the server loads it rather
-    // than generating one and printing its first-run pairing banner.
-    { TokenStore provision(dir.path()); }
 
     // Declared before the server so it outlives it; the server owns the
     // station end once it accepts it.
     auto clientEnd = std::make_unique<LoopbackTransport>(QStringLiteral("link-surface-client"));
-    StationServer server(model.get(), stationSettings, dir.path());
+    StationServer server(model.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
     if (configure) {
         configure(server);
     }
     auto* stationEnd = new LoopbackTransport(QStringLiteral("link-surface-station"), &server);
     stationEnd->linkTo(clientEnd.get());
     server.acceptTransport(stationEnd);
+    // Declaring deviceAuth, as a device that signs in by key does, so the
+    // `devices` object (iPhone app Task 13) is among what the Core sends.
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
-        kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"))));
+        kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
+        {kSessionProtocolMajor}, {{"deviceAuth", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -1023,6 +1073,14 @@ QJsonObject captureLimits()
     limits.insert(QStringLiteral("maxPeers"),
                   limit(StationServer::kMaxConcurrentPeers, QStringLiteral("count"),
                         QStringLiteral("StationServer::kMaxConcurrentPeers")));
+    // Part C fix wave (R1-M4): connecting peers one address may hold.
+    limits.insert(QStringLiteral("maxHandshakesPerAddress"),
+                  limit(StationServer::kMaxHandshakesPerAddress, QStringLiteral("count"),
+                        QStringLiteral("StationServer::kMaxHandshakesPerAddress")));
+    // Part C fix wave: auth.request's optional device `shortName`.
+    limits.insert(QStringLiteral("shortNameMaxBytes"),
+                  limit(DeviceStore::kMaxShortNameBytes, QStringLiteral("bytes"),
+                        QStringLiteral("DeviceStore::kMaxShortNameBytes")));
     // DaemonMediaController.cpp:35 [file scope, unreachable here]:
     //   constexpr int kMaxEndpoints = 8;
     limits.insert(QStringLiteral("maxDisplayEndpoints"),
@@ -1205,7 +1263,8 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &RfKitModel::staticMetaObject,
             &StationTciModel::staticMetaObject,
             &AccessoryDataModel::staticMetaObject,
-            &AccessorySettingsModel::staticMetaObject};
+            &AccessorySettingsModel::staticMetaObject,
+            &StationDevicesFacade::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

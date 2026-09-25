@@ -121,12 +121,18 @@
 //   2026-09-24 - R-R3-49 fix wave: tgxlOperateAppliesWhole
 //                (remoteTgxlControlVersion 3). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
 
 #include "core/AppSettings.h"
 #include "core/FaultLog.h"
+#include "core/security/ClientDeviceIdentity.h"
+#include "core/security/DeviceAuthenticator.h"
+#include "core/security/StationIdentity.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionEndReasons.h"
@@ -291,14 +297,17 @@ bool isLocalNetworkAddress(const QString& host)
 // (SessionEndReasons). OperatorReasonText words the same reasons for
 // display. Any other reason still ends the session and is not retried; the
 // window then shows it as a plain refusal with the Core's reason.
-StationEndReport stationEndReport(const QString& reason)
+// iPhone app Task 18 (R-IOS-08, R-IOS-17): the end's code chooses the
+// kind (the link document, section 12.4). A Core that sends no code is an
+// older one, and its reason's words are read instead (SessionEndReasons).
+StationEndReport stationEndReport(const QString& reason, const QString& code)
 {
     StationEndReport report;
     report.kind = StationEndReport::Kind::Refused;
     report.reason = reason;
+    report.code = code;
 
-    // Interim: Part C's end code in session.end replaces parsing the reason.
-    const SessionEndReasons::Parsed parsed = SessionEndReasons::parse(reason);
+    const SessionEndReasons::Parsed parsed = SessionEndReasons::read(code, reason);
     switch (parsed.kind) {
     case SessionEndReasons::Parsed::Kind::TakenOver:
         report.kind = StationEndReport::Kind::TakenOver;
@@ -309,10 +318,62 @@ StationEndReport stationEndReport(const QString& reason)
         report.coreMajor = parsed.coreMajor;
         report.appMajor = parsed.appMajor;
         break;
+    case SessionEndReasons::Parsed::Kind::DeviceRemoved:
+        report.kind = StationEndReport::Kind::DeviceRemoved;
+        break;
+    case SessionEndReasons::Parsed::Kind::PairingRequired:
+        report.kind = StationEndReport::Kind::PairingRequired;
+        break;
+    case SessionEndReasons::Parsed::Kind::IdentityChanged:
+        report.kind = StationEndReport::Kind::IdentityChanged;
+        break;
     case SessionEndReasons::Parsed::Kind::Other:
         break;
     }
     return report;
+}
+
+// iPhone app Task 18: this computer's device block for a sign-in over
+// this connection (the link document, section 3.5): its key signs the
+// transcript of this connection's challenge, the Core's certificate and
+// the Core's key.
+SessionDeviceBlock deviceBlockFor(const ClientDeviceIdentity& identity, const QString& name,
+                                  const QString& shortName, const QByteArray& challenge,
+                                  const QByteArray& certSha256, const QByteArray& stationSpki)
+{
+    const QByteArray deviceSpki = identity.publicKeySpki();
+    return SessionDeviceBlock{
+        StationIdentity::toBase64Url(identity.fingerprint()),
+        StationIdentity::toBase64Url(deviceSpki),
+        name,
+        QString::fromLatin1(ClientDeviceIdentity::kKind),
+        StationIdentity::toBase64Url(identity.sign(
+            DeviceAuthenticator::transcript(challenge, certSha256, stationSpki, deviceSpki))),
+        // Part C fix wave: outside the signed transcript, as `name` is.
+        shortName,
+    };
+}
+
+// The Core's key from its hello, when it is a usable one.
+QByteArray stationSpkiOf(const SessionMessage& hello)
+{
+    if (!hello.stationIdentity) {
+        return {};
+    }
+    bool ok = false;
+    const QByteArray spki = StationIdentity::fromBase64Url(hello.stationIdentity->publicKey, &ok);
+    return ok && StationIdentity::isP256Spki(spki) ? spki : QByteArray();
+}
+
+// True when `binding` (the hello's certBinding, base64url) is `spki`'s
+// signature over this connection's certificate.
+bool bindingHolds(const QByteArray& spki, const QString& binding, const QByteArray& certSha256)
+{
+    bool ok = false;
+    const QByteArray signature = StationIdentity::fromBase64Url(binding, &ok);
+    return ok && certSha256.size() == 32 && !spki.isEmpty()
+        && StationIdentity::verify(spki, StationIdentity::certBindingMessage(certSha256),
+                                   signature);
 }
 
 } // namespace
@@ -486,7 +547,8 @@ StationClient::~StationClient()
 
 void StationClient::connectToStation(const QUrl& url, const QString& token,
                                      const QString& expectedFingerprint,
-                                     bool allowUnpinned)
+                                     bool allowUnpinned,
+                                     const QByteArray& stationIdentityFingerprint)
 {
     // Fix round 1, Important 2. Every OTHER entry into connectToStation()
     // cancels a pending retry as a side effect of reaching attachTransport()
@@ -510,7 +572,9 @@ void StationClient::connectToStation(const QUrl& url, const QString& token,
     // of the cause. Cleared here so a later attempt starts clean.
     m_lastError.clear();
 
-    if (expectedFingerprint.isEmpty() && !allowUnpinned) {
+    // iPhone app Task 18: a paired Core is trusted by its identity key,
+    // which is checked at its hello, so it needs no pin here.
+    if (expectedFingerprint.isEmpty() && !allowUnpinned && stationIdentityFingerprint.isEmpty()) {
         m_lastError = QStringLiteral(
             "No station certificate fingerprint to pin. Refusing to connect: an "
             "unpinned self-signed certificate authenticates nothing.");
@@ -531,11 +595,12 @@ void StationClient::connectToStation(const QUrl& url, const QString& token,
     // onReconnectTimeout(), deliberately does not reset this at all.
     m_reconnectAttempts = 0;
 
-    dialStation(url, token, expectedFingerprint, allowUnpinned);
+    dialStation(url, token, expectedFingerprint, allowUnpinned, stationIdentityFingerprint);
 }
 
 void StationClient::dialStation(const QUrl& url, const QString& token,
-                                const QString& expectedFingerprint, bool allowUnpinned)
+                                const QString& expectedFingerprint, bool allowUnpinned,
+                                const QByteArray& stationIdentityFingerprint)
 {
     // First error wins for THIS attempt -- see connectToStation()'s own
     // clear. A redial from onReconnectTimeout() is a new attempt and gets
@@ -571,12 +636,31 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
         return;
     }
 
+    // iPhone app Task 18: the same for a paired Core. Its certificate
+    // binding is what proves it, and without TLS there is no certificate
+    // to check the binding against.
+    if (url.scheme().compare(QLatin1String("wss"), Qt::CaseInsensitive) != 0
+        && !stationIdentityFingerprint.isEmpty()) {
+        m_lastError = QStringLiteral("This computer connects to a Core it paired with only "
+                                     "over a secure address beginning with wss://.");
+        qCWarning(lcStationClient) << m_lastError << url.toString(QUrl::RemovePassword);
+        emit sessionEnded(m_lastError);
+        emit connectionActivityChanged();
+        return;
+    }
+
     // Whether this attempt owes a certificate comparison before it may
     // send the token. The conjunction is the SAME one the sslErrors bypass
     // below has always used: opting out requires both an explicit
     // allowUnpinned and no configured pin. attachTransport() turns this
     // into the per-attach m_pinSatisfied.
-    m_pinRequired = !(expectedFingerprint.isEmpty() && allowUnpinned);
+    //
+    // iPhone app Task 18: a paired Core owes none. Its identity key and
+    // certificate binding are checked at its hello instead, so a Core
+    // whose certificate changed is still recognised by its key.
+    m_pinRequired = stationIdentityFingerprint.isEmpty()
+                    && !(expectedFingerprint.isEmpty() && allowUnpinned);
+    m_stationIdentity = stationIdentityFingerprint;
 
     // Latched (Task 19) so a later automatic retry can redial identically.
     // Parent design section 13: "onReconnectTimeout slot with latched host
@@ -715,11 +799,13 @@ bool StationClient::ensurePinSatisfied()
 
     auto* wsTransport = qobject_cast<WebSocketTransport*>(m_transport);
     QWebSocket* socket = wsTransport != nullptr ? wsTransport->socket() : nullptr;
-    const QSslCertificate peer = socket != nullptr
-                                     ? socket->sslConfiguration().peerCertificate()
-                                     : QSslCertificate();
+    // iPhone app Task 18: read through the transport, which is where the
+    // device sign-in reads the same certificate (a WebSocketTransport
+    // digests its socket's peer certificate, exactly as this did).
+    const QByteArray peerDigest =
+        m_transport != nullptr ? m_transport->peerCertificateSha256() : QByteArray();
 
-    if (peer.isNull()) {
+    if (peerDigest.isEmpty()) {
         // A pin is configured and the link cannot produce a certificate to
         // check it against. dialStation() refuses a non-TLS scheme up
         // front, so reaching this means something stranger: a transport
@@ -748,13 +834,17 @@ bool StationClient::ensurePinSatisfied()
     }
 
     const QString pinned = m_lastFingerprint.toUpper();
-    const QString actual = formatFingerprint(peer.digest(QCryptographicHash::Sha256));
+    const QString actual = formatFingerprint(peerDigest);
     if (actual != pinned) {
         m_lastError = QStringLiteral("Station certificate fingerprint does not match the saved pin.");
         qCWarning(lcStationClient) << m_lastError;
         // See the ordering note above: endSession, then abort.
         endSession(m_lastError, /*attemptReconnect=*/false);
-        socket->abort();
+        if (socket != nullptr) {
+            socket->abort();
+        } else if (m_transport != nullptr) {
+            m_transport->closeLink(m_lastError);
+        }
         return false;
     }
 
@@ -763,7 +853,8 @@ bool StationClient::ensurePinSatisfied()
 }
 
 void StationClient::startSession(SessionTransport* transport, const QString& token,
-                                 const QString& expectedFingerprint)
+                                 const QString& expectedFingerprint,
+                                 const QByteArray& stationIdentityFingerprint)
 {
     // A pin this caller states is a pin this session owes, exactly as on
     // the dial path. With no fingerprint (the default, and every adopted
@@ -771,7 +862,8 @@ void StationClient::startSession(SessionTransport* transport, const QString& tok
     // to require. Set BEFORE attachTransport(), which is what turns it
     // into this attach's m_pinSatisfied, and latched into
     // m_lastFingerprint because ensurePinSatisfied() reads it from there.
-    m_pinRequired = !expectedFingerprint.isEmpty();
+    m_pinRequired = !expectedFingerprint.isEmpty() && stationIdentityFingerprint.isEmpty();
+    m_stationIdentity = stationIdentityFingerprint;
 
     // Fix round 1, Minor 3. Without this, a client that once dialed via
     // connectToStation() (latching m_lastUrl to something real) and LATER
@@ -856,6 +948,7 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     // over; the new station's hello says it again.
     m_agreedMajor = 0;
     m_stationFeatures.clear();
+    m_enrollingIdentity.clear();
 
     // These are optional, remote-only fields.  A fresh peer may predate
     // them, in which case its snapshot cannot overwrite a status received
@@ -1324,7 +1417,7 @@ void StationClient::onReconnectTimeout()
         emit connectionActivityChanged();
         return;
     }
-    dialStation(m_lastUrl, m_token, m_lastFingerprint, m_lastAllowUnpinned);
+    dialStation(m_lastUrl, m_token, m_lastFingerprint, m_lastAllowUnpinned, m_stationIdentity);
 }
 
 // ── Inbound dispatch ─────────────────────────────────────────────────────
@@ -1472,7 +1565,7 @@ void StationClient::onTransportText(const QByteArray& wire)
         // R-R3-38: an end that will not fix itself is what the window shows
         // and offers buttons for; a retryable one retries as before.
         if (!message.retryable) {
-            m_lastEndReport = stationEndReport(message.reason);
+            m_lastEndReport = stationEndReport(message.reason, message.endCode);
         }
         // The station's own classification, not this end's guess at one
         // and not a match against its English prose. Every station-sent
@@ -1514,7 +1607,8 @@ void StationClient::handleHello(const SessionMessage& message)
         // reason the Core would have refused it: the same end as the
         // Core's refusal, so the window shows the same version notice
         // whichever side finds the mismatch.
-        m_lastEndReport = stationEndReport(m_lastError);
+        m_lastEndReport = stationEndReport(
+            m_lastError, QString::fromLatin1(SessionEndCode::kLinkVersion));
         disconnectFromStation(m_lastError);
         return;
     }
@@ -1544,14 +1638,145 @@ void StationClient::handleHello(const SessionMessage& message)
     // already latched by now (connected() precedes any inbound frame), so
     // in the ordinary case this costs one bool test; when it has not, it
     // does the comparison here rather than letting the secret out.
-    if (!ensurePinSatisfied()) {
+    //
+    // iPhone app Task 18: a paired Core is trusted by its identity key
+    // instead of the pin; signIn() checks it before anything is sent.
+    if (m_stationIdentity.isEmpty() && !ensurePinSatisfied()) {
         return;
     }
 
+    signIn(message);
+}
+
+void StationClient::setDeviceIdentity(std::shared_ptr<const ClientDeviceIdentity> identity,
+                                      const QString& deviceName, const QString& shortName)
+{
+    m_deviceIdentity = std::move(identity);
+    m_deviceName = deviceName;
+    m_deviceShortName = shortName;
+    // A client that cannot sign in by key does not say it can.
+    if (m_deviceIdentity && m_deviceIdentity->isValid()) {
+        m_declaredFeatures.insert(QByteArrayLiteral("deviceAuth"), 1);
+    } else {
+        m_declaredFeatures.remove(QByteArrayLiteral("deviceAuth"));
+        if (m_deviceIdentity) {
+            qCWarning(lcStationClient) << "This computer's device key is unavailable:"
+                                       << m_deviceIdentity->lastError();
+        }
+    }
+}
+
+void StationClient::refuseStation(const QString& reason, StationEndReport::Kind kind,
+                                  const QString& code)
+{
+    m_lastError = reason;
+    qCWarning(lcStationClient) << "Not signing in to the Core:" << reason;
+    // Recorded before the end is reported, so the window reads it.
+    StationEndReport report;
+    report.kind = kind;
+    report.reason = reason;
+    report.code = code;
+    m_lastEndReport = report;
+    disconnectFromStation(reason);
+}
+
+bool StationClient::verifyStationIdentity(const SessionMessage& hello,
+                                          const QByteArray& expected,
+                                          QByteArray* stationSpki, QByteArray* certSha256)
+{
+    const QString identityCode = QString::fromLatin1(SessionEndCode::kIdentityChanged);
+    const QByteArray spki = stationSpkiOf(hello);
+    // A Core that shows no identity, or another one, is not the Core this
+    // computer paired with: never trusted silently (the link document,
+    // section 12.4, identityChanged).
+    if (spki.isEmpty() || StationIdentity::fingerprintOf(spki) != expected) {
+        refuseStation(QStringLiteral("The Core at this address is not the Core this computer "
+                                     "paired with, so this computer did not connect. If the "
+                                     "Core was set up again, forget it here and pair again."),
+                      StationEndReport::Kind::IdentityChanged, identityCode);
+        return false;
+    }
+    const QByteArray certificate =
+        m_transport != nullptr ? m_transport->peerCertificateSha256() : QByteArray();
+    if (!bindingHolds(spki, hello.stationIdentity->certBinding, certificate)) {
+        refuseStation(QStringLiteral("The Core's certificate is not signed by the Core this "
+                                     "computer paired with, so this computer did not connect."),
+                      StationEndReport::Kind::IdentityChanged, identityCode);
+        return false;
+    }
+    *stationSpki = spki;
+    *certSha256 = certificate;
+    return true;
+}
+
+bool StationClient::signIn(const SessionMessage& hello)
+{
+    const bool keyUsable = m_deviceIdentity && m_deviceIdentity->isValid();
+    bool challengeOk = false;
+    const QByteArray challenge = StationIdentity::fromBase64Url(hello.challenge, &challengeOk);
+    const bool challengeUsable =
+        challengeOk && challenge.size() == DeviceAuthenticator::kChallengeBytes;
+
+    if (!m_stationIdentity.isEmpty()) {
+        // A paired Core: its key and certificate binding, then this
+        // computer's own key. The token is never sent to it.
+        QByteArray stationSpki;
+        QByteArray certificate;
+        if (!verifyStationIdentity(hello, m_stationIdentity, &stationSpki, &certificate)) {
+            return false;
+        }
+        if (!keyUsable) {
+            refuseStation(QStringLiteral("This computer's own key could not be read, so it "
+                                         "cannot sign in to the Core it paired with."),
+                          StationEndReport::Kind::Refused, QString());
+            return false;
+        }
+        if (!challengeUsable || !stationDeclares(QByteArrayLiteral("deviceAuth"), 1)) {
+            refuseStation(QStringLiteral("The Core at this address did not offer the sign-in "
+                                         "this computer paired for, so this computer did not "
+                                         "connect."),
+                          StationEndReport::Kind::IdentityChanged,
+                          QString::fromLatin1(SessionEndCode::kIdentityChanged));
+            return false;
+        }
+        send(SessionMessages::hello(m_agreedMajor, kSessionProtocolMinor, m_localSettingsSchema,
+                                    peerNameForThisProcess(), m_supportedMajors,
+                                    m_declaredFeatures));
+        send(SessionMessages::authRequest(
+            QString(), deviceBlockFor(*m_deviceIdentity, m_deviceName, m_deviceShortName,
+                                      challenge, certificate, stationSpki)));
+        return true;
+    }
+
+    // A Core trusted by its pin. When it has an identity and the pin was
+    // actually checked, this computer's key is enrolled with the token in
+    // the same sign-in (the link document, section 3.5), and the Core is
+    // trusted by that identity from then on. A Core with no identity, a
+    // bench link with no pin, or a certificate the identity does not bind
+    // gets the token alone, as before.
+    SessionDeviceBlock block;
+    m_enrollingIdentity.clear();
+    if (keyUsable && !m_token.isEmpty() && m_pinRequired && m_pinSatisfied && challengeUsable
+        && stationDeclares(QByteArrayLiteral("deviceAuth"), 1)) {
+        const QByteArray stationSpki = stationSpkiOf(hello);
+        const QByteArray certificate =
+            m_transport != nullptr ? m_transport->peerCertificateSha256() : QByteArray();
+        if (!stationSpki.isEmpty()
+            && bindingHolds(stationSpki, hello.stationIdentity->certBinding, certificate)) {
+            block = deviceBlockFor(*m_deviceIdentity, m_deviceName, m_deviceShortName,
+                                   challenge, certificate, stationSpki);
+            m_enrollingIdentity = StationIdentity::fingerprintOf(stationSpki);
+        } else {
+            qCWarning(lcStationClient) << "The Core's identity does not match its certificate;"
+                                       << "signing in with the token alone.";
+        }
+    }
     send(SessionMessages::hello(m_agreedMajor, kSessionProtocolMinor, m_localSettingsSchema,
                                 peerNameForThisProcess(), m_supportedMajors,
                                 m_declaredFeatures));
-    send(SessionMessages::authRequest(m_token));
+    send(m_enrollingIdentity.isEmpty() ? SessionMessages::authRequest(m_token)
+                                       : SessionMessages::authRequest(m_token, block));
+    return true;
 }
 
 bool StationClient::stationDeclares(const QByteArray& feature, int minVersion) const
@@ -1566,7 +1791,15 @@ void StationClient::handleAuthResult(const SessionMessage& message)
 {
     if (!message.accepted) {
         m_lastError = message.reason;
-        qCWarning(lcStationClient) << "Station refused authentication:" << message.reason;
+        m_enrollingIdentity.clear();
+        qCWarning(lcStationClient) << "Station refused authentication:" << message.reason
+                                   << message.endCode;
+        // iPhone app Task 18: a refusal that will not fix itself (a removed
+        // or unpaired device, a retired token) is what the window shows,
+        // chosen by its code.
+        if (!message.retryable) {
+            m_lastEndReport = stationEndReport(message.reason, message.endCode);
+        }
         // A WRONG TOKEN stays permanent; a RATE-LIMITED refusal does not.
         // The station's rate limiter is global rather than per-peer, so
         // somebody else's five bad guesses inside 60 s refuse the operator
@@ -1580,6 +1813,16 @@ void StationClient::handleAuthResult(const SessionMessage& message)
         return;
     }
     m_authenticated = true;
+    // iPhone app Task 18: the token sign-in enrolled this computer's key.
+    // The Core is trusted by its identity from now on, a redial included.
+    if (!m_enrollingIdentity.isEmpty()) {
+        const QByteArray learned = m_enrollingIdentity;
+        m_enrollingIdentity.clear();
+        m_stationIdentity = learned;
+        qCInfo(lcStationClient) << "This computer's key is paired with the Core; it signs in"
+                                << "by key from now on.";
+        emit stationIdentityLearned(learned);
+    }
 }
 
 void StationClient::handleCapabilities(const SessionMessage& message)
@@ -2071,6 +2314,12 @@ QObject* StationClient::resolveOrCreate(const QByteArray& objectKey,
     if (m_radioModel.isNull()) {
         return nullptr;
     }
+    // iPhone app Task 18: a Core sends its `devices` object to a client
+    // that declares deviceAuth (the link document, section 7.1). This
+    // window does not show the list, so it holds no object for it.
+    if (objectKey == QByteArrayLiteral("devices")) {
+        return nullptr;
+    }
 
     const int sliceId = idFromKey(objectKey, kSliceKeyPrefix);
     if (sliceId < 0) {
@@ -2242,7 +2491,8 @@ void StationClient::handleDelta(const SessionMessage& message)
     if (target == nullptr) {
         // Once per object per session: a newer Core's object this client
         // does not hold (notches on an older app) changes often.
-        if (!m_unheldDeltaKeys.contains(message.objectKey)) {
+        if (!m_unheldDeltaKeys.contains(message.objectKey)
+            && message.objectKey != QByteArrayLiteral("devices")) {
             m_unheldDeltaKeys.insert(message.objectKey);
             qCWarning(lcStationClient) << "Delta for an object this client does not hold:"
                                        << message.objectKey;

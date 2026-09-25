@@ -7086,7 +7086,17 @@ nereus_add_test(tst_connection_selector)
 nereus_add_test(tst_station_lan_cache)
 nereus_add_test(tst_station_lan_transport)
 nereus_add_test(tst_station_lan_selection)
+# iPhone app Task 16 (D36, R-IOS-16): the Core's Bonjour record and
+# advertiser. On macOS the real backend registers on this computer only and
+# the test browses for it; nothing reaches a network.
+nereus_add_test(tst_dns_sd_advertiser)
 nereus_add_test(tst_gui_connection_controller)
+# iPhone app Task 18 (R-IOS-08): the desktop pairs with a Core. Its own
+# device key, one tap and the code against a real StationServer over the
+# loopback (IPv4 and IPv6), every refusal, then a sign-in by key.
+nereus_add_test(tst_station_pairing_client fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_station_pairing_client PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # R3 remote window harness plan, Task 2 (R-R3-16/17/21/24): one real remote
 # MainWindow dialling an in-process StationServer over a loopback ws://
@@ -7241,6 +7251,72 @@ nereus_add_test(tst_notch_visual_does_not_perturb_noise_floor_or_maxbin)
 # flagged as losing both the class AND its only test with no signal on a
 # runner that happened to lack OpenSSL.
 nereus_add_test(tst_certificate_store)
+
+# iPhone app Task 12 (R-IOS-08, R-IOS-02): the Core's identity key (created
+# once, mode 0600, reused), its label rules, and the paired-device store
+# (well-formed records only, 0600, failing closed on a damaged file).
+nereus_add_test(tst_station_identity)
+nereus_add_test(tst_station_label)
+nereus_add_test(tst_device_store)
+# The device sign-in itself: the authenticator's refusals and rate limits
+# (injected clock), and the link's refusals, token enrolment and admission
+# over the in-process loopback.
+nereus_add_test(tst_device_auth
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+# iPhone app Task 13 (R-IOS-08): the `devices` object, rename, the key
+# backup acknowledgement, revoke and token retirement, and the connection a
+# removed device or a retired token loses, over the in-process loopback.
+nereus_add_test(tst_station_devices
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+# iPhone app Task 14 (R-IOS-08, D37): the pairing code and its word list,
+# the pairing window (injected clock), and the SPAKE2+EE exchange with its
+# confirmation boxes.
+nereus_add_test(tst_pairing_code EXTRA_LABELS core)
+target_compile_definitions(tst_pairing_code PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+nereus_add_test(tst_pairing_window EXTRA_LABELS core)
+nereus_add_test(tst_spake_exchange EXTRA_LABELS core)
+
+# iPhone app Task 14 (R-IOS-08): the Core's side of one pairing over
+# standard input and output, for the cross-implementation tests (the iPhone
+# app's pairing interop test, Task 15, and tst_station_pairing below). The
+# phone session's Task 10 adds tests/tools/ on its own branch: keep both
+# sets of tools here when the two meet.
+add_executable(nereus_pairing_peer EXCLUDE_FROM_ALL
+    tools/nereus_pairing_peer.cpp
+    $<TARGET_OBJECTS:nereus_test_sandbox>)
+target_link_libraries(nereus_pairing_peer PRIVATE NereusCore)
+set_target_properties(nereus_pairing_peer PROPERTIES AUTOMOC ON)
+set_property(GLOBAL APPEND PROPERTY NEREUS_ALL_TESTS nereus_pairing_peer)
+
+# The pairing on the link: LAN mode's refusals and success, code mode's
+# burn, backoff and success, the code kept from token sign-ins and from the
+# logging categories, pairing.open and pairing.close, and the peer tool
+# above paired with the C++ device side in code and LAN mode.
+nereus_add_test(tst_station_pairing
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+add_dependencies(tst_station_pairing nereus_pairing_peer)
+target_compile_definitions(tst_station_pairing PRIVATE
+    NEREUS_PAIRING_PEER="$<TARGET_FILE:nereus_pairing_peer>")
+
+# iPhone app Task 17 (R-IOS-08): the Core's read-only status page on
+# loopback (the code only while unclaimed, nothing for a peer elsewhere, 404
+# for anything but GET /), and the owner-only console socket with every
+# console command against a Core started in the test, including the real
+# entry point (server_main.cpp, as tst_daemon_signals runs it) and the real
+# nereusd binary finding the socket through --config.
+nereus_add_test(tst_station_status_page EXTRA_LABELS session)
+nereus_add_test(tst_station_control_socket
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+if(TARGET nereusd)
+    add_dependencies(tst_station_control_socket nereusd)
+endif()
+target_compile_definitions(tst_station_control_socket PRIVATE
+    NEREUSD_BINARY="$<TARGET_FILE:nereusd>")
 
 # Remote Daemon R2, Task 18: the wss session. Everything tasks 7 through 17
 # built converges here -- StateMirror, ObjectRegistry,

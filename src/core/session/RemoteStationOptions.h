@@ -25,8 +25,13 @@
 //                                    and --token, and the remote-mode GUI
 //                                    gate. AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 18 (R-IOS-08): the
+//                                    paired Core's identity fingerprint.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
+#include <QByteArray>
 #include <QString>
 
 namespace NereusSDR {
@@ -50,6 +55,15 @@ struct RemoteStationOptions {
     /// Accept the station's self-signed certificate without a pinned
     /// fingerprint. Bench convenience; see StationClient::connectToStation.
     bool allowUnpinned = false;
+
+    /// iPhone app Task 18 (R-IOS-08): the fingerprint (SHA-256 of the
+    /// SubjectPublicKeyInfo DER, 32 bytes) of the Core identity key this
+    /// computer paired with, or empty for a Core it has not. When set, the
+    /// Core is trusted by that key: its hello must show it, the certificate
+    /// binding must verify for the certificate this connection presents,
+    /// and this computer signs in with its own device key. The pin and the
+    /// token are then not used (the link document, sections 3.4 and 3.5).
+    QByteArray identityFingerprint;
 
     /// True when this process should run as a remote client.
     bool isRemote() const { return !url.isEmpty(); }

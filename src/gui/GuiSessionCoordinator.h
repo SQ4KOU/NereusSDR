@@ -30,6 +30,15 @@ public:
                  QString* error = nullptr);
     void shutdown();
 
+    /// iPhone app Task 18 (R-IOS-08): the live window's client enrolled
+    /// this computer's key with its Core. The current selection is trusted
+    /// by that identity from now on, as the saved Core is, so the two still
+    /// match; the window itself is kept.
+    void noteStationIdentity(const QByteArray& identityFingerprint)
+    {
+        m_selection.connection.identityFingerprint = identityFingerprint;
+    }
+
 signals:
     void windowChanged(NereusSDR::MainWindow* window);
     void connectionsRequested();

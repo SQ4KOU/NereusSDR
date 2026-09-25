@@ -7,11 +7,17 @@
 
 #include "gui/ConnectionSelector.h"
 
+#include "core/security/PairingCode.h"
+#include "core/session/StationPairingClient.h"
+
 #include <QAbstractItemView>
+#include <QDialogButtonBox>
+#include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QTreeWidget>
@@ -102,14 +108,20 @@ ConnectionSelector::ConnectionSelector(QWidget* parent)
     layout->addWidget(currentGroup);
 
     // R-R3-17: the row actions show and hide with the selected row. Measured
-    // with all nine shown (and the wider of the Disconnect captions), the row
+    // with all ten shown (and the wider of the Disconnect captions), the row
     // keeps that width as its minimum, so showing a hidden button never
     // raises the window's minimum width and makes Qt enlarge the window.
     auto* actionRow = new QWidget(this);
     actionRow->setObjectName(QStringLiteral("connectionSelectorActions"));
     auto* actionLayout = new QHBoxLayout(actionRow);
     actionLayout->setContentsMargins(0, 0, 0, 0);
-    m_addCoreButton = makeButton(tr("Add Core…"), QStringLiteral("connectionSelectorAddCore"));
+    // iPhone app Task 18: "Type an address" is the Core setup editor the
+    // Add Core button opened (a Core's address, and for a Core from before
+    // paired devices its token and certificate fingerprint); "Add a Core by
+    // code" pairs with a Core by the code it shows.
+    m_addCoreButton = makeButton(tr("Type an address…"), QStringLiteral("connectionSelectorAddCore"));
+    m_addByCodeButton = makeButton(tr("Add a Core by code…"),
+                                   QStringLiteral("connectionSelectorAddByCode"));
     m_addRadioButton = makeButton(tr("Add Radio…"), QStringLiteral("connectionSelectorAddRadio"));
     m_scanButton = makeButton(tr("Scan"), QStringLiteral("connectionSelectorScan"));
     m_editButton = makeButton(tr("Edit…"), QStringLiteral("connectionSelectorEdit"));
@@ -119,6 +131,7 @@ ConnectionSelector::ConnectionSelector(QWidget* parent)
     m_connectButton = makeButton(tr("Connect"), QStringLiteral("connectionSelectorConnect"));
     auto* closeButton = makeButton(tr("Close"), QStringLiteral("connectionSelectorClose"));
 
+    actionLayout->addWidget(m_addByCodeButton);
     actionLayout->addWidget(m_addCoreButton);
     actionLayout->addWidget(m_addRadioButton);
     actionLayout->addWidget(m_scanButton);
@@ -133,17 +146,23 @@ ConnectionSelector::ConnectionSelector(QWidget* parent)
 
     // Every button is still unhidden here (setTargets() below applies the
     // first selection), so the layout's size hint covers the full row.
+    // The Connect button reads Pair for a Core that takes new devices.
     int fullRowWidth = 0;
-    for (const QString& caption : {tr("Cancel retry"), tr("Disconnect")}) {
-        m_disconnectButton->setText(caption);
-        actionLayout->invalidate();
-        fullRowWidth = std::max(fullRowWidth, actionLayout->sizeHint().width());
+    for (const QString& connectCaption : {tr("Connect"), tr("Pair")}) {
+        m_connectButton->setText(connectCaption);
+        for (const QString& caption : {tr("Cancel retry"), tr("Disconnect")}) {
+            m_disconnectButton->setText(caption);
+            actionLayout->invalidate();
+            fullRowWidth = std::max(fullRowWidth, actionLayout->sizeHint().width());
+        }
     }
     actionRow->setMinimumWidth(fullRowWidth);
 
     connect(m_targetTree, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem*, QTreeWidgetItem*) { updateActions(); });
     connect(m_addCoreButton, &QPushButton::clicked, this, &ConnectionSelector::addCoreRequested);
+    connect(m_addByCodeButton, &QPushButton::clicked, this,
+            &ConnectionSelector::addByCodeRequested);
     connect(m_addRadioButton, &QPushButton::clicked, this, &ConnectionSelector::addRadioRequested);
     connect(m_scanButton, &QPushButton::clicked, this, &ConnectionSelector::scanRequested);
     connect(m_editButton, &QPushButton::clicked, this, [this] {
@@ -164,8 +183,13 @@ ConnectionSelector::ConnectionSelector(QWidget* parent)
     connect(m_disconnectButton, &QPushButton::clicked, this,
             &ConnectionSelector::disconnectRequested);
     connect(m_connectButton, &QPushButton::clicked, this, [this] {
-        if (const ConnectionTargetRow* target = selectedTarget();
-            target != nullptr && target->connectable) {
+        const ConnectionTargetRow* target = selectedTarget();
+        if (target == nullptr) {
+            return;
+        }
+        if (target->pairable) {
+            emit pairRequested(target->key);
+        } else if (target->connectable) {
             emit connectRequested(target->key);
         }
     });
@@ -404,9 +428,11 @@ void ConnectionSelector::updateActions()
 {
     const ConnectionTargetRow* target = selectedTarget();
     const bool hasTarget = target != nullptr;
-    const bool canConnect = hasTarget && target->connectable;
+    const bool canPair = hasTarget && target->pairable;
+    const bool canConnect = hasTarget && (target->connectable || canPair);
     const bool canEdit = hasTarget && target->editable;
     const bool canForget = hasTarget && target->forgettable;
+    m_connectButton->setText(canPair ? tr("Pair") : tr("Connect"));
     m_connectButton->setVisible(canConnect);
     m_connectButton->setEnabled(canConnect);
     m_editButton->setVisible(canEdit);
@@ -427,6 +453,93 @@ QPushButton* ConnectionSelector::makeButton(const QString& text, const QString& 
     button->setObjectName(objectName);
     button->setAutoDefault(false);
     return button;
+}
+
+AddCoreByCodeDialog::AddCoreByCodeDialog(const QString& address, QWidget* parent)
+    : QDialog(parent)
+{
+    setWindowTitle(tr("Add a Core by code"));
+    setObjectName(QStringLiteral("addCoreByCode"));
+
+    auto* layout = new QVBoxLayout(this);
+    // Part C fix wave (R2-M2): the places that show the code today. A
+    // headless Core has no screen, and the Remote Access page shows no code
+    // yet.
+    auto* explanation = new QLabel(
+        tr("Type the Core's pairing code and its address. The code is on the Core's status "
+           "page, or run nereusd pairing show on the computer the Core runs on."),
+        this);
+    explanation->setObjectName(QStringLiteral("addCoreByCodeExplanation"));
+    configurePlainTextLabel(explanation);
+    layout->addWidget(explanation);
+
+    auto* form = new QFormLayout();
+    m_codeEdit = new QLineEdit(this);
+    m_codeEdit->setObjectName(QStringLiteral("addCoreByCodeCode"));
+    m_codeEdit->setPlaceholderText(tr("7-anvil-harbor"));
+    m_codeEdit->setMaxLength(64);
+    m_addressEdit = new QLineEdit(address, this);
+    m_addressEdit->setObjectName(QStringLiteral("addCoreByCodeAddress"));
+    m_addressEdit->setPlaceholderText(tr("shack-core.local, 192.168.1.20 or [2001:db8::20]"));
+    m_addressEdit->setMaxLength(512);
+    form->addRow(tr("Pairing code:"), m_codeEdit);
+    form->addRow(tr("Core address:"), m_addressEdit);
+    layout->addLayout(form);
+
+    m_errorLabel = new QLabel(this);
+    m_errorLabel->setObjectName(QStringLiteral("addCoreByCodeError"));
+    configurePlainTextLabel(m_errorLabel);
+    m_errorLabel->setVisible(false);
+    layout->addWidget(m_errorLabel);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
+    auto* pairButton = buttons->addButton(tr("Pair"), QDialogButtonBox::AcceptRole);
+    auto* cancelButton = buttons->button(QDialogButtonBox::Cancel);
+    pairButton->setObjectName(QStringLiteral("addCoreByCodePair"));
+    cancelButton->setObjectName(QStringLiteral("addCoreByCodeCancel"));
+    pairButton->setAutoDefault(false);
+    cancelButton->setAutoDefault(false);
+    layout->addWidget(buttons);
+    connect(pairButton, &QPushButton::clicked, this, [this] {
+        if (validate()) {
+            accept();
+        }
+    });
+    connect(cancelButton, &QPushButton::clicked, this, &QDialog::reject);
+    if (!address.isEmpty()) {
+        m_codeEdit->setFocus();
+    }
+    resize(480, sizeHint().height());
+}
+
+QString AddCoreByCodeDialog::code() const
+{
+    return m_codeEdit->text();
+}
+
+bool AddCoreByCodeDialog::validate()
+{
+    // Checked here, before anything is sent: a mistyped word would
+    // otherwise burn the Core's code.
+    if (PairingCode::normalise(m_codeEdit->text()).isEmpty()) {
+        m_errorLabel->setText(tr("Check the code. It is a number and two words, such as "
+                                 "7-anvil-harbor."));
+        m_errorLabel->setVisible(true);
+        return false;
+    }
+    QString host;
+    quint16 port = 0;
+    if (!StationPairingClient::parseAddress(m_addressEdit->text(), &host, &port)) {
+        m_errorLabel->setText(tr("Enter the Core's address: a name, an IPv4 address or an "
+                                 "IPv6 address, with its port if it is not 47910."));
+        m_errorLabel->setVisible(true);
+        return false;
+    }
+    m_host = host;
+    m_port = port;
+    m_errorLabel->clear();
+    m_errorLabel->setVisible(false);
+    return true;
 }
 
 } // namespace NereusSDR

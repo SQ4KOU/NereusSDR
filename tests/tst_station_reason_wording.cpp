@@ -82,6 +82,16 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-47: the Tuner Genius's
 //                                    antenna, operate and bypass reasons.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08):
+//                                    pair.fail's reason (pairFail,
+//                                    sendPairFail) is scanned like every
+//                                    other; the console's pairing code
+//                                    notice is not a reason.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the pairing code is never printed
+//               to standard output (the journal on a packaged Core). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -257,6 +267,8 @@ const QList<ReasonSender>& reasonSenders()
         {"authResult", 1},   {"settingsReject", 3},       {"dropPeer", 1},
         {"sendRejected", 3}, {"sendAllocationResult", 4}, {"rejectAllocation", 3},
         {"reject", 0},       {"rejectDetail", 1},         {"fail", 0},
+        // iPhone app Task 14: pair.fail and StationServer's sender for it.
+        {"pairFail", 0},     {"sendPairFail", 1},
         // Text the station sends as a property value (propertyTextSources).
         {"connectionFailed", 0}, {"failIdentityAdmission", 1}, {"setLastLoadError", 0},
         {"setNnrLastError", 0}, {"publish", 1}, {"setReceiveLayoutRestoreStatus", 1},
@@ -653,6 +665,14 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("notRepresentableReason()"),
           // AlexAntennaFacade's filter policy refusal, scanned below.
           QStringLiteral("alex->setBpfModeForChain(chain, mode)")}},
+        // iPhone app Task 13 (R-IOS-08): the device administration verbs'
+        // command.result, forwarded by the dispatcher as result.reason; the
+        // log lines never reach an app.
+        {"src/core/session/StationDevicesFacade.cpp", {},
+         {"Could not save", "A paired device was removed", "The pairing token was retired"},
+         8},
+        // The label rule a refused station.rename gives.
+        {"src/core/security/StationLabel.cpp", {QStringLiteral("ruleText")}, {}, 1},
         // property.result for a write the mirror refuses.
         {"src/core/session/StateMirror.cpp", {}, {}, 5, {},
          {// A function of this file, and a model's applyMirroredValue
@@ -826,6 +846,13 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/session/StationClient.cpp", "",
          "the app's end of the link: its own reasons are shown through OperatorReasonText"},
         {"src/core/session/StationClient.h", "", "the app's end of the link"},
+        // iPhone app Task 18: the desktop's side of pairing. Its own reasons
+        // are shown through OperatorReasonText; the one pair.fail it sends
+        // only tells the Core the code did not match, and the operator reads
+        // the Core's answer.
+        {"src/core/session/StationPairingClient.cpp", "",
+         "the app's end of pairing: its own reasons are shown through OperatorReasonText"},
+        {"src/core/session/StationPairingClient.h", "", "the app's end of pairing"},
         {"src/core/session/SessionMessages.cpp", "", "encodes a reason it is given"},
         {"src/core/session/SessionMessages.h", "", "declares the messages"},
         {"src/core/session/SessionCommandDispatcher.h", "", "declares emitResult"},
@@ -1032,7 +1059,8 @@ QStringList unplacedReasonSites(const QString& file, const QString& code, int* f
         QStringLiteral("\\bQString\\s*\\*\\s*\\w*(?:[Rr]eason|[Rr]efusal)\\w*\\b"));
     static const QRegularExpression sender(QStringLiteral(
         "\\b(commandResult|sessionEnd|authResult|settingsReject|propertyResult|emitResult"
-        "|dropPeer|sendRejected|sendAllocationResult|rejectAllocation)\\s*\\("));
+        "|dropPeer|sendRejected|sendAllocationResult|rejectAllocation|pairFail|sendPairFail)"
+        "\\s*\\("));
     QStringList unplaced;
     for (const FunctionBody& function : functionsIn(code, anyName)) {
         const bool named = reasonFunction.match(function.name).hasMatch();
@@ -1302,6 +1330,48 @@ private slots:
         }
         QVERIFY2(functions >= 30, qPrintable(QString::number(functions)));
         QVERIFY2(unplaced.isEmpty(), qPrintable(unplaced.join(QLatin1Char('\n'))));
+    }
+
+    void pairFailReasonsSpeakOfTheCore()
+    {
+        // iPhone app Task 14 (R-IOS-08): every reason pair.fail carries
+        // (StationServer's sendPairFail, and handlePairConfirm's refusal
+        // helper, which passes its reason there) is plain and names the
+        // Core, the word the operator knows it by.
+        static const QRegularExpression anyName(QStringLiteral("."));
+        static const QRegularExpression literal(
+            QStringLiteral("^\\s*QStringLiteral\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*\\)\\s*$"));
+        const QString code = codeOf(sourcePath(QStringLiteral("src/core/session/StationServer.cpp")));
+        QVERIFY(!code.isEmpty());
+        QStringList reasons;
+        for (const FunctionBody& function : functionsIn(code, anyName)) {
+            QList<QPair<QString, int>> callees{{QStringLiteral("sendPairFail("), 1}};
+            if (function.name == QLatin1String("handlePairConfirm")) {
+                callees.append({QStringLiteral("refuse("), 0});
+            }
+            for (const auto& [callee, index] : callees) {
+                qsizetype at = function.body.indexOf(callee);
+                while (at >= 0) {
+                    const qsizetype open = at + callee.size() - 1;
+                    const qsizetype close =
+                        closingOf(function.body, open, QLatin1Char('('), QLatin1Char(')'));
+                    const QStringList arguments =
+                        splitTopLevel(function.body.mid(open + 1, close - open - 2));
+                    if (index < arguments.size()) {
+                        const QRegularExpressionMatch match = literal.match(arguments.at(index));
+                        if (match.hasMatch()) {
+                            reasons.append(match.captured(1));
+                        }
+                    }
+                    at = function.body.indexOf(callee, close);
+                }
+            }
+        }
+        QVERIFY2(reasons.size() >= 12, qPrintable(QString::number(reasons.size())));
+        for (const QString& reason : std::as_const(reasons)) {
+            QVERIFY2(wordingProblemIn(reason).isEmpty(), qPrintable(reason));
+            QVERIFY2(reason.contains(QStringLiteral("Core")), qPrintable(reason));
+        }
     }
 
     void everyReasonTheFixturesRecordIsPlain()

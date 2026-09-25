@@ -80,6 +80,15 @@
 //                remoteTgxlControlVersion 1 (the amp's and tuner's own
 //                settings), the latter last in the minor-11 block. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 12 (R-IOS-08): stationIdentityVersion,
+//                last in the minor-11 block. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 13 (R-IOS-08): deviceAdminVersion, last
+//                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 14 (R-IOS-08): pairingVersion, last in
+//                the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -164,6 +173,25 @@ struct StationCapabilities {
     /// commands. Sent last in the same minor-11 block. 0: a window cannot
     /// change the tuner's own settings on this Core and says so.
     int remoteTgxlControlVersion = 0;
+    /// iPhone app Task 12 (R-IOS-08): 1 means the Core has its own identity
+    /// key and signs in paired devices by key (the hello's `identity` and
+    /// `challenge`, auth.request's `device`). Sent last in the same
+    /// minor-11 block. A client learns the same from the hello's
+    /// `features.deviceAuth`, which it needs before capabilities arrive;
+    /// this entry is what a signed-in window reads afterwards.
+    int stationIdentityVersion = 0;
+    /// iPhone app Task 13 (R-IOS-08): 1 means the Core sends the `devices`
+    /// object (its paired devices, label, claim, token and key backup) to a
+    /// device whose hello declares `deviceAuth` 1, and takes devices.revoke,
+    /// station.rename, station.acknowledgeKeyBackup and station.retireToken.
+    /// Sent in the same minor-11 block, after stationIdentityVersion.
+    int deviceAdminVersion = 0;
+    /// iPhone app Task 14 (R-IOS-08): 1 means the Core pairs devices (the
+    /// `pair.*` messages, which a client learns before capabilities from the
+    /// hello's `features.pairing`), keeps `pairingWindowOpen` and
+    /// `pairingCode` on the `devices` object, and takes `pairing.open` and
+    /// `pairing.close`. Sent last in the same minor-11 block.
+    int pairingVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

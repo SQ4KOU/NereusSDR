@@ -23,6 +23,19 @@
 //                                    each client step's role; placeholders
 //                                    in client messages.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08):
+//                                    "$device:<case>" and the runner's own
+//                                    device key, made at run time.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08):
+//                                    stationSetup "otherPairedDevices" and
+//                                    the device ids it records, with the
+//                                    runner's own, for "$ref:device:<n>"
+//                                    and "$ref:device:self".
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -39,9 +52,11 @@
 #include <QJsonDocument>
 #include <QMetaObject>
 #include <QPointer>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSet>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QTimer>
 
 #include <algorithm>
@@ -50,9 +65,13 @@
 #include <vector>
 
 #include "core/dsp/Ps3Snapshot.h"
+#include "core/security/DeviceAuthenticator.h"
+#include "core/security/DeviceStore.h"
+#include "core/security/StationIdentity.h"
 #include "core/session/LinkVersion.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationLanAnnouncement.h"
+#include "core/session/DnsSdAdvertiser.h"
 #include "core/session/StationServer.h"
 #include "fakes/LoopbackTransport.h"
 
@@ -862,6 +881,100 @@ QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
     return QString();
 }
 
+namespace {
+
+// iPhone app Task 12: the runner's own device for "$device:<case>" (the
+// link document, section 16.1). Its key is made at run time in a scratch
+// directory; stationSetup's "pairedDevice" puts it in the Core's paired
+// devices before the client connects.
+struct ConformanceDevice {
+    QTemporaryDir dir;
+    StationIdentity key = StationIdentity::loadOrCreate(dir.path());
+};
+
+bool mentionsDevice(const QJsonValue& value)
+{
+    if (value.isString()) {
+        return value.toString().startsWith(QStringLiteral("$device:"));
+    }
+    if (value.isObject()) {
+        const QJsonObject object = value.toObject();
+        return std::any_of(object.begin(), object.end(),
+                           [](const QJsonValue& v) { return mentionsDevice(v); });
+    }
+    if (value.isArray()) {
+        const QJsonArray array = value.toArray();
+        return std::any_of(array.begin(), array.end(),
+                           [](const QJsonValue& v) { return mentionsDevice(v); });
+    }
+    return false;
+}
+
+// Fills every "$device:<case>" with the device block the runner's device
+// sends: "signed" signs this connection's transcript (the challenge the
+// station's hello gave, recorded as "challenge"); "otherChallenge" signs one
+// with a challenge of the runner's own; "otherCertificate" signs one that
+// binds a certificate other than the station's.
+QJsonValue fillDevice(const QJsonValue& value, const ConformanceDevice& device,
+                      const StationServer& server, const LinkFixtures::Captures& captures,
+                      QString* error)
+{
+    if (value.isString() && value.toString().startsWith(QStringLiteral("$device:"))) {
+        const QString which = value.toString().mid(8);
+        if (!captures.contains(QStringLiteral("challenge"))) {
+            *error = QStringLiteral("$device needs the station's challenge recorded as "
+                                    "\"challenge\"");
+            return {};
+        }
+        bool ok = false;
+        QByteArray challenge = StationIdentity::fromBase64Url(
+            captures.value(QStringLiteral("challenge")).toString(), &ok);
+        QString pin = server.certificateFingerprint();
+        pin.remove(QLatin1Char(':'));
+        QByteArray certSha256 = QByteArray::fromHex(pin.toLatin1());
+        if (which == QStringLiteral("otherChallenge")) {
+            quint32 words[DeviceAuthenticator::kChallengeBytes / sizeof(quint32)]{};
+            QRandomGenerator::system()->fillRange(words);
+            challenge = QByteArray(reinterpret_cast<const char*>(words), sizeof(words));
+        } else if (which == QStringLiteral("otherCertificate")) {
+            certSha256 = StationIdentity::fingerprintOf(QByteArrayLiteral("another certificate"));
+        } else if (which != QStringLiteral("signed")) {
+            *error = QStringLiteral("%1 is not $device:signed, $device:otherChallenge or "
+                                    "$device:otherCertificate").arg(value.toString());
+            return {};
+        }
+        if (!ok || !device.key.isValid()) {
+            *error = QStringLiteral("$device: no usable challenge or device key");
+            return {};
+        }
+        const QByteArray transcript = DeviceAuthenticator::transcript(
+            challenge, certSha256, server.stationIdentity().publicKeySpki(),
+            device.key.publicKeySpki());
+        return QJsonObject{
+            {QStringLiteral("id"), StationIdentity::toBase64Url(device.key.fingerprint())},
+            {QStringLiteral("publicKey"), StationIdentity::toBase64Url(device.key.publicKeySpki())},
+            {QStringLiteral("name"), QStringLiteral("Conformance device")},
+            {QStringLiteral("kind"), QStringLiteral("phone")},
+            {QStringLiteral("signature"),
+             StationIdentity::toBase64Url(device.key.sign(transcript))},
+            // Part C fix wave: every sign-in the station's runner makes
+            // carries a short name, as the app's does.
+            {QStringLiteral("shortName"), QStringLiteral("Conformance")},
+        };
+    }
+    if (value.isObject()) {
+        QJsonObject out;
+        const QJsonObject in = value.toObject();
+        for (auto it = in.constBegin(); it != in.constEnd(); ++it) {
+            out.insert(it.key(), fillDevice(it.value(), device, server, captures, error));
+        }
+        return out;
+    }
+    return value;
+}
+
+} // namespace
+
 QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& server,
                                  LoopbackTransport& transport)
 {
@@ -893,6 +1006,56 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
     Captures captures;
     captures.insert(QStringLiteral("token"), server.token());
     int counter = 0;
+
+    // iPhone app Task 12: the runner's device, when the fixture uses one.
+    std::unique_ptr<ConformanceDevice> device;
+    const bool paired = setup.value(QStringLiteral("pairedDevice")).toBool(false);
+    if (paired || mentionsDevice(QJsonValue(steps))) {
+        device = std::make_unique<ConformanceDevice>();
+        if (!device->key.isValid()) {
+            return QStringLiteral("the runner's device key could not be made");
+        }
+    }
+    if (paired) {
+        PairedDevice record;
+        record.id = device->key.fingerprint();
+        record.publicKeySpki = device->key.publicKeySpki();
+        record.name = QStringLiteral("Conformance device");
+        record.kind = QStringLiteral("phone");
+        if (server.deviceStore() == nullptr || !server.deviceStore()->add(record)) {
+            return QStringLiteral("stationSetup.pairedDevice: the device could not be paired");
+        }
+        captures.insert(QStringLiteral("device:self"),
+                        StationIdentity::toBase64Url(device->key.fingerprint()));
+    }
+    // iPhone app Task 13: devices besides the runner's own, paired before
+    // the client connects, their keys made here and their ids recorded as
+    // "device:1" to "device:<n>" in the order they were paired.
+    std::vector<std::unique_ptr<ConformanceDevice>> otherDevices;
+    const QJsonValue othersValue = setup.value(QStringLiteral("otherPairedDevices"));
+    const double othersCount = othersValue.toDouble(0.0);
+    if (!othersValue.isUndefined()
+        && (!othersValue.isDouble() || othersCount < 0.0 || othersCount > 16.0
+            || othersCount != static_cast<double>(static_cast<int>(othersCount)))) {
+        return QStringLiteral("stationSetup.otherPairedDevices must be a whole number from 0 "
+                              "to 16");
+    }
+    for (int n = 1; n <= static_cast<int>(othersCount); ++n) {
+        auto other = std::make_unique<ConformanceDevice>();
+        PairedDevice record;
+        record.id = other->key.fingerprint();
+        record.publicKeySpki = other->key.publicKeySpki();
+        record.name = QStringLiteral("Other device %1").arg(n);
+        record.kind = QStringLiteral("tablet");
+        if (!other->key.isValid() || server.deviceStore() == nullptr
+            || !server.deviceStore()->add(record)) {
+            return QStringLiteral("stationSetup.otherPairedDevices: device %1 could not be "
+                                  "paired").arg(n);
+        }
+        captures.insert(QStringLiteral("device:%1").arg(n),
+                        StationIdentity::toBase64Url(record.id));
+        otherDevices.push_back(std::move(other));
+    }
     VirtualClock clock(&server);
     int consumed = 0;
     bool lastRetryable = false;
@@ -945,7 +1108,14 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
                 QString error;
                 // Behaviour or scripted, the station's runner sends the
                 // message itself, placeholders filled (section 16.3).
-                const QJsonValue sent = substitute(message, &captures, &counter, &error);
+                QJsonValue outgoing = message;
+                if (device) {
+                    outgoing = fillDevice(message, *device, server, captures, &error);
+                    if (!error.isEmpty()) {
+                        return QStringLiteral("%1: %2").arg(describe(index), error);
+                    }
+                }
+                const QJsonValue sent = substitute(outgoing, &captures, &counter, &error);
                 if (!error.isEmpty()) {
                     return QStringLiteral("%1: %2").arg(describe(index), error);
                 }
@@ -1145,9 +1315,46 @@ StationLanAnnouncement LinkMediaVectors::lanAnnouncement()
     return value;
 }
 
+namespace {
+
+// A made-up identity fingerprint, 32 bytes. Not any Core's.
+QByteArray vectorIdentity()
+{
+    QByteArray identity;
+    for (int i = 0; i < kStationLanIdentityBytes; ++i) {
+        identity.append(static_cast<char>(0x10 + i * 7));
+    }
+    return identity;
+}
+
+QByteArray base64Url(const QByteArray& bytes)
+{
+    return bytes.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+}
+
+} // namespace
+
+StationLanAnnouncement LinkMediaVectors::lanAnnouncement2()
+{
+    StationLanAnnouncement value = lanAnnouncement();
+    value.schema = kStationLanAnnouncementSchema2;
+    value.claimed = true;
+    value.identity = vectorIdentity();
+    value.label = QStringLiteral("KG4VCF/shack");
+    value.pairing = StationLanPairing::Code;
+    return value;
+}
+
+QByteArray LinkMediaVectors::lanAnnouncementTrailingBytes()
+{
+    // Shaped like a future field: a tag, a length and three bytes.
+    return QByteArray("\x07\x03\x61\x62\x63", 5);
+}
+
 QJsonObject LinkMediaVectors::toJson(const StationLanAnnouncement& value)
 {
-    return QJsonObject{
+    QJsonObject json{
+        {QStringLiteral("schema"), int(value.schema)},
         {QStringLiteral("controlPort"), value.controlPort},
         {QStringLiteral("fingerprint"), value.fingerprint},
         {QStringLiteral("coreName"), value.coreName},
@@ -1155,35 +1362,87 @@ QJsonObject LinkMediaVectors::toJson(const StationLanAnnouncement& value)
         {QStringLiteral("radioMac"), value.radioMac},
         {QStringLiteral("radioConnected"), value.radioConnected},
     };
+    if (value.schema == kStationLanAnnouncementSchema2) {
+        json.insert(QStringLiteral("claimed"), value.claimed);
+        json.insert(QStringLiteral("identity"), QString::fromLatin1(base64Url(value.identity)));
+        json.insert(QStringLiteral("label"), value.label);
+        json.insert(QStringLiteral("pairing"), stationLanPairingName(value.pairing));
+    }
+    return json;
 }
 
 bool LinkMediaVectors::fromJson(const QJsonObject& json, StationLanAnnouncement* value,
                                 QString* error)
 {
+    const QStringList schemaOne{QStringLiteral("schema"), QStringLiteral("controlPort"),
+                                QStringLiteral("fingerprint"), QStringLiteral("coreName"),
+                                QStringLiteral("radioName"), QStringLiteral("radioMac"),
+                                QStringLiteral("radioConnected")};
+    const QStringList schemaTwo{QStringLiteral("claimed"), QStringLiteral("identity"),
+                                QStringLiteral("label"), QStringLiteral("pairing")};
+    const int schema = json.value(QStringLiteral("schema")).toInt(-1);
     const QString problem = expectKeys(
-        json,
-        {QStringLiteral("controlPort"), QStringLiteral("fingerprint"), QStringLiteral("coreName"),
-         QStringLiteral("radioName"), QStringLiteral("radioMac"), QStringLiteral("radioConnected")},
-        {}, QStringLiteral("announcement expect"));
+        json, schema == kStationLanAnnouncementSchema2 ? schemaOne + schemaTwo : schemaOne, {},
+        QStringLiteral("announcement expect"));
     if (!problem.isEmpty()) {
         *error = problem;
         return false;
     }
     qint64 port = 0;
     if (!readWhole(json, QStringLiteral("controlPort"), &port, error) || port < 0 || port > 65535
-        || !json.value(QStringLiteral("radioConnected")).isBool()) {
+        || !json.value(QStringLiteral("radioConnected")).isBool()
+        || (schema != kStationLanAnnouncementSchema1 && schema != kStationLanAnnouncementSchema2)) {
         if (error->isEmpty()) {
-            *error = QStringLiteral("controlPort or radioConnected is out of range");
+            *error = QStringLiteral("schema, controlPort or radioConnected is out of range");
         }
         return false;
     }
+    value->schema = static_cast<quint8>(schema);
     value->controlPort = static_cast<quint16>(port);
     value->fingerprint = json.value(QStringLiteral("fingerprint")).toString();
     value->coreName = json.value(QStringLiteral("coreName")).toString();
     value->radioName = json.value(QStringLiteral("radioName")).toString();
     value->radioMac = json.value(QStringLiteral("radioMac")).toString();
     value->radioConnected = json.value(QStringLiteral("radioConnected")).toBool();
+    if (schema == kStationLanAnnouncementSchema2) {
+        const auto pairing =
+            stationLanPairingFromName(json.value(QStringLiteral("pairing")).toString());
+        const auto identity = QByteArray::fromBase64Encoding(
+            json.value(QStringLiteral("identity")).toString().toLatin1(),
+            QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals
+                | QByteArray::AbortOnBase64DecodingErrors);
+        if (!json.value(QStringLiteral("claimed")).isBool() || !pairing || !identity) {
+            *error = QStringLiteral("claimed, identity or pairing is not readable");
+            return false;
+        }
+        value->claimed = json.value(QStringLiteral("claimed")).toBool();
+        value->identity = *identity;
+        value->label = json.value(QStringLiteral("label")).toString();
+        value->pairing = *pairing;
+    }
     return true;
+}
+
+DnsSdRecord LinkMediaVectors::dnsSdRecord()
+{
+    const StationLanAnnouncement announcement = lanAnnouncement2();
+    DnsSdRecord record;
+    record.instanceName = dnsSdInstanceName(announcement.displayName());
+    record.label = announcement.label;
+    record.identity = announcement.identity;
+    record.claimed = announcement.claimed;
+    record.pairing = announcement.pairing;
+    return record;
+}
+
+QJsonObject LinkMediaVectors::toJson(const DnsSdRecord& record)
+{
+    QJsonObject txt;
+    for (const auto& [key, value] : dnsSdTxtEntries(record)) {
+        txt.insert(QString::fromLatin1(key), QString::fromLatin1(value));
+    }
+    return QJsonObject{{QStringLiteral("serviceType"), QString::fromLatin1(kDnsSdServiceType)},
+                       {QStringLiteral("txt"), txt}};
 }
 
 Ps3Snapshot LinkMediaVectors::ps3Snapshot()
@@ -1322,6 +1581,36 @@ QList<DisplayCodecFrame> LinkMediaVectors::nsdcFrames()
         frames.append(frame);
     }
     return frames;
+}
+
+// The first plane's prefix starts right after the 42-byte header:
+// blockSizeCode at 42, blockCount at 43..44; the sequence is at 16..19.
+QByteArray LinkMediaVectors::nsdcBadPlaneDelta(const QByteArray& delta)
+{
+    QByteArray bytes = delta;
+    bytes[42] = 4;
+    return bytes;
+}
+
+QByteArray LinkMediaVectors::nsdcStaleTruncatedDelta(const QByteArray& delta)
+{
+    QByteArray bytes = delta;
+    for (int i = 16; i < 20; ++i) {
+        bytes[i] = 0;
+    }
+    bytes.chop(1);
+    return bytes;
+}
+
+QByteArray LinkMediaVectors::nsdcBadBlockCountKeyframe(const QByteArray& keyframe)
+{
+    QByteArray bytes = keyframe;
+    const quint16 count = static_cast<quint16>(
+        (static_cast<quint8>(bytes.at(43)) << 8) | static_cast<quint8>(bytes.at(44)));
+    const quint16 wrong = static_cast<quint16>(count + 1U);
+    bytes[43] = static_cast<char>(wrong >> 8);
+    bytes[44] = static_cast<char>(wrong & 0xFF);
+    return bytes;
 }
 
 QString LinkMediaVectors::nsdcDispositionName(DisplayCodecDisposition disposition)
