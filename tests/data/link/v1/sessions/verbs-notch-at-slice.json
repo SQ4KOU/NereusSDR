@@ -27,8 +27,16 @@
         {"from": "station", "message": {"class": "StationCatalog", "key": "catalog", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"class": "SliceModel", "key": "slice:0", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"type": "snapshot.complete"}},
-        {"advanceMs": 20000},
-        {"advanceMs": 20000},
-        {"advanceMs": 20000}
+        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "notch.addAtSlice", "id": "$int:invoke40:0:4294967295", "args": [{"ordinal": 0, "name": "sliceId", "kind": "i64", "value": 7}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": "$ref:invoke40", "reason": "That receiver is not on this Core", "type": "command.result", "verb": "notch.addAtSlice"}},
+        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "notch.addAtSlice", "id": "$int:invoke41:0:4294967295", "args": [{"ordinal": 0, "name": "sliceId", "kind": "i64", "value": 0}]}},
+        {"from": "station", "message": {"accepted": true, "affected": ["notches"], "id": "$ref:invoke41", "reason": "", "type": "command.result", "values": [{"kind": "i64", "name": "revision", "ordinal": 0, "value": 1}, {"kind": "i64", "name": "id", "ordinal": 0, "value": 1}], "verb": "notch.addAtSlice"}},
+        {"advanceMs": 50},
+        {"from": "station", "message": {"key": "notches", "properties": [{"kind": "utf8", "name": "listJson", "ordinal": 0, "value": "[{\"active\":true,\"centreHz\":14226550,\"id\":1,\"widthHz\":200}]"}, {"kind": "i64", "name": "revision", "ordinal": 1, "value": 1}], "type": "delta"}},
+        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "notch.addAtSlice", "id": "$int:invoke42:0:4294967295", "args": [{"ordinal": 0, "name": "sliceId", "kind": "i64", "value": 0}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": "$ref:invoke42", "reason": "A notch already exists within 10 Hz", "type": "command.result", "verb": "notch.addAtSlice"}},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "notch.addAtSlice", "id": 1402, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "i64", "value": 0}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 1402, "reason": "This notch change is not one this Core understands.", "type": "command.result", "verb": "notch.addAtSlice"}},
+        {"advanceMs": 50}
     ]
 }

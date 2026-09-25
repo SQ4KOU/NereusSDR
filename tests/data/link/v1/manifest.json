@@ -104,6 +104,7 @@
         {"id": "session-verbs-ps3-display", "file": "sessions/verbs-ps3-display.json", "kind": "session", "requires": {"psDisplayVersion": 1}},
         {"id": "session-verbs-ps3", "file": "sessions/verbs-ps3.json", "kind": "session", "requires": {"psAlgorithmVersion": 3}},
         {"id": "session-verbs-notch", "file": "sessions/verbs-notch.json", "kind": "session", "requires": {"notchControlVersion": 1}},
+        {"id": "session-verbs-notch-at-slice", "file": "sessions/verbs-notch-at-slice.json", "kind": "session", "requires": {"notchControlVersion": 2}},
         {"id": "media-lan-announcement", "file": "media/lan-announcement.bin", "kind": "media", "requires": {}},
         {"id": "media-lan-announcement-2", "file": "media/lan-announcement-2.bin", "kind": "media", "requires": {}},
         {"id": "media-lan-announcement-2-trailing", "file": "media/lan-announcement-2-trailing.bin", "kind": "media", "requires": {}},

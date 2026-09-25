@@ -232,6 +232,11 @@
 //                and a remote window reloads its copies of both
 //                (scheduleRemotePaReload). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: addTnfForSlice, the desktop's +TNF in
+//                one place (moved out of MainWindow::onAddTnfClicked), and
+//                addTnfFromStation, the same add for a device's
+//                notch.addAtSlice. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -13397,6 +13402,24 @@ int RadioModel::addNotchForSlice(SliceModel* slice, double centerHz,
     return m_notchModel->addNotch(centerHz, widthHz);
 }
 
+double RadioModel::tnfCentreHzFor(const SliceModel& slice)
+{
+    // demodulatedRxFrequency(), not effectiveRxFrequency(): composedShiftHz
+    // feeds WDSP the notch origin including the DIG click-tune offset, so a
+    // centre computed without it lands displaced by exactly that offset in
+    // DIGU/DIGL. Codex review of PR #313.
+    return NotchModel::tnfAddCenterHz(slice.demodulatedRxFrequency(),
+                                      slice.filterLow(), slice.filterHigh());
+}
+
+int RadioModel::addTnfForSlice(SliceModel* slice)
+{
+    if (!m_notchModel || !slice) {
+        return -1;
+    }
+    return addNotchForSlice(slice, tnfCentreHzFor(*slice), NotchModel::kDefaultNotchWidthHz);
+}
+
 void RadioModel::commitPendingNotchEdits()
 {
     if (m_notchEditTimer) {
@@ -13457,6 +13480,17 @@ bool RadioModel::addNotchFromStation(int sliceId, double centreHz, double widthH
     }
     if (id) { *id = added; }
     return true;
+}
+
+// R-IOS-27, R-IOS-06: notch.addAtSlice. The centre and width are the
+// desktop's +TNF (tnfCentreHzFor, kDefaultNotchWidthHz); the add and every
+// refusal are notch.add's (addNotchFromStation), an unknown receiver
+// included.
+bool RadioModel::addTnfFromStation(int sliceId, int* id, QString* reason)
+{
+    const SliceModel* slice = sliceById(sliceId);
+    const double centreHz = slice ? tnfCentreHzFor(*slice) : 0.0;
+    return addNotchFromStation(sliceId, centreHz, NotchModel::kDefaultNotchWidthHz, id, reason);
 }
 
 bool RadioModel::moveNotchFromStation(int id, double centreHz, double widthHz,

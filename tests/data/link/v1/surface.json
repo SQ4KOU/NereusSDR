@@ -138,7 +138,7 @@
         {
             "kind": "i64",
             "name": "notchControlVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "i64",
@@ -1254,6 +1254,19 @@
             "capabilityVersion": 1,
             "minMinor": 5,
             "verb": "notch.delete"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                }
+            ],
+            "capability": "notchControlVersion",
+            "capabilityVersion": 2,
+            "minMinor": 5,
+            "verb": "notch.addAtSlice"
         },
         {
             "arguments": [

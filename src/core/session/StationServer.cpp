@@ -284,6 +284,9 @@
 //                                    1, last in the minor-11 block, and
 //                                    slice.selectBand refused below it.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: notchControlVersion
+//                                    2 (notch.addAtSlice).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -3902,8 +3905,9 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.propertyResultVersion = 1;
     // R-R3-21 / R-R3-09: the Core owns the notch list (the `notches` object
     // and the notch.* commands). Independent of WDSP: the list lives on
-    // NotchModel whether or not channels exist.
-    caps.notchControlVersion = 1;
+    // NotchModel whether or not channels exist. 2 (R-IOS-27, R-IOS-06):
+    // also notch.addAtSlice, the desktop's +TNF on a slice.
+    caps.notchControlVersion = 2;
 #ifdef HAVE_WDSP
     caps.wdspVersion = 210;
     caps.wdspCompatibilityVersion = 1;

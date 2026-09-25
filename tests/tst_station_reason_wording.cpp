@@ -108,6 +108,9 @@
 //                                    relays onBandButtonClicked's refusal,
 //                                    now scanned. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: addTnfFromStation
+//                                    (notch.addAtSlice) scanned.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -850,6 +853,9 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("applyNnrModelSelection"), QStringLiteral("addNotchFromStation"),
           QStringLiteral("moveNotchFromStation"), QStringLiteral("setNotchActiveFromStation"),
           QStringLiteral("deleteNotchFromStation"), QStringLiteral("requestIoBoardProbe"),
+          // R-IOS-27, R-IOS-06: notch.addAtSlice, which relays
+          // addNotchFromStation's reasons.
+          QStringLiteral("addTnfFromStation"),
           QStringLiteral("nr3CannotRunReason"),
           // The slice cap reason, relayed by the addSlice and addSliceOnPan
           // verbs' results.

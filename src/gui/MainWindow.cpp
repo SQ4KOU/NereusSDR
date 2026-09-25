@@ -163,6 +163,10 @@
 //                RadioModel::paReadings() (the Core's in a remote window);
 //                the TX badge follows RadioModel::txInhibitedChanged.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: onAddTnfClicked calls
+//                RadioModel::addTnfForSlice, the +TNF add the Core's
+//                notch.addAtSlice shares. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -2816,15 +2820,9 @@ void MainWindow::onAddTnfClicked(const QString& panId)
     if (!m_radioModel) { return; }
     SliceModel* slice = sliceForPan(panId);
     if (!m_radioModel->notchModel() || !slice) { return; }
-    // demodulatedRxFrequency(), not effectiveRxFrequency(): composedShiftHz
-    // feeds WDSP the notch origin including the DIG click-tune offset, so a
-    // centre computed without it lands displaced by exactly that offset in
-    // DIGU/DIGL. Codex review of PR #313.
-    m_radioModel->addNotchForSlice(
-        slice,
-        NotchModel::tnfAddCenterHz(slice->demodulatedRxFrequency(),
-                                   slice->filterLow(), slice->filterHigh()),
-        NotchModel::kDefaultNotchWidthHz);
+    // The centre and width live in RadioModel::addTnfForSlice, which the
+    // Core's notch.addAtSlice runs too (R-IOS-27, R-IOS-06).
+    m_radioModel->addTnfForSlice(slice);
 }
 
 // A rejected add is not a failure worth an error badge, but it must not be

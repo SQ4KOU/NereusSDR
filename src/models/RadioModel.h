@@ -117,6 +117,10 @@
 //                SWR protection settings applied to the live controller
 //                when they change, not only at start. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: addTnfForSlice, the desktop's +TNF
+//                in one place, and addTnfFromStation, the same add for a
+//                device's notch.addAtSlice. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2954,6 +2958,16 @@ public slots:
     /// the width to its own receiver, and its id arrives with its list.
     int addNotchForSlice(SliceModel* slice, double centerHz, double widthHz);
 
+    /// The +TNF button for `slice`: a notch of NotchModel::kDefaultNotchWidthHz
+    /// at NotchModel::tnfAddCenterHz of the slice's demodulated frequency and
+    /// filter (Thetis TNFAdd, console.cs:40313-40331 [v2.10.3.15]), through
+    /// addNotchForSlice. The desktop's button and the Core's
+    /// notch.addAtSlice both come here, so the centre is composed once.
+    /// Returns what addNotchForSlice returns; -1 with no slice or no list.
+    int addTnfForSlice(SliceModel* slice);
+    /// The +TNF centre for `slice`, in Hz.
+    static double tnfCentreHzFor(const SliceModel& slice);
+
 public:
     // ── R-R3-21 / R-R3-09: the Core's notch commands ────────────────────────
     // A remote window changes the Core's list only through these, one notch
@@ -2964,6 +2978,10 @@ public:
     // so they carry no final period; the others are whole sentences.
     bool addNotchFromStation(int sliceId, double centreHz, double widthHz,
                              int* id, QString* reason);
+    /// R-IOS-27, R-IOS-06: notch.addAtSlice, the desktop's +TNF for a
+    /// device (addTnfForSlice on the Core's slice), with notch.add's
+    /// refusals.
+    bool addTnfFromStation(int sliceId, int* id, QString* reason);
     bool moveNotchFromStation(int id, double centreHz, double widthHz, QString* reason);
     bool setNotchActiveFromStation(int id, bool active, QString* reason);
     bool deleteNotchFromStation(int id, QString* reason);

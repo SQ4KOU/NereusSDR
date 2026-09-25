@@ -120,6 +120,10 @@
 //                                    (bandSelectVersion 1), the desktop's
 //                                    band button on a slice.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: notch.addAtSlice
+//                                    (notchControlVersion 2), the desktop's
+//                                    +TNF on a slice.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -497,6 +501,9 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kDspControlSessionProtocolMinor},
         {"notch.delete", {arg("id", kInt)}, "notchControlVersion", 1,
          kDspControlSessionProtocolMinor},
+        // R-IOS-27, R-IOS-06: the desktop's +TNF on a slice.
+        {"notch.addAtSlice", {arg("sliceId", kInt)}, "notchControlVersion", 2,
+         kDspControlSessionProtocolMinor},
         // The Core's paired devices, its name, its key backup and its old
         // pairing token (iPhone app Task 13, R-IOS-08).
         {"devices.revoke", {arg("id", kUtf8)}, "deviceAdminVersion", 1,
@@ -869,6 +876,12 @@ void SessionCommandDispatcher::handleNotchAction(const SessionMessage& invoke)
         valid = hasExactlyArguments(invoke.arguments, {"id"})
             && kindIs("id", MirrorWireKind::Int64)
             && findIntArgument(invoke.arguments, "id", &id) == ArgumentStatus::Ok;
+    } else if (verb == "notch.addAtSlice") {
+        // R-IOS-27, R-IOS-06 (notchControlVersion 2): the desktop's +TNF.
+        // The Core composes the centre and width from its own slice.
+        valid = hasExactlyArguments(invoke.arguments, {"sliceId"})
+            && kindIs("sliceId", MirrorWireKind::Int64)
+            && findIntArgument(invoke.arguments, "sliceId", &sliceId) == ArgumentStatus::Ok;
     } else {
         emitResult(verb, invoke.commandId, false,
                    QStringLiteral("The Core does not know this request. Updating the Core may help."), {});
@@ -885,6 +898,8 @@ void SessionCommandDispatcher::handleNotchAction(const SessionMessage& invoke)
     int addedId = -1;
     if (verb == "notch.add") {
         accepted = m_radioModel->addNotchFromStation(sliceId, centreHz, widthHz, &addedId, &reason);
+    } else if (verb == "notch.addAtSlice") {
+        accepted = m_radioModel->addTnfFromStation(sliceId, &addedId, &reason);
     } else if (verb == "notch.move") {
         accepted = m_radioModel->moveNotchFromStation(id, centreHz, widthHz, &reason);
     } else if (verb == "notch.setActive") {
@@ -899,7 +914,7 @@ void SessionCommandDispatcher::handleNotchAction(const SessionMessage& invoke)
         // own view of the edit until the mirror has caught up with it.
         values.append({0, "revision", MirrorWireKind::Int64,
                        static_cast<qlonglong>(m_radioModel->notchListRevision())});
-        if (verb == "notch.add") {
+        if (verb == "notch.add" || verb == "notch.addAtSlice") {
             values.append({0, "id", MirrorWireKind::Int64, static_cast<qlonglong>(addedId)});
         }
     }

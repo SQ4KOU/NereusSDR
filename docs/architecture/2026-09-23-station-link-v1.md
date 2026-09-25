@@ -699,7 +699,7 @@ change shows as surface drift and as a change to this table.
 | `propertyResultVersion` | 1 |
 | `dspAssetVersion` | 2 |
 | `psDisplayVersion` | 1 |
-| `notchControlVersion` | 1 |
+| `notchControlVersion` | 2 |
 | `audioProfileVersion` | 1 |
 | `audioClockVersion` | 1 |
 | `receiverAudioVersion` | 1 |
@@ -738,6 +738,12 @@ When a feature is off, its version is 0:
   WDSP. `psDisplayVersion` also needs media.
 - `remoteCtunVersion`, `propertyResultVersion` and `notchControlVersion`
   are never 0.
+- `notchControlVersion`: 2. At 1 the Core owns the notch list (the
+  `notches` object, `notch.add`, `notch.move`, `notch.setActive` and
+  `notch.delete`); 2 adds `notch.addAtSlice`, the desktop's +TNF on a
+  slice (section 9.1). The four earlier verbs need 1, so a client that
+  compares the version as a minimum reads 2 exactly as it read 1. It is
+  sent at every minor, as before; the notch verbs need agreed minor 5.
 - `radioHardwareVersion`: sent only at agreed minor 11. 0 without the step
   attenuator bound; 1 with it; 2 with the Alex antennas too; 4 with the HL2
   I/O board too: the `ioBoard` object, `setAlexRxAntenna` (which needs 3)
@@ -2167,6 +2173,7 @@ refused.
 | `notch.move` | `id` i64, `centreHz` f64, `widthHz` f64 | `notchControlVersion` | 1 | 5 |
 | `notch.setActive` | `id` i64, `active` bool | `notchControlVersion` | 1 | 5 |
 | `notch.delete` | `id` i64 | `notchControlVersion` | 1 | 5 |
+| `notch.addAtSlice` | `sliceId` i64 | `notchControlVersion` | 2 | 5 |
 | `devices.revoke` | `id` utf8 | `deviceAdminVersion` | 1 | 11 |
 | `station.rename` | `label` utf8 | `deviceAdminVersion` | 1 | 11 |
 | `station.acknowledgeKeyBackup` | none | `deviceAdminVersion` | 1 | 11 |
@@ -2202,6 +2209,22 @@ These command groups need a sentence beyond the table:
   app to change bands on this Core.", and a Core that sends
   `bandSelectVersion` 0 answers "This Core cannot change bands for an
   app."
+- **A notch at a slice.** `notch.addAtSlice` (`sliceId` `i64`;
+  `notchControlVersion` 2, agreed minor 5) does what the desktop's +TNF
+  button does for that slice: the Core puts a notch of 200 Hz
+  (`NotchModel::kDefaultNotchWidthHz`) at the slice's demodulated
+  frequency (the VFO, RIT and the DIGU/DIGL click-tune offset) moved by
+  the middle of its receive filter (Thetis TNFAdd with
+  notchSidebandShift), through `RadioModel::addTnfForSlice`, the one
+  function the desktop's button calls too. The add is `notch.add`'s, so
+  its rules and refusals are too (the notch control document): an
+  unknown `sliceId` is refused with "That receiver is not on this Core",
+  a second press on the same signal with "A notch already exists within
+  10 Hz", and arguments it does not take with "This notch change is not
+  one this Core understands.". An accepted result is `notch.add`'s:
+  `affected` `["notches"]` and the values `revision` and `id`. A peer
+  below agreed minor 5 gets "Update this app to change notches on this
+  Core.".
 - **The filter policy.** `setAlexBpfMode` sets one receive filter chain's
   filter policy (`chain` 0 or 1; `mode` 0 Auto, 1 Force filter, 2 Force
   bypass), the call the Core's own filter policy dialog makes on Apply.

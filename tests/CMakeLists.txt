@@ -7429,6 +7429,13 @@ nereus_add_test(tst_slice_select_band
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 
+# R-IOS-27, R-IOS-06: notch.addAtSlice, the desktop's +TNF for a device's
+# slice on the Core (notchControlVersion 2), with notch.add's refusals.
+# Loopback only, no RF, no audio device.
+nereus_add_test(tst_notch_add_at_slice
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+
 # R-R3-49 (parity Task 3): a remote window's profile combos (TX, Phone/CW,
 # RADE), Setup > Audio > TX Profile and TX Input's radio microphone, and
 # RADE's Reset vocoder, against an in-process Core. Loopback only, no RF, no

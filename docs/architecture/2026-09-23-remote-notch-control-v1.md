@@ -30,6 +30,9 @@ whenever it runs; it does not depend on a radio or on WDSP.
   stays the window's own.
 - A `notch.*` command on an agreed minor below 5 is refused with "Update this
   app to change notches on this Core."
+- Version 2 (R-IOS-27, R-IOS-06) adds `notch.addAtSlice`, below. The Core
+  sends 2; the other four commands need 1, so a window that compares the
+  version as a minimum reads 2 as it read 1.
 
 ## The `notches` object
 
@@ -73,10 +76,11 @@ one this Core understands." and changes nothing.
 | `notch.move` | `id` (int64), `centreHz` (float64), `widthHz` (float64) | Moves and resizes one notch in one change: both values are checked before either applies, so a refused move changes nothing |
 | `notch.setActive` | `id` (int64), `active` (bool) | Turns one notch on or off |
 | `notch.delete` | `id` (int64) | Removes one notch |
+| `notch.addAtSlice` | `sliceId` (int64) | Version 2. The desktop's +TNF for receiver `sliceId`: the Core composes the notch itself, 200 Hz wide at the receiver's demodulated frequency (VFO, RIT and the DIGU/DIGL click-tune offset) moved by the middle of its receive filter (Thetis TNFAdd with notchSidebandShift), the same `RadioModel::addTnfForSlice` the desktop's button runs, and adds it as `notch.add` does |
 
 An accepted command's `command.result` names affected key `notches` and
-carries `revision`, the list revision after the change; `notch.add` also
-carries `id`, the new notch's id. The window keeps its own view of an edit
+carries `revision`, the list revision after the change; `notch.add` and
+`notch.addAtSlice` also carry `id`, the new notch's id. The window keeps its own view of an edit
 until the mirrored revision reaches that value, so a delta already in flight
 cannot undo it.
 
@@ -87,13 +91,16 @@ A refused command carries a plain reason and no values:
 - "That notch would be outside the radio's tuning range."
 - The Core's own add refusals, for example "Maximum of 1024 notches reached"
   or "A notch already exists within 10 Hz".
+- "That receiver is not on this Core" (`notch.add` and `notch.addAtSlice`
+  naming an unknown `sliceId`).
 
 A dragging window sends at most one `notch.move` per 100 ms
 (`NotchModel::kRemoteMoveIntervalMs`), plus a final one when the drag ends.
 
 ## Evidence
 
-`tst_station_session` (mirror mode, add, move, toggle, delete, refusals, an
+`tst_notch_add_at_slice` (`notch.addAtSlice` lands the desktop +TNF's
+notch in USB, LSB, DIGU and DIGL, and each refusal), `tst_station_session` (mirror mode, add, move, toggle, delete, refusals, an
 older app's refused writes), `tst_tnf_ui_wiring`, `tst_notch_channel_sync`
 (every command reaches every bound WDSP channel once) and
 `tst_settings_scope` (the exact Core-owned key forms). Hardware acceptance is

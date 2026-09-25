@@ -101,6 +101,9 @@
 //   2026-09-25 - R-IOS-27, R-IOS-06: bandSelectVersion, last in the
 //                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: notchControlVersion 2 documented
+//                (notch.addAtSlice). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -293,6 +296,8 @@ struct StationCapabilities {
     /// R-R3-21 / R-R3-09: the Core owns the notch list, mirrors it as the
     /// `notches` object and takes notch.add / notch.move / notch.setActive
     /// / notch.delete. 0 means a window keeps today's settings-based notches.
+    /// 2 (R-IOS-27, R-IOS-06) adds notch.addAtSlice, the desktop's +TNF on
+    /// a slice, with the Core composing the notch.
     int notchControlVersion = 0;
     /// R-R3-23: 1 means the Core can send lossless audio (uncompressed
     /// 16-bit stereo, L16) beside Opus. A GUI that sees it may add
