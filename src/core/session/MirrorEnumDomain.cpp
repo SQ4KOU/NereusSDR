@@ -32,6 +32,9 @@
 //                                    duplicate declaration is removed.
 //                                    AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): DrivePowerSource (the tune
+//                drive source on `transmit`). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorEnumDomain.h"
@@ -42,6 +45,7 @@
 #include "models/RfKitModel.h"
 #include "models/Band.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 #include "models/TunerModel.h"
 
 #include <QHash>
@@ -168,6 +172,11 @@ const DomainTable& table()
             AccessoryDataModel::InterlockMode::Warn,
             AccessoryDataModel::InterlockMode::Block,
         });
+
+        // R-R3-49 (parity Task 2): the tune drive source on `transmit`.
+        declare<DrivePowerSource>(&t, { DrivePowerSource::DriveSlider,
+                                        DrivePowerSource::TuneSlider,
+                                        DrivePowerSource::Fixed });
 
         // From src/models/Band.h. Count is deliberately ABSENT: it is an
         // iteration bound and AlexController's "no slice in this slot"

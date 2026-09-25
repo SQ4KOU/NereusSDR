@@ -42,6 +42,10 @@
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-49 fix wave: RadioModel transmitting Outbound. J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): the TX and Phone/CW applets'
+//                 thirteen TransmitModel settings Bidirectional;
+//                 tunePowerForTxBand and tuneDrivePowerSource Outbound.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -290,7 +294,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "snrDb", MirrorDirection::Outbound },
     { "SliceModel", "lastRadeRxCallsign", MirrorDirection::Outbound },
 
-    // ---- TransmitModel (15 entries) ----
+    // ---- TransmitModel (30 entries) ----
     { "TransmitModel", "mox", MirrorDirection::Bidirectional },
     { "TransmitModel", "tune", MirrorDirection::Bidirectional },
     { "TransmitModel", "power", MirrorDirection::Bidirectional },
@@ -306,6 +310,25 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitModel", "antiVoxTauMs", MirrorDirection::Bidirectional },
     { "TransmitModel", "antiVoxRun", MirrorDirection::Bidirectional },
     { "TransmitModel", "paSettingsBypass", MirrorDirection::Bidirectional },
+    // R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX and
+    // Phone/CW applets' settings. None keys the radio; a receive-only Core
+    // takes them off the air and refuses them on it (StationServer).
+    { "TransmitModel", "tunePower", MirrorDirection::Bidirectional },
+    { "TransmitModel", "voxThresholdDb", MirrorDirection::Bidirectional },
+    { "TransmitModel", "voxHangTimeMs", MirrorDirection::Bidirectional },
+    { "TransmitModel", "monEnabled", MirrorDirection::Bidirectional },
+    { "TransmitModel", "monitorVolume", MirrorDirection::Bidirectional },
+    { "TransmitModel", "txLevelerOn", MirrorDirection::Bidirectional },
+    { "TransmitModel", "txEqEnabled", MirrorDirection::Bidirectional },
+    { "TransmitModel", "cfcEnabled", MirrorDirection::Bidirectional },
+    { "TransmitModel", "cpdrOn", MirrorDirection::Bidirectional },
+    { "TransmitModel", "cpdrLevelDb", MirrorDirection::Bidirectional },
+    { "TransmitModel", "amCarrierLevel", MirrorDirection::Bidirectional },
+    { "TransmitModel", "dexpEnabled", MirrorDirection::Bidirectional },
+    { "TransmitModel", "micGainDb", MirrorDirection::Bidirectional },
+    // The Core's reports; both change only through setTunePowerForTxBand.
+    { "TransmitModel", "tunePowerForTxBand", MirrorDirection::Outbound },
+    { "TransmitModel", "tuneDrivePowerSource", MirrorDirection::Outbound },
 
     // ---- TunerModel (21 entries) ----
     { "TunerModel", "relayC1", MirrorDirection::Outbound },

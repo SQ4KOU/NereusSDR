@@ -69,6 +69,14 @@
 //                 transmit settings gate in a remote window; the keying
 //                 controls keep setTransmitPermitted. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 : R-R3-49 (parity Task 2): Tune Power, the VOX level and
+//                 delay, MON, its level and output pair, LEV, EQ and CFC
+//                 follow setTransmitChainSettingsPermitted in a remote
+//                 window. Its Tune Power slider asks the Core
+//                 (setTunePowerForTxBand) and shows the Core's value; the
+//                 MON output pair routes this computer's monitor audio in a
+//                 remote window too. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -262,6 +270,7 @@ TxApplet::TxApplet(RadioModel* model, QWidget* parent)
     if (model && model->role() == RadioModel::Role::Remote) {
         setTransmitPermitted(false);
         setTransmitSettingsPermitted(false);
+        setTransmitChainSettingsPermitted(false);
     }
 }
 
@@ -1069,6 +1078,15 @@ void TxApplet::wireControls()
     connect(m_tunePwrSlider, &QSlider::valueChanged, this, [this, &tx](int val) {
         updatePowerSliderLabels();
         if (m_updatingFromModel) { return; }
+        // R-R3-49 (parity Task 2): a remote window asks the Core, which
+        // does what the lines below do for its own transmit band. A drag
+        // asks once, on release.
+        if (remoteTunePower()) {
+            if (!m_tunePwrSlider->isSliderDown()) {
+                requestRemoteTunePower(val);
+            }
+            return;
+        }
         tx.setTunePowerForBand(m_currentBand, val);
         // When the user touches the tune slider, switch the tune drive
         // source so TUNE actually reads from tunePowerForBand instead of
@@ -1083,10 +1101,27 @@ void TxApplet::wireControls()
         tx.setTuneDrivePowerSource(DrivePowerSource::TuneSlider);
     });
 
+    connect(m_tunePwrSlider, &QSlider::sliderReleased, this, [this]() {
+        if (m_updatingFromModel || !remoteTunePower()) { return; }
+        requestRemoteTunePower(m_tunePwrSlider->value());
+    });
+
+    // R-R3-49 (parity Task 2): in a remote window the slider shows the
+    // Core's tune power for its transmit band.
+    connect(&tx, &TransmitModel::tunePowerForTxBandChanged,
+            this, [this](int watts) {
+        if (!remoteTunePower()) { return; }
+        QSignalBlocker b(m_tunePwrSlider);
+        m_updatingFromModel = true;
+        m_tunePwrSlider->setValue(watts);
+        updatePowerSliderLabels();
+        m_updatingFromModel = false;
+    });
+
     // Reverse: TransmitModel::tunePowerByBandChanged → slider (only for current band)
     connect(&tx, &TransmitModel::tunePowerByBandChanged,
             this, [this](Band band, int watts) {
-        if (band != m_currentBand) { return; }
+        if (band != m_currentBand || remoteTunePower()) { return; }
         QSignalBlocker b(m_tunePwrSlider);
         m_updatingFromModel = true;
         m_tunePwrSlider->setValue(watts);
@@ -1339,12 +1374,12 @@ void TxApplet::wireControls()
     });
 
     // ── R-R3-45: MON output ↔ AudioEngine::txMonitorOutput ──────────────────
-    // This computer's choice, so a local window only: a remote window cannot
-    // transmit yet, and its MON controls are held off by
-    // setTransmitPermitted. When remote transmit lands, the choice reaches
-    // the Core's AudioEngine::setTxMonitorOutput through the session.
-    if (m_model->role() == RadioModel::Role::Local) {
-        if (AudioEngine* engine = m_model->audioEngine()) {
+    // This computer's choice: the audio engine that plays this window's
+    // sound. R-R3-49 (parity Task 2): a remote window too, where it is this
+    // computer's own routing (a window-scope setting), as in a local window;
+    // it follows setTransmitChainSettingsPermitted there.
+    {
+        if (AudioEngine* engine = m_model->localAudioDevices()) {
             connect(m_monSpeakersBtn, &QPushButton::clicked, this,
                     [this, engine](bool) {
                 showMonitorOutput(false);
@@ -1641,7 +1676,7 @@ void TxApplet::syncFromModel()
     // Tune Power for current band
     {
         QSignalBlocker b(m_tunePwrSlider);
-        const int tunePwr = tx.tunePowerForBand(m_currentBand);
+        const int tunePwr = shownTunePower(m_currentBand);
         m_tunePwrSlider->setValue(tunePwr);
     }
 
@@ -1923,7 +1958,7 @@ void TxApplet::setCurrentBand(Band band)
 
     // Update the Tune Power slider to reflect the per-band stored value.
     {
-        const int tunePwr = tx.tunePowerForBand(band);
+        const int tunePwr = shownTunePower(band);
         QSignalBlocker b(m_tunePwrSlider);
         m_updatingFromModel = true;
         m_tunePwrSlider->setValue(tunePwr);
@@ -2216,20 +2251,12 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
     };
 
     // R-R3-49 (parity Task 1): RF Power and the TX filter low and high
-    // follow setTransmitSettingsPermitted; this gate keeps the rest.
-    apply(m_tunePwrSlider);
+    // follow setTransmitSettingsPermitted; parity Task 2: Tune Power, the
+    // VOX level and delay, MON, LEV, EQ and CFC follow
+    // setTransmitChainSettingsPermitted. This gate keeps the rest.
     apply(m_tuneBtn);
     apply(m_moxBtn);
     apply(m_voxBtn);
-    apply(m_voxSlider);
-    apply(m_voxDlySlider);
-    apply(m_monBtn);
-    apply(m_monitorVolumeSlider);
-    apply(m_monSpeakersBtn);
-    apply(m_monHeadphonesBtn);
-    apply(m_levBtn);
-    apply(m_eqBtn);
-    apply(m_cfcBtn);
     apply(m_profileCombo);
     apply(m_twoToneBtn);
     apply(m_psaBtn);
@@ -2249,6 +2276,54 @@ void TxApplet::setTransmitSettingsPermitted(bool permitted, const QString& unava
                              static_cast<QWidget*>(m_txFilterLowSpin),
                              static_cast<QWidget*>(m_txFilterHighSpin)}) {
         gateTransmitControl(control, permitted, reason);
+    }
+}
+
+// R-R3-49 (parity Task 2): the rest of this applet's transmit settings. The
+// Core takes them off the air (transmitSettingsVersion 2) and shows its
+// values back; the MON output pair is this computer's own routing.
+void TxApplet::setTransmitChainSettingsPermitted(bool permitted,
+                                                 const QString& unavailableReason)
+{
+    m_transmitChainSettingsPermitted = permitted;
+    const QString reason = unavailableReason.isEmpty()
+        ? IStationLink::transmitSettingsUnavailableReason()
+        : unavailableReason;
+    for (QWidget* control : {static_cast<QWidget*>(m_tunePwrSlider),
+                             static_cast<QWidget*>(m_voxSlider),
+                             static_cast<QWidget*>(m_voxDlySlider),
+                             static_cast<QWidget*>(m_monBtn),
+                             static_cast<QWidget*>(m_monitorVolumeSlider),
+                             static_cast<QWidget*>(m_monSpeakersBtn),
+                             static_cast<QWidget*>(m_monHeadphonesBtn),
+                             static_cast<QWidget*>(m_levBtn),
+                             static_cast<QWidget*>(m_eqBtn),
+                             static_cast<QWidget*>(m_cfcBtn)}) {
+        gateTransmitControl(control, permitted, reason);
+    }
+}
+
+bool TxApplet::remoteTunePower() const
+{
+    return m_model && m_model->role() == RadioModel::Role::Remote;
+}
+
+int TxApplet::shownTunePower(Band band) const
+{
+    if (!m_model) { return 0; }
+    const TransmitModel& tx = m_model->transmitModel();
+    return remoteTunePower() ? tx.tunePowerForTxBand() : tx.tunePowerForBand(band);
+}
+
+void TxApplet::requestRemoteTunePower(int watts)
+{
+    if (!m_model) { return; }
+    TransmitModel& tx = m_model->transmitModel();
+    IStationLink* link = m_model->stationLink();
+    if (!m_transmitChainSettingsPermitted || !link
+        || !link->requestTunePowerForTxBand(watts).sent) {
+        // Not asked: the slider shows the Core's value again.
+        tx.reportTunePowerForTxBandRefused();
     }
 }
 

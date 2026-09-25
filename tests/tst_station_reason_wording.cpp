@@ -86,6 +86,10 @@
 //                                    on-the-air refusal and the window's
 //                                    transmit settings reason.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2): the transmit
+//                                    settings' range refusals and the Tune
+//                                    Power command's reasons.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -796,7 +800,10 @@ const QList<ReasonSource>& reasonSources()
           // R-R3-49 (parity Task 1): the Core's one on-the-air refusal.
           QStringLiteral("onAirReason"), QStringLiteral("stationOnAirRefusal"),
           QStringLiteral("setTgxlAntennaForStation"), QStringLiteral("setTgxlOperateForStation"),
-          QStringLiteral("setTgxlBypassForStation"), QStringLiteral("setNnrDiagnosticMode"),
+          QStringLiteral("setTgxlBypassForStation"),
+          // R-R3-49 (parity Task 2): the Tune Power slider's command.
+          QStringLiteral("setTunePowerForTxBandForStation"),
+          QStringLiteral("setNnrDiagnosticMode"),
           QStringLiteral("applyNnrModelSelection"), QStringLiteral("addNotchFromStation"),
           QStringLiteral("moveNotchFromStation"), QStringLiteral("setNotchActiveFromStation"),
           QStringLiteral("deleteNotchFromStation"), QStringLiteral("requestIoBoardProbe"),
@@ -820,7 +827,20 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("kNotchListBusyReason"),
           // R-R3-49 (parity Task 1): onAirReason, a function of this file
           // scanned here.
-          QStringLiteral("onAirReason()")}},
+          QStringLiteral("onAirReason()"),
+          // R-R3-49 (parity Task 2): TransmitModel::settingRangeRefusal,
+          // scanned below.
+          QStringLiteral("range")}},
+        // R-R3-49 (parity Task 2): a transmit setting's range, in
+        // property.result and setTunePowerForTxBand's command.result. The
+        // inserts are the setters' own range numbers.
+        {"src/models/TransmitModel.cpp", {QStringLiteral("settingRangeRefusal")}, {}, 7,
+         {QStringLiteral("hi"), QStringLiteral("kVoxThresholdDbMin"),
+          QStringLiteral("kVoxThresholdDbMax"), QStringLiteral("kVoxHangTimeMsMin"),
+          QStringLiteral("kVoxHangTimeMsMax"), QStringLiteral("kCpdrLevelDbMin"),
+          QStringLiteral("kCpdrLevelDbMax"), QStringLiteral("kAmCarrierLevelMin"),
+          QStringLiteral("kAmCarrierLevelMax"), QStringLiteral("kMicGainDbMin"),
+          QStringLiteral("kMicGainDbMax")}},
     };
     return sources;
 }

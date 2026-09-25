@@ -179,6 +179,13 @@
 //                                    while the radio is off the air and
 //                                    refuses it while it is on the air.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
+//                                    transmitSettingsVersion 2: the TX
+//                                    and Phone/CW applets' settings on
+//                                    `transmit`, a value outside a
+//                                    setting's range refused in plain
+//                                    words, and setTunePowerForTxBand.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1384,6 +1391,18 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                     : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
             break;
         }
+        // R-R3-49 (parity Task 2): the Tune Power slider's command came
+        // with transmitSettingsVersion 2, in the same minor-11 block.
+        if (message.commandVerb == "setTunePowerForTxBand"
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || transmitSettingsVersion() < 2)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change the tune power on this Core.")
+                    : QStringLiteral("This Core cannot change its transmit settings."), {}));
+            break;
+        }
         if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")
             && it->agreedMinor < kRemoteTgxlConfigSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
@@ -1856,6 +1875,16 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
                                 ? SliceModel::activeWriteReason()
                                 : QString::fromLatin1(kOutboundWriteReason));
             continue;
+        }
+        // R-R3-49 (parity Task 2): a transmit setting outside its setter's
+        // range is refused with the range, rather than clamped silently.
+        if (message.objectKey == QByteArray(kTransmitKey) && !m_radioModel.isNull()) {
+            const QString range = m_radioModel->transmitModel()
+                .settingRangeRefusal(update.name, update.value);
+            if (!range.isEmpty()) {
+                refusals.insert(update.name, range);
+                continue;
+            }
         }
         const MirrorApplyResult result = m_mirror->applyInbound(message.objectKey, update.name, update.value);
         if (!result.accepted) {
@@ -2353,7 +2382,11 @@ int StationServer::transmitSettingsVersion() const
 {
     // 1: `transmit` writes outside the keying set and the DspOptions*Tx
     // keys, taken off the air and refused on it (R-R3-49, parity Task 1).
-    return m_radioModel.isNull() ? 0 : 1;
+    // 2: the TX and Phone/CW applets' settings on `transmit` (tunePower,
+    // the VOX level and delay, MON and its level, LEV, EQ, CFC, PROC and
+    // its level, AM carrier, DEXP, mic level), tunePowerForTxBand and
+    // tuneDrivePowerSource, and setTunePowerForTxBand (parity Task 2).
+    return m_radioModel.isNull() ? 0 : 2;
 }
 
 int StationServer::tgxlControlVersion() const

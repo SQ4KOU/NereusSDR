@@ -88,6 +88,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 1):
 //                                    transmitSettingsUnavailableReason.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
+//                                    requestTunePowerForTxBand.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -285,6 +288,13 @@ public:
     /// on a Core without transmitSettingsVersion.
     static QString transmitSettingsUnavailableReason()
     { return QStringLiteral("This Core does not let this app change transmit settings. Updating the Core may help."); }
+    /// R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's
+    /// Tune Power slider. The Core sets the tune power for the band it
+    /// transmits on and the tune drive source to the tune slider, as the
+    /// local slider does; both come back on the mirrored `transmit` object
+    /// (tunePowerForTxBand, tuneDrivePowerSource). Refused on the air.
+    virtual CommandOutcome requestTunePowerForTxBand(int)
+    { return { false, transmitSettingsUnavailableReason() }; }
 
     virtual CommandOutcome requestApplyNnrModels(quint32)
     { return { false, QStringLiteral("NNR model application is not supported by this link to the Core.") }; }

@@ -387,7 +387,7 @@ change shows as surface drift and as a change to this table.
 | `stationTciVersion` | 1 |
 | `accessoryDataVersion` | 1 |
 | `remoteTgxlControlVersion` | 3 |
-| `transmitSettingsVersion` | 1 |
+| `transmitSettingsVersion` | 2 |
 
 <!-- /surface -->
 
@@ -437,7 +437,14 @@ When a feature is off, its version is 0:
   `filterHigh`, `lineInGain`, `userDigOut`, `pureSig`,
   `forceAttwhenPSAoff`, `forceAttwhenPowerChangesWhenPSAon`,
   `forceAttwhenPowerChangesWhenPSAonAndDecreased`, `antiVoxTauMs`,
-  `antiVoxRun` and `paSettingsBypass`. Each is refused while the radio is
+  `antiVoxRun` and `paSettingsBypass`. At 2 it also covers the TX and
+  Phone/CW applets' settings on `transmit`: `tunePower`, `voxThresholdDb`,
+  `voxHangTimeMs`, `monEnabled`, `monitorVolume`, `txLevelerOn`,
+  `txEqEnabled`, `cfcEnabled`, `cpdrOn`, `cpdrLevelDb`, `amCarrierLevel`,
+  `dexpEnabled` and `micGainDb`, each refused outside its range with the
+  range in plain words (section 7.3); the read-only `tunePowerForTxBand`
+  and `tuneDrivePowerSource`; and the command `setTunePowerForTxBand`
+  (section 9.1). Each is refused while the radio is
   on the air (section 7.3). The keying set stays refused on a receive-only
   Core, on and off the air, and so do raw settings writes of
   `hardware/<mac>/tx/...`, `powerByBand` and `tunePowerByBand` (the
@@ -954,7 +961,7 @@ An enum property lists the values its domain allows.
 | 13 | `overloadAdc1` | `i64` | outbound |  |
 | 14 | `adcLinked` | `bool` | outbound |  |
 
-**TransmitModel** (15 properties)
+**TransmitModel** (30 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -973,6 +980,21 @@ An enum property lists the values its domain allows.
 | 12 | `antiVoxTauMs` | `i64` | bidirectional |  |
 | 13 | `antiVoxRun` | `bool` | bidirectional |  |
 | 14 | `paSettingsBypass` | `bool` | bidirectional |  |
+| 15 | `tunePower` | `i64` | bidirectional |  |
+| 16 | `voxThresholdDb` | `i64` | bidirectional |  |
+| 17 | `voxHangTimeMs` | `i64` | bidirectional |  |
+| 18 | `monEnabled` | `bool` | bidirectional |  |
+| 19 | `monitorVolume` | `f64` | bidirectional |  |
+| 20 | `txLevelerOn` | `bool` | bidirectional |  |
+| 21 | `txEqEnabled` | `bool` | bidirectional |  |
+| 22 | `cfcEnabled` | `bool` | bidirectional |  |
+| 23 | `cpdrOn` | `bool` | bidirectional |  |
+| 24 | `cpdrLevelDb` | `i64` | bidirectional |  |
+| 25 | `amCarrierLevel` | `i64` | bidirectional |  |
+| 26 | `dexpEnabled` | `bool` | bidirectional |  |
+| 27 | `micGainDb` | `i64` | bidirectional |  |
+| 28 | `tunePowerForTxBand` | `i64` | outbound |  |
+| 29 | `tuneDrivePowerSource` | `enum` | outbound | 0, 1, 2 |
 
 **TunerModel** (21 properties)
 
@@ -1055,6 +1077,22 @@ Notes on the keys:
   state as `radio`'s `transmitting` (outbound); a window reads "on the
   air" from it, the mirrored `transmit.tune`, and `pureSignal`'s
   `twoToneOn`.
+- **`transmit` at `transmitSettingsVersion` 2.** Each property carries its
+  setter's type: `tunePower` (i64, the fixed tune power Setup uses, 0 to
+  100 W, 0 to 99 on a Hermes Lite 2), `voxThresholdDb` (i64, -80 to 0 dB),
+  `voxHangTimeMs` (i64, 1 to 2000 ms), `monEnabled` (bool), `monitorVolume`
+  (f64, 0.0 to 1.0; a window's slider shows it as 0 to 100),
+  `txLevelerOn`, `txEqEnabled`, `cfcEnabled`, `cpdrOn` (bool; `cpdrOn` is
+  PROC), `cpdrLevelDb` (i64, 0 to 20 dB), `amCarrierLevel` (i64, 0 to 100
+  percent), `dexpEnabled` (bool) and `micGainDb` (i64, -50 to 70 dB).
+  `tunePowerForTxBand` (i64, outbound) is the tune power for the band the
+  Core transmits on (its transmit slice's band, as TUNE reads it), which
+  the TX applet's Tune Power slider shows; it follows the transmit slice
+  across bands. `tuneDrivePowerSource` (enum, outbound: 0 the drive slider,
+  1 the tune slider, 2 the fixed tune power) is where TUNE takes its power
+  from. Both change only through `setTunePowerForTxBand`. None of these
+  keys the radio. The MON output choice (speakers or phones) is not on the
+  link: it is each window's own audio routing.
 - **Unknown classes.** A client that receives a schema for a class it does
   not know records the difference and drops that class's objects and
   deltas.
@@ -1086,7 +1124,13 @@ minor 11 (it was never offered `transmitSettingsVersion`; the same
 reason), any other `transmit` property on a receive-only station while
 its radio is on the air ("The radio is on the air. Try again when it stops.": keyed through
 its `MoxController` from any source, a hardware PTT included, until the
-hand-back to receive ends; TUNE on; or the two-tone test running), and
+hand-back to receive ends; TUNE on; or the two-tone test running), a
+`transmit` setting outside its setter's range, with the range ("Choose a
+tune power from 0 to 100 W.", "Choose a VOX level from -80 to 0 dB.",
+"Choose a VOX delay from 1 to 2000 ms.", "Choose a monitor level from 0.0
+to 1.0.", "Choose a PROC level from 0 to 20 dB.", "Choose an AM carrier
+level from 0 to 100 percent.", "Choose a mic level from -50 to 70 dB."; a
+Hermes Lite 2 says "Choose a tune power from 0 to 99."), and
 DSP settings from a peer that did not negotiate them
 (`StationServer::handlePropertyWrite`). The on-air check is read once for
 the whole write, before anything in it is applied.
@@ -1314,6 +1358,7 @@ refused.
 | `setTgxlAntenna` | `port` i64 | `remoteTgxlControlVersion` | 2 | 11 |
 | `setTgxlOperate` | `on` bool | `remoteTgxlControlVersion` | 2 | 11 |
 | `setTgxlBypass` | `on` bool | `remoteTgxlControlVersion` | 2 | 11 |
+| `setTunePowerForTxBand` | `watts` i64 | `transmitSettingsVersion` | 2 | 11 |
 | `configureRfKit` | `host` utf8, `port` i64 | `remoteRfKitControlVersion` | 2 | 11 |
 | `disconnectRfKit` | none | `remoteRfKitControlVersion` | 2 | 11 |
 | `setRfKitEnabled` | `enabled` bool | `remoteRfKitControlVersion` | 2 | 11 |
@@ -1386,6 +1431,19 @@ Four command groups need a sentence beyond the table:
   antenna on a tuner with no antenna switch or a port outside 1 to 3.
   The reasons are in
   [remote accessory control version 1](2026-09-23-remote-accessory-control-v1.md).
+- **The Tune Power slider.** `setTunePowerForTxBand` (`watts`, 0 to 100,
+  0 to 99 on a Hermes Lite 2) does what the TX applet's Tune Power slider
+  does in a local window: it sets the tune power for the band the Core
+  transmits on and sets the tune drive source to the tune slider, so TUNE
+  uses that power. The Core reports both on `transmit`
+  (`tunePowerForTxBand`, `tuneDrivePowerSource`). It keys nothing, so a
+  receive-only Core takes it, but it is refused while the radio is on the
+  air ("The radio is on the air. Try again when it stops."), outside the
+  tune power range ("Choose a tune power from 0 to 100 W.", or "Choose a
+  tune power from 0 to 99." on a Hermes Lite 2), and when not understood
+  ("The request to change the tune power was not understood."). A peer
+  below agreed minor 11 gets "Update this app to change the tune power on
+  this Core."
 - **One TCI switch.** The Core keeps one TCI switch and port for its own
   TCI server (`setStationTci`, the `stationTci` object). A desktop window
   connected to a Core with `stationTciVersion` 1 shows that switch and
@@ -1935,7 +1993,7 @@ same on every machine.
 | `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
-| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason |
+| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand` |
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key taken off the air and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false |

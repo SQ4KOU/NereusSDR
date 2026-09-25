@@ -1,4 +1,7 @@
 // no-port-check: NereusSDR-original. Negotiated GUI availability, no RF/DSP logic.
+// 2026-09-24: R-R3-49 (parity Task 2): the TX applet's EQ toggle is a
+// transmit setting, live in a remote window off the air. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include <QtTest>
 #include <QAction>
 #include <QDir>
@@ -195,7 +198,11 @@ private slots:
         offset->setValue(400);
         action->trigger();
         auto* eq = window.findChild<QPushButton*>(QStringLiteral("TxEqButton"));
-        QVERIFY(eq && !eq->isEnabled());
+        // R-R3-49 (parity Task 2): the EQ toggle is a transmit setting, live
+        // off the air; its right-click (the TX equalizer dialog) keeps the
+        // remote transmit gate and opens nothing.
+        QVERIFY(eq);
+        QTRY_VERIFY(eq->isEnabled());
         QMetaObject::invokeMethod(eq, "customContextMenuRequested", Q_ARG(QPoint, QPoint()));
         QVERIFY(!window.findChild<TxEqDialog*>());
 
@@ -234,7 +241,9 @@ private slots:
         QWidget* powerPage = setup->realizedPageForTest(QStringLiteral("Power"));
         QVERIFY(powerPage && !powerPage->isEnabled());
         auto* proc = window.findChild<QPushButton*>(QStringLiteral("PhoneCwProcButton"));
-        QVERIFY(proc && !proc->isEnabled());
+        // R-R3-49 (parity Task 2): PROC and EQ are transmit settings: live
+        // off the air whatever txPermitted says.
+        QVERIFY(proc && proc->isEnabled());
         const quint32 epoch = client->sessionEpoch();
         const ConnectionState radioState = window.radioModel()->connectionState();
         StationCapabilities capabilities = client->capabilities();
@@ -252,7 +261,7 @@ private slots:
         QTRY_VERIFY(!client->capabilities().txPermitted);
         QTRY_VERIFY(!xit->isEnabled());
         QVERIFY(!action->isEnabled());
-        QVERIFY(!proc->isEnabled() && !eq->isEnabled());
+        QVERIFY(proc->isEnabled() && eq->isEnabled());
         QVERIFY(!powerPage->isEnabled());
         QCOMPARE(client->sessionEpoch(), epoch);
         QCOMPARE(window.radioModel()->connectionState(), radioState);

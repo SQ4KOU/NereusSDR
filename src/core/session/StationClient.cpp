@@ -125,6 +125,11 @@
 //                (transmitSettingsVersion), and the radio's `transmitting`
 //                cleared when the session ends. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): requestTunePowerForTxBand
+//                (transmitSettingsVersion 2), the Core's tunePowerForTxBand
+//                and tuneDrivePowerSource applied as plain state, and a
+//                refused Tune Power change shows the Core's value again.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2507,6 +2512,12 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
         auto* tuner = qobject_cast<TunerModel*>(target);
         return tuner != nullptr && tuner->applyStationValue(propertyName, native);
     }
+    // R-R3-49 (parity Task 2): the Core's tune power for its transmit band
+    // and tune drive source, plain state; they change only by command.
+    if (className == "TransmitModel") {
+        auto* tx = qobject_cast<TransmitModel*>(target);
+        return tx != nullptr && tx->applyStationValue(propertyName, native);
+    }
     // R-R3-47 / R-R3-22: plain state applies; never a command to an amp.
     if (className == "AmplifierModel") {
         auto* amp = qobject_cast<AmplifierModel*>(target);
@@ -3303,6 +3314,17 @@ StationClient::CommandOutcome StationClient::requestTgxlBypass(bool on)
                        QStringLiteral("the Tuner Genius bypass"));
 }
 
+// R-R3-49 (parity Task 2): the TX applet's Tune Power slider. A Core
+// below transmitSettingsVersion 2 is not asked.
+StationClient::CommandOutcome StationClient::requestTunePowerForTxBand(int watts)
+{
+    if (!transmitSettingsAvailable(2)) {
+        return IStationLink::requestTunePowerForTxBand(watts);
+    }
+    return sendCommand("setTunePowerForTxBand", -1, { intArgument("watts", watts) },
+                       QStringLiteral("the tune power"));
+}
+
 StationClient::CommandOutcome StationClient::requestDisconnectTgxl()
 {
     if (!remoteTgxlConfigAvailable()) {
@@ -3396,6 +3418,11 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             m_radioModel->reportStationAccessoryRefusal(device, reason, message.commandId);
         } else {
             m_radioModel->reportStationSliceCommandRejected(reason);
+        }
+        // R-R3-49 (parity Task 2): a refused Tune Power change leaves the
+        // Core's value; the slider shows it again.
+        if (pending.verb == "setTunePowerForTxBand") {
+            m_radioModel->transmitModel().reportTunePowerForTxBandRefused();
         }
         // R-R3-46 fix wave: a refused band antenna leaves the window's
         // values as the Core's; the Setup tab that showed the click re-reads.

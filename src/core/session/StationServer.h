@@ -184,6 +184,9 @@
 //                                    transmitSettingsVersion and
 //                                    isTransmitSettingKeyAcceptedOffAir.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
+//                                    transmitSettingsVersion 2.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -485,7 +488,9 @@ public:
     // radio model: a receive-only Core takes a `transmit` write outside the
     // keying set (mox, tune, voxEnabled, twoToneActive) and a key on
     // isTransmitSettingKeyAcceptedOffAir's list while its radio is off the
-    // air, and refuses each while it is on the air; 0 otherwise.
+    // air, and refuses each while it is on the air; 0 otherwise. 2 (parity
+    // Task 2): also the TX and Phone/CW applets' settings on `transmit`,
+    // each refused outside its range, and setTunePowerForTxBand.
     int transmitSettingsVersion() const;
     // R-R3-49 (parity Task 1): the one list of transmit settings keys a
     // receive-only Core takes while its radio is off the air (today the

@@ -7276,6 +7276,13 @@ nereus_add_test(tst_station_session
 nereus_add_test(tst_transmit_settings_gate
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# R-R3-49 (parity Task 2): the TX and Phone/CW applets' settings from a
+# remote window: round trips to the Core's TX chain (a test TxChannel, no
+# WDSP channel), range and on-air refusals, the Tune Power command and the
+# applets. Loopback only, no RF, no audio device.
+nereus_add_test(tst_transmit_model_properties
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 
 # iPhone app plan, Task 1 (R-IOS-01): the link's surface, captured from the
 # code (LinkSurface.cpp) and guarded against tests/data/link/v1/surface.json.

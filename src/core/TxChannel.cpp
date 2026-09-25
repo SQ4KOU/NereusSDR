@@ -328,6 +328,9 @@ warren@wpratt.com
 //                 Source: Thetis wdsp/calcc.c:891-1132 [v2.10.3.13] +
 //                 Thetis cmaster.cs:143-147 [v2.10.3.13].  AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): setTxEqRunning records its
+//                 last value for the test read-back. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -3611,6 +3614,7 @@ void TxChannel::setPostGenToneMag(double mag)
 
 void TxChannel::setTxEqRunning(bool on)
 {
+    m_txEqRunningLast = on;  // R-R3-49 (parity Task 2): test read-back only
 #ifdef HAVE_WDSP
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     // From Thetis wdsp/eq.c:742-747 [v2.10.3.13] — SetTXAEQRun(channel, run).

@@ -90,6 +90,10 @@
 //                 transmit settings gate in a remote window; the keying
 //                 controls keep setTransmitPermitted. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 : R-R3-49 (parity Task 2): setTransmitChainSettingsPermitted
+//                 for Tune Power, the VOX level and delay, MON, its level
+//                 and output, LEV, EQ and CFC. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -298,6 +302,14 @@ public slots:
     // availability only, as setTransmitPermitted.
     void setTransmitSettingsPermitted(bool permitted,
                                       const QString& unavailableReason = QString());
+    // R-R3-49 (parity Task 2): the rest of this applet's transmit settings
+    // (Tune Power, the VOX level and delay, MON and its level, the MON
+    // output pair, LEV, EQ, CFC), live while the Core takes them
+    // (transmitSettingsVersion 2) and its radio is off the air. The VOX
+    // button, TUNE, MOX, 2-Tone, PS-A and the profile stay on
+    // setTransmitPermitted.
+    void setTransmitChainSettingsPermitted(bool permitted,
+                                           const QString& unavailableReason = QString());
 public:
 
     // ── Test accessors ──────────────────────────────────────────────────────
@@ -526,6 +538,12 @@ private:
     // after handshake/capability evaluation.
     bool m_transmitPermitted{true};
     bool m_transmitSettingsPermitted{true};
+    bool m_transmitChainSettingsPermitted{true};
+    // R-R3-49 (parity Task 2): a remote window's Tune Power slider asks the
+    // Core (setTunePowerForTxBand) and shows the Core's tunePowerForTxBand.
+    bool remoteTunePower() const;
+    int  shownTunePower(Band band) const;
+    void requestRemoteTunePower(int watts);
 };
 
 } // namespace NereusSDR

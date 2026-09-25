@@ -100,6 +100,10 @@
 //                                    setTgxlOperate and setTgxlBypass
 //                                    (remoteTgxlControlVersion 2).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
+//                                    setTunePowerForTxBand
+//                                    (transmitSettingsVersion 2).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -373,6 +377,9 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"setTgxlBypass", {arg("on", kBool)}, "remoteTgxlControlVersion", 2,
          kRadioIdentitySessionProtocolMinor},
+        // The TX applet's Tune Power slider (R-R3-49, parity Task 2).
+        {"setTunePowerForTxBand", {arg("watts", kInt)}, "transmitSettingsVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
         // The Core's RF-Kit RF2K-S and the station TCI server (R-R3-47,
         // R-R3-48).
         {"configureRfKit", {arg("host", kUtf8), arg("port", kInt)},
@@ -611,6 +618,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     } else if (invoke.commandVerb == "setTgxlAntenna" || invoke.commandVerb == "setTgxlOperate"
                || invoke.commandVerb == "setTgxlBypass") {
         handleTgxlControl(invoke);
+    } else if (invoke.commandVerb == "setTunePowerForTxBand") {
+        handleTunePowerForTxBand(invoke);
     } else if (invoke.commandVerb == "requestIoBoardProbe") {
         handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "setAlexRxAntenna") {
@@ -1583,6 +1592,32 @@ void SessionCommandDispatcher::handleTgxlControl(const SessionMessage& invoke)
     if (!sent) {
         emitResult(verb, invoke.commandId, false,
                    reason.isEmpty() ? QStringLiteral("The Core did not switch the Tuner Genius.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's Tune
+// Power slider. The Core sets its transmit band's tune power and the tune
+// drive source to the tune slider, as the local slider does; the window
+// sees both on the `transmit` object. Refused while the radio is on the air
+// and outside the tune power range; nothing changes then. Keys nothing.
+void SessionCommandDispatcher::handleTunePowerForTxBand(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    int watts = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "watts" })
+        || !hasWireKind(invoke.arguments, "watts", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "watts", &watts) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to change the tune power was not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setTunePowerForTxBandForStation(watts, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change the tune power.")
                                     : reason, {});
         return;
     }

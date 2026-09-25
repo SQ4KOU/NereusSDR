@@ -15,6 +15,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 controls that work, Task 2.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2): the AM
+//                                    carrier follows the transmit settings
+//                                    gate. AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -38,6 +42,7 @@
 #include <QUrl>
 
 #include "OperatorWording.h"
+#include "core/session/IStationLink.h"
 #include "core/AppSettings.h"
 #include "core/BuildIdentity.h"
 #include "core/MicProfileManager.h"
@@ -467,10 +472,12 @@ private slots:
             QVERIFY(!combo->isEnabled());
             QCOMPARE(combo->toolTip(), kRemoteTransmitReason);
         }
+        // R-R3-49 (parity Task 2): the AM carrier is a transmit setting; with
+        // no Core taking them it says why in the transmit settings' words.
         auto* carrier = childByAccessibleName<QSlider>(applet, QStringLiteral("AM carrier level"));
         QVERIFY(carrier != nullptr);
         QVERIFY(!carrier->isEnabled());
-        QCOMPARE(carrier->toolTip(), kRemoteTransmitReason);
+        QCOMPARE(carrier->toolTip(), IStationLink::transmitSettingsUnavailableReason());
         QVERIFY(sessions.replace({}, false));
     }
 

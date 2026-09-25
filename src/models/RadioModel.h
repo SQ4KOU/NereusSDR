@@ -97,6 +97,10 @@
 //                a window; the TX half of the remote DSP > Options apply.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): setTunePowerForTxBandForStation,
+//                refreshTransmitTuneBand and wireTransmitChainForTest.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2118,6 +2122,12 @@ public:
     bool setTgxlAntennaForStation(int port, QString* reason);
     bool setTgxlOperateForStation(bool on, QString* reason);
     bool setTgxlBypassForStation(bool on, QString* reason);
+    // R-R3-49 (parity Task 2, transmitSettingsVersion 2): a window's Tune
+    // Power slider. Sets the tune power for the band the Core transmits on
+    // and the tune drive source to the tune slider, as the local slider
+    // does. Refused, changing nothing, while the radio is on the air and
+    // outside the tune power range.
+    bool setTunePowerForTxBandForStation(int watts, QString* reason);
 
     // Phase 3G-9b: one-shot profile that sets the 7 smooth-default recipe
     // values on SpectrumWidget. Called from the constructor exactly once
@@ -2703,6 +2713,12 @@ public:
     // WDSP-init lambda inside connectToRadio() (see "createTxChannel(kTxChannelId)"
     // around RadioModel.cpp:1514).
     void injectTxChannelForTest(class TxChannel* ch) { m_txChannel = ch; }
+
+    // R-R3-49 (parity Task 2): inject `channel` and run the Core's transmit
+    // chain wiring (TransmitModel to TxChannel, MON to the audio engine)
+    // that connectToRadio() runs once WDSP is up, so a test can check a
+    // setting reached the TX channel's own state. No WDSP channel, no RF.
+    void wireTransmitChainForTest(class TxChannel* channel);
 
     // Phase 4 Agent 4A of issue #167 — test seam to inject the HPSDRModel
     // hardware profile directly. setBoardForTest(HPSDRHW::OrionMKII) maps
@@ -3724,6 +3740,11 @@ private:
     // switch the Core's Tuner Genius now (not the Core's tuner, the radio
     // on the air, or no tuner admitted).
     bool stationTgxlControlAllowed(QString* reason) const;
+    // R-R3-49 (parity Task 2): the transmit band for tunePowerForTxBand,
+    // and the Core's transmit chain wiring (moved from connectToRadio()).
+    void refreshTransmitTuneBand();
+    void wireMicAndMonitorToTransmit();
+    void wireTransmitProcessingChain();
 
     // Phase 3Q-1: drives the RadioModel-level connection state machine.
     // Guards against redundant transitions (no emit if state unchanged).

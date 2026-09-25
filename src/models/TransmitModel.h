@@ -237,6 +237,13 @@
 //   2026-09-23 - R-R3-46 fix wave: setHpsdrModel moved out of line; the
 //                 tune power is clamped at the settings load (2026-09-24).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): the TX and Phone/CW applets'
+//                 settings as mirrored Q_PROPERTYs (transmitSettingsVersion
+//                 2), the Core's tune power for its transmit band
+//                 (tunePowerForTxBand, setTunePowerForTxBand) and the tune
+//                 drive source on the link, and settingRangeRefusal().
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -245,8 +252,11 @@
 #include "core/WdspTypes.h"
 #include "core/audio/CompositeTxMicRouter.h"
 
+#include <QByteArray>
+#include <QMetaType>
 #include <QObject>
 #include <QString>
+#include <QVariant>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -593,6 +603,33 @@ public:
         return m_tuneDrivePowerSource;
     }
     void setTuneDrivePowerSource(DrivePowerSource source);
+
+    // ── R-R3-49 (parity Task 2): tune power for the transmit band ─────────
+    //
+    // The band the Core transmits on (its transmit slice's band, as the
+    // TUNE path reads it), set by RadioModel. tunePowerForTxBand() is that
+    // band's tunePowerForBand(); in a remote window it is the Core's value,
+    // applied by applyStationValue(). NereusSDR-original.
+    int  tunePowerForTxBand() const noexcept { return m_tunePowerForTxBand; }
+    void setTuneTxBand(Band band);
+    /// What the TX applet's Tune Power slider does locally: the transmit
+    /// band's tune power, and the tune drive source to TuneSlider. False,
+    /// changing nothing, before the transmit band is known.
+    bool setTunePowerForTxBand(int watts);
+    /// The Tune Power range for this radio: 0 to 99 on a Hermes Lite 2,
+    /// else 0 to 100 (setTunePower / setTunePowerForBand).
+    int  tunePowerMax() const noexcept;
+    /// A window: the Core's tunePowerForTxBand or tuneDrivePowerSource as
+    /// it reported them. A plain state apply; nothing is saved or sent.
+    bool applyStationValue(const QByteArray& propertyName, const QVariant& value);
+    /// A window: the Core refused a Tune Power change; the slider shows the
+    /// Core's value again.
+    void reportTunePowerForTxBandRefused();
+    /// The plain words a Core gives for a value outside a mirrored
+    /// setting's range, or empty when `value` is in range (or the property
+    /// has no range here). `propertyName` is the property's name on the
+    /// link; the range is the setter's own.
+    QString settingRangeRefusal(const QByteArray& propertyName, const QVariant& value) const;
 
     // ── Fixed tune power (#167 Phase 3C) ──────────────────────────────────
     //
@@ -1015,6 +1052,50 @@ public:
 
     Q_PROPERTY(bool paSettingsBypass READ paSettingsBypass WRITE setPaSettingsBypass
                                      NOTIFY paSettingsBypassChanged)
+
+    // ── R-R3-49 (parity Task 2): the TX and Phone/CW applets' settings ────
+    //
+    // Mirrored on the `transmit` object (transmitSettingsVersion 2), each
+    // under its setter's name and type and NOTIFY on its existing signal.
+    // Declared after paSettingsBypass so the earlier ordinals stay put. A
+    // window writes them while the Core's radio is off the air; the Core
+    // refuses a value outside the setter's range (settingRangeRefusal) and
+    // any write while it is on the air. None keys the radio.
+    Q_PROPERTY(int   tunePower      READ tunePower      WRITE setTunePower
+                                    NOTIFY tunePowerChanged)
+    Q_PROPERTY(int   voxThresholdDb READ voxThresholdDb WRITE setVoxThresholdDb
+                                    NOTIFY voxThresholdDbChanged)
+    Q_PROPERTY(int   voxHangTimeMs  READ voxHangTimeMs  WRITE setVoxHangTimeMs
+                                    NOTIFY voxHangTimeMsChanged)
+    Q_PROPERTY(bool  monEnabled     READ monEnabled     WRITE setMonEnabled
+                                    NOTIFY monEnabledChanged)
+    Q_PROPERTY(float monitorVolume  READ monitorVolume  WRITE setMonitorVolume
+                                    NOTIFY monitorVolumeChanged)
+    Q_PROPERTY(bool  txLevelerOn    READ txLevelerOn    WRITE setTxLevelerOn
+                                    NOTIFY txLevelerOnChanged)
+    Q_PROPERTY(bool  txEqEnabled    READ txEqEnabled    WRITE setTxEqEnabled
+                                    NOTIFY txEqEnabledChanged)
+    Q_PROPERTY(bool  cfcEnabled     READ cfcEnabled     WRITE setCfcEnabled
+                                    NOTIFY cfcEnabledChanged)
+    Q_PROPERTY(bool  cpdrOn         READ cpdrOn         WRITE setCpdrOn
+                                    NOTIFY cpdrOnChanged)
+    Q_PROPERTY(int   cpdrLevelDb    READ cpdrLevelDb    WRITE setCpdrLevelDb
+                                    NOTIFY cpdrLevelDbChanged)
+    Q_PROPERTY(int   amCarrierLevel READ amCarrierLevel WRITE setAmCarrierLevel
+                                    NOTIFY amCarrierLevelChanged)
+    Q_PROPERTY(bool  dexpEnabled    READ dexpEnabled    WRITE setDexpEnabled
+                                    NOTIFY dexpEnabledChanged)
+    Q_PROPERTY(int   micGainDb      READ micGainDb      WRITE setMicGainDb
+                                    NOTIFY micGainDbChanged)
+    // The Core's tune power for its transmit band (the band of the slice
+    // that transmits), which the TX applet's Tune Power slider shows, and
+    // the tune drive source. No WRITE: both change only through the
+    // setTunePowerForTxBand command, which sets them together as the local
+    // slider does.
+    Q_PROPERTY(int tunePowerForTxBand READ tunePowerForTxBand
+                                      NOTIFY tunePowerForTxBandChanged)
+    Q_PROPERTY(NereusSDR::DrivePowerSource tuneDrivePowerSource
+               READ tuneDrivePowerSource NOTIFY tuneDrivePowerSourceChanged)
 
     /// Bypass PA settings flag. false (default) = use board-specific table.
     bool paSettingsBypass() const noexcept { return m_paSettingsBypass; }
@@ -2004,7 +2085,10 @@ signals:
     void twoToneActiveChanged(bool active);
     /// Emitted when tuneDrivePowerSource() changes.  Mirrors Thetis
     /// TuneDrivePowerOrigin setter at console.cs:46554-46575 [v2.10.3.13].
-    void tuneDrivePowerSourceChanged(DrivePowerSource source);
+    void tuneDrivePowerSourceChanged(NereusSDR::DrivePowerSource source);
+    /// R-R3-49 (parity Task 2): tunePowerForTxBand() changed (a new
+    /// transmit band, that band's tune power, or the Core's report).
+    void tunePowerForTxBandChanged(int watts);
     /// Emitted when tunePower() (fixed) changes.  Mirrors Thetis
     /// tune_power setter at console.cs:17229-17242 [v2.10.3.13].
     void tunePowerChanged(int watts);
@@ -2145,6 +2229,14 @@ private:
     // HF amateur + GEN/WWV/XVTR only (Band::SwlFirst == 14).  Phase 3L
     // SWL bands inherit ham-band values — no separate per-SWL TX power.
     std::array<int, static_cast<std::size_t>(Band::SwlFirst)> m_tunePowerByBand{};
+    // R-R3-49 (parity Task 2): the transmit band and its tune power.
+    // m_tuneTxBandKnown is false until RadioModel sets the band (always, on
+    // a window), so a window's own per-band copy never overwrites the
+    // Core's value.
+    Band m_tuneTxBand{Band::Band20m};
+    bool m_tuneTxBandKnown{false};
+    int  m_tunePowerForTxBand{50};
+    void refreshTunePowerForTxBand();
 
     // Per-band normal-mode power storage.
     // From Thetis console.cs:1813-1814 [v2.10.3.13] — power_by_band default

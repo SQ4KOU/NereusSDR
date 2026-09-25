@@ -13,6 +13,9 @@
 //                                    set. A window's on-the-air state
 //                                    follows the Core. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2): the Core
+//                                    offers transmitSettingsVersion 2.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -183,11 +186,13 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
     QVERIFY(s.core->receiveOnlyStationPolicy());
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 1);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 1);
+    // 2 since parity Task 2 (the TX and Phone/CW applets' settings).
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 2);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 2);
     QVERIFY(s.client->transmitSettingsAvailable());
     QVERIFY(s.client->transmitSettingsAvailable(1));
-    QVERIFY(!s.client->transmitSettingsAvailable(2));
+    QVERIFY(s.client->transmitSettingsAvailable(2));
+    QVERIFY(!s.client->transmitSettingsAvailable(3));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
         QStringLiteral("DspOptionsBufferSizePhoneTx")));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(

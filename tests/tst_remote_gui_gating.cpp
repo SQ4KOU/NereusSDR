@@ -113,6 +113,11 @@
 //                 Shift-click follow the transmit settings gate, not the
 //                 keying gate. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-24 -- R-R3-49 (parity Task 2): the TX applet's Tune Power, LEV
+//                 and the Phone/CW applet's PROC follow the transmit
+//                 settings gate in a real remote window; the container MON
+//                 button toggles the Core's MON off the air and greys on it.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -4098,7 +4103,21 @@ private slots:
             QVERIFY(txApplet != nullptr);
             QVERIFY(client->transmitSettingsAvailable());
             QTRY_VERIFY(txApplet->rfPowerSlider()->isEnabled());
-            QVERIFY(!txApplet->tunePowerSlider()->isEnabled());
+            // R-R3-49 (parity Task 2): Tune Power, LEV and the Phone/CW
+            // applet's PROC follow the same gate at transmitSettingsVersion
+            // 2; the VOX button keeps the remote transmit reason.
+            QVERIFY(client->transmitSettingsAvailable(2));
+            QPushButton* const lev = txApplet->findChild<QPushButton*>(QStringLiteral("TxLevButton"));
+            QPushButton* const vox = txApplet->findChild<QPushButton*>(QStringLiteral("TxVoxButton"));
+            auto* const phone = window->findChild<PhoneCwApplet*>();
+            QVERIFY(lev && vox && phone);
+            QPushButton* const proc = phone->findChild<QPushButton*>(QStringLiteral("PhoneCwProcButton"));
+            QVERIFY(proc);
+            QTRY_VERIFY(txApplet->tunePowerSlider()->isEnabled());
+            QTRY_VERIFY(lev->isEnabled());
+            QTRY_VERIFY(proc->isEnabled());
+            QVERIFY(!vox->isEnabled());
+            QCOMPARE(vox->toolTip(), remoteReason);
             MoxController* const coreMox = station.moxController();
             QVERIFY(coreMox != nullptr);
             coreMox->setMoxCheck({});
@@ -4107,9 +4126,17 @@ private slots:
             QTRY_VERIFY(!txApplet->rfPowerSlider()->isEnabled());
             QCOMPARE(txApplet->rfPowerSlider()->toolTip(),
                      QStringLiteral("The radio is on the air. Try again when it stops."));
+            for (QWidget* w : std::initializer_list<QWidget*>{txApplet->tunePowerSlider(), lev, proc}) {
+                QTRY_VERIFY(!w->isEnabled());
+                QCOMPARE(w->toolTip(),
+                         QStringLiteral("The radio is on the air. Try again when it stops."));
+            }
             coreMox->setMox(false);
             QTRY_VERIFY(!window->radioModel()->isCoreOnAir());
             QTRY_VERIFY(txApplet->rfPowerSlider()->isEnabled());
+            QTRY_VERIFY(txApplet->tunePowerSlider()->isEnabled());
+            QTRY_VERIFY(lev->isEnabled());
+            QTRY_VERIFY(proc->isEnabled());
 
             // The RADE applet's profile combo and Reset vocoder get it too.
             auto* const rade = window->findChild<RadeApplet*>();
@@ -4485,17 +4512,35 @@ private slots:
             // The transmit buttons say the transmit reason and change nothing.
             const QString reason =
                 QStringLiteral("Remote transmit controls are not available from this Core yet.");
-            for (Id id : {Id::Mon, Id::Tun, Id::Mox, Id::TwoTon, Id::PsA}) {
+            for (Id id : {Id::Tun, Id::Mox, Id::TwoTon, Id::PsA}) {
                 QVERIFY(!box.buttons->isButtonAvailable(id));
                 QCOMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(id)), reason);
             }
-            const bool mon = station.transmitModel().monEnabled();
             emit box.container->otherButtonClicked(int(Id::Mox));
-            emit box.container->otherButtonClicked(int(Id::Mon));
             QVERIFY(toastSaying(window, reason));
             QVERIFY(!station.moxController()->isMox());
             QVERIFY(!model->moxController()->isMox());
-            QCOMPARE(model->transmitModel().monEnabled(), mon);
+
+            // R-R3-49 (parity Task 2): MON is a transmit setting. It toggles
+            // the Core's MON off the air and lights from the Core's value.
+            const bool mon = station.transmitModel().monEnabled();
+            QTRY_VERIFY(box.buttons->isButtonAvailable(Id::Mon));
+            emit box.container->otherButtonClicked(int(Id::Mon));
+            QTRY_COMPARE(station.transmitModel().monEnabled(), !mon);
+            QTRY_COMPARE(box.buttons->buttonState(Id::Mon), !mon);
+            station.transmitModel().setMonEnabled(mon);
+            QTRY_COMPARE(box.buttons->buttonState(Id::Mon), mon);
+            // On the air it greys with the on-air reason and changes nothing.
+            station.moxController()->setMoxCheck({});
+            station.moxController()->setMox(true);
+            const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+            QTRY_VERIFY(!box.buttons->isButtonAvailable(Id::Mon));
+            QCOMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(Id::Mon)), onAir);
+            emit box.container->otherButtonClicked(int(Id::Mon));
+            QCOMPARE(station.transmitModel().monEnabled(), mon);
+            station.moxController()->setMox(false);
+            QTRY_VERIFY(station.moxController()->state() == MoxState::Rx);
+            QTRY_VERIFY(box.buttons->isButtonAvailable(Id::Mon));
 
             window->findChild<ContainerManager*>()->destroyContainer(box.container->id());
         }

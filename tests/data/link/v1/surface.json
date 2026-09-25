@@ -238,7 +238,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 1
+            "value": 2
         }
     ],
     "commands": [
@@ -611,6 +611,19 @@
             "capabilityVersion": 2,
             "minMinor": 11,
             "verb": "setTgxlBypass"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "watts",
+                    "optional": false
+                }
+            ],
+            "capability": "transmitSettingsVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "setTunePowerForTxBand"
         },
         {
             "arguments": [
@@ -4345,6 +4358,101 @@
                     "kind": "bool",
                     "name": "paSettingsBypass",
                     "ordinal": 14
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "tunePower",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "voxThresholdDb",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "voxHangTimeMs",
+                    "ordinal": 17
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "monEnabled",
+                    "ordinal": 18
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "monitorVolume",
+                    "ordinal": 19
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "txLevelerOn",
+                    "ordinal": 20
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "txEqEnabled",
+                    "ordinal": 21
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "cfcEnabled",
+                    "ordinal": 22
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "cpdrOn",
+                    "ordinal": 23
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "cpdrLevelDb",
+                    "ordinal": 24
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "amCarrierLevel",
+                    "ordinal": 25
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "dexpEnabled",
+                    "ordinal": 26
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "micGainDb",
+                    "ordinal": 27
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tunePowerForTxBand",
+                    "ordinal": 28
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2
+                    ],
+                    "kind": "enum",
+                    "name": "tuneDrivePowerSource",
+                    "ordinal": 29
                 }
             ]
         },

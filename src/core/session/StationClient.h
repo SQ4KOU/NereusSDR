@@ -240,6 +240,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 1):
 //                                    transmitSettingsAvailable.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
+//                                    requestTunePowerForTxBand.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -655,6 +658,8 @@ public:
     CommandOutcome requestTgxlAntenna(int port) override;
     CommandOutcome requestTgxlOperate(bool on) override;
     CommandOutcome requestTgxlBypass(bool on) override;
+    // R-R3-49 (parity Task 2): see IStationLink.
+    CommandOutcome requestTunePowerForTxBand(int watts) override;
     CommandOutcome requestApplyNnrModels(quint32 revision) override;
     bool nnrControlAvailable() const override;
     // R-R3-21: the Core advertised dspAssetVersion 2 on a session that

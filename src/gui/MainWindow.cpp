@@ -134,6 +134,11 @@
 //                combos follow it; applyRemoteRoleGating runs again when
 //                the Core's radio goes on or off the air. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): the TX applet's Tune Power, VOX
+//                level and delay, MON, LEV, EQ and CFC, the Phone/CW
+//                applet's mic level, PROC, AM carrier and DEXP, and the
+//                container MON button follow transmitSettingsPermitted(2).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -4080,6 +4085,9 @@ void MainWindow::buildUI()
             }
         };
         hooks.transmitPermitted = [this] { return transmitControlsPermitted(); };
+        // R-R3-49 (parity Task 2): MON is a transmit setting (version 2).
+        hooks.transmitSettingsPermitted = [this] { return transmitSettingsPermitted(2); };
+        hooks.transmitSettingsReason = [this] { return transmitSettingsReason(2); };
         hooks.remoteTransmitReason =
             tr("Remote transmit controls are not available from this Core yet.");
         hooks.spectrumFor = [this](SliceModel* s) { return spectrumForSlice(s); };
@@ -11385,12 +11393,18 @@ void MainWindow::applyRemoteRoleGating()
     // while the Core takes them and its radio is off the air.
     const bool settingsPermitted = transmitSettingsPermitted();
     const QString settingsReason = transmitSettingsReason();
+    // R-R3-49 (parity Task 2): the applets' other transmit settings came
+    // with transmitSettingsVersion 2.
+    const bool chainPermitted = transmitSettingsPermitted(2);
+    const QString chainReason = transmitSettingsReason(2);
     if (m_txApplet) {
         m_txApplet->setTransmitPermitted(transmitPermitted, transmitReason);
         m_txApplet->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
+        m_txApplet->setTransmitChainSettingsPermitted(chainPermitted, chainReason);
     }
     if (m_phoneCwApplet) {
         m_phoneCwApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+        m_phoneCwApplet->setTransmitSettingsPermitted(chainPermitted, chainReason);
     }
     // R-R3-44: the VAX applet's TX row (VAX as the microphone).
     if (m_vaxApplet) {

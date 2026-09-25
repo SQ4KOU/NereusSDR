@@ -78,6 +78,12 @@
 //                 setHpsdrModel (which ran before the load and saved under
 //                 the previous radio). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): tunePowerForTxBand (the
+//                 transmit band's tune power) with setTuneTxBand,
+//                 setTunePowerForTxBand and a window's applyStationValue;
+//                 settingRangeRefusal() for the mirrored transmit settings.
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs (Thetis v2.10.3.13) ---
@@ -596,6 +602,132 @@ void TransmitModel::setTunePowerForBand(Band band, int watts)
     }
     m_tunePowerByBand[static_cast<std::size_t>(idx)] = clamped;
     emit tunePowerByBandChanged(band, clamped);
+    if (m_tuneTxBandKnown && band == m_tuneTxBand) {
+        refreshTunePowerForTxBand();
+    }
+}
+
+// ── R-R3-49 (parity Task 2): tune power for the transmit band ─────────────
+//
+// NereusSDR-original. The TX applet's Tune Power slider sets the per-band
+// tune power and the tune drive source to TuneSlider (TxApplet.cpp); a
+// remote window reaches the same two through setTunePowerForTxBand on the
+// Core, for the band the Core transmits on.
+
+int TransmitModel::tunePowerMax() const noexcept
+{
+    return (m_hpsdrModel == HPSDRModel::HERMESLITE) ? 99 : 100;
+}
+
+void TransmitModel::refreshTunePowerForTxBand()
+{
+    if (!m_tuneTxBandKnown) { return; }
+    const int watts = tunePowerForBand(m_tuneTxBand);
+    if (watts == m_tunePowerForTxBand) { return; }
+    m_tunePowerForTxBand = watts;
+    emit tunePowerForTxBandChanged(watts);
+}
+
+void TransmitModel::setTuneTxBand(Band band)
+{
+    m_tuneTxBand = band;
+    m_tuneTxBandKnown = true;
+    refreshTunePowerForTxBand();
+}
+
+bool TransmitModel::setTunePowerForTxBand(int watts)
+{
+    if (!m_tuneTxBandKnown) { return false; }
+    setTunePowerForBand(m_tuneTxBand, watts);
+    setTuneDrivePowerSource(DrivePowerSource::TuneSlider);
+    return true;
+}
+
+bool TransmitModel::applyStationValue(const QByteArray& propertyName, const QVariant& value)
+{
+    if (propertyName == "tunePowerForTxBand") {
+        bool ok = false;
+        const int watts = value.toInt(&ok);
+        if (!ok) { return false; }
+        if (watts != m_tunePowerForTxBand) {
+            m_tunePowerForTxBand = watts;
+            emit tunePowerForTxBandChanged(watts);
+        }
+        return true;
+    }
+    if (propertyName == "tuneDrivePowerSource") {
+        if (!value.canConvert<DrivePowerSource>()) { return false; }
+        const DrivePowerSource source = value.value<DrivePowerSource>();
+        if (source != m_tuneDrivePowerSource) {
+            // The Core's report, not this window's choice: not saved here.
+            m_tuneDrivePowerSource = source;
+            emit tuneDrivePowerSourceChanged(source);
+        }
+        return true;
+    }
+    return false;
+}
+
+void TransmitModel::reportTunePowerForTxBandRefused()
+{
+    emit tunePowerForTxBandChanged(m_tunePowerForTxBand);
+}
+
+QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
+                                           const QVariant& value) const
+{
+    const auto outside = [&value](qlonglong lo, qlonglong hi) {
+        bool ok = false;
+        const qlonglong v = value.toLongLong(&ok);
+        return !ok || v < lo || v > hi;
+    };
+    if (propertyName == "tunePower" || propertyName == "tunePowerForTxBand") {
+        const int hi = tunePowerMax();
+        if (!outside(0, hi)) { return {}; }
+        return m_hpsdrModel == HPSDRModel::HERMESLITE
+            ? QStringLiteral("Choose a tune power from 0 to %1.").arg(hi)
+            : QStringLiteral("Choose a tune power from 0 to %1 W.").arg(hi);
+    }
+    if (propertyName == "voxThresholdDb") {
+        return outside(kVoxThresholdDbMin, kVoxThresholdDbMax)
+            ? QStringLiteral("Choose a VOX level from %1 to %2 dB.")
+                  .arg(kVoxThresholdDbMin).arg(kVoxThresholdDbMax)
+            : QString();
+    }
+    if (propertyName == "voxHangTimeMs") {
+        return outside(kVoxHangTimeMsMin, kVoxHangTimeMsMax)
+            ? QStringLiteral("Choose a VOX delay from %1 to %2 ms.")
+                  .arg(kVoxHangTimeMsMin).arg(kVoxHangTimeMsMax)
+            : QString();
+    }
+    if (propertyName == "cpdrLevelDb") {
+        return outside(kCpdrLevelDbMin, kCpdrLevelDbMax)
+            ? QStringLiteral("Choose a PROC level from %1 to %2 dB.")
+                  .arg(kCpdrLevelDbMin).arg(kCpdrLevelDbMax)
+            : QString();
+    }
+    if (propertyName == "amCarrierLevel") {
+        return outside(kAmCarrierLevelMin, kAmCarrierLevelMax)
+            ? QStringLiteral("Choose an AM carrier level from %1 to %2 percent.")
+                  .arg(kAmCarrierLevelMin).arg(kAmCarrierLevelMax)
+            : QString();
+    }
+    if (propertyName == "micGainDb") {
+        return outside(kMicGainDbMin, kMicGainDbMax)
+            ? QStringLiteral("Choose a mic level from %1 to %2 dB.")
+                  .arg(kMicGainDbMin).arg(kMicGainDbMax)
+            : QString();
+    }
+    if (propertyName == "monitorVolume") {
+        bool ok = false;
+        const double v = value.toDouble(&ok);
+        const bool inRange = ok && std::isfinite(v)
+            && v >= static_cast<double>(kMonitorVolumeMin)
+            && v <= static_cast<double>(kMonitorVolumeMax);
+        return inRange ? QString()
+                       : QStringLiteral("Choose a monitor level from 0.0 to 1.0.");
+    }
+    return {};
 }
 
 // ── Per-band normal-mode power (#167 Phase 3A) ──────────────────────────────
@@ -1219,6 +1351,7 @@ void TransmitModel::load()
         const int v = s.value(key, QStringLiteral("50")).toInt();
         m_tunePowerByBand[static_cast<std::size_t>(i)] = std::clamp(v, 0, hi);
     }
+    refreshTunePowerForTxBand();
 }
 
 void TransmitModel::save()

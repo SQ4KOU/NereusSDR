@@ -309,6 +309,10 @@ warren@wpratt.com
 //                 wdsp/calcc.c:891-1132 [v2.10.3.13] + Thetis
 //                 cmaster.cs:143-147 [v2.10.3.13].  AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): read-back test seams for the TX
+//                 chain settings a remote window changes (EQ run, leveler,
+//                 CFC, CPDR and its gain, AM carrier). NereusSDR-original.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -2343,6 +2347,16 @@ public:
     //   (c) Idempotent guard fires on duplicate calls (value unchanged).
     double lastMicPreampForTest()             const noexcept { return m_micPreampLast; }
 
+    // ── Test seam (R-R3-49, parity Task 2): the TX chain settings a remote
+    // window changes, read back from the channel's own state (the carries
+    // below; EQ run from its own last value, the carry being snapshot-only).
+    bool   lastTxEqRunningForTest()           const noexcept { return m_txEqRunningLast; }
+    bool   lastTxLevelerOnForTest()           const noexcept { return m_levelerOn; }
+    bool   lastTxCfcRunningForTest()          const noexcept { return m_cfcOn; }
+    bool   lastTxCpdrOnForTest()              const noexcept { return m_cpdrOn; }
+    double lastTxCpdrGainDbForTest()          const noexcept { return m_cpdrLevelDb; }
+    int    lastTxAmCarrierLevelForTest()      const noexcept { return m_amCarrierPct; }
+
     // ── Test seam (Phase 3M-3a-iii Task 17) — DEXP pushvox bridge ──────────
     //
     // Synchronously invoke the static pushvox bridge for the given channel
@@ -3060,6 +3074,9 @@ private:
     bool    m_cpdrOn       {false};
     double  m_cpdrLevelDb  {0.0};
     int     m_amCarrierPct {100};   // carry; AM/SAM/DSB carrier level
+    // R-R3-49 (parity Task 2): the last setTxEqRunning value, for the test
+    // seam only (m_eqEnabled is the rebuild snapshot's carry).
+    bool    m_txEqRunningLast {false};
 
     // PureSignal carry — 3M-4 work
     bool    m_pureSignalEnabled {false};

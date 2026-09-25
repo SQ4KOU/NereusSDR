@@ -113,6 +113,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-47: the Tuner Genius's antenna,
 //                                    operate and bypass verbs.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
+//                                    setTunePowerForTxBand.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -232,6 +235,9 @@ private:
     // R-R3-49 / R-R3-47 (remoteTgxlControlVersion 2): the Tuner Genius's
     // antenna, operate and bypass, through the Core's own TunerModel.
     void handleTgxlControl(const NereusSDR::SessionMessage& invoke);
+    // R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's
+    // Tune Power slider, through the Core's own TransmitModel.
+    void handleTunePowerForTxBand(const NereusSDR::SessionMessage& invoke);
     void handleRequestIoBoardProbe(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 fix wave (radioHardwareVersion 3): one band's RX or RX-only
     // antenna, applied through the Core's AlexAntennaFacade.
