@@ -577,7 +577,7 @@ public:
     /// generation; the same limits with the same reason are accepted as-is.
     bool setDisplayBudgetLimits(const DisplayBudgetLimits& limits,
                                 DisplayBudgetReason reason = DisplayBudgetReason::None);
-    /// The budget in force for the current session: the limits last set,
+    /// The budget in force for the media session: the limits last set,
     /// except that with setDisplayBudgetForReasonPeersOnly(true) a peer
     /// below kDisplayBudgetReasonSessionProtocolMinor (or no peer) has none
     /// and keeps legacy mode.

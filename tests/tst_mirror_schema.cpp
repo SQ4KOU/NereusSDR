@@ -70,6 +70,7 @@
 #include "models/AccessorySettingsModel.h"
 #include "core/session/StationCatalog.h"
 #include "core/session/StationDevicesFacade.h"
+#include "core/session/ConnectedDevicesFacade.h"
 
 using namespace NereusSDR;
 
@@ -883,7 +884,9 @@ private:
                  // iPhone app Task 13 (R-IOS-08): the Core's paired devices.
                  &StationDevicesFacade::staticMetaObject,
                  // iPhone app Task 19 (R-IOS-06): the Core's catalogue.
-                 &StationCatalog::staticMetaObject };
+                 &StationCatalog::staticMetaObject,
+                 // iPhone app Task 71 (R-IOS-02): who is on the Core.
+                 &ConnectedDevicesFacade::staticMetaObject };
     }
 };
 

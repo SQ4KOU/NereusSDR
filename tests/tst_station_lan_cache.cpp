@@ -175,8 +175,10 @@ private slots:
         QCOMPARE(older->pairing, StationLanPairing::Closed);
         QCOMPARE(older->displayName(), QStringLiteral("Rock 5C"));
 
-        // Every field at its limit: 479 bytes, and a label is never cut.
+        // Every field at its limit: 480 bytes (iPhone app Task 71: with the
+        // device count), and a label is never cut.
         StationLanAnnouncement largest = valueV2();
+        largest.devicesConnected = kStationLanMaxDevicesConnected;
         largest.coreName = QString(kStationLanMaxCoreNameBytes, QLatin1Char('C'));
         largest.radioName = QString(kStationLanMaxRadioNameBytes, QLatin1Char('R'));
         largest.label = QString(32, QLatin1Char('K')) + QLatin1Char('/')
@@ -223,14 +225,20 @@ private slots:
         QCOMPARE(error, QStringLiteral("Station LAN announcement has an invalid label."));
         QVERIFY(!decodeStationLanAnnouncement(encoded.chopped(1), &error));
         // Schema 2 extends by appending: bytes after the known fields are
-        // ignored, up to the datagram bound.
+        // ignored, up to the datagram bound. iPhone app Task 71: the device
+        // count is a known field now, so the bytes go after it; the first
+        // byte after Pairing is read as the count.
+        StationLanAnnouncement countedSource = source;
+        countedSource.devicesConnected = 1;
+        const QByteArray counted = wire(countedSource);
+        QCOMPARE(counted, encoded + '\x01');
         const auto extended = decodeStationLanAnnouncement(encoded + QByteArray("\x01\x02\x03", 3), &error);
         QVERIFY2(extended, qPrintable(error));
-        QCOMPARE(*extended, source);
+        QCOMPARE(*extended, countedSource);
         QVERIFY(decodeStationLanAnnouncement(
-            encoded + QByteArray(kStationLanMaxDatagramBytes - encoded.size(), '\x7f'), &error));
+            counted + QByteArray(kStationLanMaxDatagramBytes - counted.size(), '\x7f'), &error));
         QVERIFY(!decodeStationLanAnnouncement(
-            encoded + QByteArray(kStationLanMaxDatagramBytes - encoded.size() + 1, '\x7f'), &error));
+            counted + QByteArray(kStationLanMaxDatagramBytes - counted.size() + 1, '\x7f'), &error));
         QCOMPARE(error, QStringLiteral("Station LAN announcement is too large."));
         // Schema 1 stays exact.
         QVERIFY(!decodeStationLanAnnouncement(wire(value()) + '\x00', &error));
