@@ -381,7 +381,7 @@ change shows as surface drift and as a change to this table.
 | `audioClockVersion` | 1 |
 | `receiverAudioVersion` | 1 |
 | `headphonesMixVersion` | 1 |
-| `radioHardwareVersion` | 5 |
+| `radioHardwareVersion` | 6 |
 | `remotePgxlControlVersion` | 4 |
 | `remoteRfKitControlVersion` | 4 |
 | `stationTciVersion` | 1 |
@@ -415,9 +415,19 @@ When a feature is off, its version is 0:
   and the filter policy command `setAlexBpfMode` (which needs 4); 5 (group
   B fix wave) with `rxOutOnTx` on `alexAntennas` two-way (RX bypass on TX,
   the VFO flag's BYPS; the Core applies it through its AlexController,
-  which clears `ext1OutOnTx` and `ext2OutOnTx`). A station no longer sends
-  3 or 4; a client compares the version as a minimum (section 6.2), so 5
-  serves `setAlexRxAntenna` and `setAlexBpfMode` too.
+  which clears `ext1OutOnTx` and `ext2OutOnTx`); 6 (parity Task 12) with
+  the rest of the transmit half of `alexAntennas` two-way: `txAntennas`,
+  `blockTxAnt2`, `blockTxAnt3`, `ext1OutOnTx`, `ext2OutOnTx` and
+  `rxOutOverride`, each applied through the Core's AlexController as the
+  local Antenna Control tab applies it (a TX antenna on a port blocked for
+  transmit is kept and settles with a reason; Block TX moves a band on that
+  port back to Ant 1; Ext 1 or Ext 2 on TX clears the other two). These
+  seven writes have no on-air rule, on the Core or in a local window, as in
+  Thetis: an antenna change while the radio transmits goes out on the TX
+  routing, and a relay flag reaches the relays at the next MOX edge. A
+  station no longer sends 3, 4 or 5; a client compares the version as a
+  minimum (section 6.2), so 6 serves `setAlexRxAntenna`, `setAlexBpfMode`
+  and `rxOutOnTx` too.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -694,13 +704,13 @@ An enum property lists the values its domain allows.
 | 0 | `rxAntennas` | `utf8` | bidirectional |  |
 | 1 | `rxOnlyAntennas` | `utf8` | bidirectional |  |
 | 2 | `useTxAntennaForRx` | `bool` | bidirectional |  |
-| 3 | `txAntennas` | `utf8` | outbound |  |
-| 4 | `blockTxAnt2` | `bool` | outbound |  |
-| 5 | `blockTxAnt3` | `bool` | outbound |  |
+| 3 | `txAntennas` | `utf8` | bidirectional |  |
+| 4 | `blockTxAnt2` | `bool` | bidirectional |  |
+| 5 | `blockTxAnt3` | `bool` | bidirectional |  |
 | 6 | `rxOutOnTx` | `bool` | bidirectional |  |
-| 7 | `ext1OutOnTx` | `bool` | outbound |  |
-| 8 | `ext2OutOnTx` | `bool` | outbound |  |
-| 9 | `rxOutOverride` | `bool` | outbound |  |
+| 7 | `ext1OutOnTx` | `bool` | bidirectional |  |
+| 8 | `ext2OutOnTx` | `bool` | bidirectional |  |
+| 9 | `rxOutOverride` | `bool` | bidirectional |  |
 
 **AmplifierModel** (20 properties)
 
@@ -1392,6 +1402,15 @@ with the reason "The Core sets this itself; it cannot be changed from
 here.", unless one of the earlier, more specific refusals above applies
 first; this covers the station's own readings, such as a slice's signal
 strength, as well as properties changed through a command.
+
+`alexAntennas`' transmit properties (`txAntennas`, `blockTxAnt2`,
+`blockTxAnt3`, `rxOutOnTx`, `ext1OutOnTx`, `ext2OutOnTx`, `rxOutOverride`,
+two-way from `radioHardwareVersion` 5 and 6) are not held while the radio
+is on the air, and a receive-only station takes them from any peer that
+was offered the object: they key nothing, and Thetis changes them while
+transmitting (section 6.3). A `txAntennas` list that asks for a port
+blocked for transmit keeps that band's antenna and settles with "An
+antenna blocked for transmit cannot be a band's TX antenna."
 
 After the whole batch, the station reads each property back. When the
 agreed minor is at least 5 (`kDspControlSessionProtocolMinor`) and the

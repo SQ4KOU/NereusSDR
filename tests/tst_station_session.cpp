@@ -5619,7 +5619,7 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
     // step (2), and its I/O board and the per-band antenna verb (3, fix
     // wave) are behind it too; 4 with the filter policy verb (R-R3-46 /
     // R-R3-21).
-    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 5);
+    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 6);
     // Schema, object, the Core's change and the accepted write's echo.
     QVERIFY(aboutStepAtt(current) >= 3);
     QCOMPARE(currentResults.size(), 1);
@@ -5842,6 +5842,18 @@ void TstStationSession::windowAntennaEditsReachTheCoresController()
     s.core->alexControllerMutable().setBlockTxAnt2(true);
     QTRY_COMPARE(window->txAnt(Band::Band20m), 3);
     QTRY_VERIFY(window->blockTxAnt2());
+    // Parity Task 12 (radioHardwareVersion 6): and the window's reach the
+    // Core's controller.
+    QVERIFY(s.client->remoteTransmitAntennasAvailable());
+    window->setTxAnt(Band::Band40m, 3);
+    QTRY_COMPARE(s.core->alexController().txAnt(Band::Band40m), 3);
+    window->setBlockTxAnt2(false);
+    QTRY_VERIFY(!s.core->alexController().blockTxAnt2());
+    window->setExt2OutOnTx(true);
+    QTRY_VERIFY(s.core->alexController().ext2OutOnTx());
+    QTRY_VERIFY(!window->rxOutOnTx());  // cleared by the Core, as Thetis does
+    window->setRxOutOverride(true);
+    QTRY_VERIFY(s.core->alexController().rxOutOverride());
     // And a receive change made on the Core.
     s.core->alexControllerMutable().setRxAnt(Band::Band80m, 3);
     QTRY_COMPARE(window->rxAnt(Band::Band80m), 3);
@@ -5855,7 +5867,7 @@ void TstStationSession::windowAntennaEditsWaitForACoreThatOffersThem()
     // R-R3-46 fix wave: from radioHardwareVersion 3 a band's edit is the
     // setAlexRxAntenna command, not a whole-list property write, and the
     // window's value follows the Core's answer.
-    for (const int version : {0, 1, 2, 3, 4, 5}) {
+    for (const int version : {0, 1, 2, 3, 4, 5, 6}) {
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);
@@ -5877,6 +5889,13 @@ void TstStationSession::windowAntennaEditsWaitForACoreThatOffersThem()
         // Group B fix wave: RX bypass on TX from radioHardwareVersion 5.
         QCOMPARE(client.remoteRxBypassOnTxAvailable(), version >= 5);
         QCOMPARE(client.rxBypassOnTxUnavailableReason().isEmpty(), version >= 5);
+        // Parity Task 12: the rest of the transmit antennas and relays from 6.
+        QCOMPARE(client.remoteTransmitAntennasAvailable(), version >= 6);
+        const QString txAntennasReason = client.transmitAntennasUnavailableReason();
+        QCOMPARE(txAntennasReason.isEmpty(), version >= 6);
+        if (version >= 2 && version < 6) {
+            QVERIFY2(OperatorWording::isPlain(txAntennasReason), qPrintable(txAntennasReason));
+        }
         const QString reason = client.hardwareConfigUnavailableReason();
         QCOMPARE(reason.isEmpty(), version >= 2);
         if (version < 2) {
@@ -6228,7 +6247,7 @@ void TstStationSession::windowBandAntennaEditKeepsTheCoresNewerBands()
     joinHardwareWindow(s, coreStore, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 5);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 6);
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
     AlexAntennaFacade* window = s.window->alexAntennaFacade();
     QVERIFY(window->hasBandEditSender());
@@ -6277,7 +6296,7 @@ void TstStationSession::windowFilterPolicyReachesTheCore()
     joinHardwareWindow(s, coreStore, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 5);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 6);
     QVERIFY(s.client->filterPolicyEditAvailable());
     QVERIFY(s.client->filterPolicyUnavailableReason().isEmpty());
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
@@ -6546,7 +6565,7 @@ void TstStationSession::windowShowsTheCoresIoBoard()
     joinHardwareWindow(s, settings, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 5);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 6);
     const IoBoardHl2& windowBoard = s.window->ioBoard();
     QVERIFY(!windowBoard.isDetected());
 

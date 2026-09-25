@@ -208,7 +208,7 @@
         {
             "kind": "i64",
             "name": "radioHardwareVersion",
-            "value": 5
+            "value": 6
         },
         {
             "kind": "i64",
@@ -2621,19 +2621,19 @@
                     "ordinal": 2
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "utf8",
                     "name": "txAntennas",
                     "ordinal": 3
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "blockTxAnt2",
                     "ordinal": 4
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "blockTxAnt3",
                     "ordinal": 5
@@ -2645,19 +2645,19 @@
                     "ordinal": 6
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "ext1OutOnTx",
                     "ordinal": 7
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "ext2OutOnTx",
                     "ordinal": 8
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "rxOutOverride",
                     "ordinal": 9

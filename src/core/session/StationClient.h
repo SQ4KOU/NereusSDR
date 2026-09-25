@@ -731,6 +731,13 @@ public:
     bool remoteRxBypassOnTxAvailable() const;
     /// Empty while remoteRxBypassOnTxAvailable().
     QString rxBypassOnTxUnavailableReason() const;
+    /// Parity Task 12 (radioHardwareVersion 6): the Core takes this
+    /// window's transmit antennas and relays on `alexAntennas` (the TX
+    /// antenna for each band, Block TX on Ant 2 and 3, Ext 1 and Ext 2 on
+    /// TX and the RX bypass relay override).
+    bool remoteTransmitAntennasAvailable() const;
+    /// Empty while remoteTransmitAntennasAvailable().
+    QString transmitAntennasUnavailableReason() const;
     /// Verb "requestIoBoardProbe": probe the Core's radio's HL2 I/O board.
     CommandOutcome requestIoBoardProbe() override;
     /// R-R3-46 fix wave (radioHardwareVersion 3). Verb "setAlexRxAntenna":

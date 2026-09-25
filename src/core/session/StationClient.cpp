@@ -158,6 +158,10 @@
 //                setRfKitAntenna, setRfKitTciMode and setRfKitAddress
 //                (remoteRfKitControlVersion 4). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-46 (parity Task 12): the transmit antennas
+//                and relays from radioHardwareVersion 6
+//                (remoteTransmitAntennasAvailable). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -3049,6 +3053,23 @@ QString StationClient::rxBypassOnTxUnavailableReason() const
         return hardwareConfigUnavailableReason();
     }
     return QStringLiteral("This Core cannot switch its receive bypass on transmit for this "
+                          "app. Updating the Core may help.");
+}
+
+bool StationClient::remoteTransmitAntennasAvailable() const
+{
+    return remoteHardwareConfigAvailable() && m_capabilities.radioHardwareVersion >= 6;
+}
+
+QString StationClient::transmitAntennasUnavailableReason() const
+{
+    if (remoteTransmitAntennasAvailable()) {
+        return {};
+    }
+    if (!remoteHardwareConfigAvailable()) {
+        return hardwareConfigUnavailableReason();
+    }
+    return QStringLiteral("This Core cannot change its radio's transmit antennas for this "
                           "app. Updating the Core may help.");
 }
 

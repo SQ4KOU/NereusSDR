@@ -21,9 +21,10 @@
 // arrive, and the window's receive edits, which an edit gate may refuse.
 //
 // Settable (receive): the RX antenna for each band, the RX-only antenna for
-// each band and "use the TX antenna for RX". Reported (transmit, R4): the TX
-// antenna for each band, the two Block-TX switches and the four TX relay
-// switches.
+// each band and "use the TX antenna for RX". Settable too (transmit): RX
+// bypass on TX from radioHardwareVersion 5, and from version 6 (parity
+// Task 12) the TX antenna for each band, the two Block-TX switches and the
+// other three TX relay switches.
 //
 // Wire values: a per-band list is 14 comma-separated whole numbers in Band
 // order (160 m .. 6 m, GEN, WWV, XVTR). RX and TX antennas are 1..3; the
@@ -44,6 +45,11 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-21 (radioHardwareVersion
 //                                    4): the Core's filter policy for a
 //                                    remote window (setBpfModeForChain).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-46 parity Task 12
+//                                    (radioHardwareVersion 6): the TX
+//                                    antennas and relays two-way, and the
+//                                    window's transmit edit availability.
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -72,16 +78,19 @@ class AlexAntennaFacade final : public QObject {
                NOTIFY rxOnlyAntennasChanged)
     Q_PROPERTY(bool useTxAntennaForRx READ useTxAntennaForRx WRITE setUseTxAntennaForRx
                NOTIFY useTxAntennaForRxChanged)
-    // Reported by the Core (transmit settings, changed only on the Core).
-    Q_PROPERTY(QString txAntennas READ txAntennas NOTIFY txAntennasChanged)
-    Q_PROPERTY(bool blockTxAnt2 READ blockTxAnt2 NOTIFY blockTxAnt2Changed)
-    Q_PROPERTY(bool blockTxAnt3 READ blockTxAnt3 NOTIFY blockTxAnt3Changed)
+    // Parity Task 12 (radioHardwareVersion 6): the transmit antennas and
+    // relays are two-way too, applied through the Core's AlexController as
+    // the local Antenna Control tab applies them.
+    Q_PROPERTY(QString txAntennas READ txAntennas WRITE setTxAntennas NOTIFY txAntennasChanged)
+    Q_PROPERTY(bool blockTxAnt2 READ blockTxAnt2 WRITE setBlockTxAnt2 NOTIFY blockTxAnt2Changed)
+    Q_PROPERTY(bool blockTxAnt3 READ blockTxAnt3 WRITE setBlockTxAnt3 NOTIFY blockTxAnt3Changed)
     // Group B fix wave (radioHardwareVersion 5): RX bypass on TX (the VFO
     // flag's BYPS) is two-way, as useTxAntennaForRx is.
     Q_PROPERTY(bool rxOutOnTx READ rxOutOnTx WRITE setRxOutOnTx NOTIFY rxOutOnTxChanged)
-    Q_PROPERTY(bool ext1OutOnTx READ ext1OutOnTx NOTIFY ext1OutOnTxChanged)
-    Q_PROPERTY(bool ext2OutOnTx READ ext2OutOnTx NOTIFY ext2OutOnTxChanged)
-    Q_PROPERTY(bool rxOutOverride READ rxOutOverride NOTIFY rxOutOverrideChanged)
+    Q_PROPERTY(bool ext1OutOnTx READ ext1OutOnTx WRITE setExt1OutOnTx NOTIFY ext1OutOnTxChanged)
+    Q_PROPERTY(bool ext2OutOnTx READ ext2OutOnTx WRITE setExt2OutOnTx NOTIFY ext2OutOnTxChanged)
+    Q_PROPERTY(bool rxOutOverride READ rxOutOverride WRITE setRxOutOverride
+               NOTIFY rxOutOverrideChanged)
 
 public:
     /// True when an edit may go ahead; otherwise false with a plain reason.
@@ -140,12 +149,27 @@ public:
     bool windowAvailable() const { return m_windowAvailable; }
     QString windowUnavailableReason() const { return m_windowReason; }
 
+    /// Parity Task 12. A remote window: whether its transmit antenna and
+    /// relay edits (the TX antenna for each band, Block TX on Ant 2 and 3,
+    /// Ext 1 and Ext 2 on TX, the RX bypass relay override) can reach the
+    /// Core (radioHardwareVersion 6), and whether RX bypass on TX can
+    /// (version 5); each with its plain reason when not. Both start
+    /// unavailable with the "connect to the Core" reason; a local window's
+    /// tab does not read them.
+    void setTransmitEditAvailability(bool txAntennas, const QString& txAntennasReason,
+                                     bool rxBypass, const QString& rxBypassReason);
+    bool txAntennasEditable() const { return m_txAntennasEditable; }
+    QString txAntennasUnavailableReason() const { return m_txAntennasReason; }
+    bool rxBypassEditable() const { return m_rxBypassEditable; }
+    QString rxBypassUnavailableReason() const { return m_rxBypassReason; }
+
     /// Why the last edit of `property` settled on another value; empty when
     /// it was taken as asked or was never edited.
     QString settleReason(const QByteArray& property) const;
 
-    /// A remote window: a value the Core reports (txAntennas, blockTxAnt2,
-    /// blockTxAnt3, rxOutOnTx, ext1OutOnTx, ext2OutOnTx, rxOutOverride).
+    /// A remote window: a transmit value the Core reports (txAntennas,
+    /// blockTxAnt2, blockTxAnt3, rxOutOnTx, ext1OutOnTx, ext2OutOnTx,
+    /// rxOutOverride), as a plain state apply that no edit gate refuses.
     /// False for any other name, and always false while bound.
     bool applyRemoteProperty(const QByteArray& property, const QVariant& value);
 
@@ -172,10 +196,22 @@ public:
     /// setRxOutOnTx (which clears Ext1/Ext2 out on TX, as Thetis's
     /// chkRxOutOnTx does).
     void setRxOutOnTx(bool on);
+    /// Parity Task 12 (radioHardwareVersion 6): the transmit half, through
+    /// the controller's own setters (a TX antenna on a port blocked for
+    /// transmit is kept, as AlexController keeps it; Block TX moves a band
+    /// on that port back to Ant 1; Ext 1 and Ext 2 on TX clear the other
+    /// two, as Thetis's chkEXT1OutOnTx and chkEXT2OutOnTx do).
+    void setTxAntennas(const QString& list);
+    void setBlockTxAnt2(bool on);
+    void setBlockTxAnt3(bool on);
+    void setExt1OutOnTx(bool on);
+    void setExt2OutOnTx(bool on);
+    void setRxOutOverride(bool on);
 
     /// One band's edit, as the whole list with that band changed.
     void setRxAnt(Band band, int ant);
     void setRxOnlyAnt(Band band, int ant);
+    void setTxAnt(Band band, int ant);
 
 signals:
     void rxAntennasChanged(const QString& list);
@@ -192,6 +228,8 @@ signals:
     void editRejected(const QString& reason);
     /// setWindowAvailability() changed the availability or its reason.
     void windowAvailabilityChanged(bool available);
+    /// setTransmitEditAvailability() changed either availability or reason.
+    void transmitEditAvailabilityChanged();
     /// A band edit did not reach the Core or the Core refused it; the held
     /// values are unchanged, so a view that showed the click re-reads them.
     void bandEditRefused();
@@ -234,6 +272,10 @@ private:
     BandEditSender m_bandEditSender;
     bool m_windowAvailable{false};
     QString m_windowReason;
+    bool m_txAntennasEditable{false};
+    QString m_txAntennasReason;
+    bool m_rxBypassEditable{false};
+    QString m_rxBypassReason;
     QHash<QByteArray, QString> m_settleReasons;
     Values m_values;
 };

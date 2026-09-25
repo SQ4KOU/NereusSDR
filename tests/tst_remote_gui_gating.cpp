@@ -2633,12 +2633,35 @@ private slots:
             "Remote transmit controls are not available from this Core yet.");
         auto* antennas = hardware->findChild<AntennaAlexAntennaControlTab*>();
         QVERIFY(antennas != nullptr);
+        // Parity Task 12: Antenna Control's transmit half follows whether
+        // the Core takes it (radioHardwareVersion 6, RX bypass on TX 5),
+        // not the transmit permission; until told, "connect to the Core".
+        const QString connectReason = QStringLiteral(
+            "Connect to the Core to change the radio's hardware settings.");
         QVERIFY(!antennas->txGridForTest()->isEnabled());
-        QCOMPARE(antennas->txGridForTest()->toolTip(), transmitReason);
+        QCOMPARE(antennas->txGridForTest()->toolTip(), connectReason);
         QVERIFY(!antennas->blockTxAnt2ForTest()->isEnabled());
         QVERIFY(!antennas->rxOutOnTxForTest()->isEnabled());
         QVERIFY(antennas->useTxAntForRxForTest()->isEnabled());
         QVERIFY(antennas->rxButtonForTest(Band::Band40m, 2)->isEnabled());
+        const QString olderTx = QStringLiteral(
+            "This Core cannot change its radio's transmit antennas for this app. "
+            "Updating the Core may help.");
+        QVERIFY(OperatorWording::isPlain(olderTx));
+        alex->setTransmitEditAvailability(false, olderTx, true, {});
+        QVERIFY(!antennas->txGridForTest()->isEnabled());
+        QCOMPARE(antennas->txGridForTest()->toolTip(), olderTx);
+        QVERIFY(!antennas->ext1OutOnTxForTest()->isEnabled());
+        QCOMPARE(antennas->rxOutOverrideForTest()->toolTip(), olderTx);
+        QVERIFY(antennas->rxOutOnTxForTest()->isEnabled());
+        alex->setTransmitEditAvailability(true, {}, true, {});
+        QVERIFY(antennas->txGridForTest()->isEnabled());
+        QVERIFY(antennas->blockTxAnt2ForTest()->isEnabled());
+        QVERIFY(antennas->ext2OutOnTxForTest()->isEnabled());
+        QVERIFY(antennas->txGridForTest()->toolTip().isEmpty());
+        // The transmit permission does not take them away.
+        dialog.setTransmitPermitted(false, transmitReason);
+        QVERIFY(antennas->txGridForTest()->isEnabled());
         const auto group = [hardware](const QString& title) -> QGroupBox* {
             for (QGroupBox* box : hardware->findChildren<QGroupBox*>()) {
                 if (box->title() == title) { return box; }
@@ -2692,7 +2715,6 @@ private slots:
         for (const QString& text : transmitChecks) {
             QVERIFY2(check(text)->isEnabled(), qPrintable(text));
         }
-        QVERIFY(antennas->txGridForTest()->isEnabled());
         QVERIFY(group(QStringLiteral("User Dig Out"))->isEnabled());
         QVERIFY(group(QStringLiteral("TX Display Cal"))->toolTip().isEmpty());
 

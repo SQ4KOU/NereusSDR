@@ -190,6 +190,11 @@
 //                flag's do; the VAX first-run check for new virtual cables
 //                runs in a remote window as in a local one. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-46 (parity Task 12): the Alex facade learns
+//                whether the Core takes the transmit antennas and relays
+//                (radioHardwareVersion 6) and RX bypass on TX (5); Setup >
+//                Antenna Control follows it. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -11659,6 +11664,20 @@ void MainWindow::applyRemoteRoleGating()
             : m_stationClient != nullptr
                 ? OperatorReasonText::forDisplay(m_stationClient->hardwareConfigUnavailableReason())
                 : tr("Connect to the Core to change the radio's hardware settings."));
+        // R-R3-49 / R-R3-46 (parity Task 12): the transmit antennas and
+        // relays go through the Core from radioHardwareVersion 6, RX bypass
+        // on TX from 5, whatever the transmit permission says; a local
+        // window's own controller always takes them.
+        const bool localWindow = m_radioModel->ownsLocalDsp();
+        const bool txAntennas = localWindow
+            || (m_stationClient != nullptr && m_stationClient->remoteTransmitAntennasAvailable());
+        alex->setTransmitEditAvailability(
+            txAntennas, txAntennas ? QString()
+                : m_stationClient != nullptr
+                    ? OperatorReasonText::forDisplay(
+                          m_stationClient->transmitAntennasUnavailableReason())
+                    : tr("Connect to the Core to change the radio's hardware settings."),
+            rxBypassPermitted(), OperatorReasonText::forDisplay(rxBypassUnavailableReason()));
     }
     // R-R3-46: Protocol Info shows the Core's radio (showCoreRadioInfo(),
     // never connection(), which a remote model does not have) once the

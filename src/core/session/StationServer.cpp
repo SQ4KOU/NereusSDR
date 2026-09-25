@@ -247,6 +247,12 @@
 //                                    accessoryDataVersion 2 (the rfkit*
 //                                    connection counts).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-46 (parity Task 12):
+//                                    radioHardwareVersion 6, the TX
+//                                    antennas and relays on `alexAntennas`
+//                                    two-way, with no on-air rule, as in
+//                                    Thetis.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2727,8 +2733,26 @@ int StationServer::radioHardwareVersion() const
     // (setAlexRxAntenna), R-R3-46 fix wave. 4: the filter policy verb
     // (setAlexBpfMode), R-R3-46 / R-R3-21, applied through the same
     // `alexAntennas` facade. 5: `rxOutOnTx` (RX bypass on TX) two-way,
-    // group B fix wave.
-    return m_radioModel->ioBoardFacade()->isBound() ? 5 : 2;
+    // group B fix wave. 6: the rest of the transmit half two-way (the TX
+    // antenna for each band, Block TX on Ant 2 and 3, Ext 1 and Ext 2 on TX
+    // and the RX bypass relay override), parity Task 12.
+    //
+    // None of them waits for the radio to leave the air, on this Core or in
+    // a local window, because Thetis has no such rule: each Setup handler
+    // applies at once, the antenna and Block-TX ones through
+    // console.AlexAntCtrlEnabled -> UpdateAlexAntSelection(RX1Band, _mox, ...)
+    // with tx = _mox, the relay ones by setting Alex's statics.
+    // From Thetis setup.cs:13780-13835 [v2.10.3.15] ProcessAlexAntRadioButton
+    //   Alex.getAlex().setTxAnt(band, (byte)ant); ... console.AlexAntCtrlEnabled = true;
+    // From Thetis setup.cs:18786-18833 [v2.10.3.15] chkBlockTxAnt2/3_CheckedChanged
+    //   console.AlexANT2RXOnly = chkBlockTxAnt2.Checked; // G8NJJ_21h
+    // From Thetis setup.cs:16520-16544 [v2.10.3.15] chkEXT1OutOnTx / chkEXT2OutOnTx
+    //   Alex.Ext1OutOnTx = chkEXT1OutOnTx.Checked;
+    // From Thetis setup.cs:17609-17614 [v2.10.3.15] chkDisableRXOut_CheckedChanged
+    //   console.RxOutOverride = chkDisableRXOut.Checked;
+    // RadioModel sends the TX routing for an antenna change while keyed and
+    // holds the relay flags for the next MOX edge (group B fix wave).
+    return m_radioModel->ioBoardFacade()->isBound() ? 6 : 2;
 }
 
 StationCapabilities StationServer::buildCapabilities() const
@@ -2763,7 +2787,8 @@ StationCapabilities StationServer::buildCapabilities() const
             // 2 once its Alex antennas are behind `alexAntennas` too, with
             // the hardware apply step and the I/O board probe; 3 with the
             // read-only `ioBoard` object and the per-band antenna verb; 4
-            // with the filter policy verb.
+            // with the filter policy verb; 5 with RX bypass on TX two-way;
+            // 6 with the rest of the transmit antennas and relays two-way.
             caps.radioHardwareVersion = radioHardwareVersion();
             // R-R3-47 / R-R3-22: 1 on a Core that owns its accessories: the
             // read-only `amplifier` and `rfkit` objects. The Power Genius is 2

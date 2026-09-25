@@ -721,7 +721,11 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("coreNewest"), QStringLiteral("appNewest"), QStringLiteral("update"),
           QStringLiteral("otherApp")}},
         // The window's reason it keeps: its own parameter, from this file.
-        {"src/core/accessories/AlexAntennaFacade.cpp", {}, {}, 6, {}, {QStringLiteral("kept")}},
+        // Parity Task 12: and its transmit edit reasons (txKept, bypassKept),
+        // from MainWindow's StationClient reasons, shown through
+        // OperatorReasonText.
+        {"src/core/accessories/AlexAntennaFacade.cpp", {}, {}, 6, {},
+         {QStringLiteral("kept"), QStringLiteral("txKept"), QStringLiteral("bypassKept")}},
         // The attenuator's range in dB.
         {"src/core/StepAttenuatorFacade.cpp", {}, {}, 6,
          {QStringLiteral("lo"), QStringLiteral("hi"),
@@ -939,6 +943,10 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason the attenuator rows show"},
         {"src/core/accessories/AlexAntennaFacade.h", "windowUnavailableReason",
          "a remote window's own reason the antenna rows show"},
+        {"src/core/accessories/AlexAntennaFacade.h", "txAntennasUnavailableReason",
+         "a remote window's own reason the transmit antenna rows show (parity Task 12)"},
+        {"src/core/accessories/AlexAntennaFacade.h", "rxBypassUnavailableReason",
+         "a remote window's own reason RX bypass on TX shows (parity Task 12)"},
         {"src/core/TciServer.h", "operatorNoticeReason", "a remote window's own TCI notice"},
         {"src/models/RadioModel.cpp", "mirrorTxProfilesFromStation",
          "a window's TX profile requests: it shows the link's own reason for a request it "

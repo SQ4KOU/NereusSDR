@@ -484,7 +484,9 @@ public:
     StationCapabilities buildCapabilities() const;
     /// R-R3-46: what this Core offers a window of its radio's hardware:
     /// 0 nothing, 1 the `stepAtt` object, 2 also `alexAntennas`, the
-    /// hardware apply step and the I/O board probe.
+    /// hardware apply step and the I/O board probe; the I/O board today
+    /// raises it to 6 (the ioBoard object, the per-band antenna and filter
+    /// policy verbs, and the transmit antennas and relays two-way).
     int radioHardwareVersion() const;
     // R-R3-47 / R-R3-22: 1 when this Core owns its accessories and mirrors
     // the `amplifier` and `rfkit` objects (remotePgxlControlVersion and

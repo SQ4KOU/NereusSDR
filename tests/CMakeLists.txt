@@ -7067,6 +7067,13 @@ nereus_add_test(tst_remote_core_stop_notice)
 nereus_add_test(tst_remote_tx_widgets)
 nereus_add_test(tst_remote_tx_presentation fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_remote_tx_presentation PRIVATE NEREUS_BUILD_TESTS)
+# R-R3-49 / R-R3-46 (remote-window parity Task 12): the transmit antennas
+# and relays from a remote window (Antenna Control and the flag's BYPS), on
+# and off the air, and the routing and P1 / P2 bytes the Core then sends
+# its fake radio, compared with a local window's.
+nereus_add_test(tst_remote_tx_antennas fakes/RemoteWindowHarness.cpp
+    fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_remote_tx_antennas PRIVATE NEREUS_BUILD_TESTS)
 
 # R-R3-38: client-only saved Core credentials and coherent CLI selection.
 nereus_add_test(tst_core_target_store)
