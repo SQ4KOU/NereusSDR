@@ -61,6 +61,10 @@
 //                destroy) move to the model's receive lane; a resampled
 //                block is encoded there and sent back here in order. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39: stop() ends a TX audio holder's cycle as its
+//                disconnect does (stopTxChrono), so the TCI transmit
+//                resampler is freed. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-25 - D14 / R-R3-49: the TX sensors' mic level is Thetis's MIC
 //                reading, max(-195, TXA_MIC_AV) (thetisTxReading). J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -1577,7 +1581,15 @@ void TciServer::stop()
     m_txSensorTimer->stop();
 
     // Phase 17: release TX audio mutex — no client is active after stop().
+    // R-R3-39: as a holder's disconnect does, end its TX cycle: the TCI
+    // input ring drains and the transmit lane frees the TCI resampler
+    // (TxChannel::clearTciAudio). Without it a server stopped mid-cycle left
+    // the resampler to leak.
+    const bool heldTxAudio = !m_txAudioActiveClient.isNull();
     m_txAudioActiveClient = nullptr;
+    if (heldTxAudio) {
+        stopTxChrono();
+    }
 
     // Disconnect all connected clients.  We disconnect the socket's signals
     // from this object first to prevent onClientDisconnected() re-entry during

@@ -41,6 +41,10 @@
 //                 plans on a fast core, and each closed channel's threads
 //                 are forgotten. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39: the TX destroy and rebuild barriers free the
+//                 wrapper's TCI transmit resampler on the transmit lane.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  cmaster.c
@@ -1759,6 +1763,10 @@ void WdspEngine::destroyTxChannel(int channelId)
         m_txLane->postBarrier([this, channel, buffer, channelId]() mutable {
             channel->quiesceWorkerOnLane();
             channel->markRetired();
+            // R-R3-39: a TX cycle still running when the channel goes
+            // leaves its TCI resampler; free it here, on the lane, after
+            // every TCI block queued before this barrier.
+            channel->releaseTciResamplerOnLane();
 #ifdef HAVE_WDSP
             // Deactivate with drain before closing.
             // dmode=1: drain-mode close (mirrors destroyRxChannel pattern).
@@ -2035,6 +2043,10 @@ qint64 WdspEngine::rebuildTxChannel(int channelId, const ChannelConfig& cfg)
 
         m_txLane->postBarrier([this, old, ptr, channelId, reopen]() mutable {
             old->quiesceWorkerOnLane();
+            // R-R3-39: the old wrapper was retired at once, so a cycle-stop
+            // destroy still queued for it is skipped; free its TCI
+            // resampler here, on the lane.
+            old->releaseTciResamplerOnLane();
 #ifdef HAVE_WDSP
             // Deactivate with drain before closing (mirrors destroyTxChannel).
             // dmode=1: drain-mode close per Thetis console.cs:29607 [v2.10.3.13].

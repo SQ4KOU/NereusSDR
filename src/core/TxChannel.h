@@ -335,6 +335,12 @@ warren@wpratt.com
 //                 with the RF gate open (Thetis's unkey order) and returns
 //                 its sequence.  AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-25 : R-R3-39 by J.J. Boyd (KG4VCF): the TCI transmit
+//                 resampler is freed on the transmit lane at every teardown
+//                 (channel destroy and rebuild through
+//                 releaseTciResamplerOnLane; the destructor as a last
+//                 resort); liveTciResamplersForTest counts them.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -1052,6 +1058,15 @@ public:
     /// thread (TciServer's TX_CHRONO start/stop hooks run there) because
     /// the worker stops pulling once m_tciAudioActive flips false.
     void clearTciAudio();
+
+    /// R-R3-39: frees the TCI transmit resampler. WdspEngine's destroy and
+    /// rebuild barriers call it on the transmit lane (the caller's thread
+    /// with no lane), so a channel torn down mid-cycle never leaks it.
+    void releaseTciResamplerOnLane();
+
+    /// R-R3-39: TCI transmit resamplers alive now, across every TxChannel.
+    /// For tests.
+    static int liveTciResamplersForTest();
 
     // ── Anti-VOX detector audio feed (3M-3a-iv Task 3) ──────────────────────
     //

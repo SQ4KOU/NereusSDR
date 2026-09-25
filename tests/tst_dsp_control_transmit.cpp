@@ -7,12 +7,20 @@
 // posted before a rebuild never run; and the unkey drain is measured with
 // and without microphone blocks arriving.
 //
+// The TCI transmit resampler (R-R3-39 follow-up): it is freed on the
+// transmit lane at every teardown (a TCI holder's disconnect, the TCI
+// server's stop, a rate change, the channel's rebuild, destroy and the
+// engine's shutdown), and the live count ends at zero.
+//
 // REALTIME: the timer-gap bound is wall-clock time while a real TX channel
 // and a real RX channel run 200 ms blocks and feeder threads drive them.
 #include <QtTest/QtTest>
 #include "RealtimeTestLoad.h"
 
 #include <QElapsedTimer>
+#include <QSignalSpy>
+#include <QUrl>
+#include <QWebSocket>
 #include <QEventLoop>
 #include <QThread>
 #include <QTimer>
@@ -40,6 +48,8 @@
 #include "core/TxAnalyzer.h"
 #include "core/TxChannel.h"
 #include "core/WdspEngine.h"
+#include "core/TciBinaryFrame.h"
+#include "core/TciServer.h"
 #include "core/WdspThreadCheck.h"
 #include "core/daemon/DaemonApp.h"
 #include "core/daemon/DaemonConfig.h"
@@ -689,6 +699,125 @@ private slots:
         const quint64 eventLoopCalls = WdspThreadCheck::eventLoopEntries();
         WdspThreadCheck::uninstall();
         QCOMPARE(eventLoopCalls, quint64{0});
+    }
+
+    // R-R3-39: the TCI transmit resampler never leaks. A block at a rate
+    // other than 48 kHz makes one on the transmit lane; every teardown frees
+    // it there: the TX audio holder's disconnect, a rate change (the old one
+    // goes, one new one lives), the TCI server's stop, the channel's
+    // rebuild and destroy, and the engine's shutdown.
+    void tciResamplerIsFreedOnEveryTeardown()
+    {
+        const auto txFrame = [](int rate) {
+            std::vector<float> samples(512, 0.1f);   // 256 stereo frames
+            return TciBinaryFrame::buildStreamPayload(
+                0, rate, static_cast<int>(TciSampleType::Float32),
+                static_cast<int>(samples.size()),
+                static_cast<int>(TciStreamType::TxAudioStream), 2, samples.data());
+        };
+        const auto claimTxAudio = [](QWebSocket& app, TciServer& server) {
+            QSignalSpy connected(&app, &QWebSocket::connected);
+            app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+            if (!connected.wait(2000)) {
+                return false;
+            }
+            app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+            return QTest::qWaitFor([&server]() { return server.activeTxClientCount() == 1; },
+                                   3000);
+        };
+        QCOMPARE(TxChannel::liveTciResamplersForTest(), 0);
+        {
+            TimedLog log;
+            Rig rig;
+            QVERIFY2(buildRig(rig, &log), "the rig did not come up");
+            RadioModel& model = *rig.model;
+            // The app holds the TX audio; the transmitter refuses to key,
+            // so nothing is keyed while its audio flows.
+            model.moxController()->setMoxCheck([]() {
+                return safety::BandPlanGuard::MoxCheckResult{false, QStringLiteral("test")};
+            });
+            TciServer server(&model);
+            QVERIFY(server.start(0));
+
+            // A holder's disconnect mid-cycle, after a rate change.
+            {
+                QWebSocket app;
+                QVERIFY(claimTxAudio(app, server));
+                app.sendBinaryMessage(txFrame(24000));
+                QTRY_COMPARE_WITH_TIMEOUT(TxChannel::liveTciResamplersForTest(), 1, 3000);
+                app.sendBinaryMessage(txFrame(8000));   // a rate change
+                QTest::qWait(100);
+                QVERIFY(model.waitForTransmitLaneForTest(kLaneIdleTimeoutMs));
+                QCOMPARE(TxChannel::liveTciResamplersForTest(), 1);
+                app.close();
+                QTRY_COMPARE_WITH_TIMEOUT(server.activeTxClientCount(), 0, 3000);
+                QVERIFY(model.waitForTransmitLaneForTest(kLaneIdleTimeoutMs));
+                QCOMPARE(TxChannel::liveTciResamplersForTest(), 0);
+            }
+            // The server's stop with a holder mid-cycle.
+            {
+                QWebSocket app;
+                QVERIFY(claimTxAudio(app, server));
+                app.sendBinaryMessage(txFrame(12000));
+                QTRY_COMPARE_WITH_TIMEOUT(TxChannel::liveTciResamplersForTest(), 1, 3000);
+                server.stop();
+                QVERIFY(model.waitForTransmitLaneForTest(kLaneIdleTimeoutMs));
+                QCOMPARE(TxChannel::liveTciResamplersForTest(), 0);
+            }
+        }
+        QCOMPARE(TxChannel::liveTciResamplersForTest(), 0);
+
+        // The channel's own teardowns, on a transmit lane.
+        DspControlThread lane(DspLane::Transmit);
+        lane.start();
+        {
+            WdspEngine engine;
+            engine.m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+            engine.setTransmitLane(&lane);
+            const auto create = [&engine]() {
+                return engine.createTxChannel(kTxId, kTxInSize, WdspEngine::kTxDspBufferSize,
+                                              kRateHz, WdspEngine::kTxDspSampleRate, kRateHz);
+            };
+            const auto feed24k = [](TxChannel* tx) {
+                QByteArray block(256 * 2 * static_cast<int>(sizeof(float)), '\0');
+                tx->feedTxAudioFromTci(block, 256, 2, 24000);
+            };
+            TxChannel* tx = create();
+            QVERIFY(tx);
+            feed24k(tx);
+            QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+            QCOMPARE(TxChannel::liveTciResamplersForTest(), 1);
+
+            // Rebuild mid-cycle: the old wrapper's resampler goes.
+            ChannelConfig cfg;
+            cfg.bufferSize = kTxInSize;
+            cfg.filterSize = WdspEngine::kTxDspBufferSize;
+            cfg.sampleRate = kRateHz;
+            QVERIFY(engine.rebuildTxChannel(kTxId, cfg) >= 0);
+            QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+            QCOMPARE(TxChannel::liveTciResamplersForTest(), 0);
+
+            // Destroy mid-cycle.
+            tx = engine.txChannel(kTxId);
+            QVERIFY(tx);
+            feed24k(tx);
+            QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+            QCOMPARE(TxChannel::liveTciResamplersForTest(), 1);
+            engine.destroyTxChannel(kTxId);
+            QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+            QCOMPARE(TxChannel::liveTciResamplersForTest(), 0);
+
+            // Shutdown mid-cycle (the engine goes with the next brace).
+            tx = create();
+            QVERIFY(tx);
+            QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+            feed24k(tx);
+            QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+            QCOMPARE(TxChannel::liveTciResamplersForTest(), 1);
+        }
+        QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+        QCOMPARE(TxChannel::liveTciResamplersForTest(), 0);
+        lane.stop();
     }
 
     // The rebuild's generation check: a setter still queued for the old

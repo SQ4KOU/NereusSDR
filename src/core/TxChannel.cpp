@@ -353,6 +353,12 @@ warren@wpratt.com
 //                 already inside sendTxIq; each block is zeroed before
 //                 fexchange0.  AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-25 : R-R3-39 by J.J. Boyd (KG4VCF): the TCI transmit
+//                 resampler is freed on the transmit lane at every teardown
+//                 (channel destroy and rebuild through
+//                 releaseTciResamplerOnLane; the destructor as a last
+//                 resort); liveTciResamplersForTest counts them.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -419,6 +425,12 @@ void  destroy_resampleFV(void* ptr);
 #endif
 
 namespace NereusSDR {
+
+namespace {
+// R-R3-39: TCI transmit resamplers alive now (m_tciTxResampler), across
+// every TxChannel; liveTciResamplersForTest reads it.
+std::atomic<int> s_liveTciResamplers{0};
+} // namespace
 
 static bool stageRunningDefault(TxChannel::Stage s);
 
@@ -880,6 +892,11 @@ TxChannel::~TxChannel()
     // R-R3-39: any job of this wrapper still queued on a lane does nothing.
     m_alive->store(false, std::memory_order_release);
     unregisterVoxCallback();
+    // R-R3-39: the destroy or rebuild barrier has freed it on the transmit
+    // lane; with no lane it is freed here, on the caller's thread, as every
+    // WDSP call of such a wrapper is. A lane that stopped for good before
+    // its barrier ran would otherwise leak it.
+    destroyTciResampler();
 }
 
 // ---------------------------------------------------------------------------
@@ -2759,13 +2776,14 @@ void TxChannel::feedTciAudioBlock(const QByteArray& interleavedStereoBytes,
     if (srcRate > 0 && srcRate != kWdspTxaInputRate) {
         // Recreate the resampler if the input rate changed (or first call).
         if (m_tciTxResampler && m_tciTxResamplerInputRate != srcRate) {
-            destroy_resampleFV(m_tciTxResampler);
-            m_tciTxResampler = nullptr;
-            m_tciTxResamplerInputRate = 0;
+            destroyTciResampler();
         }
         if (!m_tciTxResampler) {
             m_tciTxResampler = create_resampleFV(srcRate, kWdspTxaInputRate);
             m_tciTxResamplerInputRate = srcRate;
+            if (m_tciTxResampler) {
+                s_liveTciResamplers.fetch_add(1, std::memory_order_relaxed);
+            }
         }
         if (m_tciTxResampler) {
             // Output buffer: worst case is upsample 8 kHz -> 48 kHz (6x).
@@ -2898,8 +2916,19 @@ void TxChannel::destroyTciResampler()
         destroy_resampleFV(m_tciTxResampler);
         m_tciTxResampler = nullptr;
         m_tciTxResamplerInputRate = 0;
+        s_liveTciResamplers.fetch_sub(1, std::memory_order_relaxed);
     }
 #endif
+}
+
+void TxChannel::releaseTciResamplerOnLane()
+{
+    destroyTciResampler();
+}
+
+int TxChannel::liveTciResamplersForTest()
+{
+    return s_liveTciResamplers.load(std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------
