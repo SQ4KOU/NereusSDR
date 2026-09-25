@@ -419,6 +419,7 @@ private slots:
     void handshakeDeadlineDropsASilentPeer();
     void peerLimitRefusesFurtherConnections();
     void oneAddressHoldsAtMostTwoConnectingSlots();
+    void ipv6PeersAreCountedPerSlash64();
     void listenIsIdempotent();
 
     // ---- Security fix round ----
@@ -4568,6 +4569,144 @@ void TstStationSession::oneAddressHoldsAtMostTwoConnectingSlots()
     dial(attacker);
     QCOMPARE(server.peerCount(), 6);
     Q_UNUSED(second);
+}
+
+// Part C follow-up (R-IOS-08): an IPv6 host has a whole /64 to dial from,
+// so the per-address count keys IPv6 by its /64 prefix. IPv4, and IPv4
+// written as IPv4-mapped IPv6, stays keyed by the full address.
+void TstStationSession::ipv6PeersAreCountedPerSlash64()
+{
+    QCOMPARE(StationServer::kMaxHandshakesPerAddress, 2);
+    QCOMPARE(StationServer::kMaxConcurrentPeers, 8);
+    const QString capReason = QStringLiteral(
+        "The Core already has as many connections as it allows. Try again shortly.");
+
+    const auto makeServer = [this](RadioModel* model, AppSettings& settings) {
+        auto server = std::make_unique<StationServer>(
+            model, settings,
+            NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
+        server->setAuthDeadlineMs(0);
+        return server;
+    };
+    const auto dial = [this](StationServer& server, const QString& address) {
+        auto* stationEnd = new LoopbackTransport(QStringLiteral("station"), this);
+        auto* clientEnd = new LoopbackTransport(QStringLiteral("client"), this);
+        stationEnd->setPeerAddress(address);
+        stationEnd->linkTo(clientEnd);
+        server.acceptTransport(stationEnd);
+        return clientEnd;
+    };
+    const auto refusedWithCap = [&capReason](LoopbackTransport* client) {
+        if (!client->receivedKinds().contains(QByteArrayLiteral("session.end"))) {
+            return false;
+        }
+        for (const QByteArray& wire : client->received()) {
+            const SessionMessage m = decodeOrFail(wire);
+            if (m.kind == SessionMessageKind::SessionEnd) {
+                return m.retryable && m.reason == capReason;
+            }
+        }
+        return false;
+    };
+
+    // Four addresses in one /64, two handshakes each: two slots, the rest
+    // refused with the cap's reason.
+    {
+        QTemporaryDir settingsDir;
+        QVERIFY(settingsDir.isValid());
+        AppSettings settings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+        auto model = makeStationRadioModel(0);
+        auto server = makeServer(model.get(), settings);
+        const QStringList oneSlash64 = {
+            QStringLiteral("2001:db8:1:2::1"), QStringLiteral("2001:db8:1:2::2"),
+            QStringLiteral("2001:db8:1:2:aaaa:bbbb:cccc:dddd"),
+            QStringLiteral("2001:db8:1:2:ffff:ffff:ffff:fffe")};
+        QList<LoopbackTransport*> refused;
+        int dialled = 0;
+        for (const QString& address : oneSlash64) {
+            for (int i = 0; i < 2; ++i) {
+                LoopbackTransport* client = dial(*server, address);
+                if (++dialled > 2) {
+                    refused.append(client);
+                }
+            }
+        }
+        QCOMPARE(server->peerCount(), 2);
+        QCOMPARE(refused.size(), 6);
+        for (LoopbackTransport* client : std::as_const(refused)) {
+            QTRY_VERIFY(refusedWithCap(client));
+        }
+    }
+
+    // Two different /64s get two each.
+    {
+        QTemporaryDir settingsDir;
+        QVERIFY(settingsDir.isValid());
+        AppSettings settings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+        auto model = makeStationRadioModel(0);
+        auto server = makeServer(model.get(), settings);
+        dial(*server, QStringLiteral("2001:db8:1:2::1"));
+        dial(*server, QStringLiteral("2001:db8:1:2::2"));
+        dial(*server, QStringLiteral("2001:db8:1:3::1"));
+        dial(*server, QStringLiteral("2001:db8:1:3::2"));
+        QCOMPARE(server->peerCount(), 4);
+        LoopbackTransport* third = dial(*server, QStringLiteral("2001:db8:1:3::3"));
+        QCOMPARE(server->peerCount(), 4);
+        QTRY_VERIFY(refusedWithCap(third));
+    }
+
+    // An IPv4-mapped peer is counted as its IPv4 address: it shares a count
+    // with the plain form, and not with other mapped addresses (which all
+    // sit in one /64, ::ffff:0:0/96).
+    {
+        QTemporaryDir settingsDir;
+        QVERIFY(settingsDir.isValid());
+        AppSettings settings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+        auto model = makeStationRadioModel(0);
+        auto server = makeServer(model.get(), settings);
+        dial(*server, QStringLiteral("::ffff:192.0.2.7"));
+        dial(*server, QStringLiteral("::ffff:192.0.2.7"));
+        LoopbackTransport* plain = dial(*server, QStringLiteral("192.0.2.7"));
+        QCOMPARE(server->peerCount(), 2);
+        QTRY_VERIFY(refusedWithCap(plain));
+        dial(*server, QStringLiteral("::ffff:192.0.2.8"));
+        dial(*server, QStringLiteral("192.0.2.8"));
+        dial(*server, QStringLiteral("::ffff:192.0.2.9"));
+        QCOMPARE(server->peerCount(), 5);
+    }
+
+    // A signed-in session still does not count against its /64.
+    {
+        QTemporaryDir settingsDir;
+        QVERIFY(settingsDir.isValid());
+        AppSettings settings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+        auto model = makeStationRadioModel(0);
+        auto server = makeServer(model.get(), settings);
+        LoopbackTransport* signedIn = dial(*server, QStringLiteral("2001:db8:5:6::10"));
+        QTRY_VERIFY(!signedIn->received().isEmpty());
+        signedIn->sendText(SessionMessages::encode(SessionMessages::hello(
+            kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("phone"))));
+        signedIn->sendText(SessionMessages::encode(SessionMessages::authRequest(server->token())));
+        QTRY_VERIFY(signedIn->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+        QVERIFY(server->hasAuthenticatedSession());
+        dial(*server, QStringLiteral("2001:db8:5:6::11"));
+        dial(*server, QStringLiteral("2001:db8:5:6::12"));
+        QCOMPARE(server->peerCount(), 3);
+        LoopbackTransport* third = dial(*server, QStringLiteral("2001:db8:5:6::13"));
+        QCOMPARE(server->peerCount(), 3);
+        QTRY_VERIFY(refusedWithCap(third));
+    }
+
+    // The key itself.
+    QCOMPARE(StationServer::addressKey(QStringLiteral("2001:db8:1:2:aaaa::1")),
+             StationServer::addressKey(QStringLiteral("2001:db8:1:2::9")));
+    QVERIFY(StationServer::addressKey(QStringLiteral("2001:db8:1:2::1"))
+            != StationServer::addressKey(QStringLiteral("2001:db8:1:3::1")));
+    QCOMPARE(StationServer::addressKey(QStringLiteral("::ffff:192.0.2.7")),
+             QStringLiteral("192.0.2.7"));
+    QCOMPARE(StationServer::addressKey(QStringLiteral("192.0.2.7")),
+             QStringLiteral("192.0.2.7"));
+    QCOMPARE(StationServer::addressKey(QString()), QString());
 }
 
 void TstStationSession::listenIsIdempotent()

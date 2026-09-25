@@ -1895,8 +1895,12 @@ runs the same deadline on its side.
 - Of those, one address may hold at most 2 that are still connecting
   (their snapshot not yet sent; `kMaxHandshakesPerAddress`), so one host
   cannot hold every slot by redialling within the connect deadline. An
-  IPv4-mapped IPv6 address counts as its IPv4 address. The next one from
-  that address gets the same `session.end`, `retryable` true. A connection
+  IPv4 address counts by itself, and an IPv4-mapped IPv6 address counts
+  as its IPv4 address. Any other IPv6 address counts by its /64 prefix,
+  because one host can dial from every address in its /64; a household on
+  one /64 therefore shares the 2, as one behind IPv4 NAT does. Signed-in
+  sessions are not counted. The next one from that address or /64 gets
+  the same `session.end`, `retryable` true. A connection
   with no address of its own (the relay's) is not counted by address.
 
 ### 12.4 Ending, preemption and retryable

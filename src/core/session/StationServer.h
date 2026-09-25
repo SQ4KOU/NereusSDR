@@ -292,7 +292,8 @@ public:
     /// Part C fix wave (R1-M4): connections from one address that are
     /// still connecting (their snapshot not yet sent), so one host cannot
     /// hold every kMaxConcurrentPeers slot by redialling within the
-    /// handshake deadline. A connection with no address of its own (the
+    /// handshake deadline. IPv6 addresses are counted per /64 (see
+    /// addressKey()). A connection with no address of its own (the
     /// relay, later) is not counted here.
     static constexpr int kMaxHandshakesPerAddress = 2;
 
@@ -479,8 +480,9 @@ public:
     /// as the first-run banner is written.
     static void printToConsole(const QString& text);
     /// Part C fix wave (R1-M4): `address` as the per-address handshake
-    /// count keys it: an IPv4-mapped IPv6 address as its IPv4 form, no
-    /// scope id. "" for "".
+    /// count keys it: IPv4, and an IPv4-mapped IPv6 address, as the full
+    /// IPv4 address; any other IPv6 address as its /64 prefix
+    /// ("2001:db8:1:2::/64"), no scope id. "" for "".
     static QString addressKey(const QString& address);
     /// Whether `address` (a connection's peer address) is on one of this
     /// machine's directly connected networks: a loopback address, or one

@@ -1165,10 +1165,22 @@ QString StationServer::addressKey(const QString& address)
     bool mapped = false;
     const quint32 ipv4 = host.toIPv4Address(&mapped);
     if (mapped) {
-        host = QHostAddress(ipv4);
+        // IPv4, and IPv4-mapped IPv6, by the full address.
+        return QHostAddress(ipv4).toString();
     }
-    host.setScopeId(QString());
-    return host.toString();
+    if (host.protocol() != QAbstractSocket::IPv6Protocol) {
+        return host.toString();
+    }
+    // Part C follow-up (R-IOS-08): an IPv6 host is handed a whole /64 and
+    // can dial from any address in it, so IPv6 peers are counted by their
+    // /64 prefix. A household on one /64 then shares the two connecting
+    // slots the way one behind IPv4 NAT does; signed-in sessions are not
+    // counted, and the refusal is retryable.
+    Q_IPV6ADDR bytes = host.toIPv6Address();
+    for (int i = 8; i < 16; ++i) {
+        bytes[i] = 0;
+    }
+    return QHostAddress(bytes).toString() + QStringLiteral("/64");
 }
 
 bool StationServer::isOnDirectNetwork(const QString& address)
