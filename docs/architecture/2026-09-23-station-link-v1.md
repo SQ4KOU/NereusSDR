@@ -82,8 +82,9 @@ and the [R3 plan](2026-09-20-remote-daemon-r3-plan.md).
   (`[2001:db8::1]:47910`, `[::1]`); an IPv6 address without brackets, with
   or without a port (`2001:db8::1:47910`, `::1`, what Apple's
   `NWProtocolWebSocket` sends for an IPv6 URL); an IPv4 address with or
-  without a port; and a host name (letters, digits, `-`, `_` and `.`),
-  with or without a port. An IPv6 zone (`%en0`) is dropped. A value
+  without a port; and a host name (labels of 1 to 63 letters, digits, `-`
+  and `_`, split by single dots, none starting or ending with `-`), with or
+  without a port. An IPv6 zone (`%en0`) is dropped. A value
   without brackets that reads both as an address and as an address and a
   port (`::1:8080`) is taken as an address; the station reads nothing from
   it either way. Qt itself cannot read an unbracketed IPv6 `Host` and
@@ -92,12 +93,22 @@ and the [R3 plan](2026-09-20-remote-daemon-r3-plan.md).
 - A request the station cannot read gets `400 Bad Request` with
   `Connection: close` and a one-line plain text body, and the connection
   closes: no `Host`, more than one `Host`, a `Host` in none of the forms
-  above, a request line other than `GET <target> HTTP/1.1`, or a request
-  missing `Upgrade: websocket`, `Connection: Upgrade`, a
-  `Sec-WebSocket-Key` of 16 bytes or `Sec-WebSocket-Version`. A head
-  longer than 8192 bytes (`kMaxRequestHeadBytes`) gets the same. A
-  `Sec-WebSocket-Version` the station does not speak is Qt's to answer:
-  its own `400`, then the close.
+  above (or one Qt's URL parser finds no host in), a request line other
+  than `GET <path> HTTP/1.1`, a header line that is not `name: value`
+  with a token name (a folded line, one starting with a space or tab,
+  included), a control character other than a tab in a value, more than
+  100 header lines, a first `Upgrade` header that is not exactly
+  `websocket`, a first `Connection` header without `Upgrade`, a first
+  `Sec-WebSocket-Key` that is not 16 bytes, or a `Sec-WebSocket-Version`
+  that is missing or is not a comma-separated list of numbers. A head
+  longer than 8192 bytes (`kMaxRequestHeadBytes`) gets the same. These
+  follow how Qt reads the request, so that each request the station
+  passes on is one Qt answers. A `Sec-WebSocket-Version` number the
+  station does not speak (`8`) is Qt's to answer: its own `400`, then the
+  close. If Qt closes a request without writing anything, for any other
+  reason, the station writes the same `400` first. No complete opening
+  request ends without an answer; one never finished is closed at the
+  deadline below.
 - The whole opening, from the TCP accept through TLS to the `101`, must
   finish within 10 s (`StationServer::kDefaultOpeningDeadlineMs`, Qt's own
   default handshake timeout); a connection that has not opened by then is
@@ -2465,15 +2476,21 @@ runs the same deadline on its side.
 - `media.control` messages are capped at 128 KiB and `station.metrics.v1`
   at 16 KiB, when encoded and when decoded.
 - Openings (connections whose TLS or upgrade has not finished) are
-  counted apart from connections: at most 8 at once
-  (`kMaxConcurrentPeers`) and 2 from one address or IPv6 /64
+  counted apart from connections: at most 64 at once
+  (`StationServer::kMaxUnfinishedOpenings`) and 2 from one address or IPv6 /64
   (`kMaxHandshakesPerAddress`, counted as below), each until it opens, is
   refused or reaches the 10 s opening deadline (section 2). A new
   connection at either limit closes the oldest unfinished opening (from
   its own address first, then the oldest of all) and takes its place, so
   openings that never finish do not keep a device out, and a client that
   redials while its own abandoned dials are still opening gets its newest
-  dial through.
+  dial through. The total is 64, not the 8 connections below, because it
+  is what a flood must fill to push a real device's opening out: with 2
+  per address that takes 64 connects from at least 32 addresses or /64s
+  within the device's own opening time. Each opening costs one file
+  descriptor; `nereusd` runs under the default limit of 1024
+  (`packaging/nereusd.service.in` sets no `LimitNOFILE`), so 64 openings
+  and the 8 connections stay far below it.
 - The station accepts at most 8 connections at once
   (`kMaxConcurrentPeers`), counting those still connecting. The next one
   gets `session.end` "The Core already has as many connections as it

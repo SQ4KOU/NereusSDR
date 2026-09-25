@@ -1249,10 +1249,11 @@ bool StationServer::listen(const QHostAddress& address, quint16 port)
         // answers 400, and hands the connection to m_wsServer for the 101
         // (StationOpeningGate.h has the cause). m_wsServer itself never
         // listens.
-        m_openingGate = new StationOpeningGate(m_wsServer, kMaxConcurrentPeers,
-                                               kMaxHandshakesPerAddress,
+        m_openingGate = new StationOpeningGate(m_wsServer, m_maxOpenings,
+                                               m_maxOpeningsPerAddress,
                                                &StationServer::addressKey, this);
     }
+    m_openingGate->setOpeningLimits(m_maxOpenings, m_maxOpeningsPerAddress);
     m_openingGate->setOpeningDeadlineMs(m_openingDeadlineMs);
 
     QSslConfiguration tls = QSslConfiguration::defaultConfiguration();
@@ -1268,8 +1269,9 @@ bool StationServer::listen(const QHostAddress& address, quint16 port)
     // later today but may change with Qt). The link document's section 2
     // states it; tst_link_version reads it back from the listener.
     tls.setProtocol(QSsl::TlsV1_2OrLater);
-    // Kept on m_wsServer too: tlsConfiguration() reads it back from there.
-    m_wsServer->setSslConfiguration(tls);
+    // The gate's copy is the one every connection uses (it runs TLS;
+    // m_wsServer never listens), so it is the only copy, and
+    // tlsConfiguration() reads it back from the gate.
     m_openingGate->setTlsConfiguration(tls);
 
     if (!m_openingGate->listen(address, port)) {
@@ -1311,7 +1313,8 @@ bool StationServer::isListening() const
 
 QSslConfiguration StationServer::tlsConfiguration() const
 {
-    return m_wsServer != nullptr ? m_wsServer->sslConfiguration() : QSslConfiguration();
+    // The gate's copy: the one its connections actually run TLS with.
+    return m_openingGate != nullptr ? m_openingGate->tlsConfiguration() : QSslConfiguration();
 }
 
 quint16 StationServer::peerAgreedMajor(SessionTransport* peer) const
@@ -1779,6 +1782,14 @@ void StationServer::setMaxMissedPongs(int misses)
 static_assert(StationServer::kDefaultOpeningDeadlineMs
                   == StationOpeningGate::kDefaultOpeningDeadlineMs,
               "the Core and its opening gate state one opening deadline");
+
+#ifdef NEREUS_BUILD_TESTS
+void StationServer::setOpeningLimitsForTest(int total, int perAddress)
+{
+    m_maxOpenings = total > 0 ? total : kMaxUnfinishedOpenings;
+    m_maxOpeningsPerAddress = perAddress > 0 ? perAddress : kMaxHandshakesPerAddress;
+}
+#endif
 
 void StationServer::setOpeningDeadlineMs(int ms)
 {

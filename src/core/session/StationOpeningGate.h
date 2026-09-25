@@ -18,36 +18,49 @@
 // IPv6 literal without brackets ("Host: ::1", what Apple's WebSocket API
 // sends for ws://[::1]:port/) is not an authority QUrl can read, so the
 // request is invalid and QWebSocketServerPrivate::handshakeReceived
-// writes no reply at all. Read from the Qt 6.11 binary (its sources are
-// not installed here) and measured on Qt 6.11 and 6.8.3: the connection
-// is closed at once with nothing written. The operator's Pi (Qt 6.8.2,
-// Linux) left it open with nothing written. Either way no reply ever
-// comes. The Core serves one listener and routes nothing by Host, so the
-// gate:
+// writes no reply at all (read from the Qt 6.8.2 and 6.11 sources, and
+// measured on Qt 6.11 and 6.8.3: the connection is closed at once with
+// nothing written). The operator's Pi (Qt 6.8.2, Linux) left it open
+// with nothing written. Either way no reply ever comes. The Core serves
+// one listener and routes nothing by Host, so the gate:
 //
 //   - reads the Host itself and writes it back in the one form Qt reads
 //     (an IPv6 literal in brackets, the port kept when there was one);
 //     every form a real client sends opens the session: bracketed IPv6
 //     with or without a port, unbracketed IPv6 with or without a port,
-//     IPv4 with or without a port, and a host name;
+//     IPv4 with or without a port, and a host name (labels of 1 to 63
+//     letters, digits, hyphens and underscores, none starting or ending
+//     with a hyphen);
 //   - answers 400 Bad Request itself, and closes, a request it cannot
-//     read: no Host, more than one, a Host that is none of those forms,
-//     or an opening request missing what every WebSocket opening carries
-//     (GET, HTTP/1.1, Upgrade: websocket, Connection: Upgrade, a
-//     Sec-WebSocket-Key of 16 bytes, Sec-WebSocket-Version);
+//     read, or one Qt would close without a word: no Host, more than
+//     one, a Host that is none of those forms or that QUrl finds no host
+//     in, a request line other than GET <path> HTTP/1.1, a header line
+//     Qt's parser refuses or drops (a name that is not a token, a folded
+//     line, a control character in a value, more than 100 headers), a
+//     first Upgrade header that is not exactly "websocket", a first
+//     Connection header without "upgrade", a first Sec-WebSocket-Key
+//     that is not 16 bytes, or a Sec-WebSocket-Version that is missing
+//     or not a list of numbers. Qt answers the rest: 101, or its own 400
+//     for a version number the Core does not speak;
+//   - answers 400 itself when Qt closes a request it was handed without
+//     writing anything, whatever the reason (OpeningSocket in the .cpp),
+//     so no opening ends in silence;
 //   - bounds the whole opening (TCP accept to Qt's 101) by one deadline,
 //     kDefaultOpeningDeadlineMs, and closes a connection that has not
 //     opened by then;
-//   - holds at most kMaxOpenings unfinished openings at once, at most
-//     kMaxOpeningsPerAddress from one address, counted until each opens,
-//     is refused or reaches the deadline. A new connection at either
-//     limit closes the oldest unfinished opening (that address's, then
-//     the oldest of all) and takes its place, so openings that never
-//     finish cannot keep a device out, and a client redialling over its
-//     own abandoned dials gets its newest through. The numbers are
-//     StationServer's kMaxConcurrentPeers and kMaxHandshakesPerAddress,
-//     and the address is counted the way StationServer::addressKey counts
-//     it (an IPv6 address by its /64).
+//   - holds a limited number of unfinished openings at once, and a
+//     limited number from one address, counted until each opens, is
+//     refused or reaches the deadline. A new connection at either limit
+//     closes the oldest unfinished opening (that address's, then the
+//     oldest of all) and takes its place, so openings that never finish
+//     cannot keep a device out, and a client redialling over its own
+//     abandoned dials gets its newest through. The limits are
+//     StationServer::kMaxUnfinishedOpenings (64; the reasons are there)
+//     and StationServer::kMaxHandshakesPerAddress (2), and the address is
+//     counted the way StationServer::addressKey counts it (an IPv6
+//     address by its /64);
+//   - hands an opened session's socket to its QWebSocket (markOpened),
+//     so closing the gate closes only what is still opening.
 //
 // Nothing here trusts or records the Host: it is rewritten only so Qt can
 // parse the request, never read back.
@@ -56,6 +69,11 @@
 // Modification history (NereusSDR):
 //   2026-09-25  J.J. Boyd / KG4VCF  Original implementation (R-IOS-01,
 //                                    R-R3-26). AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Review fixes: Qt's header rules, the
+//                                    unanswered-close 400, a 64-opening
+//                                    pool, opened sockets handed to their
+//                                    QWebSocket. AI-assisted via Anthropic
 //                                    Claude Code.
 // =================================================================
 
@@ -121,7 +139,13 @@ public:
                        AddressKey addressKey, QObject* parent = nullptr);
     ~StationOpeningGate() override;
 
+    /// The TLS settings every accepted connection runs with.
     void setTlsConfiguration(const QSslConfiguration& tls) { m_tls = tls; }
+    QSslConfiguration tlsConfiguration() const { return m_tls; }
+
+    /// The total and per-address limits; values below 1 are ignored.
+    /// Applies to connections accepted after the call.
+    void setOpeningLimits(int maxOpenings, int maxOpeningsPerAddress);
 
     /// Values below 1 are ignored. Applies to openings accepted after the
     /// call.
@@ -135,8 +159,9 @@ public:
     void closeAll();
 
     /// The owner calls this for every QWebSocket Qt hands it, so the
-    /// opening that produced it stops counting.
-    void markOpened(const QWebSocket* socket);
+    /// opening that produced it stops counting and its socket moves under
+    /// the QWebSocket (closeAll() leaves it alone from then on).
+    void markOpened(QWebSocket* socket);
 
 protected:
     void incomingConnection(qintptr descriptor) override;

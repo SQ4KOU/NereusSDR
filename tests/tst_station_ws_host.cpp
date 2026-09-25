@@ -18,10 +18,17 @@
 //     well inside the opening deadline, never silence;
 //   - a session opened with "Host: ::1" says hello and signs in like any
 //     other;
-//   - eight openings that never finish (four that never start TLS, four
-//     that never send the request) do not keep a ninth device out: it
-//     opens at once and the oldest of the eight is closed; one address
-//     holds at most two, and its newest dial gets through;
+//   - a request Qt would close without a word (a host name QUrl cannot
+//     read, a Sec-WebSocket-Version that is not a number, an Upgrade list)
+//     gets the gate's 400, and so does one Qt closes unanswered for any
+//     other reason;
+//   - a full pool of openings that never finish (half that never start
+//     TLS, half that never send the request) does not keep a device out:
+//     it opens at once and the oldest is closed, in a gate of its own and
+//     in the Core's; one address holds at most two, and its newest dial
+//     gets through;
+//   - closing the listener tells a signed-in device why before its
+//     connection ends;
 //   - the status page answers, or refuses, each Host form as its own rule
 //     says, and still refuses a name that is not this computer's.
 //
@@ -280,6 +287,20 @@ private slots:
         QTest::newRow("after bracket") << "[::1]x" << "";
         QTest::newRow("bare ipv6 bad tail") << "2001:db8::1:zz" << "";
         QTest::newRow("dots") << "core..local" << "";
+        // Names QUrl (so Qt) cannot read: before this was checked they
+        // passed the gate and Qt closed the connection without a word.
+        QTest::newRow("hyphen first") << "-core.local" << "";
+        QTest::newRow("hyphen last") << "core-.local" << "";
+        QTest::newRow("hyphen after dot") << "a.-b" << "";
+        QTest::newRow("only a hyphen") << "-" << "";
+        QTest::newRow("hyphen before port") << "core-:47910" << "";
+        QTest::newRow("label of 64") << QString(64, QLatin1Char('a')) + ".local" << "";
+        QTest::newRow("label of 63") << QString(63, QLatin1Char('a')) + ".local"
+                                     << QString(63, QLatin1Char('a')) + ".local";
+        QTest::newRow("trailing dot") << "core.local." << "";
+        QTest::newRow("empty ace") << "xn--" << "";
+        QTest::newRow("hyphen inside") << "ab--cd.local" << "ab--cd.local";
+        QTest::newRow("underscore label") << "_-_" << "_-_";
     }
 
     void canonicalHostTable()
@@ -307,6 +328,62 @@ private slots:
         QVERIFY(!StationOpeningGate::rewriteRequestHead(
                      openingRequest("Host: ::1\r\n").replace("dGhlIHNhbXBsZSBub25jZQ==", "short"))
                      .ok);
+    }
+
+    // Every head the gate passes on must be one Qt reads the same way
+    // (QWebSocketHandshakeRequest::readHandshake, Qt 6.8.2 and 6.11): what
+    // Qt would close without a word, the gate answers 400 instead.
+    void rewriteFollowsQtsReading_data()
+    {
+        QTest::addColumn<QByteArray>("head");
+        QTest::addColumn<bool>("ok");
+        const QByteArray base = openingRequest("Host: ::1\r\n");
+        auto with = [&](const char* from, const char* to) {
+            return QByteArray(base).replace(from, to);
+        };
+        QTest::newRow("as sent") << base << true;
+        QTest::newRow("version a word")
+            << with("Sec-WebSocket-Version: 13", "Sec-WebSocket-Version: abc") << false;
+        QTest::newRow("version list with a word")
+            << with("Sec-WebSocket-Version: 13", "Sec-WebSocket-Version: 13, abc") << false;
+        QTest::newRow("version list") << with("Sec-WebSocket-Version: 13", "Sec-WebSocket-Version: 13, 8")
+                                      << true;
+        QTest::newRow("second version line a word")
+            << with("Sec-WebSocket-Version: 13", "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Version: x")
+            << false;
+        QTest::newRow("version only commas")
+            << with("Sec-WebSocket-Version: 13", "Sec-WebSocket-Version: ,") << false;
+        QTest::newRow("upgrade list") << with("Upgrade: websocket", "Upgrade: h2c, websocket") << false;
+        QTest::newRow("upgrade case") << with("Upgrade: websocket", "Upgrade: WebSocket") << true;
+        QTest::newRow("upgrade second")
+            << with("Upgrade: websocket", "Upgrade: h2c\r\nUpgrade: websocket") << false;
+        QTest::newRow("connection list")
+            << with("Connection: Upgrade", "Connection: keep-alive, Upgrade") << true;
+        QTest::newRow("connection upgrade second")
+            << with("Connection: Upgrade", "Connection: keep-alive\r\nConnection: Upgrade") << false;
+        QTest::newRow("key second")
+            << with("Sec-WebSocket-Key:", "Sec-WebSocket-Key: short\r\nSec-WebSocket-Key:") << false;
+        QTest::newRow("folded line") << with("Upgrade: websocket", "Upgrade: websocket\r\n extra") << false;
+        QTest::newRow("space before colon") << with("Host: ::1", "Host : ::1") << false;
+        QTest::newRow("name not a token") << with("Host: ::1", "Host: ::1\r\nX@A: 1") << false;
+        QTest::newRow("control character")
+            << with("Host: ::1", "Host: ::1\r\nX-A: a\x01" "b") << false;
+        QTest::newRow("absolute target") << with("GET / ", "GET http://core/ ") << false;
+        QTest::newRow("target not a path") << with("GET / ", "GET * ") << false;
+        QByteArray fill;
+        for (int i = 0; i < 95; ++i) {
+            fill += "X-A: 1\r\n";
+        }
+        QTest::newRow("100 headers") << with("Host: ::1\r\n", "Host: ::1\r\n" + fill) << true;
+        QTest::newRow("101 headers")
+            << with("Host: ::1\r\n", "Host: ::1\r\n" + fill + "X-A: 1\r\n") << false;
+    }
+
+    void rewriteFollowsQtsReading()
+    {
+        QFETCH(QByteArray, head);
+        QFETCH(bool, ok);
+        QCOMPARE(StationOpeningGate::rewriteRequestHead(head).ok, ok);
     }
 
     // ── The listener ─────────────────────────────────────────────────────
@@ -378,6 +455,64 @@ private slots:
         QTRY_COMPARE(core.server->openingCount(), 0);
     }
 
+    // Forms the gate once passed on and Qt then closed without a word.
+    void aRequestQtCannotReadGets400_data()
+    {
+        QTest::addColumn<QByteArray>("request");
+        const QByteArray base = openingRequest("Host: ::1\r\n");
+        QTest::newRow("name with a hyphen first") << openingRequest("Host: -core.local\r\n");
+        QTest::newRow("version a word")
+            << QByteArray(base).replace("Sec-WebSocket-Version: 13", "Sec-WebSocket-Version: abc");
+        QTest::newRow("upgrade list")
+            << QByteArray(base).replace("Upgrade: websocket", "Upgrade: h2c, websocket");
+    }
+
+    void aRequestQtCannotReadGets400()
+    {
+        QFETCH(QByteArray, request);
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend on this machine");
+        }
+        Core core(m_securityDir.path());
+        QVERIFY(core.server->listen(QHostAddress::LocalHost, 0));
+        auto client = tlsClient(core.server->serverPort());
+        QVERIFY(client);
+        const Answer answer = sendOpening(*client, request, kShortDeadlineMs);
+        QVERIFY2(answer.statusLine.startsWith("HTTP/1.1 400"), answer.statusLine.constData());
+        QVERIFY(answer.closed);
+        QVERIFY(answer.rest.contains("could not read"));
+        QCOMPARE(core.server->peerCount(), 0);
+        QTRY_COMPARE(core.server->openingCount(), 0);
+    }
+
+    // The backstop: whatever else makes Qt close a request it was handed
+    // without writing anything, the gate writes the 400 first. Qt closes
+    // unanswered when its queue of opened sockets is full
+    // (QWebSocketServerPrivate::handshakeReceived, "Too many pending
+    // connections"); a queue of 0 makes every request meet that.
+    void whenQtClosesWithoutAnsweringTheGateAnswers400()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend on this machine");
+        }
+        Core core(m_securityDir.path());
+        QVERIFY(core.server->listen(QHostAddress::LocalHost, 0));
+        QWebSocketServer target(QStringLiteral("test"), QWebSocketServer::SecureMode);
+        target.setMaxPendingConnections(0);
+        StationOpeningGate gate(&target, 4, 2, &StationServer::addressKey);
+        gate.setTlsConfiguration(core.server->tlsConfiguration());
+        gate.setOpeningDeadlineMs(kShortDeadlineMs);
+        QVERIFY(gate.listen(QHostAddress::LocalHost, 0));
+        auto client = tlsClient(gate.serverPort());
+        QVERIFY(client);
+        const Answer answer = sendOpening(*client, openingRequest("Host: ::1\r\n"), kShortDeadlineMs);
+        QVERIFY2(answer.statusLine.startsWith("HTTP/1.1 400"), answer.statusLine.constData());
+        QVERIFY(answer.closed);
+        QVERIFY(answer.rest.contains("could not read"));
+        QVERIFY(answer.elapsedMs < kShortDeadlineMs);
+        QTRY_COMPARE(gate.pendingCount(), 0);
+    }
+
     void anUnfinishedRequestIsClosedAtTheDeadline()
     {
         if (!QSslSocket::supportsSsl()) {
@@ -431,19 +566,17 @@ private slots:
         QVERIFY(core.server->hasAuthenticatedSession());
     }
 
-    void eightUnfinishedOpeningsDoNotKeepANinthDeviceOut()
+    void aFullPoolOfUnfinishedOpeningsDoesNotKeepADeviceOut()
     {
         if (!QSslSocket::supportsSsl()) {
             QSKIP("Qt reports no working TLS backend on this machine");
         }
-        // The gate as the station builds it, with the station's limits
-        // and certificate, but every connection counted as its own
-        // address: loopback here is one address, and the per-address
-        // limit is the next slot's subject.
+        // The gate with the station's limits and certificate, but every
+        // connection counted as its own address: loopback here is one
+        // address, and the per-address limit is the next slots' subject.
         Core core(m_securityDir.path(), /*openingDeadlineMs=*/60000);
         QVERIFY(core.server->listen(QHostAddress::LocalHost, 0));
         QWebSocketServer target(QStringLiteral("test"), QWebSocketServer::SecureMode);
-        target.setSslConfiguration(core.server->tlsConfiguration());
         int opened = 0;
         StationOpeningGate* gate = nullptr;
         connect(&target, &QWebSocketServer::newConnection, this, [&]() {
@@ -452,8 +585,8 @@ private slots:
                 ++opened;
             }
         });
-        StationOpeningGate realGate(&target, StationServer::kMaxConcurrentPeers,
-                                    StationServer::kMaxHandshakesPerAddress,
+        constexpr int kPool = StationServer::kMaxUnfinishedOpenings;
+        StationOpeningGate realGate(&target, kPool, StationServer::kMaxHandshakesPerAddress,
                                     [](const QString&) { return QString(); });
         gate = &realGate;
         realGate.setTlsConfiguration(core.server->tlsConfiguration());
@@ -463,10 +596,10 @@ private slots:
         QVERIFY(realGate.listen(QHostAddress::LocalHost, 0));
         const quint16 port = realGate.serverPort();
 
-        // Four that never start TLS, then four that finish TLS and never
+        // Half that never start TLS, then half that finish TLS and never
         // ask. The oldest is the first silent one.
         std::vector<std::unique_ptr<QTcpSocket>> silent;
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < kPool / 2; ++i) {
             auto socket = std::make_unique<QTcpSocket>();
             socket->connectToHost(QHostAddress::LocalHost, port);
             QVERIFY(QTest::qWaitFor([&]() { return socket->state() == QAbstractSocket::ConnectedState; }, 2000));
@@ -474,15 +607,15 @@ private slots:
             silent.push_back(std::move(socket));
         }
         std::vector<std::unique_ptr<QSslSocket>> mute;
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < kPool / 2; ++i) {
             auto socket = tlsClient(port);
             QVERIFY(socket);
             mute.push_back(std::move(socket));
         }
-        QTRY_COMPARE(realGate.pendingCount(), StationServer::kMaxConcurrentPeers);
+        QTRY_COMPARE(realGate.pendingCount(), kPool);
 
-        // The ninth, a real device, opens at once, and the oldest of the
-        // eight is the one closed to make room.
+        // One more, a real device, opens at once, and the oldest unfinished
+        // opening is the one closed to make room.
         QElapsedTimer timer;
         timer.start();
         auto device = tlsClient(port);
@@ -495,7 +628,39 @@ private slots:
         for (std::size_t i = 1; i < silent.size(); ++i) {
             QCOMPARE(silent.at(i)->state(), QAbstractSocket::ConnectedState);
         }
-        QCOMPARE(realGate.pendingCount(), StationServer::kMaxConcurrentPeers - 1);
+        QCOMPARE(realGate.pendingCount(), kPool - 1);
+    }
+
+    // The Core's own gate, with its own address key: at the total limit
+    // the oldest opening of all makes room. The total is lowered and the
+    // per-address limit raised past it so that one loopback address can
+    // reach the total; the address key still runs on every connection.
+    void theCoresGateMakesRoomAtTheTotalLimit()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend on this machine");
+        }
+        Core core(m_securityDir.path(), /*openingDeadlineMs=*/60000);
+        core.server->setOpeningLimitsForTest(3, 4);
+        QVERIFY(core.server->listen(QHostAddress::LocalHost, 0));
+        const quint16 port = core.server->serverPort();
+        std::vector<std::unique_ptr<QSslSocket>> mute;
+        for (int i = 0; i < 3; ++i) {
+            auto socket = tlsClient(port);
+            QVERIFY(socket);
+            mute.push_back(std::move(socket));
+        }
+        QTRY_COMPARE(core.server->openingCount(), 3);
+        auto device = tlsClient(port);
+        QVERIFY(device);
+        QTRY_VERIFY(mute.front()->state() != QAbstractSocket::ConnectedState);
+        QCOMPARE(mute.at(1)->state(), QAbstractSocket::ConnectedState);
+        QCOMPARE(mute.at(2)->state(), QAbstractSocket::ConnectedState);
+        QCOMPARE(core.server->openingCount(), 3);
+        const Answer answer = sendOpening(*device, openingRequest("Host: ::1\r\n"), 5000);
+        QVERIFY2(answer.statusLine.startsWith("HTTP/1.1 101"), answer.statusLine.constData());
+        QTRY_COMPARE(core.server->peerCount(), 1);
+        QCOMPARE(core.server->openingCount(), 2);
     }
 
     void oneAddressHoldsAtMostTwoOpeningsAndItsNewestGetsThrough()
@@ -539,6 +704,86 @@ private slots:
         QCOMPARE(core.server->openingCount(), 0);
         QVERIFY(!core.server->isListening());
         QTRY_VERIFY(client->state() != QAbstractSocket::ConnectedState);
+    }
+
+    // An opened session belongs to its QWebSocket, not to the gate:
+    // closing the gate (as StationServer::close() does after telling each
+    // peer why) closes only what is still opening and leaves the session's
+    // socket to its owner.
+    void closingTheGateLeavesAnOpenedSessionToItsOwner()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend on this machine");
+        }
+        Core core(m_securityDir.path());
+        QVERIFY(core.server->listen(QHostAddress::LocalHost, 0));
+        QWebSocketServer target(QStringLiteral("test"), QWebSocketServer::SecureMode);
+        auto gate = std::make_unique<StationOpeningGate>(&target, 4, 2, &StationServer::addressKey);
+        std::unique_ptr<QWebSocket> session;
+        connect(&target, &QWebSocketServer::newConnection, this, [&]() {
+            while (QWebSocket* socket = target.nextPendingConnection()) {
+                gate->markOpened(socket);
+                session.reset(socket);
+            }
+        });
+        gate->setTlsConfiguration(core.server->tlsConfiguration());
+        QVERIFY(gate->listen(QHostAddress::LocalHost, 0));
+        auto client = tlsClient(gate->serverPort());
+        QVERIFY(client);
+        const Answer answer = sendOpening(*client, openingRequest("Host: ::1\r\n"), kShortDeadlineMs);
+        QVERIFY2(answer.statusLine.startsWith("HTTP/1.1 101"), answer.statusLine.constData());
+        QTRY_VERIFY(session != nullptr);
+        QCOMPARE(gate->pendingCount(), 0);
+        QVERIFY(gate->findChildren<QSslSocket*>().isEmpty());
+
+        gate->closeAll();
+        gate.reset();
+        QCoreApplication::processEvents();
+        QCOMPARE(session->state(), QAbstractSocket::ConnectedState);
+        session->sendTextMessage(QStringLiteral("still here"));
+        QByteArray buffer = answer.rest;
+        QByteArray partial;
+        QList<QByteArray> messages;
+        QTRY_VERIFY((buffer += client->readAll(), takeFrames(buffer, partial, messages),
+                     messages.contains(QByteArray("still here"))));
+    }
+
+    // Shutting the listener down with a device signed in: the device is
+    // told why (session.end, then the WebSocket close) before its
+    // connection ends, rather than having it cut from under it.
+    void closingTheListenerTellsASignedInDeviceWhy()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend on this machine");
+        }
+        Core core(m_securityDir.path());
+        QVERIFY(core.server->listen(QHostAddress::LocalHost, 0));
+        auto client = tlsClient(core.server->serverPort());
+        QVERIFY(client);
+        const Answer answer = sendOpening(*client, openingRequest("Host: ::1\r\n"), kShortDeadlineMs);
+        QVERIFY2(answer.statusLine.startsWith("HTTP/1.1 101"), answer.statusLine.constData());
+        QByteArray buffer = answer.rest;
+        QByteArray partial;
+        QList<QByteArray> messages;
+        auto pump = [&]() {
+            buffer += client->readAll();
+            takeFrames(buffer, partial, messages);
+        };
+        sendTextFrame(*client, SessionMessages::encode(SessionMessages::hello(
+                                   kSessionProtocolMajor, kSessionProtocolMinor, 0,
+                                   QStringLiteral("NereusSDR iPhone"))));
+        sendTextFrame(*client,
+                      SessionMessages::encode(SessionMessages::authRequest(core.server->token())));
+        QTRY_VERIFY((pump(), !firstOfType(messages, QStringLiteral("auth.result")).isEmpty()));
+        QVERIFY(core.server->hasAuthenticatedSession());
+
+        core.server->close();
+        QVERIFY(!core.server->isListening());
+        QTRY_VERIFY((pump(), !firstOfType(messages, QStringLiteral("session.end")).isEmpty()));
+        QTRY_VERIFY(client->state() != QAbstractSocket::ConnectedState);
+        // The event loop runs on with the Core's objects torn down.
+        QTest::qWait(50);
+        QCOMPARE(core.server->peerCount(), 0);
     }
 
     // ── The status page ──────────────────────────────────────────────────

@@ -323,6 +323,27 @@ public:
     /// addressKey()). A connection with no address of its own (the
     /// relay, later) is not counted here.
     static constexpr int kMaxHandshakesPerAddress = 2;
+    /// Core WebSocket opening (R-IOS-01, R-R3-26): connections whose TLS
+    /// or WebSocket upgrade has not finished, counted by
+    /// StationOpeningGate apart from the peers above, each until it opens,
+    /// is refused or reaches kDefaultOpeningDeadlineMs. At this total the
+    /// oldest unfinished opening is closed to make room for the new one;
+    /// kMaxHandshakesPerAddress of them per address (IPv6 by /64) still
+    /// applies first, closing that address's own oldest.
+    ///
+    /// Why 64, and not kMaxConcurrentPeers: the pool is what a flood has
+    /// to fill to push a real device's opening out. Each address holds
+    /// only 2, so pushing a device out takes 64 connects from at least 32
+    /// addresses or /64s inside that device's own opening time (TCP
+    /// connect to the end of its request, well under a second): at 8 it
+    /// took 8 plain TCP connects from 5 addresses. What 64 costs is file
+    /// descriptors, one per opening. packaging/nereusd.service.in sets no
+    /// LimitNOFILE, so nereusd runs under the default soft limit of 1024;
+    /// 64 openings, kMaxConcurrentPeers peers, the status page and the
+    /// radio's sockets stay far below it, and the pool keeps a flood from
+    /// ever reaching it (before the gate a flood of unfinished openings
+    /// could climb toward 1024 at about 100 connects a second).
+    static constexpr int kMaxUnfinishedOpenings = 64;
 
     /// Largest inbound WebSocket message, and frame, on an ACCEPTED
     /// socket. Applied by WebSocketTransport's constructor.
@@ -531,6 +552,10 @@ public:
     /// restores the real one.
     void setPairingHasherForTest(std::function<QByteArray(const QString&)> hasher);
     bool isHashingPairingCodeForTest() const;
+    /// The opening pool's total and per-address limits in place of
+    /// kMaxUnfinishedOpenings and kMaxHandshakesPerAddress, from the next
+    /// listen() on, so a test on one loopback address can reach the total.
+    void setOpeningLimitsForTest(int total, int perAddress);
 #endif
 
     /// See kDefaultAuthDeadlineMs. Values below 1 disable the deadline,
@@ -879,6 +904,8 @@ private:
     QWebSocketServer* m_wsServer = nullptr;
     StationOpeningGate* m_openingGate = nullptr;
     int m_openingDeadlineMs = kDefaultOpeningDeadlineMs;
+    int m_maxOpenings = kMaxUnfinishedOpenings;
+    int m_maxOpeningsPerAddress = kMaxHandshakesPerAddress;
 
     StateMirror* m_mirror = nullptr;
     ObjectRegistry* m_registry = nullptr;
