@@ -179,7 +179,9 @@ quint8 computeLpf(double freqMhz);
 //     else setAlex1HPF(rx2_dds_freq_mhz);
 //
 // `rx2Live` is Thetis's chkRX2.Checked, meaning a second receiver is actually
-// listening. `rx2PreampPresent` is BoardCapabilities::rx2PreampPresent: true
+// listening. With more than two live receivers on one front end the callers
+// pass the highest of the others as RX2 (plan Task 14 fix wave, M6), so the
+// low-pass passes every one of them. `rx2PreampPresent` is BoardCapabilities::rx2PreampPresent: true
 // means RX2 has its own front end and never shares this filter, so the first
 // receiver decides alone.
 double receiveLpfFrequencyMhz(double rx1Mhz, double rx2Mhz,

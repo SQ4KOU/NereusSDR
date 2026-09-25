@@ -47,6 +47,7 @@
 #include "core/P1RadioConnection.h"
 #include "core/ReceiverManager.h"
 #include "core/codec/AlexFilterMap.h"
+#include "core/BoardCapabilities.h"
 #include "models/Band.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -55,6 +56,7 @@ using namespace NereusSDR;
 
 namespace {
 
+constexpr double k10mHz = 28400000.0;
 constexpr double k20mHz = 14200000.0;
 constexpr double k40mHz =  7100000.0;
 constexpr double k80mHz =  3700000.0;
@@ -344,6 +346,51 @@ private slots:
         QCOMPARE(conn.rx1SlotForTest(), 0);
         QCOMPARE(hpfBits(conn),
                  codec::alex::computeRxPreselector(k20mHz / 1e6, HPSDRHW::Hermes));
+    }
+    // ── The receive low-pass passes the highest live receiver (M6) ───────
+    //
+    // Thetis's rule for a front end two receivers share takes the higher of
+    // RX1 and RX2 (console.cs:15487-15499 [v2.10.3.15]); with more live
+    // slices on one front end the low-pass has to pass the highest of them,
+    // or a slice above it is filtered out. Where RX2 has a front end of its
+    // own (rx2PreampPresent) RX1 decides alone, as before.
+    void receiveLowPass_passesTheHighestLiveReceiver_data()
+    {
+        QTest::addColumn<int>("board");
+        QTest::addColumn<bool>("shared");
+        QTest::newRow("Hermes (one front end)") << int(HPSDRHW::Hermes)     << true;
+        QTest::newRow("HL2 (one front end)")    << int(HPSDRHW::HermesLite) << true;
+        QTest::newRow("Angelia (RX2 its own)")  << int(HPSDRHW::Angelia)    << false;
+    }
+    void receiveLowPass_passesTheHighestLiveReceiver()
+    {
+        QFETCH(int, board);
+        QFETCH(bool, shared);
+        const HPSDRHW hw = HPSDRHW(board);
+        P1RadioConnection conn;
+        conn.setBoardForTest(hw);
+        QCOMPARE(!BoardCapsTable::forBoard(hw).rx2PreampPresent, shared);
+
+        conn.setLiveReceiverSlots((1u << 0) | (1u << 1));
+        conn.setReceiverFrequency(0, quint64(k80mHz));
+        conn.setReceiverFrequency(1, quint64(k40mHz));
+        QCOMPARE(lpfBits(conn),
+                 codec::alex::computeLpf((shared ? k40mHz : k80mHz) / 1e6));
+
+        // A third slice on a higher band.
+        conn.setLiveReceiverSlots((1u << 0) | (1u << 1) | (1u << 2));
+        conn.setReceiverFrequency(2, quint64(k10mHz));
+        QCOMPARE(lpfBits(conn),
+                 codec::alex::computeLpf((shared ? k10mHz : k80mHz) / 1e6));
+
+        // It closes: the next highest again.
+        conn.setLiveReceiverSlots((1u << 0) | (1u << 1));
+        QCOMPARE(lpfBits(conn),
+                 codec::alex::computeLpf((shared ? k40mHz : k80mHz) / 1e6));
+
+        // The second closes too: RX1 alone, whatever slot 1 last held.
+        conn.setLiveReceiverSlots(1u << 0);
+        QCOMPARE(lpfBits(conn), codec::alex::computeLpf(k80mHz / 1e6));
     }
 };
 

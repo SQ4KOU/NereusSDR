@@ -932,6 +932,7 @@ void P1RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setLiveReceiverSlots(quint32 slotMask)
 {
+    const quint32 previousMask = m_liveSlotMask;
     m_liveSlotMask = slotMask;
 
     // The announced-count axis: highest live slot + 1. Zero when nothing is
@@ -950,8 +951,12 @@ void P1RadioConnection::setLiveReceiverSlots(quint32 slotMask)
         while (lowest < 31 && (slotMask & (1u << lowest)) == 0) { ++lowest; }
         // m_rxFreqHz holds seven slots; a slot beyond it has no frequency
         // this connection could read, so it cannot stand in.
-        if (lowest < 7 && lowest != m_rx1Slot) {
+        if (lowest < 7) {
             m_rx1Slot = lowest;
+        }
+        // The stand-in or the receivers beside it may have changed; the
+        // receive low-pass reads every live slot (fix wave M6).
+        if (slotMask != previousMask) {
             recomputeReceiveFilters(-1);
         }
     }
@@ -1052,19 +1057,38 @@ void P1RadioConnection::recomputeReceiveFilters(int changedSlot)
         // always tuned by the time this runs, so the fallback below only
         // covers the ordering case where a later receiver is tuned first.
         //
-        // Two receivers only, deliberately: upstream has exactly RX1 and RX2
-        // and no answer for a third, so a slice on receiver 2 or above does
-        // not influence the selection. And m_rxFreqHz[1] is never cleared
-        // when a slice goes away, so a stale value can outlive its receiver.
-        // That is bounded and benign in one direction: the rule takes a
-        // maximum, so a stale entry can only ever hold the corner HIGHER
-        // than needed. Too wide costs some out-of-band rejection; too narrow
-        // would cost the whole band, and cannot happen here.
+        // Fix wave M6: once the model has told this connection which slots
+        // are live (setLiveReceiverSlots), "RX2" is the highest live
+        // receiver other than the stand-in. Upstream has exactly RX1 and
+        // RX2 and takes the higher of the two; with more live slices on a
+        // shared front end the low-pass has to pass the highest of them, or
+        // a third slice on a higher band is filtered out. Only live slots
+        // count, so a closed slice's stale frequency no longer holds the
+        // corner up.
+        //
+        // Before any slot set arrives (connection-only use), slot 1 stands
+        // in for RX2 as before. m_rxFreqHz[1] is never cleared when a slice
+        // goes away, so a stale value can outlive its receiver there. That
+        // is bounded and benign in one direction: the rule takes a maximum,
+        // so a stale entry can only ever hold the corner HIGHER than needed.
         const double rx1Mhz = (rx1Hz != 0)
             ? double(rx1Hz) / 1e6
             : double(frequencyHz) / 1e6;
-        const double rx2Mhz = double(m_rxFreqHz[1]) / 1e6;
-        const bool rx2Live  = (m_rxFreqHz[1] != 0);
+        double rx2Mhz = 0.0;
+        bool rx2Live  = false;
+        if (m_liveSlotMask != 0) {
+            for (int slot = 0; slot < 7; ++slot) {
+                if (slot == m_rx1Slot || (m_liveSlotMask & (1u << slot)) == 0
+                    || m_rxFreqHz[slot] == 0) {
+                    continue;
+                }
+                rx2Live = true;
+                rx2Mhz = std::max(rx2Mhz, double(m_rxFreqHz[slot]) / 1e6);
+            }
+        } else {
+            rx2Mhz  = double(m_rxFreqHz[1]) / 1e6;
+            rx2Live = (m_rxFreqHz[1] != 0);
+        }
 
         const quint8 newRxLpf = codec::alex::computeLpf(
             codec::alex::receiveLpfFrequencyMhz(

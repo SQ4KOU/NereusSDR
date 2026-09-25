@@ -1012,15 +1012,24 @@ void P2RadioConnection::recomputeReceiveFilters()
     //     else setAlexLPF(rx1_dds_freq_mhz, false);
     // Plan Task 14: this used to be whichever DDC was retuned last, so on
     // the G2 (RX2 has its own front end) adding slice B on a lower band put
-    // slice A behind B's low-pass. RX1 is the stand-in (rx1Ddc); RX2 is the
-    // next live receiver above it, since Thetis has exactly two.
+    // slice A behind B's low-pass. RX1 is the stand-in (rx1Ddc).
+    //
+    // Fix wave M6: RX2 is the highest live receiver other than RX1, not the
+    // next one above it. Thetis has exactly two receivers; with more live
+    // slices on a shared front end the low-pass has to pass the highest of
+    // them, as the rule's "higher of the two" passes RX2, or a third slice
+    // on a higher band is filtered out. Where RX2 has its own front end
+    // (rx2PreampPresent) RX1 still decides alone.
     if (!m_mox) {
-        int rx2 = -1;
-        for (int ddc = rx1 + 1; ddc < kMaxRxStreams; ++ddc) {
-            if (m_liveSlotMask & (1u << ddc)) { rx2 = ddc; break; }
+        bool rx2Live = false;
+        double rx2Mhz = 0.0;
+        for (int ddc = 0; ddc < kMaxRxStreams; ++ddc) {
+            if (ddc == rx1 || (m_liveSlotMask & (1u << ddc)) == 0) { continue; }
+            const int hz = m_rx[static_cast<size_t>(ddc)].frequency;
+            if (hz <= 0) { continue; }
+            rx2Live = true;
+            rx2Mhz = std::max(rx2Mhz, hz / 1e6);
         }
-        const bool rx2Live = rx2 >= 0 && m_rx[static_cast<size_t>(rx2)].frequency > 0;
-        const double rx2Mhz = rx2Live ? m_rx[static_cast<size_t>(rx2)].frequency / 1e6 : 0.0;
         m_alex.lpfBitsRx = NereusSDR::codec::alex::computeLpf(
             NereusSDR::codec::alex::receiveLpfFrequencyMhz(
                 freqMhz, rx2Mhz, rx2Live, m_caps ? m_caps->rx2PreampPresent : false));

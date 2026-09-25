@@ -254,6 +254,42 @@ private slots:
         QCOMPARE(highPriorityByte(s.conn, kOcByte),
                  wireOc(s.oc.maskFor(Band::Band20m, /*tx=*/false)));
     }
+    // ── The receive low-pass passes the highest live receiver (M6) ───────
+    //
+    // Thetis's two-receiver rule (console.cs:15487-15499 [v2.10.3.15])
+    // extended to every live slice on a shared front end, as the RX1
+    // stand-in extends RX1. A third slice on a higher band.
+    void receiveLowPass_passesTheHighestLiveReceiver_data()
+    {
+        QTest::addColumn<int>("board");
+        QTest::addColumn<bool>("separateRx2");
+        QTest::newRow("Hermes (one front end)") << int(HPSDRHW::Hermes) << false;
+        QTest::newRow("G2 (RX2 has its own)")   << int(HPSDRHW::Saturn) << true;
+    }
+    void receiveLowPass_passesTheHighestLiveReceiver()
+    {
+        QFETCH(int, board);
+        QFETCH(bool, separateRx2);
+        P2RadioConnection conn;
+        conn.setBoardForTest(HPSDRHW(board));
+
+        conn.setLiveReceiverSlots((1u << 2) | (1u << 3) | (1u << 4));
+        conn.setReceiverFrequency(2, quint64(k80mHz));
+        conn.setReceiverFrequency(3, quint64(k40mHz));
+        conn.setReceiverFrequency(4, quint64(k10mHz));
+        QCOMPARE(alex0Lpf(conn),
+                 codec::alex::computeLpf((separateRx2 ? k80mHz : k10mHz) / 1e6));
+
+        // The third closes: the higher of the two left.
+        conn.setLiveReceiverSlots((1u << 2) | (1u << 3));
+        QCOMPARE(alex0Lpf(conn),
+                 codec::alex::computeLpf((separateRx2 ? k80mHz : k40mHz) / 1e6));
+
+        // The middle one closes instead: the third is still passed.
+        conn.setLiveReceiverSlots((1u << 2) | (1u << 4));
+        QCOMPARE(alex0Lpf(conn),
+                 codec::alex::computeLpf((separateRx2 ? k80mHz : k10mHz) / 1e6));
+    }
 };
 
 QTEST_MAIN(TestP2BandOutputsAndRxLpf)
