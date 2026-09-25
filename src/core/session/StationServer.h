@@ -1002,6 +1002,13 @@ private:
     /// place (its notice keeps the slice), a token window, the station
     /// device, or a slice nobody owns.
     QByteArray saveForAbsentSubject(int sliceId) const;
+    /// Fix wave I3: the foreign-slice refusal for a write or removal of a
+    /// slice's own settings key (Slice<N>/...) from a session whose device does not own live slice N; empty when
+    /// it may, or when the key is not a slice's.
+    QString sliceSettingsRefusal(SessionTransport* transport, const QString& key) const;
+    /// Removes a settings key and applies its default live (the removal's
+    /// own effect, after its checks).
+    void applySettingsRemove(const SessionMessage& message);
     /// Each attached view's `slice:` and `marker:` forms after an owner
     /// change: object.destroy of the old form, object.create of the new.
     void onSliceOwnerChanged(int sliceId, const QByteArray& oldOwner,

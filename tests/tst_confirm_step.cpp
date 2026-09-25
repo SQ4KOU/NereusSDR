@@ -1191,6 +1191,50 @@ private slots:
                  QStringLiteral("settingChanged"));
     }
 
+    // Fix wave I3: removing a setting returns it to its default, live, so
+    // it is a write of the default: asked when it reaches another device,
+    // applied only on proceed, and the other device told.
+    void aSettingsRemoveIsAskedAsAWriteOfItsDefault()
+    {
+        SharedAdc s;
+        const QString key = QStringLiteral("DspOptionsBufferSizePhoneRx");
+        s.core.settings->setValue(key, QStringLiteral("1024"));
+        s.appA->sendText(SessionMessages::encode(SessionMessages::settingsRemove(key)));
+        const QJsonObject reject = waitForLast(s.appA, QStringLiteral("settings.reject"), 0);
+        QCOMPARE(reject.value(QStringLiteral("key")).toString(), key);
+        QCOMPARE(reject.value(QStringLiteral("reason")).toString(), kWaiting);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("sharedSetting"));
+        QCOMPARE(ask.value(QStringLiteral("forSettingsKey")).toString(), key);
+        const QJsonObject change = ask.value(QStringLiteral("change")).toObject();
+        QCOMPARE(change.value(QStringLiteral("label")).toString(),
+                 QStringLiteral("Receive buffer size, voice modes"));
+        QCOMPARE(change.value(QStringLiteral("from")).toString(), QStringLiteral("1024"));
+        QCOMPARE(change.value(QStringLiteral("to")).toString(), QStringLiteral("Default"));
+        QVERIFY(OperatorWording::isPlain(change.value(QStringLiteral("to")).toString()));
+        QCOMPARE(s.core.settings->value(key).toString(), QStringLiteral("1024"));
+
+        const QJsonObject done = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger());
+        QVERIFY2(done.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(done).toJson().constData());
+        QCOMPARE(valueOf(done, QStringLiteral("settingsKey")).toString(), key);
+        QVERIFY(!s.core.settings->contains(key));
+        QCOMPARE(waitForLast(s.appB, QStringLiteral("notice"), 0).value(QStringLiteral("kind")).toString(),
+                 QStringLiteral("settingChanged"));
+    }
+
+    // Alone on the Core, the same removal applies at once.
+    void aloneASettingsRemoveAppliesAtOnce()
+    {
+        SharedAdc s(/*withB=*/false);
+        const QString key = QStringLiteral("DspOptionsBufferSizePhoneRx");
+        s.core.settings->setValue(key, QStringLiteral("1024"));
+        s.appA->sendText(SessionMessages::encode(SessionMessages::settingsRemove(key)));
+        QTRY_VERIFY(!s.core.settings->contains(key));
+        QCOMPARE(countOf(s.appA, QStringLiteral("confirm.request")), 0);
+        QCOMPARE(countOf(s.appA, QStringLiteral("settings.reject")), 0);
+    }
+
     void aNotchInsideAnotherDevicesPassbandAsksOneOutsideDoesNot()
     {
         SharedAdc s;

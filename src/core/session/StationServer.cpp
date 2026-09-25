@@ -319,6 +319,7 @@
 #include <QJsonObject>
 #include <QLoggingCategory>
 #include <QNetworkInterface>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSslConfiguration>
 #include <QSslSocket>
@@ -3691,12 +3692,47 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
                                                         restored.toString(), reason));
         return;
     }
+    // Fix wave I3: a slice's own settings keys are its owner's alone.
+    if (const QString refusal = sliceSettingsRefusal(transport, key); !refusal.isEmpty()) {
+        const QVariant kept = m_settings.value(key);
+        send(transport, SessionMessages::settingsReject(key, kept.isValid(), kept.toString(),
+                                                        refusal));
+        return;
+    }
     // iPhone app Task 75 (link section 8.1): a write that reaches another
     // device is held and asked first.
     if (handleSharedSetting(transport, message)) {
         return;
     }
     applySettingsWrite(transport, message, nullptr);
+}
+
+QString StationServer::sliceSettingsRefusal(SessionTransport* transport, const QString& key) const
+{
+    // Slice<N>/... is SliceModel's per-slice, per-band state (Station
+    // scope). A slice's NNR keys, hardware/<mac>/slices/<N>/nnr/..., are
+    // model-owned and refused to every writer already.
+    static const QRegularExpression kSliceKey(QStringLiteral("^Slice(\\d+)/"));
+    const QRegularExpressionMatch match = kSliceKey.match(key);
+    if (!match.hasMatch() || m_radioModel.isNull()) {
+        return {};
+    }
+    const QByteArray requester = m_peers.value(transport).sessionDeviceId;
+    if (requester.isEmpty()) {
+        return {};
+    }
+    bool ok = false;
+    const int sliceId = match.captured(1).toInt(&ok);
+    if (!ok) {
+        return {};
+    }
+    // Only the slice's owner; a slice that is not live has none, so its
+    // keys (which would seed the next slice under that id) are nobody's.
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    if (ownership->isLive(sliceId) && ownership->mark(sliceId).owner == requester) {
+        return {};
+    }
+    return ownedElsewhereReason(sliceId);
 }
 
 bool StationServer::applySettingsWrite(SessionTransport* transport, const SessionMessage& message,
@@ -3786,6 +3822,24 @@ void StationServer::handleSettingsRemove(SessionTransport* transport, const Sess
                                                       refusal));
         return;
     }
+    // Fix wave I3: a slice's own settings keys are its owner's alone.
+    if (const QString refusal = sliceSettingsRefusal(transport, key); !refusal.isEmpty()) {
+        const QVariant kept = m_settings.value(key);
+        send(transport, SessionMessages::settingsReject(key, kept.isValid(), kept.toString(),
+                                                        refusal));
+        return;
+    }
+    // Fix wave I3: a removal is a write of the default, so it goes through
+    // the shared-setting check exactly as a write does.
+    if (handleSharedSetting(transport, message)) {
+        return;
+    }
+    applySettingsRemove(message);
+}
+
+void StationServer::applySettingsRemove(const SessionMessage& message)
+{
+    const QString key = QString::fromUtf8(message.objectKey);
     m_settings.remove(key);
     // R-R3-21: removing a DSP > Options RX setting returns it to its
     // default, which takes effect now as a write does. R-R3-46: so does a

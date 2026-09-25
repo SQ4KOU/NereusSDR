@@ -679,6 +679,10 @@ iPhone. It can be changed only there.":
 - `requestSliceSampleRate`, `requestStreamCentre` and `requestStreamCtunPinned` naming a
   slice that is not the requester's (fix wave C1, 2026-09-25): another device's, one nobody
   owns, or one held for a device, whatever receivers are in use;
+- a `settings.write` or `settings.remove` of a slice's own keys, `Slice<N>/...` (the `Slice`
+  keys, Core scope; the link, section 8), from a device that does not own slice N, or for an
+  id no live slice holds, whose keys would seed the next slice under it (fix wave I3,
+  2026-09-25; the settings reject carries the Core's value);
 - `tx.setTxSlice` (Task 34) naming another device's slice.
 
 Four requests on a shared receiver are routes, not refusals, when they name the requester's
@@ -971,6 +975,10 @@ wiring.
 
 A change that touches nothing beyond the requester's own slices applies at once: a slice's own
 settings on a receiver it does not share, display defaults, spot and reporter settings.
+
+A `settings.remove` returns its key to the default, live, so it is a write of the default: it
+is checked, asked and told exactly as that write would be (fix wave I3, 2026-09-25), with
+`change.to` "Default".
 
 ### 7.2 The disturbed set
 

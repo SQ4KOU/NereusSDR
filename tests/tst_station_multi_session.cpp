@@ -1703,6 +1703,68 @@ private slots:
         QVERIFY(!everSaw(appB, QStringLiteral("slice:0")));
     }
 
+    // Fix wave I3: a slice's own settings keys (Slice<N>/...) are written
+    // or removed only by slice N's owner; anyone else is refused with the
+    // foreign-slice reason and nothing is stored. (Its NNR keys under
+    // hardware/<mac>/slices/<N>/ are model-owned, refused to everyone.)
+    void aSlicesSettingsKeysAreWrittenOrRemovedOnlyByItsOwner()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, a.key.fingerprint());
+        const int own = core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).first();
+        const QString sliceKey = QStringLiteral("Slice0/AfGain");
+        core.settings->setValue(sliceKey, QStringLiteral("17"));
+        const QString reason = ownedElsewhere(QStringLiteral("iPhone"));
+        const auto rejectFor = [appB](const QString& key) {
+            for (const QJsonObject& o : ofType(appB->received(), QStringLiteral("settings.reject"))) {
+                if (o.value(QStringLiteral("key")).toString() == key) {
+                    return o;
+                }
+            }
+            return QJsonObject{};
+        };
+
+        appB->sendText(SessionMessages::encode(
+            SessionMessages::settingsWrite(sliceKey, QStringLiteral("5"), QStringLiteral("b-1"))));
+        QTRY_VERIFY(!rejectFor(sliceKey).isEmpty());
+        QCOMPARE(rejectFor(sliceKey).value(QStringLiteral("reason")).toString(), reason);
+        QCOMPARE(core.settings->value(sliceKey).toString(), QStringLiteral("17"));
+        const int rejectsBefore = static_cast<int>(ofType(appB->received(),
+                                                          QStringLiteral("settings.reject")).size());
+        appB->sendText(SessionMessages::encode(SessionMessages::settingsRemove(sliceKey)));
+        QTRY_VERIFY(ofType(appB->received(), QStringLiteral("settings.reject")).size() > rejectsBefore);
+        QCOMPARE(ofType(appB->received(), QStringLiteral("settings.reject")).last()
+                     .value(QStringLiteral("reason")).toString(),
+                 reason);
+        QCOMPARE(core.settings->value(sliceKey).toString(), QStringLiteral("17"));
+        // A slice that is not live has no owner: its keys, which would
+        // seed the next slice under that id, are nobody's to write.
+        const QString unusedKey = QStringLiteral("Slice4/AfGain");
+        QVERIFY(!core.model->sliceOwnership()->isLive(4));
+        appB->sendText(SessionMessages::encode(
+            SessionMessages::settingsWrite(unusedKey, QStringLiteral("3"), QStringLiteral("b-3"))));
+        QTRY_VERIFY(!rejectFor(unusedKey).isEmpty());
+        QVERIFY(!core.settings->contains(unusedKey));
+
+        // Its own slice's keys, and A its own, are written as before.
+        const QString ownKey = QStringLiteral("Slice%1/AfGain").arg(own);
+        appB->sendText(SessionMessages::encode(
+            SessionMessages::settingsWrite(ownKey, QStringLiteral("9"), QStringLiteral("b-2"))));
+        QTRY_COMPARE(core.settings->value(ownKey).toString(), QStringLiteral("9"));
+        appA->sendText(SessionMessages::encode(
+            SessionMessages::settingsWrite(sliceKey, QStringLiteral("21"), QStringLiteral("a-1"))));
+        QTRY_COMPARE(core.settings->value(sliceKey).toString(), QStringLiteral("21"));
+        QVERIFY(rejectFor(ownKey).isEmpty());
+    }
+
     // Fix wave C1 (ruling 5.9): a sample rate, a C-Tune centre or pin
     // naming another device's slice, a slice nobody owns, or a slice held
     // for a device, is refused with the foreign-slice reason whatever the

@@ -639,17 +639,21 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
     }
 
     // ── Settings writes (link section 8.1) ───────────────────────────────
-    if (message.kind == SessionMessageKind::SettingsWrite) {
+    // Fix wave I3: a removal returns the key to its default, live, so it is
+    // a write of the default: a change whenever the key holds a value.
+    const bool removal = message.kind == SessionMessageKind::SettingsRemove;
+    if (message.kind == SessionMessageKind::SettingsWrite || removal) {
         const QString key = QString::fromUtf8(message.objectKey);
         const SettingsProxyServer::SharedFamily family = SettingsProxyServer::sharedFamilyOf(key);
-        if (family == SettingsProxyServer::SharedFamily::None || message.updates.isEmpty()) {
+        if (family == SettingsProxyServer::SharedFamily::None
+            || (!removal && message.updates.isEmpty())) {
             return c;
         }
         const QString now = m_settings.value(key).toString();
-        const QString next = message.updates.first().value.toString();
+        const QString next = removal ? QString() : message.updates.first().value.toString();
         c.target = QStringLiteral("setting:") + key;
         c.targetValue = now;
-        c.shared = now != next;
+        c.shared = removal ? m_settings.contains(key) : now != next;
         QString label;
         switch (family) {
         case SettingsProxyServer::SharedFamily::ReceiveOptions: {
@@ -679,7 +683,9 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
             break;
         }
         words(label, now.isEmpty() ? QStringLiteral("None") : now,
-              next.isEmpty() ? QStringLiteral("None") : next);
+              removal          ? QStringLiteral("Default")
+              : next.isEmpty() ? QStringLiteral("None")
+                               : next);
         return c;
     }
 
@@ -1061,9 +1067,12 @@ void StationServer::askSharedSetting(SessionTransport* transport, const SessionM
     }
     ConfirmStep::Question question;
     question.kind = QStringLiteral("sharedSetting");
+    // A settings removal is held as a settings write (of the default);
+    // its original's kind says which to apply.
     question.held = original.kind == SessionMessageKind::PropertyWrite
                         ? ConfirmStep::Held::PropertyWrite
                     : original.kind == SessionMessageKind::SettingsWrite
+                            || original.kind == SessionMessageKind::SettingsRemove
                         ? ConfirmStep::Held::SettingsWrite
                         : ConfirmStep::Held::Command;
     question.original = original;
@@ -1158,7 +1167,15 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
     }
 
     SessionMessage result;
-    if (question.held == ConfirmStep::Held::SettingsWrite) {
+    if (question.held == ConfirmStep::Held::SettingsWrite
+        && question.original.kind == SessionMessageKind::SettingsRemove) {
+        // Fix wave I3: a removal's readback is the key alone (it is gone).
+        applySettingsRemove(question.original);
+        const QString key = QString::fromUtf8(question.original.objectKey);
+        result = SessionMessages::commandResult(
+            invoke.commandVerb, invoke.commandId, true, QString(), {},
+            {MirrorUpdate{0, QByteArrayLiteral("settingsKey"), MirrorWireKind::Utf8, key}});
+    } else if (question.held == ConfirmStep::Held::SettingsWrite) {
         QString refusal;
         const bool applied = applySettingsWrite(transport, question.original, &refusal);
         const QString key = QString::fromUtf8(question.original.objectKey);

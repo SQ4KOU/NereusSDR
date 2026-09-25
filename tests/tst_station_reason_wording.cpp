@@ -675,6 +675,9 @@ const QList<ReasonSource>& reasonSources()
           // ruling 4.3).
           QStringLiteral("sliceRefusal(requester, sliceId)"),
           QStringLiteral("ownedElsewhereReason(sliceId)"),
+          // Fix wave I3: a slice's settings key; ownedElsewhereReason's
+          // words, scanned here.
+          QStringLiteral("sliceSettingsRefusal(transport, key)"),
           // StateMirror's and SettingsProxyServer's results, scanned below.
           QStringLiteral("result.reason"),
           QStringLiteral("m_settingsServer->otherRadioRefusal(key)"),

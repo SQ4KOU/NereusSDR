@@ -2213,7 +2213,18 @@ A `settings.write` that would disturb another device (the several-devices
 design's section 7.1 list, section 7.6 here) is held as section 7.3 says:
 `settings.reject` with the reason "Waiting for you to confirm." and the
 Core's value, then a `confirm.request` with `forSettingsKey`; its proceed
-carries `settingsKey` and `value` as its readback (section 7.5).
+carries `settingsKey` and `value` as its readback (section 7.5). A
+`settings.remove` returns its key to the default, live, so it is checked
+exactly as a write of the default is: held and asked the same way, with
+`change.to` "Default", and its proceed carries `settingsKey` alone as its
+readback, since the key is gone.
+
+A slice's own keys, `Slice<N>/...`, are written and removed only by the
+device that owns slice N (the several-devices design, ruling 5.9). From
+any other device, and for an id no live slice holds, they get
+`settings.reject` with the Core's value and the reason "That slice belongs
+to <the owner's name>. It can be changed only there." ("the Core" when
+nobody owns it).
 
 The station refuses a write to a key outside the station scope ("Each app
 keeps this setting itself; the Core does not store it."), to another radio's `hardware/<mac>/` keys ("These settings

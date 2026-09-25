@@ -700,9 +700,11 @@ void StationServer::refuseWhileAsking(SessionTransport* transport, const Session
         answerHere(transport, SessionMessages::commandResult(
             original.commandVerb, original.commandId, false,
             QString::fromLatin1(kWaitingReason), {}, {phaseNeedsConfirmation()}));
-    } else if (original.kind == SessionMessageKind::SettingsWrite) {
+    } else if (original.kind == SessionMessageKind::SettingsWrite
+               || original.kind == SessionMessageKind::SettingsRemove) {
         // iPhone app Task 75 (link section 8.1): the Core's own value goes
-        // back with the reason, so the device shows it until it proceeds.
+        // back with the reason, so the device shows it until it proceeds
+        // (a removal too, fix wave I3).
         const QString key = QString::fromUtf8(original.objectKey);
         const QVariant kept = m_settings.value(key);
         send(transport, SessionMessages::settingsReject(key, kept.isValid(), kept.toString(),
@@ -724,7 +726,8 @@ void StationServer::sendQuestion(SessionTransport* transport, ConfirmStep::Quest
     } else if (question.original.kind == SessionMessageKind::PropertyWrite
                && question.original.writeId != 0) {
         prompt.forWriteId = question.original.writeId;
-    } else if (question.original.kind == SessionMessageKind::SettingsWrite) {
+    } else if (question.original.kind == SessionMessageKind::SettingsWrite
+               || question.original.kind == SessionMessageKind::SettingsRemove) {
         prompt.forSettingsKey = QString::fromUtf8(question.original.objectKey);
     }
     question.namedSlices = slicesNamedBy(question);
