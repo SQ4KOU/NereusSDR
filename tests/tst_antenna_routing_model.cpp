@@ -476,6 +476,38 @@ private slots:
         model.injectConnectionForTest(nullptr);
         delete mock;
     }
+
+    // Parity Task 12 (group B fix wave re-review, Minor 2): a radio that
+    // goes away while transmitting leaves no TX routing behind. After the
+    // next connect an antenna change goes out as the receive routing and a
+    // relay flag is applied at once, not held for a MOX edge.
+    void disconnectWhileTransmittingLeavesTheReceiveRouting() {
+        RadioModel model;
+        model.setCapsForTest(/*hasAlex=*/true);
+        model.addSlice(QStringLiteral("pan-0"));
+        auto* first = new MockConnection();
+        model.injectConnectionForTest(first);
+        const Band band = model.lastBand();
+        model.onMoxHardwareFlipped(true);
+        QVERIFY(!first->calls.isEmpty());
+        QVERIFY(first->calls.last().tx);
+
+        model.disconnectFromRadio();
+        delete first;
+
+        auto* second = new MockConnection();
+        model.injectConnectionForTest(second);
+        model.alexControllerMutable().setTxAnt(band, 2);
+        QVERIFY(!second->calls.isEmpty());
+        QVERIFY(!second->calls.last().tx);
+        second->calls.clear();
+        model.alexControllerMutable().setRxOutOverride(true);
+        QVERIFY(!second->calls.isEmpty());
+        QVERIFY(!second->calls.last().tx);
+
+        model.injectConnectionForTest(nullptr);
+        delete second;
+    }
 };
 
 QTEST_MAIN(TestAntennaRoutingModel)

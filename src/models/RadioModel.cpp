@@ -265,6 +265,11 @@
 //                wait for the next MOX edge (setup.cs:15459-15470,
 //                16520-16544 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-46 (parity Task 12): teardownConnection
+//                clears the TX routing flag, so a disconnect while keyed
+//                does not leave the next connection's antenna changes on
+//                the TX routing. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -17171,6 +17176,14 @@ void RadioModel::teardownConnection()
     // are thread-affined to the worker and destroying them on any other
     // thread emits cross-thread warnings and can crash on Windows.
     teardownWorkerThreadedConnection(m_connection, m_connThread);
+
+    // Parity Task 12 (group B fix wave re-review, Minor 2): the relays of a
+    // radio that was transmitting when it went away are not on TX any more.
+    // Without this a disconnect while keyed left m_alexRoutingTx set, and
+    // after the next connect an antenna change on that band went out as the
+    // TX routing (and the relay flags waited for a MOX edge) until the next
+    // key-up.
+    m_alexRoutingTx = false;
 
     // Re-arm the discovery quiet period now that the protocol disconnect has
     // actually completed.  The arm at the top of this function starts the
