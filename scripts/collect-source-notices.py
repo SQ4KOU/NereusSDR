@@ -38,11 +38,14 @@ LIBRARY is one of the presets: fftw3, rade, opus, r8brain, rnnoise,
 libspecbleach, wdsp, and the fetched libraries portaudio, libdatachannel,
 libjuice, usrsctp, libsrtp, plog, nlohmann-json, libsodium and spake2-ee. rnnoise and
 libspecbleach read the FetchContent sources under --build-dir/_deps. The
-fetched libraries need --build-dir to be a configured tree for their
-sources only: the files surveyed are the ones any supported platform
-compiles, read from each library's own CMake lists, so the output does not
-depend on which platform's tree is given (libjuice, usrsctp, libsrtp, plog
-and json are built from the copies under nereus_libdatachannel-src/deps/).
+fetched libraries up to nlohmann-json need --build-dir to be a configured
+tree for their sources only: the files surveyed are the ones any supported
+platform compiles, read from each library's own CMake lists, so the output
+does not depend on which platform's tree is given (libjuice, usrsctp,
+libsrtp, plog and json are built from the copies under
+nereus_libdatachannel-src/deps/). libsodium and spake2-ee need --build-dir
+to be a built tree: they read its compile_commands.json for the files the
+build compiled and each file's include path.
 opus needs
 --opus-source, an extracted Opus source tree at the pinned commit (a
 built tree has one at
@@ -58,7 +61,9 @@ Exit 0 on success, 1 on a --check mismatch, 2 on a usage error.
 from __future__ import annotations
 
 import argparse
+import json
 import re
+import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -623,6 +628,59 @@ def _fftw3(root: Path, _args: argparse.Namespace) -> SourceSet:
     base = root / "third_party/fftw3"
     return SourceSet("FFTW3", base, "third_party/fftw3", "3.3.5 (Windows header)",
                      [base / "include/fftw3.h"], ["fftw3.txt", "GPLv2.txt"])
+
+
+# ---------------------------------------------------------------------------
+# libsodium and SPAKE2+EE (cmake/NereusPairing.cmake) are read from a built
+# tree: the files its compile_commands.json lists and the headers they
+# include, each resolved with its own command's include path.
+
+def _compile_entries(build: Path) -> list[tuple[Path, list[Path]]]:
+    """(source file, include directories) for every compile command."""
+    path = build / "compile_commands.json"
+    if not path.is_file():
+        raise SystemExit(f"{path} is missing; configure and build the tree first")
+    entries: list[tuple[Path, list[Path]]] = []
+    for entry in json.loads(path.read_text(encoding="utf-8")):
+        args = entry.get("arguments") or shlex.split(entry["command"])
+        directory = Path(entry["directory"])
+        dirs: list[Path] = []
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            value = None
+            for flag in ("-I", "-isystem", "-iquote"):
+                if arg == flag and i + 1 < len(args):
+                    value = args[i + 1]
+                    i += 1
+                elif arg.startswith(flag) and len(arg) > len(flag) and flag == "-I":
+                    value = arg[2:]
+            if value is not None:
+                dirs.append((directory / value).resolve())
+            i += 1
+        entries.append(((directory / entry["file"]).resolve(), dirs))
+    return entries
+
+
+def _from_build(build: Path, keep: Path, seeds: Path) -> list[Path]:
+    """Files under keep that the build compiled, or that the compiled files
+    under seeds include, resolved with each command's own include path."""
+    keep = keep.resolve()
+    seeds = seeds.resolve()
+    found: set[Path] = set()
+    for source, dirs in _compile_entries(build):
+        if not _within(source, seeds):
+            continue
+        for path in resolve_includes([source], dirs):
+            if _within(path, keep):
+                found.add(path)
+    return sorted(found)
+
+
+def _need_build(args: argparse.Namespace) -> Path:
+    if args.build_dir is None:
+        raise SystemExit("this library needs --build-dir (a built tree)")
+    return args.build_dir.resolve()
 
 
 def _libsodium(_root: Path, args: argparse.Namespace) -> SourceSet:
