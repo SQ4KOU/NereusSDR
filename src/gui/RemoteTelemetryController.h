@@ -15,6 +15,7 @@
 namespace NereusSDR {
 class StationClient;
 class RemoteMediaController;
+class RadioModel;
 
 struct RemoteTelemetryView {
     enum class State { Disconnected, Unsupported, Waiting, Current, Stale };
@@ -64,6 +65,11 @@ public:
     QString detailText() const;
     // Also used by deterministic lifecycle tests with a monotonic clock.
     void sampleNow();
+    // R-R3-32 / R-R3-46 (parity Task 6): the remote window's model takes
+    // the Core's PA readings from each current sample, and all of them
+    // absent while the measurements are out of date or the session ended
+    // (RadioModel::applyCorePaReadings).
+    void setPaReadingsTarget(RadioModel* model);
 signals:
     void changed();
 private:
@@ -72,6 +78,8 @@ private:
     void refreshCurrent(qint64 now);
     QPointer<StationClient> m_client;
     QPointer<RemoteMediaController> m_media;
+    QPointer<RadioModel> m_paTarget;
+    void pushPaReadings();
     QElapsedTimer m_clock;
     Clock m_now;
     PlaybackObserver m_playback;

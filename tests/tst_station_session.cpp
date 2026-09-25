@@ -320,6 +320,9 @@ private slots:
     void receiverLoadIsOmittedForMinorTenPeer();
     void clientKeepsReceiverLoadOnlyWhenNegotiated_data();
     void clientKeepsReceiverLoadOnlyWhenNegotiated();
+    void radioStatusIsOmittedForMinorTenPeer();
+    void clientKeepsRadioStatusOnlyWhenNegotiated_data();
+    void clientKeepsRadioStatusOnlyWhenNegotiated();
     void nnrLimitReachesMinorElevenPeerAndTryAgainClearsIt();
     void nnrLimitIsOmittedForMinorTenPeer();
     void minorTenWriteThatClearsTheLimitCarriesNoNnrLimit();
@@ -730,7 +733,7 @@ void TstStationSession::hostTelemetryReachesVersionTwoPeer()
     auto model = makeStationRadioModel(0);
     StationServer server(model.get(), settings, m_securityDir.path());
     server.setTelemetryEnabled(true);
-    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 3);
+    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 4);
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&remote, &proxy);
@@ -868,7 +871,7 @@ void TstStationSession::receiverLoadReachesVersionThreePeer()
     auto model = makeStationRadioModel(0);
     StationServer server(model.get(), settings, m_securityDir.path());
     server.setTelemetryEnabled(true);
-    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 3);
+    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 4);
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&remote, &proxy);
@@ -1012,6 +1015,108 @@ void TstStationSession::clientKeepsReceiverLoadOnlyWhenNegotiated()
     QCOMPARE(received.receivers.has_value(), kept);
     // The host section follows its own negotiation, untouched by this one.
     QCOMPARE(received.host.isEmpty(), version < 2);
+}
+
+// R-R3-32 (remote-window parity Task 6): a minor-10 GUI receives no PA
+// readings or link quality in the radio section.
+void TstStationSession::radioStatusIsOmittedForMinorTenPeer()
+{
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("radio-status-old.settings")));
+    auto model = makeStationRadioModel(0);
+    StationServer server(model.get(), settings, m_securityDir.path());
+    server.setTelemetryEnabled(true);
+    auto* station = new LoopbackTransport(QStringLiteral("minor10-radio-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("minor10-radio-client"), this);
+    station->linkTo(peer);
+    server.acceptTransport(station);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kReceiverLoadSessionProtocolMinor - 1, 6,
+        QStringLiteral("minor-10-client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(server.telemetryAvailable());
+    peer->clearReceived();
+
+    StationTelemetrySnapshot snapshot;
+    snapshot.sequence = 3;
+    snapshot.sampledElapsedMs = 2000;
+    snapshot.radio.connected = true;
+    snapshot.radio.rxMbps = 12.0;
+    snapshot.radio.paVolts = 13.8;
+    snapshot.radio.paTemperatureCelsius = 40.0;
+    snapshot.radio.packetLossPercent = 1.0;
+    snapshot.radio.udpPacketsSeen = 10;
+    QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
+    QByteArray wire;
+    QTRY_VERIFY([&] {
+        for (const QByteArray& message : peer->received()) {
+            if (QJsonDocument::fromJson(message).object().value(QStringLiteral("type"))
+                    == QStringLiteral("station.metrics.v1")) {
+                wire = message;
+                return true;
+            }
+        }
+        return false;
+    }());
+    const QByteArray golden =
+        R"({"payload":{"audio":{"active":false,"contextGeneration":0},)"
+        R"("radio":{"connected":true,"rxMbps":12},"sampledElapsedMs":2000,"sequence":3},)"
+        R"("type":"station.metrics.v1"})";
+    QCOMPARE(wire, golden);
+}
+
+// The GUI accepts the radio's PA readings and link quality only from a Core
+// that negotiated both minor 11 and telemetry version 4.
+void TstStationSession::clientKeepsRadioStatusOnlyWhenNegotiated_data()
+{
+    QTest::addColumn<int>("minor");
+    QTest::addColumn<int>("version");
+    QTest::addColumn<bool>("kept");
+    QTest::newRow("minor 11, version 4")
+        << int(kReceiverLoadSessionProtocolMinor) << 4 << true;
+    QTest::newRow("minor 11, version 3")
+        << int(kReceiverLoadSessionProtocolMinor) << 3 << false;
+    QTest::newRow("minor 10, version 4")
+        << int(kReceiverLoadSessionProtocolMinor - 1) << 4 << false;
+}
+
+void TstStationSession::clientKeepsRadioStatusOnlyWhenNegotiated()
+{
+    QFETCH(int, minor);
+    QFETCH(int, version);
+    QFETCH(bool, kept);
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    QSignalSpy samples(&client, &StationClient::telemetryReceived);
+    auto* station = new LoopbackTransport(QStringLiteral("raw-radio-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("raw-radio-client"), this);
+    station->linkTo(peer);
+    client.startSession(peer, QStringLiteral("test-token"));
+    const auto send = [&](const SessionMessage& message) {
+        station->sendText(SessionMessages::encode(message));
+    };
+    send(SessionMessages::hello(kSessionProtocolMajor, static_cast<quint16>(minor), 6,
+                                QStringLiteral("station")));
+    send(SessionMessages::authResult(true, {}, false));
+    StationCapabilities caps;
+    caps.stationTelemetryVersion = version;
+    send(SessionMessages::capabilities(caps.toUpdates()));
+    send(SessionMessages::snapshotComplete());
+    QTRY_VERIFY(client.telemetryAvailable());
+    SessionMessage sample;
+    sample.kind = SessionMessageKind::StationTelemetry;
+    sample.telemetry.sequence = 1;
+    sample.telemetry.radio.connected = true;
+    sample.telemetry.radio.rxMbps = 3.0;
+    sample.telemetry.radio.paVolts = 13.8;
+    sample.telemetry.radio.jitterMs = 0.5;
+    send(sample);
+    QTRY_COMPARE(samples.count(), 1);
+    const auto received = qvariant_cast<StationTelemetrySnapshot>(samples.first().at(0));
+    QCOMPARE(received.radio.paVolts.has_value(), kept);
+    QCOMPARE(received.radio.jitterMs.has_value(), kept);
+    QCOMPARE(received.radio.rxMbps, std::optional<double>(3.0));
 }
 
 // R-R3-40: a current GUI sees the Core's runtime NNR step-back and asks for
@@ -5988,13 +6093,14 @@ void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
         {hw(QStringLiteral("cal/txDisplayOffset")), QStringLiteral("7.5")},
         {hw(QStringLiteral("cal/paSens")), QStringLiteral("3.25")},
         {hw(QStringLiteral("cal/paOffset")), QStringLiteral("1.5")},
-        {hw(QStringLiteral("paCalibration/boardClass")), QStringLiteral("2")},
-        {hw(QStringLiteral("paCalibration/calPoint1")), QStringLiteral("123")},
+        // R-R3-49 (parity Task 6): the PA forward-power table
+        // (paCalibration/boardClass, calPoint1..10) and the PA profiles
+        // (pa/...) are taken off the air at transmitSettingsVersion 6
+        // (tst_remote_pa_pages); the Calibration tab's own copy stays refused.
         {hw(QStringLiteral("paCalibration/cal/paSens")), QStringLiteral("3.25")},
         {hw(QStringLiteral("hl2/pttHangMs")), QStringLiteral("30")},
         {hw(QStringLiteral("hl2/txLatencyMs")), QStringLiteral("40")},
         {hw(QStringLiteral("tx/UserDigOut")), QStringLiteral("15")},
-        {hw(QStringLiteral("pa/profile/active")), QStringLiteral("Custom")},
         {hw(QStringLiteral("powerByBand/40m")), QStringLiteral("100")},
         {hw(QStringLiteral("tunePowerByBand/40m")), QStringLiteral("100")},
         {hw(QStringLiteral("ocOutputs/hardware/oc/extPa/model")), QStringLiteral("2")},

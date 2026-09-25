@@ -366,7 +366,7 @@ change shows as surface drift and as a change to this table.
 | `spectrumGrantVersion` | 1 |
 | `remoteDisplayBudgetVersion` | 1 |
 | `remoteCtunVersion` | 1 |
-| `stationTelemetryVersion` | 3 |
+| `stationTelemetryVersion` | 4 |
 | `remoteTgxlConfigVersion` | 1 |
 | `remoteFourO3AControlVersion` | 1 |
 | `wdspVersion` | 210 |
@@ -387,7 +387,7 @@ change shows as surface drift and as a change to this table.
 | `stationTciVersion` | 1 |
 | `accessoryDataVersion` | 1 |
 | `remoteTgxlControlVersion` | 3 |
-| `transmitSettingsVersion` | 5 |
+| `transmitSettingsVersion` | 6 |
 
 <!-- /surface -->
 
@@ -399,7 +399,9 @@ When a feature is off, its version is 0:
   unless media is enabled.
 - `remoteDisplayBudgetVersion`: 0 unless media and budget enforcement are
   on and a budget has been computed.
-- `stationTelemetryVersion`: 0 unless telemetry is enabled.
+- `stationTelemetryVersion`: 0 unless telemetry is enabled. At 4 the
+  radio section also carries, for a peer at agreed minor 11, the Core's
+  PA readings and radio link quality (section 10).
 - `remoteTgxlConfigVersion`, `remoteFourO3AControlVersion`: 0 unless the
   Core owns its accessories.
 - `wdspVersion`, `wdspCompatibilityVersion`, `nnrVersion`,
@@ -477,8 +479,14 @@ When a feature is off, its version is 0:
   `WindBackPowerSwr`, `TxInhibitMonitorEnabled`,
   `TxInhibitMonitorReversed`), taken while the radio is off the air
   (section 8), the SWR Protection keys applied to the Core's SWR
-  protection at once. Each is refused while the radio is on the air
-  (section 7.3). The keying set stays refused on a receive-only
+  protection at once. At 6 it also covers Setup > PA: the PA profiles
+  (`hardware/<mac>/pa/...`: PA Gain's profiles, per-band gains, adjust
+  matrix and max power) and the PA forward-power table
+  (`hardware/<mac>/paCalibration/...`: the Watt Meter page), taken while
+  the radio is off the air (section 8) and applied to the Core's PA
+  profiles and calibration at once. PA Gain's auto-calibrate sweep keys
+  the radio and waits for remote transmit. Each is refused while the radio
+  is on the air (section 7.3). The keying set stays refused on a receive-only
   Core, on and off the air, and so do raw settings writes of
   `hardware/<mac>/tx/...`, `powerByBand` and `tunePowerByBand` (the
   `transmit` object owns them). A window whose Core sends 0 keeps its
@@ -755,7 +763,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (20 properties)
+**RadioModel** (21 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -779,6 +787,7 @@ An enum property lists the values its domain allows.
 | 17 | `rxFilter1Band` | `i64` | outbound |  |
 | 18 | `rxFilter1Reason` | `utf8` | outbound |  |
 | 19 | `transmitting` | `bool` | outbound |  |
+| 20 | `txInhibited` | `bool` | outbound |  |
 
 **RfKitModel** (30 properties)
 
@@ -1167,7 +1176,11 @@ Notes on the keys:
   off the air (section 7.3). The Core also publishes its real transmit
   state as `radio`'s `transmitting` (outbound); a window reads "on the
   air" from it, the mirrored `transmit.tune`, and `pureSignal`'s
-  `twoToneOn`.
+  `twoToneOn`. `radio`'s `txInhibited` (bool, outbound) is the Core's TX
+  inhibit (its `TxInhibitMonitor`); a window's TX indicator shows it. It
+  needs no capability: a window that does not know it ignores it. A window
+  clears its copy of `transmitting` and `txInhibited` when the session
+  ends.
 - **`transmit` at `transmitSettingsVersion` 2.** Each property carries its
   setter's type: `tunePower` (i64, the fixed tune power Setup uses, 0 to
   100 W, 0 to 99 on a Hermes Lite 2), `voxThresholdDb` (i64, -80 to 0 dB),
@@ -1497,7 +1510,16 @@ Core expected this box to be on or off."). A taken SWR Protection key, or
 its removal, applies to the Core's SWR protection at once (a removal
 returns the default: off, limit 2.0, tune power to ignore 35 W). A taken
 External TX Inhibit key is stored on the Core, whose TX inhibit gate
-follows it (the receiver and transmit gaps plan, Task 13).
+follows it (the receiver and transmit gaps plan, Task 13). At
+`transmitSettingsVersion` 6 the same off-air rule holds for Setup > PA's
+keys, `hardware/<mac>/pa/...` (the PA profiles: the profile list
+`pa/profile/_names`, each profile `pa/profile/<name>`, and the active
+profile `pa/profile/active`) and `hardware/<mac>/paCalibration/...` (the
+PA forward-power table, `boardClass` and `calPoint1` to `calPoint10`),
+from a peer at agreed minor 11. A taken key, or its removal, applies to
+the Core's PA profiles or calibration at once, and a window reloads its
+copies of both when those keys change. The rest of the transmit-side
+hardware keys stay refused.
 
 ### 8.2 Keys the Core owns by code
 
@@ -1721,7 +1743,24 @@ is never a command. The client drops a message whose `sequence` is not
 higher than the last, or whose `sampledElapsedMs` went backwards, and
 ignores host fields unless the agreed minor is at least 10 and the version
 at least 2, and receiver fields unless the minor is at least 11 and the
-version at least 3. A message over 16 KiB is refused.
+version at least 3, and the radio section's PA readings and link quality
+unless the minor is at least 11 and the version at least 4. A message
+over 16 KiB is refused.
+
+At version 4 (remote-window parity Task 6) the radio section carries, each
+absent when the radio has none or has not reported it and all absent while
+the radio is not connected: `paVolts` (the PA drain volts, user ADC0),
+`supplyVolts`, `paCurrentAmps` and `paTemperatureCelsius` (the Core's
+`RadioModel::paReadings()`), `packetLossPercent` (lost over received plus
+lost in the last 5 seconds, from the sequence errors Thetis counts, one
+per mismatch), `jitterMs` (RFC 3550 section 6.4.1 interarrival jitter of
+the lowest active receive stream), `packetGapMs` (the longest interval
+between two datagrams from the radio in the last second), `sampleRateHz`
+and `udpPacketsSeen` (datagrams from the radio since it connected). Volts,
+amps, jitter and gap are finite and not negative, the loss is 0 to 100, a
+temperature is not below absolute zero, and the counts are whole numbers.
+A window shows each as the Core's, and one that is absent or out of date
+as unavailable, never 0.
 
 <!-- surface:telemetry -->
 <!-- Generated by scripts/render-link-tables.py from tests/data/link/v1/surface.json. Do not edit by hand. -->
@@ -1733,6 +1772,7 @@ Message kind `station.metrics.v1`.
 | 1 | 3 | 15 | `audio.active`, `audio.contextGeneration`, `audio.encodeFailuresPerSecond`, `audio.encodedPacketsPerSecond`, `audio.sendAcceptedPerSecond`, `audio.sendRejectedPerSecond`, `audio.sourceDropsPerSecond`, `audio.sourceFramesPerSecond`, `radio.connected`, `radio.rttAgeMs`, `radio.rttMs`, `radio.rxMbps`, `radio.txMbps`, `sampledElapsedMs`, `sequence` |
 | 2 | 10 | 22 | `host.hottestZoneCelsius`, `host.hottestZoneName`, `host.memoryAvailableKiB`, `host.memoryTotalKiB`, `host.processCpuPercent`, `host.processResidentKiB`, `host.systemCpuPercent` |
 | 3 | 11 | 26 | `receivers[].inputDelayMs`, `receivers[].loadPercent`, `receivers[].skippedInputMs`, `receivers[].sliceId` |
+| 4 | 11 | 35 | `radio.jitterMs`, `radio.paCurrentAmps`, `radio.paTemperatureCelsius`, `radio.paVolts`, `radio.packetGapMs`, `radio.packetLossPercent`, `radio.sampleRateHz`, `radio.supplyVolts`, `radio.udpPacketsSeen` |
 
 <!-- /surface -->
 
@@ -2239,7 +2279,7 @@ same on every machine.
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
 | `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand`; at `transmitSettingsVersion` 3, a write of `micBoost` and `lineInBoost` taken, and `lineInBoost` out of range refused with its range beside a write of the outbound `activeTxProfile`; at `transmitSettingsVersion` 4, a write of `txEqBandsJson`, `txEqUseLegacy` and `txLevelerDecay` taken, and a nine-value `txEqBandsJson`, a `cfcCompressionJson` with a value out of range and `txAlcDecay` out of range each refused whole with its range |
-| `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key taken off the air and a transmit hardware key refused |
+| `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false |
 | `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot |

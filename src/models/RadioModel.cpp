@@ -219,6 +219,15 @@
 //                [v2.10.3.15]), for the local page and a window's change
 //                on the Core. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-25 - R-R3-32 / R-R3-46 / R-R3-49 (parity Task 6): paReadings
+//                and paRowVolts, the one PA reading source (the Core's in a
+//                remote window, applyCorePaReadings); `txInhibited` follows
+//                the TX inhibit monitor; a window's hardware/<mac>/pa/ and
+//                paCalibration/ changes reload the Core's PA profiles and
+//                calibration at once (read-only PaProfileManager reload),
+//                and a remote window reloads its copies of both
+//                (scheduleRemotePaReload). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1057,6 +1066,32 @@ RadioModel::RadioModel(Role role, QObject* parent)
             s.value(QStringLiteral("TxInhibitMonitorReversed"), QStringLiteral("False"))
              .toString() == QStringLiteral("True"));
     }
+
+    // R-R3-49 (parity Task 6): `txInhibited` follows this model's own
+    // TxInhibitMonitor on a local model (the Core); a remote window holds
+    // the Core's value instead (applyMirroredValue).
+    if (m_role != Role::Remote) {
+        connect(&m_txInhibit, &safety::TxInhibitMonitor::txInhibitedChanged, this,
+                [this](bool inhibited, safety::TxInhibitMonitor::Source) {
+            emit txInhibitedChanged(inhibited);
+        });
+    }
+
+    // R-R3-32 (parity Task 6): a local model's PA readings follow its
+    // RadioStatus (the connection's volts are wired at connect), and every
+    // window's readings are re-read when the connection state moves.
+    connect(&m_radioStatus, &RadioStatus::paCurrentChanged, this,
+            [this](double) { if (m_role != Role::Remote) { emit paReadingsChanged(); } });
+    connect(&m_radioStatus, &RadioStatus::paTemperatureChanged, this,
+            [this](double) { if (m_role != Role::Remote) { emit paReadingsChanged(); } });
+    connect(this, &RadioModel::connectionStateChanged, this,
+            [this](ConnectionState state) {
+        if (m_role != Role::Remote && state != ConnectionState::Connected) {
+            m_paCurrentReported = false;
+            m_paTemperatureReported = false;
+        }
+        emit paReadingsChanged();
+    });
 
     // 2. PA telemetry → SwrProtectionController::ingest is wired from the
     //    per-sample paTelemetryUpdated handler (search this file for
@@ -2780,6 +2815,15 @@ QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVa
             if (m_remoteRfKitEnabled != value.toBool()) {
                 m_remoteRfKitEnabled = value.toBool();
                 emit rfKitEnabledChanged(m_remoteRfKitEnabled);
+            }
+            return {};
+        }
+        if (propertyName == "txInhibited") {
+            // R-R3-49 (parity Task 6): the Core's TX inhibit, observed.
+            if (value.typeId() != QMetaType::Bool) { return QStringLiteral("Expected a boolean TX inhibit observation."); }
+            if (m_remoteTxInhibited != value.toBool()) {
+                m_remoteTxInhibited = value.toBool();
+                emit txInhibitedChanged(m_remoteTxInhibited);
             }
             return {};
         }
@@ -4900,9 +4944,67 @@ void RadioModel::updateCoreOnAir()
 
 void RadioModel::clearRemoteTransmittingState()
 {
-    if (m_role != Role::Remote || !m_remoteTransmitting) { return; }
+    if (m_role != Role::Remote) { return; }
+    // R-R3-49 (parity Task 6): the Core's TX inhibit too.
+    if (m_remoteTxInhibited) {
+        m_remoteTxInhibited = false;
+        emit txInhibitedChanged(false);
+    }
+    if (!m_remoteTransmitting) { return; }
     m_remoteTransmitting = false;
     emit transmittingChanged(false);
+}
+
+bool RadioModel::isTxInhibited() const
+{
+    // R-R3-49 (parity Task 6): a remote window holds the Core's value.
+    if (m_role == Role::Remote) { return m_remoteTxInhibited; }
+    return m_txInhibit.inhibited();
+}
+
+RadioModel::PaReadings RadioModel::paReadings() const
+{
+    // R-R3-32 (parity Task 6): a remote window shows the Core's.
+    if (m_role == Role::Remote) { return m_corePaReadings; }
+    PaReadings readings;
+    if (!isConnected() || m_connection == nullptr) { return readings; }
+    // The connection's cached volts, -1 until a status frame reported them
+    // (RadioConnection::lastUserAdc0Volts / lastSupplyVolts). The user ADC0
+    // volts are reported only by the boards that sense their PA drain.
+    const float paVolts = m_connection->lastUserAdc0Volts();
+    if (paVolts >= 0.0f) { readings.paVolts = static_cast<double>(paVolts); }
+    const float supplyVolts = m_connection->lastSupplyVolts();
+    if (supplyVolts >= 0.0f) { readings.supplyVolts = static_cast<double>(supplyVolts); }
+    // From Thetis clsHardwareSpecific.cs:255-264 [v2.10.3.15] HasAmps: only
+    // the boards with a PA current sensor report amps.
+    // //N1GP G2E added
+    if (m_paCurrentReported && boardCapabilities().hasPaAmpsTelemetry) {
+        readings.paCurrentAmps = m_radioStatus.paCurrentAmps();
+    }
+    if (m_paTemperatureReported) {
+        readings.paTemperatureCelsius = m_radioStatus.paTemperatureCelsius();
+    }
+    return readings;
+}
+
+RadioModel::PaRowVolts RadioModel::paRowVolts() const
+{
+    const PaReadings readings = paReadings();
+    PaRowVolts row;
+    if (m_hardwareProfile.model == HPSDRModel::ANAN_G2E) {
+        row.volts = readings.supplyVolts;
+        row.supply = true;
+    } else {
+        row.volts = readings.paVolts;
+    }
+    return row;
+}
+
+void RadioModel::applyCorePaReadings(const PaReadings& readings)
+{
+    if (m_role != Role::Remote || readings == m_corePaReadings) { return; }
+    m_corePaReadings = readings;
+    emit paReadingsChanged();
 }
 
 bool RadioModel::rfKitEnabled() const
@@ -5558,6 +5660,8 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
     // permission) wakes nothing.
     if (identityMoved) {
         emit currentRadioChanged(m_lastRadioInfo);
+        // R-R3-46 (parity Task 6): the PA pages show this radio's bank.
+        reloadRemotePaState();
     }
 }
 
@@ -12421,6 +12525,13 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
                           userAdc0Raw, userAdc1Raw, supplyRaw);
     });
 
+    // R-R3-32 (parity Task 6): the connection's PA drain and supply volts
+    // are PA readings too (paReadings()).
+    connect(m_connection, &RadioConnection::userAdc0Changed,
+            this, [this](float) { emit paReadingsChanged(); });
+    connect(m_connection, &RadioConnection::supplyVoltsChanged,
+            this, [this](float) { emit paReadingsChanged(); });
+
     // Error handling
     connect(m_connection, &RadioConnection::errorOccurred,
             this, [](NereusSDR::RadioConnectionError code, const QString& msg) {
@@ -12791,6 +12902,15 @@ void RadioModel::handlePaTelemetry(quint16 fwdRaw, quint16 revRaw,
     }
     if (hl2TempValid) {
         m_radioStatus.setPaTemperature(hl2TempC);
+    }
+    // R-R3-32 (parity Task 6): a reading is present in paReadings() once a
+    // sample has reported it. The first sample may repeat RadioStatus's
+    // starting value, which emits nothing, so announce the flip here.
+    const bool temperatureNow = m_paTemperatureReported || paTemp > 0.0 || hl2TempValid;
+    if (!m_paCurrentReported || temperatureNow != m_paTemperatureReported) {
+        m_paCurrentReported = true;
+        m_paTemperatureReported = temperatureNow;
+        emit paReadingsChanged();
     }
 
     // Phase 3M-0 Task 17 + Codex P1 follow-up: feed SwrProtectionController
@@ -19214,8 +19334,14 @@ void RadioModel::scheduleRemoteHardwareApply(const QString& key)
         reload = QStringLiteral("oc");
     } else if (rest == QLatin1String("hl2IoBoard/n2adrFilter")) {
         reload = QStringLiteral("n2adr");
-    } else if (rest.startsWith(QLatin1String("cal/"))) {
+    } else if (rest.startsWith(QLatin1String("cal/"))
+               || rest.startsWith(QLatin1String("paCalibration/"))) {
+        // R-R3-46 (parity Task 6): the PA forward-power table
+        // (paCalibration/) is the calibration controller's too.
         reload = QStringLiteral("cal");
+    } else if (rest.startsWith(QLatin1String("pa/"))) {
+        // R-R3-46 (parity Task 6): the PA profiles (PaProfileManager).
+        reload = QStringLiteral("pa");
     } else if (rest.startsWith(QLatin1String("hl2/"))) {
         reload = QStringLiteral("hl2");
     } else {
@@ -19301,6 +19427,74 @@ void RadioModel::flushRemoteHardwareApply()
         m_hl2Options.setMacAddress(mac);
         m_hl2Options.load();
         observe(QStringLiteral("hl2"));
+    }
+    // R-R3-46 / R-R3-49 (parity Task 6): a window's PA Gain change leaves
+    // the Core's PA profile bank as the local page's edit would (the
+    // profile the drive and tune power are computed from, and the active
+    // one), read back as saved without seeding or writing anything.
+    if (reloads.contains(QStringLiteral("pa")) && m_paProfileManager) {
+        m_paProfileManager->setMacAddress(mac);
+        m_paProfileManager->reloadFromSettings();
+        observe(QStringLiteral("pa"));
+    }
+}
+
+// R-R3-46 / R-R3-49 (parity Task 6): a remote window's copies of the Core's
+// PA profile bank and PA forward-power table follow the Core's settings, so
+// the PA pages show the Core's values and a save never sends back a stale
+// one. Coalesced like the OC matrix reload below.
+void RadioModel::scheduleRemotePaReload(const QString& key)
+{
+    if (ownsLocalDsp()) {
+        return;
+    }
+    const QString mac = m_lastRadioInfo.macAddress;
+    if (mac.isEmpty()) {
+        return;
+    }
+    const QString prefix = QStringLiteral("hardware/%1/").arg(mac);
+    if (!key.isEmpty()) {
+        if (!key.startsWith(prefix, Qt::CaseInsensitive)) {
+            return;
+        }
+        const QString rest = key.mid(prefix.size());
+        if (!rest.startsWith(QLatin1String("pa/"))
+            && !rest.startsWith(QLatin1String("paCalibration/"))) {
+            return;
+        }
+    }
+    if (m_remotePaReloadTimer == nullptr) {
+        m_remotePaReloadTimer = new QTimer(this);
+        m_remotePaReloadTimer->setSingleShot(true);
+        connect(m_remotePaReloadTimer, &QTimer::timeout,
+                this, &RadioModel::reloadRemotePaState);
+    }
+    if (!m_remotePaReloadTimer->isActive()) {
+        m_remotePaReloadTimer->start(kHardwareApplyCoalesceMs);
+    }
+}
+
+void RadioModel::reloadRemotePaState()
+{
+    if (ownsLocalDsp()) {
+        return;
+    }
+    const QString mac = m_lastRadioInfo.macAddress;
+    if (m_paProfileManager) {
+        m_paProfileManager->setMacAddress(mac);
+        m_paProfileManager->reloadFromSettings();
+    }
+    if (mac.isEmpty()) {
+        return;
+    }
+    m_calController.setMacAddress(mac);
+    m_calController.load();
+    // As the Core's connect path does: a radio whose PA forward-power table
+    // was never saved shows its board's factory table.
+    // Source: Thetis console.cs:6691-6724 CalibratedPAPower [v2.10.3.13]
+    if (m_calController.paCalProfile().boardClass == PaCalBoardClass::None) {
+        m_calController.setPaCalProfile(
+            PaCalProfile::defaults(paCalBoardClassFor(m_hardwareProfile.model)));
     }
 }
 

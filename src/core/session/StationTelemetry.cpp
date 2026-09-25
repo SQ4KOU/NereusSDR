@@ -236,6 +236,65 @@ bool putRate(QJsonObject& object, const QString& key, std::optional<double> valu
     object.insert(key, *value);
     return true;
 }
+
+// R-R3-32 (stationTelemetryVersion 4): the radio's PA readings and link
+// quality. Volts, amps, jitter and gap are finite and not negative; loss is
+// a percentage; a temperature is not below absolute zero; the counts are
+// whole numbers.
+using RadioRealMember = std::optional<double> StationRadioTelemetry::*;
+constexpr std::array<std::pair<const char*, RadioRealMember>, 5> kRadioReals{{
+    {"paVolts", &StationRadioTelemetry::paVolts},
+    {"supplyVolts", &StationRadioTelemetry::supplyVolts},
+    {"paCurrentAmps", &StationRadioTelemetry::paCurrentAmps},
+    {"jitterMs", &StationRadioTelemetry::jitterMs},
+    {"packetGapMs", &StationRadioTelemetry::packetGapMs},
+}};
+using RadioCountMember = std::optional<qint64> StationRadioTelemetry::*;
+constexpr std::array<std::pair<const char*, RadioCountMember>, 2> kRadioCounts{{
+    {"sampleRateHz", &StationRadioTelemetry::sampleRateHz},
+    {"udpPacketsSeen", &StationRadioTelemetry::udpPacketsSeen},
+}};
+
+bool decodeRadioStatus(const QJsonObject& radio, StationRadioTelemetry* out)
+{
+    for (const auto& [name, member] : kRadioReals) {
+        if (!optionalRate(radio, QString::fromLatin1(name), &(out->*member))) { return false; }
+    }
+    for (const auto& [name, member] : kRadioCounts) {
+        if (!optionalInteger(radio, QString::fromLatin1(name), &(out->*member))) { return false; }
+    }
+    return optionalPercent(radio, QStringLiteral("packetLossPercent"), &out->packetLossPercent)
+        && optionalCelsius(radio, QStringLiteral("paTemperatureCelsius"),
+                           &out->paTemperatureCelsius);
+}
+
+bool encodeRadioStatus(const StationRadioTelemetry& in, QJsonObject* radio)
+{
+    for (const auto& [name, member] : kRadioReals) {
+        if (!putRate(*radio, QString::fromLatin1(name), in.*member)) { return false; }
+    }
+    for (const auto& [name, member] : kRadioCounts) {
+        if (in.*member) {
+            if (*(in.*member) < 0) { return false; }
+            radio->insert(QString::fromLatin1(name), *(in.*member));
+        }
+    }
+    if (in.packetLossPercent) {
+        if (!std::isfinite(*in.packetLossPercent) || *in.packetLossPercent < 0
+            || *in.packetLossPercent > 100.0) {
+            return false;
+        }
+        radio->insert(QStringLiteral("packetLossPercent"), *in.packetLossPercent);
+    }
+    if (in.paTemperatureCelsius) {
+        if (!std::isfinite(*in.paTemperatureCelsius)
+            || *in.paTemperatureCelsius < kAbsoluteZeroCelsius) {
+            return false;
+        }
+        radio->insert(QStringLiteral("paTemperatureCelsius"), *in.paTemperatureCelsius);
+    }
+    return true;
+}
 }
 
 bool StationTelemetryCodec::decode(const QJsonObject& object,
@@ -274,8 +333,12 @@ bool StationTelemetryCodec::decode(const QJsonObject& object,
         || decoded.radio.rttMs.has_value() != decoded.radio.rttAgeMs.has_value()) {
         return false;
     }
+    if (!decodeRadioStatus(radio, &decoded.radio)) {
+        return false;
+    }
     if (!decoded.radio.connected && (decoded.radio.rxMbps || decoded.radio.txMbps
-                                     || decoded.radio.rttMs)) {
+                                     || decoded.radio.rttMs
+                                     || !decoded.radio.hasNoRadioStatus())) {
         return false;
     }
     for (const auto& [name, member] : kAudioRates) {
@@ -305,6 +368,9 @@ std::optional<QJsonObject> StationTelemetryCodec::encode(
     }
     if (snapshot.radio.rttAgeMs) {
         radio.insert(QStringLiteral("rttAgeMs"), *snapshot.radio.rttAgeMs);
+    }
+    if (!encodeRadioStatus(snapshot.radio, &radio)) {
+        return std::nullopt;
     }
     QJsonObject audio{{QStringLiteral("active"), snapshot.audio.active},
                       {QStringLiteral("contextGeneration"),

@@ -58,6 +58,9 @@
 //                 and the step attenuator's ATT on TX, its value and Force
 //                 ATT Bidirectional. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 6): RadioModel txInhibited
+//                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -690,6 +693,8 @@ const MirrorPolicy::Entry kEntries[] = {
     // R-R3-49: the Core's real transmit state (MoxController), so a window
     // can grey what waits while the radio is on the air. Never writable.
     { "RadioModel", "transmitting", MirrorDirection::Outbound },
+    // R-R3-49 (parity Task 6): the Core's TX inhibit, Core to window only.
+    { "RadioModel", "txInhibited", MirrorDirection::Outbound },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },

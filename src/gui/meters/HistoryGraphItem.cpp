@@ -20,6 +20,9 @@
 //                 meter keeps WDSP's -400 zero-power floor as a number.
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
 //                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 (remote-window parity Task 6): axis 1 skips the
+//                 sentinel on hardware bindings too. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -146,7 +149,7 @@ void HistoryGraphItem::setValue1(double v)
 {
     // NereusSDR (R-R3-13): skip a no-reading sample (see setValue()); axis 1
     // follows its own binding.
-    if (isReceiveSignalBinding(m_bindingId1) && isNoMeterReading(v)) {
+    if (isNoReadingBinding(m_bindingId1) && isNoMeterReading(v)) {
         return;
     }
     m_buf1.push(static_cast<float>(v));

@@ -209,7 +209,9 @@ inline constexpr quint16 kRemoteSpectrumGrantSessionProtocolMinor = 9;
 inline constexpr quint16 kCoreHostTelemetrySessionProtocolMinor = 10;
 // Station telemetry carries each receiver's processing load, input wait and
 // skipped input in an optional receivers section (stationTelemetryVersion 3).
-// Minor-10 peers receive exactly the radio, audio and host sections.
+// Minor-10 peers receive exactly the radio, audio and host sections. The
+// radio's PA readings and link quality (stationTelemetryVersion 4) also need
+// minor 11; below it the radio section carries none of them.
 inline constexpr quint16 kReceiverLoadSessionProtocolMinor = 11;
 // A receiver that cannot keep up with neural noise reduction is stepped back
 // at runtime: SliceModel's nnrLimit property and the nnr.tryAgain command.

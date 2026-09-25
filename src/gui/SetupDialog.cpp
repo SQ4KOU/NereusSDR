@@ -132,6 +132,12 @@
 //                 its own controls at transmitSettingsVersion 4. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-25: R-R3-49 / R-R3-46 (parity Task 6): PA > PA Gain, Watt
+//                 Meter and PA Values no longer wait for remote transmit;
+//                 each gates its own controls at transmitSettingsVersion 6
+//                 (the auto-calibrate sweep keeps the transmit permission).
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 //   2026-09-25: R-R3-49 (parity Task 5): Transmit > Power, Transmit >
 //                 DEXP/VOX and Test > Two-Tone IMD no longer wait for remote
 //                 transmit; each gates its own controls at
@@ -1147,13 +1153,16 @@ void SetupDialog::buildTree()
     //
     // R-R3-46 / R-R3-10: the three are transmit settings. A remote window
     // now knows the Core's radio, so they are shown for a radio that has
-    // them, and follow the transmit permission with its reason until remote
-    // transmit arrives (requiresTransmit). Local mode is always permitted.
+    // them. R-R3-49 (parity Task 6): no longer held whole for remote
+    // transmit. The Core takes their settings while its radio is off the
+    // air, so each page gates its own controls on transmitSettingsVersion
+    // 6; PA Gain's auto-calibrate sweep, which keys the radio, keeps the
+    // transmit permission. Local mode is always permitted.
     m_paGainItem = registerPage(m_paCategoryItem, "PA Gain", SetupScope::Core, [this]() -> QWidget* {
         m_paGainPage = new PaGainByBandPage(m_model);
         m_paGainPage->applyCapabilityVisibility(capsForModel(m_model));
         return m_paGainPage;
-    }, /*requiresTransmit=*/true);
+    });
 
     m_paWattMeterItem = registerPage(m_paCategoryItem, "Watt Meter", SetupScope::Core,
                                      [this]() -> QWidget* {
@@ -1183,13 +1192,13 @@ void SetupDialog::buildTree()
                     }
                 });
         return m_paWattMeterPage;
-    }, /*requiresTransmit=*/true);
+    });
 
     m_paValuesItem = registerPage(m_paCategoryItem, "PA Values", SetupScope::Core, [this]() -> QWidget* {
         m_paValuesPage = new PaValuesPage(m_model);
         m_paValuesPage->applyCapabilityVisibility(capsForModel(m_model));
         return m_paValuesPage;
-    }, /*requiresTransmit=*/true);
+    });
 
     // Cache the registry index so the Watt Meter cross-wire above can realize
     // the PA Values page without a label lookup on every button press.

@@ -108,6 +108,11 @@
 //                `transmit`; a window's profile manager mirrors them.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 / R-R3-46 / R-R3-49 (parity Task 6): paReadings,
+//                the one PA reading source for every window (the Core's in
+//                a remote window, applyCorePaReadings); the Core's TX
+//                inhibit mirrored as `txInhibited`. NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-25 - R-R3-49 (parity Task 5): applySwrProtectionSetting, the
 //                SWR protection settings applied to the live controller
 //                when they change, not only at start. J.J. Boyd (KG4VCF),
@@ -390,6 +395,10 @@ class RadioModel : public QObject {
     // the moment MoxController starts a key (its MOX button, a hardware
     // PTT, CAT, TCI, TUNE or two-tone) until its TX to RX handover ends.
     Q_PROPERTY(bool transmitting READ isTransmitting NOTIFY transmittingChanged)
+    // R-R3-49 (parity Task 6, carried from gaps Task 13): the Core's TX
+    // inhibit (TxInhibitMonitor::inhibited()), Core to window only, so a
+    // remote window's TX badge shows the Core's inhibit.
+    Q_PROPERTY(bool txInhibited READ isTxInhibited NOTIFY txInhibitedChanged)
 
 
 public:
@@ -881,6 +890,40 @@ public:
     // Phase 3P-H Task 2.
     const RadioStatus& radioStatus()        const { return m_radioStatus; }
     RadioStatus&       radioStatus()              { return m_radioStatus; }
+
+    // R-R3-32 / R-R3-46 (parity Task 6): the radio's PA readings, the one
+    // source every window's PA row, Radio Status, PA Values and the HW
+    // Volts, Amps and Temperature meters read. A local window takes them
+    // from its own connection and RadioStatus; a remote window holds the
+    // Core's (applyCorePaReadings, from station telemetry version 4). Each
+    // is absent when the radio has none, has not reported it, or (in a
+    // remote window) the Core's telemetry is out of date: never a 0
+    // standing in for "unknown".
+    struct PaReadings {
+        std::optional<double> paVolts;              // PA drain volts (user ADC0)
+        std::optional<double> supplyVolts;          // supply volts
+        std::optional<double> paCurrentAmps;        // PA current
+        std::optional<double> paTemperatureCelsius; // PA temperature
+        bool operator==(const PaReadings&) const = default;
+    };
+    PaReadings paReadings() const;
+    // True in a remote window, whose readings come from the Core.
+    bool paReadingsFromCore() const { return m_role == Role::Remote; }
+    // The PA row's volts, as the System tile and Radio Status show them:
+    // the supply volts on the ANAN-G2E, whose user ADC0 is dark (2026-05-25
+    // G2E bench finding), the PA drain volts on every other board.
+    struct PaRowVolts {
+        std::optional<double> volts;
+        bool supply = false;   // true: supply volts ("PSU"), else PA volts ("PA")
+    };
+    PaRowVolts paRowVolts() const;
+    // Remote window only: the Core's latest readings, or all absent when
+    // its telemetry is out of date or the session ended.
+    void applyCorePaReadings(const PaReadings& readings);
+
+    // R-R3-49 (parity Task 6): the radio's TX inhibit. Local: this model's
+    // TxInhibitMonitor. Remote: the Core's, as the window last heard it.
+    bool isTxInhibited() const;
 
     // Settings hygiene validation — single instance owned here.
     // Call validate() after each successful connect.
@@ -1599,6 +1642,11 @@ public:
     /// (`key` is the settings key), coalesced, so the window never saves a
     /// stale cell back over a newer Core value. A no-op on a Local model.
     void scheduleRemoteOcReload(const QString& key);
+    // R-R3-46 / R-R3-49 (parity Task 6): in a remote window, a key of the
+    // Core's radio's PA profiles (hardware/<mac>/pa/...) or PA forward-power
+    // table (hardware/<mac>/paCalibration/...) reloads the window's copies,
+    // coalesced; an empty key reloads them whatever changed.
+    void scheduleRemotePaReload(const QString& key);
 
     /// R-R3-46: ask the radio's HL2 I/O board to identify itself (three
     /// I2C reads). Locally the P1 connection enqueues them; a remote window
@@ -3404,6 +3452,10 @@ signals:
     void transmittingChanged(bool transmitting);
     // R-R3-49 (parity Task 1): isCoreOnAir() changed.
     void coreOnAirChanged(bool onAir);
+    // R-R3-32 (parity Task 6): paReadings() changed.
+    void paReadingsChanged();
+    // R-R3-49 (parity Task 6): isTxInhibited() changed.
+    void txInhibitedChanged(bool inhibited);
     // Fires on each transition to Connected with the RadioInfo of the live
     // connection. HardwarePage (Phase 3I) listens to this to repopulate
     // sub-tabs with per-radio fields.
@@ -5499,6 +5551,18 @@ private:
     // Core's value as a remote window last heard it.
     bool m_transmitting{false};
     bool m_remoteTransmitting{false};
+    // R-R3-49 (parity Task 6): the Core's TX inhibit as a remote window
+    // last heard it.
+    bool m_remoteTxInhibited{false};
+    // R-R3-32 (parity Task 6): the Core's PA readings in a remote window,
+    // and in a local one whether a telemetry sample has reported the PA
+    // current and the PA temperature since connect.
+    PaReadings m_corePaReadings;
+    bool m_paCurrentReported{false};
+    bool m_paTemperatureReported{false};
+    // R-R3-46 (parity Task 6): the remote window's PA reload.
+    QTimer* m_remotePaReloadTimer{nullptr};
+    void reloadRemotePaState();
     // R-R3-49 (parity Task 1): isCoreOnAir() as last announced.
     bool m_coreOnAir{false};
     void updateCoreOnAir();

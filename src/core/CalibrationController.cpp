@@ -20,6 +20,9 @@
 //   2026-09-23 - R-R3-46: save() writes only changed keys, so a remote
 //                 window never rewrites the transmit calibration. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-46 (remote-window parity Task 6): load() announces a
+//                 PA forward-power table that changed. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -352,6 +355,10 @@ void CalibrationController::load()
     //   default-constructed so `RadioModel::connectToRadio` can substitute
     //   `PaCalProfile::defaults(paCalBoardClassFor(model))` on first connect.
     const QString paBase = QStringLiteral("hardware/%1/paCalibration/").arg(m_mac);
+    // R-R3-46 (remote-window parity Task 6): a reload after another
+    // window's change announces a PA table that moved, so the Watt Meter
+    // page shows it.
+    const PaCalProfile before = m_paCalProfile;
     const int storedClassInt = s.value(paBase + QStringLiteral("boardClass"),
                                        QStringLiteral("0")).toInt();
     const auto storedClass = static_cast<PaCalBoardClass>(storedClassInt);
@@ -366,6 +373,11 @@ void CalibrationController::load()
             m_paCalProfile.watts[static_cast<std::size_t>(i)] =
                 s.value(key, fallback).toFloat();
         }
+    }
+    if (before.boardClass != m_paCalProfile.boardClass
+        || before.watts != m_paCalProfile.watts) {
+        emit paCalProfileChanged();
+        emit changed();
     }
 }
 

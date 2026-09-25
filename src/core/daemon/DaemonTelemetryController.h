@@ -110,6 +110,8 @@ private:
                                qint64 sampledElapsedMs) const;
     void applyAudioObservation(StationTelemetrySnapshot& snapshot,
                                qint64 sampledElapsedMs);
+    // R-R3-32 (parity Task 6): the radio's PA readings and link quality.
+    void applyRadioStatus(StationTelemetrySnapshot& snapshot) const;
     void stopCollecting();
     std::optional<QVector<StationReceiverTelemetry>> radioModelReceiverLoads() const;
 

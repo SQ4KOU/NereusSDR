@@ -208,6 +208,14 @@
 //                                    applied to the Core's controller at
 //                                    once.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-32 (parity Task 6):
+//                                    transmitSettingsVersion 6: Setup > PA's
+//                                    pa/ and paCalibration/ keys taken off
+//                                    the air and applied at once;
+//                                    stationTelemetryVersion 4: the radio's
+//                                    PA readings and link quality for a
+//                                    peer at minor 11.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -596,6 +604,26 @@ bool isPowerPageTransmitKey(const QString& key)
     return RadioModel::isSwrProtectionSettingKey(key)
         || key == QLatin1String("TxInhibitMonitorEnabled")
         || key == QLatin1String("TxInhibitMonitorReversed");
+}
+
+// R-R3-46 / R-R3-49 (parity Task 6): Setup > PA's keys, the PA profiles
+// (hardware/<mac>/pa/..., PaProfileManager: PA Gain's profiles, per-band
+// gains, adjust matrix and max power) and the PA forward-power table
+// (hardware/<mac>/paCalibration/..., CalibrationController: the Watt Meter
+// page). Taken while the radio is off the air and applied at once
+// (RadioModel::scheduleRemoteHardwareApply). The Calibration tab's own
+// copies of its transmit fields (paCalibration/cal/...) are Hardware
+// Config's, not the PA pages', and stay refused.
+bool isPaPageTransmitKey(const QString& rawKey)
+{
+    const QStringList parts = rawKey.toLower().split(QLatin1Char('/'));
+    if (parts.size() < 4 || parts[0] != QLatin1String("hardware")) {
+        return false;
+    }
+    if (parts[2] == QLatin1String("pa")) {
+        return true;
+    }
+    return parts[2] == QLatin1String("pacalibration") && parts[3] != QLatin1String("cal");
 }
 
 // R-R3-49 (parity Task 5): the plain refusal for a Power page key's value
@@ -2360,6 +2388,9 @@ bool StationServer::sendTelemetry(const StationTelemetrySnapshot& snapshot,
     // sections it negotiated, without "receivers".
     if (peer == m_peers.cend() || peer->agreedMinor < kReceiverLoadSessionProtocolMinor) {
         message.telemetry.receivers.reset();
+        // R-R3-32 (parity Task 6): and without the radio's PA readings and
+        // link quality (stationTelemetryVersion 4, minor 11).
+        message.telemetry.radio.clearRadioStatus();
     }
     const QByteArray wire = SessionMessages::encode(message);
     if (wire.isEmpty()) { return false; }
@@ -2468,7 +2499,10 @@ bool StationServer::isTransmitSettingKeyAcceptedOffAir(const QString& key)
 {
     // R-R3-49 (parity Task 5): and Setup > Transmit > Power's SWR Protection
     // and External TX Inhibit keys.
-    return isTransmitDspOptionsKey(key) || isPowerPageTransmitKey(key);
+    // R-R3-46 / R-R3-49 (parity Task 6): and Setup > PA's PA profiles and
+    // PA forward-power table.
+    return isTransmitDspOptionsKey(key) || isPowerPageTransmitKey(key)
+        || isPaPageTransmitKey(key);
 }
 
 bool StationServer::transmitSettingsOffered(SessionTransport* transport) const
@@ -2526,7 +2560,12 @@ int StationServer::transmitSettingsVersion() const
     // taken off the air), DEXP/VOX (the DEXP timings, look-ahead,
     // side-channel filter and antiVoxGainDb) and Test > Two-Tone IMD (the
     // two-tone settings) (parity Task 5).
-    return m_radioModel.isNull() ? 0 : 5;
+    // 6: Setup > PA (PA Gain's profiles, per-band gains, adjust matrix and
+    // max power; the Watt Meter's PA forward-power table): the
+    // hardware/<mac>/pa/... and hardware/<mac>/paCalibration/... keys taken
+    // off the air and applied to the Core's PA profiles and calibration at
+    // once (parity Task 6).
+    return m_radioModel.isNull() ? 0 : 6;
 }
 
 int StationServer::tgxlControlVersion() const
@@ -2677,7 +2716,9 @@ StationCapabilities StationServer::buildCapabilities() const
         }
     }
     caps.remoteCtunVersion = 1;
-    caps.stationTelemetryVersion = m_telemetryEnabled ? 3 : 0;
+    // 4 (R-R3-32, parity Task 6): the radio section also carries the Core's
+    // PA readings and radio link quality, for a peer at minor 11.
+    caps.stationTelemetryVersion = m_telemetryEnabled ? 4 : 0;
     caps.remoteTgxlConfigVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.remoteFourO3AControlVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.propertyResultVersion = 1;

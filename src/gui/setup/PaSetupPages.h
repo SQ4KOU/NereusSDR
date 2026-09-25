@@ -109,6 +109,14 @@
 //                 column-width polish. Per STYLEGUIDE.md. Pure visual,
 //                 behaviour unchanged. AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-25 - R-R3-46 / R-R3-49 / R-R3-32 (remote-window parity
+//                 Task 6): PA Gain's editor and the Watt Meter's PA table
+//                 follow transmitSettingsVersion 6 in a remote window (the
+//                 auto-calibrate sweep keeps the transmit permission); PA
+//                 Values' PA current, temperature and supply volts come from
+//                 RadioModel::paReadings() (the Core's in a remote window),
+//                 unavailable when absent. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -283,6 +291,15 @@ public:
     // From Thetis comboRadioModel_SelectedIndexChanged setup.cs:19812-20310
     // [v2.10.3.13].
     void applyCapabilityVisibility(const BoardCapabilities& caps);
+
+    // R-R3-46 / R-R3-49 (remote-window parity Task 6): in a remote window
+    // the profiles, per-band gains, adjust matrix, max power and the PA
+    // bypass follow transmitSettingsVersion 6 (taken by the Core while its
+    // radio is off the air); the auto-calibrate sweep, which keys the
+    // radio, follows the transmit permission.
+    void setTransmitPermitted(bool permitted, const QString& reason) override;
+    void setTransmitSettingsPermittedAt(int version, bool permitted,
+                                        const QString& reason) override;
 
 #ifdef NEREUS_BUILD_TESTS
     QComboBox*       profileComboForTest()       const { return m_profileCombo; }
@@ -544,6 +561,15 @@ private:
     QPushButton*  m_autoCalCancelButton{nullptr};
     QDoubleSpinBox* m_autoCalTargetSpin{nullptr};
 
+    // R-R3-46 / R-R3-49 (parity Task 6): the two gates and their controls.
+    QList<QWidget*> paSettingsControls() const;
+    QList<QWidget*> paKeyingControls() const;
+    void applyPaGates();
+    bool    m_paSettingsPermitted{true};
+    QString m_paSettingsReason;
+    bool    m_paKeyingPermitted{true};
+    QString m_paKeyingReason;
+
 #ifdef NEREUS_BUILD_TESTS
     /// Test injectors (see setNextProfileNameForTest / setDeleteConfirmedForTest /
     /// setResetConfirmedForTest above).
@@ -595,6 +621,11 @@ public:
     // From Thetis comboRadioModel_SelectedIndexChanged setup.cs:19812-20310
     // [v2.10.3.13].
     void applyCapabilityVisibility(const BoardCapabilities& caps);
+
+    // R-R3-46 / R-R3-49 (parity Task 6): the PA forward-power table follows
+    // transmitSettingsVersion 6 in a remote window.
+    void setTransmitSettingsPermittedAt(int version, bool permitted,
+                                        const QString& reason) override;
 
 #ifdef NEREUS_BUILD_TESTS
     bool showPaValuesCheckedForTest() const;
@@ -751,6 +782,11 @@ private:
     double m_paCurrentCurrent{0.0};
     double m_paTempCurrent{0.0};
     double m_supplyCurrent{0.0};
+    // R-R3-32 (parity Task 6): whether RadioModel::paReadings() has each.
+    bool m_paCurrentPresent{false};
+    bool m_paTempPresent{false};
+    bool m_supplyPresent{false};
+    void refreshPaReadings();
 
     // Helper: format a label with peak/min annotation.  Output shape:
     //   "12.34 W  (P 50.00 / M 5.00)"

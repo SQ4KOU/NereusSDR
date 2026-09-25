@@ -189,6 +189,10 @@
 #include "gui/UnbuiltFeatures.h"
 #include "gui/containers/ContainerButtonDispatcher.h"
 #include "models/Band.h"
+#include "gui/setup/PaSetupPages.h"
+#include "core/session/IStationLink.h"
+#include <QDoubleSpinBox>
+#include <QCheckBox>
 #include "gui/containers/ContainerManager.h"
 #include "gui/containers/ContainerWidget.h"
 #include "gui/meters/AntennaButtonItem.h"
@@ -3037,6 +3041,10 @@ private slots:
         QVERIFY(pa != nullptr);
         QVERIFY(!pa->isHidden());
 
+        // R-R3-49 (parity Task 6): the pages are no longer held whole for
+        // remote transmit. Each opens and gates its own Core settings on
+        // transmitSettingsVersion 6; PA Gain's auto-calibrate sweep, which
+        // keys the radio, keeps the transmit permission.
         const QString transmitReason = QStringLiteral(
             "Remote transmit controls are not available from this Core yet.");
         auto* const notice = dialog.findChild<QLabel*>(
@@ -3047,23 +3055,32 @@ private slots:
             QTreeWidgetItem* const leaf = setupLeaf(dialog, label);
             QVERIFY2(leaf != nullptr, qPrintable(label));
             QVERIFY2(!leaf->isHidden(), qPrintable(label));
-            QCOMPARE(leaf->toolTip(0), transmitReason);
-            QVERIFY(OperatorWording::isPlain(leaf->toolTip(0)));
+            QVERIFY2(leaf->toolTip(0) != transmitReason, qPrintable(label));
             dialog.selectPage(label);
             QWidget* const page = dialog.realizedPageForTest(label);
             QVERIFY2(page != nullptr, qPrintable(label));
-            QVERIFY2(!page->isEnabled(), qPrintable(label));
-            QCOMPARE(page->toolTip(), transmitReason);
-            QVERIFY2(!notice->isHidden(), qPrintable(label));
-            QCOMPARE(notice->text(), transmitReason);
+            QVERIFY2(page->isEnabled(), qPrintable(label));
+            QVERIFY2(notice->isHidden(), qPrintable(label));
         }
+        auto* const paGain = qobject_cast<PaGainByBandPage*>(
+            dialog.realizedPageForTest(QStringLiteral("PA Gain")));
+        QVERIFY(paGain != nullptr);
+        QDoubleSpinBox* const gain20 = paGain->gainSpinForTest(Band::Band20m);
+        QCheckBox* const autoCal = paGain->autoCalibrateCheckForTest();
+        QVERIFY(gain20 && autoCal);
+        // Closed until the version 6 gate is pushed, with the Core reason.
+        QVERIFY(!gain20->isEnabled());
+        QCOMPARE(gain20->toolTip(), IStationLink::transmitSettingsUnavailableReason());
+        dialog.setTransmitSettingsPermitted(true, QString(), 6);
+        QVERIFY(gain20->isEnabled());
+        QVERIFY(!autoCal->isEnabled());
+        QCOMPARE(autoCal->toolTip(), transmitReason);
+        dialog.setTransmitSettingsPermitted(false, QStringLiteral("The radio is on the air. Try again when it stops."), 6);
+        QVERIFY(!gain20->isEnabled());
 
-        // A Core that permits transmit lifts the transmit reason.
+        // A Core that permits transmit opens the sweep.
         dialog.setTransmitPermitted(true);
-        for (const QString& label : {QStringLiteral("PA Gain"), QStringLiteral("Watt Meter"),
-                                     QStringLiteral("PA Values")}) {
-            QVERIFY2(setupLeaf(dialog, label)->toolTip(0) != transmitReason, qPrintable(label));
-        }
+        QVERIFY(autoCal->isEnabled());
 
         // Local direct mode: the same radio's PA pages are live, no reason.
         RadioModel local;

@@ -22,6 +22,9 @@
 //                 core-side src/core/meters/SliceMeterPump.{h,cpp}; smeterUpdated
 //                 removed with its only listener. J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 (remote-window parity Task 6):
+//                 setPaReadingsModel. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -170,6 +173,12 @@ public:
     void setRemoteRadioModel(RadioModel* model,
                              std::function<bool()> snapshotReady,
                              std::function<double(const SliceModel*)> maxBinSource = {});
+
+    // R-R3-32 (remote-window parity Task 6): the model whose
+    // paReadings() feed the HwVolts, HwAmps and HwTemperature bindings on
+    // every poll, in a local window (this radio) and a remote one (the
+    // Core's), with the no-reading sentinel when a reading is absent.
+    void setPaReadingsModel(RadioModel* model);
 
     // ── TX meter bindings (H.2, Phase 3M-1a) ─────────────────────────────
     //
@@ -344,6 +353,8 @@ private:
     std::function<double()> m_rxOffsetSource;
     bool m_remoteRole{false};
     QPointer<RadioModel> m_remoteModel;
+    QPointer<RadioModel> m_paReadingsModel;
+    void pollHardwareTelemetry();
     std::function<bool()> m_remoteSnapshotReady;
     std::function<double(const SliceModel*)> m_remoteMaxBinSource;
 };

@@ -220,8 +220,9 @@ struct StationCapabilities {
     int remoteCtunVersion = 0;
     /// 1: radio and audio telemetry. 2: adds the Core host section (CPU,
     /// memory, temperature). 3: adds the receivers section (each receiver's
-    /// processing load and input wait). Negotiated minor still gates each
-    /// version.
+    /// processing load and input wait). 4 (remote-window parity Task 6,
+    /// minor 11): adds the radio's PA readings and link quality to the
+    /// radio section. Negotiated minor still gates each version.
     int stationTelemetryVersion = 0;
     int remoteTgxlConfigVersion = 0;
     int remoteFourO3AControlVersion = 0;

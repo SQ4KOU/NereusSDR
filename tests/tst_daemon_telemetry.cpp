@@ -56,6 +56,19 @@ public:
     void setMicPTTDisabled(bool) override {}
     void setMicXlr(bool) override {}
     void setWatchdogEnabled(bool) override {}
+
+    // R-R3-32 (parity Task 6): drive the link counters as the receive path
+    // would: `count` datagrams 1 ms apart on stream 0, one sequence error.
+    void feedLinkStatsForTest(int count)
+    {
+        const qint64 start = RadioLinkStats::nowUs() - count * 1000;
+        for (int i = 0; i < count; ++i) {
+            const qint64 at = start + i * 1000;
+            m_linkStats.noteDatagram(at);
+            m_linkStats.noteSequenced(at, i == count - 1 ? 1U : 0U);
+            m_linkStats.noteStreamArrival(0, quint32(i), at, 1000.0);
+        }
+    }
 };
 
 struct SessionHarness {
@@ -278,7 +291,9 @@ private slots:
             std::make_unique<HostTelemetrySampler>(host.directory.path()));
         controller.disableAutomaticSamplingForTest();
         h.server.setTelemetryEnabled(true);
-        QCOMPARE(h.server.buildCapabilities().stationTelemetryVersion, 3);
+        // 4 since remote-window parity Task 6 (the radio's PA readings and
+        // link quality); host telemetry came with 2.
+        QCOMPARE(h.server.buildCapabilities().stationTelemetryVersion, 4);
         QSignalSpy samples(&h.client, &StationClient::telemetryReceived);
         h.connectClient(this);
         QTRY_VERIFY(h.client.telemetryAvailable());
@@ -486,6 +501,72 @@ private slots:
             QTRY_COMPARE(samples.count(), i);
             QVERIFY(lastSnapshot(samples).host.isEmpty());
         }
+    }
+
+    // R-R3-32 / R-R3-46 (remote-window parity Task 6): the Core's own PA
+    // readings (RadioModel::paReadings()) and its connection's link counters
+    // ride the sample at stationTelemetryVersion 4; a reading the radio has
+    // not reported stays absent, and none rides while the radio is not
+    // connected.
+    void radioPaReadingsAndLinkQualityRideTheSample()
+    {
+        SessionHarness h;
+        h.station.setBoardForTest(HPSDRHW::Saturn);
+        h.station.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        qint64 nowMs = 0;
+        DaemonTelemetryController controller(
+            &h.server, &h.station, nullptr, nullptr, [&] { return nowMs; });
+        controller.disableAutomaticSamplingForTest();
+        h.server.setTelemetryEnabled(true);
+
+        NullRadioConnection connection;
+        h.station.injectConnectionForTest(&connection);
+        QSignalSpy samples(&h.client, &StationClient::telemetryReceived);
+        h.connectClient(this);
+        QTRY_VERIFY(h.client.telemetryAvailable());
+
+        // Nothing reported yet: every reading absent, never 0.
+        nowMs = 100;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 1);
+        StationTelemetrySnapshot snapshot = lastSnapshot(samples);
+        QVERIFY(snapshot.radio.connected);
+        QVERIFY(!snapshot.radio.paVolts && !snapshot.radio.supplyVolts
+                && !snapshot.radio.paCurrentAmps && !snapshot.radio.paTemperatureCelsius);
+        QVERIFY(!snapshot.radio.packetLossPercent && !snapshot.radio.jitterMs);
+        QCOMPARE(snapshot.radio.udpPacketsSeen, std::optional<qint64>(0));
+
+        // The radio reports: user ADC0 490 is 12.5 V by Thetis's
+        // convertToVolts ((490 / 4095) * 5 * 23 / 1.1), the supply AIN6 and
+        // a PA current sample.
+        connection.handleUserAdc0Raw(490);
+        connection.handleSupplyRaw(2000);
+        h.station.handlePaTelemetryForTest(0, 0, 0, 490, 1000, 2000);
+        connection.feedLinkStatsForTest(10);
+        nowMs = 1100;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 2);
+        snapshot = lastSnapshot(samples);
+        const RadioModel::PaReadings pa = h.station.paReadings();
+        QVERIFY(pa.paVolts && pa.supplyVolts && pa.paCurrentAmps);
+        QCOMPARE(snapshot.radio.paVolts, pa.paVolts);
+        QVERIFY(qAbs(*snapshot.radio.paVolts - 12.5) < 0.05);
+        QCOMPARE(snapshot.radio.supplyVolts, pa.supplyVolts);
+        QCOMPARE(snapshot.radio.paCurrentAmps, pa.paCurrentAmps);
+        QVERIFY(!snapshot.radio.paTemperatureCelsius);   // a G2 reports none
+        QCOMPARE(snapshot.radio.udpPacketsSeen, std::optional<qint64>(10));
+        QCOMPARE(snapshot.radio.packetLossPercent, std::optional<double>(100.0 / 11.0));
+        QCOMPARE(snapshot.radio.jitterMs, std::optional<double>(0.0));
+        QVERIFY(snapshot.radio.packetGapMs);
+
+        // The radio gone: nothing rides.
+        h.station.injectConnectionForTest(nullptr);
+        nowMs = 2100;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 3);
+        snapshot = lastSnapshot(samples);
+        QVERIFY(!snapshot.radio.connected);
+        QVERIFY(snapshot.radio.hasNoRadioStatus());
     }
 
     void queuedRadioReadsRejectAReplyFromTheReplacedConnection()

@@ -154,6 +154,12 @@
 //                (Transmit > Power, DEXP/VOX, Test > Two-Tone IMD) follow
 //                transmitSettingsPermitted(5). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-32 (parity Task 6): Setup > PA follows
+//                transmitSettingsPermitted(6); the System tile's PA row and
+//                the HW Volts, Amps and Temperature meters read
+//                RadioModel::paReadings() (the Core's in a remote window);
+//                the TX badge follows RadioModel::txInhibitedChanged.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1349,6 +1355,9 @@ void MainWindow::ensureRemoteSession()
                                                m_panStack, m_stationClient);
         m_remoteTelemetry = new RemoteTelemetryController(
             m_stationClient, m_remoteMedia, this);
+        // R-R3-32 (parity Task 6): the Core's PA readings reach this
+        // window's model, which every PA surface reads.
+        m_remoteTelemetry->setPaReadingsTarget(m_radioModel);
         connect(m_remoteTelemetry, &RemoteTelemetryController::changed, this, [this] {
             if (m_titleBar) {
                 m_titleBar->connectionSegment()->setRemoteTelemetryText(m_remoteTelemetry->bannerText());
@@ -4170,6 +4179,9 @@ void MainWindow::buildUI()
     // apply live interval + averaging-window changes without a MainWindow
     // round-trip.  Non-owning; RadioModel stores the pointer only.
     m_radioModel->setMeterPoller(m_meterPoller);
+    // R-R3-32 (parity Task 6): the HW Volts, Amps and Temperature meters
+    // read the one PA reading source (the Core's in a remote window).
+    m_meterPoller->setPaReadingsModel(m_radioModel);
     // Task 3.2: expose ContainerManager via RadioModel so MultimeterPage
     // can broadcast unit-mode changes to all live MeterItems.
     m_radioModel->setContainerManager(m_containerManager);
@@ -6032,11 +6044,13 @@ void MainWindow::buildUI()
     // setTxInhibited() was added in Task 14 and toggles m_txInhibitLabel
     // visibility. The Source parameter is ignored by the UI slot (the pill
     // is binary: visible or hidden).
-    connect(&m_radioModel->txInhibit(),
-            &safety::TxInhibitMonitor::txInhibitedChanged,
-            this, [this](bool inhibited, safety::TxInhibitMonitor::Source /*source*/) {
-        setTxInhibited(inhibited);
-    });
+    //
+    // R-R3-49 (parity Task 6): through RadioModel::txInhibitedChanged, which
+    // follows this window's own monitor locally and the Core's mirrored
+    // `txInhibited` in a remote window, so both show the radio's inhibit.
+    connect(m_radioModel, &RadioModel::txInhibitedChanged,
+            this, &MainWindow::setTxInhibited);
+    setTxInhibited(m_radioModel->isTxInhibited());
 }
 
 void MainWindow::rebuildEditContainerSubmenu()
@@ -8968,105 +8982,60 @@ void MainWindow::buildStatusBar()
         m_chromeBar->relayout(m_chromeBarWidget->width());
     };
 
-    // Wire voltage signals: re-bind on every new connection, reset on disconnect.
-    connect(m_radioModel, &RadioModel::connectionStateChanged, this,
-            [this, refreshChromeBarForSystemTile](ConnectionState s) {
-        if (s != ConnectionState::Connected) {
+    // R-R3-32 / R-R3-46 (parity Task 6): the PA row reads the one PA
+    // reading source, RadioModel::paReadings(): this window's own radio, or
+    // in a remote window the Core's (station telemetry version 4). A reading
+    // that is absent (none on this board, not reported yet, disconnected,
+    // or the Core's telemetry out of date) clears its half of the row; it
+    // is never shown as 0.
+    //
+    // 2026-05-25 KG4VCF G2E bench finding: ANAN-G2E (HermesC10) firmware
+    // leaves user_adc0 (AIN3 / status bytes 53-54) dark (0.1 V against an
+    // actual 13.4 V supply), so the G2E row shows supply_volts (AIN6 /
+    // bytes 45-46) labelled "PSU"; on the other MKII boards user_adc0 IS
+    // the PA drain sense, which is what the "PA" label means
+    // (RadioModel::paRowVolts). The choice reads the model at each update,
+    // when it is settled.
+    //
+    // 2026-08-03 KG4VCF G2E bench finding: status frames can be parsed
+    // before RadioModel reaches Connected, and the connection suppresses
+    // re-emitting an unchanged value, so a steady supply would never reach
+    // a listener bound late. paReadings() reads the connection's cached
+    // values, and RadioModel re-announces them on every connection state
+    // change, so the first reading is never missed.
+    auto refreshPaRow = [this, refreshChromeBarForSystemTile]() {
+        // R-R3-32: a remote window's readings are the Core's, and say so.
+        m_systemTile->setPaSourceNote(m_radioModel->paReadingsFromCore()
+                                          ? tr("From the Core") : QString());
+        const RadioModel::PaRowVolts row = m_radioModel->paRowVolts();
+        // Task 3.6: ANAN-8000DLE user preference gate. For ANAN-8000D
+        // radios, consult the "Show volts/amps in title bar" AppSettings key
+        // (default true). Other MKII-class boards (7000DLE, AnvelinaPro3)
+        // have no such checkbox, so the gate is always open.
+        const bool is8000D = (m_radioModel->hardwareProfile().model == HPSDRModel::ANAN8000D);
+        const bool showVolts = !is8000D ||
+            AppSettings::instance().value(
+                QStringLiteral("HardwareAnan8000DleShowVoltsAmps"),
+                QStringLiteral("True")).toString() == QStringLiteral("True");
+        if (row.volts && showVolts) {
+            m_systemTile->setPaLabel(row.supply ? QStringLiteral("PSU") : QStringLiteral("PA"));
+            m_systemTile->setPaVolts(*row.volts);
+        } else {
             m_systemTile->clearPaVolts();
+        }
+        // PA temperature (HL2 publishes it via the handlePaTelemetry HL2
+        // branch). The label formatting respects
+        // PaTempUnitNotifier::currentUnit().
+        const RadioModel::PaReadings readings = m_radioModel->paReadings();
+        if (readings.paTemperatureCelsius) {
+            m_systemTile->setPaTempCelsius(*readings.paTemperatureCelsius);
+        } else {
             m_systemTile->clearPaTemp();
-            refreshChromeBarForSystemTile();
         }
-        if (auto* conn = m_radioModel->connection()) {
-            // conn is a new object on each reconnect — no deduplication needed.
-            // Qt::UniqueConnection is not supported for lambda connects anyway.
-            //
-            // 2026-05-25 KG4VCF G2E bench finding: ANAN-G2E (HermesC10)
-            // firmware leaves user_adc0 (AIN3 / status bytes 53-54) dark.
-            // Bench reading was 0.1 V against an actual 13.4 V supply.
-            // Route supply_volts (AIN6 / bytes 45-46) to the tile on G2E
-            // and rename "PA" to "PSU".  Other MKII boards keep the
-            // existing user_adc0 path -- on those SKUs user_adc0 IS the
-            // PA drain sense, which is what the "PA" label means.
-            //
-            // Implementation note: we bind BOTH signals unconditionally
-            // and gate inside each slot on the CURRENT model.  The outer
-            // lambda fires on every connectionStateChanged transition
-            // (Connecting / Probing / Connected), and at Connecting time
-            // hardwareProfile.model may not yet be set to ANAN_G2E -- so
-            // a branch-at-bind-time approach picked the wrong slot and
-            // the tile stayed dark.  Gating inside the slot reads the
-            // model at each signal emission, when it is guaranteed to be
-            // set (status frames only arrive after the Connected handler
-            // has populated the profile).
-            auto onUserAdc0 = [this, refreshChromeBarForSystemTile](float v) {
-                const auto model = m_radioModel->hardwareProfile().model;
-                if (model == HPSDRModel::ANAN_G2E) {
-                    return;  // G2E uses supply_volts; ignore user_adc0.
-                }
-                // Task 3.6: ANAN-8000DLE user preference gate.
-                // For ANAN-8000D radios, consult the "Show volts/amps in title
-                // bar" AppSettings key (default true). For other MKII-class
-                // boards (7000DLE, AnvelinaPro3) the gate is always open —
-                // those boards don't have the per-SKU preference checkbox.
-                const bool is8000D = (model == HPSDRModel::ANAN8000D);
-                const bool showVolts = !is8000D ||
-                    AppSettings::instance().value(
-                        QStringLiteral("HardwareAnan8000DleShowVoltsAmps"),
-                        QStringLiteral("True")).toString() == QStringLiteral("True");
-                if (!showVolts) { return; }
-                m_systemTile->setPaLabel(QStringLiteral("PA"));
-                m_systemTile->setPaVolts(static_cast<double>(v));
-                refreshChromeBarForSystemTile();
-                qInfo() << "PA tile updated via userAdc0:" << v << "V";
-            };
-            connect(conn, &RadioConnection::userAdc0Changed, this, onUserAdc0);
-
-            auto onSupplyVolts = [this, refreshChromeBarForSystemTile](float v) {
-                const auto model = m_radioModel->hardwareProfile().model;
-                if (model != HPSDRModel::ANAN_G2E) {
-                    return;  // Non-G2E uses user_adc0 path.
-                }
-                m_systemTile->setPaLabel(QStringLiteral("PSU"));
-                m_systemTile->setPaVolts(static_cast<double>(v));
-                refreshChromeBarForSystemTile();
-                qInfo() << "PSU tile updated via supplyVolts:" << v << "V";
-            };
-            connect(conn, &RadioConnection::supplyVoltsChanged, this, onSupplyVolts);
-
-            // 2026-08-03 KG4VCF G2E bench finding: neither qInfo above ever
-            // printed against a live G2E, although it stayed Connected for
-            // minutes. Root cause: P2RadioConnection starts parsing
-            // High-Priority status frames (and calling handleSupplyRaw /
-            // handleUserAdc0Raw) as soon as its UDP socket is live -- the
-            // bench log's first "P2: UDP packet: port 1025 ... size 60"
-            // trace lands about 19 ms BEFORE RadioModel reaches Connected.
-            // The connect() calls just above cannot exist before this exact
-            // lambda runs, so that first sample's userAdc0Changed /
-            // supplyVoltsChanged emission fires with nobody listening.
-            // handleSupplyRaw/handleUserAdc0Raw then suppress every later
-            // re-emit of an unchanged value (identical-raw suppression), so
-            // a steady supply never gives the tile a second chance. Pull
-            // whatever the connection already computed instead of waiting
-            // on a change that will never come.
-            if (conn->lastUserAdc0Volts() >= 0.0f) {
-                onUserAdc0(conn->lastUserAdc0Volts());
-            }
-            if (conn->lastSupplyVolts() >= 0.0f) {
-                onSupplyVolts(conn->lastSupplyVolts());
-            }
-        }
-    });
-
-    // PA temperature row — driven by RadioStatus::paTemperatureChanged
-    // (HL2 publishes via the handlePaTelemetry HL2 branch; future boards
-    // may publish via the same RadioStatus signal).  The label
-    // formatting respects PaTempUnitNotifier::currentUnit() so a
-    // °C / °F toggle reformats live.
-    connect(&m_radioModel->radioStatus(), &RadioStatus::paTemperatureChanged,
-            this, [this, refreshChromeBarForSystemTile](double celsius) {
-        m_systemTile->setPaTempCelsius(celsius);
         refreshChromeBarForSystemTile();
-    });
+    };
+    connect(m_radioModel, &RadioModel::paReadingsChanged, this, refreshPaRow);
+    refreshPaRow();
 
     // Live re-format on °C / °F toggle without waiting for the next
     // telemetry sample. There is no toggle(); flip explicitly, matching
@@ -11299,7 +11268,8 @@ SetupDialog* MainWindow::createSetupDialog()
     if (!m_radioModel || !m_radioModel->ownsLocalDsp()) {
         // R-R3-49 (parity Tasks 2 and 3): the settings later versions
         // brought (Audio > TX Input's microphone, Audio > TX Profile).
-        for (const int version : {2, 3, 4, 5}) {
+        // R-R3-49 (parity Task 6): and version 6, Setup > PA.
+        for (const int version : {2, 3, 4, 5, 6}) {
             dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(version),
                                                  transmitSettingsReason(version), version);
         }
@@ -11478,6 +11448,9 @@ void MainWindow::applyRemoteRoleGating()
         // Two-Tone IMD came with version 5.
         dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(5),
                                              transmitSettingsReason(5), 5);
+        // R-R3-49 (parity Task 6): Setup > PA came with version 6.
+        dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(6),
+                                             transmitSettingsReason(6), 6);
         dialog->setStationSettingsAvailable(stationAvailable, stationSettingsReason());
     }
     if (m_actTxEqualizer) {

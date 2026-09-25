@@ -134,6 +134,13 @@
 //                requestRadeResetVocoder (transmitSettingsVersion 3); a
 //                refused profile request shows the Core's profile again.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 / R-R3-46 / R-R3-49 (parity Task 6): the radio's
+//                PA readings and link quality kept only from a Core at
+//                minor 11 and stationTelemetryVersion 4; the Core's
+//                `txInhibited` applied as plain state; the Core's PA
+//                profiles and PA table reloaded in the window as their keys
+//                arrive. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -1381,6 +1388,12 @@ void StationClient::onTransportText(const QByteArray& wire)
                 || m_capabilities.stationTelemetryVersion < 3) {
                 message.telemetry.receivers.reset();
             }
+            // R-R3-32 (parity Task 6): and the radio's PA readings and link
+            // quality only from one that negotiated version 4.
+            if (m_agreedMinor < kReceiverLoadSessionProtocolMinor
+                || m_capabilities.stationTelemetryVersion < 4) {
+                message.telemetry.radio.clearRadioStatus();
+            }
             emit telemetryReceived(message.telemetry, m_sessionEpoch);
         }
         break;
@@ -1905,6 +1918,8 @@ void StationClient::handleSettingsSnapshot(const SessionMessage& message)
         for (auto it = data.constBegin(); it != data.constEnd(); ++it) {
             m_radioModel->scheduleRemoteOcReload(it.key());
         }
+        // R-R3-46 (parity Task 6): and its PA profiles and PA table, once.
+        m_radioModel->scheduleRemotePaReload(QString());
         // Follow-up 6: pages showing the Core's settings re-read them.
         m_radioModel->reportStationSettingChanged(QString());
     }
@@ -1968,6 +1983,8 @@ void StationClient::handleSettingsValue(const SessionMessage& message)
     // window's copy, so its next save cannot send a stale cell back.
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteOcReload(key);
+        // R-R3-46 (parity Task 6): likewise the PA profiles and PA table.
+        m_radioModel->scheduleRemotePaReload(key);
         // Follow-up 6: another window's (or the Core's) change reaches the
         // pages that show it.
         m_radioModel->reportStationSettingChanged(key);
@@ -1988,6 +2005,8 @@ void StationClient::handleSettingsReject(const SessionMessage& message)
     // R-R3-46: a refused OC cell settles the window's copy on the Core's.
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteOcReload(QString::fromUtf8(message.objectKey));
+        // R-R3-46 (parity Task 6): a refused PA write settles on the Core's.
+        m_radioModel->scheduleRemotePaReload(QString::fromUtf8(message.objectKey));
     }
     if (!message.reason.isEmpty() && m_radioModel) {
         m_radioModel->reportStationSliceCommandRejected(message.reason);
@@ -2446,6 +2465,8 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("RadioModel.rfKitEnabled"),
         // R-R3-49: likewise the Core's transmit state; it never keys here.
         QByteArrayLiteral("RadioModel.transmitting"),
+        // R-R3-49 (parity Task 6): likewise the Core's TX inhibit.
+        QByteArrayLiteral("RadioModel.txInhibited"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),
         QByteArrayLiteral("SliceModel.signalAverageDbm"),
