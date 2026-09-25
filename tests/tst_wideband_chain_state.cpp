@@ -314,9 +314,23 @@ private slots:
     // loop takes EP6 only (networkproto1.c:181-201 [v2.10.3.15]), and
     // NereusSDR has no P1 wideband receive path, so any board offering it
     // there buys a bypassed preselector and no stream.
+    //
+    // Driven through the model, not only through the table helper: a check
+    // of widebandAdcsFor alone could not fail, because that helper returns 0
+    // on Protocol 1 by construction. What matters is that the model refuses,
+    // so every row is stood into a RadioModel running Protocol 1 and asked
+    // for extended view, the way an_anan_100d_does_not_reach_extended_mode
+    // does for one board. A P2RadioConnection is injected on purpose: its
+    // cast is then no gate, and the only thing that can refuse is the
+    // protocol rule the two model readers take from widebandAdcsFor.
+    //
+    // The same harness on Protocol 2 must ENGAGE for every row that offers
+    // wideband there (and only for those), or the Protocol 1 refusals would
+    // prove nothing.
     void no_board_offers_wideband_while_running_protocol1()
     {
         int rows = 0;
+        int engagedOnP2 = 0;
         for (const BoardCapabilities& caps : BoardCapsTable::all()) {
             ++rows;
             QVERIFY2(BoardCapsTable::widebandAdcsFor(caps, ProtocolVersion::Protocol1) == 0,
@@ -326,8 +340,50 @@ private slots:
                     "arrives.")
                     .arg(caps.displayName)
                     .arg(BoardCapsTable::widebandAdcsFor(caps, ProtocolVersion::Protocol1))));
+
+            for (ProtocolVersion protocol : {ProtocolVersion::Protocol1,
+                                             ProtocolVersion::Protocol2}) {
+                P2RadioConnection conn;
+                RadioModel model;
+                model.injectConnectionForTest(&conn);
+                model.setHpsdrModelForTest(defaultModelForBoard(caps.board));
+                model.setBoardRowForTest(caps);
+                RadioInfo info;
+                info.protocol = protocol;
+                model.setLastRadioInfoForTest(info);
+                model.configureStreamPool(/*userDdcCount*/ 4, /*maxSlices*/ 4, 192000);
+
+                const int a = model.addSlice();
+                SliceModel* slice = model.sliceById(a);
+                QVERIFY(slice);
+                slice->setWidebandExtensionRequested(true);
+
+                const bool engaged = model.widebandActiveForChainForTest(0);
+                if (protocol == ProtocolVersion::Protocol1) {
+                    QVERIFY2(!engaged,
+                        qPrintable(QStringLiteral("%1 running Protocol 1 reached "
+                            "extended view: its preselector was bypassed for a "
+                            "wideband stream Protocol 1 never delivers.")
+                            .arg(caps.displayName)));
+                    QVERIFY2((cmdGeneralWbMask(conn) & 0xff) == 0x00,
+                        qPrintable(QStringLiteral("%1 running Protocol 1 set a "
+                            "wideband enable bit").arg(caps.displayName)));
+                } else {
+                    const bool offers = BoardCapsTable::widebandAdcsFor(caps, protocol) > 0;
+                    QVERIFY2(engaged == offers,
+                        qPrintable(QStringLiteral("%1 running Protocol 2: offers "
+                            "wideband %2, engaged %3").arg(caps.displayName)
+                            .arg(offers).arg(engaged)));
+                    if (engaged) { ++engagedOnP2; }
+                }
+                slice->setWidebandExtensionRequested(false);
+                model.injectConnectionForTest(nullptr);
+            }
         }
         QVERIFY2(rows > 0, "an empty table would pass this vacuously");
+        QVERIFY2(engagedOnP2 > 0,
+                 "no row engaged on Protocol 2 either, so the Protocol 1 "
+                 "refusals above prove nothing about the protocol gate");
     }
 
     // The consequence at the model level, for the board that carried the bad

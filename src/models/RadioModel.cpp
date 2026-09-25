@@ -14947,11 +14947,17 @@ void RadioModel::wireWidebandConnection()
 
 std::optional<double> RadioModel::widebandAdcRateHz(int adc) const
 {
+    // The protocol gate is BoardCapsTable::widebandAdcsFor's, not a second
+    // copy of it here: it gives 0 on Protocol 1 for every row, which is what
+    // tst_wideband_chain_state's every-row invariant drives through this
+    // model (plan Task 5). The P2RadioConnection cast is not a protocol rule;
+    // the wideband FFT engines exist only on that connection.
     if (role() != Role::Local || !isConnected()
-        || m_lastRadioInfo.protocol != ProtocolVersion::Protocol2
         || !qobject_cast<P2RadioConnection*>(m_connection)
         || adc < 0 || adc >= WidebandSpectrumCache::kMaxSources
-        || adc >= boardCapabilities().adcCount || adc >= boardCapabilities().widebandAdcs
+        || adc >= boardCapabilities().adcCount
+        || adc >= BoardCapsTable::widebandAdcsFor(boardCapabilities(),
+                                                  m_lastRadioInfo.protocol)
         || !m_widebandFftEngines[adc] || !m_widebandCaptureEpochs[adc]
         || m_widebandCaptureEpochs[adc]->load(std::memory_order_acquire) == 0) {
         return std::nullopt;
@@ -20011,7 +20017,6 @@ std::optional<RadioModel::WidebandDemandRoute>
 RadioModel::widebandDemandRoute(const SliceModel* slice) const
 {
     if (role() != Role::Local || m_widebandDemandRetiring
-        || m_lastRadioInfo.protocol != ProtocolVersion::Protocol2
         || !slice || sliceById(slice->sliceIndex()) != slice) {
         return std::nullopt;
     }
@@ -20022,8 +20027,12 @@ RadioModel::widebandDemandRoute(const SliceModel* slice) const
     const auto& caps = boardCapabilities();
     const int adc = adcForStream(stream);
     const int chain = chainForStream(stream);
+    // widebandAdcsFor carries the protocol gate: 0 on Protocol 1 for every
+    // row, the row's widebandAdcs on Protocol 2 (plan Task 5). One copy of
+    // the rule, which tst_wideband_chain_state drives for every row.
     if (adc < 0 || adc >= WidebandSpectrumCache::kMaxSources
-        || adc >= caps.adcCount || adc >= caps.widebandAdcs
+        || adc >= caps.adcCount
+        || adc >= BoardCapsTable::widebandAdcsFor(caps, m_lastRadioInfo.protocol)
         || chain < 0 || chain >= 2 || chain >= caps.rxFilterChainCount) {
         return std::nullopt;
     }

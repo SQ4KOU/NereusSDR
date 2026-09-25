@@ -2710,6 +2710,13 @@ public:
         applyHpsdrModel(m);
     }
 
+    // Stand in an exact capability-table row (for invariants over every row
+    // of BoardCapsTable::all(), including rows no HPSDRModel resolves to).
+    void setBoardRowForTest(const BoardCapabilities& caps) {
+        m_testWidebandCaps = caps;
+        reconcileWidebandDemand();
+    }
+
     // Synthetic routing topology for ADC-versus-filter-chain regressions.
     // Copies the selected profile; it does not change any production SKU.
     void setWidebandTopologyForTest(int adcCount, int widebandAdcs, int chains) {

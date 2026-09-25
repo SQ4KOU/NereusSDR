@@ -508,8 +508,10 @@ const BoardCapabilities kAngelia = {
     //   private bool _wb_caused_alex_hpf_bypass = false; //[2.10.3.7]MW0LGE fixes #529
     //   [original inline comment from console.cs:43545, the flag the handler sets]
     // (The row read 0 from 2026-07-30, Codex review round 5, PR #293, when
-    // it described Protocol 1 only; the protocol gate now lives in
-    // widebandAdcsFor, so a Protocol 1 connection still gets none.)
+    // it described Protocol 1 only. The protocol gate is
+    // BoardCapsTable::widebandAdcsFor, and RadioModel's two wideband readers,
+    // widebandDemandRoute and widebandAdcRateHz, go through it, so a
+    // Protocol 1 connection still gets none.)
     .widebandAdcs     = 1,
     // Every rate the board reaches on either protocol. Protocol 1 trims to
     // 48/96/192 kHz, Protocol 2 keeps all six:
@@ -586,8 +588,10 @@ const BoardCapabilities kOrion = {
     //   private bool _wb_caused_alex_hpf_bypass = false; //[2.10.3.7]MW0LGE fixes #529
     //   [original inline comment from console.cs:43545, the flag the handler sets]
     // (The row read 0 from 2026-07-30, Codex review round 5, PR #293, when
-    // it described Protocol 1 only; the protocol gate now lives in
-    // widebandAdcsFor, so a Protocol 1 connection still gets none.)
+    // it described Protocol 1 only. The protocol gate is
+    // BoardCapsTable::widebandAdcsFor, and RadioModel's two wideband readers,
+    // widebandDemandRoute and widebandAdcRateHz, go through it, so a
+    // Protocol 1 connection still gets none.)
     .widebandAdcs     = 1,
     // Every rate the board reaches on either protocol. Protocol 1 trims to
     // 48/96/192 kHz, Protocol 2 keeps all six:
