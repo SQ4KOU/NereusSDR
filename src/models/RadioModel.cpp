@@ -4892,7 +4892,7 @@ void RadioModel::wireTransmitProcessingChain()
     }
 }
 
-// F.1 — txaFlushed: the TX channel stops, and PureSignal hears the radio
+// F.1, txaFlushed: the TX channel stops, and PureSignal hears the radio
 // is back on receive. Moved out of connectToRadioImpl (group B fix wave)
 // so a test can wire it against a test channel.
 void RadioModel::wireTxaFlushed()

@@ -10600,7 +10600,7 @@ void MainWindow::wireSliceToSpectrum()
     // nothing downstream reads.
     // Phase 3F closeout — AntennaPickerMenu pick forwards to SliceModel::setRxAntenna.
 
-    // Phase 3P-I-b T9 — VFO BYPS button ↔ AlexController::rxOutOnTx.
+    // Phase 3P-I-b T9: VFO BYPS button ↔ AlexController::rxOutOnTx.
     // Group B fix wave: through the Alex facade, the Core's in a remote
     // window (see createSliceFlag).
     connect(m_radioModel->alexAntennaFacade(), &AlexAntennaFacade::rxOutOnTxChanged,
