@@ -208,7 +208,7 @@ void TwoToneController::setActive(bool on)
         m_rejectSettleTimer.stop();
 
         // ── Stage 2a: if TUN is on, turn it off first.  Porting from Thetis
-        //     console.cs:44805-44813 [v2.10.3.15] — chk2TONE_CheckedChanged,
+        //     console.cs:44805-44813 [v2.10.3.15], chk2TONE_CheckedChanged,
         //     original C# logic:
         //       // stop tune if currently running and we want to run 2tone
         //       if (chk2TONE.Checked && chkTUN.Checked)
