@@ -182,6 +182,15 @@ public:
     /// answer before it says "Waiting for the Core". A Core that answers
     /// within this (the usual case at session start) never flashes the line.
     static constexpr int kPanWaitingGraceMs = 2000;
+    /// The display planner runs this often while a media session is live
+    /// (and on every budget change and allocation answer).
+    static constexpr int kPlannerIntervalMs = 100;
+    /// Fix wave 3 (the several-devices re-review's Minor 3): how long pans
+    /// must keep their widths before a resize that made them wider asks the
+    /// Core again for what the operator wants: two of the planner's ticks
+    /// (kPlannerIntervalMs), so a drag, whose steps come far faster, asks
+    /// once when it stops, not at every step.
+    static constexpr int kResizeSettleMs = 2 * kPlannerIntervalMs;
     /// R-R3-37: what the pan named `panId` was last told about its remote
     /// display, including its zoom-detail limit. The pan paints
     /// buildPanStatusText() of this.

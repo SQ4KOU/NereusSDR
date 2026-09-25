@@ -613,10 +613,21 @@ struct RemoteMediaController::Private {
     /// wanted quality; a refusal for the budget (answered by the smaller
     /// share the Core publishes with it) ends the ask, and the planner plans
     /// inside the share again. It asks again whenever what the operator
-    /// wants grows (a new pan, a wider or faster one): wantedCharge is the
-    /// charge of the displays wanted at the last plan.
+    /// wants grows (a new pan, a wider or faster one; a resize once it
+    /// settles, fix wave 3) and when the transmit holder changes
+    /// (setTransmitHolder): wantedCharge is the charge of the displays
+    /// wanted at the last plan.
     bool askingWanted = false;
     DisplayBudgetCharge wantedCharge;
+    /// Fix wave 3 (Minor 3): the displays wanted at the last plan, and a
+    /// resize's growth waiting to settle before it asks: the wanted charge
+    /// before the resize began, and when a width last moved.
+    QList<RemoteDisplayIntent> wantedIntents;
+    struct ResizeAsk {
+        DisplayBudgetCharge base;
+        qint64 movedAtMs = 0;
+    };
+    std::optional<ResizeAsk> resizeAsk;
     /// Fix wave 3: the transmit holder last notified (setTransmitHolder);
     /// a change asks again. Kept across media sessions: it is the station's.
     quint64 holderEpoch = 0;
@@ -797,7 +808,7 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         if (!d->preparingAudio) { requestAudio(); }
     });
     d->timer = new QTimer(this);
-    d->timer->setInterval(100);
+    d->timer->setInterval(kPlannerIntervalMs);
     connect(d->timer, &QTimer::timeout, this, &RemoteMediaController::refreshSubscriptions);
     connect(client, &StationClient::displayBudgetChanged, this, [this] {
         if (!d->client) { return; }
@@ -1565,6 +1576,8 @@ void RemoteMediaController::stop()
     d->cachedAllocationError.clear();
     d->askingWanted = false;
     d->wantedCharge = {};
+    d->wantedIntents.clear();
+    d->resizeAsk.reset();
     if (d->peer) {
         MediaPeer* old = d->peer;
         d->peer = nullptr;
@@ -2345,10 +2358,47 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         }
         const DisplayBudgetCharge wanted =
             sumDisplayCharges(wantedCharges).value_or(DisplayBudgetCharge{});
+        // Fix wave 3 (Minor 3): a resize (the same pans at the same frame
+        // rates, only their widths changed) asks once its widths have
+        // settled for kResizeSettleMs, not at every step of a drag; any
+        // other growth asks at once.
+        bool sameDisplays = !d->wantedIntents.isEmpty()
+            && d->wantedIntents.size() == intents.size();
+        bool widthsMoved = false;
+        for (qsizetype i = 0; sameDisplays && i < intents.size(); ++i) {
+            const RemoteDisplayIntent& was = d->wantedIntents.at(i);
+            const RemoteDisplayIntent& is = intents.at(i);
+            sameDisplays = was.panId == is.panId && was.fps == is.fps
+                && was.includeWidePlane == is.includeWidePlane;
+            widthsMoved = widthsMoved || was.pixels != is.pixels;
+        }
+        if (d->resizeAsk && !sameDisplays) {
+            // The displays changed shape mid-resize: the resize's growth is
+            // asked for now, with whatever else changed.
+            if (!nonIncreasing(wanted, d->resizeAsk->base)) {
+                d->askingWanted = true;
+            }
+            d->resizeAsk.reset();
+        } else if (d->resizeAsk && widthsMoved) {
+            d->resizeAsk->movedAtMs = now;
+        }
         if (!nonIncreasing(wanted, d->wantedCharge)) {
-            d->askingWanted = true;
+            if (sameDisplays) {
+                if (!d->resizeAsk) {
+                    d->resizeAsk = Private::ResizeAsk{d->wantedCharge, now};
+                }
+            } else {
+                d->askingWanted = true;
+            }
+        }
+        if (d->resizeAsk && now - d->resizeAsk->movedAtMs >= kResizeSettleMs) {
+            if (!nonIncreasing(wanted, d->resizeAsk->base)) {
+                d->askingWanted = true;
+            }
+            d->resizeAsk.reset();
         }
         d->wantedCharge = wanted;
+        d->wantedIntents = intents;
     }
     const bool askWanted = d->askingWanted && !retainedPs3ExceedsCap;
     // While asking, plan without the share: every pan at its wanted quality.

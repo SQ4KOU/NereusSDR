@@ -1628,7 +1628,12 @@ then detail, then the active pan, down to one pan at 256 pixels and 10 frames a 
 subscribes again, and what it subscribes then is its request. The demand the Core records is
 therefore what each device asked for, and the split is fair. A planner asks again when what the
 operator wants grows (a pan added, a pan made wider or faster), and when the transmit holder
-changes (fix wave 3, the re-review's Important 2):
+changes (fix wave 3, the re-review's Important 2). A pan made wider by a resize (the same pans at
+the same frame rates, only their widths changed) asks once the widths have stayed put for
+`RemoteMediaController::kResizeSettleMs`, 200 ms, two of the desktop planner's 100 ms ticks
+(`kPlannerIntervalMs`), so a window dragged wider asks once when the drag stops, not at every
+step (fix wave 3, the re-review's Minor 3); any other growth asks at once. The holder changes that
+ask:
 
 - this device becomes the present holder (it takes transmit, or comes back from away holding it):
   rule 1 gives a holder its whole request, and its request is the plan it made inside its old
@@ -1656,7 +1661,9 @@ it.
   it**, and replaces the Core's test seam `StationServer::setDisplayBudgetHolderForTest` with
   `TransmitHolder`'s holder in `splitDisplayBudget`.
 - The phone's planner, `DisplayQualityAllocator` (phone Task 52), must do the same: at the start
-  of its media session, whenever the displays the operator wants grow, and whenever `txState`'s
+  of its media session, whenever the displays the operator wants grow (a pane widened by a
+  resize or a rotation once its width has held for 200 ms, not at every step), and whenever
+  `txState`'s
   `holderEpoch` or `holderAway` changes (it takes transmit, the holder changes, a holder lets go or
   goes away), subscribe every visible pane at its wanted pixels and frame rate; on an
   `allocation-result` refused with the reason
