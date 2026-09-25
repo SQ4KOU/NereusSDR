@@ -129,6 +129,7 @@ class DisplayLoadGovernor;
 class SharedHostSampler;
 class SliceModel;
 class StepAttenuatorController;
+class TxAnalyzer;
 
 // Connects a headless nereusd process to a radio and keeps its slice list
 // in sync with the resolved DaemonConfig. See the file header above for
@@ -217,6 +218,10 @@ public:
     // production code never asks, because start()/stop() own the lifetime
     // and start() already logs whether the listener came up.
     StationServer* stationServer() const { return m_stationServer.get(); }
+
+    // R-R3-39 / R-IOS-03: the running RadioModel (nullptr before start() and
+    // after stop()), so a test can key the model the daemon builds.
+    RadioModel* radioModelForTest() const { return m_radioModel.get(); }
 
     void setStationListenRetryIntervalsForTest(int initialMs, int maximumMs)
     {
@@ -408,6 +413,14 @@ private:
     // no special-casing is needed for that.
     void clearFftTopology();
 
+    // R-R3-39 / R-IOS-03: creates the Core's TX analyzer and runs it on the
+    // MOX edge as the desktop does. Called from start() after the model.
+    void createTxAnalyzer();
+
+    // R-R3-39 / R-IOS-03: the desktop's TX analyzer (display 5, fed by the
+    // TX siphon). Declared before m_radioModel so it outlives the model, as
+    // stop() also keeps: the model's TX channel closes first.
+    std::unique_ptr<TxAnalyzer> m_txAnalyzer;
     std::unique_ptr<RadioModel> m_radioModel;
     DaemonConfig m_radioConfig;
     QString m_selectedRadioMac;

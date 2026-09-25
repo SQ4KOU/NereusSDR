@@ -39,6 +39,10 @@
 //                 (runWdsp) and the poll's pixels come back through
 //                 DspControlThread::request. AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-25 : R-R3-39 / R-IOS-03 by J.J. Boyd (KG4VCF): applyStationRates()
+//                 holds the rate and frame rate MainWindow set, so nereusd
+//                 sets up its analyzer the same way. AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxAnalyzer.h"
@@ -215,6 +219,15 @@ void TxAnalyzer::setOutputFps(int fps)
         applySetAnalyzer();
     }
 #endif
+}
+
+void TxAnalyzer::applyStationRates()
+{
+    // TX dsp_rate = 96 kHz per WdspEngine::kTxDspSampleRate (= cmaster.c:182
+    // [v2.10.3.13] hardcoded 96000). The siphon at TXA.c:586 delivers
+    // dsp_size = 4096 complex samples per fexchange0 cycle at this rate.
+    setSampleRate(96000.0);
+    setOutputFps(15);  // Thetis frame_rate default per specHPSDR.cs:335 [v2.10.3.13+501e3f51]
 }
 
 void TxAnalyzer::start()

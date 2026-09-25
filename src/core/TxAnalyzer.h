@@ -59,6 +59,10 @@
 //                 GetPixels, destroy) runs there; the poll hands the pixels
 //                 back to this object's thread. AI-assisted implementation
 //                 via Anthropic Claude Code.
+//   2026-09-25 : R-R3-39 / R-IOS-03 by J.J. Boyd (KG4VCF): applyStationRates(),
+//                 the rate and frame rate the desktop window and nereusd
+//                 both give their TX analyzer. AI-assisted implementation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -158,6 +162,11 @@ public:
     /// analyzer overlap calculation per specHPSDR.cs:784 [v2.10.3.13+501e3f51].
     /// Default 15 fps per specHPSDR.cs:335 [v2.10.3.13+501e3f51].
     void setOutputFps(int fps);
+
+    /// The station's set-up of this analyzer, shared by the desktop window
+    /// and nereusd so the two cannot drift: the TX DSP rate (96 kHz, see
+    /// setSampleRate) and Thetis's 15 frames a second (setOutputFps).
+    void applyStationRates();
 
     /// Begin polling GetPixels at outputFps.  Called by MainWindow on
     /// MOX-up.  No-op if already running.

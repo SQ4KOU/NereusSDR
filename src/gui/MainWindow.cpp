@@ -131,6 +131,10 @@
 //   2026-09-25 - R-R3-39 (station Task 32): the TX analyzer runs its WDSP
 //                calls on the model's transmit lane. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39 / R-IOS-03: the TX analyzer's rate and frame rate
+//                come from TxAnalyzer::applyStationRates, shared with
+//                nereusd. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -4583,11 +4587,9 @@ void MainWindow::buildUI()
         // R-R3-39: its WDSP calls run on the transmit lane, not here.
         m_txAnalyzer = new TxAnalyzer(TxAnalyzer::kTxDispId, this,
                                       m_radioModel->transmitLane());
-        // TX dsp_rate = 96 kHz per WdspEngine::kTxDspSampleRate (= cmaster.c:182
-        // [v2.10.3.13] hardcoded 96000). The siphon at TXA.c:586 delivers
-        // dsp_size = 4096 complex samples per fexchange0 cycle at this rate.
-        m_txAnalyzer->setSampleRate(96000.0);
-        m_txAnalyzer->setOutputFps(15);  // Thetis frame_rate default per specHPSDR.cs:335 [v2.10.3.13+501e3f51]
+        // TX dsp_rate 96 kHz and Thetis's 15 fps; nereusd (DaemonApp) gives
+        // its analyzer the same set-up.
+        m_txAnalyzer->applyStationRates();
         // Phase 3M-5d: expose TxAnalyzer on RadioModel so Setup Display TX
         // page can reach it without depending on MainWindow.
         m_radioModel->setTxAnalyzer(m_txAnalyzer);

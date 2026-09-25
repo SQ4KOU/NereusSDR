@@ -41,6 +41,8 @@
 #include "core/TxChannel.h"
 #include "core/WdspEngine.h"
 #include "core/WdspThreadCheck.h"
+#include "core/daemon/DaemonApp.h"
+#include "core/daemon/DaemonConfig.h"
 #include "core/wdsp_api.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -183,6 +185,17 @@ private:
     TimedLog* m_log{nullptr};
     std::atomic<int> m_txBlocks{0};
 };
+
+// WDSP's analyzer table (third_party/wdsp/src/analyzer.c: DP pdisp[]).
+// XCreateAnalyzer fills a slot; Spectrum0 dereferences it unchecked.
+extern "C" {
+extern void* pdisp[];
+}
+
+bool wdspDisplayExists(int disp)
+{
+    return pdisp[disp] != nullptr;
+}
 
 // A thread that calls `tick` about once a millisecond until stopped.
 class Feeder {
@@ -397,6 +410,93 @@ private slots:
         QVERIFY(rig.model->waitForTransmitLaneForTest(kLaneIdleTimeoutMs));
         txFeeder.stop();
         rxFeeder.stop();
+    }
+
+    // R-R3-39, R-IOS-03: a Core keys without crashing. createTxChannel
+    // points the TX siphon at analyzer display 5 (TXASetSipMode 1,
+    // TXASetSipDisplay 5), and only the desktop's TxAnalyzer created it;
+    // nereusd has no MainWindow, so its first keyed block dereferenced
+    // pdisp[5] == NULL in Spectrum0 (analyzer.c). The model DaemonApp
+    // builds now has the desktop's TX analyzer: display 5 exists before the
+    // first block, the analyzer runs while keyed, and keyed blocks go
+    // through the siphon without a crash.
+    void aCoreKeysWithoutCrashing()
+    {
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(DaemonConfig::defaults()));
+        RadioModel* model = app.radioModelForTest();
+        QVERIFY(model != nullptr);
+        QVERIFY(model->transmitLane() != nullptr);
+        QVERIFY(model->waitForTransmitLaneForTest(kLaneIdleTimeoutMs));
+
+        // nereusd refuses transmit today (a receive-only station policy,
+        // which remote transmit lifts); lifted here to key the Core's own
+        // model the way a remote key will.
+        model->setReceiveOnlyStationPolicy(false);
+        model->setCapsForTest(/*hasAlex=*/false);
+        MockConnection conn(nullptr);
+        model->injectConnectionForTest(&conn);
+        model->setTuneOffSettleMsForTest(0);
+        if (SliceModel* slice = model->activeSlice()) {
+            slice->setDspMode(DSPMode::USB);
+            slice->setFrequency(14'200'000.0);
+        }
+        WdspEngine* engine = model->wdspEngine();
+        engine->m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+        TxChannel* tx = engine->createTxChannel(kTxId, kTxInSize,
+                                                WdspEngine::kTxDspBufferSize, kRateHz,
+                                                WdspEngine::kTxDspSampleRate, kRateHz);
+        QVERIFY(tx != nullptr);
+        QVERIFY(model->waitForTransmitLaneForTest(kLaneIdleTimeoutMs));
+        tx->setConnection(&conn);
+        model->injectTxChannelForTest(tx);
+        model->wireTxChannelKeyingForTest();
+        QVERIFY(model->waitForTransmitLaneForTest(kLaneIdleTimeoutMs));
+
+        // Keyed blocks: each is recorded with whether display 5 existed as
+        // it went through the siphon.
+        std::atomic<int> keyedBlocks{0};
+        std::atomic<int> keyedBlocksWithoutDisplay{0};
+        std::function<void()> block = txBlockTick(tx);
+        Feeder feeder([&]() {
+            const bool keyed = tx->isRunning();
+            const bool display = wdspDisplayExists(TxAnalyzer::kTxDispId);
+            block();
+            if (keyed) {
+                keyedBlocks.fetch_add(1);
+                if (!display) {
+                    keyedBlocksWithoutDisplay.fetch_add(1);
+                }
+            }
+        });
+
+        QString rejected;
+        connect(model->moxController(), &MoxController::moxRejected, this,
+                [&rejected](const QString& reason) { rejected = reason; });
+        model->moxController()->setMox(true);
+        QVERIFY2(rejected.isEmpty(), qPrintable(rejected));
+        QTRY_VERIFY_WITH_TIMEOUT(tx->isRunning(), 30000);
+        // About 32 input blocks of 64 samples at 48 kHz per 4096-sample DSP
+        // block at 96 kHz: several DSP blocks, each through the siphon.
+        QTRY_VERIFY_WITH_TIMEOUT(keyedBlocks.load() >= 400, 60000);
+        QVERIFY(model->txAnalyzer() != nullptr);
+        QVERIFY(model->txAnalyzer()->isRunning());
+        QCOMPARE(model->txAnalyzer()->blockSize(), tx->dspBlockFrames());
+
+        model->moxController()->setMox(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!tx->isRunning(), 5000);
+        QVERIFY(model->waitForTransmitLaneForTest(kLaneIdleTimeoutMs));
+        feeder.stop();
+        QVERIFY(!model->txAnalyzer()->isRunning());
+        QCOMPARE(keyedBlocksWithoutDisplay.load(), 0);
+
+        tx->setConnection(nullptr);
+        model->injectTxChannelForTest(nullptr);
+        engine->shutdown();
+        model->injectConnectionForTest(nullptr);
+        app.stop();
+        QVERIFY(app.radioModelForTest() == nullptr);
     }
 
     // Twenty key and unkey cycles (MOX, TUNE and two-tone in turn) with
