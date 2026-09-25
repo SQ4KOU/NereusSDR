@@ -87,6 +87,18 @@
 //                names the Core only on a Core (NereusSDR in a window with
 //                no Core); stale slice-limit comments corrected.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7: setMoxFromButton
+//                (Thetis chkMOX_Click, console.cs:29730-29747 [v2.10.3.15])
+//                for the MOX buttons, and setMox, the TCI trx shim, now keys
+//                through MoxController::onTciPtt with PttMode::Tci under the
+//                PollPTT rules instead of always acting. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7 fix wave:
+//                applyTxKeyBlock (TX inhibit and the PA trip gate every
+//                key, console.cs:15341-15363 and 25470 [v2.10.3.15]); setMox
+//                passes every TCI release on; teardown unkeys; the MOX
+//                button completes a pending TUN-off before keying.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
