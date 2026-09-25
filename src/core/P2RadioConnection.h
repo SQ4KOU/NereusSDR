@@ -245,6 +245,7 @@ public slots:
     void setHpfBypassOnTx(bool on) override;
     void setHpfBypassOnPs(bool on) override;
     void setAlexHpfBypass(bool on) override;
+    void setDisable6mLna(bool onRx, bool onTx) override;
     void setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot) override;
     void setActiveReceiverCount(int count) override;
     void setSampleRate(int sampleRate) override;

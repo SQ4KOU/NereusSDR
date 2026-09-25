@@ -1492,6 +1492,22 @@ void P2RadioConnection::setAlexHpfBypass(bool on)
 }
 
 // ---------------------------------------------------------------------------
+// setDisable6mLna: "Disable 6m LNA on RX / TX" (plan Task 14 fix wave). Sent
+// at once: Thetis's setters re-apply the high-pass (console.cs:18719-18751
+// Disable6mLNAonRX / Disable6mLNAonTX [v2.10.3.15]).
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setDisable6mLna(bool onRx, bool onTx)
+{
+    if (onRx == m_disable6mLnaOnRx && onTx == m_disable6mLnaOnTx) {
+        return;
+    }
+    RadioConnection::setDisable6mLna(onRx, onTx);
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // setReceiverVfoFrequencies: each DDC's slice VFO, for the OC band.
 // ---------------------------------------------------------------------------
 void P2RadioConnection::setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot)
@@ -3073,6 +3089,8 @@ CodecContext P2RadioConnection::buildCodecContext() const
     //     if (_mox && disable_hpf_on_tx)
     //     { NetworkIO.SetAlexHPFBits(0x20); ... return; }
     // "HPF Bypass" (fix wave): 0x20 keyed or not (console.cs:6850-6855).
+    // "Disable 6m LNA on RX / TX" (fix wave): on 6 m the BPF/LNA (0x40)
+    // becomes 0x20 (console.cs:6935, 7050).
     //
     // SetAlexHPFBits writes prbpfilter (Alex0) only (netInterface.c:604-621
     // [v2.10.3.15]); Alex1's high-pass is not touched. Alex1 mirrors Alex0's

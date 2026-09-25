@@ -17,7 +17,7 @@
 //                Anthropic Claude Code.
 //   2026-09-25: applyAlex1HpfSwitches: the Alex tab's high-pass
 //                switches (HPF Bypass on TX, HPF Bypass on PureSignal
-//                feedback, HPF Bypass) applied to the RX1 high-pass word as Thetis's
+//                feedback, HPF Bypass, Disable 6m LNA on RX / TX) applied to the RX1 high-pass word as Thetis's
 //                setAlexHPF / setBPF1ForOrionIISaturn apply them. Plan
 //                Task 14 fix wave (R-R3-49). J.J. Boyd (KG4VCF), with
 //                AI-assisted transformation via Anthropic Claude Code.
@@ -186,12 +186,14 @@ double receiveLpfFrequencyMhz(double rx1Mhz, double rx2Mhz,
                               bool rx2Live, bool rx2PreampPresent) noexcept;
 
 // The Alex tab's high-pass switches, as Thetis holds them on the console.
-// Defaults are Thetis's console fields (console.cs:18753 and 18764
-// [v2.10.3.15]); what the Setup tab saves is handed in by RadioModel.
+// Defaults are Thetis's console fields (console.cs:18719, 18741, 18753,
+// 18764 and 18793 [v2.10.3.15]); what the Setup tab saves is handed in by RadioModel.
 struct Alex1HpfSwitches {
     bool hpfBypassOnTx {false};   // chkDisableHPFonTX  -> disable_hpf_on_tx
     bool hpfBypassOnPs {false};   // chkDisableHPFonPSb -> disable_hpf_on_ps
     bool hpfBypass     {false};   // chkAlexHPFBypass   -> alex_hpf_bypass
+    bool disable6mLnaOnRx {false};  // chkDisable6mLNAonRX -> disable_6m_lna_on_rx
+    bool disable6mLnaOnTx {true};   // chkDisable6mLNAonTX -> disable_6m_lna_on_tx
 };
 
 // The RX1 high-pass word (Alex0, SetAlexHPFBits) after those switches.
@@ -209,6 +211,12 @@ struct Alex1HpfSwitches {
 //   if (alex_hpf_bypass)
 //   { NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF ... return; }
 // (setBPF1ForOrionIISaturn has the same at 6965-6970), keyed or not.
+// On 6 m, where the selection is the BPF/LNA (0x40):
+// From Thetis console.cs:6935 setAlexHPF [v2.10.3.15]
+//   if (alex6bphpf_bypass || disable_6m_lna_on_rx || (_mox && disable_6m_lna_on_tx))
+//   { NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
+// (setBPF1ForOrionIISaturn: console.cs:7050).
+
 // The PureSignal arm exists only in the band-pass function, which Thetis
 // runs for Orion MkII, Saturn and HermesC10 alone (usesBpf1Preselector,
 // console.cs:6827-6837 setAlex1HPF [v2.10.3.15]).

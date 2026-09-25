@@ -1518,9 +1518,9 @@ quint8 P1RadioConnection::effectiveAlexHpfBits() const
                                 ? static_cast<quint8>(m_alexRxHpfOverride)
                                 : m_alexHpfBits;
     // The Alex tab's high-pass switches (plan Task 14 and its fix wave):
-    // HPF Bypass on TX, HPF Bypass, and on the band-pass boards HPF Bypass
-    // on PureSignal feedback. Thetis, for both the high-pass and the
-    // band-pass boards:
+    // HPF Bypass on TX, HPF Bypass, Disable 6m LNA on RX / TX, and on the
+    // band-pass boards HPF Bypass on PureSignal feedback. Thetis, for both
+    // the high-pass and the band-pass boards:
     //   From Thetis console.cs:6841-6848 [v2.10.3.15] (setAlexHPF)
     //     if (alexpresent && !initializing)
     //     {

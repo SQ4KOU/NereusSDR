@@ -28,6 +28,18 @@
 //     if (alex_hpf_bypass) { NetworkIO.SetAlexHPFBits(0x20); ... return; }
 // keyed or not, on every Alex board.
 //
+// Disable 6m LNA on TX / on RX (chkDisable6mLNAonTX, default on, and
+// chkDisable6mLNAonRX):
+//   From Thetis setup.cs:15340-15350 [v2.10.3.15]
+//     console.Disable6mLNAonTX = ...; console.Disable6mLNAonRX = ...;
+//   From Thetis console.cs:18719-18751 [v2.10.3.15] (each setter re-applies)
+//   (inline attribution at console.cs:18731, verbatim:
+//     HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM)
+//   From Thetis console.cs:6931-6936 and 7046-7051 [v2.10.3.15]
+//     if (alex6bphpf_bypass || disable_6m_lna_on_rx || (_mox && disable_6m_lna_on_tx))
+//     { NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
+// in place of the 6 m BPF/LNA selection (0x40), on the band's own branch.
+//
 // Each switch is driven from the Setup tab on the Core, and from a remote
 // window's write arriving at the Core (scheduleRemoteHardwareApply).
 // =================================================================
@@ -50,6 +62,8 @@ namespace {
 
 const QString kMac = QStringLiteral("AA:BB:CC:DD:EE:15");
 constexpr quint64 k40mHz = 7100000ULL;
+constexpr quint64 k6mHz  = 50125000ULL;
+constexpr quint8  k6mLna = 0x40;
 constexpr quint8  kBypass = 0x20;
 
 class ConnectedP1 final : public P1RadioConnection {
@@ -353,6 +367,111 @@ private slots:
                  kBypass);  // the rule itself would bypass...
         conn.setAlexHpfBypass(true);
         QCOMPARE(p1Hpf(conn), before);  // ...but the HL2 has no Alex board
+    }
+    // ── Disable 6m LNA on TX / on RX, both protocols ─────────────────────
+    void sixMetreLna_followsTheSetupTab_data()
+    {
+        QTest::addColumn<int>("protocol");
+        QTest::addColumn<int>("board");
+        QTest::newRow("P1 Angelia (high-pass ladder)") << 1 << int(HPSDRHW::Angelia);
+        QTest::newRow("P1 Orion MkII (band-pass)")     << 1 << int(HPSDRHW::OrionMKII);
+        QTest::newRow("P2 Saturn (G2)")                << 2 << int(HPSDRHW::Saturn);
+        QTest::newRow("P2 Orion (ANAN-200D)")          << 2 << int(HPSDRHW::Orion);
+    }
+    void sixMetreLna_followsTheSetupTab()
+    {
+        QFETCH(int, protocol);
+        QFETCH(int, board);
+        const HPSDRHW hw = HPSDRHW(board);
+        ConnectedP1 p1;
+        ConnectedP2 p2;
+        RadioConnection* conn = nullptr;
+        auto tune = [&](quint64 hz) {
+            if (protocol == 1) { p1.setReceiverFrequency(0, hz); }
+            else               { p2.setReceiverFrequency(2, hz); }
+        };
+        if (protocol == 1) { p1.setBoardForTest(hw); conn = &p1; }
+        else               { p2.setBoardForTest(hw); conn = &p2; }
+        tune(k6mHz);
+        auto hpf = [&]() { return protocol == 1 ? p1Hpf(p1) : p2Alex0Hpf(p2); };
+
+        RadioModel model;
+        prepareCore(model, hw, conn);
+        AntennaAlexAlex1Tab tab(&model);
+        tab.restoreSettings(kMac);
+        QCheckBox* onTx = boxNamed(tab, QStringLiteral("Disable 6m LNA on TX"));
+        QCheckBox* onRx = boxNamed(tab, QStringLiteral("Disable 6m LNA on RX"));
+        QVERIFY(onTx && onRx);
+        QVERIFY(onTx->isChecked());   // Thetis's defaults
+        QVERIFY(!onRx->isChecked());
+        // The tab applies what it restored; the connection's own defaults
+        // are Thetis's too.
+        model.applyAlexHpfSwitchSettings();
+
+        // Receiving on 6 m the LNA is in.
+        QCOMPARE(hpf(), k6mLna);
+        // Keyed, the TX switch (on) bypasses it.
+        conn->setMox(true);
+        QCOMPARE(hpf(), kBypass);
+        // Off: keyed keeps the LNA.
+        onTx->setChecked(false);
+        QCOMPARE(hpf(), k6mLna);
+        conn->setMox(false);
+
+        // The RX switch bypasses it receiving, keyed or not.
+        onRx->setChecked(true);
+        QCOMPARE(hpf(), kBypass);
+        conn->setMox(true);
+        QCOMPARE(hpf(), kBypass);
+        conn->setMox(false);
+
+        // Off 6 m neither switch changes the band's filter.
+        onTx->setChecked(true);
+        tune(k40mHz);
+        const quint8 filtered = codec::alex::computeRxPreselector(k40mHz / 1e6, hw);
+        QCOMPARE(hpf(), filtered);
+        conn->setMox(true);
+        QCOMPARE(hpf(), filtered);
+        conn->setMox(false);
+
+        onRx->setChecked(false);
+        model.injectConnectionForTest(nullptr);
+    }
+
+    // ── Disable 6m LNA on RX from a remote window ────────────────────────
+    void sixMetreLna_remoteWindowWrite_reachesTheCore()
+    {
+        ConnectedP2 conn;
+        conn.setBoardForTest(HPSDRHW::Saturn);
+        conn.setReceiverFrequency(2, k6mHz);
+        QCOMPARE(p2Alex0Hpf(conn), k6mLna);
+
+        RadioModel core;
+        prepareCore(core, HPSDRHW::Saturn, &conn);
+        QStringList reloads;
+        core.setHardwareApplyObserverForTest([&reloads](const QString& name) { reloads << name; });
+
+        const QString key =
+            QStringLiteral("hardware/%1/alex/master/disable6mLnaOnRx").arg(kMac);
+        AppSettings::instance().setValue(key, QStringLiteral("True"));
+        core.scheduleRemoteHardwareApply(key);
+        QTRY_COMPARE(reloads, QStringList{QStringLiteral("alex")});
+        QCOMPARE(p2Alex0Hpf(conn), kBypass);
+
+        const QString txKey =
+            QStringLiteral("hardware/%1/alex/master/disable6mLnaOnTx").arg(kMac);
+        reloads.clear();
+        AppSettings::instance().setValue(key, QStringLiteral("False"));
+        AppSettings::instance().setValue(txKey, QStringLiteral("False"));
+        core.scheduleRemoteHardwareApply(key);
+        core.scheduleRemoteHardwareApply(txKey);
+        QTRY_COMPARE(reloads, QStringList{QStringLiteral("alex")});
+        QCOMPARE(p2Alex0Hpf(conn), k6mLna);
+        conn.setMox(true);
+        QCOMPARE(p2Alex0Hpf(conn), k6mLna);
+        conn.setMox(false);
+
+        core.injectConnectionForTest(nullptr);
     }
 };
 

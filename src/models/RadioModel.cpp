@@ -19046,6 +19046,10 @@ void RadioModel::scheduleRemoteHardwareApply(const QString& key)
                || rest.compare(QLatin1String("alex/master/hpfBypassOnPs"),
                                Qt::CaseInsensitive) == 0
                || rest.compare(QLatin1String("alex/master/hpfBypass"),
+                               Qt::CaseInsensitive) == 0
+               || rest.compare(QLatin1String("alex/master/disable6mLnaOnRx"),
+                               Qt::CaseInsensitive) == 0
+               || rest.compare(QLatin1String("alex/master/disable6mLnaOnTx"),
                                Qt::CaseInsensitive) == 0) {
         // Plan Task 14 and its fix wave: the Alex tab's high-pass switches,
         // applied to the connection.
@@ -19165,6 +19169,16 @@ void RadioModel::flushRemoteHardwareApply()
 //   From Thetis console.cs:18793-18803 [v2.10.3.15]
 //     public bool AlexHPFBypass
 //     { ... set { alex_hpf_bypass = value; double freq = VFOAFreq; setAlex1HPF(freq); ...
+//   From Thetis setup.cs:15340-15350 [v2.10.3.15]
+//     console.Disable6mLNAonTX = chkDisable6mLNAonTX.Checked;
+//     console.Disable6mLNAonRX = chkDisable6mLNAonRX.Checked;
+//   From Thetis console.cs:18719-18751 [v2.10.3.15]
+//     Disable6mLNAonRX / Disable6mLNAonTX { set { ...; setAlex1HPF(freq); ... } }
+//     (disable_6m_lna_on_rx = false, disable_6m_lna_on_tx = true)
+//   Disable6mLNAonRX also re-applies RX2's high-pass on the two-filter
+//   boards; setAlex2HPF has no 6 m LNA switch, so nothing changes there.
+//   Upstream inline attribution preserved verbatim (console.cs:18731):
+//     HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
 // Thetis also runs the PureSignal handler once at start-up
 // (setup.cs:1079), so the saved value applies from the first packet; here
 // the connect path calls this. The connection composes the high-pass word
@@ -19189,11 +19203,15 @@ void RadioModel::applyAlexHpfSwitchSettings()
     // Default True: chkDisableHPFonPSb.Checked = true (setup.designer.cs).
     const bool onPs = flag("alex/master/hpfBypassOnPs", "True");
     const bool bypass = flag("alex/master/hpfBypass", "False");
+    const bool lnaOffRx = flag("alex/master/disable6mLnaOnRx", "False");
+    // Default True: chkDisable6mLNAonTX.Checked = true (setup.designer.cs).
+    const bool lnaOffTx = flag("alex/master/disable6mLnaOnTx", "True");
     RadioConnection* conn = m_connection;
-    QMetaObject::invokeMethod(conn, [conn, onTx, onPs, bypass]() {
+    QMetaObject::invokeMethod(conn, [conn, onTx, onPs, bypass, lnaOffRx, lnaOffTx]() {
         conn->setHpfBypassOnTx(onTx);
         conn->setHpfBypassOnPs(onPs);
         conn->setAlexHpfBypass(bypass);
+        conn->setDisable6mLna(lnaOffRx, lnaOffTx);
     });
 }
 

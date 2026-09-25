@@ -17,7 +17,7 @@
 //                Anthropic Claude Code.
 //   2026-09-25: applyAlex1HpfSwitches: the Alex tab's high-pass
 //                switches (HPF Bypass on TX, HPF Bypass on PureSignal
-//                feedback, HPF Bypass) applied to the RX1 high-pass word as Thetis's
+//                feedback, HPF Bypass, Disable 6m LNA on RX / TX) applied to the RX1 high-pass word as Thetis's
 //                setAlexHPF / setBPF1ForOrionIISaturn apply them. Plan
 //                Task 14 fix wave (R-R3-49). J.J. Boyd (KG4VCF), with
 //                AI-assisted transformation via Anthropic Claude Code.
@@ -259,6 +259,21 @@ quint8 applyAlex1HpfSwitches(quint8 selected, NereusSDR::HPSDRHW board,
     //   {
     //       NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
     if (switches.hpfBypass) {
+        return kBypass;
+    }
+    // The 6 m branch, where the band's selection is the BPF/LNA (0x40):
+    //   From Thetis console.cs:6931-6936 [v2.10.3.15] (setAlexHPF), and the
+    //   same at 7046-7051 (setBPF1ForOrionIISaturn):
+    //     else if ((decimal)freq >= SetupForm.udAlex6BPFStart.Value && // 6m BPF/LNA
+    //              (decimal)freq <= SetupForm.udAlex6BPFEnd.Value)
+    //     {
+    //         if (alex6bphpf_bypass || disable_6m_lna_on_rx || (_mox && disable_6m_lna_on_tx))
+    //         {
+    //             NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
+    // The per-row 6 m bypass (alex6bphpf_bypass) is not handled here.
+    static constexpr quint8 k6mBpfLna = 0x40;
+    if (selected == k6mBpfLna
+        && (switches.disable6mLnaOnRx || (keyed && switches.disable6mLnaOnTx))) {
         return kBypass;
     }
     return selected;

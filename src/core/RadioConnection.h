@@ -455,7 +455,21 @@ public slots:
         sw.hpfBypassOnTx = m_hpfBypassOnTx;
         sw.hpfBypassOnPs = m_hpfBypassOnPs;
         sw.hpfBypass     = m_alexHpfBypass;
+        sw.disable6mLnaOnRx = m_disable6mLnaOnRx;
+        sw.disable6mLnaOnTx = m_disable6mLnaOnTx;
         return sw;
+    }
+
+    /// "Disable 6m LNA on RX" / "on TX" (the Alex tab). On 6 m the high-pass
+    /// word's 6 m BPF/LNA selection (0x40) becomes the bypass (0x20) while
+    /// receiving (RX switch) or keyed (TX switch):
+    ///   From Thetis console.cs:6931-6936 [v2.10.3.15] (setAlexHPF)
+    ///     if (alex6bphpf_bypass || disable_6m_lna_on_rx || (_mox && disable_6m_lna_on_tx))
+    ///     { NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
+    /// Defaults as Thetis: RX false (console.cs:18719), TX true (18741).
+    virtual void setDisable6mLna(bool onRx, bool onTx) {
+        m_disable6mLnaOnRx = onRx;
+        m_disable6mLnaOnTx = onTx;
     }
 
     /// "HPF Bypass" (the Alex tab's master switch, Thetis chkAlexHPFBypass
@@ -879,6 +893,11 @@ protected:
     // "HPF Bypass" (setAlexHpfBypass). Written and read on the connection
     // thread.
     bool m_alexHpfBypass{false};
+
+    // "Disable 6m LNA on RX / TX" (setDisable6mLna). Written and read on the
+    // connection thread.
+    bool m_disable6mLnaOnRx{false};
+    bool m_disable6mLnaOnTx{true};
 
     // Shared state for setMicPTTDisabled (3M-1b G.5; renamed for issue #182
     // to match Thetis MicPTTDisabled / mic_ptt_disabled storage name exactly).
