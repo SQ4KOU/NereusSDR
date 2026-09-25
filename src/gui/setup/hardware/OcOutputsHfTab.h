@@ -202,9 +202,11 @@ private:
     // Guard against feedback loops between matrix changed() and checkbox toggled()
     bool m_syncing{false};
 
-    // Phase 3P-H Task 5b: last computed OC byte for the live-LED row.
-    // bit N == 1 means pin N lit. Recomputed on OcMatrix::changed,
-    // PanadapterModel::bandChanged, and TransmitModel::moxChanged.
+    // Phase 3P-H Task 5b: the OC byte the live-LED row shows; bit N == 1
+    // means pin N lit. Plan Task 14 fix wave: this is the byte the
+    // connection composed (RadioModel::bandOutputsByte), refreshed on
+    // RadioModel::bandOutputsChanged and connectionStateChanged; 0 (nothing
+    // lit) until a byte is known. The tab computes no byte of its own.
     quint8 m_currentOcByte{0};
 };
 
