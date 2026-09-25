@@ -868,6 +868,14 @@ disturbed, so nobody is asked and nothing is refused. With no free receiver it g
 chooser of section 6.4. D50 is not narrowed: it asks whenever a move would disturb
 another device, and this move disturbs none.
 
+**Ruling 6.6a. Slices with no owner in a pan move** (fix wave after the group review of Tasks
+71 to 76, accepting the code as it is). A pan move (rulings 6.4 and 6.5) names only slices a
+device owns or is holding for a device that is away; a slice with no owner (5.2, step 3) that
+the new window leaves outside goes to a free receiver or, with none free, closes, with nobody
+asked and nobody told (`StationServer::checkPanMove`, the `Apply` kind). Nobody's work is lost:
+no device holds such a slice, and a held slice is its owner's and is named and saved as
+ruling 5.2 says.
+
 A sample-rate change on a shared receiver is D53 (section 7); slices that no longer fit
 the narrower window follow the same move-or-close rule, and the on-air refusal (ruling 7.4)
 applies.
