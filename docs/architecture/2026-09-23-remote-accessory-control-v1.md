@@ -1330,6 +1330,19 @@ the fix wave): it clears the amp's error and operates nothing.
 
 ## Window behaviour
 
+**One on-the-air rule in both windows** (group B fix wave, M5; the
+operator's ruling 2026-09-25). A local window's Power Genius OPERATE and
+STANDBY (the applet and the PowerGenius XL tab), RF-Kit OPERATE and
+antennas, and Tuner Genius relays, ANT and OPERATE follow the rule a remote
+window's do: while the radio is on the air (MOX, TUNE, two-tone, or the
+hand-back to receive after MOX) each is disabled with "The radio is on the
+air. Try again when it stops." (`RadioModel::onAirReason()`, the one
+sentence both windows use), and a press that gets through anyway sends
+nothing to this computer's accessory (`RadioModel::stationOnAirRefusal`,
+the Core's own check). TUNE keeps its transmit gate. `tst_remote_peripherals`
+(`localWindowAmpAndTunerSwitchesWaitOnTheAir`) checks each keyed and
+unkeyed; the remote window's cases check the same in a remote window.
+
 A window reads `amplifier` and `rfkit` only while the Core offers them:
 
 - Filled on attach from the `object.create` values, and updated by every

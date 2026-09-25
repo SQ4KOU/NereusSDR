@@ -603,6 +603,7 @@ private slots:
     void olderCoreLeavesTheRfKitSwitchesGreyed();
     void localRfKitPageShowsTheRemoteReadings();
     void pageThatOutlivesItsModelSendsNothing();
+    void localWindowAmpAndTunerSwitchesWaitOnTheAir();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -4616,6 +4617,169 @@ void RemotePeripheralsTest::pageThatOutlivesItsModelSendsNothing()
     QVERIFY(!page->hasModelForTest());
     page.reset();
     QCOMPARE(link.tgxlAddressCalls, 0);
+}
+
+// Group B fix wave (M5, the operator's ruling 2026-09-25, "block them in
+// both windows"): a local window's Power Genius OPERATE (the applet and the
+// PowerGenius XL tab), RF-Kit OPERATE and antennas, and Tuner Genius relays
+// and switches follow the remote window's rule. While the radio is on the
+// air each is disabled with RadioModel::onAirReason(), and a press that
+// gets through anyway sends nothing; off the air each works as before.
+void RemotePeripheralsTest::localWindowAmpAndTunerSwitchesWaitOnTheAir()
+{
+    AppSettings::instance().clear();
+    const QString onAir = RadioModel::onAirReason();
+    QVERIFY(OperatorWording::isPlain(onAir));
+    const auto pressDisabled = [](QPushButton* button) {
+        button->setEnabled(true);   // a press that gets through anyway
+        button->click();
+    };
+
+    // The Power Genius and the RF-Kit on this computer.
+    FakeGenius amp;
+    QVERIFY(amp.listen());
+    RadioModel local;
+    AmpApplet ampApplet(&local);
+    PgxlAdvancedPage tab(&local);
+    Rf2ksApplet rfKit(&local);
+    QSignalSpy ampOperate(&ampApplet, &AmpApplet::operateToggled);
+    QSignalSpy rfKitOperate(&rfKit, &Rf2ksApplet::operateToggled);
+    QSignalSpy rfKitAntenna(&rfKit, &Rf2ksApplet::antennaRequested);
+    local.pgxlConnection()->connectToPgxl(QStringLiteral("127.0.0.1"), amp.port());
+    QVERIFY(amp.accept());
+    amp.send(QStringLiteral("V3.8.9"));
+    QTRY_VERIFY(local.pgxlConnection()->isConnected());
+    amp.send(QStringLiteral("S0|status state=STANDBY"));
+    QPushButton* tabOperate = tab.operateButtonForTesting();
+    QTRY_VERIFY(tabOperate->isEnabled());
+    QVERIFY(ampApplet.operateButtonEnabledForTesting());
+    QVERIFY(rfKit.operateButtonEnabledForTesting());
+    QVERIFY(rfKit.antennaButtonIsEnabledForTesting(1));
+    QPushButton* ampButton = nullptr;
+    QPushButton* rfKitButton = nullptr;
+    for (QPushButton* b : ampApplet.findChildren<QPushButton*>()) {
+        if (b->text() == QStringLiteral("OPERATE")) { ampButton = b; }
+    }
+    for (QPushButton* b : rfKit.findChildren<QPushButton*>()) {
+        if (b->text() == QStringLiteral("STANDBY")) { rfKitButton = b; }
+    }
+    QVERIFY(ampButton && rfKitButton);
+    QPushButton* rfKitAnt1 = nullptr;
+    for (QPushButton* b : rfKit.findChildren<QPushButton*>()) {
+        if (b->text() == QStringLiteral("ANT 1")) { rfKitAnt1 = b; }
+    }
+    QVERIFY(rfKitAnt1);
+
+    MoxController* const mox = local.moxController();
+    QVERIFY(mox);
+    mox->setMoxCheck({});
+    mox->setMox(true);
+    QTRY_VERIFY(local.isCoreOnAir());
+    QTRY_VERIFY(!ampApplet.operateButtonEnabledForTesting());
+    QCOMPARE(ampApplet.operateButtonToolTipForTesting(), onAir);
+    QTRY_VERIFY(!tabOperate->isEnabled());
+    QCOMPARE(tabOperate->toolTip(), onAir);
+    QVERIFY(!rfKit.operateButtonEnabledForTesting());
+    QCOMPARE(rfKit.operateButtonToolTipForTesting(), onAir);
+    for (int n = 1; n <= 4; ++n) {
+        QVERIFY(!rfKit.antennaButtonIsEnabledForTesting(n));
+        QCOMPARE(rfKit.antennaButtonToolTipForTesting(n), onAir);
+    }
+    const int ampLines = amp.commands.filter(QRegularExpression(QStringLiteral("^operate"))).size();
+    pressDisabled(ampButton);
+    pressDisabled(tabOperate);
+    pressDisabled(rfKitButton);
+    pressDisabled(rfKitAnt1);
+    QTest::qWait(100);
+    QCOMPARE(ampOperate.count(), 0);
+    QCOMPARE(rfKitOperate.count(), 0);
+    QCOMPARE(rfKitAntenna.count(), 0);
+    QCOMPARE(amp.commands.filter(QRegularExpression(QStringLiteral("^operate"))).size(), ampLines);
+    // The press put each back the way the rule has it.
+    QVERIFY(!ampApplet.operateButtonEnabledForTesting());
+    QVERIFY(!tabOperate->isEnabled());
+    QVERIFY(!rfKit.operateButtonEnabledForTesting());
+    QVERIFY(!rfKit.antennaButtonIsEnabledForTesting(1));
+
+    mox->setMox(false);
+    QTRY_VERIFY(!local.isCoreOnAir());
+    QTRY_VERIFY(ampApplet.operateButtonEnabledForTesting());
+    QVERIFY(ampApplet.operateButtonToolTipForTesting().isEmpty());
+    QTRY_VERIFY(tabOperate->isEnabled());
+    QVERIFY(rfKit.operateButtonEnabledForTesting());
+    QVERIFY(rfKit.operateButtonToolTipForTesting().isEmpty());
+    QVERIFY(rfKit.antennaButtonIsEnabledForTesting(1));
+    QTRY_VERIFY(!local.stationOnAirRefusal(nullptr));
+    ampApplet.clickOperateForTesting();
+    QCOMPARE(ampOperate.count(), 1);
+    tabOperate->click();
+    QVERIFY(amp.waitFor(QStringLiteral("operate=1")) >= 0);
+    rfKit.clickOperateButtonForTesting();
+    QCOMPARE(rfKitOperate.count(), 1);
+    rfKit.clickAntennaButtonForTesting(1);
+    QCOMPARE(rfKitAntenna.count(), 1);
+    local.pgxlConnection()->disconnect();
+
+    // The Tuner Genius on this computer: the Core model is a local window's
+    // model with its own tuner connection.
+    CoreAndWindow cw;
+    RadioModel& station = cw.station;
+    station.smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
+    station.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+    FakeGenius tuner;
+    QVERIFY(tuner.listen());
+    TunerApplet applet(&station, station.tunerModel());
+    // A local window with transmit, as MainWindow sets it (the Core model
+    // here is receive-only for its session server).
+    applet.setTransmitPermitted(true, QString());
+    QVERIFY(admitCoreTuner(station, tuner));
+    for (int relay = 0; relay < 3; ++relay) {
+        QTRY_VERIFY(applet.relayBarForTesting(relay)->isScrollEnabled());
+    }
+    QVERIFY(applet.operateButtonForTesting()->isEnabled());
+    MoxController* const coreMox = station.moxController();
+    coreMox->setMoxCheck({});
+    coreMox->setMox(true);
+    QTRY_VERIFY(station.isCoreOnAir());
+    for (int relay = 0; relay < 3; ++relay) {
+        QTRY_VERIFY(!applet.relayBarForTesting(relay)->isScrollEnabled());
+        QCOMPARE(applet.relayBarForTesting(relay)->toolTip(), onAir);
+    }
+    QVERIFY(!applet.operateButtonForTesting()->isEnabled());
+    QCOMPARE(applet.operateButtonForTesting()->toolTip(), onAir);
+    for (int port = 1; port <= 3; ++port) {
+        QVERIFY(!applet.antennaButtonForTesting(port)->isEnabled());
+        QCOMPARE(applet.antennaButtonForTesting(port)->toolTip(), onAir);
+    }
+    // What the tuner is asked to do, less the connection's own status and
+    // info polls.
+    const auto switchCommands = [&tuner](int from) {
+        QStringList out;
+        for (const QString& c : tuner.commands.mid(from)) {
+            if (c != QLatin1String("status") && c != QLatin1String("info")) { out << c; }
+        }
+        return out;
+    };
+    int mark = tuner.commands.size();
+    applet.relayBarForTesting(0)->setScrollEnabled(true);   // gets through anyway
+    wheel(applet.relayBarForTesting(0), 120);
+    pressDisabled(applet.operateButtonForTesting());
+    pressDisabled(applet.antennaButtonForTesting(2));
+    QTest::qWait(150);
+    QVERIFY2(switchCommands(mark).isEmpty(), qPrintable(switchCommands(mark).join(u',')));
+
+    coreMox->setMox(false);
+    QTRY_VERIFY(!station.isCoreOnAir());
+    QTRY_VERIFY(!station.stationOnAirRefusal(nullptr));
+    for (int relay = 0; relay < 3; ++relay) {
+        QTRY_VERIFY(applet.relayBarForTesting(relay)->isScrollEnabled());
+        QVERIFY(applet.relayBarForTesting(relay)->toolTip().isEmpty());
+    }
+    QVERIFY(applet.operateButtonForTesting()->isEnabled());
+    mark = tuner.commands.size();
+    wheel(applet.relayBarForTesting(0), 120);
+    QVERIFY(tuner.waitFor(QStringLiteral("tune relay=0 move=1"), mark) >= 0);
+    QVERIFY(!station.transmitModel().isTune());
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

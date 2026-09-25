@@ -114,6 +114,11 @@ TunerApplet::TunerApplet(RadioModel* model, TunerModel* tunerModel, QWidget* par
     if (model && model->role() == RadioModel::Role::Remote) {
         connect(model, &RadioModel::stationLinkStateChanged,
                 this, &TunerApplet::updateActuatingControls);
+    }
+    // Group B fix wave (M5, the operator's ruling 2026-09-25): a local
+    // window's relays, ANT and OPERATE wait on the air too, with the same
+    // reason, so both windows follow one rule.
+    if (model) {
         connect(model, &RadioModel::coreOnAirChanged,
                 this, &TunerApplet::updateActuatingControls);
     }
@@ -447,7 +452,7 @@ void TunerApplet::requestRelayMove(int relay, int direction)
         }
         return;
     }
-    if (m_transmitPermitted && m_tunerModel) {
+    if (m_transmitPermitted && m_tunerModel && !localSwitchRefusedOnAir()) {
         m_tunerModel->adjustRelay(relay, direction);
     }
 }
@@ -470,6 +475,20 @@ bool TunerApplet::coreOnAir() const
     return m_model && m_model->isCoreOnAir();
 }
 
+QString TunerApplet::onAirReason()
+{
+    return RadioModel::onAirReason();
+}
+
+bool TunerApplet::localSwitchRefusedOnAir() const
+{
+    // Group B fix wave (M5): this computer's own tuner, refused by the
+    // Core's own on-the-air rule (RadioModel::stationOnAirRefusal), which
+    // also covers the hand-back to receive after MOX.
+    return m_model && m_model->role() != RadioModel::Role::Remote
+        && m_model->stationOnAirRefusal(nullptr);
+}
+
 // R-R3-49 / R-R3-47: a remote window asks the Core, which switches its own
 // tuner; the button follows the Core's reported antenna, not the click.
 void TunerApplet::requestAntenna(int port)
@@ -480,7 +499,7 @@ void TunerApplet::requestAntenna(int port)
         }
         return;
     }
-    if (m_transmitPermitted && m_tunerModel) {
+    if (m_transmitPermitted && m_tunerModel && !localSwitchRefusedOnAir()) {
         m_tunerModel->setAntennaA(port);
     }
 }
@@ -541,6 +560,10 @@ void TunerApplet::updateActuatingControls()
         const bool onAir = coreOnAir();
         switchable = !onAir;
         switchTip = onAir ? onAirReason() : QString();
+    } else if (m_transmitPermitted && coreOnAir()) {
+        // Group B fix wave (M5): a local window's, the same rule.
+        switchable = false;
+        switchTip = onAirReason();
     }
     for (QPushButton* button : {m_operateBtn, m_ant1Btn, m_ant2Btn, m_ant3Btn}) {
         if (!button) { continue; }
@@ -557,6 +580,10 @@ void TunerApplet::updateActuatingControls()
         const bool onAir = coreOnAir();
         relayCommandsEnabled = !onAir && m_tunerModel && m_tunerModel->hasDirectConnection();
         relayTip = onAir ? onAirReason() : QString();
+    } else if (m_transmitPermitted && coreOnAir()) {
+        // Group B fix wave (M5): a local window's relays, the same rule.
+        relayCommandsEnabled = false;
+        relayTip = onAirReason();
     }
     for (RelayBar* bar : {m_c1Bar, m_lBar, m_c2Bar}) {
         if (!bar) { continue; }
@@ -800,7 +827,7 @@ void TunerApplet::cycleOperateState()
     // follows its report.
     if (!m_tunerModel) return;
     const bool remote = remoteTunerControl();
-    if (remote ? coreOnAir() : !m_transmitPermitted) return;
+    if (remote ? coreOnAir() : (!m_transmitPermitted || localSwitchRefusedOnAir())) return;
     IStationLink* link = remote ? m_model->stationLink() : nullptr;
     const auto setBypass = [this, link](bool on) {
         if (link) { link->requestTgxlBypass(on); } else { m_tunerModel->setBypass(on); }

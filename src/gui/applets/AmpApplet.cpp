@@ -186,6 +186,12 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
             }
             return;
         }
+        // Group B fix wave (M5, the operator's ruling 2026-09-25): this
+        // computer's amp waits on the air too, by the Core's own rule.
+        if (m_model && m_model->stationOnAirRefusal(nullptr)) {
+            updateOperateButton();
+            return;
+        }
         emit operateToggled(!isOp);
     });
     telRow->addWidget(m_operateBtn, 1);
@@ -243,9 +249,10 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
         if (m_model->role() == RadioModel::Role::Remote) {
             connect(m_model, &RadioModel::stationLinkStateChanged,
                     this, &AmpApplet::updateOperateButton);
-            connect(m_model, &RadioModel::coreOnAirChanged,
-                    this, &AmpApplet::updateOperateButton);
         }
+        // Group B fix wave (M5): both windows wait on the air.
+        connect(m_model, &RadioModel::coreOnAirChanged,
+                this, &AmpApplet::updateOperateButton);
         syncFromAmplifier();
         updateStationState();
     }
@@ -266,7 +273,16 @@ bool AmpApplet::remoteOperateControl() const
 
 void AmpApplet::updateOperateButton()
 {
-    if (!m_operateBtn || !isRemoteWindow()) {
+    if (!m_operateBtn) {
+        return;
+    }
+    if (!isRemoteWindow()) {
+        // Group B fix wave (M5, the operator's ruling 2026-09-25): a local
+        // window's OPERATE waits while the radio is on the air, with the
+        // remote window's reason; otherwise it is as before.
+        const bool onAir = m_model && m_model->isCoreOnAir();
+        m_operateBtn->setEnabled(!onAir);
+        m_operateBtn->setToolTip(onAir ? RadioModel::onAirReason() : QString());
         return;
     }
     if (!remoteOperateControl()) {

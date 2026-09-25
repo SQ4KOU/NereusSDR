@@ -97,6 +97,12 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
             }
             return;
         }
+        // Group B fix wave (M5, the operator's ruling 2026-09-25): this
+        // computer's amp waits on the air too, by the Core's own rule.
+        if (localSwitchRefusedOnAir()) {
+            updateRemoteControls();
+            return;
+        }
         emit operateToggled(wantOperate);
     });
     header->addWidget(m_operateBtn);
@@ -202,6 +208,10 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
                 }
                 return;
             }
+            if (localSwitchRefusedOnAir()) {   // group B fix wave (M5)
+                updateRemoteControls();
+                return;
+            }
             emit antennaRequested(RfKitAntenna::Type::Internal, i);
         });
         m_antennaButtons[i] = btn;
@@ -287,9 +297,10 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
         if (m_model->role() == RadioModel::Role::Remote) {
             connect(m_model, &RadioModel::stationLinkStateChanged,
                     this, &Rf2ksApplet::updateRemoteControls);
-            connect(m_model, &RadioModel::coreOnAirChanged,
-                    this, &Rf2ksApplet::updateRemoteControls);
         }
+        // Group B fix wave (M5): both windows wait on the air.
+        connect(m_model, &RadioModel::coreOnAirChanged,
+                this, &Rf2ksApplet::updateRemoteControls);
         syncFromRfKit();
         updateStationState();
     }
@@ -326,9 +337,30 @@ QString Rf2ksApplet::remoteControlReason() const
     return QString();
 }
 
+bool Rf2ksApplet::localSwitchRefusedOnAir() const
+{
+    return m_model && !isRemoteModel() && m_model->stationOnAirRefusal(nullptr);
+}
+
 void Rf2ksApplet::updateRemoteControls()
 {
-    if (!isRemoteModel() || !m_operateBtn) {
+    if (!m_operateBtn) {
+        return;
+    }
+    if (!isRemoteModel()) {
+        // Group B fix wave (M5, the operator's ruling 2026-09-25): a local
+        // window's OPERATE and antennas wait while the radio is on the air,
+        // with the remote window's reason; otherwise as the amp lists them.
+        const bool onAir = m_model && m_model->isCoreOnAir();
+        const QString reason = onAir ? RadioModel::onAirReason() : QString();
+        m_operateBtn->setEnabled(!onAir);
+        m_operateBtn->setToolTip(reason);
+        m_operateBtn->setAccessibleDescription(reason);
+        for (auto it = m_antennaButtons.cbegin(); it != m_antennaButtons.cend(); ++it) {
+            it.value()->setEnabled(!onAir && !m_localAntennaDisabled.contains(it.key()));
+            it.value()->setToolTip(reason);
+            it.value()->setAccessibleDescription(reason);
+        }
         return;
     }
     const QString reason = remoteControlReason();
@@ -677,8 +709,14 @@ void Rf2ksApplet::setAntennas(const QList<RfKitAntenna>& list)
         btn->setText(label);
         // R-R3-21: an amplifier report never re-enables a remote window's
         // antenna buttons by itself: updateRemoteControls decides there.
+        // Group B fix wave (M5): a local window keeps the amp's listing and
+        // updateRemoteControls adds the on-air rule.
         if (!isRemoteModel()) {
-            btn->setEnabled(a.state != RfKitAntenna::State::Disabled);
+            if (a.state == RfKitAntenna::State::Disabled) {
+                m_localAntennaDisabled.insert(a.number);
+            } else {
+                m_localAntennaDisabled.remove(a.number);
+            }
         }
         setButtonActive(btn, a.state == RfKitAntenna::State::Active);
     }

@@ -140,8 +140,9 @@ public:
     // R-R3-49 / R-R3-47: the Core's refusal while it transmits, and the
     // tooltip on ANT and OPERATE in a remote window while the radio is on
     // the air.
-    static QString onAirReason()
-    { return QStringLiteral("The radio is on the air. Try again when it stops."); }
+    // Group B fix wave (M5): RadioModel's one sentence, shared by both
+    // windows.
+    static QString onAirReason();
     bool staleIndicatorVisibleForTesting() const;
 
     // R3 remote sessions are receive-only. MainWindow applies the negotiated
@@ -227,6 +228,8 @@ private:
     void requestRelayMove(int relay, int direction);
     // The Core reports the radio on the air: MOX, TUNE or two-tone.
     bool coreOnAir() const;
+    // Group B fix wave (M5): a local window's own switch, refused on the air.
+    bool localSwitchRefusedOnAir() const;
     void requestAntenna(int port);
 
     TunerModel* m_tunerModel = nullptr;

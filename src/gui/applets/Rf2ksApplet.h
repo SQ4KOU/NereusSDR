@@ -23,6 +23,7 @@
 #include "models/TunerModel.h"
 
 #include <QHash>
+#include <QSet>
 #include <QPushButton>
 
 class QContextMenuEvent;
@@ -157,6 +158,8 @@ private slots:
 private:
     QMenu* buildContextMenu(QObject* menuParent);
     bool   isRemoteModel() const;
+    // Group B fix wave (M5): a local window's own switch, refused on the air.
+    bool   localSwitchRefusedOnAir() const;
     // R-R3-22: a remote window's Disconnect or Connect, sent to the Core.
     void   requestRemoteConnectionToggle();
     // R-R3-49 (parity Task 10): the Core switches its amp for this window.
@@ -180,6 +183,9 @@ private:
 
     // Section C widgets.
     QHash<int, QPushButton*> m_antennaButtons;
+    // Group B fix wave (M5): the antennas this computer's amp lists as
+    // disabled (a local window).
+    QSet<int> m_localAntennaDisabled;
     QHash<int, QString>      m_antennaLabels;
     QLabel*                  m_tunerStatusLabel{nullptr};
     QPushButton*             m_tuneBtn{nullptr};

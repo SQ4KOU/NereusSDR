@@ -273,6 +273,9 @@ PgxlAdvancedPage::PgxlAdvancedPage(RadioModel* model, QWidget* parent)
             connect(amp, &AmplifierModel::statusChanged,
                     this, &PgxlAdvancedPage::updateOperateButton);
         }
+        // Group B fix wave (M5): and whether the radio is on the air.
+        connect(m_model, &RadioModel::coreOnAirChanged,
+                this, &PgxlAdvancedPage::updateOperateButton);
     }
 
     connect(m_diagnostics, &ConnectionDiagnostics::changed,
@@ -288,8 +291,10 @@ PgxlAdvancedPage::PgxlAdvancedPage(RadioModel* model, QWidget* parent)
 // R-R3-49 (parity Task 9, operator amendment 2026-09-25): the local tab's
 // Operate reads the action the amp's reported state allows (Standby while
 // it operates, Operate otherwise), as a remote window's tab does. It is
-// offered while this computer is connected to the amp. The local applet's
-// OPERATE has no on-the-air rule, so neither has this button.
+// offered while this computer is connected to the amp. Group B fix wave
+// (M5, the operator's ruling 2026-09-25): it waits while the radio is on
+// the air, as the applet's OPERATE and a remote window's do, with the same
+// reason.
 void PgxlAdvancedPage::updateOperateButton()
 {
     if (!m_operateBtn) {
@@ -299,9 +304,11 @@ void PgxlAdvancedPage::updateOperateButton()
     const AmplifierModel* amp = m_model ? m_model->amplifierModel() : nullptr;
     const bool connected = pgxl && pgxl->isConnected();
     const bool operating = amp && amp->operate();
+    const bool onAir = m_model && m_model->isCoreOnAir();
     m_operateBtn->setText(operating ? tr("Standby") : tr("Operate"));
-    m_operateBtn->setEnabled(connected);
+    m_operateBtn->setEnabled(connected && !onAir);
     m_operateBtn->setToolTip(!connected ? tr("The Power Genius is not connected.")
+                             : onAir ? RadioModel::onAirReason()
                              : operating ? tr("Put the Power Genius in standby.")
                                          : tr("Put the Power Genius in operate."));
 }
@@ -310,7 +317,8 @@ void PgxlAdvancedPage::onOperateClicked()
 {
     PgxlConnection* pgxl = m_model ? m_model->pgxlConnection() : nullptr;
     const AmplifierModel* amp = m_model ? m_model->amplifierModel() : nullptr;
-    if (!pgxl || !pgxl->isConnected() || !amp) {
+    // Group B fix wave (M5): refused on the air, by the Core's own rule.
+    if (!pgxl || !pgxl->isConnected() || !amp || m_model->stationOnAirRefusal(nullptr)) {
         updateOperateButton();
         return;
     }

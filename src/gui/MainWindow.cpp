@@ -6884,7 +6884,10 @@ void MainWindow::populateDefaultMeter()
             // computer's RF-Kit connection is local only.
             connect(m_rfKitApplet, &Rf2ksApplet::antennaRequested,
                     this, [this](RfKitAntenna::Type type, int number) {
-                if (m_radioModel->role() == RadioModel::Role::Remote) {
+                // Group B fix wave (M5): refused on the air, as the applet
+                // and a remote window are.
+                if (m_radioModel->role() == RadioModel::Role::Remote
+                    || m_radioModel->stationOnAirRefusal(nullptr)) {
                     return;
                 }
                 if (Rf2ksConnection* conn = m_radioModel->rfKitConnection()) {
@@ -6893,7 +6896,8 @@ void MainWindow::populateDefaultMeter()
             });
             connect(m_rfKitApplet, &Rf2ksApplet::operateToggled,
                     this, [this](bool wantOperate) {
-                if (m_radioModel->role() == RadioModel::Role::Remote) {
+                if (m_radioModel->role() == RadioModel::Role::Remote
+                    || m_radioModel->stationOnAirRefusal(nullptr)) {   // M5
                     return;
                 }
                 Rf2ksConnection* conn = m_radioModel->rfKitConnection();
@@ -12533,7 +12537,10 @@ void MainWindow::onConnectionStateChanged()
                 // R-R3-49 (parity Task 9): a remote window's applet asks the
                 // Core itself (setPgxlOperate); this computer's Power Genius
                 // connection is local only.
-                if (m_radioModel->role() == RadioModel::Role::Remote) {
+                // Group B fix wave (M5): refused on the air, as the applet
+                // and a remote window are.
+                if (m_radioModel->role() == RadioModel::Role::Remote
+                    || m_radioModel->stationOnAirRefusal(nullptr)) {
                     return;
                 }
                 // Bench-fix 2026-05-19: pcap stream 11 (.19 PowerGeniusDesktop
