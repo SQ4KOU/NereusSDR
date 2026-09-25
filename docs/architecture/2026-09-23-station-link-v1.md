@@ -1744,12 +1744,14 @@ property answers not accepted, with no value, and the reason "That slice
 belongs to <the owner's name>. It can be changed only there." (the name as
 `connectedDevices` numbers it; "the Core" for a slice nobody owns). Nothing
 else comes back. The commands `removeSlice`, `setActiveSliceById`,
-`nnr.setDiagnostics`, `nnr.resetTuning`, `nnr.tryAgain` and `notch.add`
-naming another device's slice are refused with the same reason (section
-9.1). A C-Tune centre change or pin and a slice's band change follow the
-receiver rules of section 7.5 instead (a C-Tune request naming another
-device's slice is refused with this same reason); a sample-rate change is
-the next task's.
+`nnr.setDiagnostics`, `nnr.resetTuning`, `nnr.tryAgain`, `notch.add`,
+`requestSliceSampleRate`, `requestStreamCentre` and
+`requestStreamCtunPinned` naming a slice that is not the requester's
+(another device's, one nobody owns, or one held for a device) are refused
+with the same reason, whatever receivers are in use (section 9.1). On the
+requester's own slice, a C-Tune centre change or pin and a slice's band
+change follow the receiver rules of section 7.5, and a sample-rate change
+the shared-setting rules of section 7.6.
 
 **Waiting for you to confirm** (iPhone app plan Task 74; the
 several-devices design, section 7.3). A write that would disturb another
@@ -2366,8 +2368,9 @@ These command groups need a sentence beyond the table:
   choice never moves it. The station's own duties that exist once per
   radio (the FreeDV Reporter's frequency, TCI's per-slice broadcasts)
   follow the most recent choice by any device. `removeSlice`,
-  `setActiveSliceById`, `nnr.*` and `notch.add` naming another device's
-  slice are refused (section 7.3).
+  `setActiveSliceById`, `nnr.*`, `notch.add`, `requestSliceSampleRate`,
+  `requestStreamCentre` and `requestStreamCtunPinned` naming a slice that
+  is not the requester's are refused (section 7.3).
 
 - **The filter policy.** `setAlexBpfMode` sets one receive filter chain's
   filter policy (`chain` 0 or 1; `mode` 0 Auto, 1 Force filter, 2 Force

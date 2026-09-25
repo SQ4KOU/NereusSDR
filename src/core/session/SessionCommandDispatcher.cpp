@@ -722,14 +722,19 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
 
 bool SessionCommandDispatcher::refusedForAnotherDevice(const SessionMessage& invoke)
 {
-    // The verbs that name a slice of the requester's by `sliceId` (ruling
-    // 5.9). requestSliceSampleRate, requestStreamCtunPinned and
-    // requestStreamCentre are routes on a shared receiver, not refusals
-    // (Tasks 74 and 75).
+    // Every verb that names a slice by `sliceId` (ruling 5.9): a device
+    // addresses only its own slices. requestSliceSampleRate,
+    // requestStreamCtunPinned and requestStreamCentre are routes on the
+    // requester's own slice (D53, the anchor rules; Tasks 74 and 75, which
+    // run before this), and refusals on anyone else's, a slice nobody owns
+    // or one held for a device, whatever receivers are in use (fix wave
+    // C1).
     static const QSet<QByteArray> kSliceVerbs{
         QByteArrayLiteral("removeSlice"), QByteArrayLiteral("setActiveSliceById"),
         QByteArrayLiteral("nnr.setDiagnostics"), QByteArrayLiteral("nnr.resetTuning"),
-        QByteArrayLiteral("nnr.tryAgain"), QByteArrayLiteral("notch.add")};
+        QByteArrayLiteral("nnr.tryAgain"), QByteArrayLiteral("notch.add"),
+        QByteArrayLiteral("requestSliceSampleRate"), QByteArrayLiteral("requestStreamCentre"),
+        QByteArrayLiteral("requestStreamCtunPinned")};
     if (m_requester.isEmpty() || !m_sliceAccess || !kSliceVerbs.contains(invoke.commandVerb)) {
         return false;
     }

@@ -1634,6 +1634,13 @@ private slots:
             {"nnr.tryAgain", {int64("sliceId", 0)}},
             {"nnr.setDiagnostics", {int64("sliceId", 0), int64("testMode", 1), int64("outputMode", 1)}},
             {"notch.add", {int64("sliceId", 0), f64("centreHz", frequency + 500.0), f64("widthHz", 100.0)}},
+            // Fix wave C1 (ruling 5.9): the three verbs that are routes on
+            // a device's own slice are refusals on another's, with no
+            // receiver in use yet.
+            {"requestSliceSampleRate", {int64("sliceId", 0), int64("rateHz", 96000)}},
+            {"requestStreamCentre", {int64("sliceId", 0), f64("centreHz", frequency + 1000.0)}},
+            {"requestStreamCtunPinned",
+             {int64("sliceId", 0), MirrorUpdate{0, "pinned", MirrorWireKind::Bool, true}}},
         };
         const int notches = static_cast<int>(core.model->notchModel()->notches().size());
         for (const auto& verb : verbs) {
@@ -1653,6 +1660,73 @@ private slots:
                  true);
         // And never saw A's.
         QVERIFY(!everSaw(appB, QStringLiteral("slice:0")));
+    }
+
+    // Fix wave C1 (ruling 5.9): a sample rate, a C-Tune centre or pin
+    // naming another device's slice, a slice nobody owns, or a slice held
+    // for a device, is refused with the foreign-slice reason whatever the
+    // receivers are, and neither the rate nor the window moves.
+    void rateCentreAndPinOnASliceNotTheRequestersAreRefused()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        Device c(QStringLiteral("MacBook"), QStringLiteral("computer"));
+        core.pair(a);
+        core.pair(b);
+        core.pair(c);
+        core.model->configureStreamPool(5, 5, 192000);
+        core.model->sliceById(0)->setFrequency(14200000.0);
+        // A signs in and leaves: its slice is held for it.
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        QVERIFY(core.invoke(appA, "session.leave").value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(!appA->isOpen());
+        QCOMPARE(core.model->sliceOwnership()->mark(0).heldFor, a.key.fingerprint());
+        LoopbackTransport* appB = core.signIn(b);
+        LoopbackTransport* appC = core.signIn(c);
+        QVERIFY(admitted(appB));
+        QVERIFY(admitted(appC));
+        const int bSlice = core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).first();
+        // A slice the Core makes with several devices on it is nobody's.
+        const int nobodys = core.model->addSlice(QStringLiteral("pan-0"));
+        QVERIFY(nobodys >= 0);
+        QVERIFY(core.model->sliceOwnership()->mark(nobodys).owner.isEmpty());
+        QVERIFY(core.model->streamAllocator().streamCount() > 0);
+
+        const QList<QPair<int, QString>> targets{
+            {bSlice, ownedElsewhere(QStringLiteral("iPad"))},
+            {0, ownedElsewhere(QStringLiteral("iPhone"))},
+            {nobodys, QStringLiteral("That slice belongs to the Core. It can be changed only there.")},
+        };
+        for (const auto& target : targets) {
+            SliceModel* slice = core.model->sliceById(target.first);
+            QVERIFY(slice != nullptr);
+            const int stream = slice->streamIndex();
+            const int rate = slice->sampleRateHz();
+            const double centre = stream >= 0 ? core.model->streamAllocator().streamCentreHz(stream)
+                                              : 0.0;
+            const QList<QPair<QByteArray, QList<MirrorUpdate>>> verbs{
+                {"requestSliceSampleRate", {int64("sliceId", target.first), int64("rateHz", 96000)}},
+                {"requestStreamCentre",
+                 {int64("sliceId", target.first), f64("centreHz", slice->frequency() + 1000.0)}},
+                {"requestStreamCtunPinned",
+                 {int64("sliceId", target.first),
+                  MirrorUpdate{0, "pinned", MirrorWireKind::Bool, true}}},
+            };
+            for (const auto& verb : verbs) {
+                const QJsonObject refused = core.invoke(appC, verb.first, verb.second);
+                QVERIFY2(!refused.value(QStringLiteral("accepted")).toBool(true),
+                         verb.first.constData());
+                QCOMPARE(refused.value(QStringLiteral("reason")).toString(), target.second);
+            }
+            // Nothing a later turn of the event loop could apply either.
+            QTest::qWait(50);
+            QCOMPARE(slice->sampleRateHz(), rate);
+            if (stream >= 0) {
+                QCOMPARE(core.model->streamAllocator().streamCentreHz(stream), centre);
+            }
+        }
     }
 
     // Each device receives its own slices and a marker for every other.

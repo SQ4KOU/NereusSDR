@@ -676,11 +676,16 @@ iPhone. It can be changed only there.":
 - a `property.write` to a `slice:` key outside the writer's view, or to any `marker:` key;
 - `removeSlice`, `setActiveSliceById`, `nnr.*` and `notch.add` naming another device's slice
   (the link, lines 1370, 1373, 1402-1404 and 1422);
+- `requestSliceSampleRate`, `requestStreamCentre` and `requestStreamCtunPinned` naming a
+  slice that is not the requester's (fix wave C1, 2026-09-25): another device's, one nobody
+  owns, or one held for a device, whatever receivers are in use;
 - `tx.setTxSlice` (Task 34) naming another device's slice.
 
-Four requests on a shared receiver are routes, not refusals: a sample-rate change is D53
-(section 7); a C-Tune centre change or pin follows the anchor rules (6.2, 6.3); and the
-anchor's own band change is a pan move (ruling 6.5).
+Four requests on a shared receiver are routes, not refusals, when they name the requester's
+own slice: a sample-rate change is D53 (section 7); a C-Tune centre change or pin follows the
+anchor rules (6.2, 6.3); and the anchor's own band change is a pan move (ruling 6.5). Naming
+any other slice, they are refused as above: a device reaches a shared receiver only through
+its own slice on it.
 
 ### 5.7 The active slice
 
