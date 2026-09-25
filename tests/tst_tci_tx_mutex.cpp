@@ -75,7 +75,37 @@ private slots:
     void station_server_refuses_transmit_until_remote_transmit();
     void station_server_refuses_transmit_settings();
     void second_app_trx_follows_thetis_rule();
+    void stop_releases_the_tx_audio_client();
 };
+
+// R-R3-39: stopping the server while an app holds the TX audio releases it
+// as the app's disconnect does: txAudioActiveClientChanged(nullptr), so the
+// indicator and the TX channel's TCI audio gate show no TX audio client.
+// A stop with no holder says nothing.
+void TestTciTxMutex::stop_releases_the_tx_audio_client()
+{
+    TciServer server(nullptr);
+    QVERIFY(server.start(0));
+    QSignalSpy holder(&server, &TciServer::txAudioActiveClientChanged);
+    QWebSocket app;
+    QSignalSpy connected(&app, &QWebSocket::connected);
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeTxClientCount(), 1, 3000);
+    QCOMPARE(holder.count(), 1);
+    QVERIFY(holder.at(0).at(0).value<QWebSocket*>() != nullptr);
+
+    server.stop();
+    QCOMPARE(server.activeTxClientCount(), 0);
+    QCOMPARE(holder.count(), 2);
+    QCOMPARE(holder.at(1).at(0).value<QWebSocket*>(), static_cast<QWebSocket*>(nullptr));
+
+    // No holder: a second start and stop emits nothing.
+    QVERIFY(server.start(0));
+    server.stop();
+    QCOMPARE(holder.count(), 2);
+}
 
 // ── tx_mutex_single_client_claim_and_release() ───────────────────────────────
 //

@@ -62,9 +62,9 @@
 //                block is encoded there and sent back here in order. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-25 - R-R3-39: stop() ends a TX audio holder's cycle as its
-//                disconnect does (stopTxChrono), so the TCI transmit
-//                resampler is freed. J.J. Boyd (KG4VCF), AI-assisted via
-//                Anthropic Claude Code.
+//                disconnect does (txAudioActiveClientChanged(nullptr), then
+//                stopTxChrono), so the TCI transmit resampler is freed.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-25 - D14 / R-R3-49: the TX sensors' mic level is Thetis's MIC
 //                reading, max(-195, TXA_MIC_AV) (thetisTxReading). J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -1588,6 +1588,10 @@ void TciServer::stop()
     const bool heldTxAudio = !m_txAudioActiveClient.isNull();
     m_txAudioActiveClient = nullptr;
     if (heldTxAudio) {
+        // As on a holder's disconnect: nothing keeps showing a TX audio
+        // client (the indicator, and MainWindow's TCI audio gate on the TX
+        // channel) once the server has stopped.
+        emit txAudioActiveClientChanged(nullptr);
         stopTxChrono();
     }
 
