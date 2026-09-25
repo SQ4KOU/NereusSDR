@@ -4979,11 +4979,22 @@ private slots:
         h.remoteHeadphonesBus->setOutputPacingAvailableForTesting(false);
         QTRY_VERIFY_WITH_TIMEOUT(!remoteMedia.headphonesProblem().isEmpty(), 5000);
         const QString problem = remoteMedia.headphonesProblem();
-        QCOMPARE(problem, RemoteMediaController::headphonesFaultText(
-                              RemoteAudioReceiver::Fault::SpeakerTimingUnavailable));
-        QCOMPARE(problem, QStringLiteral("The headphones stopped reporting their timing. Turn the "
-                                         "headphones off and on in Setup, Audio, Devices to try "
-                                         "again."));
+        // Which fault the receiver reports depends on where its worker is
+        // when the timing goes: at its pacing read it reports the timing,
+        // inside its write loop the write fails first (the headphones bus
+        // refuses a write without timing). Either stops the headphones, and
+        // the worker returns after the first, so exactly one is reported.
+        const QString timingText = QStringLiteral(
+            "The headphones stopped reporting their timing. Turn the headphones off and on in "
+            "Setup, Audio, Devices to try again.");
+        const QString writeText = QStringLiteral(
+            "Audio could not be sent to the headphones. Turn the headphones off and on in "
+            "Setup, Audio, Devices to try again.");
+        QCOMPARE(RemoteMediaController::headphonesFaultText(
+                     RemoteAudioReceiver::Fault::SpeakerTimingUnavailable), timingText);
+        QCOMPARE(RemoteMediaController::headphonesFaultText(
+                     RemoteAudioReceiver::Fault::SpeakerWriteFailed), writeText);
+        QVERIFY2(problem == timingText || problem == writeText, qPrintable(problem));
         QVERIFY(OperatorWording::isPlain(problem));
         QCOMPARE(errors.count(), 1);
         QCOMPARE(errors.constFirst().at(0).toString(), problem);
