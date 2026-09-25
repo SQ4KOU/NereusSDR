@@ -7308,6 +7308,9 @@ nereus_add_test(tst_slice_ownership EXTRA_LABELS session)
 # iPhone app Task 74 (R-IOS-02, R-IOS-30): each receiver's anchor, and the
 # confirm step (a pan move, a take, Take it back, the readback, notices).
 nereus_add_test(tst_receiver_anchor EXTRA_LABELS session)
+# iPhone app Task 75 (R-IOS-30): which other devices a radio-wide setting
+# disturbs, table-driven; the receive antenna kept on a band crossing.
+nereus_add_test(tst_disturbance_check EXTRA_LABELS session)
 nereus_add_test(tst_confirm_step
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)

@@ -847,6 +847,9 @@ set(CORE_SOURCES
     # iPhone app Task 73 (R-IOS-02): whose each slice is, the held-for mark
     # and each owner's active slice.
     src/core/SliceOwnership.cpp
+    # iPhone app Task 75 (R-IOS-30): which other devices a radio-wide
+    # setting disturbs.
+    src/core/DisturbanceCheck.cpp
     src/core/WidebandFrameAccumulator.cpp
     src/core/WidebandFftEngine.cpp
     src/core/spectrum/WidebandDisplayReference.cpp
