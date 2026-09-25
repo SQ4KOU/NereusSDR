@@ -655,6 +655,83 @@ private slots:
         QVERIFY(twice.value(QStringLiteral("reason")).toString() != kWaiting);
     }
 
+    // Fix wave C2 (ruling 5.2, its last paragraph): the phone leaves last,
+    // so its slice is held for it; the desktop then takes that receiver.
+    // Nobody is there to ask or tell, so the closed slice is saved in the
+    // phone's layout store, and its next sign-in restores it with its
+    // settings.
+    void aHeldSliceATakeClosesIsSavedForItsOwnerAndRestoredAtItsReturn()
+    {
+        Core core;
+        Device phone;
+        Device desktop(QStringLiteral("Mac"), QStringLiteral("computer"));
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        core.pair(phone);
+        core.pair(desktop);
+        LoopbackTransport* appPhone = core.signIn(phone);
+        QVERIFY(admitted(appPhone));
+        core.model->sliceById(0)->setAfGain(17);
+        QVERIFY(core.invoke(appPhone, "session.leave").value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(!appPhone->isOpen());
+        QCOMPARE(core.model->sliceOwnership()->mark(0).heldFor, phone.key.fingerprint());
+        const int heldReceiver = streamOf(core, 0);
+        QVERIFY(heldReceiver >= 0);
+
+        LoopbackTransport* appDesk = core.signIn(desktop);
+        QVERIFY(admitted(appDesk));
+        const int deskSlice =
+            core.model->sliceOwnership()->ownedBy(desktop.key.fingerprint()).first();
+        core.model->sliceById(deskSlice)->setFrequency(14074000.0);
+        QVERIFY(streamOf(core, deskSlice) >= 0 && streamOf(core, deskSlice) != heldReceiver);
+
+        // Every receiver is in use: the desktop takes the held slice's.
+        QCOMPARE(core.invoke(appDesk, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-d2"))})
+                     .value(QStringLiteral("accepted")).toBool(true),
+                 false);
+        const QJsonObject ask = waitForLast(appDesk, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("takeReceiver"));
+        int choice = -1;
+        for (const QJsonValue& v : ask.value(QStringLiteral("choices")).toArray()) {
+            if (v.toObject().value(QStringLiteral("streamIndex")).toInt() == heldReceiver) {
+                choice = v.toObject().value(QStringLiteral("choice")).toInt();
+            }
+        }
+        QVERIFY(choice >= 0);
+        const QJsonObject done = core.invoke(
+            appDesk, "confirm.proceed",
+            {int64("id", ask.value(QStringLiteral("id")).toInteger()), int64("choice", choice)});
+        QVERIFY2(done.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(done).toJson().constData());
+        QVERIFY(core.model->sliceOwnership()->heldFor(phone.key.fingerprint()).isEmpty());
+
+        // Saved for the phone, with its settings.
+        const QString mac = core.model->currentRadioMac();
+        const QList<SavedSlice> saved =
+            DeviceLayoutStore::load(AppSettings::instance(), mac, phone.key.fingerprint());
+        QCOMPARE(saved.size(), 1);
+        QCOMPARE(saved.first().id, 0);
+        QCOMPARE(saved.first().frequencyHz, 7074000.0);
+        QCOMPARE(saved.first().settings.value(QStringLiteral("Slice/AfGain")), QStringLiteral("17"));
+
+        // The desktop closes its new slice, freeing the receiver.
+        const QString newKey = done.value(QStringLiteral("affected")).toArray().first().toString();
+        QVERIFY(newKey.startsWith(QStringLiteral("slice:")));
+        QVERIFY(core.invoke(appDesk, "removeSlice", {int64("sliceId", newKey.mid(6).toInt())})
+                    .value(QStringLiteral("accepted")).toBool());
+
+        // The phone signs in again and has its slice back.
+        LoopbackTransport* back = core.signIn(phone);
+        QVERIFY(admitted(back));
+        const QList<int> own = core.model->sliceOwnership()->ownedBy(phone.key.fingerprint());
+        QCOMPARE(own.size(), 1);
+        QCOMPARE(core.model->sliceById(own.first())->frequency(), 7074000.0);
+        QCOMPARE(core.model->sliceById(own.first())->afGain(), 17);
+        QVERIFY(core.server->slicesNotRestored(phone.key.fingerprint()).isEmpty());
+        QVERIFY(DeviceLayoutStore::load(AppSettings::instance(), mac, phone.key.fingerprint())
+                    .isEmpty());
+    }
+
     void theSliceCapFullOffersTheSliceChooser()
     {
         Shared s(2, 2);

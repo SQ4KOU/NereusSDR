@@ -831,7 +831,7 @@ void StationServer::applyPanMove(const PanMoveCheck& check, const QByteArray& re
     for (const ReceiverPlanner::Disturbed& d : check.plan.disturbed) {
         if (d.effect == ReceiverPlanner::Effect::Closes) {
             SavedSlice closed;
-            if (closeSliceFor(d.sliceId, QByteArray(), &closed)) {
+            if (closeSliceFor(d.sliceId, saveForAbsentSubject(d.sliceId), &closed)) {
                 closedBy[d.device].append(closed);
             }
         }
@@ -841,7 +841,7 @@ void StationServer::applyPanMove(const PanMoveCheck& check, const QByteArray& re
     for (const int id : unplaced) {
         const QByteArray device = m_radioModel->sliceOwnership()->mark(id).subject();
         SavedSlice closed;
-        if (closeSliceFor(id, QByteArray(), &closed)) {
+        if (closeSliceFor(id, saveForAbsentSubject(id), &closed)) {
             closedBy[device].append(closed);
         }
     }
@@ -981,7 +981,10 @@ QHash<QByteArray, QList<SavedSlice>> StationServer::closeForTake(const QList<int
     for (const int id : sliceIds) {
         const QByteArray device = m_radioModel->sliceOwnership()->mark(id).subject();
         SavedSlice closed;
-        if (closeSliceFor(id, QByteArray(), &closed)) {
+        // Ruling 5.2's last paragraph: a slice held for a device that has
+        // left is saved in its layout store; its notice has nobody to
+        // reach, so the store is where its owner finds it again.
+        if (closeSliceFor(id, saveForAbsentSubject(id), &closed)) {
             closedBy[device].append(closed);
         }
     }

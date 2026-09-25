@@ -1120,7 +1120,7 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
     QList<QByteArray> closedDevices;
     for (int id : now.closes) {
         const QByteArray who = m_radioModel->sliceOwnership()->mark(id).subject();
-        if (closeSliceFor(id, QByteArray(), nullptr) && !closedDevices.contains(who)) {
+        if (closeSliceFor(id, saveForAbsentSubject(id), nullptr) && !closedDevices.contains(who)) {
             closedDevices.append(who);
         }
     }

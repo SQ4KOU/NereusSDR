@@ -4183,6 +4183,19 @@ bool StationServer::closeSliceFor(int sliceId, const QByteArray& saveFor, SavedS
     return true;
 }
 
+QByteArray StationServer::saveForAbsentSubject(int sliceId) const
+{
+    if (m_radioModel.isNull()) {
+        return {};
+    }
+    const QByteArray subject = m_radioModel->sliceOwnership()->mark(sliceId).subject();
+    if (subject.isEmpty() || subject == SliceOwnership::stationDevice()
+        || subject.startsWith("token:") || m_deviceSessions->entry(subject)) {
+        return {};
+    }
+    return subject;
+}
+
 void StationServer::releaseDeviceSlices(const QByteArray& deviceId)
 {
     if (m_radioModel.isNull() || deviceId.isEmpty()

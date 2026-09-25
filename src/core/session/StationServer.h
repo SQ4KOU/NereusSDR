@@ -995,6 +995,13 @@ private:
     /// request, saving it for `saveFor` when set; false (nothing done)
     /// when it is the Core's last slice.
     bool closeSliceFor(int sliceId, const QByteArray& saveFor, SavedSlice* closed = nullptr);
+    /// Fix wave C2 (ruling 5.2, its last paragraph): the paired device a
+    /// slice another device's take, pan move or rate change is about to
+    /// close must be saved for, because it has left (no registry entry)
+    /// and nobody is there to ask or tell; empty for a device holding a
+    /// place (its notice keeps the slice), a token window, the station
+    /// device, or a slice nobody owns.
+    QByteArray saveForAbsentSubject(int sliceId) const;
     /// Each attached view's `slice:` and `marker:` forms after an owner
     /// change: object.destroy of the old form, object.create of the new.
     void onSliceOwnerChanged(int sliceId, const QByteArray& oldOwner,
