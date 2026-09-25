@@ -68,6 +68,20 @@
 //   2026-09-25 - D14 / R-R3-49: the TX sensors' mic level is Thetis's MIC
 //                reading, max(-195, TXA_MIC_AV) (thetisTxReading). J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7 fix wave
+//                (R-R3-49): the trx note says what an app's trx:N,false
+//                does since Task 7 (it releases a TCI key only). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7 follow-up
+//                (R-R3-49): a trx:N,true,tci that keyed nothing and left no
+//                TCI level held gives the TX audio lock back and stops
+//                TX_CHRONO. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 12 (R-R3-49): a
+//                slice's frequency and centre changes send dds and if, and
+//                each line reaches an app's update gap with the gate its
+//                event named. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -749,16 +763,35 @@ void TciServer::wireSliceForBroadcast(SliceModel* slice, int sliceId)
     // are the one thing about Slice C the wire may legitimately hear, and
     // dropping them would mean a client following tx_frequency froze the
     // moment the operator handed TX to an internal slice and tuned it.
+    //
+    // Task 12 (R-R3-49): a tune is a VFO event (if + vfo) and, when it moved
+    // the pan with it, a centre event (dds + if) too. The centre event is
+    // queued on every tune and dropped at drain when the centre did not move,
+    // because which of the two a tune was is only known once RadioModel and
+    // the pan have settled the slice's offset.
     connect(slice, &SliceModel::frequencyChanged, this,
             [this, sliceId, exposed](double freq) {
                 const auto hz = static_cast<qint64>(freq);
                 if (exposed) {
                     m_protocol->enqueueLocalBroadcastVfo(
                         sliceId, hz, sliceDrivesTx(sliceId));
+                    m_protocol->enqueueLocalBroadcastCentre(sliceId);
                 } else if (sliceDrivesTx(sliceId)) {
                     m_protocol->enqueueLocalBroadcastTxFrequency(hz);
                 }
             });
+
+    // Task 12 (R-R3-49): the slice's offset from its stream centre moved (a
+    // pan drag, a pan that follows the VFO, a restream): a centre event,
+    // as Thetis's CentreFrequency setter fires CentreFrequencyHandlers
+    // (console.cs:10781-10789 [v2.10.3.15]) and TCIServer answers with
+    // dds and if (TCIServer.cs:7364-7388 [v2.10.3.15]).
+    if (exposed) {
+        connect(slice, &SliceModel::shiftOffsetHzChanged, this,
+                [this, sliceId](double) {
+                    m_protocol->enqueueLocalBroadcastCentre(sliceId);
+                });
+    }
 
     // Everything below this point is tagged with a receiver index, so it
     // stops at the advertised count.
@@ -2515,6 +2548,10 @@ void TciServer::onTextMessageReceived(const QString& msg)
     session->lastCommand   = msg;
     session->lastCommandAt = QDateTime::currentMSecsSinceEpoch();
 
+    // Task 7 follow-up (R-R3-49): this app took (or kept) the TX audio lock
+    // for its trx:N,true,tci. Checked again after the protocol's setMox.
+    bool trxTookTxAudio = false;
+
     // Phase 3J-1 closeout Item 2 (2026-05-12): firehose for TciLogWindow.
     // Strip the trailing ';' for readability in the log view.  Peer comes
     // from the session struct populated in onNewConnection.
@@ -2910,9 +2947,14 @@ void TciServer::onTextMessageReceived(const QString& msg)
                         // keyed does nothing and is not answered; with it
                         // unkeyed, the trx keys it even when another app
                         // holds the TX audio (only the asker's audio is
-                        // refused); and any app's trx:N,false unkeys (the
-                        // protocol's setMox). Unkeying also releases the TX
-                        // audio (hookGlobalBroadcasts, OnMoxPreChangeHandler).
+                        // refused); and any app's trx:N,false releases a TCI
+                        // key (the protocol's setMox). Since Task 7 a key
+                        // another source holds (the MOX button, the mic, VOX)
+                        // stays: PollPTT releases only in PTTMode.TCI. The
+                        // asking app is answered with the real state and no
+                        // app is told the requested one (Task 7 fix wave).
+                        // Unkeying also releases the TX audio
+                        // (hookGlobalBroadcasts, OnMoxPreChangeHandler).
                         // Still not ported: the CW break-in guard
                         // (shouldIgnoreTrxForCurrentCwBreakIn, CW transmit is
                         // not built) and the VFOATX/VFOBTX choice by
@@ -2942,6 +2984,7 @@ void TciServer::onTextMessageReceived(const QString& msg)
                                 // TX_CHRONO timing frames so WSJT-X begins
                                 // streaming TX_AUDIO_STREAM binary frames.
                                 startTxChrono(ws, trxIdx);
+                                trxTookTxAudio = true;
                             } else {
                                 // Phase 26 review finding #10: explicit find +
                                 // fallback string, zero allocation path.
@@ -2990,6 +3033,30 @@ void TciServer::onTextMessageReceived(const QString& msg)
     // in priority order. Coalescing (Thetis m_outboundCoalescedFrames at
     // TCIServer.cs:769-774 [v2.10.3.13]) lands in Phase 15.
     const QString response = m_protocol->handleCommand(msg);
+
+    // Task 7 follow-up (R-R3-49): the trx keyed nothing and holds no TCI
+    // level (refused by the band plan, the interlock or the microphone
+    // check, or made under TX inhibit or a PA trip): give the TX audio
+    // back and stop TX_CHRONO. Otherwise the lock stays with the app until
+    // its trx:N,false or any unkey, and meanwhile a MOX-button, mic or VOX
+    // key transmits the app's TCI buffer instead of the microphone and
+    // skips R-R3-36's microphone-ready check (RadioModel::
+    // pcCaptureGatesKeying). A trx held off by a manual key keeps its
+    // level, and the lock, for the key that follows.
+    //
+    // Not in Thetis: its handleTrxMessage keeps the listener's
+    // ownsActiveTciPtt until the app's trx:false or OnMoxPreChangeHandler
+    // (TCIServer.cs:3623-3672 [v2.10.3.15]).
+    if (trxTookTxAudio && m_model && m_model->moxController() != nullptr
+        && !m_model->moxController()->isTciPttHeld()
+        && !m_txAudioActiveClient.isNull() && m_txAudioActiveClient.data() == ws) {
+        m_txAudioActiveClient = nullptr;
+        qCInfo(lcTci) << "TciServer: TX audio mutex released for" << session->peer
+                      << "(its trx keyed nothing)";
+        emit txAudioActiveClientChanged(nullptr);
+        stopTxChrono();
+    }
+
     if (!response.isEmpty()) {
         session->sendQueue.push(TciSendQueue::Priority::Control, response);
     }
@@ -3007,16 +3074,21 @@ void TciServer::onTextMessageReceived(const QString& msg)
 // (TCIServer.cs:750-758 [v2.10.3.15]).
 void TciServer::broadcastPendingNotifications()
 {
+    // Task 12 (R-R3-49): each line keeps the gate its event bound to it
+    // when it was queued, so an if line is never sorted by its neighbours.
     QStringList pending;
+    std::vector<std::optional<TciUpdateGap::Gate>> gates;
     while (m_protocol->hasPendingNotification()) {
-        pending << m_protocol->takePendingNotification();
+        TciProtocol::PendingLine line = m_protocol->takePendingLine();
+        pending << line.frame;
+        gates.push_back(line.gate);
     }
     if (pending.isEmpty()) {
         return;
     }
     const qint64 nowMs = m_gapClock.elapsed();
     for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
-        for (const QString& line : sit.value()->updateGap.offer(pending, nowMs)) {
+        for (const QString& line : sit.value()->updateGap.offer(pending, gates, nowMs)) {
             sit.value()->sendQueue.push(TciSendQueue::Priority::Control, line);
         }
     }

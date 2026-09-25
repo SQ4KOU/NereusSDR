@@ -464,3 +464,226 @@ the TCI broadcast tests and `tests/tst_tci_update_gap.cpp`.
 **Execution note (advisory):** opus. Before Task 7, which runs last.
 
 - [ ] **Step 1:** Read the Thetis sends, test, fix, commit.
+
+## Task 13: The radio's TX inhibit input reaches the keying gate, as Thetis reads it
+
+**Requirements:** the 3M-1 transmit work; the source-first rule. Found by Task 7's re-review:
+Task 7's fix wave wired TX inhibit and the PA trip into every keying source, but nothing in
+production asserts them. `TxInhibitMonitor::setUserIoReader`, `notifyRxOnly`,
+`notifyOutOfBand` and `notifyBlockTxAntenna` have only test callers. The monitor has no poll
+of its own, and `handleGanymedeTrip` has no production caller.
+
+**Source first:** Thetis `console.cs` `PollTXInhibit` (`console.cs:25849-25887 [v2.10.3.15]`,
+polled every 100 ms from power-on at `27417-27425`):
+- the model gate `_useTxInhibit && Model != HPSDR`;
+- Protocol 1: `!getUserI02()` for ANAN_G2E, 7000D, 8000D and RedPitaya (`//DH1KLM`,
+  `//N1GP G2E added`), otherwise `!getUserI01()`;
+- Protocol 2: `!getUserI05_p2()` for 7000D, 8000D, G2, G2_1K, ANVELINAPRO3 and RedPitaya,
+  otherwise `!getUserI04_p2()`;
+- `_reverseTxInhibit`, then `TXInhibitChangedHandlers`, then `OnTXInhibitChanged`
+  (`45353-45356`), then the TXInhibit setter (`15342-15366`).
+
+On the wire:
+- Protocol 1: `networkproto1.c:336`, `user_dig_in = (C1 >> 1) & 0xf` when `C0 & 0xf8 == 0x00`;
+- Protocol 2: `network.c:756`, `user_dig_in = ReadBufp[55]` in the high-priority status
+  packet (the Thetis comment says byte 59; the code reads 55);
+- the accessors: `netInterface.c:245-289`.
+
+For the HL2, read mi0bot-Thetis for its own inputs. For the Ganymede PA trip, read Thetis's CAT
+handling of the Ganymede message.
+
+**Files:**
+- `src/core/P1RadioConnection.cpp` and `src/core/P2RadioConnection.cpp` (parse the user
+  digital inputs);
+- `src/core/TxInhibitMonitor.{h,cpp}` (a per-status-frame or 100 ms reader);
+- `src/models/RadioModel.cpp` (wiring, the setting's `useTxInhibit` and `reverseTxInhibit`);
+- the Setup control, if Thetis shows one (source first);
+- tests.
+
+**Acceptance:**
+- Each model reads the input bit Thetis reads, on each protocol, with the reverse option.
+- A change reaches `TxInhibitMonitor` within one status frame or 100 ms, and every keying
+  source is blocked while it holds (Task 7's gate). The P1 and P2 status parsers carry a test
+  with the exact byte positions.
+- The Ganymede trip reaches `handleGanymedeTrip` from its real source, or a NEEDS_CONTEXT if
+  NereusSDR has none.
+- A CAT or TCI request made while blocked is dropped, not held (Task 7's re-review, N3).
+
+**Verification:** the transmit boundary, so tests come first. Bench pending with the
+operator's go-ahead: a sequencer or a jumper on the radio's input.
+
+**Execution note (advisory):** opus. After Task 7's follow-up.
+
+- [ ] **Step 1:** Read the sources, then write the parsers, the reader and the tests.
+
+## Task 14: Band outputs and filters follow the right slice, as Thetis and mi0bot choose them
+
+**Requirements:** the 3M-1 transmit work, Phase 3F section 16.3.2, R-R3-49 (every control does
+what its label says). Found by the whole-branch re-review's audit
+(`.crew/2026-09-24-receiver-and-transmit-gaps-plan/rereview-whole-branch-report.md`, Part 2).
+All five gaps predate this branch.
+
+1. **Transmit band outputs on Protocol 1 ignore the transmitting slice.**
+   - While keyed, `buildCodecContext` builds the OC byte from the RX1 stand-in's band
+     (`P1RadioConnection.cpp:2582-2587`).
+   - In a cross-band split this sends a carrier through the wrong band's filter.
+   - On the HL2 the N2ADR board's transmit low-pass is chosen by these pins
+     (`N2adrPreset.cpp:92-121`). A 7 MHz carrier selects the 30/20 m low-pass, so the second
+     harmonic leaves unfiltered. A 14 MHz carrier into the 60/40 m low-pass reflects power into
+     the PA.
+2. **Protocol 2 sends no band outputs at all.**
+   - Thetis writes them to the high-priority packet's byte 1401 (`network.c:1031`).
+   - No NereusSDR Protocol 2 codec writes that byte, although Setup shows the OC Outputs tab
+     for the G2.
+3. **The Protocol 2 receive low-pass follows the last retuned receiver** instead of Thetis's
+   rule (`P2RadioConnection.cpp:980-982`).
+4. **"HPF Bypass on TX" is saved but never read** on either protocol
+   (`AntennaAlexAlex1Tab.cpp:381`).
+5. **The band comes from the receiver's DDC centre, not its VFO frequency.** Near a band edge
+   with CTUN, the two can name different bands.
+
+**Source first** (Thetis v2.10.3.15 at `3759d096`; mi0bot-Thetis at `c26a8a4` for the HL2):
+- `Penny.cs:170-178`: receive uses `RXABitMasks[band of VFOA]`; transmit uses
+  `TXABitMasks[band of VFOB]` when `VFOBTX` is set, otherwise VFOA's band.
+- The callers pass `lo_band` and `lo_bandb` (`console.cs:14935-14937`, `29101-29106`
+  `HdwMOXChanged`, `45950-45955`). `VFOBTX` is `chkVFOBTX` (`console.cs:39833`).
+- mi0bot `Penny.cs:176-190` is the HL2 branch. `console.cs:14986-14988` is the HL2's OC band.
+- `network.c:1031`: `packetbuf[1401] = (oc_output << 1) & 0xfe`.
+- `console.cs:15487-15498` is the receive low-pass. It is named `UpdateAlexTXFilter` but
+  runs unkeyed: the higher of RX1 and RX2 on a board with no separate RX2 front end, otherwise
+  RX1.
+- `console.cs:15467-15469` and `6843-6848`: `disable_hpf_on_tx` gives the HPF word 0x20
+  while keyed.
+- If a source cannot be found, stop with NEEDS_CONTEXT. Never guess a byte or a bit.
+
+**Files:**
+- `src/core/P1RadioConnection.{h,cpp}` (the keyed OC band from the transmit frequency; the
+  band from the VFO frequency);
+- `src/core/P2RadioConnection.{h,cpp}` and the Protocol 2 codecs that build the
+  high-priority packet (byte 1401; the receive low-pass rule; HPF bypass while keyed);
+- `src/models/RadioModel.cpp` (whatever the connections need: the transmitting slice's
+  frequency, the stand-in's VFO frequency, the bypass setting);
+- the Alex tab's setting reader;
+- tests, including the Protocol 2 regression freeze baseline, updated in its own commit with
+  the reason.
+
+**Acceptance:**
+- **Protocol 1, keyed.** The OC byte is the transmit mask for the band of the transmitting
+  slice's frequency (plus XIT, as the Alex transmit low-pass already uses), whichever slice
+  that is.
+  - HL2 test: A on 20 m, B transmitting on 40 m gives the 40 m transmit mask (0x04 per
+    `N2adrPreset.cpp`). The reverse case is also tested.
+  - A Hermes test does the same.
+  - Unkeyed bytes are unchanged, the HL2's two-range bypass included, which is the operator's
+    hardware ruling.
+- **Protocol 2.** Byte 1401 carries `(oc_output << 1) & 0xfe` on every board with OC outputs:
+  unkeyed, the receive mask for the RX1 stand-in's band; keyed, the transmit mask for the
+  transmitting slice's band. A test covers the G2 byte in both states.
+- **Protocol 2 receive low-pass.** RX1 (the stand-in) on a board with a separate RX2 front
+  end; otherwise the higher of the stand-in and the second receiver, as Thetis does. It no
+  longer depends on which receiver was retuned last. Tested on the G2.
+- **HPF Bypass on TX.** When set, the high-pass word is 0x20 while keyed, on both protocols.
+  It is applied live, and a remote window's change reaches the Core. Tested.
+- **Band from the VFO.** Every band decision above comes from the slice's VFO frequency, as
+  Thetis's `BandByFreq(VFOAFreq)` does. Tested with CTUN near a band edge.
+- Nothing in a test keys a real radio. The Protocol 1 freeze baseline is unchanged unless a
+  state it pins is one of these fixes; say which.
+
+**Verification:** transmit filter selection, so tests come first, red on the base commit.
+Freezes on both protocols. This task gets a scoped review of its own before the operator's HL2
+bench, as Task 7 did.
+
+Bench (pending, the operator's go-ahead, dummy load, low power):
+- On the HL2, key TUNE on B after A is closed, then in a cross-band split: the I/O tab shows
+  the transmitting slice's mask.
+- On the G2, an OC output follows the band in receive and in transmit.
+
+**HL2 bench script (Task 14 fix wave).** The Pi 4 Core with the HL2 runs this branch; the
+operator drives it from a remote window. The N2ADR filter board is fitted and enabled. Dummy
+load, TUNE at the lowest power, and the operator's go-ahead before any key-down.
+
+Where to read the band outputs:
+- **In the remote window (the pass/fail reading).** Setup > Hardware > HL2 I/O: the OC strip
+  (`band=`, the byte, `RX`/`TX` and seven pin lights). Setup > Hardware > OC Outputs: the
+  live pin row, seven pin lights and nothing else. Both show the byte the Core's connection
+  sent to the radio (`RadioModel::bandOutputsByte`), not one worked out in the window. Before
+  the Core has sent one the strip shows `--` and no pins, and the row is dark.
+- **Read unkeyed 0x00 on the I/O strip only.** The OC row has no byte, no `--` and no
+  `RX`/`TX`, so a byte of 0x00 and a byte not yet known both leave it dark. Steps 1, 7 and 9
+  (unkeyed, 0x00) are therefore read on the I/O strip; the OC row is a second witness only for
+  a keyed byte with a pin lit (steps 3, 8, 9 keyed, 10 and 11).
+- **On the Pi (the second witness).** The Core logs `HL2 ocByte=0xNN band=B mox=M` whenever
+  the byte changes (`P1RadioConnection.cpp`, beside the OC compose):
+  `sudo -n journalctl -u nereusd -f | grep --line-buffered "HL2 ocByte="`
+  (the same line is in `~/.config/NereusSDR/nereussdr.log` under the service's home,
+  `/var/lib/nereusd`). `band` is the band index: 3 = 40 m, 5 = 20 m; `mox=1` is keyed.
+- Transmit pins on the N2ADR board (`N2adrPreset.cpp`): pin 3 (0x04) is the 60/40 m
+  low-pass, pin 4 (0x08) the 30/20 m low-pass. With two filter ranges open the board is
+  bypassed while receiving (0x00).
+
+Receive:
+1. Connect. Slice A on 14.074 MHz (pan 1), slice B on 7.074 MHz (pan 2). A hears 20 m FT8, B
+   hears 40 m FT8, each pan shows its own band. The I/O strip reads `0X00 RX` (two ranges
+   open: receive bypass); the OC row is dark.
+2. Add C on 14.080 MHz and D on 7.080 MHz, then E on 14.030 MHz. Each joins the pan of its
+   band and hears its own frequency; a sixth slice is refused with the slice-limit message.
+3. PureSignal off. Close B, C, D and E so only A (20 m) is open. Key TUNE on A for 5 s:
+   receive mutes; the I/O strip reads `0X08 TX`, the OC row lights pin 4 only, and the Pi logs
+   `ocByte=0x08 band=5 mox=1`. After unkey, A's receive pins are back within a second.
+4. PureSignal on. Reopen B on 7.074 MHz. Key a two-tone on A for 10 s: pan 1 keeps drawing,
+   B's pan shows PS HOLD, PureSignal calibrates; after unkey B hears 40 m again.
+5. Close A, keep B and D (40 m). B and D keep hearing 40 m FT8 at the same strength.
+6. Tune B to 14.074 MHz: B hears 20 m at full strength.
+7. Add a slice on 3.573 MHz: it hears 80 m and B 20 m; the I/O strip reads `0X00 RX` again.
+
+Transmit (the band outputs follow the transmitting slice):
+8. Close the 80 m slice and D, so only B (20 m) is open, with A closed. Hand the transmitter
+   to B (TX badge on B's flag). Key TUNE on B for 3 s: the I/O strip reads `0X08 TX`,
+   band 20m, the OC row lights pin 4 only; the Pi logs `ocByte=0x08 band=5 mox=1`. Normal forward power into the
+   dummy load, low SWR.
+9. Cross-band split, B transmitting on the lower band. Open A on 14.074 MHz (pan 1), tune B to
+   7.074 MHz, the transmitter still on B. Unkeyed the I/O strip reads `0X00 RX`. Key TUNE on
+   B for 3 s: the strip reads `0X04 TX`, band 40m, and the OC row lights pin 3, not pin 4; the
+   Pi logs `ocByte=0x04 band=3 mox=1`.
+   Normal power and SWR. Before Task 14 the wire carried pin 4 here: the 40 m carrier's second
+   harmonic left through the 30/20 m low-pass. Before this fix wave the OC Outputs row showed
+   pan 1's 20 m pins whatever the wire carried, so the row is now a valid keyed reading.
+10. The reverse. Tune A to 7.074 MHz and B to 14.074 MHz, the transmitter on B. Key TUNE on B
+    for 3 s: the strip reads `0X08 TX`, band 20m, and the OC row lights pin 4, not pin 3; the
+    Pi logs `ocByte=0x08 band=5 mox=1`.
+    Normal power, low SWR. Before Task 14 the 20 m carrier went into the 60/40 m low-pass:
+    high SWR, power reflected into the PA.
+11. Hand the transmitter back to A (7.074 MHz). Key TUNE for 3 s: the strip reads `0X04 TX`,
+    band 40m, the OC row lights pin 3 only; the Pi logs `ocByte=0x04 band=3 mox=1`.
+
+Fail, and unkey at once, if a keyed step shows another slice's band pin in the window or in
+the Pi's log, if the window and the log disagree, if the SWR rises, or if the forward power
+folds back.
+
+Receive notes (Task 14 review, M1): unkeyed, the band behind the receive pins is the RX1
+stand-in's VFO, not its stream centre, as Thetis takes `BandByFreq(VFOAFreq)`. The receive
+byte can therefore change from what an earlier build sent in two states:
+- **CTUN near a band edge.** The VFO sits in one band while the stream's centre sits in the
+  next (for example a VFO at 14.010 MHz with the centre below 14.000 MHz): the pins are the
+  VFO's band.
+- **A slice that joined another slice's stream.** A slice opened inside an existing stream
+  shares it (`JoinedExisting`) without moving its centre, so its VFO can sit up to half the
+  stream bandwidth from the centre, in another band. When it is the lowest-lettered slice on
+  the RX1 slot, its VFO's band chooses the pins. To see it, first set the receive sample rate
+  to 192 kHz or more (Setup > Hardware > Radio Info, "Sample rate (Hz)"; 192 or 384 kHz on the
+  HL2). A stream is then at least 192 kHz wide, 96 kHz either side of its centre, so C at
+  13.950 MHz, 70 kHz below B, falls inside B's stream (which is centred on B when B opens it);
+  at 48 or 96 kHz it does not, C does not join B's stream, and the case cannot be seen. Then, with A closed: open B at 14.020 MHz,
+  then C at 13.950 MHz (outside 20 m, inside B's stream, so both show on one stream), then
+  close B. The stream stays centred in 20 m, and the I/O strip shows the pins for C's band
+  (GEN), not 20 m's.
+
+**Execution note (advisory):** opus. After the whole-branch fix wave. Shares
+`P1RadioConnection.cpp` and `P2RadioConnection.cpp` with nothing in flight.
+
+- [ ] **Step 1:** Read the sources. Write the tests for all five gaps and show them red.
+- [ ] **Step 2:** Protocol 1's keyed band, then the band from the VFO.
+- [ ] **Step 3:** Protocol 2's byte 1401 and the receive low-pass rule, with the freeze
+  baseline in its own commit.
+- [ ] **Step 4:** HPF Bypass on TX on both protocols. Update the HL2 bench script with the
+  transmit steps.

@@ -13,6 +13,11 @@
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-49, R-R3-21). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Receiver and transmit gaps plan, Task
+//                                    7: the MOX button keys through
+//                                    RadioModel::setMoxFromButton (a manual
+//                                    key). AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "gui/containers/ContainerButtonDispatcher.h"
@@ -249,8 +254,9 @@ QString ContainerButtonDispatcher::click(Id id, int rxSource)
         m_model->setTune(turnOn);
         break;
     case Id::Mox:
-        // TxApplet's MOX button (MoxController::setMox).
-        m_model->moxController()->setMox(turnOn);
+        // TxApplet's MOX button: a manual key, with TUN and two-tone turned
+        // off on the way off (RadioModel::setMoxFromButton, Task 7).
+        m_model->setMoxFromButton(turnOn);
         break;
     case Id::TwoTon:
         // TxApplet's 2-TONE button (TwoToneController::setActive).

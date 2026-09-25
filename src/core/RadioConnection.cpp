@@ -42,6 +42,14 @@ void RadioConnection::setState(ConnectionState newState)
             // like evidence from the replacement transport.
             m_lastPingRttMs = -1;
             m_lastPingRttAge.invalidate();
+            // Nothing is on the wire now, and RadioModel has cleared its
+            // copy of the band outputs. Forget what was last reported, so
+            // the first byte composed after a reconnect on this same object
+            // (Protocol 1's automatic retry) is reported again even when it
+            // is the same byte (plan Task 14 re-review N1, R-R3-49).
+            m_publishedOcByte  = -1;
+            m_publishedOcBand  = -1;
+            m_publishedOcKeyed = -1;
         }
         m_state.store(newState);
         emit connectionStateChanged(newState);

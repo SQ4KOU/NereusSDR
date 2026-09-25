@@ -48,6 +48,19 @@
 //                 the PC-microphone MOX admission check. NereusSDR-original;
 //                 no Thetis logic. Fix wave: isKeyingMox(), true only
 //                 around the walk's own setMox(true) call.
+//   2026-09-24 : Receiver and transmit gaps plan, Task 7 fix wave (M9),
+//                 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code. setTuneOffPendingFn: a start waits out a TUN-off
+//                 still completing (console.cs:44805-44813 [v2.10.3.15]).
+//                 A refused start keeps the manual key through the 200 ms
+//                 settle (M2, setup.cs:11190-11193 [v2.10.3.15]).
+//   2026-09-24 : Receiver and transmit gaps plan, Task 7 follow-up, by
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code. setTuneActiveFn: the refused start's settle leaves
+//                 a manual key TUN or the MOX button holds (N1).
+//                 setTuneOffFn: a start with TUN on turns TUN off through
+//                 its own path first (item 6, console.cs:44805-44813
+//                 [v2.10.3.15]).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation
@@ -58,6 +71,8 @@
 #include <QObject>
 #include <QPointer>
 #include <QTimer>
+
+#include <functional>
 
 #include "core/WdspTypes.h"
 #include "models/TransmitModel.h"  // for DrivePowerSource enum
@@ -219,6 +234,27 @@ public:
     // in Phase L.  Default true so unit tests don't have to flip it.
     void setPowerOn(bool on);
 
+    // setTuneOffPendingFn: Task 7 fix wave, M9. RadioModel supplies "a
+    // TUN-off has started and not completed" (the tune tone may still run).
+    // setActive(true) then waits kTuneReleaseSettleMs, and again until it
+    // has completed, before keying, as Thetis chk2TONE_CheckedChanged waits
+    // 300 ms after turning TUN off (console.cs:44805-44813 [v2.10.3.15]).
+    // Unset: no wait.
+    void setTuneOffPendingFn(std::function<bool()> fn);
+
+    // setTuneActiveFn: Task 7 follow-up. RadioModel supplies "TUN is on"
+    // (from setTune(true) until its TUN-off completes). A refused start's
+    // settle does not clear a manual key while TUN holds it (N1). Unset:
+    // TUN is taken as off.
+    void setTuneActiveFn(std::function<bool()> fn);
+
+    // setTuneOffFn: Task 7 follow-up, item 6. RadioModel supplies TUN's own
+    // off path (setTune(false)). setActive(true) with TUN on calls it, waits
+    // kTuneReleaseSettleMs and until the TUN-off completes, then keys, as
+    // Thetis chk2TONE_CheckedChanged does (console.cs:44805-44813
+    // [v2.10.3.15]). Unset: TUN is not turned off (a bare MOX release).
+    void setTuneOffFn(std::function<void()> fn);
+
     // ── Test seam ──────────────────────────────────────────────────────────
     // Override the default settle / Freq2-delay timer durations.  FOR
     // TESTING ONLY — production code must use the kXxx defaults.
@@ -273,6 +309,12 @@ private slots:
     // Stage 1 of the deactivation walk: fires after kMoxReleaseSettleMs
     // when setActive(false) is called.  Stops the gen + restores PWR.
     void onDeactivationSettleElapsed();
+
+    // Task 7 fix wave, M2: the manual key after a refused start is cleared
+    // when kMoxReleaseSettleMs has passed, as Thetis's stop branch clears
+    // console.ManualMox after its await Task.Delay(200)
+    // (setup.cs:11190-11193 [v2.10.3.15]).
+    void onRejectSettleElapsed();
 
     // Hooked to MoxController::moxRejected so we can clean up our state
     // when the BandPlanGuard rejects the setMox(true) call we just made.
@@ -340,6 +382,16 @@ private:
     QTimer m_tuneReleaseSettleTimer;
     QTimer m_freq2DelayTimer;
     QTimer m_deactivationSettleTimer;
+    QTimer m_rejectSettleTimer;   // Task 7 fix wave, M2
+
+    // Task 7 fix wave, M9: see setTuneOffPendingFn.
+    std::function<bool()> m_tuneOffPending;
+    // Task 7 follow-up: see setTuneActiveFn.
+    std::function<bool()> m_tuneActive;
+    // Task 7 follow-up, item 6: see setTuneOffFn.
+    std::function<void()> m_tuneOff;
+    // Stage 2 of activation (release MOX, then continueActivation).
+    void releaseMoxThenContinue();
 };
 
 } // namespace NereusSDR

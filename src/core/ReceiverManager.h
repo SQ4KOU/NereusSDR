@@ -278,6 +278,18 @@ signals:
     void hardwareReceiverCountChanged(int count);
     void hardwareFrequencyChanged(int hardwareRx, quint64 frequencyHz);
 
+    // Which hardware receivers are live after a rebuild: bit n set means an
+    // active receiver sits on hardware index n (the frame slot on Protocol 1,
+    // the DDC on Protocol 2). Emitted before hardwareReceiverCountChanged
+    // on every rebuild, and with 0 on reset.
+    //
+    // A count cannot say this. Protocol 1 routes by frame slot, so closing
+    // slice A leaves slice B on slot 1 (slot 2 on the Orion class) and the
+    // count drops to 1 while slot 1 is still the one carrying audio. The
+    // connection needs the slots themselves to know which receiver stands in
+    // for Thetis's RX1 and how many slots the frame must announce.
+    void hardwareSlotsChanged(quint32 slotMask);
+
     // I/Q data routed to the appropriate WDSP channel.
     void iqDataForChannel(int wdspChannel, const QVector<float>& samples);
 

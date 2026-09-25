@@ -43,6 +43,7 @@
 #include "core/TwoToneController.h"
 #include "core/MoxController.h"
 #include "core/TxChannel.h"
+#include "core/TxInterlockPolicy.h"
 #include "core/safety/BandPlanGuard.h"
 #include "core/WdspTypes.h"
 #include "models/SliceModel.h"
@@ -278,6 +279,12 @@ private slots:
         ctrl.setActive(true);
         QCoreApplication::processEvents();
         QVERIFY(ctrl.isActive());
+        // Task 7: two-tone holds the manual key (console.ManualMox,
+        // setup.cs:11162 [v2.10.3.15]), so a mic release cannot unkey it.
+        QVERIFY(mox.isManualKey());
+        mox.onMicPttFromRadio(false);
+        QCoreApplication::processEvents();
+        QVERIFY(mox.isMox());
         tc.calls.clear();
 
         QSignalSpy activeSpy(&ctrl, &TwoToneController::twoToneActiveChanged);
@@ -290,6 +297,8 @@ private slots:
 
         QVERIFY(!ctrl.isActive());
         QVERIFY(!mox.isMox());
+        // console.ManualMox = false after the settle (setup.cs:11193).
+        QVERIFY(!mox.isManualKey());
         QCOMPARE(activeSpy.count(), 1);
         QCOMPARE(activeSpy[0][0].toBool(), false);
         // setTxPostGenRun(false) should have fired.
@@ -632,6 +641,8 @@ private slots:
 
         // TwoToneController cleaned up its state.
         QVERIFY(!ctrl.isActive());
+        // Task 7: the refused key leaves no manual key behind.
+        QVERIFY(!mox.isManualKey());
 
         // twoToneActiveChanged(false) was emitted (so UI can revert highlight).
         QVERIFY(activeSpy.count() >= 1);
@@ -744,6 +755,178 @@ private slots:
 
         ctrl.setActive(false);
         QTRY_VERIFY_WITH_TIMEOUT(!ctrl.isActive(), 2000);
+    }
+
+    // ── Task 7 fix wave, I2: TX inhibit and the PA trip refuse two-tone ──
+    // Thetis disables chk2TONE while inhibited (console.cs:15354
+    // [v2.10.3.15]) and aborts any key while the PA is tripped
+    // (console.cs:29364-29371). Two-tone must not key, and must clean up
+    // (generator off, not active) as a refused key does.
+    void setActive_blockedByInhibitOrPaTrip_doesNotKey_data()
+    {
+        QTest::addColumn<bool>("paTrip");
+        QTest::newRow("tx inhibit") << false;
+        QTest::newRow("pa trip") << true;
+    }
+
+    void setActive_blockedByInhibitOrPaTrip_doesNotKey()
+    {
+        QFETCH(bool, paTrip);
+        TransmitModel tx;
+        tx.setTwoTonePulsed(false);
+        tx.setTwoToneFreq2Delay(0);
+
+        RecordingTxChannel tc(kTxChannelId);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        if (paTrip) { mox.setPaTripped(true); } else { mox.setTxInhibited(true); }
+        SliceModel slice;
+
+        TwoToneController ctrl;
+        ctrl.setTransmitModel(&tx);
+        ctrl.setTxChannel(&tc);
+        ctrl.setMoxController(&mox);
+        ctrl.setSliceModel(&slice);
+        ctrl.setSettleDelaysMs(0, 0);
+        QSignalSpy activeSpy(&ctrl, &TwoToneController::twoToneActiveChanged);
+
+        ctrl.setActive(true);
+        for (int i = 0; i < 10; ++i) QCoreApplication::processEvents();
+
+        QVERIFY2(!mox.isMox(), "two-tone keyed while blocked");
+        QVERIFY(!ctrl.isActive());
+        QVERIFY(!ctrl.isActivationInFlight());
+        QVERIFY(!activeSpy.isEmpty());
+        QCOMPARE(activeSpy.last().at(0).toBool(), false);
+        QVERIFY(!tc.calls.isEmpty());
+        QCOMPARE(tc.calls.last().method, QStringLiteral("setTxPostGenRun"));
+        QCOMPARE(tc.calls.last().arg1, 0.0);
+    }
+
+    // ── Task 7 fix wave, M9: two-tone waits out a TUN-off still running ──
+    // From Thetis chk2TONE_CheckedChanged, console.cs:44805-44813
+    // [v2.10.3.15]: with TUN on, TUN is turned off and two-tone waits
+    // 300 ms (await Task.Delay(300)) before starting, so the tune tone is
+    // down before two-tone keys. Pressed while a TUN-off is still
+    // completing, two-tone must not key until it has.
+    void setActive_duringTuneOff_waitsForItToComplete()
+    {
+        TransmitModel tx;
+        tx.setTwoTonePulsed(false);
+        tx.setTwoToneFreq2Delay(0);
+
+        RecordingTxChannel tc(kTxChannelId);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        SliceModel slice;
+        bool tuneOffPending = true;
+        mox.setManualKey(true);   // TUN holds it until its TUN-off completes
+
+        TwoToneController ctrl;
+        ctrl.setTransmitModel(&tx);
+        ctrl.setTxChannel(&tc);
+        ctrl.setMoxController(&mox);
+        ctrl.setSliceModel(&slice);
+        ctrl.setSettleDelaysMs(0, 20);
+        ctrl.setTuneOffPendingFn([&tuneOffPending] { return tuneOffPending; });
+
+        ctrl.setActive(true);
+        for (int i = 0; i < 5; ++i) QCoreApplication::processEvents();
+        QVERIFY2(!mox.isMox(), "two-tone keyed while the TUN-off was still running");
+        QVERIFY(ctrl.isActivationInFlight());
+        QTest::qWait(60);
+        QVERIFY2(!mox.isMox(), "two-tone keyed while the TUN-off was still running");
+
+        // TUN-off completes (tone down, manual key cleared).
+        tuneOffPending = false;
+        mox.setManualKey(false);
+        QTRY_VERIFY_WITH_TIMEOUT(ctrl.isActive(), 2000);
+        QVERIFY(mox.isMox());
+
+        ctrl.setActive(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!ctrl.isActive(), 2000);
+    }
+
+    // ── Task 7 fix wave, M2: two-tone and the TX interlock ─────────────────
+    // A TX-interlock refusal must let two-tone clean up, as a band-plan
+    // refusal does: never active while unkeyed, generator off.
+    void setActive_interlockRefusal_cleansUpState()
+    {
+        TransmitModel tx;
+        tx.setTwoTonePulsed(false);
+        tx.setTwoToneFreq2Delay(0);
+        RecordingTxChannel tc(kTxChannelId);
+        TxInterlockPolicy policy;
+        policy.setMode(TxInterlockPolicy::Block);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        mox.setInterlockPolicy(&policy);
+        mox.onAmpStateChanged(/*hasAmp=*/true, /*inOperate=*/false);
+        SliceModel slice;
+
+        TwoToneController ctrl;
+        ctrl.setTransmitModel(&tx);
+        ctrl.setTxChannel(&tc);
+        ctrl.setMoxController(&mox);
+        ctrl.setSliceModel(&slice);
+        ctrl.setSettleDelaysMs(0, 0);
+        QSignalSpy activeSpy(&ctrl, &TwoToneController::twoToneActiveChanged);
+
+        ctrl.setActive(true);
+        for (int i = 0; i < 10; ++i) QCoreApplication::processEvents();
+
+        QVERIFY(!mox.isMox());
+        QVERIFY2(!ctrl.isActive(), "two-tone committed as active while unkeyed");
+        QVERIFY(!ctrl.isActivationInFlight());
+        QVERIFY(!mox.isManualKey());
+        QVERIFY(!activeSpy.isEmpty());
+        QCOMPARE(activeSpy.last().at(0).toBool(), false);
+        QCOMPARE(tc.calls.last().method, QStringLiteral("setTxPostGenRun"));
+        QCOMPARE(tc.calls.last().arg1, 0.0);
+        mox.setInterlockPolicy(nullptr);
+        policy.setMode(TxInterlockPolicy::Disabled);
+    }
+
+    // A band-plan refusal keeps the manual key through the 200 ms settle,
+    // as Thetis's refused start runs the stop branch (setup.cs:11190-11193
+    // [v2.10.3.15]: console.MOX = false; await Task.Delay(200); ...
+    // console.ManualMox = false;). A held mic is not tried again inside
+    // two-tone's own refusal.
+    void setActive_bandPlanRefusal_keepsManualKeyThroughSettle()
+    {
+        TransmitModel tx;
+        tx.setTwoTonePulsed(false);
+        tx.setTwoToneFreq2Delay(0);
+        RecordingTxChannel tc(kTxChannelId);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        mox.setMoxCheck(makeRejectingCheckFn(DSPMode::CWL));
+        SliceModel slice;
+
+        TwoToneController ctrl;
+        ctrl.setTransmitModel(&tx);
+        ctrl.setTxChannel(&tc);
+        ctrl.setMoxController(&mox);
+        ctrl.setSliceModel(&slice);
+        ctrl.setSettleDelaysMs(50, 0);
+        QSignalSpy rejected(&mox, &MoxController::moxRejected);
+
+        // The mic is pressed while a manual key holds it off, so it has not
+        // been tried (or refused) before two-tone starts.
+        mox.setManualKey(true);
+        mox.onMicPttFromRadio(true);
+        const int rejectedBefore = rejected.count();
+        QCOMPARE(rejectedBefore, 0);
+
+        ctrl.setActive(true);
+        QVERIFY(!mox.isMox());
+        QVERIFY(!ctrl.isActive());
+        QCOMPARE(rejected.count(), rejectedBefore + 1);   // two-tone's own only
+        QVERIFY2(mox.isManualKey(), "the refusal cleared the manual key at once");
+        mox.onMicPttFromRadio(true);
+        QCOMPARE(rejected.count(), rejectedBefore + 1);
+
+        QTRY_VERIFY_WITH_TIMEOUT(!mox.isManualKey(), 2000);
     }
 
     // ── Idempotent: setActive(true) twice is safe ────────────────────────

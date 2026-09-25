@@ -67,8 +67,8 @@ Existing fields used as inputs: `adcCount`, `supportedSampleRates`, `defaultSamp
 | Metis | 1 | 3 | DDC0-2 | **3** | 48, 96, 192 | false | 0 |
 | Hermes (ANAN-10/100) | 1 | 4 | DDC0-3 | **4** | 48, 96, 192 | false | 0 |
 | HermesII (ANAN-10E/100B) | 1 | 2 | DDC0-1 | **2** | 48, 96, 192 | false | 0 |
-| Angelia (ANAN-100D) | 2 | 7 | DDC2-6 | **5** | 48, 96, 192 | true | 2 |
-| Orion (ANAN-200D) | 2 | 7 | DDC2-6 | **5** | 48, 96, 192 | true | 2 |
+| Angelia (ANAN-100D) (see note) | 2 | 7 | DDC2-6 | **5** | P1: 48, 96, 192; P2: 48, 96, 192, 384, 768, 1536 | true | P1: 0; P2: 1 (ADC0) |
+| Orion (ANAN-200D) (see note) | 2 | 7 | DDC2-6 | **5** | P1: 48, 96, 192; P2: 48, 96, 192, 384, 768, 1536 | true | P1: 0; P2: 1 (ADC0) |
 | OrionMkII / 7000DLE / 8000DLE | 2 | 7 | DDC2-6 | **5** | 48, 96, 192, 384, 768, 1536 | true | 2 |
 | Saturn / ANAN-G2 / G2_1K | 2 | 7 | DDC2-6 | **5** | 48, 96, 192, 384, 768, 1536 | true | 2 |
 | HermesC10 / ANAN-G2E (see note) | 1 | 4 | DDC0-3 | **5** | 48, 96, 192, 384, 768, 1536 | false | 1 |
@@ -78,9 +78,19 @@ Existing fields used as inputs: `adcCount`, `supportedSampleRates`, `defaultSamp
 | RedPitaya (P2 mode) | 2 | 7 | DDC2-6 | **5** | 48, 96, 192, 384, 768, 1536 | true | 2 |
 
 Source cites:
-- Sample rate ladders: Thetis `setup.cs:849-850 [v2.10.3.15]` (P1 base + P2 array), mi0bot `setup.cs:850-851 [v2.10.3.13]` (HL2 384k extension via `include_extra_p1_rate`)
+- Sample rate ladders: Thetis `setup.cs:847-850 [v2.10.3.15]` (P1 base, the RedPitaya's extra 384k tagged `//DH1KLM`, P2 array), mi0bot `setup.cs:849-851 [v2.10.3.13-beta2]` (HL2 384k extension via `include_extra_p1_rate`). The list is chosen by the protocol the radio is running (`NetworkIO.CurrentRadioProtocol`), not by the board; in code, `BoardCapsTable::sampleRatesFor(caps, protocol, model)`.
+- Wideband: none on Protocol 1 for any board (Thetis `ChannelMaster/networkproto1.c:181-201 [v2.10.3.15]` takes EP6 only); on Protocol 2, Thetis enables ADC0 only, for every model, with no menu gate (`console.cs:43552-43558 [v2.10.3.15]`, `NetworkIO.SetWBEnable(0, 1)`). In code, `BoardCapsTable::widebandAdcsFor(caps, protocol)`, which gives 0 on Protocol 1 for every row.
 - DDC reservations: Thetis `console.cs:8186-8538 [v2.10.3.15]` (UpdateDDCs state machine)
 - HL2-specific PS rate carveout: mi0bot `console.cs:8409-8488 [v2.10.3.13]`
+
+#### Note: the ANAN-100D and ANAN-200D run either protocol
+
+Corrected 2026-09-25 (receiver and transmit gaps plan, Task 5; the operator's ruling of 2026-09-24, "follow thetis"). These rows read `48, 96, 192 | 2` here while the code carried 48 to 384 kHz and 0 wideband ADCs. Neither matched Thetis, because Thetis answers by protocol and one `BoardCapabilities` row serves both: Protocol 1 discovery maps board bytes 4 and 5 to Angelia and Orion, and Protocol 2 discovery reads byte 11 straight into `HPSDRHW` (3 and 4), so an ANAN-100D or ANAN-200D on Protocol 2 firmware lands on the same row.
+
+- **Protocol 1:** 48, 96 and 192 kHz (`setup.cs:848 [v2.10.3.15]`, only the RedPitaya and, in mi0bot, the HL2 add 384 kHz), and no wideband (`networkproto1.c:181-201`).
+- **Protocol 2:** 48 to 1536 kHz (`setup.cs:850`), and wideband on ADC0, as Thetis gives every Protocol 2 radio (`console.cs:43552-43558`). The row's `widebandAdcs` is 1 for that reason, not 2: Thetis never enables ADC1's wideband stream on any board.
+
+The row carries the union (`sampleRates` to 1536 kHz, `maxSampleRate` 1536000, `widebandAdcs` 1) and `sampleRatesFor` / `widebandAdcsFor` trim it to the protocol in use. The Radio Info tab shows the top rate for the protocol in use, and a Protocol 1 discovery reply now carries 192 kHz for every board except the HL2 (384 kHz), where it carried 384 kHz for all. The pinned gateware (`Orion.v`, `board_type = 8'h05`) is an OrionMKII-class build and says nothing about these two boards. Hardware verification is pending: no ANAN-100D or ANAN-200D on the bench.
 
 #### Note: the ANAN-G2E is the one 1-ADC Protocol 2 SKU
 
@@ -2152,7 +2162,7 @@ bypasses the preselector. §16.7 Q3.
 Badge text: `WIDE`. Existing colours are already correct
 (`src/gui/widgets/SpectrumStatusOverlay.cpp:171-176`: amber on dark amber, `#ffb800` on `#604000`).
 
-Tooltip, one of these five, selected by cause. No source citations in user-visible strings, per
+Tooltip, one of these nine, selected by cause. No source citations in user-visible strings, per
 project convention:
 
 | Cause | Tooltip |
@@ -2162,6 +2172,10 @@ project convention:
 | operator override | `Preselector bypassed by your Filter Policy setting for this chain. Click to change it.` |
 | PureSignal TX | `Preselector bypassed while PureSignal is transmitting, so the feedback path sees an unfiltered coupler signal. Filtering returns when transmit ends.` |
 | diversity range mismatch | `Preselector bypassed because diversity has pinned both receiver chains to one filter range and this slice is outside it. Click to change the filter policy for this chain.` |
+| HPF Bypass (master) setting | `Preselector bypassed by the HPF Bypass (master) setting on the Antenna / ALEX page of the hardware setup. Turn it off there to restore filtering.` |
+| Disable 6m LNA on RX setting, on 6 m | `Preselector bypassed on 6 m by the Disable 6m LNA on RX setting on the Antenna / ALEX page of the hardware setup. Turn it off there to restore filtering.` |
+| HPF Bypass on TX setting, while keyed | `Preselector bypassed while transmitting by the HPF Bypass on TX setting on the Antenna / ALEX page of the hardware setup. Filtering returns when transmit ends.` |
+| Disable 6m LNA on TX setting, keyed on 6 m | `Preselector bypassed on 6 m while transmitting by the Disable 6m LNA on TX setting on the Antenna / ALEX page of the hardware setup. Filtering returns when transmit ends.` |
 
 Clicking the badge opens the Filter Policy dialog for that chain
 (`wideBadgeClicked` already exists, `src/gui/widgets/SpectrumStatusOverlay.cpp:211-216`).

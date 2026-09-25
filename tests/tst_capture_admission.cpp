@@ -21,6 +21,8 @@
 #include <QRegularExpression>
 #include <QThread>
 #include <QSignalSpy>
+#include <QUrl>
+#include <QWebSocket>
 
 #include <cstring>
 #include <memory>
@@ -29,6 +31,7 @@
 #include "core/AudioEngine.h"
 #include "core/MoxController.h"
 #include "core/RadioConnection.h"
+#include "core/TciServer.h"
 #include "core/TwoToneController.h"
 #include "core/TxChannel.h"
 #include "core/audio/CaptureSupervisor.h"
@@ -298,6 +301,12 @@ private slots:
         QCOMPARE(flipped.count(), 0);
         QCOMPARE(rig.conn.moxOnCalls, 0);
 
+        // A new press: VOX goes inactive first (DEXP pushes only changes),
+        // as a held source refused for the microphone is not tried again
+        // until it is released (heldRefusedPressIsNotQueued).
+        if (static_cast<Ptt>(ptt) == Ptt::Vox) {
+            rig.mox()->onVoxActive(false);
+        }
         pressPtt(rig.mox(), static_cast<Ptt>(ptt));
         QTest::qWait(50);
         QCOMPARE(rejected.count(), 1);
@@ -826,6 +835,177 @@ private slots:
         QVERIFY(rig.mox()->isMox());
         QCOMPARE(rejected.count(), 1);
         QCOMPARE(rig.conn.moxOnCalls, 1);
+    }
+
+    // R-R3-36, never queued, for a source that stays held: a mic PTT or VOX
+    // refused because the microphone is not ready is not tried again on
+    // later status frames. Capture reaching Ready does not key it; the
+    // operator lets go and presses again. (A held mic or VOX is re-reported
+    // on every status frame, so each frame below is a PollPTT pass.)
+    void heldRefusedPressIsNotQueued_data()
+    {
+        QTest::addColumn<int>("ptt");
+        QTest::newRow("radio-mic-ptt") << int(Ptt::RadioMicPtt);
+        QTest::newRow("vox")           << int(Ptt::Vox);
+    }
+    void heldRefusedPressIsNotQueued()
+    {
+        QFETCH(int, ptt);
+        const Ptt source = static_cast<Ptt>(ptt);
+        Rig rig(QStringLiteral("ready"));
+        QSignalSpy rejected(rig.mox(), &MoxController::moxRejected);
+        const auto heldFrame = [&rig, source]() {
+            if (source == Ptt::RadioMicPtt) {
+                rig.mox()->onMicPttFromRadio(true);
+            } else {
+                rig.mox()->onMicPttFromRadio(false);   // a pass, VOX still active
+            }
+        };
+
+        pressPtt(rig.mox(), source);
+        QCOMPARE(rejected.count(), 1);
+        QVERIFY(!rig.mox()->isMox());
+
+        QVERIFY(reachCaptureState(rig, QStringLiteral("ready")));
+        for (int i = 0; i < 5; ++i) {
+            heldFrame();
+            QTest::qWait(10);
+        }
+        QVERIFY2(!rig.mox()->isMox(), "a held press refused for the microphone keyed later");
+        QCOMPARE(rig.conn.moxOnCalls, 0);
+
+        // Let go, press again: that press keys.
+        if (source == Ptt::RadioMicPtt) {
+            rig.mox()->onMicPttFromRadio(false);
+        } else {
+            rig.mox()->onVoxActive(false);
+        }
+        pressPtt(rig.mox(), source);
+        QTest::qWait(50);
+        QVERIFY(rig.mox()->isMox());
+        QCOMPARE(rig.conn.moxOnCalls, 1);
+        QCOMPARE(rejected.count(), 1);
+
+        if (source == Ptt::RadioMicPtt) {
+            rig.mox()->onMicPttFromRadio(false);
+        } else {
+            rig.mox()->onVoxActive(false);
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!rig.mox()->isMox(), 2000);
+    }
+
+    // The same through the TCI fallback (M6): the TCI key ends because the
+    // held mic it would fall back to has no ready microphone, and that mic
+    // is not keyed later when the microphone becomes ready.
+    void tciFallbackRefusalIsNotQueued()
+    {
+        Rig rig(QStringLiteral("ready"));
+        QSignalSpy rejected(rig.mox(), &MoxController::moxRejected);
+
+        rig.tx.setTciAudioActive(true);
+        rig.mox()->onTciPtt(true);
+        QTest::qWait(50);
+        QVERIFY(rig.mox()->isMox());
+        rig.mox()->onMicPttFromRadio(true);
+        QCOMPARE(rig.mox()->pttMode(), PttMode::Tci);
+
+        // The app lets go; its TCI audio stops with it.
+        rig.tx.setTciAudioActive(false);
+        rig.mox()->onTciPtt(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!rig.mox()->isMox(), 2000);
+        QCOMPARE(rejected.count(), 1);
+        QCOMPARE(rejected.at(0).at(0).toString(), kRefusal);
+
+        QVERIFY(reachCaptureState(rig, QStringLiteral("ready")));
+        for (int i = 0; i < 5; ++i) {
+            rig.mox()->onMicPttFromRadio(true);
+            QTest::qWait(10);
+        }
+        QVERIFY2(!rig.mox()->isMox(), "the held mic keyed once the microphone was ready");
+        QCOMPARE(rig.conn.moxOnCalls, 1);   // the TCI key only
+
+        rig.mox()->onMicPttFromRadio(false);
+        rig.mox()->onMicPttFromRadio(true);
+        QTest::qWait(50);
+        QVERIFY(rig.mox()->isMox());
+        QCOMPARE(rig.conn.moxOnCalls, 2);
+        rig.mox()->onMicPttFromRadio(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!rig.mox()->isMox(), 2000);
+    }
+
+    // R-R3-49 with R-R3-36 (Task 7 follow-up, item 5): an app's
+    // trx:0,true,tci; that keys nothing gives the TX audio back. Otherwise
+    // the lock stays with the app and a later MOX-button or mic key
+    // transmits the TCI buffer (the TX worker reads TCI audio while an app
+    // holds it) and skips the microphone-ready check. MainWindow's wiring
+    // of the lock to the TX input is reproduced here.
+    void refusedTrxReleasesTciAudio_data()
+    {
+        QTest::addColumn<int>("ptt");
+        QTest::newRow("mox button")    << int(Ptt::Mox);
+        QTest::newRow("radio-mic-ptt") << int(Ptt::RadioMicPtt);
+    }
+    void refusedTrxReleasesTciAudio()
+    {
+        QFETCH(int, ptt);
+        const Ptt source = static_cast<Ptt>(ptt);
+        Rig rig(QStringLiteral("ready"));   // capture Closed: no demand yet
+        TciServer server(rig.model.get());
+        QObject::connect(&server, &TciServer::txAudioActiveClientChanged, &server,
+                         [&rig](QWebSocket* owner) { rig.tx.setTciAudioActive(owner != nullptr); });
+        QVERIFY(server.start(0));
+        QWebSocket app;
+        QSignalSpy connected(&app, &QWebSocket::connected);
+        QSignalSpy chrono(&app, &QWebSocket::binaryMessageReceived);
+        app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+        QVERIFY(connected.wait(2000));
+        QSignalSpy rejected(rig.mox(), &MoxController::moxRejected);
+        const auto press = [&rig, source]() {
+            if (source == Ptt::Mox) {
+                rig.model->setMoxFromButton(true);
+            } else {
+                rig.mox()->onMicPttFromRadio(true);
+            }
+        };
+        const auto release = [&rig, source]() {
+            if (source == Ptt::Mox) {
+                rig.model->setMoxFromButton(false);
+            } else {
+                rig.mox()->onMicPttFromRadio(false);
+            }
+        };
+
+        // The band plan refuses the app's key: nothing is keyed.
+        rig.slice->setFrequency(14'400'000.0);
+        app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+        QTRY_COMPARE_WITH_TIMEOUT(rejected.count(), 1, 2000);
+        QTest::qWait(100);
+        QVERIFY(!rig.mox()->isMox());
+        QCOMPARE(server.activeTxClientCount(), 0);
+        QVERIFY2(!rig.tx.isTciAudioActive(), "the TX input stayed on the app's audio");
+        const int chronoFrames = int(chrono.count());
+        QTest::qWait(150);
+        QCOMPARE(int(chrono.count()), chronoFrames);   // TX_CHRONO stopped
+
+        // Back in band, the operator keys: the microphone check applies.
+        rig.slice->setFrequency(14'200'000.0);
+        press();
+        QTest::qWait(50);
+        QVERIFY2(!rig.mox()->isMox(), "keyed on the app's audio past the microphone check");
+        QCOMPARE(rejected.count(), 2);
+        QCOMPARE(rejected.at(1).at(0).toString(), kRefusal);
+        release();
+
+        // With the microphone ready a new press keys, on the microphone.
+        QVERIFY(reachCaptureState(rig, QStringLiteral("ready")));
+        press();
+        QTest::qWait(50);
+        QVERIFY(rig.mox()->isMox());
+        QVERIFY(!rig.tx.isTciAudioActive());
+        release();
+        QTRY_VERIFY_WITH_TIMEOUT(!rig.mox()->isMox(), 2000);
+        app.close();
+        server.stop();
     }
 
     // PC-mic keying with capture Ready is admitted, and unkey is never

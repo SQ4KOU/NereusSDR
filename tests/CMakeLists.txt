@@ -1741,7 +1741,7 @@ target_compile_definitions(tst_n2adr_preset PRIVATE NEREUS_BUILD_TESTS)
 # range-clamping per mi0bot setup.designer.cs, idempotent setters, per-MAC
 # AppSettings round-trip.
 # Hl2OptionsTab: construction smoke, model→UI sync, output LED strip
-# reflects IoBoardHl2::currentOcByteChanged, I2C Write button gating.
+# reflects the composed OC byte (RadioModel::bandOutputsByte), I2C Write button gating.
 nereus_add_test(tst_hl2_options_tab)
 target_compile_definitions(tst_hl2_options_tab PRIVATE NEREUS_BUILD_TESTS)
 
@@ -1902,6 +1902,42 @@ nereus_add_test(tst_alex_tx_lpf_source)
 # whose RX2 shares the Alex chain (console.cs:15487-15498 [v2.10.3.15]).
 # NereusSDR-original: no Thetis port.
 nereus_add_test(tst_p1_alex_lpf_word_source)
+
+# Phase 3F section 16.3.2: with slice A closed, the live receiver in the lowest
+# frame slot stands in for Thetis's RX1 as the source of the Protocol 1
+# receive filters (high-pass, receive low-pass, OC outputs / the HL2's N2ADR
+# board). Routing by frame slot left all three reading slot 0, A's last
+# frequency. NereusSDR-original: no Thetis port.
+nereus_add_test(tst_p1_rx_filter_follows_live_receiver)
+
+# Plan Task 14 (3M-1 transmit, Phase 3F section 16.3.2, R-R3-49): the band
+# outputs follow the transmitting slice while keyed and the VFO of the RX1
+# stand-in while not (Thetis Penny.cs:170-178, mi0bot Penny.cs:176-190);
+# Protocol 2 writes them to high-priority byte 1401 (network.c:1031) and takes
+# its receive low-pass from RX1 (console.cs:15487-15498); "HPF Bypass on TX"
+# reaches the wire on both protocols (console.cs:6843-6848).
+# NereusSDR-original tests: no Thetis port.
+nereus_add_test(tst_p1_band_outputs_follow_tx_slice)
+nereus_add_test(tst_p2_band_outputs_and_rx_lpf)
+nereus_add_test(tst_hpf_bypass_on_tx)
+# Plan Task 14 fix wave (R-R3-49): the Alex tab's other high-pass switches
+# (HPF Bypass on PureSignal feedback, HPF Bypass, Disable 6m LNA on TX / RX)
+# reach the wire as Thetis's setAlexHPF / setBPF1ForOrionIISaturn apply them
+# (console.cs:6839-6962). NereusSDR-original tests: no Thetis port.
+nereus_add_test(tst_alex_hpf_switches)
+# Plan Task 14 fix wave, I1 and I2 (R-R3-49, remote parity): the HL2 I/O,
+# HL2 options and OC Outputs tabs show the band-output byte the connection
+# composed (RadioModel::bandOutputsByte), locally and in a remote window
+# through the station link, as Thetis's UpdateOCLedStrip shows the bits
+# UpdateExtCtrl returned (console.cs:29104-29107). NereusSDR-original.
+nereus_add_test(tst_band_outputs_display
+    fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_band_outputs_display PRIVATE NEREUS_BUILD_TESTS)
+# Plan Task 14 fix wave, M2 and M3 (3M-1 transmit): Protocol 2 sends a
+# high-priority packet for the band outputs when, and only when, the OC byte
+# changes: a pin edit at once, a VFO step only across a byte change
+# (netInterface.c:399-407 SetOCBits, setup.cs:12718). NereusSDR-original.
+nereus_add_test(tst_p2_band_outputs_push fakes/P2FakeRadio.cpp)
 
 # ── A band change must retune the DDC even while CTUN holds it ───────────────
 # CTUN pins the DDC via ReceiverManager::m_ddcFreqLocked so a VFO nudge inside
@@ -2363,11 +2399,10 @@ nereus_add_test(tst_alex1_live_leds)
 target_compile_definitions(tst_alex1_live_leds PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3P-H Task 5b: OC Outputs live pin-state LED row ─────────────────────
-# Verifies OcOutputsHfTab::onLiveStateChanged() computes the displayed OC
-# byte = OcMatrix::maskFor(currentBand, isTx) via RadioModel's first
-# panadapter + TransmitModel MOX state. Covers empty matrix, RX pin set
-# for 20m, band-change recompute, MOX-driven RX↔TX matrix flip, and
-# direct setCurrentOcByte path.
+# Plan Task 14 fix wave (R-R3-49): the row shows the OC byte the connection
+# composed (RadioModel::bandOutputsByte), never one computed from the
+# matrix, a band and MOX. Covers nothing composed, a reported byte, no
+# recompute on band / MOX / matrix changes, and direct setCurrentOcByte.
 nereus_add_test(tst_oc_outputs_live_pins)
 target_compile_definitions(tst_oc_outputs_live_pins PRIVATE NEREUS_BUILD_TESTS)
 
@@ -2509,6 +2544,15 @@ nereus_add_test(tst_swr_protection_controller)
 # multi-source priority ordering + all-clear, and poll-cadence duplicate suppression.
 # Ports Thetis console.cs:25801-25839 [v2.10.3.13] (PollTXInhibit loop).
 nereus_add_test(tst_tx_inhibit_monitor)
+
+# ── Task 13 (receiver and transmit gaps plan): the radio's TX inhibit input ──
+# P1 case-0x00 C1 bits 1..4 and P2 high-priority datagram byte 59 (ReadBufp[55])
+# parsed as user_dig_in; the per-model bit choice and reverse option of Thetis
+# PollTXInhibit (console.cs:25849-25887 [v2.10.3.15]); a change reaching the
+# keying gate within one status frame; the Setup boxes reaching the monitor,
+# locally and from a remote window on the Core.
+nereus_add_test(tst_tx_inhibit_input fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_tx_inhibit_input PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3M-0 Task 5 (updated 3M-1a E.5): setWatchdogEnabled(bool) ──────────
 # 8 tests assert boolean state-tracking on RadioConnection (P1 + P2).
@@ -3205,17 +3249,33 @@ nereus_add_test(tst_mox_controller_prime_wdsp_state)
 # Verifies:
 #   Accepted slots (5): onMicPttFromRadio, onCatPtt, onVoxActive, onSpacePtt,
 #     onX2Ptt — each press emits pttModeChanged(Xxx) then moxStateChanged(true);
-#     each release emits moxStateChanged(false); PttMode NOT cleared on release
-#     (F.1 contract: hardwareFlipped(false) subscriber in RadioModel clears it).
-#   Rejected slots (2): onCwPtt (deferred to 3M-2), onTciPtt (deferred to 3J) —
-#     both press and release emit no signals and leave m_pttMode unchanged.
-#   Cross-source switching (§G): last-setter-wins semantic.
+#     each release emits moxStateChanged(false); the unkey clears PttMode
+#     (Task 7: chkMOX_CheckedChanged2 console.cs:29547 [v2.10.3.15]).
+#   onTciPtt keys with PttMode::Tci (Task 7). Rejected slot: onCwPtt
+#     (deferred to 3M-2): press and release emit no signals.
+#   Cross-source rules (§G): PollPTT keys only from receive and releases only
+#     in the source's own mode (Task 7).
 #   Idempotency (§H): repeated press does not double-emit.
 #   PttMode integer values (§I): spot-check vs enums.cs:346-359 [v2.10.3.13].
 # Source: Thetis console.cs:25463-25507 [v2.10.3.13] (PollPTT dispatch);
 #   console.cs:26680 [v2.10.3.13] (SPACE); enums.cs:346-359 [v2.10.3.13].
 #   Pre-code review §0.3 + master design §5.2.1.
 nereus_add_test(tst_mox_controller_ptt_source_dispatch)
+
+# ── Receiver and transmit gaps plan, Task 7: keying sources follow Thetis ────
+# Verifies each keying source's PTT mode (mic, VOX, TCI, the MOX button as a
+# manual key, TUN, two-tone), the mode clearing on every unkey and on a
+# refused key, and the release guards per source: a mic or VOX release
+# during a manual key, a VOX release during a mic key, a mic release during a
+# VOX key, a second source during a key, the TCI release fallback to a held
+# mic, a held VOX keying after the MOX button goes off, and the RadioModel
+# TCI shim (PttMode::Tci) and MOX button. Bare MoxController or unconnected
+# RadioModel with 0 ms walk timers; nothing keys a radio.
+# Source: Thetis console.cs [v2.10.3.15] PollPTT (25463-25623),
+#   getFallbackPTTModeAfterTCIRelease (25429-25461), chkMOX_CheckedChanged2
+#   (29406-29411, 29547), chkMOX_Click (29730-29747), chkTUN (30144-30193);
+#   setup.cs:11162, 11193 [v2.10.3.15] (two-tone ManualMox).
+nereus_add_test(tst_mox_controller_ptt_sources)
 
 # ── Phase 3M-1c Tasks C.2 / C.3 / C.4: MoxController multicast Pre/Post signals ─
 # Verifies the new 3-arg Pre/Post MOX state-change signals that future
@@ -3257,10 +3317,10 @@ nereus_add_test(tst_mox_controller_multicast_signals)
 #
 # Prong B — End-to-end (status frame → MoxController):
 #   §C.1  P1 press → MoxController engaged, PttMode::Mic
-#   §C.2  P1 release → MoxController released, PttMode retained
+#   §C.2  P1 release → MoxController released, PttMode cleared
 #   §C.3  P1 repeated press → idempotent (no double-emit)
 #   §D.1  P2 press → MoxController engaged, PttMode::Mic
-#   §D.2  P2 release → MoxController released, PttMode retained
+#   §D.2  P2 release → MoxController released, PttMode cleared
 #   §D.3  P2 repeated press → idempotent (no double-emit)
 #   §E.1  P1: consecutive false frames both emit (unconditional emission)
 #   §E.2  P2: consecutive false packets both emit (unconditional emission)

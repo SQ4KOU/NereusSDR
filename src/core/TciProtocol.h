@@ -24,6 +24,12 @@
 //   2026-09-24 - R-R3-48 / R-R3-25: setStationReceiveOnly() and
 //                transmitRefused(). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 12 (R-R3-49) by
+//                J.J. Boyd (KG4VCF): if goes out with each VFO and centre
+//                change, dds carries the centre, one if builder for the
+//                init burst and the live path, and each drained line
+//                carries the update gate of the event that queued it.
+//                AI-assisted transformation via Anthropic Claude Code.
 
 #pragma once
 
@@ -31,7 +37,13 @@
 #include <QString>
 #include <QStringList>
 
+#include "TciUpdateGap.h"
 #include "TciVfoCoalescer.h"
+
+#include <QHash>
+#include <QList>
+
+#include <optional>
 
 namespace NereusSDR {
 
@@ -95,6 +107,20 @@ public:
     // From Thetis TCIServer.cs:1722-1727 [v2.10.3.13] — outbound-coalesced map.
     void drainCoalescedNotifications();
 
+    // One queued line and the update gate of the event that queued it
+    // (Task 12, R-R3-49). gate is empty for a line queued without one:
+    // one-shot events, and the vfo answer to an app's own vfo set command,
+    // which TciUpdateGap sorts by command.
+    struct PendingLine {
+        QString frame;
+        std::optional<TciUpdateGap::Gate> gate;
+    };
+
+    // As takePendingNotification, with the line's gate. TciServer uses this
+    // so an if line reaches the gate its event named, never one inferred
+    // from where it sits in the tick (rereview of the fix wave, N2).
+    PendingLine takePendingLine();
+
     // ── Phase 3J-1 closeout (2026-05-22): local state-change broadcast ──────
     //
     // Push a TCI frame produced by the LOCAL operator (UI tuning, mode/filter
@@ -128,8 +154,28 @@ public:
     // while the transmitter sat on B, and tuning B advertised nothing.
     // TciProtocol has no RadioModel handle by design, so the caller answers
     // it, exactly as that comment anticipated.
+    //
+    // Task 12 (R-R3-49): a VFO change sends if then vfo for each channel, as
+    // Thetis's VFOdata thread does for a VFO event (TCIServer.cs:1396-1398
+    // [v2.10.3.15]); it no longer sends dds, which belongs to the centre
+    // event below. The if offset is read when the queue drains, so it names
+    // the offset the slice settled on, not the one it passed through.
     void enqueueLocalBroadcast(const QString& frame);
     void enqueueLocalBroadcastVfo(int rxIndex, qint64 hz, bool isTxBound);
+
+    /// A centre change for receiver rxIndex: dds then if:rx,0, both on the
+    /// centre gate, as Thetis's VFOdata thread sends a centre event
+    /// (TCIServer.cs:1378-1382 [v2.10.3.15]). Both values are read when the
+    /// queue drains, and the pair is dropped then if the centre is the one
+    /// last sent, so a retune that leaves the pan where it was sends no dds.
+    ///
+    /// Thetis sends the if only with CTUN on (OnCentreFrequencyChanged,
+    /// TCIServer.cs:7364-7376 [v2.10.3.15]):
+    ///   //only want to send IF with this if CTUN is enabled
+    /// [original inline comment from TCIServer.cs:7366]. NereusSDR has no model-level
+    /// CTUN for a local window, and with the pan following the VFO the
+    /// offset is 0, so the if goes every time and is always true.
+    void enqueueLocalBroadcastCentre(int rxIndex);
 
     /// Emit the untagged tx_frequency pair on its own.
     ///
@@ -533,6 +579,41 @@ private:
     // From Thetis TCIServer.cs:2096-2120 [v2.10.3.13] — sendIF format string.
     // offset += -GetDSPcwPitchShiftToZero(rx+1); //MW0LGE [2.9.0.7] note we invert with -
     static QString buildIfLine(int rx, int chan, qint64 offsetHz);
+
+    // The offset an if line carries: vfo - centre + RIT. Task 12 (R-R3-49).
+    //
+    // From Thetis TCIServer.cs:7268 and :7293 [v2.10.3.15], the live path:
+    // offsetHz = (int)-offset, where offset is RXOsc; and console.cs:31409
+    // and :31457-31458 [v2.10.3.15]:
+    //   double rx1_osc = Math.Round(-(freq - CentreFrequency) * 1.0e6);
+    //   if (chkRIT.Checked && bRitOk)
+    //       rx1_osc -= (int)udRIT.Value;
+    // so -RXOsc = (vfo - centre) + RIT.
+    //
+    // Divergence: Thetis's init burst calls sendIF with no offset, which
+    // reads +RXOsc (TCIServer.cs:2136-2152 [v2.10.3.15]), the opposite sign
+    // of its live path. One builder serves both here, with the live sign,
+    // the one that keeps vfo = dds + if.
+    //
+    // No DIG click-tune offset: Thetis's RXOsc never carries it, while
+    // NereusSDR's composed WDSP shift does.
+    //
+    // No CW pitch term. Thetis's sendIF ends with
+    //   offset += -consoleThreadSafe.GetDSPcwPitchShiftToZero(rx + 1); //MW0LGE [2.9.0.7] note we invert with -
+    // [original inline comment from TCIServer.cs:2154]
+    // because in CW it tunes the DDC off the VFO by the pitch
+    // (console.cs:31826-31838 [v2.10.3.15]). NereusSDR does not, so the
+    // term would break vfo = dds + if here. Revisit with CW transmit (3M-2).
+    static qint64 ifOffsetHz(qint64 vfoHz, qint64 centreHz, int ritHz);
+
+    // The one if builder, for the init burst and the live path alike: reads
+    // receiver rx's vfo, centre and RIT and formats the line.
+    QString buildIfLineForRx(int rx, int chan) const;
+
+    // Receiver rx's dds line, its centre read from the radio. The init burst
+    // uses it; the drain reads the same readDdsHz so it can record what it
+    // sent (m_lastBroadcastDdsHz).
+    QString buildDdsLineForRx(int rx) const;
     // From Thetis TCIServer.cs:2061-2095 [v2.10.3.13] — sendVFO format string.
     static QString buildVfoLine(int rx, int chan, qint64 hz);
     // From Thetis TCIServer.cs:2246-2259 [v2.10.3.13] — sendTXFrequencyChanged.
@@ -700,6 +781,18 @@ private:
     // at the declaration site and does not silently break when new signals are
     // wired from worker threads in Phase 24+.
     QStringList m_pendingNotifications;
+    // Lines drained from the coalescer, each with its event's gate (Task
+    // 12). Taken after m_pendingNotifications, the order the one list had.
+    QList<PendingLine> m_pendingDrained;
+    // The centre the drain last sent as dds per receiver, so a centre event
+    // that moved nothing sends nothing. Written by the drain only: the drain
+    // reaches every app, while an init burst reaches one new app, and
+    // letting the burst write here hid a pending move from every app already
+    // connected (whole-branch review M3, R-R3-49). Thetis keeps the same
+    // state per socket, so one app's connect cannot touch another's.
+    QHash<int, qint64> m_lastBroadcastDdsHz;
+    qint64 readDdsHz(int rx) const;
+    qint64 readVfoHzForRx(int rx, int chan) const;
     // Phase 15: coalescer for rapid VFO updates (Layer 3 of Thetis 3-layer
     // throttle at TCIServer.cs:1722-1727 [v2.10.3.13]). Layer 1, the per-app
     // update gap, runs after it in TciServer (TciUpdateGap, Task 10);

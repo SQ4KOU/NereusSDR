@@ -119,6 +119,18 @@
 //                refused, and turned off on a slice, while it cannot run.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7: setMoxFromButton
+//                (Thetis chkMOX_Click, console.cs:29730-29747 [v2.10.3.15])
+//                for the MOX buttons, and setMox, the TCI trx shim, now keys
+//                through MoxController::onTciPtt with PttMode::Tci under the
+//                PollPTT rules instead of always acting. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7 fix wave:
+//                applyTxKeyBlock (TX inhibit and the PA trip gate every
+//                key, console.cs:15341-15363 and 25470 [v2.10.3.15]); setMox
+//                passes every TCI release on; teardown unkeys; the MOX
+//                button completes a pending TUN-off before keying.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -400,6 +412,13 @@ class RadioModel : public QObject {
     // the moment MoxController starts a key (its MOX button, a hardware
     // PTT, CAT, TCI, TUNE or two-tone) until its TX to RX handover ends.
     Q_PROPERTY(bool transmitting READ isTransmitting NOTIFY transmittingChanged)
+    // Plan Task 14 fix wave (R-R3-49): the band-output (OC) byte the Core's
+    // connection composed, the band it was chosen for and whether the
+    // transmitter was keyed. Station-owned, never remotely writable. Every
+    // window's band-output displays show these, never a byte of their own.
+    Q_PROPERTY(int bandOutputsByte READ bandOutputsByte NOTIFY bandOutputsChanged)
+    Q_PROPERTY(int bandOutputsBand READ bandOutputsBand NOTIFY bandOutputsChanged)
+    Q_PROPERTY(bool bandOutputsKeyed READ bandOutputsKeyed NOTIFY bandOutputsChanged)
 
 
 public:
@@ -654,6 +673,17 @@ public:
     static bool networkWatchdogSetting();
     void setNetworkWatchdogEnabled(bool enabled);
     void applyNetworkWatchdog(bool enabled);
+
+    // Task 13: External TX Inhibit (Setup > Transmit > Power, grpExtTXInhibit)
+    // is a Core setting: the gate sits where the radio is. The setters save
+    // (a remote window's save goes to the Core) and apply to this model's
+    // own TxInhibitMonitor; the Core applies a window's change through
+    // StationServer. Default off, as Thetis: console.cs:15336-15337
+    // [v2.10.3.15] _useTxInhibit = false, _reverseTxInhibit = false.
+    // From Thetis setup.cs:16660-16667 [v2.10.3.15]
+    // (chkTXInhibit_CheckedChanged / chkTXInhibitReverse_CheckedChanged).
+    void setUseTxInhibit(bool on);
+    void setReverseTxInhibit(bool on);
 
     // Sub-components
     RadioConnection*  connection()       { return m_connection; }
@@ -915,6 +945,42 @@ public:
     int rxFilter1Effective() const { return static_cast<int>(filterChainState(1).effective); }
     int rxFilter1Band() const { return static_cast<int>(filterChainState(1).currentBpfBand); }
     QString rxFilter1Reason() const { return filterChainState(1).reasonText; }
+
+    // ── Plan Task 14 fix wave (R-R3-49): the band outputs on the wire ──────
+    //
+    // Thetis's Setup shows the bits UpdateExtCtrl returned:
+    //   From Thetis console.cs:29104-29107 [v2.10.3.15]
+    //     if (penny_ext_ctrl_enabled) //MW0LGE_21k
+    //     {
+    //         int bits = Penny.getPenny().UpdateExtCtrl(lo_band, lo_bandb, _mox, _tuning, SetupForm.TestIMD, chkExternalPA.Checked); //MW0LGE_21j
+    //         if (!IsSetupFormNull) SetupForm.UpdateOCLedStrip(_mox, bits);
+    // Here the connection reports the byte it composed into the packet that
+    // carries it (RadioConnection::bandOutputsComposed), and a remote window
+    // receives the Core's through the station link (link section 7.1). The
+    // HL2 I/O tab, the HL2 options tab and the OC Outputs tab show these.
+    //
+    // bandOutputsByte: the 7 OC bits. bandOutputsBand: a Band index, or -1
+    // before anything has been composed. bandOutputsKnown: false until a
+    // byte has been reported (locally) or all three values have arrived
+    // from the Core (remotely); a display shows no pins until then, since a
+    // Core that predates these properties never sends them.
+    int  bandOutputsByte()  const { return m_bandOutputsByte; }
+    int  bandOutputsBand()  const { return m_bandOutputsBand; }
+    bool bandOutputsKeyed() const { return m_bandOutputsKeyed; }
+    bool bandOutputsKnown() const;
+    // Remote role: one of the three values from the Core. False for any
+    // other name or an out-of-range value.
+    bool applyStationBandOutputsValue(const QByteArray& name, const QVariant& value);
+    // Remote role: the session ended; nothing is known until the next one.
+    void clearStationBandOutputs();
+    // Test seam: stands in for the connection's report (local role).
+    void reportBandOutputsForTest(quint8 ocByte, int band, bool keyed)
+    {
+        onBandOutputsComposed(ocByte, band, keyed);
+    }
+    // Test seam: the production connection -> model report, for a test that
+    // injects a connection (injectConnectionForTest does no wiring).
+    void wireBandOutputsReportForTest() { connectBandOutputsReport(); }
 
     // ── Phase 3F: per-panadapter RX preselector bypass state (WIDE badge) ────
     // NereusSDR-original; no upstream port. Design doc
@@ -1242,6 +1308,23 @@ public:
     /// bypassing the allocator's placement policy. Callers that DO own the
     /// placement (bindSliceToStream) already write the shift themselves.
     void reshiftSlicesOnStream(int streamIndex, double newCentreHz);
+
+    /// Commit one slice's offset from the centre the local pan says its
+    /// stream sits on, to the model and to WDSP together.
+    ///
+    /// The local tune path in MainWindow (the pan following a band jump, and
+    /// a CTUN tune inside the pan) used to write RxChannel::setShiftFrequency
+    /// straight from the widget's centre, leaving SliceModel::shiftOffsetHz
+    /// on whatever the allocator had last placed. The demodulator and the
+    /// model then described different centres, and anything reading the
+    /// model (TCI's dds and if, the notch origin) reported the wrong one.
+    /// This writes shiftOffsetHz = frequency - streamCentreHz, then pushes the
+    /// composed shift and the notch origin from the same centre through
+    /// pushNotchOrigin, so the two halves cannot disagree.
+    ///
+    /// From Thetis radio.cs:1419 [v2.10.3.15]: SetRXAShiftFreq receives
+    /// +(freq - center).
+    void applySliceStreamCentre(SliceModel* slice, double streamCentreHz);
 
     /// Phase 3F Sub-Epic I Task 7b: hardware DDC currently routed to
     /// `streamIndex`, or -1 when that stream is idle (or no codec has run).
@@ -2211,6 +2294,9 @@ public:
 signals:
     void stationLinkStateChanged();
     void filterStateChanged();
+    // bandOutputsByte / bandOutputsBand / bandOutputsKeyed / bandOutputsKnown
+    // changed.
+    void bandOutputsChanged();
     // Emitted when rxMeterOffsetDb() changes (model swap, preamp change,
     // step-att enable/disable, attenuator dB change, or AppSettings
     // RX1_MeterCalOffsetDb override).  MeterPoller connects this to
@@ -2381,6 +2467,18 @@ public:
     // called on the main thread.
     void scheduleRemoteHardwareApply(const QString& key);
 
+    // Plan Task 14 and its fix wave (R-R3-49): the Alex tab's high-pass
+    // switches (Setup > Hardware > Alex, hardware/<mac>/alex/master/...)
+    // reach the Core's own radio. Reads the saved values for the connected
+    // radio and hands them to the connection. Called on connect, by the Alex
+    // tab after it saves one, and by scheduleRemoteHardwareApply when a
+    // remote window's change arrives. A model with no radio of its own (a
+    // remote window) does nothing: its save goes to the Core, which applies
+    // it there.
+    void applyAlexHpfSwitchSettings();
+    // Task 14's name for the same apply, kept for its callers.
+    void applyHpfBypassOnTxSetting() { applyAlexHpfSwitchSettings(); }
+
     // Test-only: observe each reload the coalesced hardware apply makes,
     // by name ("oc", "n2adr", "cal", "hl2").
     void setHardwareApplyObserverForTest(std::function<void(const QString&)> observer)
@@ -2474,6 +2572,9 @@ public:
     // through it, so keeping the two in lockstep here is what keeps those
     // 24 sites working rather than just the pointer-consuming ones.
     void wireWidebandConnectionForTest() { wireWidebandConnection(); }
+    // The production ReceiverManager -> connection pushes, for a test that
+    // injects a connection (injectConnectionForTest does no wiring).
+    void wireReceiverManagerHardwarePushesForTest() { wireReceiverManagerHardwarePushes(); }
     void injectConnectionForTest(RadioConnection* conn) {
         m_connection = conn;
         setConnectionState(conn != nullptr ? ConnectionState::Connected
@@ -2525,6 +2626,10 @@ public:
     // tst_radio_model_mic_ptt_wire can verify the signal/slot bind + prime
     // path without spinning up the full wireConnectionSignals pipeline.
     void wireMicPttDisabledForTest() { connectMicPttDisabledSignal(); }
+    // Task 13: wire the injected connection's user digital inputs to the
+    // TX inhibit monitor, and undo it, without the full connect pipeline.
+    void wireTxInhibitInputForTest() { connectTxInhibitInput(); }
+    void teardownTxInhibitInputForTest() { m_txInhibit.detachRadioInput(); }
     void setLastBandForTest(NereusSDR::Band b) {
         const bool cross = (b != m_lastBand);
         m_lastBand = b;
@@ -2749,6 +2854,13 @@ public:
     // push (root cause of the v0.4.0 PureSignal-broken-on-Hermes bug).
     void setHpsdrModelForTest(HPSDRModel m) {
         applyHpsdrModel(m);
+    }
+
+    // Stand in an exact capability-table row (for invariants over every row
+    // of BoardCapsTable::all(), including rows no HPSDRModel resolves to).
+    void setBoardRowForTest(const BoardCapabilities& caps) {
+        m_testWidebandCaps = caps;
+        reconcileWidebandDemand();
     }
 
     // Synthetic routing topology for ADC-versus-filter-chain regressions.
@@ -3031,10 +3143,20 @@ public slots:
     // thread) but the runtime TciServer pumps from the main thread (same
     // thread as RadioModel), so DirectConnection is fine for production too.
 
-    /// Set MOX (PTT).  Routes to MoxController if installed, else
-    /// TransmitModel.  Mirrors AppMod::PttSource:TCI in Thetis.
-    /// From Thetis TCIServer.cs:3454-3500 [v2.10.3.13] — handleTrx, set path.
+    /// Set MOX (PTT) for TCI trx: the TCI keying source.  With a
+    /// MoxController this is MoxController::onTciPtt (PttMode::Tci), written
+    /// only when it changes the MOX state, as handleTrxMessage writes TCIPTT
+    /// only when MOX != bMox (TCIServer.cs:3671-3672 [v2.10.3.15]); without
+    /// one it falls back to the TransmitModel latch.
+    /// From Thetis TCIServer.cs:3594-3689 [v2.10.3.15]: handleTrxMessage.
     Q_INVOKABLE void setMox(bool on);
+
+    /// The MOX button (TxApplet and the container MOX button).  Ports
+    /// Thetis chkMOX_Click (console.cs:29730-29747 [v2.10.3.15]):
+    /// MoxController::onMoxButton keys or unkeys with the manual key, and
+    /// on the way off TUN and two-tone are turned off as chkMOX_Click does
+    /// (first, keeping the manual key until their own ends; see the .cpp).
+    void setMoxFromButton(bool on);
 
     /// Query MOX (PTT).  Returns the current MOX latch state.
     /// From Thetis TCIServer.cs:3555-3558 [v2.10.3.13] — sendMOX.
@@ -3051,6 +3173,18 @@ public slots:
     /// the slice frequency regardless of `chan` (see setVfoHz note).
     /// From Thetis TCIServer.cs:3793-3833 [v2.10.3.13] — handleVfo, query path.
     Q_INVOKABLE qint64 vfoHz(int rx, int chan) const;
+
+    /// The centre of the stream receiver `rx` sits on: its frequency minus
+    /// its offset from that centre (SliceModel::shiftOffsetHz). What TCI's
+    /// dds line carries, as Thetis's sendDDS reads CentreFrequency /
+    /// CentreRX2Frequency (TCIServer.cs:2402-2410 [v2.10.3.15]). 0 when no
+    /// such slice exists. Task 12, R-R3-49.
+    Q_INVOKABLE qint64 ddsHz(int rx) const;
+
+    /// Receiver `rx`'s RIT offset in Hz, 0 while RIT is off. Thetis folds
+    /// udRIT into RXOsc (console.cs:31457-31458 [v2.10.3.15]), so TCI's if
+    /// line carries it. Task 12, R-R3-49.
+    Q_INVOKABLE int ritHzForRx(int rx) const;
 
     /// Set demodulation mode for receiver `rx`.  `modeStr` is uppercase
     /// (LSB, USB, CWL, CWU, AM, FM, DIGL, DIGU, etc.).
@@ -3838,6 +3972,10 @@ private:
 
     void connectToRadioImpl(const RadioInfo& info, bool preserveSlices);
     void wireConnectionSignals(int wdspInSize);
+    // The ReceiverManager -> RadioConnection hardware pushes (live slots,
+    // receiver count, per-slot frequency). Part of wireConnectionSignals;
+    // separate so a test can install exactly the production wiring.
+    void wireReceiverManagerHardwarePushes();
     void wireWidebandConnection();
     /// Wire one slice's property changes to its OWN WDSP channel and to the
     /// radio. Call for every slice, not just the active one: this used to
@@ -3980,6 +4118,16 @@ private:
     // in isolation by tst_radio_model_mic_ptt_wire without needing to spin
     // up the full DSP-thread pipeline that wireConnectionSignals starts.
     void connectMicPttDisabledSignal();
+    // Task 13: the radio's user digital inputs reach TxInhibitMonitor
+    // (PollTXInhibit, console.cs:25849-25887 [v2.10.3.15]). Called from
+    // wireConnectionSignals.
+    void connectTxInhibitInput();
+    // Plan Task 14 fix wave: the connection's composed band outputs reach
+    // bandOutputsByte (onBandOutputsComposed). Called from
+    // wireConnectionSignals.
+    void connectBandOutputsReport();
+    void onBandOutputsComposed(quint8 ocByte, int band, bool keyed);
+    void resetBandOutputs();
 
     // Issue #177 — deferred completion of the TUN-off path.
     //
@@ -3997,6 +4145,14 @@ private:
     // chained off MoxController::rxReady, so the same total ~130 ms gap
     // separates the user's click from gen1 going off.
     void completeTuneOff();
+
+    // Task 7 fix wave, I2: pushes TX inhibit (TxInhibitMonitor) and the PA
+    // trip (paTripped()) into MoxController, whose gates refuse every key
+    // while either is set and unkey an active transmission; with either set
+    // it also turns TUN and two-tone off. Thetis TXInhibit setter
+    // (console.cs:15341-15363 [v2.10.3.15]) and _ganymede_pa_issue
+    // (console.cs:25470, 29364-29371).
+    void applyTxKeyBlock();
 
     // P1 full-parity §3.4 — per-sample PA telemetry handler.
     // Applies per-board ADC→watts scaling (scaleFwdPowerWatts /
@@ -4257,6 +4413,14 @@ public:
     /// whichever receiver was retuned last and a second slice on another band
     /// made the first one deaf.
     void republishAlexAdcSlices();
+
+    /// Plan Task 14: tell the connection the VFO frequency of the slice each
+    /// hardware receiver slot serves, so the OC outputs take their band from
+    /// a VFO (Thetis BandByFreq(VFOAFreq)) and not from a DDC centre, which
+    /// differs under CTUN. Where several slices share a slot, the lowest
+    /// slice letter speaks for it, as VFO A does in Thetis. Runs on the same
+    /// triggers as republishAlexAdcSlices.
+    void republishReceiverVfoFrequencies();
 
     /// Phase 3F Sub-Epic I closeout, defect H1: put the DSP side of the pool
     /// back in step with the allocator after anything moves a stream's rate
@@ -4614,6 +4778,13 @@ private:
     std::array<AlexController::AlexAdcState, 2> m_stationFilterStates{};
     std::array<unsigned, 2> m_stationFilterFields{};
     bool m_stationFilterSnapshotReady{false};
+    // Plan Task 14 fix wave: the band outputs on the wire (bandOutputsByte).
+    // m_bandOutputsFields: bits 0-2 = byte, band, keyed received (remote);
+    // all three set by a local report.
+    int      m_bandOutputsByte{0};
+    int      m_bandOutputsBand{-1};
+    bool     m_bandOutputsKeyed{false};
+    unsigned m_bandOutputsFields{0};
 
     // Phase 3F Sub-Epic F Task 5: per-ADC WidebandFftEngine instances.
     // Indexed by adcIndex (0 or 1). Constructed in the RadioModel ctor with
@@ -4935,6 +5106,18 @@ private:
     // nested call; the outer one finishes the loop and pushes once, from
     // fully-updated state.
     bool m_republishingAlexBpf{false};
+    // Plan Task 14 re-review N4: the Alex tab's two receive-side bypass
+    // switches as last applied (applyAlexHpfSwitchSettings), so
+    // republishAlexAdcSlices can report the bypass they put on Alex0.
+    bool m_alexHpfBypassSwitch{false};
+    bool m_alexDisable6mLnaOnRxSwitch{false};
+    // Task 14 follow-up 2: the three keyed switches as last applied, for the
+    // bypass they put on Alex0 while keyed. Defaults are the connection's
+    // (RadioConnection.h, m_hpfBypassOnTx / m_hpfBypassOnPs /
+    // m_disable6mLnaOnTx), which are Thetis's.
+    bool m_alexHpfBypassOnTxSwitch{false};
+    bool m_alexHpfBypassOnPsSwitch{true};
+    bool m_alexDisable6mLnaOnTxSwitch{true};
 
 #ifdef NEREUS_BUILD_TESTS
     std::optional<BoardCapabilities> m_testWidebandCaps;

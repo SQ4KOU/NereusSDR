@@ -167,6 +167,7 @@ void ReceiverManager::reset()
 
     if (priorCount > 0) {
         emit activeReceiverCountChanged(0);
+        emit hardwareSlotsChanged(0);
         emit hardwareReceiverCountChanged(0);
     }
 
@@ -390,12 +391,16 @@ void ReceiverManager::rebuildHardwareMapping()
     // From Thetis console.cs:8216 UpdateDDCs — DDC mapping is board-dependent.
     int nextAutoHw = 0;
     int count = 0;
+    quint32 slotMask = 0;
     for (auto it = m_receivers.begin(); it != m_receivers.end(); ++it) {
         if (it->active) {
             int hwIdx = (it->ddcIndex >= 0) ? it->ddcIndex : nextAutoHw++;
             it->hardwareRx = hwIdx;
             m_hwToLogical.insert(hwIdx, it->receiverIndex);
             ++count;
+            if (hwIdx >= 0 && hwIdx < 32) {
+                slotMask |= (1u << hwIdx);
+            }
         } else {
             it->hardwareRx = -1;
         }
@@ -404,6 +409,10 @@ void ReceiverManager::rebuildHardwareMapping()
     qCDebug(lcReceiver) << "Hardware mapping rebuilt:" << count << "active receivers";
 
     emit activeReceiverCountChanged(count);
+    // Slots first, then the count: a Protocol 1 connection sizes the frame
+    // from both, and seeing the slots first means the count arrives against
+    // the slot set it belongs to (Phase 3F section 16.3.2).
+    emit hardwareSlotsChanged(slotMask);
     emit hardwareReceiverCountChanged(count);
 
     // Re-emit frequency for each active receiver

@@ -9,6 +9,7 @@
 #include "ConnectionState.h"
 #include "RadioDiscovery.h"
 #include "HardwareProfile.h"
+#include "codec/AlexFilterMap.h"
 
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -221,6 +222,20 @@ public slots:
     virtual void setActiveReceiverCount(int count) = 0;
     virtual void setSampleRate(int sampleRate) = 0;
 
+    // Which hardware receivers are live: bit n set means a receiver is
+    // routed to hardware index n (ReceiverManager::hardwareSlotsChanged).
+    // Protocol 1 uses it to pick the receiver that stands in for Thetis's
+    // RX1 when slice A is closed, and to announce every slot in use.
+    // Non-pure so existing test mocks compile unchanged; P1 overrides.
+    virtual void setLiveReceiverSlots(quint32 /*slotMask*/) {}
+
+    // The VFO frequency of the slice each hardware receiver slot serves,
+    // indexed by slot (0 = no slice, or not told). The OC outputs take their
+    // band from a VFO, not from a DDC centre, which differs under CTUN
+    // (Thetis: BandByFreq(VFOAFreq), plan Task 14). Non-pure so existing
+    // test mocks compile unchanged; P1 and P2 override.
+    virtual void setReceiverVfoFrequencies(const QVector<quint64>& /*vfoHzBySlot*/) {}
+
     // --- Hardware Control ---
     virtual void setAttenuator(int dB) = 0;
     virtual void setPreamp(bool enabled) = 0;
@@ -410,19 +425,69 @@ public slots:
     virtual void setPuresignalRun(bool run) = 0;
 
     /// HPF Bypass on PureSignal feedback flag (G2E / OrionMKII / Saturn).
-    /// When set + MOX active + PureSignal active, the host emits Alex0 bit 12
-    /// (_Bypass) so the radio bypasses the HPF chain and feeds the post-PA
-    /// coupler tap directly to the ADC.  Default true — matches Thetis
-    /// chkDisableHPFonPSb.Checked=true [v2.10.3.13].  Storage-only on the
-    /// base class; the override actually surfaces the flag in buildCodec-
-    /// Context's alexHpfBits OR-in.  P1 path also stores for symmetric API
-    /// (P1 boards may not need it but the flag persists across protocol
-    /// switches).
+    /// When set + MOX active + PureSignal active, the host sends the Alex0
+    /// high-pass word as 0x20 (bit 12, _Bypass) so the radio bypasses the
+    /// HPF chain and feeds the post-PA coupler tap directly to the ADC.
+    /// Default true, as Thetis chkDisableHPFonPSb.Checked=true
+    /// [v2.10.3.13]. Applied on the band-pass boards only, on either
+    /// protocol (codec::alex::applyAlex1HpfSwitches); RadioModel hands it
+    /// the Alex tab's saved value (plan Task 14 fix wave).
     /// ANAN-G2E bench-fix 2026-05-23 (JJ Boyd).
     virtual void setHpfBypassOnPs(bool on) {
         m_hpfBypassOnPs = on;
     }
     bool hpfBypassOnPs() const noexcept { return m_hpfBypassOnPs; }
+
+    /// "HPF Bypass on TX" (Setup > Hardware > Alex, plan Task 14). While
+    /// keyed, an Alex board's high-pass word is 0x20, the bypass:
+    ///   From Thetis console.cs:6843-6848 [v2.10.3.15] (setAlexHPF)
+    ///     if (_mox && disable_hpf_on_tx)
+    ///     { NetworkIO.SetAlexHPFBits(0x20); ... return; }
+    /// Default false, as Thetis (console.cs:18753 disable_hpf_on_tx = false).
+    /// P1 and P2 read it when they compose the high-pass word.
+    virtual void setHpfBypassOnTx(bool on) { m_hpfBypassOnTx = on; }
+    bool hpfBypassOnTx() const noexcept { return m_hpfBypassOnTx; }
+
+    /// The Alex tab's high-pass switches as the high-pass word applies them
+    /// (codec::alex::applyAlex1HpfSwitches). Plan Task 14 fix wave.
+    codec::alex::Alex1HpfSwitches alexHpfSwitches() const noexcept {
+        codec::alex::Alex1HpfSwitches sw;
+        sw.hpfBypassOnTx = m_hpfBypassOnTx;
+        sw.hpfBypassOnPs = m_hpfBypassOnPs;
+        sw.hpfBypass     = m_alexHpfBypass;
+        sw.disable6mLnaOnRx = m_disable6mLnaOnRx;
+        sw.disable6mLnaOnTx = m_disable6mLnaOnTx;
+        return sw;
+    }
+
+    /// "Disable 6m LNA on RX" / "on TX" (the Alex tab). On 6 m the high-pass
+    /// word's 6 m BPF/LNA selection (0x40) becomes the bypass (0x20) while
+    /// receiving (RX switch) or keyed (TX switch):
+    ///   From Thetis console.cs:6931-6936 [v2.10.3.15] (setAlexHPF)
+    ///     if (alex6bphpf_bypass || disable_6m_lna_on_rx || (_mox && disable_6m_lna_on_tx))
+    ///     { NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
+    /// Defaults as Thetis: RX false (console.cs:18719), TX true (18741).
+    virtual void setDisable6mLna(bool onRx, bool onTx) {
+        m_disable6mLnaOnRx = onRx;
+        m_disable6mLnaOnTx = onTx;
+    }
+
+    /// A band-output (OC) pin was edited in the matrix this connection
+    /// composes from (plan Task 14 fix wave, M2). Protocol 2 sends a
+    /// high-priority packet when the byte changes, as Thetis pushes a pin
+    /// edit at once; Protocol 1 carries bank 0 in its frame rotation, so the
+    /// base does nothing.
+    virtual void onBandOutputPinsChanged() {}
+
+    /// "HPF Bypass" (the Alex tab's master switch, Thetis chkAlexHPFBypass
+    /// "ByPass/55 MHz HPF"). An Alex board's high-pass word is 0x20, keyed
+    /// or not:
+    ///   From Thetis console.cs:6850-6855 [v2.10.3.15] (setAlexHPF)
+    ///     if (alex_hpf_bypass)
+    ///     { NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF ... return; }
+    /// Default false, as Thetis (console.cs:18793 alex_hpf_bypass = false).
+    virtual void setAlexHpfBypass(bool on) { m_alexHpfBypass = on; }
+    bool alexHpfBypass() const noexcept { return m_alexHpfBypass; }
 
     /// Hardware mic-jack PTT disable flag (Orion/ANAN front-panel PTT).
     ///
@@ -671,8 +736,38 @@ signals:
     //   (ReadBufp points to raw[4] in NereusSDR — after 4-byte seq prefix.)
     void micPttFromRadio(bool pressed);
 
+    // The radio's user digital inputs (Thetis prn->user_dig_in), emitted
+    // when the value changes and on the first status that carries it.
+    // Task 13: TxInhibitMonitor reads the TX inhibit input from these bits
+    // the way Thetis PollTXInhibit does (console.cs:25849-25887
+    // [v2.10.3.15]); the per-model bit choice lives there, not here.
+    //
+    // P1 source: C1 bits 1..4 of a case-0x00 status subframe.
+    //   From Thetis networkproto1.c:332-336 [v2.10.3.15]:
+    //     switch (ControlBytesIn[0] & 0xf8)
+    //     case 0x00: // C0 0000 0000
+    //       prn->user_dig_in = ((ControlBytesIn[1] >> 1) & 0xf);
+    //   (networkproto1.c:335, the ADC overload line in the same case, carries
+    //   //[2.10.3.13]MW0LGE)
+    //
+    // P2 source: High-Priority status ReadBufp[55], which is datagram byte
+    //   59 after the 4-byte sequence number (network.c:531 copies readbuf+4).
+    //   From Thetis network.c:750-756 [v2.10.3.15]:
+    //     //Byte 55 - Bit [0] - User I/O (IO4) 1 = active, 0 = inactive
+    //     //          Bit [1] - User I/O (IO5) 1 = active, 0 = inactive
+    //     prn->user_dig_in = prn->ReadBufp[55];
+    void userDigitalInputsChanged(quint8 userDigIn);
+
     // Radio firmware info received during handshake.
     void firmwareInfoReceived(int version, const QString& details);
+
+    // Plan Task 14 fix wave (R-R3-49): the band-output (OC) byte this
+    // connection composed into the packet that carries it, with the band it
+    // was chosen for and whether the transmitter was keyed. Emitted when any
+    // of the three changes, on the connection thread. Thetis shows exactly
+    // these bits (UpdateOCLedStrip(_mox, bits), console.cs:29106-29107
+    // [v2.10.3.15]); RadioModel publishes them to every window.
+    void bandOutputsComposed(quint8 ocByte, int band, bool keyed);
 
 private:
     struct ByteSample { qint64 ms; qint64 bytes; };
@@ -681,6 +776,11 @@ private:
 
     static double rateFromSamples(const QList<ByteSample>& samples, int windowMs);
     static void   pruneSamples(QList<ByteSample>& samples, qint64 nowMs, int windowMs);
+
+    // publishBandOutputs: what was last reported. -1 = nothing yet.
+    mutable int m_publishedOcByte{-1};
+    mutable int m_publishedOcBand{-1};
+    mutable int m_publishedOcKeyed{-1};
 
     // Ping RTT state. Zero means no outstanding ping.
     qint64 m_pingSentMs{0};
@@ -704,7 +804,40 @@ private:
     std::atomic<float> m_lastUserAdc0Volts{-1.0f};
 
 protected:
+    // The band-output byte last reported by publishBandOutputs, or -1.
+    int publishedOcByte() const noexcept { return m_publishedOcByte; }
+
+    // Reports the band-output byte composed into the packet that carries it
+    // (bandOutputsComposed), once per change. Called from the compose path,
+    // which is const; the emit does not change the connection's state.
+    void publishBandOutputs(quint8 ocByte, int band, bool keyed) const
+    {
+        const int keyedInt = keyed ? 1 : 0;
+        if (m_publishedOcByte == int(ocByte) && m_publishedOcBand == band
+            && m_publishedOcKeyed == keyedInt) {
+            return;
+        }
+        m_publishedOcByte  = int(ocByte);
+        m_publishedOcBand  = band;
+        m_publishedOcKeyed = keyedInt;
+        emit const_cast<RadioConnection*>(this)->bandOutputsComposed(ocByte, band, keyed);
+    }
+
     void setState(ConnectionState newState);
+
+    // Task 13: called by the P1/P2 status parsers with the user digital
+    // input bits; emits userDigitalInputsChanged on a change. Connection
+    // thread only.
+    void reportUserDigitalInputs(quint8 userDigIn)
+    {
+        if (m_lastUserDigIn == static_cast<int>(userDigIn)) {
+            return;
+        }
+        m_lastUserDigIn = static_cast<int>(userDigIn);
+        emit userDigitalInputsChanged(userDigIn);
+    }
+    // -1 until the first status that carries the inputs.
+    int m_lastUserDigIn{-1};
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};
     RadioInfo m_radioInfo;
@@ -791,6 +924,19 @@ protected:
     // Default true — matches Thetis chkDisableHPFonPSb.Checked=true at
     // setup.designer.cs:23676 [v2.10.3.13].
     bool m_hpfBypassOnPs{true};
+
+    // "HPF Bypass on TX" (setHpfBypassOnTx). Written and read on the
+    // connection thread.
+    bool m_hpfBypassOnTx{false};
+
+    // "HPF Bypass" (setAlexHpfBypass). Written and read on the connection
+    // thread.
+    bool m_alexHpfBypass{false};
+
+    // "Disable 6m LNA on RX / TX" (setDisable6mLna). Written and read on the
+    // connection thread.
+    bool m_disable6mLnaOnRx{false};
+    bool m_disable6mLnaOnTx{true};
 
     // Shared state for setMicPTTDisabled (3M-1b G.5; renamed for issue #182
     // to match Thetis MicPTTDisabled / mic_ptt_disabled storage name exactly).

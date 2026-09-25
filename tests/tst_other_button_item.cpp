@@ -28,6 +28,12 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, fix wave.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  Receiver and transmit gaps plan,
+//                                    Task 7 fix wave: the container MOX
+//                                    button is blocked by TX inhibit and
+//                                    the PA trip, and is a manual key. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -402,6 +408,73 @@ private slots:
         for (Id id : {Id::Tun, Id::Mox, Id::TwoTon}) {
             QVERIFY(item.isButtonAvailable(id));
         }
+        f.model.setConnectionStateForTest(ConnectionState::Disconnected);
+    }
+
+    // Task 7 fix wave, I2: the container MOX button keys nothing while TX is
+    // inhibited or the PA is tripped (Thetis disables chkMOX and PollPTT's
+    // gate skips every source, console.cs:15341-15363 and 25470
+    // [v2.10.3.15]).
+    void moxButtonIsBlockedByTxInhibitAndPaTrip()
+    {
+        Fixture f;
+        f.model.setConnectionStateForTest(ConnectionState::Connected);
+        MoxController* mox = f.model.moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        mox->setMoxCheck([]() {
+            return safety::BandPlanGuard::MoxCheckResult{true, QString()};
+        });
+
+        f.model.txInhibit().setEnabled(true);
+        f.model.txInhibit().setUserIoReader([] { return true; });
+        f.dispatcher->click(Id::Mox, kSliceA);
+        QCoreApplication::processEvents();
+        QVERIFY2(!mox->isMox(), "the container MOX button keyed while TX is inhibited");
+        QVERIFY(!mox->isManualKey());
+        f.model.txInhibit().setEnabled(false);
+
+        f.model.handleGanymedeTrip(0x01);
+        f.dispatcher->click(Id::Mox, kSliceA);
+        QCoreApplication::processEvents();
+        QVERIFY2(!mox->isMox(), "the container MOX button keyed while the PA is tripped");
+        QVERIFY(!mox->isManualKey());
+        f.model.resetGanymedePa();
+        f.model.setConnectionStateForTest(ConnectionState::Disconnected);
+    }
+
+    // Task 7 fix wave, M8: the container MOX button is a manual key, as
+    // TxApplet's is (Thetis chkMOX_Click sets _manual_mox and no PTT mode,
+    // console.cs:29730-29747 [v2.10.3.15]): the mic neither releases it nor
+    // takes its mode, and its own off clears the manual key.
+    void containerMoxButtonIsAManualKey()
+    {
+        Fixture f;
+        f.model.setConnectionStateForTest(ConnectionState::Connected);
+        MoxController* mox = f.model.moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        mox->setMoxCheck([]() {
+            return safety::BandPlanGuard::MoxCheckResult{true, QString()};
+        });
+
+        QCOMPARE(f.dispatcher->click(Id::Mox, kSliceA), QString());
+        QCoreApplication::processEvents();
+        QVERIFY(mox->isMox());
+        QVERIFY(mox->isManualKey());
+        QVERIFY(!mox->isManualMox());   // not the TUN button's flag
+        QCOMPARE(mox->pttMode(), PttMode::None);
+
+        for (int i = 0; i < 3; ++i) {
+            mox->onMicPttFromRadio(true);
+            mox->onMicPttFromRadio(false);
+        }
+        QCoreApplication::processEvents();
+        QVERIFY2(mox->isMox(), "the mic released the container MOX button's key");
+        QCOMPARE(mox->pttMode(), PttMode::None);
+
+        QCOMPARE(f.dispatcher->click(Id::Mox, kSliceA), QString());
+        QCoreApplication::processEvents();
+        QVERIFY(!mox->isMox());
+        QVERIFY(!mox->isManualKey());
         f.model.setConnectionStateForTest(ConnectionState::Disconnected);
     }
 

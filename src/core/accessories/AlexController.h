@@ -22,6 +22,16 @@
 //                change is saved for the radio at once. NereusSDR-original
 //                (the per-ADC BPF policy has no Thetis equivalent). J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : Plan Task 14 re-review N4 (Phase 3F section 16.4):
+//                SwitchBypass, so the per-chain effective state reports the
+//                Alex tab's HPF Bypass (master) and Disable 6m LNA on RX
+//                when they put the bypass on the wire. NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : Task 14 follow-up 2 (Phase 3F section 16.4): the keyed
+//                SwitchBypass causes (HPF Bypass on TX, on PureSignal
+//                feedback, Disable 6m LNA on TX), reported while they put
+//                the bypass on the wire. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Alex.cs header (lines 1-23) ===
@@ -93,12 +103,33 @@ public:
         WidebandLocked    ///< BPF bypassed due to wideband stream active on this ADC
     };
 
+    /// An Alex tab switch that puts the bypass on this chain's wire over a
+    /// band selection the policy left filtered (plan Task 14 re-review N4).
+    /// RadioModel decides it, from the switches, the board and the chain's
+    /// selection, exactly as the connection applies them.
+    enum class SwitchBypass {
+        None,
+        HpfBypass,         ///< "HPF Bypass (master)": the bypass on any band
+        Disable6mLnaOnRx,  ///< "Disable 6m LNA on RX": the bypass for the 6 m BPF/LNA
+        // The keyed arms (Task 14 follow-up 2): on the wire only while keyed.
+        HpfBypassOnTx,     ///< "HPF Bypass on TX": the bypass on any band while keyed
+        PureSignalTx,      ///< "HPF Bypass on PureSignal feedback": keyed with PureSignal,
+                           ///< on the band-pass boards
+        Disable6mLnaOnTx   ///< "Disable 6m LNA on TX": the bypass for the 6 m BPF/LNA
+                           ///< while keyed
+    };
+
     /// Per-ADC state computed by recomputeBpf().
     struct AlexAdcState {
         BpfMode      mode {BpfMode::Auto};
         BpfEffective effective {BpfEffective::Filtered};
         Band         currentBpfBand {Band::Band20m};
         QString      reasonText;  ///< for WIDE badge tooltip + bottom-bar status
+        /// Not None when effective is Bypass only because of that switch:
+        /// the policy's own answer was Filtered, the band's selection is
+        /// still what RadioModel sends, and the connection turns it into
+        /// the bypass on the wire.
+        SwitchBypass bypassSwitch {SwitchBypass::None};
     };
 
     // ── Per-ADC BPF mode mutators + recompute ────────────────────────────────
@@ -111,6 +142,11 @@ public:
     /// Recompute BPF state for the given ADC based on current slice list, wideband
     /// state, and operator mode. Emits bpfStateChanged when effective state changes.
     void recomputeBpf(int adc);
+
+    /// Plan Task 14 re-review N4: an Alex tab switch bypasses this chain on
+    /// the wire (see SwitchBypass). Recomputes; reported only where the
+    /// policy's own answer is Filtered.
+    void setSwitchBypass(int adc, SwitchBypass cause);
 
     /// Mark that a wideband stream is active on this ADC.
     /// Recomputes BPF (wideband forces effective=WidebandLocked).
@@ -224,6 +260,7 @@ private:
 
     std::array<AlexAdcState, 2> m_perAdcState{};
     std::array<bool, 2> m_widebandActive {false, false};
+    std::array<SwitchBypass, 2> m_switchBypass {SwitchBypass::None, SwitchBypass::None};
     // Phase 3F: slice band per ADC — sentinel Band::Count means "no slice in this slot".
     // Initialized in ctor so all slots start at Band::Count (not Band::Band160m = 0).
     std::array<std::array<Band, 5>, 2> m_slicesPerAdc;

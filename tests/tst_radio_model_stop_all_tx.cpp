@@ -305,7 +305,7 @@ private slots:
         QVERIFY(!rig.tx.isRfGateOpen());
         // The caller clears the keying state; stopTransmitNow does not.
         QVERIFY(rig.model.mox());
-        rig.model.setMox(false);
+        rig.model.moxController()->setMox(false);
         pump();
         QVERIFY(!rig.model.mox());
     }

@@ -281,7 +281,94 @@ private slots:
         QCOMPARE(gap.takeDue(300), QStringList{vfoLine(0, 2)});
     }
 
+    // Task 12 (R-R3-49), rereview of the fix wave N2: an if line's gate is
+    // the one its event named, wherever the line sits in the tick. The
+    // string-only rule (an if straight after a dds is a centre if) would put
+    // both of these on the wrong gate.
+    void anIfLineTakesTheGateItsEventNamed()
+    {
+        using G = TciUpdateGap::Gate;
+        TciUpdateGap gap;  // 100 ms
+        // Hold the VFO gate: a VFO event at 0, another at 10 waits.
+        QCOMPARE(gap.offer({QStringLiteral("if:0,0,-300;"), vfoLine(0, 1)},
+                           {G::Vfo, G::Vfo}, 0).size(), 2);
+        QVERIFY(gap.offer({QStringLiteral("if:0,0,-200;"), vfoLine(0, 2)},
+                          {G::Vfo, G::Vfo}, 10).isEmpty());
+
+        // A centre event whose if is not after its dds: still the centre
+        // gate, so it goes now and the waiting VFO if is untouched.
+        const QStringList centre = {QStringLiteral("if:0,0,-100;"),
+                                    QStringLiteral("dds:0,14000000;")};
+        QCOMPARE(gap.offer(centre, {G::Centre, G::Centre}, 20), centre);
+        QCOMPARE(gap.takeDue(110),
+                 (QStringList{QStringLiteral("if:0,0,-200;"), vfoLine(0, 2)}));
+
+        // A VFO event's if straight after a centre dds for the same
+        // receiver: still the VFO gate, so it waits behind the VFO gap
+        // while the dds goes. A VFO send at 140 restarts the VFO gap first.
+        QCOMPARE(gap.offer({vfoLine(0, 9)}, {G::Vfo}, 140).size(), 1);
+        QCOMPARE(gap.offer({QStringLiteral("dds:0,14100000;"),
+                            QStringLiteral("if:0,0,-50;"), vfoLine(0, 3)},
+                           {G::Centre, G::Vfo, G::Vfo}, 150),
+                 QStringList{QStringLiteral("dds:0,14100000;")});
+        QCOMPARE(gap.takeDue(250),
+                 (QStringList{QStringLiteral("if:0,0,-50;"), vfoLine(0, 3)}));
+
+        // A line with no gate given is sorted by its command.
+        QCOMPARE(gap.offer({vfoLine(1, 7)}, {std::nullopt}, 400),
+                 QStringList{vfoLine(1, 7)});
+    }
+
 #ifdef HAVE_WEBSOCKETS
+    // Task 12 (R-R3-49), N2's two orderings: a VFO event and a centre event
+    // for the same receiver in one drain keep two separate if lines, each
+    // carrying its own event's gate, in either order.
+    void vfoAndCentreIfLinesKeepTheirOwnGateInEitherOrder()
+    {
+        using G = TciUpdateGap::Gate;
+        const auto drain = [](TciProtocol& p) {
+            p.drainCoalescedNotifications();
+            QList<TciProtocol::PendingLine> out;
+            while (p.hasPendingNotification()) {
+                out << p.takePendingLine();
+            }
+            return out;
+        };
+        const auto gateOfIf = [](const QList<TciProtocol::PendingLine>& lines, int nth) {
+            int seen = 0;
+            for (const auto& l : lines) {
+                if (l.frame.startsWith(QLatin1String("if:0,0,")) && seen++ == nth) {
+                    return l.gate;
+                }
+            }
+            return std::optional<G>{};
+        };
+
+        {   // VFO first.
+            TciProtocol p;
+            p.enqueueLocalBroadcastVfo(0, 14000000, false);
+            p.enqueueLocalBroadcastCentre(0);
+            const auto lines = drain(p);
+            QCOMPARE(lines.size(), 6);
+            QCOMPARE(lines.at(0).frame.left(7), QStringLiteral("if:0,0,"));
+            QCOMPARE(lines.at(4).frame.left(6), QStringLiteral("dds:0,"));
+            QCOMPARE(gateOfIf(lines, 0), std::optional(G::Vfo));
+            QCOMPARE(gateOfIf(lines, 1), std::optional(G::Centre));
+            QCOMPARE(lines.at(4).gate, std::optional(G::Centre));
+        }
+        {   // Centre first.
+            TciProtocol p;
+            p.enqueueLocalBroadcastCentre(0);
+            p.enqueueLocalBroadcastVfo(0, 14000000, false);
+            const auto lines = drain(p);
+            QCOMPARE(lines.size(), 6);
+            QCOMPARE(lines.at(0).frame.left(6), QStringLiteral("dds:0,"));
+            QCOMPARE(gateOfIf(lines, 0), std::optional(G::Centre));
+            QCOMPARE(gateOfIf(lines, 1), std::optional(G::Vfo));
+            QCOMPARE(lines.at(3).gate, std::optional(G::Vfo));  // vfo:0,0
+        }
+    }
+
     void serverReadsTheGapAtStartAndChangesItLive()
     {
         auto& settings = AppSettings::instance();

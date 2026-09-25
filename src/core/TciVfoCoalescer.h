@@ -31,6 +31,10 @@
 //                J.J. Boyd (KG4VCF): Layer 1 is now ported (TciUpdateGap),
 //                no longer subsumed by the event loop.
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 12 (R-R3-49) by
+//                J.J. Boyd (KG4VCF): frames carry a tag (the update gate
+//                of the event that queued them) to the drain.
+//                AI-assisted transformation via Anthropic Claude Code.
 
 #pragma once
 
@@ -64,11 +68,26 @@ public:
     // pending, the previous frame is REPLACED (latest-wins) but the
     // arrival-order slot is preserved (drain emits in original insertion order).
     // Thread-safe.
-    void update(const QString& key, const QString& frame);
+    //
+    // tag is an opaque number the caller carries with the frame to the
+    // drain (TciProtocol uses it for the update gate the event that queued
+    // the frame belongs to, Task 12 R-R3-49); -1 means none. A replacing
+    // update replaces the tag too.
+    void update(const QString& key, const QString& frame, int tag = -1);
+
+    // One drained frame with the key and tag it was queued under.
+    struct Entry {
+        QString key;
+        QString frame;
+        int     tag{-1};
+    };
 
     // Drain all pending frames in original arrival order into *out.
     // Clears internal state. Thread-safe. If out is nullptr, drops all frames.
     void drainAll(QStringList* out);
+
+    // As drainAll, keeping each frame's key and tag.
+    QList<Entry> drainEntries();
 
     // Drop all pending frames without emitting. Thread-safe.
     void clear();
@@ -80,6 +99,7 @@ private:
     mutable QMutex m_mutex;
     QQueue<QString>      m_order;   // insertion order of unique keys
     QHash<QString, QString> m_frames;  // key → latest frame
+    QHash<QString, int>     m_tags;    // key → latest frame's tag
 };
 
 } // namespace NereusSDR

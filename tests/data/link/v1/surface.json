@@ -2945,6 +2945,24 @@
                     "kind": "bool",
                     "name": "transmitting",
                     "ordinal": 19
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "bandOutputsByte",
+                    "ordinal": 20
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "bandOutputsBand",
+                    "ordinal": 21
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "bandOutputsKeyed",
+                    "ordinal": 22
                 }
             ]
         },
