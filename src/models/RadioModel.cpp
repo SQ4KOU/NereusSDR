@@ -14811,8 +14811,13 @@ void RadioModel::applyAlexAntennaForBand(Band band, bool isTx)
     } else {
         // iPhone app Task 75 (ruling 5.11a): the receive side follows the
         // band whose antenna is kept on the relay, when one is.
+        // NereusSDR divergence (D61): Thetis reads RxOnlyAnt, RxAnt and
+        // TxAnt at the current band's index (idx) and derives xvtr from
+        // the current band; this branch reads them at rxBand, the kept
+        // band. With nothing kept rxBand is `band` and the branch is
+        // Thetis's exactly.
         const Band rxBand = m_keptRxAntennaBand.value_or(band);
-        // From Thetis Alex.cs:349-366 [@501e3f5].
+        // From Thetis Alex.cs:349-366 [v2.10.3.15].
         rxOnlyAnt = m_alexController.rxOnlyAnt(rxBand);
 
         // Thetis derives `xvtr` from the current console band
@@ -14824,7 +14829,7 @@ void RadioModel::applyAlexAntennaForBand(Band band, bool isTx)
         if (xvtr) {
             rxOnlyAnt = (rxOnlyAnt >= 3) ? 3 : 0;
         } else if (rxOnlyAnt >= 3) {
-            // "do not use XVTR ant port if not using transverter" — Alex.cs:358
+            // "do not use XVTR ant port if not using transverter", Alex.cs:358 [v2.10.3.15]
             rxOnlyAnt -= 3;
         }
 
