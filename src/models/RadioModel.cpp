@@ -234,6 +234,11 @@
 //                refuses it on the air); the correction still runs only in
 //                a transmission. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 8): moveTgxlRelayForStation (the
+//                local applet's relay nudge, from AetherSDR), and
+//                scanTgxlLanForStation and setTgxlAddressForStation for a
+//                window's Peripherals row; reportStationTgxlLanScan.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -549,6 +554,7 @@ warren@wpratt.com
 // line PGXL sends so we can design the response layer in a follow-up.
 #include "core/SmartSdrApiListener.h"
 #include "core/StationTgxlController.h"
+#include "core/LanDiscovery.h"
 #include "core/StationPgxlController.h"
 #include "core/StationRfKitController.h"
 #include "core/StationTciController.h"
@@ -575,6 +581,9 @@ warren@wpratt.com
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QScopeGuard>
 #include <QScopedValueRollback>
@@ -4855,6 +4864,70 @@ bool RadioModel::setTgxlBypassForStation(bool on, QString* reason)
     return true;
 }
 
+// R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): a window's
+// mouse-wheel nudge. The Core sends the local applet's own line through its
+// TunerModel (`tune relay=<relay> move=<move>`, TgxlConnection::adjustRelay).
+// It moves one matching relay and keys nothing.
+bool RadioModel::moveTgxlRelayForStation(int relay, int direction, QString* reason)
+{
+    if (relay < 0 || relay > 2 || (direction != -1 && direction != 1)) {
+        if (reason) {
+            *reason = QStringLiteral("The request to move a Tuner Genius relay was not "
+                                     "understood.");
+        }
+        return false;
+    }
+    if (!stationTgxlControlAllowed(reason)) { return false; }
+    // From AetherSDR src/gui/TunerApplet.cpp:176-182 [@0cd4559]: each relay
+    // bar's wheel step is TunerModel::adjustRelay(<0 C1, 1 L, 2 C2>, dir),
+    // which TgxlConnection.cpp:163-169 [@0cd4559] sends as
+    // "tune relay=%1 move=%2" with move = (direction > 0) ? 1 : -1.
+    m_tunerModel->adjustRelay(relay, direction);
+    return true;
+}
+
+// R-R3-49 (parity Task 8): the Core's own Scan LAN for a window. Listening
+// sends nothing; the answer is what the Core heard in the local dialog's
+// window, Tuner Genius announcements only, from the station network.
+bool RadioModel::scanTgxlLanForStation(TgxlLanScanDone done, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
+    if (stationOnAirRefusal(reason)) {
+        return false;
+    }
+    auto* discovery = new LanDiscovery(this);
+    discovery->setObjectName(QStringLiteral("tgxlLanScan"));
+    if (m_stationBind) { discovery->setStationBind(*m_stationBind); }
+    auto devices = std::make_shared<QJsonArray>();
+    connect(discovery, &LanDiscovery::deviceDiscovered, discovery,
+            [devices](const QString& model, const QString& ip, quint16 port,
+                      const QString& /*version*/, const QString& serial,
+                      const QString& nickname) {
+                // StationTgxlController admits the same two products.
+                if (model != QStringLiteral("TunerGenius")
+                    && model != QStringLiteral("TunerGeniusXL")) {
+                    return;
+                }
+                devices->append(QJsonObject{
+                    {QStringLiteral("address"), ip},
+                    {QStringLiteral("port"), static_cast<int>(port)},
+                    {QStringLiteral("model"), model},
+                    {QStringLiteral("serial"), serial},
+                    {QStringLiteral("nickname"), nickname},
+                });
+            });
+    connect(discovery, &LanDiscovery::scanFinished, discovery,
+            [discovery, devices, done = std::move(done)]() {
+                const QString json = QString::fromUtf8(
+                    QJsonDocument(*devices).toJson(QJsonDocument::Compact));
+                discovery->deleteLater();
+                if (done) { done(json); }
+            });
+    discovery->start(m_tgxlLanScanWindowMs);
+    if (reason) { reason->clear(); }
+    return true;
+}
+
 namespace {
 // An accessory address a station may dial: an IP address or a valid DNS
 // name (Task 4d's TGXL rule, shared with the PGXL by R-R3-47).
@@ -4902,6 +4975,35 @@ bool RadioModel::configureTgxlForStation(const QString& inputHost, quint16 port,
     m_stationTgxl->start(host, port);
     if (reason) { reason->clear(); }
     return true; // Identification has started; connection is a later snapshot.
+}
+
+// R-R3-49 (parity Task 8): the Peripherals row's Host and Port, saved
+// without Connect. configureTgxl's checks and reasons, less the dial.
+bool RadioModel::setTgxlAddressForStation(const QString& inputHost, int port, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    if (m_role != Role::Local || !m_stationTgxl) {
+        return refuse(QStringLiteral("This Core cannot change its amplifier and tuner settings."));
+    }
+    if (stationOnAirRefusal(reason)) {
+        return false;
+    }
+    if (currentRadioMac().isEmpty()) {
+        return refuse(QStringLiteral("Connect the Core to a radio before setting up its Tuner Genius XL."));
+    }
+    const QString host = inputHost.trimmed();
+    if (!validStationAccessoryHost(host) || port < 1 || port > 65535) {
+        return refuse(QStringLiteral("Enter the Tuner Genius XL's IP address or host name, and a port from 1 to 65535."));
+    }
+    setPeripheralValue(QStringLiteral("TGXL_ManualIp"), host);
+    setPeripheralValue(QStringLiteral("TGXL_ManualPort"), QString::number(port));
+    AppSettings::instance().save();
+    m_stationTgxl->showSavedEndpoint(host, static_cast<quint16>(port));
+    if (reason) { reason->clear(); }
+    return true;
 }
 
 bool RadioModel::disconnectTgxlForStation(QString* reason)
@@ -5941,6 +6043,15 @@ void RadioModel::reportStationCommandFinished(quint32 commandId, bool accepted,
     // (a refusal's claim was already taken by reportStationAccessoryRefusal).
     m_pageShownAccessoryRequests.remove(commandId);
     emit stationCommandFinished(commandId, accepted, reason);
+}
+
+void RadioModel::reportStationTgxlLanScan(quint32 commandId, bool accepted,
+                                          const QString& reason, const QString& devicesJson)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    emit stationTgxlLanScanFinished(commandId, accepted, reason, devicesJson);
 }
 
 void RadioModel::reportStationRetuneRejected(int sliceId, const QString& reason)

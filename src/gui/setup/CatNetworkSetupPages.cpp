@@ -20,6 +20,7 @@
 #include "core/TciSwitch.h"
 #include "models/RadioModel.h"
 
+#include <QHideEvent>
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QNetworkInterface>
@@ -1138,6 +1139,48 @@ PeripheralsPage::PeripheralsPage(RadioModel* model, QWidget* parent)
     wireStatusSignals();
 }
 
+PeripheralsPage::~PeripheralsPage()
+{
+    // R-R3-49 (parity Task 8): an edit still unsent when the page goes.
+    sendRemoteTgxlAddress();
+}
+
+void PeripheralsPage::hideEvent(QHideEvent* event)
+{
+    sendRemoteTgxlAddress();
+    QWidget::hideEvent(event);
+}
+
+// R-R3-49 (parity Task 8): the Host and Port typed in a remote window reach
+// the Core's saved address without dialling (setTgxlAddress). A Core below
+// remoteTgxlControlVersion 4 keeps only what Connect sends, as before.
+void PeripheralsPage::sendRemoteTgxlAddress()
+{
+    if (!m_tgxlAddressEdited || !isRemoteMode() || !m_grid || !m_model) {
+        return;
+    }
+    IStationLink* link = m_model->stationLink();
+    auto* tuner = m_model->tunerModel();
+    QLayoutItem* hostItem = m_grid->itemAtPosition(1, 1);
+    QLayoutItem* portItem = m_grid->itemAtPosition(1, 2);
+    auto* ipEdit = hostItem ? qobject_cast<QLineEdit*>(hostItem->widget()) : nullptr;
+    auto* portSpin = portItem ? qobject_cast<QSpinBox*>(portItem->widget()) : nullptr;
+    if (!link || !link->tgxlFullControlAvailable() || !tuner || !ipEdit || !portSpin) {
+        return;
+    }
+    m_tgxlAddressEdited = false;
+    const QString host = ipEdit->text().trimmed();
+    const int port = portSpin->value();
+    if (host == tuner->configuredHost() && port == tuner->configuredPort()) {
+        return;
+    }
+    // A refusal arrives as the Core's notice (MainWindow's accessory route).
+    const IStationLink::CommandOutcome outcome = link->requestTgxlAddress(host, port);
+    if (!outcome.sent && m_statusLabels.size() > 0 && m_statusLabels[0]) {
+        m_statusLabels[0]->setText(OperatorReasonText::forDisplay(outcome.reason));
+    }
+}
+
 void PeripheralsPage::wireStatusSignals()
 {
     if (isRemoteMode()) {
@@ -1146,6 +1189,12 @@ void PeripheralsPage::wireStatusSignals()
         auto* tuner = m_model ? m_model->tunerModel() : nullptr;
         if (tuner) {
             connect(tuner, &TunerModel::stationConnectionChanged,
+                    this, &PeripheralsPage::refreshRemoteTgxlRow);
+        }
+        // R-R3-49 (parity Task 8): Scan LAN and the address wait while the
+        // Core reports the radio on the air.
+        if (m_model) {
+            connect(m_model, &RadioModel::coreOnAirChanged,
                     this, &PeripheralsPage::refreshRemoteTgxlRow);
         }
         auto* amp = m_model ? m_model->amplifierModel() : nullptr;
@@ -1297,6 +1346,15 @@ void PeripheralsPage::buildRow(int row, const QString& name,
                     model->setPeripheralValue(ipKey, text);
                 }
             });
+    // R-R3-49 (parity Task 8): in a remote window a typed Host reaches the
+    // Core when editing finishes (or Setup closes), without dialling.
+    if (remoteTgxl) {
+        connect(ipEdit, &QLineEdit::textEdited, this, [this]() {
+            m_tgxlAddressEdited = true;
+        });
+        connect(ipEdit, &QLineEdit::editingFinished, this,
+                &PeripheralsPage::sendRemoteTgxlAddress);
+    }
     m_grid->addWidget(ipEdit, row, 1);
 
     // Column 2: port spinbox.
@@ -1329,6 +1387,15 @@ void PeripheralsPage::buildRow(int row, const QString& name,
                     model->setPeripheralValue(portKey, QString::number(v));
                 }
             });
+    if (remoteTgxl) {
+        connect(portSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() {
+            if (!m_fillingTgxlFromCore) {
+                m_tgxlAddressEdited = true;
+            }
+        });
+        connect(portSpin, &QSpinBox::editingFinished, this,
+                &PeripheralsPage::sendRemoteTgxlAddress);
+    }
     m_grid->addWidget(portSpin, row, 2);
 
     // Column 3: Scan LAN button.
@@ -1388,16 +1455,27 @@ void PeripheralsPage::refreshRemoteTgxlRow()
         return;
     }
     const bool available = link && link->remoteTgxlConfigAvailable();
-    scanButton->setEnabled(false);
-    scanButton->setToolTip(tr("LAN scanning runs at the Core and is unavailable from this remote GUI."));
+    // R-R3-49 (parity Task 8): on a Core at remoteTgxlControlVersion 4 the
+    // Core scans its own network for this window, and keeps a typed
+    // address; both wait while the radio is on the air.
+    const bool full = link && link->tgxlFullControlAvailable();
+    const bool onAir = full && m_model->isCoreOnAir();
+    scanButton->setEnabled(full && !onAir);
+    scanButton->setToolTip(!full
+        ? tr("This Core does not scan for a Tuner Genius for this app. Updating the Core may help.")
+        : onAir ? RadioModel::onAirReason()
+                : tr("The Core listens for Tuner Genius announcements on its network for 3 seconds."));
     const QString coreHost = tuner->configuredHost();
     const quint16 corePort = static_cast<quint16>(tuner->configuredPort());
     if (coreHost != m_lastDisplayedCoreTgxlHost
         || corePort != m_lastDisplayedCoreTgxlPort) {
+        m_fillingTgxlFromCore = true;
         ipEdit->setText(coreHost);
         if (corePort > 0) {
             portSpin->setValue(corePort);
         }
+        m_fillingTgxlFromCore = false;
+        m_tgxlAddressEdited = false;
         m_lastDisplayedCoreTgxlHost = coreHost;
         m_lastDisplayedCoreTgxlPort = corePort;
     }
@@ -1409,8 +1487,13 @@ void PeripheralsPage::refreshRemoteTgxlRow()
     const bool connected = phase == TunerModel::ConnectionPhase::Connected;
     connectButton->setText(connected ? tr("Disconnect") : active ? tr("Cancel") : tr("Connect"));
     connectButton->setEnabled(available);
-    ipEdit->setEnabled(available && !connected && !active);
-    portSpin->setEnabled(available && !connected && !active);
+    ipEdit->setEnabled(available && !connected && !active && !onAir);
+    portSpin->setEnabled(available && !connected && !active && !onAir);
+    ipEdit->setToolTip(onAir ? RadioModel::onAirReason()
+                             : tr("IP address or hostname of the Tuner Genius XL on your LAN. "
+                                  "Leave blank to disable auto-connect."));
+    portSpin->setToolTip(onAir ? RadioModel::onAirReason()
+                               : tr("TCP port the Tuner Genius XL listens on (default 9010)."));
     if (!available) {
         const QString reason = tr("This Core does not offer Tuner Genius XL control to this app.");
         status->setText(reason);
@@ -1514,6 +1597,31 @@ void PeripheralsPage::refreshRemotePgxlRow()
 void PeripheralsPage::onScanLan(int rowIdx)
 {
     if (isRemoteMode()) {
+        // R-R3-49 (parity Task 8): the Tuner Genius row asks the Core to
+        // listen on its own network; a pick fills Host and Port and is kept
+        // on the Core as a typed address is. The Power Genius row does not
+        // scan remotely.
+        IStationLink* link = m_model ? m_model->stationLink() : nullptr;
+        if (rowIdx != 0 || !link || !link->tgxlFullControlAvailable()
+            || m_model->isCoreOnAir()) {
+            return;
+        }
+        auto* ipEdit = qobject_cast<QLineEdit*>(m_grid->itemAtPosition(1, 1)->widget());
+        auto* portSpin = qobject_cast<QSpinBox*>(m_grid->itemAtPosition(1, 2)->widget());
+        if (!ipEdit || !portSpin) {
+            return;
+        }
+        auto* dialog = new LanScanDialog(m_model, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setObjectName(QStringLiteral("tgxlCoreScanDialog"));
+        connect(dialog, &LanScanDialog::deviceSelected,
+                this, [this, ipEdit, portSpin](const QString& ip, quint16 port) {
+                    ipEdit->setText(ip);
+                    portSpin->setValue(static_cast<int>(port));
+                    m_tgxlAddressEdited = true;
+                    sendRemoteTgxlAddress();
+                });
+        dialog->show();
         return;
     }
     // rowIdx is 0-based (0 = TGXL, 1 = PGXL). Grid row = rowIdx + 1 because

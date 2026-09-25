@@ -818,6 +818,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("onAirReason"), QStringLiteral("stationOnAirRefusal"),
           QStringLiteral("setTgxlAntennaForStation"), QStringLiteral("setTgxlOperateForStation"),
           QStringLiteral("setTgxlBypassForStation"),
+          // R-R3-49 (parity Task 8): the relay nudge, the Core's LAN scan and
+          // the saved address.
+          QStringLiteral("moveTgxlRelayForStation"), QStringLiteral("scanTgxlLanForStation"),
+          QStringLiteral("setTgxlAddressForStation"),
           // R-R3-49 (parity Task 2): the Tune Power slider's command.
           QStringLiteral("setTunePowerForTxBandForStation"),
           // R-R3-49 (parity Task 3): the TX profile commands and the RADE
@@ -933,6 +937,9 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/session/IStationLink.h", "tgxlDeviceSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "tgxlControlUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // R-R3-49 (parity Task 8): the relay nudge, LAN scan and address.
+        {"src/core/session/IStationLink.h", "tgxlFullControlUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "transmitSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},

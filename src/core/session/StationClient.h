@@ -247,6 +247,11 @@
 //                                    profile requests and
 //                                    requestRadeResetVocoder.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8): the Tuner
+//                                    Genius relay nudge, LAN scan and
+//                                    address requests
+//                                    (remoteTgxlControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -522,6 +527,7 @@ public:
     bool tgxlDeviceSettingsAvailable() const override;
     bool tgxlControlAvailable() const override;
     bool tgxlOperateAppliesWhole() const override;
+    bool tgxlFullControlAvailable() const override;
     /// R-R3-49 (parity Task 1): the link is ready at minor 11 and the Core
     /// offers transmitSettingsVersion at least `minVersion` (1 or more): it
     /// takes this window's transmit settings while its radio is off the
@@ -665,6 +671,9 @@ public:
     CommandOutcome requestTgxlAntenna(int port) override;
     CommandOutcome requestTgxlOperate(bool on) override;
     CommandOutcome requestTgxlBypass(bool on) override;
+    CommandOutcome requestTgxlRelayMove(int relay, int direction) override;
+    CommandOutcome requestTgxlLanScan() override;
+    CommandOutcome requestTgxlAddress(const QString& host, int port) override;
     // R-R3-49 (parity Task 2): see IStationLink.
     CommandOutcome requestTunePowerForTxBand(int watts) override;
     // R-R3-49 (parity Task 3): see IStationLink. Sent only to a Core at

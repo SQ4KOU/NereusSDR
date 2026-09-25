@@ -165,6 +165,12 @@
 //                Core at transmitSettingsVersion 7 offers off the air; the
 //                PureSignal menu entries say so. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 8): openSetup's page keys go through
+//                SetupDialog::selectNavigationTarget (the Advanced and
+//                Interlock entries open their CAT & Network > 4O3A tab);
+//                the Tuner Genius applet's Copy diagnostics copies the
+//                Core's connection in a remote window. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -9685,26 +9691,18 @@ void MainWindow::openTciSetupPage()
 // entry points in this file).
 void MainWindow::openSetup(const QString& pageKey)
 {
-    static const QHash<QString, QString> kKeyToLabel = {
-        {QStringLiteral("pgxlAdvanced"),  QStringLiteral("PGXL Advanced")},
-        {QStringLiteral("tgxlAdvanced"),  QStringLiteral("TGXL Advanced")},
-        {QStringLiteral("pgxlInterlock"), QStringLiteral("PGXL Interlock")},
-        {QStringLiteral("peripherals"),   QStringLiteral("4O3A")},
-        // Phase 3P-III Task 14: RF-Kit setup page (Setup > CAT & Network > RF-Kit).
-        {QStringLiteral("rfKit"),         QStringLiteral("RF-Kit")},
-    };
-
     auto* dialog = createSetupDialog();
     if (dialog == nullptr) {
         return;  // the gate refused and has already said why
     }
 
-    const QString label = kKeyToLabel.value(pageKey);
-    if (label.isEmpty()) {
+    // R-R3-49 (parity Task 8): the key-to-page map lives in SetupDialog. The
+    // "PGXL Advanced", "TGXL Advanced" and "PGXL Interlock" tree labels this
+    // map named were folded into CAT & Network > 4O3A, so those entries
+    // opened Setup's first page; they now open their 4O3A tab.
+    if (!dialog->selectNavigationTarget(pageKey)) {
         qWarning("MainWindow::openSetup: unknown pageKey '%s' -- opening at default page",
                  qUtf8Printable(pageKey));
-    } else {
-        dialog->selectPage(label);
     }
     dialog->show();
     dialog->raise();
@@ -12603,6 +12601,14 @@ void MainWindow::onConnectionStateChanged()
             // diagnosticsCopyRequested: build diagnostic string and copy to clipboard.
             connect(m_tunerApplet, &TunerApplet::diagnosticsCopyRequested,
                     this, [this]() {
+                // R-R3-49 (parity Task 8): a remote window copies the Core's
+                // connection (the mirrored `tuner` object and accessoryData's
+                // tgxl counters), not this computer's idle socket.
+                if (m_radioModel->role() == RadioModel::Role::Remote) {
+                    QGuiApplication::clipboard()->setText(
+                        TunerApplet::coreDiagnosticsText(m_radioModel));
+                    return;
+                }
                 TgxlConnection* tgxl = m_radioModel->tgxlConnection();
                 const QString text = QStringLiteral(
                     "TGXL Diagnostics\n"

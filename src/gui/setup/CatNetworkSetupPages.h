@@ -237,6 +237,12 @@ class PeripheralsPage : public QWidget {
 
 public:
     explicit PeripheralsPage(RadioModel* model, QWidget* parent = nullptr);
+    ~PeripheralsPage() override;
+
+protected:
+    // R-R3-49 (parity Task 8): Setup closing (or the tab changing) sends a
+    // remote window's unsent Tuner Genius Host or Port to the Core.
+    void hideEvent(QHideEvent* event) override;
 
 private slots:
     void onScanLan(int rowIdx);
@@ -277,6 +283,13 @@ private:
     quint16 m_lastDisplayedCoreTgxlPort{0};
     QString m_lastDisplayedCorePgxlHost;
     quint16 m_lastDisplayedCorePgxlPort{0};
+
+    // R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): a Host or Port
+    // the operator typed in a remote window without pressing Connect goes
+    // to the Core (setTgxlAddress) when editing finishes or Setup closes.
+    void sendRemoteTgxlAddress();
+    bool m_tgxlAddressEdited{false};
+    bool m_fillingTgxlFromCore{false};
 };
 
 } // namespace NereusSDR

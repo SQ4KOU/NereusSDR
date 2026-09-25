@@ -194,6 +194,9 @@
 //                                    transmitSettingsVersion 7 and
 //                                    pureSignalArmingOffered.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8):
+//                                    remoteTgxlControlVersion 4.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -489,7 +492,8 @@ public:
     // accessories (the tuner's own settings on `accessorySettings` and the
     // setTgxlName, setTgxlNetwork, saveTgxlSettings and readTgxlSettings
     // verbs; from 2, R-R3-49, setTgxlAntenna, setTgxlOperate and
-    // setTgxlBypass); 0 otherwise.
+    // setTgxlBypass; from 4, parity Task 8, moveTgxlRelay, scanTgxlLan and
+    // setTgxlAddress); 0 otherwise.
     int tgxlControlVersion() const;
     // R-R3-49 (parity Task 1): transmitSettingsVersion. 1 on a Core with a
     // radio model: a receive-only Core takes a `transmit` write outside the

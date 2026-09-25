@@ -36,6 +36,8 @@
 //                 tab's interlock section shows and changes the Core's
 //                 policy. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-25 -- R-R3-49 (parity Task 8): selectTab. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "FourO3APage.h"
@@ -65,6 +67,18 @@
 #include <QVBoxLayout>
 
 namespace NereusSDR {
+
+void FourO3APage::selectTab(Tab tab)
+{
+    if (m_tabs) {
+        m_tabs->setCurrentIndex(static_cast<int>(tab));
+    }
+}
+
+FourO3APage::Tab FourO3APage::currentTabForTesting() const
+{
+    return static_cast<Tab>(m_tabs ? m_tabs->currentIndex() : 0);
+}
 
 FourO3APage::FourO3APage(RadioModel* model, QWidget* parent)
     : QWidget(parent)

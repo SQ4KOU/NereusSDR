@@ -119,6 +119,9 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the
 //                                    txProfile verbs and rade.resetVocoder.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8): moveTgxlRelay,
+//                                    scanTgxlLan and setTgxlAddress.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -245,6 +248,12 @@ private:
     // R-R3-49 / R-R3-47 (remoteTgxlControlVersion 2): the Tuner Genius's
     // antenna, operate and bypass, through the Core's own TunerModel.
     void handleTgxlControl(const NereusSDR::SessionMessage& invoke);
+    // R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): a relay nudge,
+    // the Core's own Scan LAN (answered when its listening window ends) and
+    // the Peripherals row's address saved without dialling.
+    void handleMoveTgxlRelay(const NereusSDR::SessionMessage& invoke);
+    void handleScanTgxlLan(const NereusSDR::SessionMessage& invoke);
+    void handleSetTgxlAddress(const NereusSDR::SessionMessage& invoke);
     // R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's
     // Tune Power slider, through the Core's own TransmitModel.
     void handleTunePowerForTxBand(const NereusSDR::SessionMessage& invoke);
@@ -278,6 +287,9 @@ private:
         QByteArray verb;
     };
     QHash<quint32, PendingPureSignalCommand> m_pureSignalCommands;
+    // R-R3-49 (parity Task 8): moves on each setSessionOwner, so a scan
+    // answer never reaches a later session.
+    quint64 m_sessionGeneration = 0;
 };
 
 } // namespace NereusSDR

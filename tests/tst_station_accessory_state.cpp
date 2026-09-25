@@ -26,6 +26,9 @@
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-24: R-R3-49 (parity Task 1): transmitSettingsVersion now travels
 // last. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 8): remoteTgxlControlVersion 4 and the
+// refusals of moveTgxlRelay, scanTgxlLan and setTgxlAddress on the wire.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QFile>
 #include <QJsonArray>
@@ -691,8 +694,10 @@ private slots:
         QCOMPARE(caps.remotePgxlControlVersion, 3);
         // R-R3-47: the Tuner Genius's own settings (Task 6); 2 with its
         // antenna, operate and bypass (R-R3-49); 3 when setTgxlOperate on
-        // puts the tuner in OPERATE whole (R-R3-49 fix wave).
-        QCOMPARE(caps.remoteTgxlControlVersion, 3);
+        // puts the tuner in OPERATE whole (R-R3-49 fix wave); 4 with the
+        // relay nudge, the Core's LAN scan and the saved address (parity
+        // Task 8).
+        QCOMPARE(caps.remoteTgxlControlVersion, 4);
         // R-R3-47: 2 once the Core's RF-Kit commands are offered (Task 3).
         QCOMPARE(caps.remoteRfKitControlVersion, 3);   // I4: Reset amp error
         // R-R3-47: the accessory records and settings (Task 4).
@@ -908,6 +913,98 @@ private slots:
                            "understood."),
             QStringLiteral("The request to bypass the Tuner Genius was not understood.")}));
         for (const QString& reason : wrong + QStringList{update, notOwning, noTuner, onAir}) {
+            QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        }
+    }
+
+    // R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): the relay
+    // nudge, the Core's LAN scan and the saved address on the wire. An older
+    // app, and a Core that does not own its accessories, are refused in
+    // bfab2b9e's words; a malformed request is not understood; the nudge
+    // with no tuner and the address with no radio say so; on the air each
+    // is refused, on a receive-only Core as well.
+    void tunerRelayScanAndAddressVerbsNeedVersionFourAndAQuietRadio()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const auto results = [&](bool owns, quint16 minor, bool onAir,
+                                 const QList<SessionMessage>& invokes) {
+            RadioModel station;
+            if (owns) {
+                station.enableStationAccessoryIdentity();
+            }
+            AppSettings settings(dir.filePath(QStringLiteral("r-%1-%2-%3.settings")
+                                                  .arg(owns).arg(minor).arg(onAir)));
+            StationServer server(&station, settings, dir.path());
+            if (onAir) {
+                station.transmitModel().setMox(true);
+            }
+            LoopbackTransport* peer = nullptr;
+            connectRawPeer(this, server, minor, &peer);
+            [&] { QTRY_VERIFY(snapshotDone(peer)); }();
+            for (const SessionMessage& invoke : invokes) {
+                peer->sendText(SessionMessages::encode(invoke));
+            }
+            QStringList reasons;
+            (void)QTest::qWaitFor([&] {
+                reasons.clear();
+                for (const SessionMessage& m : receivedMessages(peer)) {
+                    if (m.kind == SessionMessageKind::CommandResult) {
+                        reasons.append(m.accepted ? QStringLiteral("accepted") : m.reason);
+                    }
+                }
+                return reasons.size() == invokes.size();
+            }, 3000);
+            return reasons;
+        };
+        const auto intArg = [](const char* name, qlonglong v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Int64, QVariant(v)};
+        };
+        const auto textArg = [](const char* name, const QString& v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Utf8, QVariant(v)};
+        };
+        const QList<SessionMessage> right{
+            SessionMessages::commandInvoke("moveTgxlRelay", 51,
+                                           {intArg("relay", 0), intArg("direction", 1)}),
+            SessionMessages::commandInvoke("scanTgxlLan", 52, {}),
+            SessionMessages::commandInvoke("setTgxlAddress", 53,
+                                           {textArg("host", QStringLiteral("192.0.2.9")),
+                                            intArg("port", 9010)}),
+        };
+        const QString update = QStringLiteral("Update this app to switch the Tuner Genius on "
+                                              "this Core.");
+        QCOMPARE(results(true, quint16(kRadioIdentitySessionProtocolMinor - 1), false, right),
+                 (QStringList{update, update, update}));
+        const QString notOwning = QStringLiteral("This Core cannot change its amplifier and "
+                                                 "tuner settings.");
+        QCOMPARE(results(false, kRadioIdentitySessionProtocolMinor, false, right),
+                 (QStringList{notOwning, notOwning, notOwning}));
+        const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+        QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
+                 (QStringList{onAir, onAir, onAir}));
+        const QString noTuner = QStringLiteral("The Core is not connected to the Tuner Genius.");
+        const QString noRadio = QStringLiteral("Connect the Core to a radio before setting up its "
+                                               "Tuner Genius XL.");
+        const QStringList wrong = results(true, kRadioIdentitySessionProtocolMinor, false, {
+            right.at(0),
+            right.at(2),
+            SessionMessages::commandInvoke("moveTgxlRelay", 61,
+                                           {intArg("relay", 3), intArg("direction", 1)}),
+            SessionMessages::commandInvoke("moveTgxlRelay", 62,
+                                           {intArg("relay", 0), intArg("direction", 0)}),
+            SessionMessages::commandInvoke("moveTgxlRelay", 63, {intArg("relay", 0)}),
+            SessionMessages::commandInvoke("scanTgxlLan", 64, {intArg("seconds", 3)}),
+            SessionMessages::commandInvoke("setTgxlAddress", 65,
+                                           {textArg("host", QStringLiteral("192.0.2.9")),
+                                            textArg("port", QStringLiteral("9010"))}),
+        });
+        const QString relayNotUnderstood =
+            QStringLiteral("The request to move a Tuner Genius relay was not understood.");
+        QCOMPARE(wrong, (QStringList{
+            noTuner, noRadio, relayNotUnderstood, relayNotUnderstood, relayNotUnderstood,
+            QStringLiteral("The request to scan for a Tuner Genius was not understood."),
+            QStringLiteral("The request to save the Tuner Genius address was not understood.")}));
+        for (const QString& reason : wrong + QStringList{update, notOwning, onAir}) {
             QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
         }
     }

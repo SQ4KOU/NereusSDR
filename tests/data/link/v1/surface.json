@@ -233,7 +233,7 @@
         {
             "kind": "i64",
             "name": "remoteTgxlControlVersion",
-            "value": 3
+            "value": 4
         },
         {
             "kind": "i64",
@@ -611,6 +611,50 @@
             "capabilityVersion": 2,
             "minMinor": 11,
             "verb": "setTgxlBypass"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "relay",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "direction",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "moveTgxlRelay"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "scanTgxlLan"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "host",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setTgxlAddress"
         },
         {
             "arguments": [

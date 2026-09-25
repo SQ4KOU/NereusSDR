@@ -52,6 +52,12 @@
 // RadioModel::isCoreOnAir(); the Core's two-tone test and its TUNE grey ANT
 // and OPERATE in the window too. J.J. Boyd (KG4VCF), AI-assisted via
 // Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 8): a remote window's relay bars move
+// the Core's tuner relays (the bars follow the tuner), Recall tune memory
+// and Open TGXL Advanced work there, the Advanced and Interlock entries
+// open their 4O3A tab, the Peripherals row scans the Core's network and
+// keeps a typed address on the Core, and Copy diagnostics copies the Core's
+// connection. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include <QtTest>
 
@@ -77,6 +83,8 @@
 #include <QTimer>
 #include <QApplication>
 #include <QDialog>
+#include <QTableWidget>
+#include <QWheelEvent>
 
 #include "OperatorWording.h"
 #include "core/PgxlConnection.h"
@@ -110,6 +118,8 @@
 #include "gui/setup/PgxlInterlockPage.h"
 #include "gui/setup/TgxlAdvancedPage.h"
 #include "gui/SetupDialog.h"
+#include "gui/LanScanDialog.h"
+#include "gui/RelayBar.h"
 #include "gui/PgxlSaveRebootDialog.h"
 #include "models/AccessorySettingsModel.h"
 #include "models/AccessoryDataModel.h"
@@ -509,6 +519,10 @@ private slots:
     void refusalClaimsEndWithTheLink();
     void ampAppletRefusalShownOnTheAppletIsNotToasted();
     void remoteWindowSwitchesTheTunerThroughTheCore();
+    void remoteWindowMovesTheTunerRelaysThroughTheCore();
+    void remoteWindowScansAndKeepsTheTunerAddressOnTheCore();
+    void remoteTunerMenuRecallsOpensAdvancedAndCopiesTheCore();
+    void advancedAndInterlockEntriesOpenTheirFourO3ATab();
     void olderCoreLeavesTheTunerSwitchesGreyed();
     void operateFromStandbyIsOneRequestOnACoreThatAppliesItWhole();
 };
@@ -3508,6 +3522,371 @@ void RemotePeripheralsTest::operateFromStandbyIsOneRequestOnACoreThatAppliesItWh
         QCOMPARE(link.tgxlRequests, expected);
         model.detachStation();
     }
+}
+
+namespace {
+void wheel(QWidget* widget, int delta)
+{
+    QWheelEvent event(QPointF(4, 4), QPointF(4, 4), QPoint(), QPoint(0, delta), Qt::NoButton,
+                      Qt::NoModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(widget, &event);
+}
+
+int relayCommandCount(const FakeGenius& tuner)
+{
+    int count = 0;
+    for (const QString& c : tuner.commands) {
+        if (c.startsWith(QLatin1String("tune relay="))) { ++count; }
+    }
+    return count;
+}
+} // namespace
+
+// R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): a wheel nudge on C1,
+// L or C2 in a remote window moves the Core's tuner relay (the fake tuner
+// records the local applet's own line), on a receive-only Core too; the
+// bar follows the tuner's relayC1/relayL/relayC2, not the wheel; on the
+// air scrolling is off with the reason, and a request sent anyway is
+// refused with it and reaches nothing.
+void RemotePeripheralsTest::remoteWindowMovesTheTunerRelaysThroughTheCore()
+{
+    AppSettings::instance().clear();
+    CoreAndWindow cw;
+    RadioModel& station = cw.station;
+    RadioModel& window = cw.window;
+    station.smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
+    station.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+    FakeGenius tuner;
+    QVERIFY(tuner.listen());
+    TunerApplet applet(&window, window.tunerModel());
+    const QString transmitReason =
+        QStringLiteral("Remote transmit controls are not available from this Core yet.");
+    applet.setTransmitPermitted(false, transmitReason);   // as MainWindow does
+    QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
+
+    // Before the Core admits a tuner the bars do not scroll.
+    cw.connect(this);
+    QTRY_VERIFY(cw.client.tgxlFullControlAvailable());
+    window.reportStationLinkStateChanged();
+    QVERIFY(!applet.relayBarForTesting(0)->isScrollEnabled());
+    QVERIFY(admitCoreTuner(station, tuner));
+    QVERIFY(station.receiveOnlyStationPolicy());
+    QTRY_VERIFY(window.tunerModel()->hasDirectConnection());
+    for (int relay = 0; relay < 3; ++relay) {
+        QTRY_VERIFY(applet.relayBarForTesting(relay)->isScrollEnabled());
+        QVERIFY(applet.relayBarForTesting(relay)->toolTip().isEmpty());
+    }
+    QVERIFY(!applet.tuneButtonForTesting()->isEnabled());
+
+    // C1 up, L down, C2 up: the Core's tuner gets each line; the bar moves
+    // only when the tuner reports it.
+    int mark = tuner.commands.size();
+    wheel(applet.relayBarForTesting(0), 120);
+    QVERIFY(tuner.waitFor(QStringLiteral("tune relay=0 move=1"), mark) >= 0);
+    QCOMPARE(applet.relayBarForTesting(0)->value(), 0);
+    tuner.send(QStringLiteral("S0|state relayC1=42 relayL=17 relayC2=3"));
+    QTRY_COMPARE(window.tunerModel()->relayC1(), 42);
+    QTRY_COMPARE(applet.relayBarForTesting(0)->value(), 42);
+    QCOMPARE(applet.relayBarForTesting(1)->value(), 17);
+    mark = tuner.commands.size();
+    wheel(applet.relayBarForTesting(1), -120);
+    QVERIFY(tuner.waitFor(QStringLiteral("tune relay=1 move=-1"), mark) >= 0);
+    wheel(applet.relayBarForTesting(2), 120);
+    QVERIFY(tuner.waitFor(QStringLiteral("tune relay=2 move=1"), mark) >= 0);
+    QCOMPARE(applet.relayBarForTesting(1)->value(), 17);
+    QVERIFY(refused.isEmpty());
+    QVERIFY(!station.isTransmitting());
+    QVERIFY(!station.transmitModel().isTune());
+
+    // On the air (the Core's MoxController, a MOX click then the radio's
+    // own PTT input, its receive-only pre-check lifted as in the switching
+    // test): scrolling is off with the reason, and a request sent anyway is
+    // refused and reaches nothing.
+    MoxController* const mox = station.moxController();
+    QVERIFY(mox);
+    mox->setMoxCheck({});
+    for (int keying = 0; keying < 2; ++keying) {
+        if (keying == 0) { mox->setMox(true); } else { mox->onMicPttFromRadio(true); }
+        QTRY_VERIFY(window.isCoreOnAir());
+        for (int relay = 0; relay < 3; ++relay) {
+            QTRY_VERIFY(!applet.relayBarForTesting(relay)->isScrollEnabled());
+            QCOMPARE(applet.relayBarForTesting(relay)->toolTip(), TunerApplet::onAirReason());
+        }
+        const int before = relayCommandCount(tuner);
+        wheel(applet.relayBarForTesting(0), 120);
+        const int refusedBefore = refused.count();
+        QVERIFY(cw.client.requestTgxlRelayMove(0, 1).sent);
+        QTRY_COMPARE(refused.count(), refusedBefore + 1);
+        QCOMPARE(refused.last().at(0).toString(), QStringLiteral("tgxl"));
+        QCOMPARE(refused.last().at(1).toString(), TunerApplet::onAirReason());
+        QTest::qWait(100);
+        QCOMPARE(relayCommandCount(tuner), before);
+        if (keying == 0) { mox->setMox(false); } else { mox->onMicPttFromRadio(false); }
+        QTRY_VERIFY(!window.isCoreOnAir());
+        QTRY_VERIFY(applet.relayBarForTesting(0)->isScrollEnabled());
+        QVERIFY(applet.relayBarForTesting(0)->toolTip().isEmpty());
+    }
+    // A bad request is not understood, in the Core's words.
+    const int refusedBefore = refused.count();
+    QVERIFY(cw.client.requestTgxlRelayMove(3, 1).sent);
+    QTRY_COMPARE(refused.count(), refusedBefore + 1);
+    QCOMPARE(refused.last().at(1).toString(),
+             QStringLiteral("The request to move a Tuner Genius relay was not understood."));
+    QVERIFY(!station.transmitModel().isTune());
+}
+
+// R-R3-49 (parity Task 8): Setup > 4O3A > Peripherals in a remote window.
+// Scan LAN lists what the Core hears and a pick fills Host and Port; a Host
+// or Port typed without Connect reaches the Core when editing finishes,
+// and when Setup closes with an unsent edit; the Core keeps it for the next
+// window; nothing is dialled. On the air, and on an older Core, the scan
+// and the fields wait with their reasons.
+void RemotePeripheralsTest::remoteWindowScansAndKeepsTheTunerAddressOnTheCore()
+{
+    {   // An older Core: Scan LAN stays off with its reason; a typed edit
+        // is kept for Connect, as before.
+        RadioModel model(RadioModel::Role::Remote);
+        RecordingTgxlLink link;
+        link.linkReady = true;
+        link.available = true;
+        link.tgxlControl = true;
+        model.attachStation(&link);
+        PeripheralsPage page(&model);
+        model.reportStationLinkStateChanged();
+        auto* scan = page.findChild<QPushButton*>(QStringLiteral("tgxlScanButton"));
+        QVERIFY(scan);
+        QVERIFY(!scan->isEnabled());
+        QVERIFY(OperatorWording::isPlain(scan->toolTip()));
+        QVERIFY(OperatorWording::isPlain(IStationLink::tgxlFullControlUnavailableReason()));
+        QVERIFY(!link.requestTgxlLanScan().sent);
+        model.detachStation();
+    }
+
+    AppSettings::instance().clear();
+    CoreAndWindow cw;
+    RadioModel& station = cw.station;
+    RadioModel& window = cw.window;
+    station.smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
+    station.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+    station.setTgxlLanScanWindowMsForTest(150);
+    QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
+    // Nothing dials the tuner: the Core stays switched off or disconnected.
+    const auto notDialled = [&station] {
+        const auto phase = station.tunerModel()->connectionPhase();
+        return (phase == TunerModel::ConnectionPhase::Disabled
+                || phase == TunerModel::ConnectionPhase::Disconnected)
+            && !station.tgxlConnection()->isConnected();
+    };
+    cw.connect(this);
+    QTRY_VERIFY(cw.client.tgxlFullControlAvailable());
+    window.reportStationLinkStateChanged();
+
+    SetupDialog dialog(&window);
+    dialog.show();
+    QVERIFY(dialog.selectNavigationTarget(QStringLiteral("peripherals")));
+    auto* page = dialog.findChild<PeripheralsPage*>();
+    QVERIFY(page);
+    auto* host = page->findChild<QLineEdit*>(QStringLiteral("tgxlHostEdit"));
+    auto* port = page->findChild<QSpinBox*>(QStringLiteral("tgxlPortSpin"));
+    auto* scan = page->findChild<QPushButton*>(QStringLiteral("tgxlScanButton"));
+    QVERIFY(host && port && scan);
+    QTRY_VERIFY(scan->isEnabled());
+    QVERIFY(OperatorWording::isPlain(scan->toolTip()));
+    QVERIFY(host->isEnabled());
+
+    // Scan LAN: the Core listens; the dialog lists what it heard.
+    scan->click();
+    auto* scanDialog = page->findChild<LanScanDialog*>(QStringLiteral("tgxlCoreScanDialog"));
+    QVERIFY(scanDialog);
+    LanDiscovery* coreScan = nullptr;
+    QTRY_VERIFY((coreScan = station.findChild<LanDiscovery*>(QStringLiteral("tgxlLanScan")))
+                != nullptr);
+    coreScan->injectDatagramForTesting(
+        QStringLiteral("TunerGeniusXL ip=192.0.2.44 v=1.2.17 serial=9911-2 nickname=Shack_TGXL"),
+        9010);
+    QTRY_VERIFY(scanDialog->rowCountForTesting() >= 1);
+    QVERIFY(OperatorWording::isPlain(scanDialog->statusTextForTesting()));
+    auto* table = scanDialog->findChild<QTableWidget*>();
+    QVERIFY(table);
+    int row = -1;
+    for (int i = 0; i < table->rowCount(); ++i) {
+        if (table->item(i, 1)->text() == QStringLiteral("192.0.2.44")) { row = i; }
+    }
+    QVERIFY(row >= 0);
+    QCOMPARE(table->item(row, 2)->text(), QStringLiteral("9010"));
+    QCOMPARE(table->item(row, 4)->text(), QStringLiteral("9911-2"));
+    // A pick fills Host and Port and is kept on the Core, not dialled.
+    scanDialog->pickRowForTesting(row);
+    QCOMPARE(host->text(), QStringLiteral("192.0.2.44"));
+    QCOMPARE(port->value(), 9010);
+    QTRY_COMPARE(station.peripheralValue(QStringLiteral("TGXL_ManualIp")),
+                 QStringLiteral("192.0.2.44"));
+    QTRY_COMPARE(window.tunerModel()->configuredHost(), QStringLiteral("192.0.2.44"));
+    QVERIFY(notDialled());
+
+    // A Host typed without Connect reaches the Core when editing finishes.
+    host->clear();
+    QTest::keyClicks(host, QStringLiteral("192.0.2.77"));
+    emit host->editingFinished();
+    QTRY_COMPARE(station.peripheralValue(QStringLiteral("TGXL_ManualIp")),
+                 QStringLiteral("192.0.2.77"));
+    // A Port changed and left unsent reaches the Core when Setup closes.
+    port->setValue(9055);
+    QCOMPARE(station.peripheralValue(QStringLiteral("TGXL_ManualPort")), QStringLiteral("9010"));
+    dialog.close();
+    QTRY_COMPARE(station.peripheralValue(QStringLiteral("TGXL_ManualPort")),
+                 QStringLiteral("9055"));
+    QTRY_COMPARE(window.tunerModel()->configuredPort(), 9055);
+    QVERIFY(refused.isEmpty());
+    QVERIFY(notDialled());
+
+    // The Core keeps it: a later window reads it from the Core.
+    {
+        PeripheralsPage later(&window);
+        auto* laterHost = later.findChild<QLineEdit*>(QStringLiteral("tgxlHostEdit"));
+        auto* laterPort = later.findChild<QSpinBox*>(QStringLiteral("tgxlPortSpin"));
+        QCOMPARE(laterHost->text(), QStringLiteral("192.0.2.77"));
+        QCOMPARE(laterPort->value(), 9055);
+    }
+
+    // On the air: Scan LAN and the fields wait, with the reason; a scan
+    // asked for anyway is refused and nothing listens.
+    PeripheralsPage onAirPage(&window);
+    window.reportStationLinkStateChanged();
+    auto* onAirScan = onAirPage.findChild<QPushButton*>(QStringLiteral("tgxlScanButton"));
+    auto* onAirHost = onAirPage.findChild<QLineEdit*>(QStringLiteral("tgxlHostEdit"));
+    QTRY_VERIFY(onAirScan->isEnabled());
+    MoxController* const mox = station.moxController();
+    QVERIFY(mox);
+    mox->setMoxCheck({});
+    mox->setMox(true);
+    QTRY_VERIFY(window.isCoreOnAir());
+    QTRY_VERIFY(!onAirScan->isEnabled());
+    QCOMPARE(onAirScan->toolTip(), RadioModel::onAirReason());
+    QVERIFY(!onAirHost->isEnabled());
+    QCOMPARE(onAirHost->toolTip(), RadioModel::onAirReason());
+    const int refusedBefore = refused.count();
+    QVERIFY(cw.client.requestTgxlLanScan().sent);
+    QVERIFY(cw.client.requestTgxlAddress(QStringLiteral("192.0.2.88"), 9010).sent);
+    QTRY_COMPARE(refused.count(), refusedBefore + 2);
+    QCOMPARE(refused.last().at(1).toString(), RadioModel::onAirReason());
+    QVERIFY(station.findChild<LanDiscovery*>(QStringLiteral("tgxlLanScan")) == nullptr);
+    QCOMPARE(station.peripheralValue(QStringLiteral("TGXL_ManualIp")), QStringLiteral("192.0.2.77"));
+    mox->setMox(false);
+    QTRY_VERIFY(!window.isCoreOnAir());
+    QTRY_VERIFY(onAirScan->isEnabled());
+    QVERIFY(onAirHost->isEnabled());
+}
+
+// R-R3-49 (parity Task 8): in a remote window, right-click > Recall tune
+// memory copies the stored values into the bars and sends nothing, Open
+// TGXL Advanced opens the Tuner Genius tab, and Copy diagnostics copies the
+// Core's connection (the mirrored tuner and its counters on
+// accessoryData), not this computer's idle socket.
+void RemotePeripheralsTest::remoteTunerMenuRecallsOpensAdvancedAndCopiesTheCore()
+{
+    AppSettings::instance().clear();
+    CoreAndWindow cw;
+    RadioModel& station = cw.station;
+    RadioModel& window = cw.window;
+    station.smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
+    station.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+    FakeGenius tuner;
+    QVERIFY(tuner.listen());
+    TunerApplet applet(&window, window.tunerModel(), nullptr, window.tuneMemoryStore());
+    applet.setTransmitPermitted(
+        false, QStringLiteral("Remote transmit controls are not available from this Core yet."));
+    cw.connect(this);
+    QTRY_VERIFY(cw.client.tgxlFullControlAvailable());
+    window.reportStationLinkStateChanged();
+    QVERIFY(admitCoreTuner(station, tuner));
+    QTRY_VERIFY(window.tunerModel()->hasDirectConnection());
+
+    const auto action = [](QMenu* menu, const QString& text) -> QAction* {
+        for (QAction* a : menu->actions()) {
+            if (a->text() == text) { return a; }
+        }
+        return nullptr;
+    };
+    std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
+    QAction* advanced = action(menu.get(), QStringLiteral("Open TGXL Advanced..."));
+    QAction* recall = action(menu.get(), QStringLiteral("Recall tune memory"));
+    QVERIFY(advanced && recall);
+    QVERIFY(advanced->isEnabled());
+    QVERIFY(recall->isEnabled());
+
+    QSignalSpy navigation(&applet, &TunerApplet::navigationRequested);
+    advanced->trigger();
+    QCOMPARE(navigation.count(), 1);
+    QCOMPARE(navigation.first().first().toString(), QStringLiteral("tgxlAdvanced"));
+
+    // Recall: the stored values into the bars; nothing reaches the tuner.
+    TuneMemory mem{};
+    mem.antenna = 1;
+    mem.band = Band::Band20m;
+    mem.c1 = 11;
+    mem.l = 22;
+    mem.c2 = 33;
+    window.tuneMemoryStore()->store(mem);
+    applet.testSetCurrentBandAndAntenna(Band::Band20m, 1);
+    const int mark = tuner.commands.size();
+    recall->trigger();
+    QCOMPARE(applet.relayBarForTesting(0)->value(), 11);
+    QCOMPARE(applet.relayBarForTesting(1)->value(), 22);
+    QCOMPARE(applet.relayBarForTesting(2)->value(), 33);
+    QTest::qWait(100);
+    for (int i = mark; i < tuner.commands.size(); ++i) {
+        QVERIFY2(tuner.commands.at(i) == QStringLiteral("status")
+                     || tuner.commands.at(i).startsWith(QStringLiteral("keepalive"))
+                     || tuner.commands.at(i).startsWith(QStringLiteral("ping")),
+                 qPrintable(tuner.commands.at(i)));
+    }
+
+    // Copy diagnostics: the Core's connection, not this computer's.
+    QVERIFY(!window.tgxlConnection()->isConnected());
+    QTRY_VERIFY(window.accessoryDataModel()->tgxlFramesIn() > 0);
+    const QString text = TunerApplet::coreDiagnosticsText(&window);
+    QVERIFY2(text.contains(QStringLiteral("Connected: Yes")), qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("Serial: 241288-1")), qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("Lines in/out: %1 / %2")
+                               .arg(window.accessoryDataModel()->tgxlFramesIn())
+                               .arg(window.accessoryDataModel()->tgxlFramesOut())),
+             qPrintable(text));
+    QVERIFY(!station.transmitModel().isTune());
+}
+
+// R-R3-49 (parity Task 8): Open PGXL Advanced, Open TGXL Advanced and the
+// PGXL Interlock entry open CAT & Network > 4O3A at their own tab, not
+// Setup's first page, in local and remote windows.
+void RemotePeripheralsTest::advancedAndInterlockEntriesOpenTheirFourO3ATab()
+{
+    RadioModel local;
+    RadioModel remote(RadioModel::Role::Remote);
+    RecordingTgxlLink link;
+    link.linkReady = true;
+    remote.attachStation(&link);
+    for (RadioModel* model : {&local, &remote}) {
+        const struct { const char* key; FourO3APage::Tab tab; } targets[] = {
+            {"pgxlAdvanced", FourO3APage::Tab::PowerGenius},
+            {"tgxlAdvanced", FourO3APage::Tab::TunerGenius},
+            {"pgxlInterlock", FourO3APage::Tab::General},
+            {"peripherals", FourO3APage::Tab::General},
+        };
+        for (const auto& target : targets) {
+            SetupDialog dialog(model);
+            QVERIFY(dialog.findChild<FourO3APage*>() == nullptr);   // not the first page
+            QVERIFY(dialog.selectNavigationTarget(QString::fromLatin1(target.key)));
+            auto* page = dialog.findChild<FourO3APage*>();
+            QVERIFY2(page, target.key);
+            QCOMPARE(page->currentTabForTesting(), target.tab);
+            if (target.tab == FourO3APage::Tab::General) {
+                QVERIFY(page->findChild<PgxlInterlockPage*>());
+            }
+        }
+        SetupDialog dialog(model);
+        QVERIFY(!dialog.selectNavigationTarget(QStringLiteral("noSuchPage")));
+    }
+    remote.detachStation();
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

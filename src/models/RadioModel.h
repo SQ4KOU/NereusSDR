@@ -121,6 +121,11 @@
 //                receive-only Core lets a window arm PureSignal off the
 //                air. NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 8): moveTgxlRelayForStation,
+//                scanTgxlLanForStation and setTgxlAddressForStation
+//                (remoteTgxlControlVersion 4), and the window's LAN scan
+//                answer (reportStationTgxlLanScan). NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -620,6 +625,11 @@ public:
     /// stationCommandFinished for a sender that waits on its own command.
     /// Ends any page's claim on the command (noteAccessoryRequestShownOnPage).
     void reportStationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
+    /// R-R3-49 (parity Task 8): the Core answered a window's scanTgxlLan
+    /// (`devicesJson` the answer's JSON array, empty on a refusal).
+    /// Role::Remote only. Routed to stationTgxlLanScanFinished.
+    void reportStationTgxlLanScan(quint32 commandId, bool accepted, const QString& reason,
+                                  const QString& devicesJson);
 
     /// The station refused a sample-rate change, with its own reason.
     /// Role::Remote only. Routed to sliceRetuneRejected, which carries the
@@ -2204,6 +2214,27 @@ public:
     bool setTgxlAntennaForStation(int port, QString* reason);
     bool setTgxlOperateForStation(bool on, QString* reason);
     bool setTgxlBypassForStation(bool on, QString* reason);
+    // R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): a window's
+    // mouse-wheel nudge of one matching relay (`relay` 0 C1, 1 L, 2 C2;
+    // `direction` -1 or 1), sent through the Core's own TunerModel as the
+    // local applet's `tune relay=<relay> move=<move>` line. It keys
+    // nothing. Refused as the switches above are, and for other values.
+    bool moveTgxlRelayForStation(int relay, int direction, QString* reason);
+    // A window's Scan LAN: the Core listens for Tuner Genius announcements
+    // for the local Scan LAN dialog's own window (kTgxlLanScanWindowMs) and
+    // calls `done` once with a JSON array of {"address","port","model",
+    // "serial","nickname"}. Refused on a Core that does not own its
+    // accessories and while the radio is on the air; `done` is not called
+    // then. Nothing is sent to any device.
+    using TgxlLanScanDone = std::function<void(const QString& devicesJson)>;
+    bool scanTgxlLanForStation(TgxlLanScanDone done, QString* reason);
+    static constexpr int kTgxlLanScanWindowMs = 3000;
+    // A Host or Port typed on a window's Peripherals row without Connect:
+    // saves TGXL_ManualIp and TGXL_ManualPort for the Core's radio without
+    // dialling, with configureTgxl's address checks and reasons. Refused
+    // while the radio is on the air. The `tuner` object's configured
+    // address follows while the Core is not connecting or connected.
+    bool setTgxlAddressForStation(const QString& host, int port, QString* reason);
     // R-R3-49 (parity Task 2, transmitSettingsVersion 2): a window's Tune
     // Power slider. Sets the tune power for the band the Core transmits on
     // and the tune drive source to the tune slider, as the local slider
@@ -2899,6 +2930,9 @@ public:
         m_testP2FirstIqMs = firstIqMs;
         m_testP2EstablishedMs = establishedMs;
     }
+    // R-R3-49 (parity Task 8): a shorter Tuner Genius LAN scan window, so
+    // a test does not wait the dialog's three seconds.
+    void setTgxlLanScanWindowMsForTest(int ms) { m_tgxlLanScanWindowMs = ms; }
 #endif
 
     // Phase 3Q Task 10: arm / disarm the auto-connect-in-progress flag.
@@ -3520,6 +3554,9 @@ signals:
     /// the TCI switch's request wait both match their own id here (an
     /// accessory refusal also arrives on accessoryRequestRefused).
     void stationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
+    /// R-R3-49 (parity Task 8): see reportStationTgxlLanScan.
+    void stationTgxlLanScanFinished(quint32 commandId, bool accepted, const QString& reason,
+                                    const QString& devicesJson);
 
     /// Phase 3F Sub-Epic I closeout, defect F4: the operator retuned a slice
     /// to a frequency no DDC can reach, and the frequency has been rolled
@@ -5410,6 +5447,8 @@ private:
     PgxlConnection* m_pgxlConnection{nullptr};
     TgxlConnection* m_tgxlConnection{nullptr};
     StationTgxlController* m_stationTgxl{nullptr};
+    // R-R3-49 (parity Task 8): scanTgxlLanForStation's listening window.
+    int m_tgxlLanScanWindowMs{kTgxlLanScanWindowMs};
     StationPgxlController* m_stationPgxl{nullptr};
     TunerModel*     m_tunerModel{nullptr};
     AmplifierModel* m_amplifierModel{nullptr};

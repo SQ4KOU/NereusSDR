@@ -224,6 +224,13 @@
 //                                    and changes pureSignalSettings live,
 //                                    refused while the radio is on the air.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8):
+//                                    remoteTgxlControlVersion 4: the Tuner
+//                                    Genius's relay nudge, the Core's LAN
+//                                    scan and the saved address
+//                                    (moveTgxlRelay, scanTgxlLan,
+//                                    setTgxlAddress).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -482,6 +489,13 @@ bool isTgxlDeviceSettingsVerb(const QByteArray& verb)
 bool isTgxlControlVerb(const QByteArray& verb)
 {
     return verb == "setTgxlAntenna" || verb == "setTgxlOperate" || verb == "setTgxlBypass";
+}
+
+// R-R3-49 (parity Task 8): the relay nudge, the Core's LAN scan and the
+// saved address (remoteTgxlControlVersion 4).
+bool isTgxlFullControlVerb(const QByteArray& verb)
+{
+    return verb == "moveTgxlRelay" || verb == "scanTgxlLan" || verb == "setTgxlAddress";
 }
 
 // R-R3-47: why a raw write of the RF-Kit switch is refused. A current app
@@ -1484,9 +1498,12 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
         }
         // R-R3-49 / R-R3-47: the tuner's antenna, operate and bypass came
         // with remoteTgxlControlVersion 2, in the same minor-11 block.
-        if (isTgxlControlVerb(message.commandVerb)
+        // R-R3-49 (parity Task 8): the relay nudge, LAN scan and saved
+        // address came with remoteTgxlControlVersion 4, with the same
+        // reasons.
+        if ((isTgxlControlVerb(message.commandVerb) || isTgxlFullControlVerb(message.commandVerb))
             && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
-                || tgxlControlVersion() < 2)) {
+                || tgxlControlVersion() < (isTgxlControlVerb(message.commandVerb) ? 2 : 4))) {
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
@@ -2610,7 +2627,9 @@ int StationServer::tgxlControlVersion() const
     // setTgxlOperate, setTgxlBypass), R-R3-49 / R-R3-47.
     // 3: setTgxlOperate on puts the tuner in OPERATE whole (bypass off and
     // operate on, one command), R-R3-49 fix wave.
-    return accessoryStatusVersion() >= 1 ? 3 : 0;
+    // 4: moveTgxlRelay, scanTgxlLan and setTgxlAddress, R-R3-49 (parity
+    // Task 8).
+    return accessoryStatusVersion() >= 1 ? 4 : 0;
 }
 
 int StationServer::rfKitControlVersion() const

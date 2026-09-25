@@ -386,7 +386,7 @@ change shows as surface drift and as a change to this table.
 | `remoteRfKitControlVersion` | 3 |
 | `stationTciVersion` | 1 |
 | `accessoryDataVersion` | 1 |
-| `remoteTgxlControlVersion` | 3 |
+| `remoteTgxlControlVersion` | 4 |
 | `transmitSettingsVersion` | 7 |
 
 <!-- /surface -->
@@ -422,9 +422,11 @@ When a feature is off, its version is 0:
   Genius's (the `accessorySettings` object and the device settings
   commands, section 9.1); `remoteTgxlControlVersion` 2 adds the Tuner
   Genius's antenna, operate and bypass (`setTgxlAntenna`,
-  `setTgxlOperate`, `setTgxlBypass`, section 9.1), and 3 has
+  `setTgxlOperate`, `setTgxlBypass`, section 9.1), 3 has
   `setTgxlOperate` with `on` true put the tuner in operate whole (bypass
-  off and operate on, from the one command);
+  off and operate on, from the one command), and 4 adds the relay nudge,
+  the Core's Scan LAN and the saved address (`moveTgxlRelay`,
+  `scanTgxlLan`, `setTgxlAddress`, section 9.1, parity Task 8);
   `remoteRfKitControlVersion` 3 adds `resetRfKitError`, the RF-Kit
   amplifier's Reset amp error.
 - `transmitSettingsVersion`: sent only at agreed minor 11, and 0 on a
@@ -1611,6 +1613,9 @@ refused.
 | `setTgxlAntenna` | `port` i64 | `remoteTgxlControlVersion` | 2 | 11 |
 | `setTgxlOperate` | `on` bool | `remoteTgxlControlVersion` | 2 | 11 |
 | `setTgxlBypass` | `on` bool | `remoteTgxlControlVersion` | 2 | 11 |
+| `moveTgxlRelay` | `relay` i64, `direction` i64 | `remoteTgxlControlVersion` | 4 | 11 |
+| `scanTgxlLan` | none | `remoteTgxlControlVersion` | 4 | 11 |
+| `setTgxlAddress` | `host` utf8, `port` i64 | `remoteTgxlControlVersion` | 4 | 11 |
 | `setTunePowerForTxBand` | `watts` i64 | `transmitSettingsVersion` | 2 | 11 |
 | `txProfile.select` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
 | `txProfile.save` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
@@ -1657,7 +1662,7 @@ refused.
 The table's capability columns are the gate the desktop client applies
 before sending (section 6.2).
 
-Seven command groups need a sentence beyond the table:
+Eight command groups need a sentence beyond the table:
 
 - **The filter policy.** `setAlexBpfMode` sets one receive filter chain's
   filter policy (`chain` 0 or 1; `mode` 0 Auto, 1 Force filter, 2 Force
@@ -1688,6 +1693,21 @@ Seven command groups need a sentence beyond the table:
   antenna on a tuner with no antenna switch or a port outside 1 to 3.
   The reasons are in
   [remote accessory control version 1](2026-09-23-remote-accessory-control-v1.md).
+- **The tuner's relays, Scan LAN and saved address.** `moveTgxlRelay`
+  (`relay` 0 C1, 1 L, 2 C2; `direction` -1 or 1) moves one matching relay
+  one step through the Core's tuner model, sending the line a local
+  window's relay bar sends on a mouse-wheel step; the tuner's report
+  arrives on `tuner` (`relayC1`, `relayL`, `relayC2`). `scanTgxlLan` has
+  the Core listen for Tuner Genius announcements for three seconds; its
+  `command.result` is sent when the window ends, with `values` holding
+  `devicesJson` (utf8, a JSON array of
+  `{"address","port","model","serial","nickname"}`). `setTgxlAddress`
+  (`host`, `port`) saves the tuner's address for the Core's radio without
+  dialling, with `configureTgxl`'s checks. None keys anything, so a
+  receive-only Core takes them, but each is refused while the radio is
+  on the air ("The radio is on the air. Try again when it stops."); the
+  nudge also with no tuner admitted. The reasons are in the remote
+  accessory control document.
 - **The Tune Power slider.** `setTunePowerForTxBand` (`watts`, 0 to 100,
   0 to 99 on a Hermes Lite 2) does what the TX applet's Tune Power slider
   does in a local window: it sets the tune power for the band the Core
@@ -2312,7 +2332,7 @@ same on every machine.
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false |
-| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` also invokes `ps3.twoTone` with `enabled` true, refused "PureSignal cannot be run from a remote window yet.", and its arming verbs are taken (`transmitSettingsVersion` 7) and then fail on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot |
+| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` also invokes `ps3.twoTone` with `enabled` true, refused "PureSignal cannot be run from a remote window yet.", and its arming verbs are taken (`transmitSettingsVersion` 7) and then fail on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address |
 
 `tst_link_conformance_session` also checks that every verb in the
 `commands` table is invoked both ways by some fixture, and that the two

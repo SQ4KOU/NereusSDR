@@ -116,6 +116,10 @@
 //                                    transmitSettingsVersion 7; ps3.twoTone
 //                                    stays with remote transmit.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8): moveTgxlRelay,
+//                                    scanTgxlLan and setTgxlAddress
+//                                    (remoteTgxlControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -299,6 +303,9 @@ QString notRepresentableReason()
 //   slice verbs            none: they predate capability gating
 //   requestStreamCtun*     remoteCtunAvailable()          (StationClient.cpp)
 //   configure/disconnectTgxl remoteTgxlConfigAvailable()
+//   setTgxlAntenna/Operate/Bypass tgxlControlAvailable() (version 2)
+//   moveTgxlRelay, scanTgxlLan, setTgxlAddress
+//                          tgxlFullControlAvailable() (version 4)
 //   setFourO3AEnabled      remoteFourO3AControlAvailable()
 //   *Pgxl*                 remotePgxlControlAvailable() (version 2)
 //   *RfKit*                remoteRfKitControlAvailable() (version 2)
@@ -389,6 +396,13 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"setTgxlBypass", {arg("on", kBool)}, "remoteTgxlControlVersion", 2,
          kRadioIdentitySessionProtocolMinor},
+        // The Tuner Genius's relay nudge, LAN scan and saved address
+        // (R-R3-49, parity Task 8).
+        {"moveTgxlRelay", {arg("relay", kInt), arg("direction", kInt)},
+         "remoteTgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
+        {"scanTgxlLan", {}, "remoteTgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
+        {"setTgxlAddress", {arg("host", kUtf8), arg("port", kInt)},
+         "remoteTgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
         // The TX applet's Tune Power slider (R-R3-49, parity Task 2).
         {"setTunePowerForTxBand", {arg("watts", kInt)}, "transmitSettingsVersion", 2,
          kRadioIdentitySessionProtocolMinor},
@@ -530,6 +544,7 @@ void SessionCommandDispatcher::setSessionOwner(const QString& owner)
     }
     m_sessionOwner = owner;
     m_pureSignalArmingOffered = false;
+    ++m_sessionGeneration;
 }
 
 void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
@@ -641,6 +656,12 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     } else if (invoke.commandVerb == "setTgxlAntenna" || invoke.commandVerb == "setTgxlOperate"
                || invoke.commandVerb == "setTgxlBypass") {
         handleTgxlControl(invoke);
+    } else if (invoke.commandVerb == "moveTgxlRelay") {
+        handleMoveTgxlRelay(invoke);
+    } else if (invoke.commandVerb == "scanTgxlLan") {
+        handleScanTgxlLan(invoke);
+    } else if (invoke.commandVerb == "setTgxlAddress") {
+        handleSetTgxlAddress(invoke);
     } else if (invoke.commandVerb == "setTunePowerForTxBand") {
         handleTunePowerForTxBand(invoke);
     } else if (invoke.commandVerb == "txProfile.select" || invoke.commandVerb == "txProfile.save"
@@ -1636,6 +1657,93 @@ void SessionCommandDispatcher::handleTgxlControl(const SessionMessage& invoke)
         emitResult(verb, invoke.commandId, false,
                    reason.isEmpty() ? QStringLiteral("The Core did not switch the Tuner Genius.")
                                     : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): a relay nudge
+// (`relay` 0 C1, 1 L, 2 C2; `direction` -1 or 1), through the Core's own
+// TunerModel. Refused as the switches are; nothing is sent then.
+void SessionCommandDispatcher::handleMoveTgxlRelay(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    int relay = 0;
+    int direction = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "relay", "direction" })
+        || !hasWireKind(invoke.arguments, "relay", MirrorWireKind::Int64)
+        || !hasWireKind(invoke.arguments, "direction", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "relay", &relay) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "direction", &direction) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to move a Tuner Genius relay was not understood."),
+                   {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->moveTgxlRelayForStation(relay, direction, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not switch the Tuner Genius.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 8): the Core listens for Tuner Genius announcements
+// and answers once its window ends, with `values` devicesJson (utf8, a JSON
+// array of {"address","port","model","serial","nickname"}). An answer due
+// to an earlier session is dropped.
+void SessionCommandDispatcher::handleScanTgxlLan(const SessionMessage& invoke)
+{
+    const QByteArray verb = invoke.commandVerb;
+    const quint32 commandId = invoke.commandId;
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(verb, commandId, false,
+                   QStringLiteral("The request to scan for a Tuner Genius was not understood."),
+                   {});
+        return;
+    }
+    QString reason;
+    const QPointer<SessionCommandDispatcher> self(this);
+    const quint64 generation = m_sessionGeneration;
+    const bool started = m_radioModel->scanTgxlLanForStation(
+        [self, generation, verb, commandId](const QString& devicesJson) {
+            if (!self || self->m_sessionGeneration != generation) { return; }
+            emit self->commandResultReady(SessionMessages::commandResult(
+                verb, commandId, true, QString(), {},
+                {{0, "devicesJson", MirrorWireKind::Utf8, devicesJson}}));
+        },
+        &reason);
+    if (!started) {
+        emitResult(verb, commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not scan for a Tuner Genius.")
+                                    : reason, {});
+    }
+}
+
+// R-R3-49 (parity Task 8): the Peripherals row's Host and Port, saved on
+// the Core for its radio without dialling (configureTgxl's address rules).
+void SessionCommandDispatcher::handleSetTgxlAddress(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QString host;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "host", "port" })
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to save the Tuner Genius address was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setTgxlAddressForStation(host, port, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty()
+                       ? QStringLiteral("The Core did not save the Tuner Genius address.")
+                       : reason, {});
         return;
     }
     emitResult(verb, invoke.commandId, true, QString(), {});

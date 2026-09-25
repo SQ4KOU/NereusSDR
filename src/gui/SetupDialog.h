@@ -77,6 +77,12 @@ public:
 
     // Navigate to a page by its label text (e.g. "AGC/ALC").
     void selectPage(const QString& label);
+    // R-R3-49 (parity Task 8): an applet's right-click entry. "pgxlAdvanced",
+    // "tgxlAdvanced" and "pgxlInterlock" open CAT & Network > 4O3A at their
+    // own tab (Power Genius XL, Tuner Genius XL, General), "peripherals"
+    // 4O3A's General tab, "rfKit" the RF-Kit page. False for an unknown key
+    // (the dialog stays at its first page).
+    bool selectNavigationTarget(const QString& pageKey);
     void setTransmitPermitted(bool permitted, const QString& reason = QString());
     // R-R3-49 (parity Task 1): the transmit settings gate, pushed to every
     // realized page (SetupPage::setTransmitSettingsPermitted). True in a

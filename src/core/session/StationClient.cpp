@@ -146,6 +146,10 @@
 //                facade's canArm, which also follows the Core's on-air
 //                state). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 8): moveTgxlRelay, scanTgxlLan and
+//                setTgxlAddress (remoteTgxlControlVersion 4); the scan's
+//                answer goes to RadioModel::reportStationTgxlLanScan.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2821,7 +2825,8 @@ QString accessoryRefusalDevice(const QByteArray& verb, const QString& faultsDevi
     }
     if (verb == "setTgxlName" || verb == "setTgxlNetwork" || verb == "saveTgxlSettings"
         || verb == "readTgxlSettings" || verb == "configureTgxl" || verb == "disconnectTgxl"
-        || verb == "setTgxlAntenna" || verb == "setTgxlOperate" || verb == "setTgxlBypass") {
+        || verb == "setTgxlAntenna" || verb == "setTgxlOperate" || verb == "setTgxlBypass"
+        || verb == "moveTgxlRelay" || verb == "scanTgxlLan" || verb == "setTgxlAddress") {
         return QStringLiteral("tgxl");
     }
     if (verb == "configureRfKit" || verb == "disconnectRfKit" || verb == "setRfKitEnabled"
@@ -3347,6 +3352,36 @@ StationClient::CommandOutcome StationClient::requestTgxlBypass(bool on)
                        QStringLiteral("the Tuner Genius bypass"));
 }
 
+// R-R3-49 (parity Task 8): a Core below remoteTgxlControlVersion 4 is not
+// asked; the window says why in its own words.
+StationClient::CommandOutcome StationClient::requestTgxlRelayMove(int relay, int direction)
+{
+    if (!tgxlFullControlAvailable()) {
+        return IStationLink::requestTgxlRelayMove(relay, direction);
+    }
+    return sendCommand("moveTgxlRelay", -1,
+                       { intArgument("relay", relay), intArgument("direction", direction) },
+                       QStringLiteral("the Tuner Genius relay"));
+}
+
+StationClient::CommandOutcome StationClient::requestTgxlLanScan()
+{
+    if (!tgxlFullControlAvailable()) {
+        return IStationLink::requestTgxlLanScan();
+    }
+    return sendCommand("scanTgxlLan", -1, {}, QStringLiteral("the Tuner Genius scan"));
+}
+
+StationClient::CommandOutcome StationClient::requestTgxlAddress(const QString& host, int port)
+{
+    if (!tgxlFullControlAvailable()) {
+        return IStationLink::requestTgxlAddress(host, port);
+    }
+    return sendCommand("setTgxlAddress", -1,
+                       { stringArgument("host", host), intArgument("port", port) },
+                       QStringLiteral("the Tuner Genius address"));
+}
+
 // R-R3-49 (parity Task 2): the TX applet's Tune Power slider. A Core
 // below transmitSettingsVersion 2 is not asked.
 StationClient::CommandOutcome StationClient::requestTunePowerForTxBand(int watts)
@@ -3560,6 +3595,20 @@ void StationClient::handleCommandResult(const SessionMessage& message)
                 message.commandVerb, phase, message.reason, *values);
         }
     }
+    // R-R3-49 (parity Task 8): the Core's Scan LAN answer, to the window's
+    // scan dialog (a refusal is also routed as an accessory refusal above).
+    if (pending.verb == "scanTgxlLan" && !m_radioModel.isNull()) {
+        QString devicesJson;
+        for (const MirrorUpdate& value : message.updates) {
+            if (value.name == "devicesJson" && value.kind == MirrorWireKind::Utf8) {
+                devicesJson = value.value.toString();
+            }
+        }
+        const QPointer<StationClient> self(this);
+        m_radioModel->reportStationTgxlLanScan(message.commandId, message.accepted,
+                                               message.reason, devicesJson);
+        if (!self) { return; }
+    }
     // R-R3-22 fix wave: every result by its id, so a sender (the amp
     // applets, the TCI switch) clears its own pending request and shows
     // only its own refusal; it also ends a page's claim on an accepted
@@ -3678,6 +3727,12 @@ bool StationClient::tgxlOperateAppliesWhole() const
 {
     // R-R3-49 fix wave: a Core at 3 applies setTgxlOperate on whole.
     return tgxlControlAvailable() && m_capabilities.remoteTgxlControlVersion >= 3;
+}
+
+bool StationClient::tgxlFullControlAvailable() const
+{
+    // R-R3-49 (parity Task 8): moveTgxlRelay, scanTgxlLan, setTgxlAddress.
+    return tgxlControlAvailable() && m_capabilities.remoteTgxlControlVersion >= 4;
 }
 
 bool StationClient::stationTciAvailable() const

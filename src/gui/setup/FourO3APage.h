@@ -41,6 +41,9 @@
 //   2026-05-21 -- Created in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-25 -- R-R3-49 (parity Task 8): selectTab, so the applets'
+//                 Advanced and Interlock entries open their own tab. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QWidget>
@@ -64,6 +67,12 @@ class FourO3APage : public QWidget {
 
 public:
     explicit FourO3APage(RadioModel* model, QWidget* parent = nullptr);
+
+    // R-R3-49 (parity Task 8): the page's tabs, in their order. The Power
+    // Genius interlock is a section of General.
+    enum class Tab { General = 0, PowerGenius = 1, TunerGenius = 2 };
+    void selectTab(Tab tab);
+    Tab currentTabForTesting() const;
 
 private slots:
     // Master toggle handler.  Persists the new state via

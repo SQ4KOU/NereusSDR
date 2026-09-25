@@ -29,6 +29,10 @@
 //   2026-09-24  R-R3-49 / R-R3-47 by J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code.
 //                 Remote ANT/OPERATE through the Core (see .cpp).
+//   2026-09-25  R-R3-49 (parity Task 8) by J.J. Boyd (KG4VCF), with
+//                 AI-assisted transformation via Anthropic Claude Code.
+//                 Remote relay nudges, tune memory recall, Open TGXL
+//                 Advanced and the Core's diagnostics (see .cpp).
 // =================================================================
 
 #pragma once
@@ -124,6 +128,14 @@ public:
     QPushButton* antennaButtonForTesting(int port) const;
     QPushButton* operateButtonForTesting() const { return m_operateBtn; }
     QPushButton* tuneButtonForTesting() const { return m_tuneBtn; }
+    // R-R3-49 (parity Task 8): the relay bars (0 C1, 1 L, 2 C2), for tests.
+    RelayBar* relayBarForTesting(int relay) const;
+
+    // R-R3-49 (parity Task 8): Copy diagnostics to clipboard in a remote
+    // window. The Core's connection to its Tuner Genius, from the mirrored
+    // `tuner` object and `accessoryData`'s tgxl counters, never this
+    // computer's idle connection.
+    static QString coreDiagnosticsText(RadioModel* model);
 
     // R-R3-49 / R-R3-47: the Core's refusal while it transmits, and the
     // tooltip on ANT and OPERATE in a remote window while the radio is on
@@ -208,6 +220,11 @@ private:
     // OPERATE then ask the Core and follow its transmit state; TUNE and the
     // relay bars keep the transmit permission.
     bool remoteTunerControl() const;
+    // R-R3-49 (parity Task 8): the same Core also moves the relays for this
+    // app (remoteTgxlControlVersion 4). The relay bars then ask the Core
+    // and wait while the radio is on the air.
+    bool remoteRelayControl() const;
+    void requestRelayMove(int relay, int direction);
     // The Core reports the radio on the air: MOX, TUNE or two-tone.
     bool coreOnAir() const;
     void requestAntenna(int port);
