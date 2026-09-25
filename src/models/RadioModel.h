@@ -2660,6 +2660,14 @@ public:
     // from the cmd-state machine's effective PSEnabled state. RadioModel owns
     // the returned coordinator, matching production lifetime.
     PureSignal* installPureSignalForTest(TxChannel* tx);
+    // Group B fix wave: the txaFlushed wiring connectToRadio makes, against
+    // the channel wireTransmitChainForTest set, and an observer called
+    // where PureSignal hears the radio is back on receive.
+    void wireTxaFlushedForTest() { wireTxaFlushed(); }
+    void setTxaFlushedPureSignalObserverForTest(std::function<void()> observer)
+    {
+        m_txaFlushedPureSignalObserverForTest = std::move(observer);
+    }
     // Phase 3F Sub-Epic I closeout, defect F1: attach a DSP worker without
     // standing up the connection / DSP-thread pipeline, so a test can
     // reproduce connectToRadio's real ordering (pool sized and slices bound
@@ -4124,6 +4132,11 @@ private:
     // DspOptions<Setting><Mode>Tx write, and the test observer.
     QSet<QString> m_pendingDspOptionsTxGroups;
     std::function<void(DSPMode)> m_dspOptionsTxApplyObserverForTest;
+    // Group B fix wave: MoxController::txaFlushed's two halves (the TX
+    // channel's stop on its thread, PureSignal on the main thread), and
+    // the test observer of the second.
+    void wireTxaFlushed();
+    std::function<void()> m_txaFlushedPureSignalObserverForTest;
 
     // The connect-time DDC seed, factored out of the wireSliceSignals
     // singleShot so it can be driven without a live connection. Commands the

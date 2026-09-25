@@ -4850,6 +4850,30 @@ void RadioModel::wireTransmitProcessingChain()
     }
 }
 
+// F.1 — txaFlushed: the TX channel stops, and PureSignal hears the radio
+// is back on receive. Moved out of connectToRadioImpl (group B fix wave)
+// so a test can wire it against a test channel.
+void RadioModel::wireTxaFlushed()
+{
+    if (!m_moxController || !m_txChannel) {
+        return;
+    }
+    // PureSignal lives on the main thread (group A's re-review): it hears
+    // the radio is back on receive here, in RadioModel's context, first, as
+    // it did before the TX channel's stop.
+    connect(m_moxController, &MoxController::txaFlushed, this, [this]() {
+        if (m_pureSignal) {
+            if (m_txaFlushedPureSignalObserverForTest) { m_txaFlushedPureSignalObserverForTest(); }
+            m_pureSignal->onMoxChanged(false);
+        }
+    });
+    // The TX channel's own stop, on its thread.
+    connect(m_moxController, &MoxController::txaFlushed,
+            m_txChannel, [this]() {
+        m_txChannel->setRunning(false);
+    });
+}
+
 #ifdef NEREUS_BUILD_TESTS
 // Declared in RadioModel.h's NEREUS_BUILD_TESTS block.
 void RadioModel::wireTransmitChainForTest(TxChannel* channel)
@@ -11860,13 +11884,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // From Thetis console.cs:29607 [v2.10.3.13] — TX-off callsite with
             // dmode=1 (drain) in the TX→RX branch.
             // Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE  [console.cs:29603]
-            connect(m_moxController, &MoxController::txaFlushed,
-                    m_txChannel, [this]() {
-                if (m_pureSignal) {
-                    m_pureSignal->onMoxChanged(false);
-                }
-                m_txChannel->setRunning(false);
-            });
+            wireTxaFlushed();
 
             // H.1 — voxRunRequested → setVoxRun.
             // From Thetis cmaster.cs:1039-1052 [v2.10.3.13] — CMSetTXAVoxRun.

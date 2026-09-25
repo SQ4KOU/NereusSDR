@@ -281,6 +281,7 @@ private slots:
     void txProfileCarriesTheLegacyBox();
     void newReasonsArePlain();
     void curveIsReadOnTheMainThreadAndHandedByValue();
+    void txaFlushedTellsPureSignalOnTheMainThread();
     void unreadableCurveIsRefusedWithAReason();
 
 private:
@@ -1117,6 +1118,42 @@ void TstRemoteTxEqCfc::unreadableCurveIsRefusedWithAReason()
         QVERIFY2(empty.accepted, qPrintable(name + ' ' + empty.reason));
         QCOMPARE(coreTx.property(name.constData()).toString(), QString());
     }
+}
+
+// Group A follow-up (group B fix wave): MoxController::txaFlushed stops
+// the TX channel on its own thread, and tells PureSignal (a main-thread
+// object) the radio is back on receive on the main thread, never on the TX
+// thread.
+void TstRemoteTxEqCfc::txaFlushedTellsPureSignalOnTheMainThread()
+{
+    auto core = makeStationRadioModel();
+    TxChannel channel(1);
+    core->wireTransmitChainForTest(&channel);
+    QVERIFY(core->installPureSignalForTest(&channel));
+    core->wireTxaFlushedForTest();
+    QThread* pureSignalThread = nullptr;
+    int told = 0;
+    core->setTxaFlushedPureSignalObserverForTest([&]() {
+        pureSignalThread = QThread::currentThread();
+        ++told;
+    });
+
+    QThread worker;
+    worker.start();
+    channel.moveToThread(&worker);
+    emit core->moxController()->txaFlushed();
+    QTRY_COMPARE(told, 1);
+    QCOMPARE(pureSignalThread, QCoreApplication::instance()->thread());
+    // The channel's own stop still runs on its thread.
+    QThread* stopThread = nullptr;
+    QMetaObject::invokeMethod(&channel, [&]() {
+        stopThread = QThread::currentThread();
+        channel.moveToThread(QCoreApplication::instance()->thread());
+    }, Qt::BlockingQueuedConnection);
+    QCOMPARE(stopThread, &worker);
+    worker.quit();
+    worker.wait();
+    core->injectTxChannelForTest(nullptr);
 }
 
 QTEST_MAIN(TstRemoteTxEqCfc)
