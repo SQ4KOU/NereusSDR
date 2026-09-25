@@ -1240,6 +1240,14 @@ public:
     /// DdcAssignment::rate[], which the codecs populate per stream, so there
     /// it applies only to the stream named.
     bool setStreamSampleRate(int streamIndex, int rateHz);
+    /// Fix wave after the several-devices group review (a rate proceed
+    /// closes only after the change succeeds): the same change with the
+    /// slices in `closing` set aside in the plan. `close` runs for each of
+    /// them only once the change is certain (the plan holds and, on
+    /// Protocol 1, the radio took the new rate), before the plan commits.
+    /// Refused, it closes nothing. Local only.
+    bool setStreamSampleRateClosing(int streamIndex, int rateHz, const QSet<int>& closing,
+                                    const std::function<void(int)>& close);
 
     /// Phase 3F Sub-Epic I closeout, defect G2: the operator picked a sample
     /// rate on one slice's VFO flag.
@@ -1261,6 +1269,10 @@ public:
     /// relayed onto sliceRetuneRejected by
     /// reportStationRetuneRejected().
     void requestSliceSampleRate(int sliceId, int rateHz);
+    /// requestSliceSampleRate on the Core with `closing` closed through
+    /// `close` only once the change is certain (setStreamSampleRateClosing).
+    void requestSliceSampleRateClosing(int sliceId, int rateHz, const QSet<int>& closing,
+                                       const std::function<void(int)>& close);
 
     /// Set the station-owned C-Tune pin for the bound stream named by a
     /// slice. Remote roles send the typed station command and never mutate

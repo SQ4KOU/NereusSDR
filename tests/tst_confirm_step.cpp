@@ -1478,6 +1478,52 @@ private slots:
                     .value(QStringLiteral("reason")).toString()
                     .endsWith(QStringLiteral("Your slice B closed: no receiver was free.")));
     }
+
+    // Fix wave: a rate proceed closes another device's slice only once the
+    // change succeeds. Here the change is refused on its later turn (a
+    // slice nobody owns arrives, outside the narrower window, before it
+    // runs), so B's slice stays, B is told nothing, and the rate stays.
+    void aRefusedRateProceedClosesNothing()
+    {
+        Shared s(1);
+        const QJsonObject held = s.core.invoke(
+            s.appA, "requestSliceSampleRate", {int64("sliceId", 0), int64("rateHz", 96000)});
+        QCOMPARE(held.value(QStringLiteral("reason")).toString(), kWaiting);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        const quint32 proceedId = 8801;
+        s.appA->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+            "confirm.proceed", proceedId,
+            {int64("id", ask.value(QStringLiteral("id")).toInteger()), int64("choice", -1)})));
+        // Queued behind the proceed's delivery, so it runs after the
+        // proceed and before the rate change the proceed queues.
+        RadioModel* model = s.core.model.get();
+        QMetaObject::invokeMethod(model, [model]() {
+            const int id = model->addSlice(QStringLiteral("pan-0"));
+            model->sliceById(id)->setFrequency(7160000.0);
+        }, Qt::QueuedConnection);
+        QJsonObject done;
+        QTRY_VERIFY([&]() {
+            for (const QJsonObject& o : ofType(s.appA->received(), QStringLiteral("command.result"))) {
+                if (o.value(QStringLiteral("id")).toInteger() == proceedId) {
+                    done = o;
+                }
+            }
+            return !done.isEmpty();
+        }());
+        QVERIFY2(!done.value(QStringLiteral("accepted")).toBool(true),
+                 QJsonDocument(done).toJson().constData());
+        // Refused by the rate change itself, not by the proceed's checks.
+        QCOMPARE(done.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("Sample-rate change to 96 kHz was rejected; all slices "
+                                "stayed on their existing DDC windows."));
+        QTest::qWait(2 * StationServer::kDefaultDeltaFlushMs);
+        // B still owns its slice 1 (a closed id would be reused by the new
+        // slice, so the owner is what shows it stayed) at 7.150 MHz.
+        QCOMPARE(s.core.model->sliceOwnership()->ownedBy(s.b.key.fingerprint()), QList<int>{1});
+        QCOMPARE(s.core.model->sliceById(1)->frequency(), 7150000.0);
+        QCOMPARE(s.core.model->streamAllocator().streamSampleRateHz(s.receiver()), 192000);
+        QCOMPARE(countOf(s.appB, QStringLiteral("notice")), 0);
+    }
 };
 
 QTEST_GUILESS_MAIN(TstConfirmStep)

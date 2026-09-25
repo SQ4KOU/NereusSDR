@@ -140,6 +140,8 @@
 #include <QObject>
 #include <QPointer>
 #include <QHash>
+#include <QSet>
+
 #include <functional>
 #include <optional>
 #include <utility>
@@ -238,6 +240,16 @@ public:
     /// a new slice has no owner and setActiveSliceById moves the one active
     /// slice.
     void setRequester(const QByteArray& device) { m_requester = device; }
+    /// Fix wave after the several-devices group review: the next
+    /// requestSliceSampleRate dispatched (a confirmed rate change) closes
+    /// `closing` through `close`, and only once the change is certain
+    /// (RadioModel::setStreamSampleRateClosing). Used by that one dispatch
+    /// and cleared, whether it runs or not.
+    void setRateClosing(QSet<int> closing, std::function<void(int)> close)
+    {
+        m_rateClosing = std::move(closing);
+        m_rateClose = std::move(close);
+    }
     /// The plain refusal for `requester` naming `sliceId`, or empty when it
     /// may: "That slice belongs to <owner>. It can be changed only there."
     using SliceAccess = std::function<QString(const QByteArray& requester, int sliceId)>;
@@ -343,6 +355,8 @@ private:
     QString m_sessionOwner{QStringLiteral("local")};
     // iPhone app Task 73.
     QByteArray m_requester;
+    QSet<int> m_rateClosing;
+    std::function<void(int)> m_rateClose;
     SliceAccess m_sliceAccess;
     ConfirmAnswer m_confirmAnswer;
     /// Refuses (and answers) a verb whose sliceId names another device's

@@ -6602,6 +6602,13 @@ void RadioModel::clearStreamCtunPins()
 
 void RadioModel::requestSliceSampleRate(int sliceId, int rateHz)
 {
+    requestSliceSampleRateClosing(sliceId, rateHz, {}, {});
+}
+
+void RadioModel::requestSliceSampleRateClosing(int sliceId, int rateHz,
+                                               const QSet<int>& closing,
+                                               const std::function<void(int)>& close)
+{
     // Remote-daemon R2: the daemon owns the DDC windows, so a remote
     // operator's rate change is a request sent to it, never a local
     // retune. Deliberately no local sliceById() pre-check ahead of the
@@ -6639,7 +6646,7 @@ void RadioModel::requestSliceSampleRate(int sliceId, int rateHz)
         // The slice picks up its stream's rate when it binds.
         return;
     }
-    if (!setStreamSampleRate(stream, rateHz)) {
+    if (!setStreamSampleRateClosing(stream, rateHz, closing, close)) {
         emit sliceRetuneRejected(
             sliceId,
             QStringLiteral(
@@ -6931,8 +6938,15 @@ void RadioModel::commitStreamSampleRateChange(
 
 bool RadioModel::setStreamSampleRate(int streamIndex, int rateHz)
 {
+    return setStreamSampleRateClosing(streamIndex, rateHz, {}, {});
+}
+
+bool RadioModel::setStreamSampleRateClosing(int streamIndex, int rateHz,
+                                            const QSet<int>& closing,
+                                            const std::function<void(int)>& close)
+{
     const std::optional<StreamRateChangePlan> plan =
-        planStreamSampleRateChange(streamIndex, rateHz);
+        planStreamSampleRateChange(streamIndex, rateHz, closing);
     if (!plan.has_value()) {
         return false;
     }
@@ -6950,6 +6964,18 @@ bool RadioModel::setStreamSampleRate(int streamIndex, int rateHz)
         // after preflight succeeds; requestDdcAssignment at commit's tail
         // recreates it from the committed geometry.
         stopExternalDiversityRoute();
+    }
+
+    // Fix wave (several-devices group review): the change is certain now,
+    // so the slices the plan set aside close, and only now. The plan was
+    // made without them, so it commits unchanged.
+    if (close) {
+        const QList<SliceModel*> slices = m_slices;
+        for (SliceModel* slice : slices) {
+            if (slice != nullptr && closing.contains(slice->sliceIndex())) {
+                close(slice->sliceIndex());
+            }
+        }
     }
 
     commitStreamSampleRateChange(*plan);

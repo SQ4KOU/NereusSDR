@@ -1114,6 +1114,9 @@ void SessionCommandDispatcher::handleAddSliceOnPan(const SessionMessage& invoke)
 
 void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage& invoke)
 {
+    // Fix wave: a confirmed rate change's closes, for this dispatch only.
+    const QSet<int> closing = std::exchange(m_rateClosing, {});
+    const std::function<void(int)> close = std::exchange(m_rateClose, {});
     int sliceId = 0;
     int rateHz = 0;
     const ArgumentStatus sliceIdStatus =
@@ -1162,7 +1165,7 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
 
     QMetaObject::invokeMethod(
         m_radioModel,
-        [self, radioModel, verb, commandId, sliceId, rateHz, owner]() {
+        [self, radioModel, verb, commandId, sliceId, rateHz, owner, closing, close]() {
             if (self.isNull() || radioModel.isNull()) {
                 return;
             }
@@ -1196,7 +1199,7 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
             const QMetaObject::Connection conn = connect(
                 radioModel, &RadioModel::sliceRetuneRejected, self,
                 [&rejectionReason](int, const QString& reason) { rejectionReason = reason; });
-            radioModel->requestSliceSampleRate(sliceId, rateHz);
+            radioModel->requestSliceSampleRateClosing(sliceId, rateHz, closing, close);
             QObject::disconnect(conn);
 
             if (!rejectionReason.isEmpty()) {

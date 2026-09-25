@@ -1150,18 +1150,24 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
             }
         }
     }
-    // A sample rate: the other devices' slices the plan cannot place close
-    // first, so the rate change finds them gone, as it planned.
+    const bool rateChange = question.held == ConfirmStep::Held::Command
+        && question.original.commandVerb == "requestSliceSampleRate";
+    // The other devices' slices the plan cannot place close. For a sample
+    // rate (the only change with closes), fix wave: the rate change closes
+    // them itself, and only once it is certain, so a refused change closes
+    // nothing (RadioModel::setStreamSampleRateClosing).
     QList<QByteArray> closedDevices;
-    for (int id : now.closes) {
-        const QByteArray who = m_radioModel->sliceOwnership()->mark(id).subject();
-        if (closeSliceFor(id, saveForAbsentSubject(id), nullptr) && !closedDevices.contains(who)) {
-            closedDevices.append(who);
+    if (!rateChange) {
+        for (int id : now.closes) {
+            const QByteArray who = m_radioModel->sliceOwnership()->mark(id).subject();
+            if (closeSliceFor(id, saveForAbsentSubject(id), nullptr)
+                && !closedDevices.contains(who)) {
+                closedDevices.append(who);
+            }
         }
     }
 
-    if (question.held == ConfirmStep::Held::Command
-        && question.original.commandVerb == "requestSliceSampleRate") {
+    if (rateChange) {
         // The dispatcher runs a rate change on a later turn (it can take
         // the radio's data flow down for tens of milliseconds): the
         // proceed is answered, with the change's own result as its
@@ -1182,7 +1188,26 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
             ResultKey{session, question.original.commandVerb, question.original.commandId},
             later);
         m_proceedAnsweredLater = ResultKey{session, invoke.commandVerb, invoke.commandId};
+        const ResultKey deferred{session, question.original.commandVerb,
+                                 question.original.commandId};
+        const QPointer<StationServer> self(this);
+        m_dispatcher->setRateClosing(
+            QSet<int>(now.closes.cbegin(), now.closes.cend()), [self, deferred](int id) {
+                if (self.isNull() || self->m_radioModel.isNull()) {
+                    return;
+                }
+                const QByteArray who = self->m_radioModel->sliceOwnership()->mark(id).subject();
+                if (!self->closeSliceFor(id, self->saveForAbsentSubject(id), nullptr)) {
+                    return;
+                }
+                const auto entry = self->m_deferredProceeds.find(deferred);
+                if (entry != self->m_deferredProceeds.end()
+                    && !entry->closedDevices.contains(who)) {
+                    entry->closedDevices.append(who);
+                }
+            });
         m_dispatcher->dispatch(question.original);
+        m_dispatcher->setRateClosing({}, {});
         return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, true,
                                               QString(), {});
     }

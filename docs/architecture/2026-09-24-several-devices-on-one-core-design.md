@@ -1012,7 +1012,11 @@ touched. The requester's own slices never count.
 
 A rate change is simulated with today's plan (`planStreamSampleRateChange`,
 `RadioModel.cpp:6264-6324`). Another device's slice the plan would refuse becomes `closes`; the
-requester's own refused slice still refuses the whole change, as today.
+requester's own refused slice still refuses the whole change, as today. After Confirm, those
+slices close only once the rate change is certain (the plan still holds and, on Protocol 1, the
+radio took the new rate), just before it commits; a rate change refused on its later turn closes
+nothing and tells nobody (fix wave after the group review of Tasks 71 to 76,
+`RadioModel::setStreamSampleRateClosing`).
 
 **Ruling 7.4. Changes wait while the holder is on the air (D60).** While a holder is on the
 air, these changes from any other device are refused, not asked:
