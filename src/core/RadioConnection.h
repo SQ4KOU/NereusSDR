@@ -438,6 +438,16 @@ public slots:
     }
     bool hpfBypassOnPs() const noexcept { return m_hpfBypassOnPs; }
 
+    /// "HPF Bypass on TX" (Setup > Hardware > Alex, plan Task 14). While
+    /// keyed, an Alex board's high-pass word is 0x20, the bypass:
+    ///   From Thetis console.cs:6843-6848 [v2.10.3.15] (setAlexHPF)
+    ///     if (_mox && disable_hpf_on_tx)
+    ///     { NetworkIO.SetAlexHPFBits(0x20); ... return; }
+    /// Default false, as Thetis (console.cs:18753 disable_hpf_on_tx = false).
+    /// P1 and P2 read it when they compose the high-pass word.
+    virtual void setHpfBypassOnTx(bool on) { m_hpfBypassOnTx = on; }
+    bool hpfBypassOnTx() const noexcept { return m_hpfBypassOnTx; }
+
     /// Hardware mic-jack PTT disable flag (Orion/ANAN front-panel PTT).
     ///
     /// Parameter and wire convention match Thetis NetworkIO.SetMicPTT exactly:
@@ -841,6 +851,10 @@ protected:
     // Default true — matches Thetis chkDisableHPFonPSb.Checked=true at
     // setup.designer.cs:23676 [v2.10.3.13].
     bool m_hpfBypassOnPs{true};
+
+    // "HPF Bypass on TX" (setHpfBypassOnTx). Written and read on the
+    // connection thread.
+    bool m_hpfBypassOnTx{false};
 
     // Shared state for setMicPTTDisabled (3M-1b G.5; renamed for issue #182
     // to match Thetis MicPTTDisabled / mic_ptt_disabled storage name exactly).

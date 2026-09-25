@@ -1442,6 +1442,24 @@ void P2RadioConnection::setLiveReceiverSlots(quint32 slotMask)
 }
 
 // ---------------------------------------------------------------------------
+// setHpfBypassOnTx: "HPF Bypass on TX" (plan Task 14). Stored by the base
+// and read by buildCodecContext; sent at once, because Thetis's setter
+// re-applies the high-pass immediately (console.cs:18754-18762
+// DisableHPFonTX [v2.10.3.15]) and a Protocol 2 high-priority packet goes
+// out only when something changes.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setHpfBypassOnTx(bool on)
+{
+    if (on == m_hpfBypassOnTx) {
+        return;
+    }
+    RadioConnection::setHpfBypassOnTx(on);
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // setReceiverVfoFrequencies: each DDC's slice VFO, for the OC band.
 // ---------------------------------------------------------------------------
 void P2RadioConnection::setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot)
@@ -3010,6 +3028,25 @@ CodecContext P2RadioConnection::buildCodecContext() const
     // 2026-05-23 at /tmp/nereus-g2e-ps.pcap{.first, current}.
     if (m_mox && m_puresignalRun && m_hpfBypassOnPs) {
         ctx.alexHpfBits = static_cast<quint8>(ctx.alexHpfBits | 0x20);
+    }
+
+    // "HPF Bypass on TX" (plan Task 14): keyed, Alex0's high-pass word is
+    // 0x20, the bypass, whatever the receive selection was.
+    //   From Thetis console.cs:6843-6848 [v2.10.3.15] (setAlexHPF)
+    //     if (_mox && disable_hpf_on_tx)
+    //     { NetworkIO.SetAlexHPFBits(0x20); ... return; }
+    //   From Thetis console.cs:6957 [v2.10.3.15] (setBPF1ForOrionIISaturn)
+    //     if (_mox && (disable_hpf_on_tx || (disable_hpf_on_ps && PureSignalEnabled)))
+    // SetAlexHPFBits writes prbpfilter (Alex0) only (netInterface.c:604-621
+    // [v2.10.3.15]); Alex1's high-pass is not touched. Alex1 mirrors Alex0's
+    // filter bits when ADC1 has no decision of its own
+    // (P2CodecOrionMkII::buildAlex1), so that mirror is pinned to the
+    // selection Alex0 had before the bypass.
+    if (m_mox && m_hpfBypassOnTx && m_caps && m_caps->hasAlexFilters) {
+        if (ctx.alexHpfBitsAdc1 < 0) {
+            ctx.alexHpfBitsAdc1 = static_cast<int>(ctx.alexHpfBits & ~0x20u);
+        }
+        ctx.alexHpfBits = 0x20;
     }
 
     // Port / wideband config

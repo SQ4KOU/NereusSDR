@@ -1514,6 +1514,24 @@ void P1RadioConnection::setAlexRxBpf(AlexRxBpf b)
 // when there is one, otherwise the RX0-frequency-derived value.
 quint8 P1RadioConnection::effectiveAlexHpfBits() const
 {
+    // "HPF Bypass on TX" (plan Task 14): keyed, an Alex board bypasses its
+    // high-pass. Thetis, for both the high-pass and the band-pass boards:
+    //   From Thetis console.cs:6841-6848 [v2.10.3.15] (setAlexHPF)
+    //     if (alexpresent && !initializing)
+    //     {
+    //         if (_mox && disable_hpf_on_tx)
+    //         {
+    //             NetworkIO.SetAlexHPFBits(0x20);
+    //   From Thetis console.cs:6957 [v2.10.3.15] (setBPF1ForOrionIISaturn)
+    //     if (_mox && (disable_hpf_on_tx || (disable_hpf_on_ps && PureSignalEnabled)))
+    // `alexpresent` is hasAlexFilters here. The HL2 has no Alex board, and
+    // its bank 10 C3 bits are left as they were.
+    if (m_mox && m_hpfBypassOnTx) {
+        const BoardCapabilities* const fcaps = filterCaps();
+        if (fcaps && fcaps->hasAlexFilters) {
+            return 0x20;
+        }
+    }
     return m_alexRxHpfOverride >= 0 ? static_cast<quint8>(m_alexRxHpfOverride)
                                     : m_alexHpfBits;
 }

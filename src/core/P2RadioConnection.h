@@ -242,6 +242,7 @@ public slots:
     void setReceiverFrequency(int receiverIndex, quint64 frequencyHz) override;
     void setTxFrequency(quint64 frequencyHz) override;
     void setLiveReceiverSlots(quint32 slotMask) override;
+    void setHpfBypassOnTx(bool on) override;
     void setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot) override;
     void setActiveReceiverCount(int count) override;
     void setSampleRate(int sampleRate) override;

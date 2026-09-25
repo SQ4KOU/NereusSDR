@@ -1886,6 +1886,7 @@ nereus_add_test(tst_p1_rx_filter_follows_live_receiver)
 # NereusSDR-original tests: no Thetis port.
 nereus_add_test(tst_p1_band_outputs_follow_tx_slice)
 nereus_add_test(tst_p2_band_outputs_and_rx_lpf)
+nereus_add_test(tst_hpf_bypass_on_tx)
 
 # ── A band change must retune the DDC even while CTUN holds it ───────────────
 # CTUN pins the DDC via ReceiverManager::m_ddcFreqLocked so a VFO nudge inside
