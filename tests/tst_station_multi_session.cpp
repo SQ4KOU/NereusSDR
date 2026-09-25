@@ -53,8 +53,20 @@
 // when it signs in; revoking closes its slices, held ones included, and
 // forgets its layout; connectedDevices lists what each device listens on.
 //
-// Keys are made at run time in scratch directories. Media on a second
-// device is not asserted: Task 76 owns it.
+// Then, from Task 76 (the several-devices design, rulings 9.1 to 9.4),
+// media and capacity per device: each admitted device gets its own media
+// controller (DaemonMediaHub) and its own share of the display budget in
+// its own capabilities (sharedConnection, or sharedProcessing under the
+// governor's cut, only while another device is admitted; coreBusy or none
+// to a device that did not declare sessionHolder); A's media control
+// reaches A's controller only; each device hears only its own slices
+// (distinct tones per slice, read back from each device's lossless audio);
+// displays and receiver streams only for its own slices; two devices
+// watching one receiver share one FFT; B leaving ends only B's media; the
+// Core's local output plays only the station device's slices; telemetry
+// reaches every session that negotiated it.
+//
+// Keys are made at run time in scratch directories.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -73,6 +85,9 @@
 //   2026-09-25: iPhone app plan Task 74 (R-IOS-02): the anchor passes
 //               with the C-Tune pin. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 76 (R-IOS-31): media and capacity
+//               per device. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -86,6 +101,8 @@
 #include <QJsonObject>
 #include <QScopeGuard>
 #include <QTemporaryDir>
+
+#include <QtEndian>
 
 #include <atomic>
 #include <memory>
@@ -104,6 +121,12 @@
 #include "core/session/StationServer.h"
 #include "core/WdspTypes.h"
 #include "core/dsp/DspAssetService.h"
+#include "core/daemon/DaemonTelemetryController.h"
+#include "core/session/PureSignalSessionFacade.h"
+#include "core/session/media/DaemonMediaController.h"
+#include "core/session/media/DisplayBudget.h"
+#include "core/session/media/IMediaTransport.h"
+#include "core/session/media/SpectrumEndpoint.h"
 #include "models/NotchModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -564,6 +587,206 @@ int addCoHostedSlice(RadioModel& model)
     model.sliceById(second)->setFrequency(14210000.0);
     return second;
 }
+
+
+// ── Task 76: media per device ───────────────────────────────────────────
+
+// A media transport that records what it is given; ready on demand.
+class MediaFake final : public IMediaTransport {
+public:
+    explicit MediaFake(QObject* parent = nullptr) : IMediaTransport(parent) {}
+    bool start(const StartOptions& options) override
+    {
+        startOptions = options;
+        started = true;
+        return true;
+    }
+    void stop() override { started = readyState = false; }
+    bool acceptDescription(const QString&, const QString&) override { return true; }
+    bool acceptCandidate(const QString&, const QString&) override { return true; }
+    bool sendDisplay(const QByteArray& bytes) override
+    {
+        if (readyState) { displays.append(bytes); }
+        return readyState;
+    }
+    bool sendRtp(const QByteArray& packet) override
+    {
+        if (readyState) { rtpPackets.append(packet); }
+        return readyState;
+    }
+    bool isReady() const override { return readyState; }
+    bool losslessAudioNegotiated() const override { return true; }
+    void becomeReady() { readyState = true; emit ready(); }
+
+    bool started{false};
+    bool readyState{false};
+    StartOptions startOptions{Role::Answerer, 0};
+    QList<QByteArray> displays;
+    QList<QByteArray> rtpPackets;
+};
+
+constexpr char kMediaConnection[] = "11111111-2222-4333-8444-555555555555";
+
+void sendMedia(LoopbackTransport* app, const QJsonObject& payload)
+{
+    SessionMessage message;
+    message.kind = SessionMessageKind::MediaControl;
+    message.mediaPayload = payload;
+    app->sendText(SessionMessages::encode(message));
+}
+
+// Every media control `op` the Core sent `app`, in arrival order.
+QList<QJsonObject> mediaOps(const LoopbackTransport* app, const QString& op)
+{
+    QList<QJsonObject> out;
+    for (const QByteArray& wire : app->received()) {
+        SessionMessage message;
+        if (SessionMessages::decode(wire, &message)
+            && message.kind == SessionMessageKind::MediaControl
+            && message.mediaPayload.value(QStringLiteral("op")).toString() == op) {
+            out.append(message.mediaPayload);
+        }
+    }
+    return out;
+}
+
+// The last value of capability `name` the Core told `app`.
+QJsonValue latestCapability(const QList<QByteArray>& received, const QString& name)
+{
+    QJsonValue value;
+    for (const QJsonObject& caps : ofType(received, QStringLiteral("capabilities"))) {
+        for (const QJsonValue& p : caps.value(QStringLiteral("properties")).toArray()) {
+            if (p.toObject().value(QStringLiteral("name")).toString() == name) {
+                value = p.toObject().value(QStringLiteral("value"));
+            }
+        }
+    }
+    return value;
+}
+
+// The media start of an app that understands audio profiles and receiver
+// streams.
+QJsonObject mediaStart()
+{
+    return {{QStringLiteral("op"), QStringLiteral("start")},
+            {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
+            {QStringLiteral("audioProfileVersion"), 1},
+            {QStringLiteral("receiverAudioVersion"), 1}};
+}
+
+QJsonObject spectrumPlane()
+{
+    return {{QStringLiteral("detector"), 0},
+            {QStringLiteral("averageMode"), -1},
+            {QStringLiteral("averageAlpha"), 0.0}};
+}
+
+QJsonObject displayRequest(quint32 endpointId, int sliceId, double centreHz)
+{
+    return {{QStringLiteral("op"), QStringLiteral("subscribe")},
+            {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
+            {QStringLiteral("endpointId"), static_cast<qint64>(endpointId)},
+            {QStringLiteral("revision"), 1},
+            {QStringLiteral("sliceId"), sliceId},
+            {QStringLiteral("tier"), QStringLiteral("wide")},
+            {QStringLiteral("fftSize"), 1024},
+            {QStringLiteral("windowType"), 0},
+            {QStringLiteral("centreHz"), centreHz},
+            {QStringLiteral("spanHz"), 48000.0},
+            {QStringLiteral("pixels"), 128},
+            {QStringLiteral("fps"), 10},
+            {QStringLiteral("framesPerLine"), 1},
+            {QStringLiteral("trace"), spectrumPlane()},
+            {QStringLiteral("waterfall"), spectrumPlane()},
+            {QStringLiteral("minDbm"), -180.0},
+            {QStringLiteral("maxDbm"), 0.0},
+            {QStringLiteral("wideSpanFactor"), 0.0}};
+}
+
+// The left samples of an L16 packet (RTP header of 12 bytes, big-endian
+// 16-bit stereo), each as the float it was.
+QList<float> l16Left(const QByteArray& packet)
+{
+    QList<float> left;
+    for (qsizetype at = 12; at + 4 <= packet.size(); at += 4) {
+        left.append(static_cast<float>(qFromBigEndian<qint16>(packet.constData() + at))
+                    / 32768.0f);
+    }
+    return left;
+}
+
+// Two devices on one Core with media on and a hub making their media
+// controllers; A holds slice 0, B its own first slice.
+struct MediaCore {
+    Core core{/*upgradedWithToken=*/true};
+    Device a{QStringLiteral("iPhone"), QStringLiteral("phone")};
+    Device b{QStringLiteral("iPad"), QStringLiteral("tablet")};
+    QList<QPointer<MediaFake>> transports;
+    std::unique_ptr<DaemonMediaHub> hub;
+    LoopbackTransport* appA = nullptr;
+    LoopbackTransport* appB = nullptr;
+
+    explicit MediaCore(std::optional<DisplayBudgetLimits> budget = std::nullopt)
+    {
+        // Receivers for the slices, so displays have a stream to ride.
+        core.model->configureStreamPool(5, 5, 192000);
+        core.model->sliceById(0)->setFrequency(14200000.0);
+        core.server->setMediaEnabled(true);
+        core.server->setTelemetryEnabled(true);
+        if (budget) {
+            core.server->setDisplayBudgetLimits(*budget);
+        }
+        hub = std::make_unique<DaemonMediaHub>(
+            core.server.get(), core.model.get(), nullptr,
+            [this](QObject* parent) -> IMediaTransport* {
+                auto* transport = new MediaFake(parent);
+                transports.append(transport);
+                return transport;
+            });
+        core.pair(a);
+        core.pair(b);
+    }
+
+    ~MediaCore()
+    {
+        hub.reset();
+    }
+
+    void signInBoth()
+    {
+        appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        QTRY_COMPARE(hub->controllerCount(), 2);
+    }
+
+    quint64 epochOf(int index) const { return core.server->mediaSessionEpochs().at(index); }
+
+    int sliceOf(quint64 epoch) const
+    {
+        for (const SliceModel* slice : core.model->slices()) {
+            if (core.server->mediaSessionOwnsSlice(epoch, slice->sliceIndex())) {
+                return slice->sliceIndex();
+            }
+        }
+        return -1;
+    }
+
+    // Starts `app`'s media and makes its transport (the next one made)
+    // ready.
+    MediaFake* startMedia(LoopbackTransport* app)
+    {
+        const qsizetype before = transports.size();
+        sendMedia(app, mediaStart());
+        if (!QTest::qWaitFor([this, before]() { return transports.size() > before; }, 5000)) {
+            return nullptr;
+        }
+        MediaFake* transport = transports.last();
+        transport->becomeReady();
+        return transport;
+    }
+};
 
 } // namespace
 
@@ -2044,6 +2267,311 @@ private slots:
         QVERIFY(QTest::qWaitFor([&core]() { return core.server->authenticatedSessionCount() == 0; },
                                 5000));
         QVERIFY(!store->appendImport(jobA, QByteArray("x")));
+    }
+
+    // ── Task 76: media and capacity per device ─────────────────────────
+
+    // Each device's capabilities carry its own share of the Core's display
+    // budget, its own generation and its own reason: sharedConnection
+    // while another device is admitted, sharedProcessing under the
+    // governor's cut, and alone again the total's own reason. A device that
+    // did not declare sessionHolder hears coreBusy or none instead.
+    void eachDeviceGetsItsOwnShareOfTheDisplayBudget()
+    {
+        MediaCore m(DisplayBudgetLimits{1'000'000, 100'000, 5});
+        m.appA = m.core.signIn(m.a);
+        QVERIFY(admitted(m.appA));
+        const QList<QByteArray> aloneA = m.appA->received();
+        QCOMPARE(latestCapability(aloneA, QStringLiteral("remoteMediaVersion")).toInteger(), 1);
+        QCOMPARE(latestCapability(aloneA, QStringLiteral("displayApplicationBytesPerSecond"))
+                     .toInteger(), 1'000'000);
+        QCOMPARE(latestCapability(aloneA, QStringLiteral("displayBudgetGeneration")).toInteger(), 5);
+        QCOMPARE(latestCapability(aloneA, QStringLiteral("displayBudgetReason")).toString(),
+                 QStringLiteral("none"));
+
+        m.appB = m.core.signIn(m.b);
+        QVERIFY(admitted(m.appB));
+        QTRY_COMPARE(m.hub->controllerCount(), 2);
+        // B's first capabilities: half, shared.
+        QCOMPARE(latestCapability(m.appB->received(),
+                                  QStringLiteral("displayApplicationBytesPerSecond")).toInteger(),
+                 500'000);
+        QCOMPARE(latestCapability(m.appB->received(), QStringLiteral("remoteMediaVersion"))
+                     .toInteger(), 1);
+        QCOMPARE(latestCapability(m.appB->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("sharedConnection"));
+        // A is told its new share with a new generation.
+        QTRY_COMPARE(latestCapability(m.appA->received(),
+                                      QStringLiteral("displayApplicationBytesPerSecond"))
+                         .toInteger(), 500'000);
+        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("spectrumSampleUnitsPerSecond"))
+                     .toInteger(), 50'000);
+        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetGeneration"))
+                     .toInteger(), 6);
+        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("sharedConnection"));
+
+        // The governor cuts the total: sharedProcessing.
+        QVERIFY(m.core.server->setDisplayBudgetLimits(DisplayBudgetLimits{500'000, 50'000, 7},
+                                                      DisplayBudgetReason::CoreBusy));
+        QTRY_COMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                         .toString(), QStringLiteral("sharedProcessing"));
+        QCOMPARE(latestCapability(m.appB->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("sharedProcessing"));
+        QCOMPARE(latestCapability(m.appB->received(),
+                                  QStringLiteral("displayApplicationBytesPerSecond")).toInteger(),
+                 250'000);
+
+        // B leaves: A alone again, the whole cut total and the total's own
+        // reason, with a newer generation.
+        const qint64 generationBefore =
+            latestCapability(m.appA->received(), QStringLiteral("displayBudgetGeneration"))
+                .toInteger();
+        QVERIFY(m.core.invoke(m.appB, "session.leave").value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(m.hub->controllerCount(), 1);
+        QTRY_COMPARE(latestCapability(m.appA->received(),
+                                      QStringLiteral("displayApplicationBytesPerSecond"))
+                         .toInteger(), 500'000);
+        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("coreBusy"));
+        QVERIFY(latestCapability(m.appA->received(), QStringLiteral("displayBudgetGeneration"))
+                    .toInteger() > generationBefore);
+
+        // An older window beside A: its share is shared, but it hears the
+        // reason it knows (coreBusy under the cut), while A hears
+        // sharedProcessing.
+        LoopbackTransport* older = m.core.tokenSignIn();
+        QVERIFY(admitted(older));
+        QCOMPARE(latestCapability(older->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("coreBusy"));
+        QCOMPARE(latestCapability(older->received(),
+                                  QStringLiteral("displayApplicationBytesPerSecond")).toInteger(),
+                 250'000);
+        QTRY_COMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                         .toString(), QStringLiteral("sharedProcessing"));
+    }
+
+    // A's media control reaches A's controller only; B leaving ends only
+    // B's media.
+    void eachDevicesMediaControlReachesItsOwnControllerOnly()
+    {
+        MediaCore m;
+        m.signInBoth();
+        MediaFake* transportA = m.startMedia(m.appA);
+        QVERIFY(transportA);
+        QCOMPARE(m.transports.size(), 1);
+        // Only A's controller made a media connection; B was sent nothing.
+        QVERIFY(!m.appB->receivedKinds().contains(QByteArrayLiteral("media.control")));
+        QCOMPARE(m.hub->controllerFor(m.epochOf(0))->sessionEpoch(), m.epochOf(0));
+
+        MediaFake* transportB = m.startMedia(m.appB);
+        QVERIFY(transportB);
+        QVERIFY(transportA != transportB);
+        QVERIFY(transportA->started && transportB->started);
+
+        // B leaves: its media stops, A's goes on.
+        m.appB->closeLink(QStringLiteral("test"));
+        QTRY_COMPARE(m.hub->controllerCount(), 1);
+        QTRY_VERIFY(!transportB || !transportB->started);
+        QVERIFY(transportA->started);
+        QVERIFY(transportA->readyState);
+    }
+
+    // Each device hears only its own slices: distinct tones per slice, read
+    // back from each device's lossless audio. The Core's local output
+    // plays neither (both slices are devices', none is the station's).
+    void eachDeviceHearsOnlyItsOwnSlices()
+    {
+        MediaCore m;
+        m.signInBoth();
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        QVERIFY(sliceA >= 0 && sliceB >= 0 && sliceA != sliceB);
+        AudioEngine* engine = m.core.model->audioEngine();
+        engine->masterMixForTest().setRampFrames(1);
+        engine->masterMixForTest().setSlewUpFrames(0);
+        engine->setSliceStreaming(sliceA, true);
+        engine->setSliceStreaming(sliceB, true);
+        // The Core's own speakers carry neither device's slice.
+        QCOMPARE(engine->localOutputSliceMask() & ((1u << sliceA) | (1u << sliceB)), 0u);
+
+        MediaFake* transportA = m.startMedia(m.appA);
+        MediaFake* transportB = m.startMedia(m.appB);
+        QVERIFY(transportA && transportB);
+        for (LoopbackTransport* app : {m.appA, m.appB}) {
+            sendMedia(app, {{QStringLiteral("op"), QStringLiteral("audio")},
+                            {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
+                            {QStringLiteral("revision"), 1},
+                            {QStringLiteral("enabled"), true},
+                            {QStringLiteral("profile"), QStringLiteral("lossless")}});
+        }
+        QTRY_VERIFY(!mediaOps(m.appA, QStringLiteral("audio-context")).isEmpty()
+                    && !mediaOps(m.appB, QStringLiteral("audio-context")).isEmpty());
+        QVERIFY(mediaOps(m.appA, QStringLiteral("audio-context")).last()
+                    .value(QStringLiteral("enabled")).toBool());
+
+        // A's slice plays 0.5, B's 0.25 on the left, several capture blocks.
+        const QVector<float> toneA(64 * 2, 0.5f);
+        const QVector<float> toneB(64 * 2, 0.25f);
+        const auto feed = [&](int blocks) {
+            for (int frame = 0; frame < blocks * 1920; frame += 64) {
+                engine->rxBlockReady(sliceA, toneA.constData(), 64);
+                engine->rxBlockReady(sliceB, toneB.constData(), 64);
+            }
+        };
+        feed(3);
+        QTRY_VERIFY(transportA->rtpPackets.size() >= 10 && transportB->rtpPackets.size() >= 10);
+        const QList<float> heardA = l16Left(transportA->rtpPackets.last());
+        const QList<float> heardB = l16Left(transportB->rtpPackets.last());
+        QVERIFY(!heardA.isEmpty() && !heardB.isEmpty());
+        // Each hears its own tone at its own slice gain, never the other's:
+        // the two levels stand in the ratio of the tones fed.
+        const float levelA = heardA.last();
+        const float levelB = heardB.last();
+        QVERIFY(levelA > 0.0f && levelB > 0.0f);
+        QVERIFY2(std::abs(levelA / levelB - 2.0f) < 0.01f,
+                 qPrintable(QStringLiteral("A %1, B %2").arg(levelA).arg(levelB)));
+        for (float sample : heardA) {
+            QVERIFY(std::abs(sample - levelA) < 1.0f / 16384.0f);
+        }
+
+        // B's slice alone: A's mix falls silent, B's carries on.
+        const QVector<float> silence(64 * 2, 0.0f);
+        const qsizetype packetsA = transportA->rtpPackets.size();
+        const qsizetype packetsB = transportB->rtpPackets.size();
+        for (int frame = 0; frame < 3 * 1920; frame += 64) {
+            engine->rxBlockReady(sliceA, silence.constData(), 64);
+            engine->rxBlockReady(sliceB, toneB.constData(), 64);
+        }
+        QTRY_VERIFY(transportA->rtpPackets.size() >= packetsA + 10
+                    && transportB->rtpPackets.size() >= packetsB + 10);
+        QCOMPARE(l16Left(transportA->rtpPackets.last()).last(), 0.0f);
+        QVERIFY(std::abs(l16Left(transportB->rtpPackets.last()).last() - levelB) < 1.0f / 16384.0f);
+
+        // A slice A makes joins A's mix at once, and not B's.
+        const QJsonObject added =
+            m.core.invoke(m.appA, "addSlice", {utf8("initialPanId", QString())});
+        QVERIFY2(added.value(QStringLiteral("accepted")).toBool(false),
+                 qPrintable(added.value(QStringLiteral("reason")).toString()));
+        int sliceA2 = -1;
+        for (const SliceModel* slice : m.core.model->slices()) {
+            if (slice->sliceIndex() != sliceA && slice->sliceIndex() != sliceB) {
+                sliceA2 = slice->sliceIndex();
+            }
+        }
+        QVERIFY(sliceA2 >= 0);
+        const int mixA = m.hub->controllerFor(m.epochOf(0))->ownerMixSlot();
+        const int mixB = m.hub->controllerFor(m.epochOf(1))->ownerMixSlot();
+        QTRY_COMPARE(engine->ownerMixSliceMask(mixA), (1u << sliceA) | (1u << sliceA2));
+        QCOMPARE(engine->ownerMixSliceMask(mixB), 1u << sliceB);
+    }
+
+    // A device subscribes displays and receiver streams only for its own
+    // slices; two devices watching one receiver share one FFT, and it keeps
+    // running for A when B leaves.
+    void displaysOnlyForOwnSlicesAndOneFftPerReceiver()
+    {
+        MediaCore m(DisplayBudgetLimits{10'000'000, 1'000'000, 1});
+        m.signInBoth();
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        SliceModel* a = m.core.model->sliceById(sliceA);
+        SliceModel* b = m.core.model->sliceById(sliceB);
+        QVERIFY(a && b);
+        QCOMPARE(a->streamIndex(), b->streamIndex());
+        const double centre = m.core.model->streamCentreHz(a->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        QVERIFY(m.startMedia(m.appB));
+
+        // A asks for B's slice: refused, nothing set up.
+        sendMedia(m.appA, displayRequest(1, sliceB, centre));
+        QTRY_VERIFY(!mediaOps(m.appA, QStringLiteral("allocation-result")).isEmpty());
+        QJsonObject refused = mediaOps(m.appA, QStringLiteral("allocation-result")).last();
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(refused.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("That slice belongs to another device."));
+        QVERIFY(OperatorWording::isPlain(refused.value(QStringLiteral("reason")).toString()));
+        QCOMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 0);
+
+        // Each asks for its own: both accepted, on one engine.
+        sendMedia(m.appA, displayRequest(2, sliceA, centre));
+        sendMedia(m.appB, displayRequest(1, sliceB, centre));
+        QTRY_COMPARE(mediaOps(m.appA, QStringLiteral("allocation-result")).size(), 2);
+        QTRY_COMPARE(mediaOps(m.appB, QStringLiteral("allocation-result")).size(), 1);
+        QVERIFY(mediaOps(m.appA, QStringLiteral("allocation-result")).last()
+                    .value(QStringLiteral("accepted")).toBool());
+        QVERIFY(mediaOps(m.appB, QStringLiteral("allocation-result")).last()
+                    .value(QStringLiteral("accepted")).toBool());
+        QCOMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 1);
+        QCOMPARE(m.hub->controllerFor(m.epochOf(1))->activeEndpointCount(), 1);
+        QCOMPARE(m.hub->sharedSpectrum()->source().activeSources().size(), 1);
+
+        // A's receiver stream for B's slice is refused as a slice not there.
+        sendMedia(m.appA, {{QStringLiteral("op"), QStringLiteral("receiver-audio")},
+                           {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
+                           {QStringLiteral("sliceId"), sliceB},
+                           {QStringLiteral("revision"), 1},
+                           {QStringLiteral("enabled"), true},
+                           {QStringLiteral("profile"), QStringLiteral("opus")}});
+        QTRY_VERIFY(!mediaOps(m.appA, QStringLiteral("receiver-audio-context")).isEmpty());
+        const QJsonObject stream =
+            mediaOps(m.appA, QStringLiteral("receiver-audio-context")).last();
+        QCOMPARE(stream.value(QStringLiteral("enabled")).toBool(true), false);
+        QCOMPARE(stream.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("slice-removed"));
+
+        // B leaves: A's pan and the engine it rides go on.
+        m.appB->closeLink(QStringLiteral("test"));
+        QTRY_COMPARE(m.hub->controllerCount(), 1);
+        QCOMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 1);
+        QCOMPARE(m.hub->sharedSpectrum()->source().activeSources().size(), 1);
+    }
+
+    // The governor sees every device's display charge, PureSignal's once.
+    void theGovernorSeesEveryDevicesCharge()
+    {
+        MediaCore m(DisplayBudgetLimits{10'000'000, 1'000'000, 1});
+        m.signInBoth();
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        const double centre = m.core.model->streamCentreHz(
+            m.core.model->sliceById(sliceA)->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        QVERIFY(m.startMedia(m.appB));
+        sendMedia(m.appA, displayRequest(1, sliceA, centre));
+        sendMedia(m.appB, displayRequest(1, sliceB, centre));
+        QTRY_COMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 1);
+        QTRY_COMPARE(m.hub->controllerFor(m.epochOf(1))->activeEndpointCount(), 1);
+        const DisplayBudgetCharge one = m.hub->controllerFor(m.epochOf(0))->ownDisplayCharge();
+        QVERIFY(one.applicationBytesPerSecond > 0);
+        QCOMPARE(m.hub->acceptedDisplayCharge(), *sumDisplayCharges({one, one}));
+    }
+
+    // Telemetry reaches every session that negotiated it, each on its own
+    // sequence.
+    void telemetryReachesEverySessionThatNegotiatedIt()
+    {
+        MediaCore m;
+        m.signInBoth();
+        std::vector<std::unique_ptr<DaemonTelemetryController>> collectors;
+        for (quint64 epoch : m.core.server->mediaSessionEpochs()) {
+            QVERIFY(m.core.server->telemetryAvailable(epoch));
+            auto collector = std::make_unique<DaemonTelemetryController>(
+                m.core.server.get(), m.core.model.get(), nullptr);
+            collector->disableAutomaticSamplingForTest();
+            collector->bindToSession(epoch);
+            QCOMPARE(collector->sessionEpoch(), epoch);
+            collectors.push_back(std::move(collector));
+        }
+        for (auto& collector : collectors) {
+            collector->sampleNow();
+        }
+        QTRY_COMPARE(ofType(m.appA->received(), QStringLiteral("station.metrics.v1")).size(), 1);
+        QTRY_COMPARE(ofType(m.appB->received(), QStringLiteral("station.metrics.v1")).size(), 1);
+        // A new session's own collector never takes another's.
+        QCOMPARE(collectors.front()->sessionEpoch(), m.epochOf(0));
+        QCOMPARE(collectors.back()->sessionEpoch(), m.epochOf(1));
+        collectors.clear();
     }
 };
 

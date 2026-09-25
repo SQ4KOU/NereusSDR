@@ -11,6 +11,8 @@
 #include "core/session/StationServer.h"
 #include "core/session/media/DaemonAudioSender.h"
 #include "core/session/media/MediaPeer.h"
+#include "core/AudioEngine.h"
+#include "core/SliceOwnership.h"
 #include "models/RadioModel.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/session/Ps3DisplayCodec.h"
@@ -304,20 +306,108 @@ struct DaemonMediaController::EndpointEntry {
     quint64 pendingExtrasSamples{0};
 };
 
-struct DaemonMediaController::SourceRuntime {
-    DaemonSpectrumSourceConfig config;
-    bool configured{false};
-};
+// ── Shared spectrum engines (iPhone app Task 76, ruling 9.1) ─────────────
+
+DaemonSharedSpectrum::DaemonSharedSpectrum(RadioModel* radioModel, QObject* parent)
+    : QObject(parent)
+    , m_source(this)
+{
+    m_source.setRadioModel(radioModel);
+    connect(&m_source, &DaemonSpectrumSource::frameAvailable,
+            this, &DaemonSharedSpectrum::onFrameAvailable);
+}
+
+DaemonSharedSpectrum::~DaemonSharedSpectrum()
+{
+    const QList<MediaSourceKey> keys = m_runtimes.keys();
+    for (const MediaSourceKey& key : keys) {
+        m_source.deactivate(key);
+    }
+    m_runtimes.clear();
+}
+
+QList<DaemonMediaController*> DaemonSharedSpectrum::members() const
+{
+    QList<DaemonMediaController*> out;
+    for (const QPointer<DaemonMediaController>& member : m_members) {
+        if (member) {
+            out.append(member.data());
+        }
+    }
+    return out;
+}
+
+void DaemonSharedSpectrum::join(DaemonMediaController* controller)
+{
+    if (controller != nullptr && !m_members.contains(controller)) {
+        m_members.append(controller);
+    }
+}
+
+void DaemonSharedSpectrum::leave(DaemonMediaController* controller)
+{
+    m_members.removeAll(controller);
+    m_members.removeAll(QPointer<DaemonMediaController>());
+}
+
+void DaemonSharedSpectrum::onFrameAvailable(MediaSourceKey key)
+{
+    // Taken once; every controller watching this receiver gets the frame.
+    const std::optional<DaemonSpectrumFrame> frame = m_source.takeLatest(key);
+    if (!frame.has_value()) {
+        return;
+    }
+    const QList<QPointer<DaemonMediaController>> members = m_members;
+    for (const QPointer<DaemonMediaController>& member : members) {
+        if (member) {
+            member->onSourceFrame(*frame);
+        }
+    }
+}
+
+// ── The controller ───────────────────────────────────────────────────────
 
 DaemonMediaController::DaemonMediaController(StationServer* server,
                                                RadioModel* radioModel,
                                                QObject* parent,
                                                MediaPeer::TransportFactory peerFactory,
                                                MonotonicClock monotonicClock)
+    : DaemonMediaController(server, radioModel, 0,
+                            std::make_shared<DaemonSharedSpectrum>(radioModel), parent,
+                            std::move(peerFactory), std::move(monotonicClock))
+{
+    if (!m_server || !m_radioModel) {
+        return;
+    }
+    // A controller on its own is the Core's only one: it answers the
+    // PureSignal display gate and turns budget enforcement on itself.
+    const QPointer<DaemonMediaController> self(this);
+    m_server->setPs3DisplayAdmissionHandler([self](bool enabled, QString* refusal) {
+        if (!self) {
+            if (refusal) { *refusal = QStringLiteral("The Core stopped its display service."); }
+            return false;
+        }
+        return self->admitPs3Display(enabled, refusal);
+    });
+    // The command gate and accepted-state notification are both installed
+    // before capability publication can advertise budget enforcement.
+    m_server->setDisplayBudgetEnforcementEnabled(true);
+}
+
+DaemonMediaController::DaemonMediaController(StationServer* server,
+                                               RadioModel* radioModel,
+                                               quint64 boundEpoch,
+                                               std::shared_ptr<DaemonSharedSpectrum> spectrum,
+                                               QObject* parent,
+                                               MediaPeer::TransportFactory peerFactory,
+                                               MonotonicClock monotonicClock)
     : QObject(parent)
     , m_server(server)
     , m_radioModel(radioModel)
-    , m_source(this)
+    , m_boundEpoch(boundEpoch)
+    , m_shared(std::move(spectrum))
+    , m_source(m_shared->source())
+    , m_sources(m_shared->runtimes())
     , m_peerFactory(std::move(peerFactory))
     , m_monotonicClock(std::move(monotonicClock))
     , m_sendTimer(this)
@@ -328,7 +418,7 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
     m_receiverNextSequence.fill(1);
     m_receiverNextTimestamp.fill(0);
     m_displayClock.start();
-    m_source.setRadioModel(radioModel);
+    m_shared->join(this);
     m_sendTimer.setInterval(kDisplaySenderIntervalMs);
     connect(&m_sendTimer, &QTimer::timeout, this, &DaemonMediaController::onSendTick);
     m_audioDiagnosticsTimer.setInterval(kAudioDiagnosticsLogIntervalMs);
@@ -364,8 +454,14 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
             }
         }
     });
-    connect(&m_source, &DaemonSpectrumSource::frameAvailable,
-            this, &DaemonMediaController::onSourceFrame);
+    // Task 76: this session's owner mix follows whose each slice is.
+    connect(m_radioModel->sliceOwnership(), &SliceOwnership::markChanged, this,
+            [this](int, const QByteArray&, const QByteArray&) { refreshOwnerMixMask(); });
+    // A slice made for this device is noted without a mark change.
+    connect(m_radioModel->sliceOwnership(), &SliceOwnership::activeChanged, this,
+            [this] { refreshOwnerMixMask(); });
+    connect(m_radioModel, &RadioModel::sliceRemoved, this,
+            [this](int) { refreshOwnerMixMask(); });
     connect(m_radioModel, &RadioModel::streamCentreChanged,
             this, &DaemonMediaController::onStreamGeometryChanged);
     connect(m_radioModel, &RadioModel::streamBindingsChanged,
@@ -383,6 +479,7 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
         if (m_radioModel) {
             watchSliceOutputRoute(m_radioModel->sliceById(sliceId));
         }
+        refreshOwnerMixMask();
         onOutputRoutesChanged();
     });
     // Capture changes can be emitted inside endpoint lease release. Process
@@ -403,8 +500,7 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
             this, &DaemonMediaController::onRemoteAmpViewSubscriptionChanged);
     connect(m_radioModel->pureSignalFacade(), &PureSignalSessionFacade::displaySnapshotReady,
             this, [this](const Ps3Snapshot& snapshot) {
-        if (m_epoch == 0 || !m_peer || !m_peer->isReady()
-            || !m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed()) {
+        if (m_epoch == 0 || !m_peer || !m_peer->isReady() || !ps3DisplayHere()) {
             return;
         }
         // One latest snapshot, including headers, remains bounded to 160 KiB.
@@ -424,28 +520,27 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
             m_sendTimer.start();
         }
     });
-    const QPointer<DaemonMediaController> self(this);
-    m_server->setPs3DisplayAdmissionHandler([self](bool enabled, QString* refusal) {
-        if (!self) {
-            if (refusal) { *refusal = QStringLiteral("The Core stopped its display service."); }
-            return false;
-        }
-        return self->admitPs3Display(enabled, refusal);
-    });
-    // The command gate and accepted-state notification are both installed
-    // before capability publication can advertise budget enforcement.
-    m_server->setDisplayBudgetEnforcementEnabled(true);
+    // Task 76: a controller bound to a session starts with it at once
+    // (DaemonMediaHub makes it as that session's media starts).
+    if (m_boundEpoch != 0 && m_server->mediaAvailable(m_boundEpoch)) {
+        onSessionStarted(m_boundEpoch);
+    }
 }
 
 DaemonMediaController::~DaemonMediaController()
 {
     if (m_radioModel) {
         m_radioModel->pureSignalFacade()->disconnect(this);
+        if (m_radioModel->sliceOwnership()) {
+            m_radioModel->sliceOwnership()->disconnect(this);
+        }
     }
     if (m_server) {
         m_server->disconnect(this);
-        m_server->setPs3DisplayAdmissionHandler({});
-        m_server->setDisplayBudgetEnforcementEnabled(false);
+        if (m_boundEpoch == 0) {
+            m_server->setPs3DisplayAdmissionHandler({});
+            m_server->setDisplayBudgetEnforcementEnabled(false);
+        }
     }
     // As onSessionEnded(): clear the session while the pacer session is
     // live, then end the pacer and its initialised flag together, so the
@@ -454,6 +549,8 @@ DaemonMediaController::~DaemonMediaController()
     m_displayPacer.endSession();
     m_displayPacerInitialized = false;
     m_epoch = 0;
+    releaseOwnerMix();
+    m_shared->leave(this);
 }
 
 int DaemonMediaController::activeEndpointCount() const
@@ -579,8 +676,9 @@ std::optional<SpectrumGrant> DaemonMediaController::spectrumGrant(quint32 endpoi
 
 bool DaemonMediaController::coreBusyLimitsSources() const
 {
-    return m_server && m_server->displayBudgetLimits()
-        && m_server->displayBudgetReason() == DisplayBudgetReason::CoreBusy;
+    // Task 76: the engines are shared, so this follows the Core's total:
+    // its reason is CoreBusy only while the governor's cut is in force.
+    return m_server && m_server->displayBudgetReason() == DisplayBudgetReason::CoreBusy;
 }
 
 std::optional<bool> DaemonMediaController::spectrumSourceTransformsFollowFrameRate(
@@ -628,12 +726,12 @@ qint64 DaemonMediaController::displayNowNs() const
 
 bool DaemonMediaController::displayBudgetWireAvailable() const
 {
-    return m_server && m_server->displayBudgetAvailable();
+    return m_server && m_server->displayBudgetAvailable(m_epoch);
 }
 
 bool DaemonMediaController::displayPacingRequired() const
 {
-    return m_server && m_server->displayBudgetLimits().has_value();
+    return m_server && m_server->displayBudgetLimits(m_epoch).has_value();
 }
 
 DisplayBudgetCharge DaemonMediaController::currentSpectrumCharge() const
@@ -647,10 +745,14 @@ DisplayBudgetCharge DaemonMediaController::currentSpectrumCharge() const
     return sumDisplayCharges(charges).value_or(DisplayBudgetCharge{});
 }
 
+DisplayBudgetCharge DaemonMediaController::ownDisplayCharge() const
+{
+    return acceptedDisplayCharge();
+}
+
 DisplayBudgetCharge DaemonMediaController::acceptedDisplayCharge() const
 {
-    const bool ps3Enabled = m_radioModel
-        && m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
+    const bool ps3Enabled = ps3DisplayHere();
     return sumDisplayCharges({currentSpectrumCharge(),
                               ps3Enabled ? ps3DisplayCharge() : DisplayBudgetCharge{}})
         .value_or(DisplayBudgetCharge{});
@@ -679,7 +781,7 @@ std::optional<DisplayBudgetCharge> DaemonMediaController::proposedSpectrumCharge
 bool DaemonMediaController::spectrumAdmissionFits(
     quint32 endpointId, const DisplayBudgetCharge& replacement) const
 {
-    const auto limits = m_server ? m_server->displayBudgetLimits() : std::nullopt;
+    const auto limits = m_server ? m_server->displayBudgetLimits(m_epoch) : std::nullopt;
     if (!limits) {
         return true;
     }
@@ -697,8 +799,7 @@ bool DaemonMediaController::spectrumAdmissionFits(
     if (!spectrum) {
         return false;
     }
-    const bool ps3Enabled = m_radioModel
-        && m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
+    const bool ps3Enabled = ps3DisplayHere();
     const auto combined = sumDisplayCharges(
         {*spectrum, ps3Enabled ? ps3DisplayCharge() : DisplayBudgetCharge{}});
     return combined && displayChargeFits(*limits, *combined);
@@ -709,7 +810,7 @@ void DaemonMediaController::beginDisplayBudgetIfNeeded()
     if (m_displayPacerInitialized || m_epoch == 0 || !m_server) {
         return;
     }
-    const auto limits = m_server->displayBudgetLimits();
+    const auto limits = m_server->displayBudgetLimits(m_epoch);
     if (!limits) {
         return;
     }
@@ -723,12 +824,11 @@ void DaemonMediaController::refreshDisplayBudgetPacer()
     if (!m_displayPacerInitialized || !m_server) {
         return;
     }
-    const auto limits = m_server->displayBudgetLimits();
+    const auto limits = m_server->displayBudgetLimits(m_epoch);
     if (!limits) {
         return;
     }
-    const bool ps3Enabled = m_radioModel
-        && m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
+    const bool ps3Enabled = ps3DisplayHere();
     if (!m_displayPacer.update(*limits, currentSpectrumCharge(), ps3Enabled,
                                displayNowNs())) {
         qCWarning(lcDaemonMedia) << "refused invalid display pacer state update";
@@ -737,12 +837,14 @@ void DaemonMediaController::refreshDisplayBudgetPacer()
 
 bool DaemonMediaController::admitPs3Display(bool enabled, QString* refusal)
 {
-    const bool current = m_radioModel
-        && m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
+    const bool current = ps3DisplayHere();
     if (enabled == current || !enabled) {
         return true;
     }
-    const auto limits = m_server ? m_server->displayBudgetLimits() : std::nullopt;
+    // Task 76 (ruling 9.3 item 4): measured against the share this session
+    // has once the PureSignal display is charged to it.
+    const auto limits = m_server ? m_server->displayBudgetLimitsAsPs3Subscriber(m_epoch)
+                                 : std::nullopt;
     if (!limits) {
         return true;
     }
@@ -801,7 +903,7 @@ void DaemonMediaController::sendAllocationResult(
     if (connectionId.isEmpty() || !m_server) {
         return;
     }
-    const auto limits = m_server->displayBudgetLimits();
+    const auto limits = m_server->displayBudgetLimits(m_epoch);
     if (!limits) {
         return;
     }
@@ -863,6 +965,15 @@ void DaemonMediaController::onSessionStarted(quint64 epoch)
     if (epoch == 0 || epoch <= m_lastSessionEpoch) {
         return;
     }
+    // Task 76: a bound controller serves its own session alone; one on its
+    // own takes a new session only once the one it serves is gone, so it
+    // never takes media away from a live device.
+    if (m_boundEpoch != 0 && epoch != m_boundEpoch) {
+        return;
+    }
+    if (m_boundEpoch == 0 && m_epoch != 0 && m_server && m_server->mediaAvailable(m_epoch)) {
+        return;
+    }
     if (m_epoch != 0) {
         m_displayPacer.endSession();
         m_displayPacerInitialized = false;
@@ -870,6 +981,7 @@ void DaemonMediaController::onSessionStarted(quint64 epoch)
     clearSession();
     m_lastSessionEpoch = epoch;
     m_epoch = epoch;
+    acquireOwnerMix();
     beginDisplayBudgetIfNeeded();
     refreshDisplayBudgetPacer();
 }
@@ -881,7 +993,108 @@ void DaemonMediaController::onSessionEnded(quint64 epoch)
         m_displayPacer.endSession();
         m_displayPacerInitialized = false;
         m_epoch = 0;
+        releaseOwnerMix();
     }
+}
+
+void DaemonMediaController::acquireOwnerMix()
+{
+    if (m_ownerMix >= 0 || !m_radioModel || !m_radioModel->audioEngine()) {
+        refreshOwnerMixMask();
+        return;
+    }
+    m_ownerMix = m_radioModel->audioEngine()->acquireOwnerMix();
+    if (m_ownerMix < 0) {
+        qCWarning(lcDaemonMedia) << "no owner mix free for media session" << m_epoch;
+        return;
+    }
+    refreshOwnerMixMask();
+}
+
+void DaemonMediaController::releaseOwnerMix()
+{
+    if (m_ownerMix < 0) {
+        return;
+    }
+    // The senders' taps on it are gone already (their captures stopped);
+    // release waits for any callback still running.
+    if (m_radioModel && m_radioModel->audioEngine()) {
+        m_radioModel->audioEngine()->releaseOwnerMix(m_ownerMix);
+    }
+    m_ownerMix = -1;
+}
+
+bool DaemonMediaController::ownsSlice(int sliceId) const
+{
+    return m_server && m_epoch != 0 && m_server->mediaSessionOwnsSlice(m_epoch, sliceId);
+}
+
+void DaemonMediaController::refreshOwnerMixMask()
+{
+    // Ruling 9.2: this device's mix sums its own slices only.
+    if (m_ownerMix < 0 || !m_radioModel || !m_radioModel->audioEngine()) {
+        return;
+    }
+    quint32 mask = 0;
+    for (SliceModel* slice : m_radioModel->slices()) {
+        const int id = slice ? slice->sliceIndex() : -1;
+        if (id >= 0 && id < 32 && ownsSlice(id)) {
+            mask |= 1u << id;
+        }
+    }
+    m_radioModel->audioEngine()->setOwnerMixSliceMask(m_ownerMix, mask);
+    // A slice onto or off this device changes whether its headphones mix
+    // has a receiver to carry.
+    onOutputRoutesChanged();
+    // A receiver stream of a slice no longer this device's stops.
+    QList<int> lost;
+    for (const auto& [sliceId, stream] : m_receiverStreams) {
+        if (stream.desiredEnabled && !ownsSlice(sliceId)) {
+            lost.append(sliceId);
+        }
+    }
+    for (int sliceId : lost) {
+        if (m_receiverStreams.count(sliceId) != 0) {
+            reconcileReceiverAudio(sliceId);
+        }
+    }
+}
+
+bool DaemonMediaController::ps3DisplayHere() const
+{
+    // Ruling 9.3 item 4: the PureSignal display goes to its subscriber.
+    if (!m_radioModel || !m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed()
+        || m_epoch == 0 || !m_server) {
+        return false;
+    }
+    const quint64 subscriber = m_server->ps3DisplaySubscriberEpoch();
+    return subscriber != 0 ? subscriber == m_epoch
+                           : m_epoch == m_server->mediaSessionEpoch();
+}
+
+template <typename Fn>
+void DaemonMediaController::forEachSharedEndpoint(const MediaSourceKey& key, Fn&& fn)
+{
+    for (DaemonMediaController* member : m_shared->members()) {
+        for (auto& [endpointId, entry] : member->m_endpoints) {
+            if (entry.request.source == key) {
+                fn(*member, endpointId, entry);
+            }
+        }
+    }
+}
+
+bool DaemonMediaController::anySharedEndpointOn(const MediaSourceKey& key) const
+{
+    for (DaemonMediaController* member : m_shared->members()) {
+        for (const auto& [unused, entry] : member->m_endpoints) {
+            Q_UNUSED(unused);
+            if (entry.request.source == key) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 void DaemonMediaController::onRadioConnectionStateChanged(ConnectionState state)
@@ -946,7 +1159,7 @@ void DaemonMediaController::onControl(const QJsonObject& control, quint64 epoch)
 {
     // R-R3-35: a clock probe's arrival time (t1), read before anything else.
     const qint64 receivedNs = displayNowNs();
-    if (!m_server || !m_server->mediaAvailable() || epoch == 0 || epoch != m_epoch
+    if (!m_server || !m_server->mediaAvailable(epoch) || epoch == 0 || epoch != m_epoch
         || !control.value(QStringLiteral("op")).isString()) {
         return;
     }
@@ -976,7 +1189,7 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
         legacyShape.remove(QStringLiteral("audioProfileVersion"));
         // A whole number, at least 1 (the first version with profiles);
         // zero, fractions, negatives and strings are refused.
-        if (!m_server || !m_server->remoteAudioStatusAvailable()
+        if (!m_server || !m_server->remoteAudioStatusAvailable(m_epoch)
             || !exactUnsigned(control.value(QStringLiteral("audioProfileVersion")),
                               audioProfileVersion, /*nonzero=*/true)
             || audioProfileVersion < 1) {
@@ -991,7 +1204,7 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     if (declaresReceiverAudio) {
         legacyShape.remove(QStringLiteral("receiverAudioVersion"));
         quint32 receiverAudioVersion = 0;
-        if (!m_server || !m_server->remoteAudioStatusAvailable()
+        if (!m_server || !m_server->remoteAudioStatusAvailable(m_epoch)
             || !exactUnsigned(control.value(QStringLiteral("receiverAudioVersion")),
                               receiverAudioVersion, /*nonzero=*/true)
             || receiverAudioVersion < 1) {
@@ -1006,7 +1219,7 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     if (declaresHeadphonesMix) {
         legacyShape.remove(QStringLiteral("headphonesMixVersion"));
         quint32 headphonesMixVersion = 0;
-        if (!m_server || !m_server->remoteAudioStatusAvailable()
+        if (!m_server || !m_server->remoteAudioStatusAvailable(m_epoch)
             || !exactUnsigned(control.value(QStringLiteral("headphonesMixVersion")),
                               headphonesMixVersion, /*nonzero=*/true)
             || headphonesMixVersion < 1) {
@@ -1130,9 +1343,9 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         }
     }
     DisplayExtrasRequest extrasRequest;
-    if ((widebandNegotiated && (!m_server || !m_server->remoteWidebandAvailable()
+    if ((widebandNegotiated && (!m_server || !m_server->remoteWidebandAvailable(m_epoch)
                                || !control.value(QStringLiteral("extendedView")).isBool()))
-        || (extrasPresent && (!m_server || !m_server->displayExtrasAvailable()
+        || (extrasPresent && (!m_server || !m_server->displayExtrasAvailable(m_epoch)
                               || !parseDisplayExtrasRequest(control, extrasRequest)))
         || !exactKeys(legacyShape, {"op", "connectionId", "endpointId", "revision", "sliceId",
                              "tier", "fftSize", "windowType", "centreHz", "spanHz", "pixels",
@@ -1232,6 +1445,12 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         return rejectAllocation(control, endpointId, revision,
                                 QStringLiteral("This display's receiver is not on the Core."));
     }
+    // Task 76 (ruling 9.1): a device subscribes displays only for its own
+    // slices; its pans ride their receivers, shared or not.
+    if (!ownsSlice(sliceId)) {
+        return rejectAllocation(control, endpointId, revision,
+                                QStringLiteral("That slice belongs to another device."));
+    }
     const MediaSourceKey source{slice->streamIndex(), tier};
     const double sourceCentreHz = m_radioModel->streamCentreHz(source.streamIndex);
     const double sourceSampleRateHz = m_radioModel->streamSampleRateHz(source.streamIndex);
@@ -1253,12 +1472,18 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         return rejectAllocation(control, endpointId, revision,
                                 QStringLiteral("The Core is already sending as many displays as it can."));
     }
-    for (auto it = m_endpoints.cbegin(); it != m_endpoints.cend(); ++it) {
-        if (it->first != endpointId && it->second.request.source == source
-            && it->second.sourceWindowType != windowType) {
-            return rejectAllocation(control, endpointId, revision,
-                                    QStringLiteral("The receiver's spectrum settings changed first."));
+    // Task 76: the engine is shared with every device watching this
+    // receiver, so its window is everyone's.
+    bool windowConflict = false;
+    forEachSharedEndpoint(source, [&](DaemonMediaController& owner, quint32 otherId,
+                                      EndpointEntry& other) {
+        if ((&owner != this || otherId != endpointId) && other.sourceWindowType != windowType) {
+            windowConflict = true;
         }
+    });
+    if (windowConflict) {
+        return rejectAllocation(control, endpointId, revision,
+                                QStringLiteral("The receiver's spectrum settings changed first."));
     }
 
     request.extendedView = widebandNegotiated
@@ -1300,11 +1525,14 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     grant.grantedTier = tier;
     grant.requestedPixels = pixels;
     int sharedFftSize = 0;
-    for (const auto& [otherId, other] : m_endpoints) {
-        if (otherId != endpointId && other.request.source == source) {
+    // Task 76 (ruling 9.1): another device's pan on this receiver shares
+    // the engine too.
+    forEachSharedEndpoint(source, [&](DaemonMediaController& owner, quint32 otherId,
+                                      EndpointEntry& other) {
+        if (&owner != this || otherId != endpointId) {
             sharedFftSize = std::max(sharedFftSize, other.sourceFftSize);
         }
-    }
+    });
     grant.grantedFftSize = sharedFftSize > 0
         ? sharedFftSize : std::min(fftSize, FFTEngine::maximumFftSize());
     // The pixel grant is fixed here, where the source geometry and granted
@@ -1322,7 +1550,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     // asked for, so the budget holds what is granted. An older GUI requires
     // the charge for exactly its requested pixels; it is held to that, which
     // still covers every sample the endpoint emits.
-    const int chargedPixels = m_server && m_server->spectrumGrantAvailable()
+    const int chargedPixels = m_server && m_server->spectrumGrantAvailable(m_epoch)
         ? grant.grantedPixels : pixels;
     const auto displayCost = endpointDisplayCost(
         chargedPixels, fps, request.requestedWideSpanFactor > 1.0, extrasRequest.sections());
@@ -1496,7 +1724,7 @@ bool DaemonMediaController::handleAudio(const QJsonObject& control)
                                            "profile"})
                      : exactKeys(control, {"op", "connectionId", "revision", "enabled"}))
         || (hasProfile && (!requestedProfile || !m_server
-                           || !m_server->remoteAudioStatusAvailable()))
+                           || !m_server->remoteAudioStatusAvailable(m_epoch)))
         || !m_peer
         || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
         || control.value(QStringLiteral("connectionId")).toString() != m_peer->connectionId()
@@ -1542,9 +1770,11 @@ bool DaemonMediaController::handleReceiverAudio(const QJsonObject& control)
     const bool enabled = control.value(QStringLiteral("enabled")).toBool();
     auto it = m_receiverStreams.find(sliceId);
     if (it == m_receiverStreams.end()) {
-        if (!m_radioModel || m_radioModel->sliceById(sliceId) == nullptr) {
-            // No such slice: answer, but keep no entry, so requests for
-            // made-up slice ids cannot grow this map.
+        if (!m_radioModel || m_radioModel->sliceById(sliceId) == nullptr
+            || !ownsSlice(sliceId)) {
+            // No such slice, or (Task 76, ruling 9.2) not this device's:
+            // answer, but keep no entry, so requests for made-up slice ids
+            // cannot grow this map.
             ReceiverAudioStream absent;
             absent.revision = revision;
             absent.requestedProfile = *profile;
@@ -1580,7 +1810,9 @@ void DaemonMediaController::reconcileReceiverAudio(int sliceId)
     std::optional<RemoteAudioOffReason> blockedBy;
     if (!stream.desiredEnabled) {
         blockedBy = RemoteAudioOffReason::ClientDisabled;
-    } else if (!m_radioModel || m_radioModel->sliceById(sliceId) == nullptr) {
+    } else if (!m_radioModel || m_radioModel->sliceById(sliceId) == nullptr
+               || !ownsSlice(sliceId)) {
+        // Gone, or (Task 76) no longer this device's.
         stream.desiredEnabled = false;
         blockedBy = RemoteAudioOffReason::SliceRemoved;
     } else if (stream.streamIndex < 0) {
@@ -1824,8 +2056,11 @@ bool DaemonMediaController::anySliceOnHeadphones() const
     if (!m_radioModel) {
         return false;
     }
+    // Task 76: of this device's own slices; another device's receiver on
+    // its headphones is in that device's mix, not this one's.
     for (SliceModel* slice : m_radioModel->slices()) {
-        if (slice && slice->outputRoute() == SliceModel::OutputRoute::Headphones) {
+        if (slice && slice->outputRoute() == SliceModel::OutputRoute::Headphones
+            && ownsSlice(slice->sliceIndex())) {
             return true;
         }
     }
@@ -1886,6 +2121,8 @@ void DaemonMediaController::reconcileHeadphonesAudio()
             });
         }
         m_headphones.sender->setProfile(m_headphones.activeProfile);
+        // Task 76 (ruling 9.2): this device's own headphones mix.
+        m_headphones.sender->setOwnerMix(m_ownerMix);
         actualEnabled = m_peer->headphonesAudioSsrc() != 0
             && m_headphones.sender->start(m_peer->headphonesAudioSsrc(),
                                           m_headphones.nextSequence,
@@ -2096,10 +2333,12 @@ void DaemonMediaController::admitAudioProfile()
     }
 }
 
-void DaemonMediaController::onSourceFrame(MediaSourceKey key)
+void DaemonMediaController::onSourceFrame(const DaemonSpectrumFrame& sharedFrame)
 {
-    const std::optional<DaemonSpectrumFrame> sourceFrame = m_source.takeLatest(key);
-    if (!sourceFrame.has_value() || !m_radioModel) {
+    // Task 76: DaemonSharedSpectrum took this frame once for every device.
+    const MediaSourceKey key = sharedFrame.source;
+    const DaemonSpectrumFrame* const sourceFrame = &sharedFrame;
+    if (!m_radioModel || m_endpoints.empty()) {
         return;
     }
 
@@ -2316,7 +2555,7 @@ void DaemonMediaController::sendContext(EndpointEntry& entry)
     contextMessage.grant = spectrumContextGrant(entry.grant);
     // A minor-8 peer receives exactly the context it already parses.
     const QJsonObject message = encodeRemoteSpectrumContext(
-        contextMessage, m_server && m_server->spectrumGrantAvailable());
+        contextMessage, m_server && m_server->spectrumGrantAvailable(m_epoch));
     // A failed send can synchronously close the session. Copy identity before
     // crossing the transport and never retain an endpoint reference across it.
     MediaPeer* const peer = m_peer.get();
@@ -2672,7 +2911,7 @@ void DaemonMediaController::onSendTick()
     }
     MediaPeer* const peer = m_peer.get();
     const quint64 epoch = m_epoch;
-    if (!m_radioModel || !m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed()) {
+    if (!ps3DisplayHere()) {
         m_ps3CurrentChunks.clear();
         m_ps3LatestChunks.clear();
         m_ps3CurrentAttempted = false;
@@ -2788,9 +3027,7 @@ void DaemonMediaController::rebalanceSourceAfterDeparture(const MediaSourceKey& 
     if (runtime == m_sources.cend() || !runtime->configured) {
         return;
     }
-    const bool remaining = std::any_of(m_endpoints.cbegin(), m_endpoints.cend(),
-        [&key](const auto& endpoint) { return endpoint.second.request.source == key; });
-    if (!remaining) {
+    if (!anySharedEndpointOn(key)) {
         return;
     }
     // R-R3-01/R-R3-08/R-R3-09/R-R3-37: every pan still held to the departed
@@ -2800,6 +3037,7 @@ void DaemonMediaController::rebalanceSourceAfterDeparture(const MediaSourceKey& 
     // grants. A pan never gains pixels its admitted display charge does not
     // cover (the GUI asks again for the rest, as it does for a lone pan).
     // When no pan is held, only the rate can fall, which renews no context.
+    // Task 76: every device's pans on the engine, not only this one's.
     struct Regrant {
         EndpointEntry* entry = nullptr;
         int previousFftSize = 0;
@@ -2808,11 +3046,9 @@ void DaemonMediaController::rebalanceSourceAfterDeparture(const MediaSourceKey& 
     };
     std::vector<Regrant> regrants;
     int engineFftSize = 0;
-    for (auto& [unused, entry] : m_endpoints) {
-        Q_UNUSED(unused);
-        if (!(entry.request.source == key)
-            || entry.grant.reason != SpectrumLimitReason::SharedEngine) {
-            continue;
+    forEachSharedEndpoint(key, [&](DaemonMediaController&, quint32, EndpointEntry& entry) {
+        if (entry.grant.reason != SpectrumLimitReason::SharedEngine) {
+            return;
         }
         const int fftSize = std::min(entry.grant.requestedFftSize,
                                      FFTEngine::maximumFftSize());
@@ -2822,14 +3058,14 @@ void DaemonMediaController::rebalanceSourceAfterDeparture(const MediaSourceKey& 
             pixels, entry.request.targetFps, entry.request.requestedWideSpanFactor > 1.0,
             entry.extrasRequest.sections());
         if (fftSize <= entry.sourceFftSize || !displayCost) {
-            continue;
+            return;
         }
         regrants.push_back({&entry, entry.sourceFftSize, entry.request.pixels,
                             entry.displayCost});
         engineFftSize = std::max(engineFftSize, fftSize);
         entry.request.pixels = pixels;
         entry.displayCost = *displayCost;
-    }
+    });
     if (!regrants.empty()) {
         // Every re-granted pan records the engine it now shares, as a pan
         // that joins an engine does, so a later departure among them does
@@ -2845,6 +3081,12 @@ void DaemonMediaController::rebalanceSourceAfterDeparture(const MediaSourceKey& 
                 regrant.entry->displayCost = regrant.previousCost;
             }
         }
+        // Another device's re-granted pans changed its charge too.
+        for (DaemonMediaController* member : m_shared->members()) {
+            if (member != this) {
+                member->refreshDisplayBudgetPacer();
+            }
+        }
         return;
     }
     // Otherwise only the rate can fall; that renews nothing. A source that
@@ -2854,11 +3096,9 @@ void DaemonMediaController::rebalanceSourceAfterDeparture(const MediaSourceKey& 
 
 void DaemonMediaController::releaseSourceIfUnused(const MediaSourceKey& key)
 {
-    for (const auto& [unused, entry] : m_endpoints) {
-        Q_UNUSED(unused);
-        if (entry.request.source == key) {
-            return;
-        }
+    // Task 76: the engine goes only when no device watches it.
+    if (anySharedEndpointOn(key)) {
+        return;
     }
     m_source.deactivate(key);
     m_sources.remove(key);
@@ -2866,20 +3106,18 @@ void DaemonMediaController::releaseSourceIfUnused(const MediaSourceKey& key)
 
 bool DaemonMediaController::reconcileSource(const MediaSourceKey& key)
 {
+    // Task 76 (ruling 9.1): one engine for everyone watching this receiver,
+    // at the largest size and highest rate any device's pans were granted.
     int maximumFft = 0;
     int maximumFps = 0;
     int windowType = -1;
-    for (const auto& [unused, entry] : m_endpoints) {
-        Q_UNUSED(unused);
-        if (!(entry.request.source == key)) {
-            continue;
-        }
+    forEachSharedEndpoint(key, [&](DaemonMediaController&, quint32, EndpointEntry& entry) {
         maximumFft = std::max(maximumFft, entry.sourceFftSize);
         maximumFps = std::max(maximumFps, entry.request.targetFps);
         if (windowType == -1) {
             windowType = entry.sourceWindowType;
         }
-    }
+    });
     // The wire request's FFT/window values are represented in the source
     // runtime by the controller after strict validation. They are filled by
     // subscribe before this method is called.
@@ -2931,16 +3169,19 @@ bool DaemonMediaController::reconcileSource(const MediaSourceKey& key)
     runtime.config = config;
     runtime.configured = true;
     if (changed) {
-        for (auto& [unused, entry] : m_endpoints) {
-            Q_UNUSED(unused);
-            if (entry.request.source == key) {
-                entry.endpoint.reset();
-                entry.encoder.reset();
-                entry.latestInput.reset();
-                entry.contextSent = false;
-                entry.forceKeyframe = true;
-                entry.lastNoiseFloorTimestampNs = -1;
-            }
+        // Every device's pans on this engine take the new context.
+        forEachSharedEndpoint(key, [](DaemonMediaController&, quint32, EndpointEntry& entry) {
+            entry.endpoint.reset();
+            entry.encoder.reset();
+            entry.latestInput.reset();
+            entry.contextSent = false;
+            entry.forceKeyframe = true;
+            entry.lastNoiseFloorTimestampNs = -1;
+        });
+    }
+    for (DaemonMediaController* member : m_shared->members()) {
+        if (!member->m_sendTimer.isActive() && !member->m_endpoints.empty()) {
+            member->m_sendTimer.start();
         }
     }
     if (!m_sendTimer.isActive()) {
@@ -2953,11 +3194,17 @@ void DaemonMediaController::onStreamGeometryChanged(int streamIndex, double, int
 {
     MediaPeer* const peer = m_peer.get();
     const quint64 epoch = m_epoch;
-    const QList<MediaSourceKey> keys = m_sources.keys();
-    for (const MediaSourceKey& key : keys) {
-        if (key.streamIndex != streamIndex) {
-            continue;
+    // Task 76: this device's own pans on the stream; the engines they share
+    // with other devices are reconciled for everyone.
+    QList<MediaSourceKey> keys;
+    for (const auto& [unused, entry] : m_endpoints) {
+        Q_UNUSED(unused);
+        if (entry.request.source.streamIndex == streamIndex
+            && !keys.contains(entry.request.source)) {
+            keys.append(entry.request.source);
         }
+    }
+    for (const MediaSourceKey& key : keys) {
         const double centreHz = m_radioModel ? m_radioModel->streamCentreHz(streamIndex) : 0.0;
         const double sampleRateHz = m_radioModel
             ? m_radioModel->streamSampleRateHz(streamIndex) : 0.0;
@@ -2980,7 +3227,7 @@ void DaemonMediaController::onStreamGeometryChanged(int streamIndex, double, int
                 if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
             }
         }
-        if (!m_sources.contains(key)) {
+        if (!anySharedEndpointOn(key)) {
             continue;
         }
         for (auto& [unused, entry] : m_endpoints) {
@@ -2990,7 +3237,10 @@ void DaemonMediaController::onStreamGeometryChanged(int streamIndex, double, int
                 entry.latestInput.reset();
             }
         }
-        if (!reconcileSource(key)) {
+        // Another device found this engine unusable first and retired it:
+        // this device's pans on it go the same way.
+        const bool retiredByAnother = !m_sources.contains(key);
+        if (retiredByAnother || !reconcileSource(key)) {
             // The old geometry is no longer usable. Retire its reservations
             // explicitly so a client can retry instead of believing a source
             // that no longer exists still owns a live display allocation.
@@ -3149,6 +3399,8 @@ void DaemonMediaController::reconcileAudio()
         m_audioSender->setSliceSource(m_headphonesMixNegotiated
                                           ? DaemonAudioSource::kSpeakersMix
                                           : DaemonAudioSource::kMasterMix);
+        // Task 76 (ruling 9.2): this device's own mix, its own slices.
+        m_audioSender->setOwnerMix(m_ownerMix);
         actualEnabled = m_audioSender->start(m_peer->audioSsrc(), m_audioNextSequence,
                                               m_audioNextTimestamp);
         if (actualEnabled) {
@@ -3183,7 +3435,7 @@ void DaemonMediaController::sendAudioContext(bool enabled, RemoteAudioOffReason 
     if (!m_peer || m_audioRevision == 0) {
         return;
     }
-    const bool detailNegotiated = m_server && m_server->remoteAudioStatusAvailable();
+    const bool detailNegotiated = m_server && m_server->remoteAudioStatusAvailable(m_epoch);
     const bool profileNegotiated = detailNegotiated && m_audioProfileNegotiated;
     const bool lossless = m_audioActiveProfile == RemoteAudioProfile::Lossless;
     if (enabled && detailNegotiated
@@ -3361,11 +3613,15 @@ void DaemonMediaController::clearProduction()
     m_ps3CurrentChunks.clear();
     m_ps3LatestChunks.clear();
     m_ps3CurrentAttempted = false;
-    const QList<MediaSourceKey> keys = m_sources.keys();
-    for (const MediaSourceKey& key : keys) {
-        m_source.deactivate(key);
+    // Task 76: the engines this device's pans used, which other devices
+    // may still be watching.
+    QList<MediaSourceKey> keys;
+    for (const auto& [unused, entry] : m_endpoints) {
+        Q_UNUSED(unused);
+        if (!keys.contains(entry.request.source)) {
+            keys.append(entry.request.source);
+        }
     }
-    m_sources.clear();
     if (displayBudgetWireAvailable()) {
         for (const auto& [endpointId, entry] : m_endpoints) {
             AllocationRecord retired = entry.allocation;
@@ -3376,6 +3632,16 @@ void DaemonMediaController::clearProduction()
     }
     m_endpoints.clear();
     m_roundRobinCursor = 0;
+    // An engine nobody else watches stops; one another device still
+    // watches keeps running for it, sized to its own pans.
+    for (const MediaSourceKey& key : keys) {
+        if (anySharedEndpointOn(key)) {
+            rebalanceSourceAfterDeparture(key);
+        } else {
+            m_source.deactivate(key);
+            m_sources.remove(key);
+        }
+    }
     refreshDisplayBudgetPacer();
 }
 
@@ -3413,6 +3679,139 @@ quint32 DaemonMediaController::nextContextGeneration()
         ++m_nextContextGeneration;
     }
     return m_nextContextGeneration;
+}
+
+// ── One controller per admitted session (iPhone app Task 76) ────────────
+
+DaemonMediaHub::DaemonMediaHub(StationServer* server, RadioModel* radioModel, QObject* parent,
+                               MediaPeer::TransportFactory peerFactory,
+                               DaemonMediaController::MonotonicClock monotonicClock)
+    : QObject(parent)
+    , m_server(server)
+    , m_radioModel(radioModel)
+    , m_peerFactory(std::move(peerFactory))
+    , m_monotonicClock(std::move(monotonicClock))
+    , m_spectrum(std::make_shared<DaemonSharedSpectrum>(radioModel))
+{
+    if (!m_server || !m_radioModel) {
+        return;
+    }
+    connect(m_server, &StationServer::mediaSessionStarted,
+            this, &DaemonMediaHub::onSessionStarted);
+    connect(m_server, &StationServer::mediaSessionEnded,
+            this, &DaemonMediaHub::onSessionEnded);
+    // The PureSignal display gate: the asking session's controller answers
+    // (ruling 9.3 item 4).
+    const QPointer<DaemonMediaHub> self(this);
+    m_server->setSessionPs3DisplayAdmissionHandler(
+        [self](quint64 epoch, bool enabled, QString* refusal) {
+        DaemonMediaController* controller = self ? self->controllerFor(epoch) : nullptr;
+        if (!controller) {
+            if (refusal) { *refusal = QStringLiteral("The Core stopped its display service."); }
+            return false;
+        }
+        return controller->admitPs3DisplayForSession(enabled, refusal);
+    });
+    // The gate is in place before capability publication can advertise
+    // budget enforcement.
+    m_server->setDisplayBudgetEnforcementEnabled(true);
+    // A session already live (none at the Core's start) gets its own.
+    for (quint64 epoch : m_server->mediaSessionEpochs()) {
+        if (m_server->mediaAvailable(epoch)) {
+            onSessionStarted(epoch);
+        }
+    }
+}
+
+DaemonMediaHub::~DaemonMediaHub()
+{
+    if (m_server) {
+        m_server->disconnect(this);
+        m_server->setSessionPs3DisplayAdmissionHandler({});
+        m_server->setDisplayBudgetEnforcementEnabled(false);
+    }
+    m_controllers.clear();
+}
+
+void DaemonMediaHub::onSessionStarted(quint64 epoch)
+{
+    if (epoch == 0 || m_controllers.count(epoch) != 0 || !m_server) {
+        return;
+    }
+    auto controller = std::make_unique<DaemonMediaController>(
+        m_server, m_radioModel, epoch, m_spectrum, nullptr, m_peerFactory, m_monotonicClock);
+    if (m_audioTargetBitrate) {
+        controller->setAudioTargetBitrate(*m_audioTargetBitrate);
+    }
+    if (m_audioLosslessAllowed) {
+        controller->setAudioLosslessAllowed(*m_audioLosslessAllowed);
+    }
+    m_controllers.emplace(epoch, std::move(controller));
+}
+
+void DaemonMediaHub::onSessionEnded(quint64 epoch)
+{
+    auto it = m_controllers.find(epoch);
+    if (it == m_controllers.end()) {
+        return;
+    }
+    // The controller hears this same signal and clears its session itself;
+    // it goes once the signal has unwound.
+    DaemonMediaController* controller = it->second.release();
+    m_controllers.erase(it);
+    controller->deleteLater();
+}
+
+void DaemonMediaHub::setAudioTargetBitrate(int bitsPerSecond)
+{
+    m_audioTargetBitrate = bitsPerSecond;
+    for (auto& [unused, controller] : m_controllers) {
+        Q_UNUSED(unused);
+        controller->setAudioTargetBitrate(bitsPerSecond);
+    }
+}
+
+void DaemonMediaHub::setAudioLosslessAllowed(bool allowed)
+{
+    m_audioLosslessAllowed = allowed;
+    for (auto& [unused, controller] : m_controllers) {
+        Q_UNUSED(unused);
+        controller->setAudioLosslessAllowed(allowed);
+    }
+}
+
+DaemonMediaController* DaemonMediaHub::controllerFor(quint64 epoch) const
+{
+    const auto it = m_controllers.find(epoch);
+    return it != m_controllers.end() ? it->second.get() : nullptr;
+}
+
+QList<DaemonMediaController*> DaemonMediaHub::controllers() const
+{
+    QList<DaemonMediaController*> out;
+    for (const auto& [unused, controller] : m_controllers) {
+        Q_UNUSED(unused);
+        out.append(controller.get());
+    }
+    return out;
+}
+
+DisplayBudgetCharge DaemonMediaHub::acceptedDisplayCharge() const
+{
+    // Each controller's own charge; the PureSignal display is in its
+    // subscriber's alone, so it is counted once.
+    QList<DisplayBudgetCharge> charges;
+    for (const auto& [unused, controller] : m_controllers) {
+        Q_UNUSED(unused);
+        charges.append(controller->ownDisplayCharge());
+    }
+    return sumDisplayCharges(charges).value_or(DisplayBudgetCharge{});
+}
+
+DaemonAudioDiagnostics DaemonMediaHub::audioDiagnostics(quint64 epoch) const
+{
+    DaemonMediaController* controller = controllerFor(epoch);
+    return controller ? controller->audioDiagnostics() : DaemonAudioDiagnostics{};
 }
 
 } // namespace NereusSDR

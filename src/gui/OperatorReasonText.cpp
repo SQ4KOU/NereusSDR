@@ -62,6 +62,9 @@ constexpr Entry kEntries[] = {
      "The receiver was retuned and no longer covers this view.", "Refused"},
     {"This display's receiver is not on the Core.", "Refused: no slice",
      "This pan's slice is not available on the Core.", "Refused"},
+    // iPhone app Task 76 (ruling 9.1): displays only for a device's own slices.
+    {"That slice belongs to another device.", "Refused: other device",
+     "This pan's slice belongs to another device on the Core.", "Refused"},
     {kRetireReasonSliceRemoved, "Refused: no slice",
      "This pan's slice was removed.", "Refused"},
     {kRetireReasonStreamBindingChanged, "Refused: out of date",

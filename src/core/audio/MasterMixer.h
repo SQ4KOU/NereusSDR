@@ -53,6 +53,13 @@
 //                 crossfades over the anti-click ramp. NereusSDR-original.
 //                 Authored by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-25 -- iPhone app Task 76 (R-IOS-31; the several-devices
+//                 design, ruling 9.2): one mix per owner from the same
+//                 barrier. The local sums carry only the slices a local
+//                 mask names, and each owner output sums its own slices at
+//                 the same per-slice gain, pan, mute, route and up-slew.
+//                 NereusSDR-original. Authored by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 // --- From aamix.c ---
@@ -282,6 +289,25 @@ public:
     // which case that sum is not written. Both hold maxFrames * 2 floats;
     // the return value is the frame count written to each.
     int tryDrain(float* speakersOut, float* headphonesOut, int maxFrames);
+
+    // iPhone app Task 76 (the several-devices design, ruling 9.2): one mix
+    // per owner. Each owner names its slices by a bit per slice id (0..31)
+    // and gets both sums of those slices alone, each slice at its own gain,
+    // pan, mute and route, with the same ramps and up-slew as the local
+    // sums. A null buffer is not written; an owner with no bit set is
+    // skipped whole. Owner sums never hold up or change the local drain:
+    // the barrier, the cursors and the ramps are the local drain's.
+    struct OwnerOutput {
+        std::uint32_t sliceMask{0};
+        float* speakers{nullptr};
+        float* headphones{nullptr};
+    };
+    // As the two-sum tryDrain, except that speakersOut and headphonesOut
+    // carry only the slices `localMask` names (slot ids outside 0..31, the
+    // transmit monitor's, always), and each of `owners` (ownerCount of
+    // them, may be null when 0) gets its own sums.
+    int tryDrain(float* speakersOut, float* headphonesOut, int maxFrames,
+                 std::uint32_t localMask, OwnerOutput* owners, int ownerCount);
 
     // Test seam: ramp length in frames (default kDefaultRampFrames).
     void setRampFrames(int frames);

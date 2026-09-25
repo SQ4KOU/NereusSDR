@@ -284,6 +284,7 @@
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SliceMarker.h"
 #include "core/SliceOwnership.h"
+#include "core/session/media/DisplayBudgetSplit.h"
 #include "core/session/ConfirmStep.h"
 #include "core/session/ConnectedDevicesFacade.h"
 #include "core/session/DeviceSessionRegistry.h"
@@ -992,6 +993,25 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_registry = new ObjectRegistry(radioModel, m_mirror, this);
     m_dispatcher = new SessionCommandDispatcher(radioModel, this);
     m_dispatcher->setDeviceAdmin(m_devicesFacade.get());
+    // iPhone app Task 76 (ruling 9.3 item 4): the PureSignal display goes
+    // to, and is charged to, the session that subscribed to it. The
+    // dispatcher asks this gate; it names the asking session's media epoch
+    // to the handler DaemonMediaHub installs and records the subscriber.
+    m_dispatcher->setPs3DisplayAdmissionHandler([this](bool enabled, QString* refusal) {
+        const auto asker = m_peers.constFind(m_dispatchingTransport);
+        const quint64 epoch = asker != m_peers.cend() ? asker->mediaEpoch : 0;
+        if (m_ps3DisplayAdmission && !m_ps3DisplayAdmission(epoch, enabled, refusal)) {
+            return false;
+        }
+        const quint64 before = m_ps3SubscriberEpoch;
+        m_ps3SubscriberEpoch = enabled ? epoch : 0;
+        if (before != m_ps3SubscriberEpoch) {
+            // The display (and its charge) moves between sessions without
+            // the facade's subscription changing: split again at once.
+            publishDisplayBudgetCapabilities();
+        }
+        return true;
+    });
     m_settingsServer = new SettingsProxyServer(settings, this);
     // R-R3-46: the Core applies hardware settings for its connected radio
     // only; a write naming any other radio's MAC is refused.
@@ -1070,7 +1090,8 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 } else {
                     const auto route =
                         m_resultRoutes.constFind(qMakePair(result.commandVerb, result.commandId));
-                    to = route != m_resultRoutes.cend() ? route->data() : m_mediaSession;
+                    to = route != m_resultRoutes.cend() ? route->data()
+                                                        : primaryMediaSession();
                 }
                 if (to != nullptr) {
                     sendToPeer(to, result);
@@ -1399,10 +1420,13 @@ void StationServer::close()
 {
     const bool wasListening = isListening();
     const QList<SessionTransport*> transports = m_peers.keys();
+    // Task 76: the sessions still to be ended are not sent new shares.
+    m_closing = true;
     for (SessionTransport* transport : transports) {
         dropPeer(transport, QStringLiteral("The Core is shutting down."), true,
                  /*retryable=*/true);
     }
+    m_closing = false;
     if (m_wsServer != nullptr) {
         m_wsServer->close();
     }
@@ -1892,6 +1916,8 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     // (ruling 5.8).
     const QPointer<MirrorView> view = it->view;
     const QString owner = sessionOwner(it->sessionId);
+    // iPhone app Task 76: this session's own media ends with it.
+    const quint64 mediaEpoch = it->mediaEpoch;
     m_peers.erase(it);
     if (!view.isNull()) {
         view->close();
@@ -1927,18 +1953,37 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     }
     publishConnectedDevices();
 
-    if (m_mediaSession == transport) {
-        // The session media and telemetry went to (the topology note).
-        m_mediaSession = nullptr;
-        m_dispatcher->resetSessionState();
-        if (m_radioModel) {
-            m_radioModel->pureSignalFacade()->resetSession();
+    if (mediaEpoch != 0) {
+        // iPhone app Task 76: this session's media and telemetry end; every
+        // other session's go on. The session state the old one-media-
+        // session rule reset at its end is the Core's again once no session
+        // is left; the PureSignal display leaves with its subscriber.
+        const bool lastSession = primaryMediaSession() == nullptr;
+        if (lastSession) {
+            m_ps3SubscriberEpoch = 0;
+            m_dispatcher->resetSessionState();
+            if (m_radioModel) {
+                m_radioModel->pureSignalFacade()->resetSession();
+            }
+            if (!m_radioModel.isNull()) {
+                m_radioModel->clearStreamCtunPins();
+            }
+        } else if (m_ps3SubscriberEpoch == mediaEpoch) {
+            m_ps3SubscriberEpoch = 0;
+            if (m_radioModel) {
+                m_radioModel->pureSignalFacade()->setRemoteAmpViewSubscribed(false);
+            }
         }
-        if (!m_radioModel.isNull()) {
-            m_radioModel->clearStreamCtunPins();
+        emit mediaSessionEnded(mediaEpoch);
+        emit telemetrySessionEnded(mediaEpoch);
+        // The others' shares grow back (new generations to each), unless
+        // the Core is ending every session.
+        if (!m_closing) {
+            if (recomputeDisplayBudgetShares()) {
+                emit displayBudgetChanged();
+            }
+            publishBudgetToChangedSessions();
         }
-        emit mediaSessionEnded(m_mediaSessionEpoch);
-        emit telemetrySessionEnded(m_mediaSessionEpoch);
     }
     if (!hasAuthenticatedSession()) {
         // Stop draining deltas into nothing. StateMirror keeps watching --
@@ -2343,12 +2388,15 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             }
         }
         break;
-    case SessionMessageKind::MediaControl:
-        // Media is one session's until Task 76 (the topology note).
-        if (transport == m_mediaSession && mediaAvailable()) {
-            emit mediaControlReceived(message.mediaPayload, m_mediaSessionEpoch);
+    case SessionMessageKind::MediaControl: {
+        // iPhone app Task 76 (the link, section 11): from each admitted
+        // session, for its own media.
+        const quint64 epoch = m_peers.value(transport).mediaEpoch;
+        if (epoch != 0 && mediaAvailable(epoch)) {
+            emit mediaControlReceived(message.mediaPayload, epoch);
         }
         break;
+    }
     case SessionMessageKind::PropertyWrite:
         handlePropertyWrite(transport, message);
         break;
@@ -3160,14 +3208,22 @@ void StationServer::promoteToSession(SessionTransport* transport)
     // one.
     buildMirror();
 
-    // Media and telemetry go to one session until Task 76: the first
-    // admitted while none holds them (the topology note).
-    if (m_mediaSession == nullptr) {
-        m_mediaSession = transport;
-        ++m_mediaSessionEpoch;
+    // iPhone app Task 76: every admitted session has media, with its own
+    // epoch. The first session on a Core with none starts the session
+    // state afresh, as the one media session did before.
+    if (primaryMediaSession() == nullptr) {
+        m_ps3SubscriberEpoch = 0;
         m_radioModel->pureSignalFacade()->resetSession();
         m_dispatcher->resetSessionState();
     }
+    ++m_mediaSessionEpoch;
+    if (m_mediaSessionEpoch == 0) {
+        ++m_mediaSessionEpoch;
+    }
+    m_peers[transport].mediaEpoch = m_mediaSessionEpoch;
+    // Its share of the display budget, in its first capabilities; the
+    // others' shrink (new generations, published below once it is in).
+    const bool sharesChanged = recomputeDisplayBudgetShares();
     // iPhone app Task 72: the session's own id, for the dispatcher's owner
     // string (station:<sessionId>).
     m_peers[transport].sessionId = ++m_nextSessionId;
@@ -3201,11 +3257,19 @@ void StationServer::promoteToSession(SessionTransport* transport)
 
     qCInfo(lcStation) << "Session established with" << description;
     emit clientAuthenticated(description);
-    if (m_mediaSession == transport && mediaAvailable()) {
-        emit mediaSessionStarted(m_mediaSessionEpoch);
+    const quint64 epoch = m_peers.value(transport).mediaEpoch;
+    if (sharesChanged) {
+        emit displayBudgetChanged();
     }
-    if (m_mediaSession == transport && telemetryAvailable()) {
-        emit telemetrySessionStarted(m_mediaSessionEpoch);
+    publishBudgetToChangedSessions();
+    if (!m_peers.contains(transport)) {
+        return;
+    }
+    if (mediaAvailable(epoch)) {
+        emit mediaSessionStarted(epoch);
+    }
+    if (m_peers.contains(transport) && telemetryAvailable(epoch)) {
+        emit telemetrySessionStarted(epoch);
     }
 }
 
@@ -3305,6 +3369,9 @@ bool StationServer::sendCapabilitiesAndSettingsSnapshot(SessionTransport* transp
     // Capability exchange (section 7.0 step 4).  On the initial path this
     // remains before every model message; on the late-radio path it updates
     // only identity, board, effective limits, and connection state.
+    // iPhone app Task 76: what these capabilities say of the budget, so a
+    // later change is published once.
+    m_peers[transport].publishedBudget = budgetEntriesFor(transport);
     send(transport, SessionMessages::capabilities(buildCapabilitiesFor(transport).toUpdates()));
     if (!stillAdmitted()) {
         return false;
@@ -4227,12 +4294,14 @@ bool StationServer::setDisplayBudgetLimits(const DisplayBudgetLimits& limits,
     }
     m_displayBudget = limits;
     m_displayBudgetReason = reason;
+    // iPhone app Task 76: the new total is split among the media sessions.
+    recomputeDisplayBudgetShares();
     const QPointer<StationServer> self(this);
     emit displayBudgetChanged(); // The sender sees new limits before publication.
     // A peer the computed budget does not reach heard of no budget, so a
     // change to it is nothing to that peer (legacy mode exactly).
-    if (self && (!self->m_displayBudgetForReasonPeersOnly || self->displayBudgetLimits())) {
-        self->publishDisplayBudgetCapabilities();
+    if (self) {
+        self->publishBudgetToChangedSessions();
     }
     return true;
 }
@@ -4245,21 +4314,256 @@ void StationServer::setDisplayBudgetEnforcementEnabled(bool enabled)
 
 void StationServer::setPs3DisplayAdmissionHandler(Ps3DisplayAdmissionHandler handler)
 {
-    m_dispatcher->setPs3DisplayAdmissionHandler(std::move(handler));
+    if (!handler) {
+        m_ps3DisplayAdmission = {};
+        return;
+    }
+    m_ps3DisplayAdmission = [handler = std::move(handler)](quint64, bool enabled,
+                                                           QString* refusal) {
+        return handler(enabled, refusal);
+    };
+}
+
+void StationServer::setSessionPs3DisplayAdmissionHandler(SessionPs3DisplayAdmissionHandler handler)
+{
+    m_ps3DisplayAdmission = std::move(handler);
 }
 
 void StationServer::publishDisplayBudgetCapabilities()
 {
-    // Media's session only: the budget is part of media (the topology note).
-    if (mediaAvailable()) {
-        send(m_mediaSession,
-             SessionMessages::capabilities(buildCapabilitiesFor(m_mediaSession).toUpdates()));
+    // iPhone app Task 76: split again (the PureSignal display's charge may
+    // have moved) and tell each media session whose budget entries changed.
+    if (recomputeDisplayBudgetShares()) {
+        emit displayBudgetChanged();
     }
+    publishBudgetToChangedSessions();
+}
+
+void StationServer::publishBudgetToChangedSessions()
+{
+    const QList<quint64> epochs = mediaSessionEpochs();
+    for (quint64 epoch : epochs) {
+        SessionTransport* transport = mediaSessionFor(epoch);
+        if (transport == nullptr || !mediaAvailable(epoch)) {
+            continue;
+        }
+        const QByteArray entries = budgetEntriesFor(transport);
+        if (entries == m_peers.value(transport).publishedBudget) {
+            continue;
+        }
+        m_peers[transport].publishedBudget = entries;
+        send(transport,
+             SessionMessages::capabilities(buildCapabilitiesFor(transport).toUpdates()));
+    }
+}
+
+QByteArray StationServer::budgetEntriesFor(SessionTransport* transport) const
+{
+    // Every budget entry the capabilities carry, as one comparable string.
+    const StationCapabilities caps = buildCapabilitiesFor(transport);
+    QByteArray key;
+    key += QByteArray::number(caps.remoteDisplayBudgetVersion);
+    if (caps.displayBudget) {
+        key += ':' + QByteArray::number(caps.displayBudget->applicationBytesPerSecond);
+        key += ':' + QByteArray::number(caps.displayBudget->spectrumSampleUnitsPerSecond);
+        key += ':' + QByteArray::number(caps.displayBudget->generation);
+    }
+    key += caps.remotePs3DisplaySubscribed ? ":ps" : ":-";
+    if (caps.displayBudgetReason) {
+        key += ':' + QByteArray::number(static_cast<int>(*caps.displayBudgetReason));
+    }
+    return key;
+}
+
+std::optional<DisplayBudgetLimits> StationServer::displayBudgetTotalFor(
+    SessionTransport* transport) const
+{
+    if (m_displayBudget && m_displayBudgetForReasonPeersOnly) {
+        // R-R3-08/37: a computed ceiling is only for an app that can be told
+        // why it is lowered. An older app keeps legacy mode exactly: no
+        // budget, no pacing, no allocation results.
+        const auto peer = m_peers.constFind(transport);
+        if (peer == m_peers.cend()
+            || peer->agreedMinor < kDisplayBudgetReasonSessionProtocolMinor) {
+            return std::nullopt;
+        }
+    }
+    return m_displayBudget;
+}
+
+QList<QPair<SessionTransport*, DisplayBudgetShare>> StationServer::splitDisplayBudget(
+    std::optional<quint64> ps3Subscriber) const
+{
+    // iPhone app Task 76 (ruling 9.3): every media session the total
+    // reaches shares it, in admission order.
+    QList<QPair<SessionTransport*, DisplayBudgetShare>> result;
+    if (!m_displayBudget) {
+        return result;
+    }
+    DisplayBudgetSplitInput input;
+    input.total = *m_displayBudget;
+    input.governorCut = m_displayBudgetReason == DisplayBudgetReason::CoreBusy;
+    QList<SessionTransport*> sharing;
+    for (quint64 epoch : mediaSessionEpochs()) {
+        SessionTransport* transport = mediaSessionFor(epoch);
+        const Peer& peer = m_peers.find(transport).value();
+        if (!m_mediaEnabled || peer.agreedMinor < kMediaSessionProtocolMinor
+            || !displayBudgetTotalFor(transport)) {
+            continue;
+        }
+        DisplayBudgetSplitDevice device;
+        device.id = QByteArray::number(epoch);
+        // The Core cannot see what a client would like before it plans
+        // inside its share (the budget design: each client plans its own
+        // displays), so every device asks for the whole total and the split
+        // gives equal shares. Rule 1 needs the holder's own request: Task 34
+        // brings the holder and joins here.
+        device.request = {m_displayBudget->applicationBytesPerSecond,
+                          m_displayBudget->spectrumSampleUnitsPerSecond, 0};
+        device.previous = peer.budgetShare;
+        device.previousReason = peer.budgetShareReason;
+        input.devices.append(device);
+        sharing.append(transport);
+    }
+    // Transmit joins here (Task 34): TransmitHolder's holder, as
+    // DisplayBudgetHolderKind::Station for the station device, or ::Device
+    // with the holder's media epoch as holderId and holderAway while it is
+    // away. Until then transmit is unheld (rule 3).
+    input.holderKind = DisplayBudgetHolderKind::Unheld;
+    if (ps3Subscriber) {
+        input.ps3Subscriber = QByteArray::number(*ps3Subscriber);
+    }
+    const QList<DisplayBudgetShare> shares = DisplayBudgetSplit::split(input);
+    for (qsizetype i = 0; i < sharing.size() && i < shares.size(); ++i) {
+        result.append(qMakePair(sharing.at(i), shares.at(i)));
+    }
+    return result;
+}
+
+bool StationServer::recomputeDisplayBudgetShares()
+{
+    std::optional<quint64> subscriber;
+    if (m_radioModel && m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed()) {
+        subscriber = m_ps3SubscriberEpoch != 0 ? m_ps3SubscriberEpoch : mediaSessionEpoch();
+    }
+    const QList<QPair<SessionTransport*, DisplayBudgetShare>> shares =
+        splitDisplayBudget(subscriber);
+    bool changed = false;
+    QSet<SessionTransport*> sharing;
+    for (const auto& [transport, share] : shares) {
+        Peer& peer = m_peers[transport];
+        if (peer.budgetShare != share.limits || peer.budgetShareReason != share.reason) {
+            changed = true;
+        }
+        peer.budgetShare = share.limits;
+        peer.budgetShareReason = share.reason;
+        sharing.insert(transport);
+    }
+    // A session the total does not reach has no share.
+    for (quint64 epoch : mediaSessionEpochs()) {
+        SessionTransport* transport = mediaSessionFor(epoch);
+        if (sharing.contains(transport)) {
+            continue;
+        }
+        Peer& peer = m_peers[transport];
+        if (peer.budgetShare) {
+            changed = true;
+        }
+        peer.budgetShare.reset();
+        peer.budgetShareReason = DisplayBudgetReason::None;
+    }
+    return changed;
+}
+
+std::optional<DisplayBudgetLimits> StationServer::displayBudgetLimitsAsPs3Subscriber(
+    quint64 epoch) const
+{
+    SessionTransport* transport = mediaSessionFor(epoch);
+    for (const auto& [sharing, share] : splitDisplayBudget(epoch)) {
+        if (sharing == transport) {
+            return share.limits;
+        }
+    }
+    return displayBudgetLimits(epoch);
+}
+
+SessionTransport* StationServer::mediaSessionFor(quint64 epoch) const
+{
+    if (epoch == 0) {
+        return nullptr;
+    }
+    for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
+        if (it->mediaEpoch == epoch && it->authenticated) {
+            return it.key();
+        }
+    }
+    return nullptr;
+}
+
+SessionTransport* StationServer::primaryMediaSession() const
+{
+    SessionTransport* primary = nullptr;
+    quint64 lowest = 0;
+    for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
+        if (it->mediaEpoch != 0 && it->authenticated
+            && (primary == nullptr || it->mediaEpoch < lowest)) {
+            primary = it.key();
+            lowest = it->mediaEpoch;
+        }
+    }
+    return primary;
+}
+
+QList<quint64> StationServer::mediaSessionEpochs() const
+{
+    QList<quint64> epochs;
+    for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
+        if (it->mediaEpoch != 0 && it->authenticated) {
+            epochs.append(it->mediaEpoch);
+        }
+    }
+    std::sort(epochs.begin(), epochs.end());
+    return epochs;
+}
+
+quint64 StationServer::mediaSessionEpoch() const
+{
+    SessionTransport* primary = primaryMediaSession();
+    return primary != nullptr ? m_peers.value(primary).mediaEpoch : 0;
+}
+
+QByteArray StationServer::mediaSessionDevice(quint64 epoch) const
+{
+    SessionTransport* transport = mediaSessionFor(epoch);
+    return transport != nullptr ? m_peers.value(transport).sessionDeviceId : QByteArray();
+}
+
+bool StationServer::mediaSessionOwnsSlice(quint64 epoch, int sliceId) const
+{
+    // Ruling 9.1: a device's own slices, as SliceOwnership records them.
+    const QByteArray device = mediaSessionDevice(epoch);
+    if (device.isEmpty() || m_radioModel.isNull()
+        || m_radioModel->sliceOwnership() == nullptr) {
+        return false;
+    }
+    return m_radioModel->sliceOwnership()->mark(sliceId).owner == device;
+}
+
+bool StationServer::mediaAvailableFor(SessionTransport* transport) const
+{
+    const auto it = m_peers.constFind(transport);
+    return m_mediaEnabled && it != m_peers.cend() && it->authenticated && it->mediaEpoch != 0
+        && it->snapshotComplete && it->agreedMinor >= kMediaSessionProtocolMinor;
 }
 
 bool StationServer::telemetryAvailable() const
 {
-    const auto it = m_peers.constFind(m_mediaSession);
+    return telemetryAvailable(mediaSessionEpoch());
+}
+
+bool StationServer::telemetryAvailable(quint64 epoch) const
+{
+    const auto it = m_peers.constFind(mediaSessionFor(epoch));
     return m_telemetryEnabled && it != m_peers.cend() && it->authenticated
         && it->snapshotComplete && it->agreedMinor >= kStationTelemetrySessionProtocolMinor;
 }
@@ -4267,13 +4571,14 @@ bool StationServer::telemetryAvailable() const
 bool StationServer::sendTelemetry(const StationTelemetrySnapshot& snapshot,
                                   quint64 expectedEpoch)
 {
-    if (!telemetryAvailable() || expectedEpoch != m_mediaSessionEpoch) { return false; }
+    if (!telemetryAvailable(expectedEpoch)) { return false; }
+    SessionTransport* transport = mediaSessionFor(expectedEpoch);
     SessionMessage message;
     message.kind = SessionMessageKind::StationTelemetry;
     message.telemetry = snapshot;
     // A peer from before host telemetry receives exactly the radio and audio
     // sections it was built for.
-    const auto peer = m_peers.constFind(m_mediaSession);
+    const auto peer = m_peers.constFind(transport);
     if (peer == m_peers.cend() || peer->agreedMinor < kCoreHostTelemetrySessionProtocolMinor) {
         message.telemetry.host = {};
     }
@@ -4284,44 +4589,67 @@ bool StationServer::sendTelemetry(const StationTelemetrySnapshot& snapshot,
     }
     const QByteArray wire = SessionMessages::encode(message);
     if (wire.isEmpty()) { return false; }
-    m_mediaSession->sendText(wire);
+    transport->sendText(wire);
     return true;
 }
 
 bool StationServer::mediaAvailable() const
 {
-    const auto it = m_peers.constFind(m_mediaSession);
-    return m_mediaEnabled && it != m_peers.cend() && it->authenticated
-        && it->snapshotComplete && it->agreedMinor >= kMediaSessionProtocolMinor;
+    return mediaAvailable(mediaSessionEpoch());
+}
+
+bool StationServer::mediaAvailable(quint64 epoch) const
+{
+    return mediaAvailableFor(mediaSessionFor(epoch));
 }
 
 bool StationServer::remoteWidebandAvailable() const
 {
-    const auto it = m_peers.constFind(m_mediaSession);
-    return mediaAvailable() && it != m_peers.cend()
+    return remoteWidebandAvailable(mediaSessionEpoch());
+}
+
+bool StationServer::remoteWidebandAvailable(quint64 epoch) const
+{
+    const auto it = m_peers.constFind(mediaSessionFor(epoch));
+    return mediaAvailable(epoch) && it != m_peers.cend()
         && it->agreedMinor >= kRemoteWidebandSessionProtocolMinor;
 }
 
 bool StationServer::remoteAudioStatusAvailable() const
 {
-    const auto it = m_peers.constFind(m_mediaSession);
-    return mediaAvailable() && it != m_peers.cend()
+    return remoteAudioStatusAvailable(mediaSessionEpoch());
+}
+
+bool StationServer::remoteAudioStatusAvailable(quint64 epoch) const
+{
+    const auto it = m_peers.constFind(mediaSessionFor(epoch));
+    return mediaAvailable(epoch) && it != m_peers.cend()
         && it->agreedMinor >= kRemoteAudioStatusSessionProtocolMinor;
 }
 
 bool StationServer::spectrumGrantAvailable() const
 {
-    const auto it = m_peers.constFind(m_mediaSession);
-    return mediaAvailable() && it != m_peers.cend()
+    return spectrumGrantAvailable(mediaSessionEpoch());
+}
+
+bool StationServer::spectrumGrantAvailable(quint64 epoch) const
+{
+    const auto it = m_peers.constFind(mediaSessionFor(epoch));
+    return mediaAvailable(epoch) && it != m_peers.cend()
         && it->agreedMinor >= kRemoteSpectrumGrantSessionProtocolMinor;
 }
 
 bool StationServer::displayExtrasAvailable() const
 {
+    return displayExtrasAvailable(mediaSessionEpoch());
+}
+
+bool StationServer::displayExtrasAvailable(quint64 epoch) const
+{
     // Advertised in the minor-11 capabilities block only, so only a peer
     // that agreed minor 11 was told it may ask.
-    const auto it = m_peers.constFind(m_mediaSession);
-    return mediaAvailable() && it != m_peers.cend()
+    const auto it = m_peers.constFind(mediaSessionFor(epoch));
+    return mediaAvailable(epoch) && it != m_peers.cend()
         && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
         && displayExtrasVersion() >= 1;
 }
@@ -4329,33 +4657,50 @@ bool StationServer::displayExtrasAvailable() const
 void StationServer::setDisplayBudgetForReasonPeersOnly(bool reasonPeersOnly)
 {
     m_displayBudgetForReasonPeersOnly = reasonPeersOnly;
+    recomputeDisplayBudgetShares();
 }
 
 std::optional<DisplayBudgetLimits> StationServer::displayBudgetLimits() const
 {
-    if (m_displayBudget && m_displayBudgetForReasonPeersOnly) {
-        // R-R3-08/37: a computed ceiling is only for an app that can be told
-        // why it is lowered. An older app keeps legacy mode exactly: no
-        // budget, no pacing, no allocation results.
-        const auto peer = m_peers.constFind(m_mediaSession);
-        if (peer == m_peers.cend()
-            || peer->agreedMinor < kDisplayBudgetReasonSessionProtocolMinor) {
-            return std::nullopt;
-        }
+    SessionTransport* primary = primaryMediaSession();
+    if (primary == nullptr) {
+        // What a first session would be given: the whole total.
+        return displayBudgetTotalFor(nullptr);
     }
-    return m_displayBudget;
+    return displayBudgetLimits(m_peers.value(primary).mediaEpoch);
+}
+
+std::optional<DisplayBudgetLimits> StationServer::displayBudgetLimits(quint64 epoch) const
+{
+    const auto it = m_peers.constFind(mediaSessionFor(epoch));
+    if (it == m_peers.cend()) {
+        return std::nullopt;
+    }
+    return it->budgetShare;
+}
+
+DisplayBudgetReason StationServer::displayBudgetShareReason(quint64 epoch) const
+{
+    const auto it = m_peers.constFind(mediaSessionFor(epoch));
+    return it != m_peers.cend() ? it->budgetShareReason : DisplayBudgetReason::None;
 }
 
 bool StationServer::displayBudgetAvailable() const
 {
-    const auto it = m_peers.constFind(m_mediaSession);
-    return mediaAvailable() && m_displayBudgetEnforcementEnabled && displayBudgetLimits()
-        && it != m_peers.cend() && it->agreedMinor >= kRemoteDisplayBudgetSessionProtocolMinor;
+    return displayBudgetAvailable(mediaSessionEpoch());
+}
+
+bool StationServer::displayBudgetAvailable(quint64 epoch) const
+{
+    const auto it = m_peers.constFind(mediaSessionFor(epoch));
+    return mediaAvailable(epoch) && m_displayBudgetEnforcementEnabled
+        && displayBudgetLimits(epoch) && it != m_peers.cend()
+        && it->agreedMinor >= kRemoteDisplayBudgetSessionProtocolMinor;
 }
 
 bool StationServer::sendMediaControl(const QJsonObject& payload, quint64 expectedEpoch)
 {
-    if (!mediaAvailable() || expectedEpoch != m_mediaSessionEpoch) {
+    if (!mediaAvailable(expectedEpoch)) {
         return false;
     }
     SessionMessage message;
@@ -4365,7 +4710,7 @@ bool StationServer::sendMediaControl(const QJsonObject& payload, quint64 expecte
     if (wire.isEmpty()) {
         return false;
     }
-    m_mediaSession->sendText(wire);
+    mediaSessionFor(expectedEpoch)->sendText(wire);
     return true;
 }
 
@@ -4436,20 +4781,22 @@ int StationServer::radioHardwareVersion() const
 
 StationCapabilities StationServer::buildCapabilities() const
 {
-    // What the media session is told (with none, what a first session
-    // would be told), as the one session was before Task 71.
-    return buildCapabilitiesFor(m_mediaSession);
+    // What the primary media session is told (with none, what a first
+    // session would be told), as the one session was before Task 71.
+    return buildCapabilitiesFor(primaryMediaSession());
 }
 
 StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transport) const
 {
     StationCapabilities caps;
     caps.settingsSchemaVersion = settingsSchemaVersionOf(m_settings);
-    // iPhone app Task 71: media and telemetry are one session's until Task
-    // 76 (the topology note). Any other admitted session is told they are
-    // off, so it never asks for what the Core would not send it.
-    const bool media = m_mediaEnabled && transport == m_mediaSession;
-    const bool telemetry = m_telemetryEnabled && transport == m_mediaSession;
+    // iPhone app Task 76: every admitted session has media and telemetry
+    // (the topology note). Before any session, what a first one is told.
+    const auto self = m_peers.constFind(transport);
+    const bool admitted = transport == nullptr
+        || (self != m_peers.cend() && self->authenticated && self->mediaEpoch != 0);
+    const bool media = m_mediaEnabled && admitted;
+    const bool telemetry = m_telemetryEnabled && admitted;
     if (m_radioModel.isNull()) {
         return caps;
     }
@@ -4552,17 +4899,31 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
     caps.receiverAudioVersion = media ? 1 : 0;
     // R-R3-45: the headphones mix on its own stream, whenever media is on.
     caps.headphonesMixVersion = media ? 1 : 0;
-    const std::optional<DisplayBudgetLimits> budget = displayBudgetLimits();
+    // iPhone app Task 76 (ruling 9.3): this session's own share of the
+    // budget, with its own generation and reason.
+    const std::optional<DisplayBudgetLimits> budget = transport == nullptr
+        ? displayBudgetTotalFor(nullptr)
+        : (self != m_peers.cend() ? self->budgetShare : std::nullopt);
     if (media && m_displayBudgetEnforcementEnabled && budget) {
         caps.remoteDisplayBudgetVersion = 1;
         caps.displayBudget = budget;
-        caps.remotePs3DisplaySubscribed = m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
+        // Subscribed for this session: the PureSignal display goes to its
+        // subscriber alone (ruling 9.3 item 4).
+        const quint64 epoch = self != m_peers.cend() ? self->mediaEpoch : 0;
+        const quint64 subscriber = m_ps3SubscriberEpoch != 0 ? m_ps3SubscriberEpoch
+                                                             : mediaSessionEpoch();
+        caps.remotePs3DisplaySubscribed =
+            m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed()
+            && (transport == nullptr || epoch == subscriber);
         // R-R3-08/37: only a peer that negotiated the reason receives it; an
         // older one gets exactly the five budget fields it was built for.
-        const auto peer = m_peers.constFind(transport);
-        if (peer != m_peers.cend()
-            && peer->agreedMinor >= kDisplayBudgetReasonSessionProtocolMinor) {
-            caps.displayBudgetReason = m_displayBudgetReason;
+        // Task 76 (design ruling 9.3a): the shared reasons only to a peer
+        // that declared sessionHolder; another hears coreBusy or none.
+        if (self != m_peers.cend()
+            && self->agreedMinor >= kDisplayBudgetReasonSessionProtocolMinor) {
+            const DisplayBudgetReason reason = self->budgetShareReason;
+            caps.displayBudgetReason = peerHoldsSessions(transport)
+                ? reason : displayBudgetReasonForOlderDevice(reason);
         }
     }
     caps.remoteCtunVersion = 1;

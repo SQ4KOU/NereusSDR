@@ -109,6 +109,14 @@ bool DaemonAudioSender::setSliceSource(int sliceId)
     return m_source->setSliceSource(sliceId);
 }
 
+bool DaemonAudioSender::setOwnerMix(int slot)
+{
+    if (m_running) {
+        return false;
+    }
+    return m_source->setOwnerMix(slot);
+}
+
 int DaemonAudioSender::sliceSource() const noexcept
 {
     return m_source->sliceSource();

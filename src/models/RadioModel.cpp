@@ -197,6 +197,10 @@
 //                moveStreamWindowFor and moveSlicesToStream. NereusSDR-
 //                original. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-25 - iPhone app plan Task 76 (R-IOS-31, ruling 9.2): the
+//                local output plays the station device's slices, the VAX
+//                mask. NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -750,6 +754,9 @@ RadioModel::RadioModel(Role role, QObject* parent)
                 }
             }
             m_audioEngine->setVaxSliceMask(mask);
+            // iPhone app Task 76 (ruling 9.2): the Core's local output
+            // plays the station device's mix, the same slices.
+            m_audioEngine->setLocalOutputSliceMask(mask);
         };
         connect(m_sliceOwnership, &SliceOwnership::markChanged, this, vaxFollowsOwners);
         connect(m_sliceOwnership, &SliceOwnership::activeChanged, this, vaxFollowsOwners);

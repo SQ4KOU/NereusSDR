@@ -404,6 +404,15 @@ bool DaemonAudioSource::setSliceSource(int sliceId)
     return true;
 }
 
+bool DaemonAudioSource::setOwnerMix(int slot)
+{
+    if (isRunning() || slot < -1 || slot >= AudioEngine::kMaxOwnerMixes) {
+        return false;
+    }
+    m_ownerMix = slot;
+    return true;
+}
+
 void DaemonAudioSource::detachFromEngine()
 {
     if (m_audioEngine.isNull()) {
@@ -415,7 +424,12 @@ void DaemonAudioSource::detachFromEngine()
     // and a receiver stream stopping must not cost the speakers' stream a
     // block. setSliceSource() is refused while running, so the tap this
     // bridge holds is always the current kind.
-    if (m_sliceId == kMasterMix || m_sliceId == kSpeakersMix) {
+    // iPhone app Task 76: an owner mix's own taps.
+    if (m_ownerMix >= 0 && (m_sliceId == kMasterMix || m_sliceId == kSpeakersMix)) {
+        m_audioEngine->clearOwnerMixAudioTap(m_ownerMix, m_bridge.get());
+    } else if (m_ownerMix >= 0 && m_sliceId == kHeadphonesMix) {
+        m_audioEngine->clearOwnerHeadphonesMixAudioTap(m_ownerMix, m_bridge.get());
+    } else if (m_sliceId == kMasterMix || m_sliceId == kSpeakersMix) {
         m_audioEngine->clearMasterMixAudioTap(m_bridge.get());
     } else if (m_sliceId == kHeadphonesMix) {
         m_audioEngine->clearHeadphonesMixAudioTap(m_bridge.get());
@@ -436,7 +450,16 @@ void DaemonAudioSource::start()
     // Start/reset before publishing the bridge. AudioEngine's install gate
     // means the DSP thread cannot enter consume() until after this returns.
     m_bridge->start();
-    if (m_sliceId == kMasterMix || m_sliceId == kSpeakersMix) {
+    if (m_ownerMix >= 0 && (m_sliceId == kMasterMix || m_sliceId == kSpeakersMix)) {
+        if (!m_audioEngine->setOwnerMixAudioTap(m_ownerMix, m_bridge.get(),
+                                                /*speakersOnly=*/m_sliceId == kSpeakersMix)) {
+            m_bridge->stop();
+        }
+    } else if (m_ownerMix >= 0 && m_sliceId == kHeadphonesMix) {
+        if (!m_audioEngine->setOwnerHeadphonesMixAudioTap(m_ownerMix, m_bridge.get())) {
+            m_bridge->stop();
+        }
+    } else if (m_sliceId == kMasterMix || m_sliceId == kSpeakersMix) {
         m_audioEngine->setMasterMixAudioTap(m_bridge.get(),
                                             /*speakersOnly=*/m_sliceId == kSpeakersMix);
     } else if (m_sliceId == kHeadphonesMix) {

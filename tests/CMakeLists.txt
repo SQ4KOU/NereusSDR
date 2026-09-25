@@ -1500,6 +1500,9 @@ nereus_add_test(tst_audio_engine_vax_gain)
 # the MOX gate, before mute/gain/pan/mix/master volume) with its own AF gain
 # undone; the master tap and speakers stay byte-for-byte unchanged.
 nereus_add_test(tst_audio_engine_slice_tap)
+# iPhone app Task 76 (R-IOS-31, ruling 9.2): one mix per owner, and the
+# Core's local output playing the station device's slices only.
+nereus_add_test(tst_audio_engine_owner_mix)
 
 # ── Phase 3O Sub-Phase 9 Task 9.2b: VaxApplet smoke tests ────────────────────
 # Widget-level construction, signal plumbing, AppSettings round-trip.

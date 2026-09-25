@@ -93,10 +93,28 @@ qint64 DaemonTelemetryController::sessionElapsedMs() const
     return std::max<qint64>(0, clockNowMs() - m_sessionStartedMs);
 }
 
+void DaemonTelemetryController::bindToSession(quint64 epoch)
+{
+    m_boundEpoch = epoch;
+    if (m_epoch != epoch && m_server && m_server->telemetryAvailable(epoch)) {
+        onSessionStarted(epoch);
+    }
+}
+
 void DaemonTelemetryController::onSessionStarted(quint64 epoch)
 {
+    // iPhone app Task 76: one controller per session. A bound one serves
+    // its own session alone; one on its own never leaves a live session
+    // for a newer one.
+    if (m_boundEpoch != 0 && epoch != m_boundEpoch) {
+        return;
+    }
+    if (m_boundEpoch == 0 && m_epoch != 0 && m_epoch != epoch && m_server
+        && m_server->telemetryAvailable(m_epoch)) {
+        return;
+    }
     stopCollecting();
-    if (epoch == 0 || !m_server || !m_server->telemetryAvailable()) {
+    if (epoch == 0 || !m_server || !m_server->telemetryAvailable(epoch)) {
         return;
     }
 

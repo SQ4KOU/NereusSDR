@@ -636,6 +636,13 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("m_wsServer->errorString()"),
           // dropPeer's and sendRejected's parameter, from this file's calls.
           QStringLiteral("reason"),
+          // iPhone app Task 76: a display budget share's reason, a code
+          // (DisplayBudgetReason, the link's section 6.4), not words.
+          QStringLiteral("peer.budgetShareReason"), QStringLiteral("share.reason"),
+          QStringLiteral("DisplayBudgetReason::None"),
+          QStringLiteral("self->budgetShareReason"),
+          QStringLiteral("peerHoldsSessions(transport) ? reason "
+                         ": displayBudgetReasonForOlderDevice(reason)"),
           // SessionEndReasons' version and takeover reasons, scanned below.
           QStringLiteral("SessionEndReasons::versionRefused(m_supportedMajors, "
                          "message.supportedMajors)"),
@@ -845,7 +852,7 @@ const QList<ReasonSource>& reasonSources()
         {"src/core/session/media/DaemonMediaController.cpp", {},
          {// statsSummary(): a log line's text.
           "largestKeyframe="},
-         18, {},
+         19, {},
          {// Parameters and fields that carry this file's own reasons.
           QStringLiteral("reason"), QStringLiteral("prior.reason"),
           QStringLiteral("admitted.refusal"), QStringLiteral("stream.profileRefusal"),

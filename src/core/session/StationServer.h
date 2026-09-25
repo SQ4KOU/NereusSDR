@@ -71,11 +71,17 @@
 // readback of its side effects on the written object goes to the writer
 // alone. The dispatcher's owner is station:<sessionId>, so a device's
 // DSP-asset jobs end with its own session and nobody else's.
-// Media and telemetry stay with one session (m_mediaSession, the first
-// admitted while none holds it) until Task 76 gives each device a media
-// controller: another admitted session is told no media is available
-// (remoteMediaVersion 0 in its capabilities) and its media control is
-// ignored, so media never goes to two sessions at once.
+// Media and telemetry (iPhone app Task 76, the several-devices design,
+// rulings 9.1 to 9.4): every admitted session has its own media epoch,
+// given when it is let in, and is told media is on; its media control
+// reaches the media controller for that epoch alone (DaemonMediaHub makes
+// one per session), and telemetry goes to every session that negotiated
+// it. The Core's one display budget (set by configuration or the load
+// governor) is split among the sessions by DisplayBudgetSplit, and each
+// session's capabilities carry its own share, generation and reason. The
+// PureSignal display goes to the session that subscribed to it, and is
+// charged to that session alone. Transmit joins here once Task 34 lands:
+// TransmitHolder's holder feeds the split (see recomputeDisplayBudgetShares).
 //
 // A connection that has NOT yet authenticated does not touch the mirror at
 // all -- it holds nothing but its own handshake state -- so a peer
@@ -265,6 +271,16 @@
 //                                    confirm step with its readback, and
 //                                    notices (StationReceivers.cpp).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 76 (R-IOS-31): media
+//                                    and telemetry for every admitted
+//                                    session, each with its own media
+//                                    epoch; the display budget split among
+//                                    them (DisplayBudgetSplit) with each
+//                                    device's share and reason in its own
+//                                    capabilities; media control from each
+//                                    session for its own media; the
+//                                    PureSignal display's subscriber.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -290,6 +306,7 @@
 #include "core/DisturbanceCheck.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
+#include "core/session/media/DisplayBudgetSplit.h"
 
 QT_BEGIN_NAMESPACE
 class QThread;
@@ -600,28 +617,55 @@ public:
 
     /// Configure before accepting sessions. Old peers remain control-only.
     void setMediaEnabled(bool enabled);
+    /// Each takes a media session's epoch (iPhone app Task 76: every
+    /// admitted session has its own). The forms without one answer for
+    /// the primary media session: the earliest admitted of those live.
     bool mediaAvailable() const;
+    bool mediaAvailable(quint64 epoch) const;
     bool remoteWidebandAvailable() const;
+    bool remoteWidebandAvailable(quint64 epoch) const;
     /// The session agreed minor 8 or later: audio contexts carry the encoder
     /// profile or the off reason. Minor-7 peers keep the eight-key context.
     bool remoteAudioStatusAvailable() const;
+    bool remoteAudioStatusAvailable(quint64 epoch) const;
     /// The session agreed minor 9 or later: spectrum contexts report the
     /// grant Core made. Minor-8 peers keep the 19-key (20 with wideband) context.
     bool spectrumGrantAvailable() const;
+    bool spectrumGrantAvailable(quint64 epoch) const;
     /// The session agreed minor 11 and the Core advertised
     /// displayExtrasVersion 1: a subscription may carry the display extras
     /// fields (iPhone app Task 20, display extras v1).
     bool displayExtrasAvailable() const;
+    bool displayExtrasAvailable(quint64 epoch) const;
+    /// iPhone app Task 76: the epochs of the media sessions live now, in
+    /// admission order; the device a media session is for; whether a slice
+    /// is that device's own (ruling 9.1: a device subscribes displays and
+    /// receiver streams only for its own slices, and hears only its own).
+    QList<quint64> mediaSessionEpochs() const;
+    QByteArray mediaSessionDevice(quint64 epoch) const;
+    bool mediaSessionOwnsSlice(quint64 epoch, int sliceId) const;
+    /// The media session the PureSignal display goes to (the one whose
+    /// ps3.subscribeDisplay was last accepted), or 0 for none known.
+    quint64 ps3DisplaySubscriberEpoch() const { return m_ps3SubscriberEpoch; }
     /// Installs newer limits (a later generation) and why they are below the
     /// Core's ceiling (R-R3-08, R-R3-37). A new reason needs a new
     /// generation; the same limits with the same reason are accepted as-is.
     bool setDisplayBudgetLimits(const DisplayBudgetLimits& limits,
                                 DisplayBudgetReason reason = DisplayBudgetReason::None);
-    /// The budget in force for the media session: the limits last set,
-    /// except that with setDisplayBudgetForReasonPeersOnly(true) a peer
-    /// below kDisplayBudgetReasonSessionProtocolMinor (or no peer) has none
-    /// and keeps legacy mode.
+    /// The budget in force for a media session: its share of the limits
+    /// last set (iPhone app Task 76, DisplayBudgetSplit), except that with
+    /// setDisplayBudgetForReasonPeersOnly(true) a peer below
+    /// kDisplayBudgetReasonSessionProtocolMinor (or no peer) has none and
+    /// keeps legacy mode. Without an epoch: the primary media session's,
+    /// or with none, what a first session would be given.
     std::optional<DisplayBudgetLimits> displayBudgetLimits() const;
+    std::optional<DisplayBudgetLimits> displayBudgetLimits(quint64 epoch) const;
+    /// The share a media session would have with the PureSignal display
+    /// charged to it (ruling 9.3 item 4), for its subscription's admission.
+    std::optional<DisplayBudgetLimits> displayBudgetLimitsAsPs3Subscriber(quint64 epoch) const;
+    /// Why a media session's share is short (ruling 9.3a): its own reason,
+    /// before the mapping for a device without sessionHolder.
+    DisplayBudgetReason displayBudgetShareReason(quint64 epoch) const;
     /// The limits last set, whichever peer is attached.
     std::optional<DisplayBudgetLimits> configuredDisplayBudgetLimits() const
     {
@@ -631,13 +675,22 @@ public:
     /// configuration (display_adaptive on, no limits configured): only an
     /// app that understands the budget reason is put in budget mode.
     void setDisplayBudgetForReasonPeersOnly(bool reasonPeersOnly);
+    /// The reason of the Core's total (the governor's CoreBusy, or None).
     DisplayBudgetReason displayBudgetReason() const { return m_displayBudgetReason; }
     void setDisplayBudgetEnforcementEnabled(bool enabled);
     bool displayBudgetAvailable() const;
+    bool displayBudgetAvailable(quint64 epoch) const;
+    /// Splits the budget again and sends each media session whose budget
+    /// entries changed its capabilities (Task 76).
     void publishDisplayBudgetCapabilities();
     using Ps3DisplayAdmissionHandler = std::function<bool(bool, QString*)>;
     void setPs3DisplayAdmissionHandler(Ps3DisplayAdmissionHandler handler);
-    quint64 mediaSessionEpoch() const { return m_mediaSessionEpoch; }
+    /// iPhone app Task 76: the admission handler told which media session
+    /// asks (0 when the asker has none).
+    using SessionPs3DisplayAdmissionHandler = std::function<bool(quint64, bool, QString*)>;
+    void setSessionPs3DisplayAdmissionHandler(SessionPs3DisplayAdmissionHandler handler);
+    /// The primary media session's epoch (0 with none).
+    quint64 mediaSessionEpoch() const;
     /// expectedEpoch is captured by the producer when its session starts;
     /// late work must never target a replacement session.
     bool sendMediaControl(const QJsonObject& payload, quint64 expectedEpoch);
@@ -646,7 +699,10 @@ public:
     /// Configure before accepting a client; never change negotiated support live.
     void setTelemetryEnabled(bool enabled);
     bool telemetryAvailable() const;
-    quint64 sessionEpoch() const { return m_mediaSessionEpoch; }
+    bool telemetryAvailable(quint64 epoch) const;
+    quint64 sessionEpoch() const { return mediaSessionEpoch(); }
+    /// To the media session `expectedEpoch` names, when it negotiated
+    /// telemetry (iPhone app Task 76: every session that did gets its own).
     bool sendTelemetry(const StationTelemetrySnapshot& snapshot, quint64 expectedEpoch);
 
     /// The capability descriptor this daemon would advertise right now.
@@ -792,6 +848,14 @@ private:
         /// id, for the dispatcher's owner string station:<sessionId>.
         QPointer<MirrorView> view;
         quint64 sessionId = 0;
+        /// iPhone app Task 76: this admitted session's media epoch (never
+        /// 0 once admitted, unique for the Core's life), its share of the
+        /// display budget and why, and what its capabilities last said of
+        /// the budget, so a change is published once.
+        quint64 mediaEpoch = 0;
+        std::optional<DisplayBudgetLimits> budgetShare;
+        DisplayBudgetReason budgetShareReason = DisplayBudgetReason::None;
+        QByteArray publishedBudget;
 
         /// Pings sent since the last pong. Reset to 0 by every pong; the
         /// heartbeat tick declares death when it reaches maxMissedPongs().
@@ -1164,9 +1228,30 @@ private:
     bool m_mirrorBuilt = false;
 
     QHash<SessionTransport*, Peer> m_peers;
-    /// iPhone app Task 71: the one admitted session media and telemetry go
-    /// to until Task 76 (see the topology note); null when none holds them.
-    SessionTransport* m_mediaSession = nullptr;
+    /// iPhone app Task 76: the admitted session with this media epoch, or
+    /// null; the earliest admitted of those live (the primary).
+    SessionTransport* mediaSessionFor(quint64 epoch) const;
+    SessionTransport* primaryMediaSession() const;
+    bool mediaAvailableFor(SessionTransport* transport) const;
+    /// The Core's total as a peer sees it (none for an older peer when it
+    /// is computed, setDisplayBudgetForReasonPeersOnly).
+    std::optional<DisplayBudgetLimits> displayBudgetTotalFor(SessionTransport* transport) const;
+    /// Splits the total among the media sessions (DisplayBudgetSplit) into
+    /// each Peer's share; true when any share or reason changed.
+    bool recomputeDisplayBudgetShares();
+    /// The split itself: each sharing session with its share. With
+    /// `ps3Subscriber` the PureSignal display is charged to that session
+    /// whether or not it is subscribed now.
+    QList<QPair<SessionTransport*, DisplayBudgetShare>> splitDisplayBudget(
+        std::optional<quint64> ps3Subscriber) const;
+    /// What a session's capabilities say of the budget, to publish a
+    /// change once.
+    QByteArray budgetEntriesFor(SessionTransport* transport) const;
+    void publishBudgetToChangedSessions();
+    quint64 m_ps3SubscriberEpoch = 0;
+    /// close() is ending every session.
+    bool m_closing = false;
+    SessionPs3DisplayAdmissionHandler m_ps3DisplayAdmission;
     /// During promoteToSession()'s attach: the session its burst is for.
     quint64 m_nextSessionId = 0;
     /// Command results owed to a session other than the one being
