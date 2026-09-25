@@ -81,6 +81,10 @@
 //                 setTxProfilePermitted; in a remote window its manager
 //                 mirrors the Core's profiles. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : R-R3-49 (parity Task 4): the EQ and CFC right-clicks open
+//                 their dialogs in a remote window; setTxProcessingPermitted
+//                 greys the CFC dialog with the reason. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -276,6 +280,7 @@ TxApplet::TxApplet(RadioModel* model, QWidget* parent)
         setTransmitSettingsPermitted(false);
         setTransmitChainSettingsPermitted(false);
         setTxProfilePermitted(false);
+        setTxProcessingPermitted(false);
     }
 }
 
@@ -1474,7 +1479,10 @@ void TxApplet::wireControls()
         // hidden-but-alive instance is brought forward.
         connect(m_eqBtn, &QPushButton::customContextMenuRequested,
                 this, [this](const QPoint& /*pos*/) {
-            if (!m_model || !m_transmitPermitted) { return; }
+            // R-R3-49 (parity Task 4): opens in a remote window too; the
+            // dialog greys itself with the reason while the Core cannot
+            // take a change (TxEqDialog::setSettingsPermitted).
+            if (!m_model) { return; }
             TxEqDialog* dlg = TxEqDialog::instance(m_model, this);
             dlg->show();
             dlg->raise();
@@ -2189,7 +2197,9 @@ void TxApplet::setTwoToneController(TwoToneController* controller)
 // ---------------------------------------------------------------------------
 void TxApplet::requestOpenCfcDialog()
 {
-    if (!m_model || !m_transmitPermitted) { return; }
+    // R-R3-49 (parity Task 4): opens in a remote window too, greyed with
+    // the reason while the Core cannot take a change.
+    if (!m_model) { return; }
 
     if (!m_cfcDialog) {
         QWidget* host = window();
@@ -2202,9 +2212,22 @@ void TxApplet::requestOpenCfcDialog()
         // Refresh the TxChannel pointer so the bar chart timer can poll WDSP.
         m_cfcDialog->setTxChannel(m_model->txChannel());
     }
+    m_cfcDialog->setSettingsPermitted(m_txProcessingPermitted, m_txProcessingReason);
     m_cfcDialog->show();
     m_cfcDialog->raise();
     m_cfcDialog->activateWindow();
+}
+
+void TxApplet::setTxProcessingPermitted(bool permitted, const QString& unavailableReason)
+{
+    m_txProcessingPermitted = permitted;
+    m_txProcessingReason = permitted
+        ? QString()
+        : (unavailableReason.isEmpty() ? IStationLink::transmitSettingsUnavailableReason()
+                                       : unavailableReason);
+    if (m_cfcDialog) {
+        m_cfcDialog->setSettingsPermitted(m_txProcessingPermitted, m_txProcessingReason);
+    }
 }
 
 // R-R3-45: the MON output pair shows the choice; clicking the checked one

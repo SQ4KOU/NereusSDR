@@ -208,6 +208,10 @@ double responseDb(const PointList& points, bool parametricEq,
     return sum;
 }
 
+/// The TX EQ panel's curve before anything is loaded: ten flat bands
+/// from 0 to 2700 Hz, parametric (what TxEqDialog's widget starts with).
+Curve defaultTxEqCurve();
+
 /// A curve's response with the TX EQ panel's Q limits.
 double txEqResponseDb(const Curve& curve, double frequencyHz);
 

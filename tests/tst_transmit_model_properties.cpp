@@ -20,6 +20,10 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the Core offers at
 //                                    least transmitSettingsVersion 2.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 4): the TX EQ, CFC,
+//                                    phase rotator, CESSB, leveler and ALC
+//                                    properties on the link, and version 4.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -219,6 +223,8 @@ private slots:
 
     void propertiesAreOnTheLinkUnderTheirSetters();
     void coreOffersTransmitSettingsVersion2();
+    void task4PropertiesAreOnTheLinkUnderTheirGetters();
+    void coreOffersTransmitSettingsVersion4();
     void eachSettingRoundTripsToTheCoreTxChain();
     void outOfRangeWritesAreRefusedWithTheRange();
     void eachSettingIsRefusedOnTheAir();
@@ -300,6 +306,66 @@ void TstTransmitModelProperties::coreOffersTransmitSettingsVersion2()
     QCOMPARE(s.client->capabilities().transmitSettingsVersion,
              s.server->buildCapabilities().transmitSettingsVersion);
     QVERIFY(s.client->transmitSettingsAvailable(2));
+}
+
+// R-R3-49 (parity Task 4): the TX EQ, CFC, phase rotator, CESSB, leveler
+// and ALC settings, after txProfilesJson in this order, each under its
+// getter's type (the band arrays as utf8 JSON). Round trips, refusals and
+// the dialogs are in tst_remote_tx_eq_cfc.
+void TstTransmitModelProperties::task4PropertiesAreOnTheLinkUnderTheirGetters()
+{
+    TransmitModel tx;
+    const MirrorSchema& schema = MirrorSchema::forObject(&tx);
+    const struct {
+        const char* name;
+        MirrorWireKind kind;
+    } expected[] = {
+        {"txEqUseLegacy", MirrorWireKind::Bool},
+        {"txEqPreamp", MirrorWireKind::Int64},
+        {"txEqBandsJson", MirrorWireKind::Utf8},
+        {"txEqFreqsJson", MirrorWireKind::Utf8},
+        {"txEqNc", MirrorWireKind::Int64},
+        {"txEqMp", MirrorWireKind::Bool},
+        {"txEqCtfmode", MirrorWireKind::Int64},
+        {"txEqWintype", MirrorWireKind::Int64},
+        {"txEqParaEqData", MirrorWireKind::Utf8},
+        {"cfcCompressionJson", MirrorWireKind::Utf8},
+        {"cfcEqFreqJson", MirrorWireKind::Utf8},
+        {"cfcPostEqBandGainJson", MirrorWireKind::Utf8},
+        {"cfcPostEqEnabled", MirrorWireKind::Bool},
+        {"cfcPostEqGainDb", MirrorWireKind::Int64},
+        {"cfcPrecompDb", MirrorWireKind::Int64},
+        {"cfcParaEqData", MirrorWireKind::Utf8},
+        {"phaseRotatorEnabled", MirrorWireKind::Bool},
+        {"phaseRotatorFreqHz", MirrorWireKind::Int64},
+        {"phaseRotatorStages", MirrorWireKind::Int64},
+        {"phaseReverseEnabled", MirrorWireKind::Bool},
+        {"cessbOn", MirrorWireKind::Bool},
+        {"txLevelerMaxGain", MirrorWireKind::Int64},
+        {"txLevelerDecay", MirrorWireKind::Int64},
+        {"txAlcMaxGain", MirrorWireKind::Int64},
+        {"txAlcDecay", MirrorWireKind::Int64},
+    };
+    const MirrorProperty* last = schema.byName("txProfilesJson");
+    QVERIFY(last);
+    quint16 ordinal = last->ordinal;
+    for (const auto& e : expected) {
+        const MirrorProperty* prop = schema.byName(e.name);
+        QVERIFY2(prop, e.name);
+        QCOMPARE(prop->kind, e.kind);
+        QCOMPARE(prop->ordinal, ++ordinal);
+        QVERIFY2(MirrorPolicy::inboundAllowed("TransmitModel", e.name), e.name);
+        QVERIFY(prop->isWritable);
+    }
+}
+
+void TstTransmitModelProperties::coreOffersTransmitSettingsVersion4()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 4);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 4);
+    QVERIFY(s.client->transmitSettingsAvailable(4));
 }
 
 void TstTransmitModelProperties::eachSettingRoundTripsToTheCoreTxChain()

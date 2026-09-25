@@ -313,6 +313,10 @@ warren@wpratt.com
 //                 chain settings a remote window changes (EQ run, leveler,
 //                 CFC, CPDR and its gain, AM carrier). NereusSDR-original.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): read-back test seams for the TX
+//                 EQ profile and globals, the CFC profile and scalars, the
+//                 phase rotator, CESSB, leveler and ALC. NereusSDR-original.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -2356,6 +2360,30 @@ public:
     bool   lastTxCpdrOnForTest()              const noexcept { return m_cpdrOn; }
     double lastTxCpdrGainDbForTest()          const noexcept { return m_cpdrLevelDb; }
     int    lastTxAmCarrierLevelForTest()      const noexcept { return m_amCarrierPct; }
+    // R-R3-49 (parity Task 4): the TX EQ, CFC, phase rotator, CESSB,
+    // leveler and ALC settings, from the carries and the last values below.
+    const std::vector<double>& lastTxEqProfileFreqsForTest() const noexcept { return m_txEqProfileFreqsLast; }
+    const std::vector<double>& lastTxEqProfileGainsForTest() const noexcept { return m_txEqProfileGainsLast; }
+    int    txEqProfilePushCountForTest()      const noexcept { return m_txEqProfilePushCount; }
+    int    lastTxEqNcForTest()                const noexcept { return m_txEqNcLast; }
+    bool   lastTxEqMpForTest()                const noexcept { return m_txEqMpLast; }
+    int    lastTxEqCtfmodeForTest()           const noexcept { return m_txEqCtfmodeLast; }
+    int    lastTxEqWintypeForTest()           const noexcept { return m_txEqWintypeLast; }
+    const std::vector<double>& lastTxCfcProfileFForTest() const noexcept { return m_txCfcProfileFLast; }
+    const std::vector<double>& lastTxCfcProfileGForTest() const noexcept { return m_txCfcProfileGLast; }
+    const std::vector<double>& lastTxCfcProfileEForTest() const noexcept { return m_txCfcProfileELast; }
+    bool   lastTxCfcPostEqRunningForTest()    const noexcept { return m_cfcPostEqOn; }
+    double lastTxCfcPrecompDbForTest()        const noexcept { return m_cfcPrecompDb; }
+    double lastTxCfcPrePeqDbForTest()         const noexcept { return m_cfcPostEqGainDb; }
+    bool   lastPhaseRotatorRunForTest()       const noexcept { return m_phaseRotatorRunLast; }
+    double lastTxPhrotCornerHzForTest()       const noexcept { return m_phaseRotatorFreqHz; }
+    int    lastTxPhrotNstagesForTest()        const noexcept { return m_phaseRotatorStages; }
+    bool   lastTxPhrotReverseForTest()        const noexcept { return m_phaseRotatorReverse; }
+    bool   lastTxCessbOnForTest()             const noexcept { return m_cessbOn; }
+    double lastTxLevelerTopDbForTest()        const noexcept { return m_levelerMaxGainDb; }
+    int    lastTxLevelerDecayMsForTest()      const noexcept { return m_levelerDecayMs; }
+    double lastTxAlcMaxGainDbForTest()        const noexcept { return m_alcMaxGainDb; }
+    int    lastTxAlcDecayMsForTest()          const noexcept { return m_alcDecayMs; }
 
     // ── Test seam (Phase 3M-3a-iii Task 17) — DEXP pushvox bridge ──────────
     //
@@ -3077,6 +3105,19 @@ private:
     // R-R3-49 (parity Task 2): the last setTxEqRunning value, for the test
     // seam only (m_eqEnabled is the rebuild snapshot's carry).
     bool    m_txEqRunningLast {false};
+    // R-R3-49 (parity Task 4): the last values of the setters that keep no
+    // carry of their own, for the test seam only.
+    std::vector<double> m_txEqProfileFreqsLast;
+    std::vector<double> m_txEqProfileGainsLast;
+    int     m_txEqProfilePushCount {0};
+    int     m_txEqNcLast      {2048};
+    bool    m_txEqMpLast      {false};
+    int     m_txEqCtfmodeLast {0};
+    int     m_txEqWintypeLast {0};
+    std::vector<double> m_txCfcProfileFLast;
+    std::vector<double> m_txCfcProfileGLast;
+    std::vector<double> m_txCfcProfileELast;
+    bool    m_phaseRotatorRunLast {false};
 
     // PureSignal carry — 3M-4 work
     bool    m_pureSignalEnabled {false};

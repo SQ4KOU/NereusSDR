@@ -127,6 +127,11 @@
 //                 remote transmit, and gates its own controls. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-25: R-R3-49 (parity Task 4): DSP > CFC and Transmit > Speech
+//                 Processor no longer wait for remote transmit; CFC gates
+//                 its own controls at transmitSettingsVersion 4. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -1268,15 +1273,16 @@ void SetupDialog::buildTree()
     // instance is shared with the [CFC] right-click on the TxApplet).
     //
     // R-R3-21: a transmit page. Phase Rotator, CFC and CESSB are all TXA
-    // stages, and the [Configure CFC bands] button opens the TX CFC editor,
-    // so the page follows the negotiated transmit permission like the six
-    // Transmit/Audio TX leaves.
+    // stages, and the [Configure CFC bands] button opens the TX CFC editor.
+    // R-R3-49 (parity Task 4): no longer held for remote transmit. The Core
+    // mirrors every setting on it; the page gates its own controls on
+    // transmitSettingsVersion 4 (CfcSetupPage::setTransmitSettingsPermittedAt).
     registerPage(dsp, "CFC", SetupScope::Core, [this]() -> QWidget* {
         auto* cfcPage = new CfcSetupPage(m_model);
         connect(cfcPage, &CfcSetupPage::openCfcDialogRequested,
                 this,    &SetupDialog::cfcDialogRequested);
         return cfcPage;
-    }, true);
+    });
 
     registerPage(dsp, "TNF", SetupScope::Core, [this] { return new MnfSetupPage(m_model); });
     // Stage C2: user-customisable filter preset editor (10 slots × 12 modes).
@@ -1359,6 +1365,9 @@ void SetupDialog::buildTree()
     // openSetupRequested(category, page) signal feeds straight back into
     // selectPage() so the cross-link buttons jump within the same dialog
     // instance — no MainWindow round-trip required.
+    // R-R3-49 (parity Task 4): no longer held for remote transmit. The page
+    // shows the Core's TX chain and opens the TX EQ dialog and the pages
+    // that change it, each of which follows the Core's gate.
     registerPage(transmit, "Speech Processor", SetupScope::Core, [this]() -> QWidget* {
         auto* speechPage = new SpeechProcessorPage(m_model);
         connect(speechPage, &SpeechProcessorPage::openSetupRequested,
@@ -1366,7 +1375,7 @@ void SetupDialog::buildTree()
             selectPage(page);
         });
         return speechPage;
-    }, true);
+    });
 
     // Note: Setup → Transmit → PureSignal page retired in Phase 3M-4 Task 14
     // (no Thetis equivalent; PsForm at Tools > PureSignal is the entire PS

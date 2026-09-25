@@ -238,7 +238,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 3
+            "value": 4
         }
     ],
     "commands": [
@@ -4554,6 +4554,156 @@
                     "kind": "utf8",
                     "name": "txProfilesJson",
                     "ordinal": 38
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "txEqUseLegacy",
+                    "ordinal": 39
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txEqPreamp",
+                    "ordinal": 40
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "txEqBandsJson",
+                    "ordinal": 41
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "txEqFreqsJson",
+                    "ordinal": 42
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txEqNc",
+                    "ordinal": 43
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "txEqMp",
+                    "ordinal": 44
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txEqCtfmode",
+                    "ordinal": 45
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txEqWintype",
+                    "ordinal": 46
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "txEqParaEqData",
+                    "ordinal": 47
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "cfcCompressionJson",
+                    "ordinal": 48
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "cfcEqFreqJson",
+                    "ordinal": 49
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "cfcPostEqBandGainJson",
+                    "ordinal": 50
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "cfcPostEqEnabled",
+                    "ordinal": 51
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "cfcPostEqGainDb",
+                    "ordinal": 52
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "cfcPrecompDb",
+                    "ordinal": 53
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "cfcParaEqData",
+                    "ordinal": 54
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "phaseRotatorEnabled",
+                    "ordinal": 55
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "phaseRotatorFreqHz",
+                    "ordinal": 56
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "phaseRotatorStages",
+                    "ordinal": 57
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "phaseReverseEnabled",
+                    "ordinal": 58
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "cessbOn",
+                    "ordinal": 59
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txLevelerMaxGain",
+                    "ordinal": 60
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txLevelerDecay",
+                    "ordinal": 61
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txAlcMaxGain",
+                    "ordinal": 62
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txAlcDecay",
+                    "ordinal": 63
                 }
             ]
         },

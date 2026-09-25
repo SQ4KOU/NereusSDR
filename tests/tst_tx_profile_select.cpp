@@ -237,10 +237,10 @@ void TstTxProfileSelect::coreOffersTransmitSettingsVersion3()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 3);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 3);
+    // At least 3 (parity Task 4 raised it to 4).
+    QVERIFY(s.server->buildCapabilities().transmitSettingsVersion >= 3);
+    QVERIFY(s.client->capabilities().transmitSettingsVersion >= 3);
     QVERIFY(s.client->transmitSettingsAvailable(3));
-    QVERIFY(!s.client->transmitSettingsAvailable(4));
 }
 
 void TstTxProfileSelect::theWindowShowsTheCoresProfiles()

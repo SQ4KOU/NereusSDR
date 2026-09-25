@@ -50,6 +50,9 @@
 //                 settings Bidirectional; activeTxProfile and txProfilesJson
 //                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): the TX EQ, CFC, phase rotator,
+//                 CESSB, leveler and ALC settings Bidirectional. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -298,7 +301,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "snrDb", MirrorDirection::Outbound },
     { "SliceModel", "lastRadeRxCallsign", MirrorDirection::Outbound },
 
-    // ---- TransmitModel (39 entries) ----
+    // ---- TransmitModel (64 entries) ----
     { "TransmitModel", "mox", MirrorDirection::Bidirectional },
     { "TransmitModel", "tune", MirrorDirection::Bidirectional },
     { "TransmitModel", "power", MirrorDirection::Bidirectional },
@@ -345,6 +348,34 @@ const MirrorPolicy::Entry kEntries[] = {
     // The Core's TX profiles; they change only through the txProfile verbs.
     { "TransmitModel", "activeTxProfile", MirrorDirection::Outbound },
     { "TransmitModel", "txProfilesJson", MirrorDirection::Outbound },
+    // R-R3-49 (parity Task 4, transmitSettingsVersion 4): the TX EQ and
+    // CFC dialogs, Setup > DSP > CFC and AGC/ALC's TX Leveler and TX ALC.
+    // None keys the radio.
+    { "TransmitModel", "txEqUseLegacy", MirrorDirection::Bidirectional },
+    { "TransmitModel", "txEqPreamp", MirrorDirection::Bidirectional },
+    { "TransmitModel", "txEqBandsJson", MirrorDirection::Bidirectional },
+    { "TransmitModel", "txEqFreqsJson", MirrorDirection::Bidirectional },
+    { "TransmitModel", "txEqNc", MirrorDirection::Bidirectional },
+    { "TransmitModel", "txEqMp", MirrorDirection::Bidirectional },
+    { "TransmitModel", "txEqCtfmode", MirrorDirection::Bidirectional },
+    { "TransmitModel", "txEqWintype", MirrorDirection::Bidirectional },
+    { "TransmitModel", "txEqParaEqData", MirrorDirection::Bidirectional },
+    { "TransmitModel", "cfcCompressionJson", MirrorDirection::Bidirectional },
+    { "TransmitModel", "cfcEqFreqJson", MirrorDirection::Bidirectional },
+    { "TransmitModel", "cfcPostEqBandGainJson", MirrorDirection::Bidirectional },
+    { "TransmitModel", "cfcPostEqEnabled", MirrorDirection::Bidirectional },
+    { "TransmitModel", "cfcPostEqGainDb", MirrorDirection::Bidirectional },
+    { "TransmitModel", "cfcPrecompDb", MirrorDirection::Bidirectional },
+    { "TransmitModel", "cfcParaEqData", MirrorDirection::Bidirectional },
+    { "TransmitModel", "phaseRotatorEnabled", MirrorDirection::Bidirectional },
+    { "TransmitModel", "phaseRotatorFreqHz", MirrorDirection::Bidirectional },
+    { "TransmitModel", "phaseRotatorStages", MirrorDirection::Bidirectional },
+    { "TransmitModel", "phaseReverseEnabled", MirrorDirection::Bidirectional },
+    { "TransmitModel", "cessbOn", MirrorDirection::Bidirectional },
+    { "TransmitModel", "txLevelerMaxGain", MirrorDirection::Bidirectional },
+    { "TransmitModel", "txLevelerDecay", MirrorDirection::Bidirectional },
+    { "TransmitModel", "txAlcMaxGain", MirrorDirection::Bidirectional },
+    { "TransmitModel", "txAlcDecay", MirrorDirection::Bidirectional },
 
     // ---- TunerModel (21 entries) ----
     { "TunerModel", "relayC1", MirrorDirection::Outbound },

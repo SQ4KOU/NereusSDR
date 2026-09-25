@@ -1477,7 +1477,9 @@ private slots:
     void remoteTransmitOnlySetupLeavesFollowThePermission_data()
     {
         QTest::addColumn<QString>("label");
-        QTest::newRow("CFC") << QStringLiteral("CFC");
+        // R-R3-49 (parity Task 4): DSP > CFC left this list. The Core now
+        // mirrors every setting on it and the page gates its own controls
+        // on transmitSettingsVersion 4 (tst_remote_tx_eq_cfc).
         QTest::newRow("Two-Tone IMD") << QStringLiteral("Two-Tone IMD");
     }
 
@@ -3457,7 +3459,11 @@ private slots:
         remote.addSliceWithStationId(0, QStringLiteral("pan-0"));
         QVERIFY(remote.activeSlice() != nullptr);
         SetupDialog dialog(&remote);
-        dialog.setTransmitPermitted(false, reason);
+        // R-R3-49 (parity Task 4): the groups follow the transmit settings
+        // gate at version 4 (the Core mirrors them), not the transmit
+        // permission.
+        dialog.setTransmitPermitted(false, QStringLiteral("Remote transmit is not here yet"));
+        dialog.setTransmitSettingsPermitted(false, reason, 4);
         dialog.selectPage(QStringLiteral("AGC/ALC"));
         QWidget* const page = dialog.realizedPageForTest(QStringLiteral("AGC/ALC"));
         QVERIFY(page != nullptr);
@@ -3501,15 +3507,16 @@ private slots:
         QCOMPARE(tx.txAlcMaxGain(), alcMax);
         QCOMPARE(tx.txAlcDecay(), alcDecay);
 
-        // Permission restores the groups and their own tooltips; withdrawing
-        // it gates them again with the reason MainWindow passes.
-        dialog.setTransmitPermitted(true);
+        // The gate restores the groups and their own tooltips, with remote
+        // transmit still denied; closing it gates them again with the reason
+        // MainWindow passes.
+        dialog.setTransmitSettingsPermitted(true, QString(), 4);
         for (QGroupBox* group : {leveler, alc}) {
             QVERIFY(group->isEnabled());
             QVERIFY(group->toolTip().isEmpty());
             QVERIFY(group->accessibleDescription().isEmpty());
         }
-        dialog.setTransmitPermitted(false);
+        dialog.setTransmitSettingsPermitted(false, QString(), 4);
         QVERIFY(!leveler->isEnabled());
         QVERIFY2(OperatorWording::isPlain(leveler->toolTip()), qPrintable(leveler->toolTip()));
 
@@ -4095,13 +4102,14 @@ private slots:
 
             QVERIFY(!toast->isEnabled());
             QVERIFY(!reRoute->isEnabled());
-            QVERIFY(!txEqualizer->isEnabled());
-            remoteReason = txEqualizer->toolTip();
+            // R-R3-49 (parity Task 4): TX Equalizer opens in a remote window;
+            // the dialog shows why it is greyed when it is.
+            QVERIFY(txEqualizer->isEnabled());
+            remoteReason = toast->toolTip();
             QVERIFY2(remoteReason.contains(QStringLiteral("transmit")),
-                     qPrintable(QStringLiteral("the TX Equalizer entry no longer "
-                                               "carries the remote transmit reason: %1")
+                     qPrintable(QStringLiteral("the test entries no longer carry "
+                                               "the remote transmit reason: %1")
                                     .arg(remoteReason)));
-            QCOMPARE(toast->toolTip(), remoteReason);
             QCOMPARE(reRoute->toolTip(), remoteReason);
 
             // R-R3-21: the RX applet's XIT row gets the same reason through

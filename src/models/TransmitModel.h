@@ -249,6 +249,13 @@
 //                 Core's TX profiles (activeTxProfile, txProfilesJson).
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): TX EQ, CFC, phase rotator,
+//                 CESSB, leveler and ALC settings as mirrored Q_PROPERTYs
+//                 (transmitSettingsVersion 4), the band arrays as JSON on
+//                 the link, and txEqUseLegacy (Thetis EQUseLegacy, the TX
+//                 EQ dialog's Legacy EQ box, eqform.cs:988 and setup.cs:
+//                 3615, 9318 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -1147,6 +1154,68 @@ public:
     Q_PROPERTY(QString txProfilesJson  READ txProfilesJson
                                        NOTIFY txProfilesJsonChanged)
 
+    // ── R-R3-49 (parity Task 4): TX EQ, CFC, phase rotator, CESSB, leveler
+    // and ALC ────────────────────────────────────────────────────────────
+    //
+    // Mirrored on `transmit` (transmitSettingsVersion 4), after
+    // txProfilesJson so the earlier ordinals stay put, each under its
+    // setter's name and type. The ten-value bands go on the link as a
+    // compact JSON array of whole numbers (txEqBandsJson and the rest),
+    // refused whole when it is the wrong length or a value is out of range
+    // (settingRangeRefusal). txEqUseLegacy is the TX EQ dialog's Legacy EQ
+    // box, which Thetis keeps with the TX profile (EQUseLegacy). None keys
+    // the radio.
+    Q_PROPERTY(bool    txEqUseLegacy         READ txEqUseLegacy         WRITE setTxEqUseLegacy
+                                             NOTIFY txEqUseLegacyChanged)
+    Q_PROPERTY(int     txEqPreamp            READ txEqPreamp            WRITE setTxEqPreamp
+                                             NOTIFY txEqPreampChanged)
+    Q_PROPERTY(QString txEqBandsJson         READ txEqBandsJson         WRITE setTxEqBandsJson
+                                             NOTIFY txEqBandsJsonChanged)
+    Q_PROPERTY(QString txEqFreqsJson         READ txEqFreqsJson         WRITE setTxEqFreqsJson
+                                             NOTIFY txEqFreqsJsonChanged)
+    Q_PROPERTY(int     txEqNc                READ txEqNc                WRITE setTxEqNc
+                                             NOTIFY txEqNcChanged)
+    Q_PROPERTY(bool    txEqMp                READ txEqMp                WRITE setTxEqMp
+                                             NOTIFY txEqMpChanged)
+    Q_PROPERTY(int     txEqCtfmode           READ txEqCtfmode           WRITE setTxEqCtfmode
+                                             NOTIFY txEqCtfmodeChanged)
+    Q_PROPERTY(int     txEqWintype           READ txEqWintype           WRITE setTxEqWintype
+                                             NOTIFY txEqWintypeChanged)
+    Q_PROPERTY(QString txEqParaEqData        READ txEqParaEqData        WRITE setTxEqParaEqData
+                                             NOTIFY txEqParaEqDataChanged)
+    Q_PROPERTY(QString cfcCompressionJson    READ cfcCompressionJson    WRITE setCfcCompressionJson
+                                             NOTIFY cfcCompressionJsonChanged)
+    Q_PROPERTY(QString cfcEqFreqJson         READ cfcEqFreqJson         WRITE setCfcEqFreqJson
+                                             NOTIFY cfcEqFreqJsonChanged)
+    Q_PROPERTY(QString cfcPostEqBandGainJson READ cfcPostEqBandGainJson WRITE setCfcPostEqBandGainJson
+                                             NOTIFY cfcPostEqBandGainJsonChanged)
+    Q_PROPERTY(bool    cfcPostEqEnabled      READ cfcPostEqEnabled      WRITE setCfcPostEqEnabled
+                                             NOTIFY cfcPostEqEnabledChanged)
+    Q_PROPERTY(int     cfcPostEqGainDb       READ cfcPostEqGainDb       WRITE setCfcPostEqGainDb
+                                             NOTIFY cfcPostEqGainDbChanged)
+    Q_PROPERTY(int     cfcPrecompDb          READ cfcPrecompDb          WRITE setCfcPrecompDb
+                                             NOTIFY cfcPrecompDbChanged)
+    Q_PROPERTY(QString cfcParaEqData         READ cfcParaEqData         WRITE setCfcParaEqData
+                                             NOTIFY cfcParaEqDataChanged)
+    Q_PROPERTY(bool    phaseRotatorEnabled   READ phaseRotatorEnabled   WRITE setPhaseRotatorEnabled
+                                             NOTIFY phaseRotatorEnabledChanged)
+    Q_PROPERTY(int     phaseRotatorFreqHz    READ phaseRotatorFreqHz    WRITE setPhaseRotatorFreqHz
+                                             NOTIFY phaseRotatorFreqHzChanged)
+    Q_PROPERTY(int     phaseRotatorStages    READ phaseRotatorStages    WRITE setPhaseRotatorStages
+                                             NOTIFY phaseRotatorStagesChanged)
+    Q_PROPERTY(bool    phaseReverseEnabled   READ phaseReverseEnabled   WRITE setPhaseReverseEnabled
+                                             NOTIFY phaseReverseEnabledChanged)
+    Q_PROPERTY(bool    cessbOn               READ cessbOn               WRITE setCessbOn
+                                             NOTIFY cessbOnChanged)
+    Q_PROPERTY(int     txLevelerMaxGain      READ txLevelerMaxGain      WRITE setTxLevelerMaxGain
+                                             NOTIFY txLevelerMaxGainChanged)
+    Q_PROPERTY(int     txLevelerDecay        READ txLevelerDecay        WRITE setTxLevelerDecay
+                                             NOTIFY txLevelerDecayChanged)
+    Q_PROPERTY(int     txAlcMaxGain          READ txAlcMaxGain          WRITE setTxAlcMaxGain
+                                             NOTIFY txAlcMaxGainChanged)
+    Q_PROPERTY(int     txAlcDecay            READ txAlcDecay            WRITE setTxAlcDecay
+                                             NOTIFY txAlcDecayChanged)
+
     /// Bypass PA settings flag. false (default) = use board-specific table.
     bool paSettingsBypass() const noexcept { return m_paSettingsBypass; }
 
@@ -1797,6 +1866,22 @@ public:
     /// (3M-3a-ii Batch 2) for the TX EQ slot in TXProfile.
     const QString& txEqParaEqData() const noexcept { return m_txEqParaEqData; }
 
+    // ── R-R3-49 (parity Task 4): the Legacy EQ box and the band arrays ────
+    //
+    /// The TX EQ dialog's Legacy EQ box: true, the ten-band EQ reaches the
+    /// TX channel; false, the parametric curve in txEqParaEqData does.
+    /// Default true, as Thetis chkLegacyEQ.Checked = true at eqform.cs:988
+    /// [v2.10.3.15]; saved with the TX profile (EQUseLegacy).
+    bool txEqUseLegacy() const noexcept { return m_txEqUseLegacy; }
+    /// The ten TX EQ band gains / centres, and the ten CFC compression
+    /// levels / centres / post-EQ gains, as a compact JSON array of whole
+    /// numbers (the link's form). NereusSDR-original.
+    QString txEqBandsJson() const;
+    QString txEqFreqsJson() const;
+    QString cfcCompressionJson() const;
+    QString cfcEqFreqJson() const;
+    QString cfcPostEqBandGainJson() const;
+
     // ── Range constants (Thetis Designer setup.Designer.cs [v2.10.3.13]) ──
     //
     // Leveler MaxGain: 0..20 dB (udDSPLevelerThreshold:38718-38738).
@@ -1825,6 +1910,14 @@ public:
     // FFT-bin boundary math; Thetis itself sets defaults from 32 Hz.
     static constexpr int kTxEqFreqHzMin          =   10;
     static constexpr int kTxEqFreqHzMax          = 22000;
+    // R-R3-49 (parity Task 4): the ranges a window may send for the EQ
+    // settings whose setters do not clamp, from the TX EQ dialog's own
+    // controls (Nc spin box 32 to 8192; the Cutoff and Window combos'
+    // two items). Thetis does not show these on TX.
+    static constexpr int kTxEqNcMin              =   32;
+    static constexpr int kTxEqNcMax              = 8192;
+    static constexpr int kTxEqCtfmodeMax         =    1;
+    static constexpr int kTxEqWintypeMax         =    1;
 
 public slots:
     void setTxEqEnabled(bool on);
@@ -1845,6 +1938,17 @@ public slots:
     /// Opaque parametric-EQ blob for the TX EQ (3M-3a-ii follow-up Batch 6).
     /// No validation — pass-through for round-trip.  Mirrors setCfcParaEqData.
     void setTxEqParaEqData(const QString& data);
+    /// R-R3-49 (parity Task 4): the Legacy EQ box (see txEqUseLegacy()).
+    void setTxEqUseLegacy(bool on);
+    /// R-R3-49 (parity Task 4): all ten values from the link's JSON array,
+    /// each through its per-band setter. A value that is not a JSON array of
+    /// ten whole numbers changes nothing (the Core refuses it first with
+    /// settingRangeRefusal).
+    void setTxEqBandsJson(const QString& json);
+    void setTxEqFreqsJson(const QString& json);
+    void setCfcCompressionJson(const QString& json);
+    void setCfcEqFreqJson(const QString& json);
+    void setCfcPostEqBandGainJson(const QString& json);
 
     // ── Phase Rotator setters (3M-3a-ii Batch 2) ─────────────────────────
     void setPhaseRotatorEnabled(bool on);
@@ -1928,6 +2032,14 @@ signals:
     void txEqWintypeChanged(int wintype);
     /// 3M-3a-ii follow-up Batch 6 — TX EQ parametric blob round-trip.
     void txEqParaEqDataChanged(const QString& data);
+    // R-R3-49 (parity Task 4): the Legacy EQ box and the link's arrays
+    // (emitted beside the per-band signals).
+    void txEqUseLegacyChanged(bool on);
+    void txEqBandsJsonChanged(const QString& json);
+    void txEqFreqsJsonChanged(const QString& json);
+    void cfcCompressionJsonChanged(const QString& json);
+    void cfcEqFreqJsonChanged(const QString& json);
+    void cfcPostEqBandGainJsonChanged(const QString& json);
 
     // ── Phase Rotator signals (3M-3a-ii Batch 2) ─────────────────────────
     void phaseRotatorEnabledChanged(bool on);
@@ -2565,6 +2677,7 @@ private:
     // Empty by default (no Thetis database.cs default — TXProfile column
     // ships empty until the ucParametricEq dialog populates it).
     QString m_txEqParaEqData;
+    bool    m_txEqUseLegacy = true;  // R-R3-49 (parity Task 4); eqform.cs:988
 
     // ── CFC / CPDR / CESSB / Phase Rotator (3M-3a-ii Batch 2) ────────────
     //

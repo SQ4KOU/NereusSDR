@@ -145,6 +145,11 @@
 //                microphone, Audio > TX Profile) follow
 //                transmitSettingsPermitted(3) and (2). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): Tools > TX Equalizer opens in a
+//                remote window; the TX EQ and CFC dialogs and Setup's
+//                version 4 pages (DSP > CFC, AGC/ALC's TX Leveler and ALC)
+//                follow transmitSettingsPermitted(4). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -8116,7 +8121,9 @@ void MainWindow::buildMenuBar()
         txEqAction->setToolTip(QStringLiteral(
             "Open the 10-band TX EQ dialog (preamp + 10 band gains + center frequencies)."));
         connect(txEqAction, &QAction::triggered, this, [this]() {
-            if (!transmitControlsPermitted()) { return; }
+            // R-R3-49 (parity Task 4): opens in a remote window too; the
+            // dialog greys itself with the reason while the Core cannot
+            // take a change (TxEqDialog::setSettingsPermitted).
             TxEqDialog* dlg = TxEqDialog::instance(m_radioModel, this);
             dlg->show();
             dlg->raise();
@@ -11288,7 +11295,7 @@ SetupDialog* MainWindow::createSetupDialog()
     if (!m_radioModel || !m_radioModel->ownsLocalDsp()) {
         // R-R3-49 (parity Tasks 2 and 3): the settings later versions
         // brought (Audio > TX Input's microphone, Audio > TX Profile).
-        for (const int version : {2, 3}) {
+        for (const int version : {2, 3, 4}) {
             dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(version),
                                                  transmitSettingsReason(version), version);
         }
@@ -11415,11 +11422,17 @@ void MainWindow::applyRemoteRoleGating()
     // settings and RADE's Reset vocoder came with transmitSettingsVersion 3.
     const bool profilePermitted = transmitSettingsPermitted(3);
     const QString profileReason = transmitSettingsReason(3);
+    // R-R3-49 (parity Task 4): the TX EQ and CFC dialogs, Setup > DSP >
+    // CFC and AGC/ALC's TX Leveler and ALC came with version 4.
+    const bool processingPermitted = transmitSettingsPermitted(4);
+    const QString processingReason = transmitSettingsReason(4);
+    TxEqDialog::setSettingsPermitted(processingPermitted, processingReason);
     if (m_txApplet) {
         m_txApplet->setTransmitPermitted(transmitPermitted, transmitReason);
         m_txApplet->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
         m_txApplet->setTransmitChainSettingsPermitted(chainPermitted, chainReason);
         m_txApplet->setTxProfilePermitted(profilePermitted, profileReason);
+        m_txApplet->setTxProcessingPermitted(processingPermitted, processingReason);
     }
     if (m_phoneCwApplet) {
         m_phoneCwApplet->setTransmitPermitted(transmitPermitted, transmitReason);
@@ -11456,12 +11469,14 @@ void MainWindow::applyRemoteRoleGating()
         dialog->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
         dialog->setTransmitSettingsPermitted(chainPermitted, chainReason, 2);
         dialog->setTransmitSettingsPermitted(profilePermitted, profileReason, 3);
+        dialog->setTransmitSettingsPermitted(processingPermitted, processingReason, 4);
         dialog->setStationSettingsAvailable(stationAvailable, stationSettingsReason());
     }
     if (m_actTxEqualizer) {
-        m_actTxEqualizer->setEnabled(transmitPermitted);
-        m_actTxEqualizer->setToolTip(transmitPermitted
-            ? tr("Open the TX equalizer.") : transmitReason);
+        // R-R3-49 (parity Task 4): opens whatever the Core says; the dialog
+        // shows why it is greyed.
+        m_actTxEqualizer->setEnabled(true);
+        m_actTxEqualizer->setToolTip(tr("Open the TX equalizer."));
     }
     // The Tools menu's developer test entries fake an antenna switch and a
     // TX-bound re-route that nothing on the Core stands behind, so they

@@ -1308,8 +1308,14 @@ private slots:
         QVERIFY(connectFromRadioMenu(h));
         const quint32 epoch = client->sessionEpoch();
 
-        auto* txEq = h.window()->findChild<QAction*>(QStringLiteral("toolsTxEqualizer"));
+        // R-R3-49 (parity Task 4): Tools > TX Equalizer opens in a remote
+        // window whatever the Core permits (the dialog shows why it is
+        // greyed), so the remote transmit push is watched on the TX
+        // applet's VOX button, which keeps it.
+        auto* txEq = h.window()->findChild<QPushButton*>(QStringLiteral("TxVoxButton"));
         QVERIFY(txEq);
+        auto* txEqualizer = h.window()->findChild<QAction*>(QStringLiteral("toolsTxEqualizer"));
+        QVERIFY(txEqualizer && txEqualizer->isEnabled());
         QVERIFY(!client->capabilities().txPermitted);
         QVERIFY(!txEq->isEnabled());
         const QString reason = txEq->toolTip();

@@ -387,7 +387,7 @@ change shows as surface drift and as a change to this table.
 | `stationTciVersion` | 1 |
 | `accessoryDataVersion` | 1 |
 | `remoteTgxlControlVersion` | 3 |
-| `transmitSettingsVersion` | 3 |
+| `transmitSettingsVersion` | 4 |
 
 <!-- /surface -->
 
@@ -450,8 +450,18 @@ When a feature is off, its version is 0:
   `lineInBoost` refused outside its range (section 7.3); the Core's TX
   profiles, the read-only `activeTxProfile` and `txProfilesJson`; and the
   commands `txProfile.select`, `txProfile.save`, `txProfile.delete` and
-  `rade.resetVocoder` (section 9.1). Each is refused while the radio is
-  on the air (section 7.3). The keying set stays refused on a receive-only
+  `rade.resetVocoder` (section 9.1). At 4 it also covers the TX EQ, CFC,
+  phase rotator, CESSB, leveler and ALC settings on `transmit` (the TX EQ
+  and CFC dialogs, Setup > DSP > CFC and AGC/ALC's TX Leveler and TX ALC):
+  `txEqUseLegacy`, `txEqPreamp`, `txEqBandsJson`, `txEqFreqsJson`,
+  `txEqNc`, `txEqMp`, `txEqCtfmode`, `txEqWintype`, `txEqParaEqData`,
+  `cfcCompressionJson`, `cfcEqFreqJson`, `cfcPostEqBandGainJson`,
+  `cfcPostEqEnabled`, `cfcPostEqGainDb`, `cfcPrecompDb`, `cfcParaEqData`,
+  `phaseRotatorEnabled`, `phaseRotatorFreqHz`, `phaseRotatorStages`,
+  `phaseReverseEnabled`, `cessbOn`, `txLevelerMaxGain`, `txLevelerDecay`,
+  `txAlcMaxGain` and `txAlcDecay`, each refused outside its range and a
+  band array refused whole (section 7.3). Each is refused while the radio
+  is on the air (section 7.3). The keying set stays refused on a receive-only
   Core, on and off the air, and so do raw settings writes of
   `hardware/<mac>/tx/...`, `powerByBand` and `tunePowerByBand` (the
   `transmit` object owns them). A window whose Core sends 0 keeps its
@@ -967,7 +977,7 @@ An enum property lists the values its domain allows.
 | 13 | `overloadAdc1` | `i64` | outbound |  |
 | 14 | `adcLinked` | `bool` | outbound |  |
 
-**TransmitModel** (39 properties)
+**TransmitModel** (64 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1010,6 +1020,31 @@ An enum property lists the values its domain allows.
 | 36 | `lineInBoost` | `f64` | bidirectional |  |
 | 37 | `activeTxProfile` | `utf8` | outbound |  |
 | 38 | `txProfilesJson` | `utf8` | outbound |  |
+| 39 | `txEqUseLegacy` | `bool` | bidirectional |  |
+| 40 | `txEqPreamp` | `i64` | bidirectional |  |
+| 41 | `txEqBandsJson` | `utf8` | bidirectional |  |
+| 42 | `txEqFreqsJson` | `utf8` | bidirectional |  |
+| 43 | `txEqNc` | `i64` | bidirectional |  |
+| 44 | `txEqMp` | `bool` | bidirectional |  |
+| 45 | `txEqCtfmode` | `i64` | bidirectional |  |
+| 46 | `txEqWintype` | `i64` | bidirectional |  |
+| 47 | `txEqParaEqData` | `utf8` | bidirectional |  |
+| 48 | `cfcCompressionJson` | `utf8` | bidirectional |  |
+| 49 | `cfcEqFreqJson` | `utf8` | bidirectional |  |
+| 50 | `cfcPostEqBandGainJson` | `utf8` | bidirectional |  |
+| 51 | `cfcPostEqEnabled` | `bool` | bidirectional |  |
+| 52 | `cfcPostEqGainDb` | `i64` | bidirectional |  |
+| 53 | `cfcPrecompDb` | `i64` | bidirectional |  |
+| 54 | `cfcParaEqData` | `utf8` | bidirectional |  |
+| 55 | `phaseRotatorEnabled` | `bool` | bidirectional |  |
+| 56 | `phaseRotatorFreqHz` | `i64` | bidirectional |  |
+| 57 | `phaseRotatorStages` | `i64` | bidirectional |  |
+| 58 | `phaseReverseEnabled` | `bool` | bidirectional |  |
+| 59 | `cessbOn` | `bool` | bidirectional |  |
+| 60 | `txLevelerMaxGain` | `i64` | bidirectional |  |
+| 61 | `txLevelerDecay` | `i64` | bidirectional |  |
+| 62 | `txAlcMaxGain` | `i64` | bidirectional |  |
+| 63 | `txAlcDecay` | `i64` | bidirectional |  |
 
 **TunerModel** (21 properties)
 
@@ -1123,6 +1158,33 @@ Notes on the keys:
   Core). TX and mic profiles are one set. A window never keeps its own
   copy of the Core's profiles: its profile combos and Setup > Audio > TX
   Profile show these two and ask the Core. None of these keys the radio.
+- **`transmit` at `transmitSettingsVersion` 4.** The TX EQ, CFC, phase
+  rotator, CESSB, leveler and ALC settings, each under its setter's name
+  and type. `txEqUseLegacy` (bool, default true) is the TX EQ dialog's
+  Legacy EQ box: true, the ten-band EQ reaches the TX channel; false, the
+  parametric curve in `txEqParaEqData` does. The Core applies the curve
+  itself, whichever window changed it, and it is saved with the TX profile
+  (Thetis's `EQUseLegacy`). `txEqPreamp` (i64, -12 to 15 dB),
+  `txEqBandsJson` (utf8, the ten band gains, each -12 to 15 dB),
+  `txEqFreqsJson` (utf8, the ten band centres, each 10 to 22000 Hz),
+  `txEqNc` (i64, 32 to 8192), `txEqMp` (bool), `txEqCtfmode` (i64, 0
+  peaking or 1 notch), `txEqWintype` (i64, 0 Blackman-Harris or 1 Hann),
+  `txEqParaEqData` (utf8, the parametric curve as Thetis saves it: gzip,
+  then base64url, of the curve's JSON; empty for none). `cfcCompressionJson`
+  (utf8, the ten compression levels, each 0 to 16 dB), `cfcEqFreqJson`
+  (utf8, the ten band centres, each 0 to 20000 Hz),
+  `cfcPostEqBandGainJson` (utf8, the ten post-EQ gains, each -24 to 24 dB),
+  `cfcPostEqEnabled` (bool), `cfcPostEqGainDb` (i64, -24 to 24 dB),
+  `cfcPrecompDb` (i64, 0 to 16 dB), `cfcParaEqData` (utf8, as
+  `txEqParaEqData`). `phaseRotatorEnabled` (bool), `phaseRotatorFreqHz`
+  (i64, 10 to 2000 Hz), `phaseRotatorStages` (i64, 2 to 16),
+  `phaseReverseEnabled` (bool), `cessbOn` (bool), `txLevelerMaxGain` (i64,
+  0 to 20 dB), `txLevelerDecay` (i64, 1 to 5000 ms), `txAlcMaxGain` (i64, 0
+  to 120 dB) and `txAlcDecay` (i64, 1 to 50 ms). Each ten-value array is a
+  compact JSON array of ten whole numbers in band order (for example
+  `[-12,-12,-12,-1,1,4,9,12,-10,-10]`); an array of any other length, or
+  with a value that is not a whole number or is out of range, is refused
+  whole and changes nothing. None of these keys the radio.
 - **Unknown classes.** A client that receives a schema for a class it does
   not know records the difference and drops that class's objects and
   deltas.
@@ -1160,8 +1222,21 @@ tune power from 0 to 100 W.", "Choose a VOX level from -80 to 0 dB.",
 "Choose a VOX delay from 1 to 2000 ms.", "Choose a monitor level from 0.0
 to 1.0.", "Choose a PROC level from 0 to 20 dB.", "Choose an AM carrier
 level from 0 to 100 percent.", "Choose a mic level from -50 to 70 dB.",
-"Choose a Line In gain from -34.5 to 12.0 dB."; a Hermes Lite 2 says
-"Choose a tune power from 0 to 99."), and
+"Choose a Line In gain from -34.5 to 12.0 dB.", "Choose a TX EQ preamp
+from -12 to 15 dB.", "Choose a TX EQ Nc from 32 to 8192.", "Choose a TX EQ
+cutoff of 0 (peaking) or 1 (notch).", "Choose a TX EQ window of 0
+(Blackman-Harris) or 1 (Hann).", "Choose a CFC pre-compression from 0 to 16
+dB.", "Choose a CFC post-EQ gain from -24 to 24 dB.", "Choose a phase
+rotator frequency from 10 to 2000 Hz.", "Choose from 2 to 16 phase rotator
+stages.", "Choose a leveler maximum gain from 0 to 20 dB.", "Choose a
+leveler decay from 1 to 5000 ms.", "Choose an ALC maximum gain from 0 to
+120 dB.", "Choose an ALC decay from 1 to 50 ms."; a ten-value array of
+the wrong length or with a value out of range is refused whole: "Choose
+ten TX EQ band levels, each from -12 to 15 dB.", "Choose ten TX EQ band
+centres, each from 10 to 22000 Hz.", "Choose ten CFC compression levels,
+each from 0 to 16 dB.", "Choose ten CFC band centres, each from 0 to 20000
+Hz.", "Choose ten CFC post-EQ band levels, each from -24 to 24 dB."; a
+Hermes Lite 2 says "Choose a tune power from 0 to 99."), and
 DSP settings from a peer that did not negotiate them
 (`StationServer::handlePropertyWrite`). The on-air check is read once for
 the whole write, before anything in it is applied.
@@ -2052,7 +2127,7 @@ same on every machine.
 | `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
-| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand`; at `transmitSettingsVersion` 3, a write of `micBoost` and `lineInBoost` taken, and `lineInBoost` out of range refused with its range beside a write of the outbound `activeTxProfile` |
+| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand`; at `transmitSettingsVersion` 3, a write of `micBoost` and `lineInBoost` taken, and `lineInBoost` out of range refused with its range beside a write of the outbound `activeTxProfile`; at `transmitSettingsVersion` 4, a write of `txEqBandsJson`, `txEqUseLegacy` and `txLevelerDecay` taken, and a nine-value `txEqBandsJson`, a `cfcCompressionJson` with a value out of range and `txAlcDecay` out of range each refused whole with its range |
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key taken off the air and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false |

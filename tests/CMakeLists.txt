@@ -7289,6 +7289,15 @@ nereus_add_test(tst_transmit_model_properties
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 
+# R-R3-49 (parity Task 4): the TX EQ, CFC, phase rotator, CESSB, leveler and
+# ALC settings from a remote window: round trips to the Core's TX channel (a
+# test TxChannel, no WDSP channel), band arrays refused whole, on-air
+# refusals, the EQ and CFC dialogs and Setup > DSP > CFC and AGC/ALC, and a
+# local window's curves unchanged. Loopback only, no RF, no audio device.
+nereus_add_test(tst_remote_tx_eq_cfc
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+
 # R-R3-49 (parity Task 3; iPhone plan Task 40): the Core's TX profiles on the
 # `transmit` object, a window's profile manager as a mirror that never saves,
 # and txProfile.select / save / delete with their refusals. Loopback only, no

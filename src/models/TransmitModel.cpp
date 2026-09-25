@@ -89,6 +89,12 @@
 //                 window's applyStationValue) and the Line In gain range
 //                 in settingRangeRefusal(). NereusSDR-original. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): txEqUseLegacy (Thetis
+//                 EQUseLegacy, setup.cs:3615 and 9318 [v2.10.3.15]) with a
+//                 one-time seed from the old per-computer key, the band
+//                 arrays as JSON for the link, and the EQ, CFC, phase
+//                 rotator, leveler and ALC ranges in settingRangeRefusal().
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs (Thetis v2.10.3.13) ---
@@ -267,6 +273,9 @@
 #include <QJsonValue>
 
 #include <algorithm>
+#include <array>
+#include <functional>
+#include <limits>
 #include <cmath>
 
 namespace NereusSDR {
@@ -735,6 +744,51 @@ QStringList TransmitModel::txProfileNamesFromJson(const QString& json)
     return names;
 }
 
+// R-R3-49 (parity Task 4): the link's ten-value band arrays.
+namespace {
+
+// NereusSDR-original: ten whole numbers as the link's compact JSON array.
+QString tenValuesJson(const std::function<int(int)>& value)
+{
+    QJsonArray array;
+    for (int i = 0; i < 10; ++i) {
+        array.append(value(i));
+    }
+    return QString::fromUtf8(QJsonDocument(array).toJson(QJsonDocument::Compact));
+}
+
+// The ten whole numbers in `json`, or false when it is not a JSON array of
+// exactly ten whole numbers. Range is the caller's.
+bool tenValuesFromJson(const QString& json, std::array<int, 10>& out)
+{
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    if (!doc.isArray()) { return false; }
+    const QJsonArray array = doc.array();
+    if (array.size() != 10) { return false; }
+    for (int i = 0; i < 10; ++i) {
+        const QJsonValue v = array.at(i);
+        if (!v.isDouble()) { return false; }
+        const double d = v.toDouble();
+        if (!std::isfinite(d) || d != std::floor(d)
+            || d < static_cast<double>(std::numeric_limits<int>::min())
+            || d > static_cast<double>(std::numeric_limits<int>::max())) {
+            return false;
+        }
+        out[static_cast<std::size_t>(i)] = static_cast<int>(d);
+    }
+    return true;
+}
+
+bool tenValuesInRange(const QString& json, int lo, int hi)
+{
+    std::array<int, 10> values{};
+    if (!tenValuesFromJson(json, values)) { return false; }
+    return std::all_of(values.begin(), values.end(),
+                       [lo, hi](int v) { return v >= lo && v <= hi; });
+}
+
+} // namespace
+
 QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
                                            const QVariant& value) const
 {
@@ -798,6 +852,98 @@ QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
             && v <= static_cast<double>(kMonitorVolumeMax);
         return inRange ? QString()
                        : QStringLiteral("Choose a monitor level from 0.0 to 1.0.");
+    }
+    // R-R3-49 (parity Task 4): the TX EQ, CFC, phase rotator, leveler and
+    // ALC settings, each with its setter's own range; a band array is
+    // refused whole unless it holds ten whole numbers, each in range.
+    const auto scalar = [&outside](qlonglong lo, qlonglong hi, const QString& words) {
+        return outside(lo, hi) ? words : QString();
+    };
+    if (propertyName == "txEqPreamp") {
+        return scalar(kTxEqPreampDbMin, kTxEqPreampDbMax,
+            QStringLiteral("Choose a TX EQ preamp from %1 to %2 dB.")
+                .arg(kTxEqPreampDbMin).arg(kTxEqPreampDbMax));
+    }
+    if (propertyName == "txEqNc") {
+        return scalar(kTxEqNcMin, kTxEqNcMax,
+            QStringLiteral("Choose a TX EQ Nc from %1 to %2.")
+                .arg(kTxEqNcMin).arg(kTxEqNcMax));
+    }
+    if (propertyName == "txEqCtfmode") {
+        return scalar(0, kTxEqCtfmodeMax,
+            QStringLiteral("Choose a TX EQ cutoff of 0 (peaking) or 1 (notch)."));
+    }
+    if (propertyName == "txEqWintype") {
+        return scalar(0, kTxEqWintypeMax,
+            QStringLiteral("Choose a TX EQ window of 0 (Blackman-Harris) or 1 (Hann)."));
+    }
+    if (propertyName == "cfcPrecompDb") {
+        return scalar(kCfcPrecompDbMin, kCfcPrecompDbMax,
+            QStringLiteral("Choose a CFC pre-compression from %1 to %2 dB.")
+                .arg(kCfcPrecompDbMin).arg(kCfcPrecompDbMax));
+    }
+    if (propertyName == "cfcPostEqGainDb") {
+        return scalar(kCfcPostEqGainDbMin, kCfcPostEqGainDbMax,
+            QStringLiteral("Choose a CFC post-EQ gain from %1 to %2 dB.")
+                .arg(kCfcPostEqGainDbMin).arg(kCfcPostEqGainDbMax));
+    }
+    if (propertyName == "phaseRotatorFreqHz") {
+        return scalar(kPhaseRotatorFreqHzMin, kPhaseRotatorFreqHzMax,
+            QStringLiteral("Choose a phase rotator frequency from %1 to %2 Hz.")
+                .arg(kPhaseRotatorFreqHzMin).arg(kPhaseRotatorFreqHzMax));
+    }
+    if (propertyName == "phaseRotatorStages") {
+        return scalar(kPhaseRotatorStagesMin, kPhaseRotatorStagesMax,
+            QStringLiteral("Choose from %1 to %2 phase rotator stages.")
+                .arg(kPhaseRotatorStagesMin).arg(kPhaseRotatorStagesMax));
+    }
+    if (propertyName == "txLevelerMaxGain") {
+        return scalar(kTxLevelerMaxGainDbMin, kTxLevelerMaxGainDbMax,
+            QStringLiteral("Choose a leveler maximum gain from %1 to %2 dB.")
+                .arg(kTxLevelerMaxGainDbMin).arg(kTxLevelerMaxGainDbMax));
+    }
+    if (propertyName == "txLevelerDecay") {
+        return scalar(kTxLevelerDecayMsMin, kTxLevelerDecayMsMax,
+            QStringLiteral("Choose a leveler decay from %1 to %2 ms.")
+                .arg(kTxLevelerDecayMsMin).arg(kTxLevelerDecayMsMax));
+    }
+    if (propertyName == "txAlcMaxGain") {
+        return scalar(kTxAlcMaxGainDbMin, kTxAlcMaxGainDbMax,
+            QStringLiteral("Choose an ALC maximum gain from %1 to %2 dB.")
+                .arg(kTxAlcMaxGainDbMin).arg(kTxAlcMaxGainDbMax));
+    }
+    if (propertyName == "txAlcDecay") {
+        return scalar(kTxAlcDecayMsMin, kTxAlcDecayMsMax,
+            QStringLiteral("Choose an ALC decay from %1 to %2 ms.")
+                .arg(kTxAlcDecayMsMin).arg(kTxAlcDecayMsMax));
+    }
+    const auto bands = [&value](int lo, int hi, const QString& words) {
+        return tenValuesInRange(value.toString(), lo, hi) ? QString() : words;
+    };
+    if (propertyName == "txEqBandsJson") {
+        return bands(kTxEqBandDbMin, kTxEqBandDbMax,
+            QStringLiteral("Choose ten TX EQ band levels, each from %1 to %2 dB.")
+                .arg(kTxEqBandDbMin).arg(kTxEqBandDbMax));
+    }
+    if (propertyName == "txEqFreqsJson") {
+        return bands(kTxEqFreqHzMin, kTxEqFreqHzMax,
+            QStringLiteral("Choose ten TX EQ band centres, each from %1 to %2 Hz.")
+                .arg(kTxEqFreqHzMin).arg(kTxEqFreqHzMax));
+    }
+    if (propertyName == "cfcCompressionJson") {
+        return bands(kCfcCompressionDbMin, kCfcCompressionDbMax,
+            QStringLiteral("Choose ten CFC compression levels, each from %1 to %2 dB.")
+                .arg(kCfcCompressionDbMin).arg(kCfcCompressionDbMax));
+    }
+    if (propertyName == "cfcEqFreqJson") {
+        return bands(kCfcEqFreqHzMin, kCfcEqFreqHzMax,
+            QStringLiteral("Choose ten CFC band centres, each from %1 to %2 Hz.")
+                .arg(kCfcEqFreqHzMin).arg(kCfcEqFreqHzMax));
+    }
+    if (propertyName == "cfcPostEqBandGainJson") {
+        return bands(kCfcPostEqBandGainDbMin, kCfcPostEqBandGainDbMax,
+            QStringLiteral("Choose ten CFC post-EQ band levels, each from %1 to %2 dB.")
+                .arg(kCfcPostEqBandGainDbMin).arg(kCfcPostEqBandGainDbMax));
     }
     return {};
 }
@@ -1772,6 +1918,22 @@ void TransmitModel::loadFromSettings(const QString& mac)
     setTxEqParaEqData(s.value(pfx + QLatin1String("TXParaEQData"),
                                 QStringLiteral("")).toString());
 
+    // R-R3-49 (parity Task 4): the Legacy EQ box, default true (Thetis
+    // eqform.cs:988 [v2.10.3.15]). It used to be this computer's setting
+    // (TxEqDialog/UsingLegacyEQ); a radio with no value of its own takes
+    // that one once, so a user who chose the parametric EQ keeps it.
+    {
+        const QString key = pfx + QLatin1String("EQUseLegacy");
+        const QString computerKey = QStringLiteral("TxEqDialog/UsingLegacyEQ");
+        QString stored = s.value(key).toString();
+        if (!s.contains(key) && s.contains(computerKey)) {
+            stored = s.value(computerKey).toString();
+            s.setValue(key, stored == QLatin1String("False")
+                                ? QStringLiteral("False") : QStringLiteral("True"));
+        }
+        setTxEqUseLegacy(stored != QLatin1String("False"));
+    }
+
     // ── Phase Rotator (3M-3a-ii Batch 2) ──────────────────────────────────
     // Defaults from Thetis database.cs:4726-4730 [v2.10.3.13].
     setPhaseRotatorEnabled(s.value(pfx + QLatin1String("CFCPhaseRotatorEnabled"),
@@ -2030,6 +2192,8 @@ void TransmitModel::persistToSettings(const QString& mac) const
 
     // TX EQ parametric blob (3M-3a-ii follow-up Batch 6).
     s.setValue(pfx + QLatin1String("TXParaEQData"), m_txEqParaEqData);
+    s.setValue(pfx + QLatin1String("EQUseLegacy"),
+               m_txEqUseLegacy ? QStringLiteral("True") : QStringLiteral("False"));
 
     // ── Phase Rotator / CFC / CPDR / CESSB (3M-3a-ii Batch 2) ────────────
     s.setValue(pfx + QLatin1String("CFCPhaseRotatorEnabled"),
@@ -2790,6 +2954,7 @@ void TransmitModel::setTxEqBand(int index, int dB)
     // Thetis TXProfile keys: TXEQ1..TXEQ10 (1-indexed, per database.cs:4316-4325 [v2.10.3.13]).
     persistOne(QStringLiteral("TXEQ%1").arg(index + 1), QString::number(clamped));
     emit txEqBandChanged(index, clamped);
+    emit txEqBandsJsonChanged(txEqBandsJson());  // R-R3-49 (parity Task 4)
 }
 
 void TransmitModel::setTxEqFreq(int index, int hz)
@@ -2801,6 +2966,7 @@ void TransmitModel::setTxEqFreq(int index, int hz)
     // Thetis TXProfile keys: TxEqFreq1..TxEqFreq10 (mixed-case per database.cs:4326-4335 [v2.10.3.13]).
     persistOne(QStringLiteral("TxEqFreq%1").arg(index + 1), QString::number(clamped));
     emit txEqFreqChanged(index, clamped);
+    emit txEqFreqsJsonChanged(txEqFreqsJson());  // R-R3-49 (parity Task 4)
 }
 
 void TransmitModel::setTxLevelerOn(bool on)
@@ -2914,6 +3080,85 @@ void TransmitModel::setTxEqParaEqData(const QString& data)
     m_txEqParaEqData = data;
     persistOne(QStringLiteral("TXParaEQData"), data);
     emit txEqParaEqDataChanged(data);
+}
+
+// ── R-R3-49 (parity Task 4): the Legacy EQ box and the link's arrays ─────
+
+void TransmitModel::setTxEqUseLegacy(bool on)
+{
+    if (on == m_txEqUseLegacy) { return; }
+    // From Thetis setup.cs:9318 [v2.10.3.15]:
+    //   console.EQForm.UsingLegacyEQ = (bool)dr["EQUseLegacy"];
+    // (Above it in the same restore, on the VAC lines it disables first:
+    //   // diable the vacs, so we can make changes without them trying to re-init etc MW0LGE_21dk5
+    //  [original inline comment from setup.cs:9313].)
+    // and setup.cs:3615: dr["EQUseLegacy"] = console.EQForm.UsingLegacyEQ;
+    // Thetis keeps it with the TX profile; so does NereusSDR.
+    m_txEqUseLegacy = on;
+    persistOne(QStringLiteral("EQUseLegacy"),
+               on ? QStringLiteral("True") : QStringLiteral("False"));
+    emit txEqUseLegacyChanged(on);
+}
+
+
+QString TransmitModel::txEqBandsJson() const
+{
+    return tenValuesJson([this](int i) { return txEqBand(i); });
+}
+
+QString TransmitModel::txEqFreqsJson() const
+{
+    return tenValuesJson([this](int i) { return txEqFreq(i); });
+}
+
+QString TransmitModel::cfcCompressionJson() const
+{
+    return tenValuesJson([this](int i) { return cfcCompression(i); });
+}
+
+QString TransmitModel::cfcEqFreqJson() const
+{
+    return tenValuesJson([this](int i) { return cfcEqFreq(i); });
+}
+
+QString TransmitModel::cfcPostEqBandGainJson() const
+{
+    return tenValuesJson([this](int i) { return cfcPostEqBandGain(i); });
+}
+
+void TransmitModel::setTxEqBandsJson(const QString& json)
+{
+    std::array<int, 10> values{};
+    if (!tenValuesFromJson(json, values)) { return; }
+    for (int i = 0; i < 10; ++i) { setTxEqBand(i, values[static_cast<std::size_t>(i)]); }
+}
+
+void TransmitModel::setTxEqFreqsJson(const QString& json)
+{
+    std::array<int, 10> values{};
+    if (!tenValuesFromJson(json, values)) { return; }
+    for (int i = 0; i < 10; ++i) { setTxEqFreq(i, values[static_cast<std::size_t>(i)]); }
+}
+
+void TransmitModel::setCfcCompressionJson(const QString& json)
+{
+    std::array<int, 10> values{};
+    if (!tenValuesFromJson(json, values)) { return; }
+    for (int i = 0; i < 10; ++i) { setCfcCompression(i, values[static_cast<std::size_t>(i)]); }
+}
+
+void TransmitModel::setCfcEqFreqJson(const QString& json)
+{
+    std::array<int, 10> values{};
+    if (!tenValuesFromJson(json, values)) { return; }
+    for (int i = 0; i < 10; ++i) { setCfcEqFreq(i, values[static_cast<std::size_t>(i)]); }
+}
+
+void TransmitModel::setCfcPostEqBandGainJson(const QString& json)
+{
+    std::array<int, 10> values{};
+    if (!tenValuesFromJson(json, values)) { return; }
+    for (int i = 0; i < 10; ++i) { setCfcPostEqBandGain(i, values[static_cast<std::size_t>(i)]); }
 }
 
 // ── CFC / CPDR / CESSB / Phase Rotator (3M-3a-ii Batch 2) ─────────────────
@@ -3046,6 +3291,7 @@ void TransmitModel::setCfcEqFreq(int index, int hz)
     // Thetis TXProfile keys: CFCEqFreq0..CFCEqFreq9 (database.cs:4757-4766 [v2.10.3.13]).
     persistOne(QStringLiteral("CFCEqFreq%1").arg(index), QString::number(clamped));
     emit cfcEqFreqChanged(index, clamped);
+    emit cfcEqFreqJsonChanged(cfcEqFreqJson());  // R-R3-49 (parity Task 4)
 }
 
 void TransmitModel::setCfcCompression(int index, int dB)
@@ -3061,6 +3307,7 @@ void TransmitModel::setCfcCompression(int index, int dB)
     // the per-band G[] compression amounts.
     persistOne(QStringLiteral("CFCPreComp%1").arg(index), QString::number(clamped));
     emit cfcCompressionChanged(index, clamped);
+    emit cfcCompressionJsonChanged(cfcCompressionJson());  // R-R3-49 (parity Task 4)
 }
 
 void TransmitModel::setCfcPostEqBandGain(int index, int dB)
@@ -3074,6 +3321,7 @@ void TransmitModel::setCfcPostEqBandGain(int index, int dB)
     // Thetis TXProfile keys: CFCPostEqGain0..CFCPostEqGain9 (database.cs:4746-4755 [v2.10.3.13]).
     persistOne(QStringLiteral("CFCPostEqGain%1").arg(index), QString::number(clamped));
     emit cfcPostEqBandGainChanged(index, clamped);
+    emit cfcPostEqBandGainJsonChanged(cfcPostEqBandGainJson());  // R-R3-49 (parity Task 4)
 }
 
 void TransmitModel::setCfcParaEqData(const QString& data)

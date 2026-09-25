@@ -201,6 +201,17 @@ void resetPointsDefault(Curve& c, int bandCount)
 
 } // namespace
 
+Curve defaultTxEqCurve()
+{
+    Curve c;
+    c.parametricEq   = true;
+    c.globalGainDb   = kTxEqGlobalGainDb;
+    c.frequencyMinHz = kTxEqMinHz;
+    c.frequencyMaxHz = kTxEqMaxHz;
+    resetPointsDefault(c, kTxEqBandCount);
+    return c;
+}
+
 double txEqResponseDb(const Curve& curve, double frequencyHz)
 {
     return responseDb(curve.points, curve.parametricEq, curve.frequencyMinHz,
@@ -242,12 +253,7 @@ bool loadTxEqCurve(const QString& json, Curve& out)
     if (newFreqMax <= newFreqMin) { return false; }
 
     // The panel's widget before the load.
-    Curve c;
-    c.parametricEq   = true;
-    c.globalGainDb   = kTxEqGlobalGainDb;
-    c.frequencyMinHz = kTxEqMinHz;
-    c.frequencyMaxHz = kTxEqMaxHz;
-    resetPointsDefault(c, kTxEqBandCount);
+    Curve c = defaultTxEqCurve();
 
     if (bandCount != c.points.size()) {
         // As the widget: the defaults for a new band count are laid out

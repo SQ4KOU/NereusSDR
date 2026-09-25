@@ -75,7 +75,10 @@ private slots:
         // registered while it is on the unbuilt list (R-R3-49). Audio > TX
         // Profile follows the transmit settings gate since parity Task 3
         // (tst_remote_tx_profiles, setupOpensTxProfileWithoutRemoteTransmit).
-        for (const char* label : {"Power", "Speech Processor", "DEXP/VOX"}) {
+        // Transmit > Speech Processor opens since parity Task 4: it shows the
+        // Core's TX chain and opens the editors, each on the Core's gate
+        // (tst_remote_tx_eq_cfc).
+        for (const char* label : {"Power", "DEXP/VOX"}) {
             QTest::newRow(label) << QString::fromLatin1(label);
         }
     }
@@ -193,9 +196,13 @@ private slots:
         QVERIFY(xit && zero && offset && rit);
         QVERIFY(!xit->isEnabled() && !zero->isEnabled() && !offset->isEnabled());
         QVERIFY(rit->isEnabled());
+        // R-R3-49 (parity Task 4): Tools > TX Equalizer opens in a remote
+        // window; opening it writes nothing.
         auto* action = window.findChild<QAction*>(QStringLiteral("toolsTxEqualizer"));
-        QVERIFY(action && !action->isEnabled());
+        QVERIFY(action && action->isEnabled());
         QVERIFY(!action->toolTip().isEmpty());
+        // The dialog it opens takes the Core's gate: open off the air.
+        QTRY_VERIFY(TxEqDialog::settingsPermitted());
         stationLink->clearReceived();
         xit->click();
         zero->click();
@@ -203,12 +210,15 @@ private slots:
         action->trigger();
         auto* eq = window.findChild<QPushButton*>(QStringLiteral("TxEqButton"));
         // R-R3-49 (parity Task 2): the EQ toggle is a transmit setting, live
-        // off the air; its right-click (the TX equalizer dialog) keeps the
-        // remote transmit gate and opens nothing.
+        // off the air. Parity Task 4: its right-click opens the TX equalizer
+        // dialog (the one Tools opened above).
         QVERIFY(eq);
         QTRY_VERIFY(eq->isEnabled());
+        TxEqDialog* const eqDialog = window.findChild<TxEqDialog*>();
+        QVERIFY(eqDialog);
+        eqDialog->hide();
         QMetaObject::invokeMethod(eq, "customContextMenuRequested", Q_ARG(QPoint, QPoint()));
-        QVERIFY(!window.findChild<TxEqDialog*>());
+        QVERIFY(eqDialog->isVisible());
 
         // A real accepted RX write is the drain barrier, and proves that
         // suppressing TX gestures has not disabled all slice controls.
@@ -264,13 +274,17 @@ private slots:
             SessionMessages::capabilities(capabilities.toUpdates())));
         QTRY_VERIFY(!client->capabilities().txPermitted);
         QTRY_VERIFY(!xit->isEnabled());
-        QVERIFY(!action->isEnabled());
+        // R-R3-49 (parity Task 4): TX Equalizer stays available.
+        QVERIFY(action->isEnabled());
         QVERIFY(proc->isEnabled() && eq->isEnabled());
         QVERIFY(!powerPage->isEnabled());
         QCOMPARE(client->sessionEpoch(), epoch);
         QCOMPARE(window.radioModel()->connectionState(), radioState);
         client->disconnectFromStation(QStringLiteral("test complete"));
-        QVERIFY(!action->isEnabled());
+        // R-R3-49 (parity Task 4): the entry stays; the dialog it opens is
+        // greyed with the reason while no Core takes a change.
+        QVERIFY(action->isEnabled());
+        QVERIFY(!TxEqDialog::settingsPermitted());
     }
 };
 

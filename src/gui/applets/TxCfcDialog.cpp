@@ -36,6 +36,10 @@
 //                 dialog background and made the controls effectively
 //                 invisible during bench test.  J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): setSettingsPermitted greys the
+//                 controls with a reason in a remote window while the Core
+//                 cannot take a CFC change. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -206,6 +210,20 @@ void TxCfcDialog::setTxChannel(TxChannel* tx)
     m_tx = tx;
 }
 
+void TxCfcDialog::setSettingsPermitted(bool permitted, const QString& reason)
+{
+    // R-R3-49 (parity Task 4). Every control is a direct child of the
+    // dialog (the layouts own none of them).
+    for (QWidget* child : findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly)) {
+        if (child == m_settingsReasonLabel) { continue; }
+        child->setEnabled(permitted);
+    }
+    if (m_settingsReasonLabel) {
+        m_settingsReasonLabel->setText(permitted ? QString() : reason);
+        m_settingsReasonLabel->setVisible(!permitted && !reason.isEmpty());
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // UI build-out — 1:1 with frmCFCConfig.Designer.cs [v2.10.3.13].
 //
@@ -229,6 +247,13 @@ void TxCfcDialog::buildUi()
     // ── Left column: edit rows + two parametric EQ widgets ───────────────
     auto* leftCol = new QVBoxLayout;
     leftCol->setSpacing(6);
+
+    // R-R3-49 (parity Task 4): why the controls are greyed, when they are.
+    m_settingsReasonLabel = new QLabel(this);
+    m_settingsReasonLabel->setObjectName(QStringLiteral("TxCfcSettingsReason"));
+    m_settingsReasonLabel->setWordWrap(true);
+    m_settingsReasonLabel->setVisible(false);
+    leftCol->addWidget(m_settingsReasonLabel);
 
     // ── Top edit row (above ucCFC_comp) ──────────────────────────────────
     // From Thetis frmCFCConfig.Designer.cs:30-65 [v2.10.3.13] — labels

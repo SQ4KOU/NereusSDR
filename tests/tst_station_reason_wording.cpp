@@ -852,7 +852,24 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("kVoxHangTimeMsMax"), QStringLiteral("kCpdrLevelDbMin"),
           QStringLiteral("kCpdrLevelDbMax"), QStringLiteral("kAmCarrierLevelMin"),
           QStringLiteral("kAmCarrierLevelMax"), QStringLiteral("kMicGainDbMin"),
-          QStringLiteral("kMicGainDbMax")}},
+          QStringLiteral("kMicGainDbMax"),
+          // R-R3-49 (parity Task 4): the TX EQ, CFC, phase rotator, leveler
+          // and ALC ranges, and the ten-value band arrays' ranges.
+          QStringLiteral("kTxEqPreampDbMin"), QStringLiteral("kTxEqPreampDbMax"),
+          QStringLiteral("kTxEqNcMin"), QStringLiteral("kTxEqNcMax"),
+          QStringLiteral("kCfcPrecompDbMin"), QStringLiteral("kCfcPrecompDbMax"),
+          QStringLiteral("kCfcPostEqGainDbMin"), QStringLiteral("kCfcPostEqGainDbMax"),
+          QStringLiteral("kPhaseRotatorFreqHzMin"), QStringLiteral("kPhaseRotatorFreqHzMax"),
+          QStringLiteral("kPhaseRotatorStagesMin"), QStringLiteral("kPhaseRotatorStagesMax"),
+          QStringLiteral("kTxLevelerMaxGainDbMin"), QStringLiteral("kTxLevelerMaxGainDbMax"),
+          QStringLiteral("kTxLevelerDecayMsMin"), QStringLiteral("kTxLevelerDecayMsMax"),
+          QStringLiteral("kTxAlcMaxGainDbMin"), QStringLiteral("kTxAlcMaxGainDbMax"),
+          QStringLiteral("kTxAlcDecayMsMin"), QStringLiteral("kTxAlcDecayMsMax"),
+          QStringLiteral("kTxEqBandDbMin"), QStringLiteral("kTxEqBandDbMax"),
+          QStringLiteral("kTxEqFreqHzMin"), QStringLiteral("kTxEqFreqHzMax"),
+          QStringLiteral("kCfcCompressionDbMin"), QStringLiteral("kCfcCompressionDbMax"),
+          QStringLiteral("kCfcEqFreqHzMin"), QStringLiteral("kCfcEqFreqHzMax"),
+          QStringLiteral("kCfcPostEqBandGainDbMin"), QStringLiteral("kCfcPostEqBandGainDbMax")}},
     };
     return sources;
 }

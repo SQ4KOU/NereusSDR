@@ -193,6 +193,11 @@
 //                                    gain range, the txProfile verbs and
 //                                    rade.resetVocoder.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 4):
+//                                    transmitSettingsVersion 4: the TX EQ,
+//                                    CFC, phase rotator, CESSB, leveler and
+//                                    ALC settings on `transmit`.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2410,7 +2415,13 @@ int StationServer::transmitSettingsVersion() const
     // micBias, micPttDisabled, lineIn, lineInBoost), the Core's TX profiles
     // (activeTxProfile, txProfilesJson), txProfile.select / save / delete
     // and rade.resetVocoder (parity Task 3).
-    return m_radioModel.isNull() ? 0 : 3;
+    // 4: the TX EQ (txEqUseLegacy, txEqPreamp, txEqBandsJson,
+    // txEqFreqsJson, txEqNc, txEqMp, txEqCtfmode, txEqWintype,
+    // txEqParaEqData), CFC (cfcCompressionJson, cfcEqFreqJson,
+    // cfcPostEqBandGainJson, cfcPostEqEnabled, cfcPostEqGainDb,
+    // cfcPrecompDb, cfcParaEqData), phase rotator, CESSB, leveler and ALC
+    // settings; a band array is refused whole (parity Task 4).
+    return m_radioModel.isNull() ? 0 : 4;
 }
 
 int StationServer::tgxlControlVersion() const

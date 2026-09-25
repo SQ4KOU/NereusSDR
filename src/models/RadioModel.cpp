@@ -205,6 +205,13 @@
 //                mirror of the Core's (mirrorTxProfilesFromStation).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): the TX channel gets the curve the
+//                Legacy EQ box (txEqUseLegacy) picks: the ten-band EQ, or
+//                the parametric curve in txEqParaEqData through ParaEqCurve,
+//                pushed on the box, the curve, the EQ enable and the bands,
+//                and at connect (Thetis eqform.cs chkLegacyEQ_CheckedChanged
+//                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -425,6 +432,7 @@ warren@wpratt.com
 // TxMicRouter is already included via RadioModel.h (for std::unique_ptr destructor).
 #include "core/MoxController.h"
 #include "core/MicProfileManager.h"
+#include "core/ParaEqCurve.h"
 #include "core/PaProfile.h"
 #include "core/PaProfileManager.h"
 #include "core/PaTelemetryScaling.h"
@@ -4162,7 +4170,7 @@ void RadioModel::wireTransmitProcessingChain()
     // every EQ change — the Graph10 wrapper stays available for a
     // future "reset to default freqs" UX.
 
-    auto pushEqProfile = [this]() {
+    auto pushLegacyEqProfile = [this]() {
         if (!m_txChannel) { return; }
         std::vector<double> freqs10(10, 0.0);
         std::vector<double> gains11(11, 0.0);
@@ -4173,6 +4181,30 @@ void RadioModel::wireTransmitProcessingChain()
             gains11[static_cast<std::size_t>(i + 1)] =
                 static_cast<double>(m_transmitModel.txEqBand(i));
         }
+        m_txChannel->setTxEqProfile(freqs10, gains11);
+    };
+
+    // R-R3-49 (parity Task 4): the curve the Legacy EQ box picks. Thetis
+    // eqform.cs chkLegacyEQ_CheckedChanged [v2.10.3.15] calls
+    // setTXEQProfile for the legacy EQ and the parametric path otherwise;
+    // Thetis keeps the box with the TX profile (EQUseLegacy). The Core
+    // applies the parametric curve saved in txEqParaEqData itself
+    // (ParaEqCurve, moved out of the dialog), so a window, local or
+    // remote, only changes the model. A saved value with no curve gives
+    // the panel's flat default curve, as the dialog did.
+    auto pushEqProfile = [this, pushLegacyEqProfile]() {
+        if (!m_txChannel) { return; }
+        if (m_transmitModel.txEqUseLegacy()) {
+            pushLegacyEqProfile();
+            return;
+        }
+        ParaEqCurve::Curve curve;
+        if (!ParaEqCurve::txEqCurveFromParaEqData(m_transmitModel.txEqParaEqData(), curve)) {
+            curve = ParaEqCurve::defaultTxEqCurve();
+        }
+        std::vector<double> freqs10;
+        std::vector<double> gains11;
+        ParaEqCurve::sampleTxEqProfile(curve, freqs10, gains11);
         m_txChannel->setTxEqProfile(freqs10, gains11);
     };
 
@@ -4299,6 +4331,21 @@ void RadioModel::wireTransmitProcessingChain()
     // 4. txEqFreqChanged → rebuild full Profile (custom-freq path).
     connect(&m_transmitModel, &TransmitModel::txEqFreqChanged,
             m_txChannel, [pushEqProfile](int /*idx*/, int /*Hz*/) {
+        pushEqProfile();
+    });
+
+    // 4a. R-R3-49 (parity Task 4): the Legacy EQ box, the parametric
+    //     curve and the EQ enable push the curve the box picks.
+    connect(&m_transmitModel, &TransmitModel::txEqUseLegacyChanged,
+            m_txChannel, [pushEqProfile](bool /*on*/) {
+        pushEqProfile();
+    });
+    connect(&m_transmitModel, &TransmitModel::txEqParaEqDataChanged,
+            m_txChannel, [pushEqProfile](const QString& /*data*/) {
+        pushEqProfile();
+    });
+    connect(&m_transmitModel, &TransmitModel::txEqEnabledChanged,
+            m_txChannel, [pushEqProfile](bool /*on*/) {
         pushEqProfile();
     });
 

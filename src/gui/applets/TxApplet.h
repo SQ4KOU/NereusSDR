@@ -98,6 +98,10 @@
 //                 profile combo, which picks the Core's profiles in a
 //                 remote window. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 : R-R3-49 (parity Task 4): setTxProcessingPermitted for the
+//                 CFC dialog; the EQ and CFC right-clicks open their
+//                 dialogs in a remote window. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -319,6 +323,14 @@ public slots:
     // (transmitSettingsVersion 3), live while its radio is off the air.
     void setTxProfilePermitted(bool permitted,
                                const QString& unavailableReason = QString());
+    // R-R3-49 (parity Task 4): the CFC dialog (transmitSettingsVersion 4).
+    // The EQ and CFC right-clicks open their dialogs in any window; this
+    // greys the CFC dialog with the reason while a remote window cannot
+    // change it (the TX EQ dialog takes TxEqDialog::setSettingsPermitted).
+    void setTxProcessingPermitted(bool permitted,
+                                  const QString& unavailableReason = QString());
+    // The CFC dialog, once a right-click or Setup has built it.
+    TxCfcDialog* cfcDialog() const { return m_cfcDialog; }
 public:
 
     // ── Test accessors ──────────────────────────────────────────────────────
@@ -549,6 +561,8 @@ private:
     bool m_transmitSettingsPermitted{true};
     bool m_transmitChainSettingsPermitted{true};
     bool m_txProfilePermitted{true};
+    bool m_txProcessingPermitted{true};   // R-R3-49 (parity Task 4)
+    QString m_txProcessingReason;
     // R-R3-49 (parity Task 2): a remote window's Tune Power slider asks the
     // Core (setTunePowerForTxBand) and shows the Core's tunePowerForTxBand.
     bool remoteTunePower() const;

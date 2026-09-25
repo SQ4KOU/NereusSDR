@@ -190,14 +190,16 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     QVERIFY(s.connect());
     QVERIFY(s.core->receiveOnlyStationPolicy());
     // 2 since parity Task 2 (the TX and Phone/CW applets' settings), 3
-    // since parity Task 3 (the microphone input and the TX profiles).
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 3);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 3);
+    // since parity Task 3 (the microphone input and the TX profiles), 4
+    // since parity Task 4 (TX EQ, CFC, phase rotator, CESSB, leveler, ALC).
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 4);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 4);
     QVERIFY(s.client->transmitSettingsAvailable());
     QVERIFY(s.client->transmitSettingsAvailable(1));
     QVERIFY(s.client->transmitSettingsAvailable(2));
     QVERIFY(s.client->transmitSettingsAvailable(3));
-    QVERIFY(!s.client->transmitSettingsAvailable(4));
+    QVERIFY(s.client->transmitSettingsAvailable(4));
+    QVERIFY(!s.client->transmitSettingsAvailable(5));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
         QStringLiteral("DspOptionsBufferSizePhoneTx")));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(

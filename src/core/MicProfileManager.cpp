@@ -27,6 +27,10 @@
 //                 save and delete (setStationMirror and friends); it never
 //                 touches AppSettings. NereusSDR-original. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): the EQUseLegacy key (the TX EQ
+//                 dialog's Legacy EQ box), default True as every Thetis
+//                 factory profile sets it (database.cs:4552 [v2.10.3.15]).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived handler logic
@@ -67,7 +71,7 @@ QString activeKey(const QString& mac)
 }
 
 // ---------------------------------------------------------------------------
-// 107 live-field keys captured per profile.  Order matches the table in the
+// 108 live-field keys captured per profile.  Order matches the table in the
 // chunk-F + 3M-3a-i / ii / iii task specs (tools/script-friendly: sorted by
 // group).
 //   23 mic/VOX/MON/two-tone   (3M-1c F)
@@ -77,6 +81,7 @@ QString activeKey(const QString& mac)
 // +  2 FilterLow/FilterHigh   (Plan 4 Cluster A D1)
 // +  2 line_in_gain/user_dig_out (P1 full-parity Task 2.4)
 // + 11 DEXP envelope/ratios/look-ahead/SCF (3M-3a-iii Tasks 7-10)
+// +  1 EQUseLegacy            (R-R3-49 parity Task 4)
 // ---------------------------------------------------------------------------
 const QStringList& liveKeyList()
 {
@@ -148,6 +153,10 @@ const QStringList& liveKeyList()
         // the TX EQ slot.  No Thetis database.cs row — TXProfile column ships
         // empty until ucParametricEq populates it.
         QStringLiteral("TXParaEQData"),
+        // The TX EQ dialog's Legacy EQ box (1), R-R3-49 (parity Task 4).
+        // Thetis keeps it with the TX profile: setup.cs:3615 [v2.10.3.15]
+        //   dr["EQUseLegacy"] = console.EQForm.UsingLegacyEQ;
+        QStringLiteral("EQUseLegacy"),
         // Leveler (3 keys) — database.cs:4584-4588 [v2.10.3.13].
         QStringLiteral("Lev_On"),
         QStringLiteral("Lev_MaxGain"),
@@ -1224,6 +1233,11 @@ QHash<QString, QVariant> MicProfileManager::defaultProfileValues()
     // No Thetis database.cs row; column ships empty.  Phase 3M-3a-ii follow-up
     // Batch 6.
     out.insert(QStringLiteral("TXParaEQData"),   QString());
+    // R-R3-49 (parity Task 4): From Thetis database.cs:4552 [v2.10.3.15]:
+    //   dr["EQUseLegacy"] = true;
+    // Every factory profile in database.cs sets it true too (4787 through
+    // 9199), so no factory profile overrides it.
+    out.insert(QStringLiteral("EQUseLegacy"),    QStringLiteral("True"));
     out.insert(QStringLiteral("Lev_On"),         QStringLiteral("True"));    // database.cs:4584
     out.insert(QStringLiteral("Lev_MaxGain"),    QStringLiteral("15"));      // database.cs:4586
     out.insert(QStringLiteral("Lev_Decay"),      QStringLiteral("100"));     // database.cs:4588
@@ -1346,6 +1360,8 @@ QHash<QString, QVariant> MicProfileManager::captureLiveValues(const TransmitMode
     // TX EQ blob (1) — opaque QString fits QVariant directly.  Phase 3M-3a-ii
     // follow-up Batch 6.
     out.insert(QStringLiteral("TXParaEQData"), tx->txEqParaEqData());
+    out.insert(QStringLiteral("EQUseLegacy"),
+               tx->txEqUseLegacy() ? QStringLiteral("True") : QStringLiteral("False"));
     out.insert(QStringLiteral("Lev_On"),
                tx->txLevelerOn() ? QStringLiteral("True") : QStringLiteral("False"));
     out.insert(QStringLiteral("Lev_MaxGain"), QString::number(tx->txLevelerMaxGain()));
@@ -1491,6 +1507,12 @@ void MicProfileManager::applyValuesToModel(const QHash<QString, QVariant>& value
     // TX EQ blob (1) — opaque QString; empty default (no Thetis row).  Phase
     // 3M-3a-ii follow-up Batch 6.
     tx->setTxEqParaEqData(take(QStringLiteral("TXParaEQData"), QString()));
+    // R-R3-49 (parity Task 4): From Thetis setup.cs:9318 [v2.10.3.15]:
+    //   console.EQForm.UsingLegacyEQ = (bool)dr["EQUseLegacy"];
+    // (the restore above it: // diable the vacs, so we can make changes without them trying to re-init etc MW0LGE_21dk5
+    //  [original inline comment from setup.cs:9313])
+    tx->setTxEqUseLegacy(take(QStringLiteral("EQUseLegacy"), QStringLiteral("True"))
+                             != QLatin1String("False"));
     tx->setTxLevelerOn(take(QStringLiteral("Lev_On"), QStringLiteral("True"))
                             == QLatin1String("True"));
     tx->setTxLevelerMaxGain(take(QStringLiteral("Lev_MaxGain"), QStringLiteral("15")).toInt());
