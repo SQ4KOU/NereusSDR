@@ -50,6 +50,10 @@
 //   2026-09-25: R-R3-39 (station Task 32): the TX readings too
 //               (TxChannel::txMeter, the transmit lane's last reading).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25: D14 / R-R3-49: the TX readings name a TxMeterType, which
+//               TxChannel::txMeter maps to its WDSP index; ALC, ALC gain
+//               and COMP had read TXA_COMP_PK, TXA_COMP_AV and TXA_CFC_AV.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -583,16 +587,19 @@ void MeterPoller::pollTxMeters()
 
     const int chanId = m_txChannel->channelId();
 
-    // Meter binding IDs → WDSP TxMeterType values.
+    // Meter binding IDs → TxMeterType. TxChannel::txMeter maps each to the
+    // WDSP index it names (wdspTxaMeterIndex, D14 / R-R3-49); passing the
+    // enum's raw value read another meter (ALC read TXA_COMP_PK, ALC gain
+    // TXA_COMP_AV, COMP TXA_CFC_AV).
     // From Thetis dsp.cs:999-1029 [v2.10.3.13]:
-    //   TXA_OUT_PK  → TxMeterType::OutPeak  (12)
-    //   TXA_ALC_PK  → TxMeterType::AlcPeak  (9)
-    //   TXA_ALC_AV  → TxMeterType::AlcAvg   (10)
-    //   TXA_ALC_GAIN→ TxMeterType::AlcGain  (11)
-    struct TxPollEntry { int bindingId; int wdspMt; };
+    //   TXA_OUT_PK  → TxMeterType::OutPeak
+    //   TXA_ALC_PK  → TxMeterType::AlcPeak
+    //   TXA_ALC_AV  → TxMeterType::AlcAvg
+    //   TXA_ALC_GAIN→ TxMeterType::AlcGain
+    struct TxPollEntry { int bindingId; TxMeterType meter; };
     static constexpr TxPollEntry kTxPollSet[] = {
-        { MeterBinding::TxAlc,     static_cast<int>(TxMeterType::AlcAvg)  },   // TXA_ALC_AV  [v2.10.3.13]
-        { MeterBinding::TxAlcGain, static_cast<int>(TxMeterType::AlcGain) },   // TXA_ALC_GAIN [v2.10.3.13]
+        { MeterBinding::TxAlc,     TxMeterType::AlcAvg  },   // TXA_ALC_AV  [v2.10.3.13]
+        { MeterBinding::TxAlcGain, TxMeterType::AlcGain },   // TXA_ALC_GAIN [v2.10.3.13]
         // TxPower uses the TXA_OUT_PK reading for the power bar in 3M-1a.
         // Hardware PA forward power is pushed via RadioStatus::powerChanged
         // (the existing setRadioStatus() path); this reading is the WDSP
@@ -602,7 +609,7 @@ void MeterPoller::pollTxMeters()
         // peak, although TxComp is TXA_COMP_AV (MeterPoller.h) as in
         // Thetis: From Thetis dsp.cs:1013-1014 [v2.10.3.15]
         //   case MeterType.COMP: val = GetTXAMeter(channel, txaMeterType.TXA_COMP_AV);
-        { MeterBinding::TxComp,    static_cast<int>(TxMeterType::CompAvg) },   // TXA_COMP_AV [v2.10.3.15]
+        { MeterBinding::TxComp,    TxMeterType::CompAvg },   // TXA_COMP_AV [v2.10.3.15]
     };
 
     for (const auto& entry : kTxPollSet) {
@@ -613,7 +620,7 @@ void MeterPoller::pollTxMeters()
         // R-R3-39: TxChannel::txMeter makes that call on the transmit lane
         // and returns the lane's last reading, so this poll never waits on
         // WDSP.
-        value = m_txChannel->txMeter(entry.wdspMt);
+        value = m_txChannel->txMeter(entry.meter);
         Q_UNUSED(chanId)
 #else
         Q_UNUSED(chanId)

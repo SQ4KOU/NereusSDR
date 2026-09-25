@@ -12,6 +12,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-25 — wdspTxaMeterIndex(): each TxMeterType maps to the WDSP
+//                 txaMeterType index Thetis's CalculateTXMeter reads for it
+//                 (D14, R-R3-49), by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -209,8 +213,8 @@ enum class RxMeterType : int {
     AgcAvg       = 6    // RXA_AGC_AV — MW0LGE [2.9.0.7] added av [Thetis dsp.cs:882]
 };
 
-// TX meter types. Values match WDSP GetTXAMeter 'mt' argument.
-// From Thetis wdsp.cs txaMeterType
+// TX meter types. NereusSDR's own order, NOT WDSP's GetTXAMeter index:
+// map with wdspTxaMeterIndex() below (D14, R-R3-49).
 enum class TxMeterType : int {
     MicPeak      = 0,
     MicAvg       = 1,
@@ -230,6 +234,51 @@ enum class TxMeterType : int {
     LevelerAvg   = 15,
     LevelerGain  = 16
 };
+
+// D14, R-R3-49: the GetTXAMeter index (WDSP txaMeterType) a TxMeterType
+// reads. TxMeterType's values are NereusSDR's own order, not WDSP's, so
+// nothing passes one to WDSP raw; TxChannel::txMeter(TxMeterType) maps it
+// here. The WDSP enum this build compiles is third_party/wdsp/src/TXA.h
+// txaMeterType (TXA_MIC_PK 0 .. TXA_OUT_AV 16), the same order as Thetis's
+// own copy of it:
+// From Thetis Console/dsp.cs:899-919 [v2.10.3.15] — enum txaMeterType
+//   TXA_MIC_PK, TXA_MIC_AV, TXA_EQ_PK, TXA_EQ_AV, TXA_LVLR_PK, TXA_LVLR_AV,
+//   TXA_LVLR_GAIN, TXA_CFC_PK, TXA_CFC_AV, TXA_CFC_GAIN, TXA_COMP_PK,
+//   TXA_COMP_AV, TXA_ALC_PK, TXA_ALC_AV, TXA_ALC_GAIN, TXA_OUT_PK,
+//   TXA_OUT_AV, TXA_METERTYPE_LAST
+// Each meter reads the index Thetis reads for it:
+// From Thetis Console/dsp.cs:992-1050 [v2.10.3.15] — CalculateTXMeter
+//   MIC -> TXA_MIC_AV, PWR -> TXA_OUT_PK, ALC -> TXA_ALC_AV,
+//   EQ -> TXA_EQ_AV, LEVELER -> TXA_LVLR_AV, COMP -> TXA_COMP_AV,
+//   ALC_G -> TXA_ALC_GAIN, LVL_G -> TXA_LVLR_GAIN, MIC_PK -> TXA_MIC_PK,
+//   ALC_PK -> TXA_ALC_PK, EQ_PK -> TXA_EQ_PK, LEVELER_PK -> TXA_LVLR_PK,
+//   COMP_PK -> TXA_COMP_PK, CFC_PK -> TXA_CFC_PK, CFC_G -> TXA_CFC_GAIN,
+//   CFC_AV -> TXA_CFC_AV
+// Thetis reads no output average; OutAvg reads TXA_OUT_AV, the meter it
+// names.
+constexpr int wdspTxaMeterIndex(TxMeterType meter) noexcept
+{
+    switch (meter) {
+    case TxMeterType::MicPeak:     return 0;    // TXA_MIC_PK
+    case TxMeterType::MicAvg:      return 1;    // TXA_MIC_AV
+    case TxMeterType::EqPeak:      return 2;    // TXA_EQ_PK
+    case TxMeterType::EqAvg:       return 3;    // TXA_EQ_AV
+    case TxMeterType::LevelerPeak: return 4;    // TXA_LVLR_PK
+    case TxMeterType::LevelerAvg:  return 5;    // TXA_LVLR_AV
+    case TxMeterType::LevelerGain: return 6;    // TXA_LVLR_GAIN
+    case TxMeterType::CfcPeak:     return 7;    // TXA_CFC_PK
+    case TxMeterType::CfcAvg:      return 8;    // TXA_CFC_AV
+    case TxMeterType::CfcGain:     return 9;    // TXA_CFC_GAIN
+    case TxMeterType::CompPeak:    return 10;   // TXA_COMP_PK
+    case TxMeterType::CompAvg:     return 11;   // TXA_COMP_AV
+    case TxMeterType::AlcPeak:     return 12;   // TXA_ALC_PK
+    case TxMeterType::AlcAvg:      return 13;   // TXA_ALC_AV
+    case TxMeterType::AlcGain:     return 14;   // TXA_ALC_GAIN
+    case TxMeterType::OutPeak:     return 15;   // TXA_OUT_PK
+    case TxMeterType::OutAvg:      return 16;   // TXA_OUT_AV
+    }
+    return -1;
+}
 
 // WDSP channel type for OpenChannel 'type' parameter.
 enum class ChannelType : int {

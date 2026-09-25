@@ -54,6 +54,9 @@
 //                TxChannel::txMeter, the transmit lane's last reading,
 //                not a GetTXAMeter call on the event loop. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - D14 / R-R3-49: the mic level names TxMeterType::MicAvg,
+//                mapped to its WDSP index by TxChannel::txMeter. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -448,7 +451,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         double micDbm = -140.0;
         if (auto* wdsp = m_remoteWindow ? nullptr : m_model->wdspEngine()) {
             if (auto* tx = wdsp->txChannel(WdspEngine::kTxChannelId)) {
-                micDbm = tx->txMeter(static_cast<int>(TxMeterType::MicAvg));
+                micDbm = tx->txMeter(TxMeterType::MicAvg);
             }
         }
         const double fwdWatts  = m_model->radioStatus().forwardPowerWatts();

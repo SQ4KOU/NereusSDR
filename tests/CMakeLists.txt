@@ -2073,6 +2073,11 @@ nereus_add_test(tst_rx_channel_stop_feed REALTIME)
 # a connect's five channels load nothing.
 nereus_add_test(tst_rx_channel_dfnr_lazy)
 
+# D14, R-R3-49: every NereusSDR TX meter maps to the WDSP txaMeterType index
+# Thetis reads for it (wdspTxaMeterIndex); the expected indices are written
+# by hand from the compiled third_party/wdsp/src/TXA.h.
+nereus_add_test(tst_tx_meter_index)
+
 # ── Tunable Notch Filter Task 1: the notch DB's tune frequency ─────────────
 # WDSP maps absolute-Hz notch centres into a channel's passband with
 # offset = tunefreq + shift (third_party/wdsp/src/nbp.c:192). tunefreq had

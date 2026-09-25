@@ -326,6 +326,10 @@ warren@wpratt.com
 //                 blocks are pushed at once while nothing is queued there, so
 //                 the ring keeps the order blocks arrive in.  AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-25 : D14 / R-R3-49 by J.J. Boyd (KG4VCF): txMeter(TxMeterType)
+//                 maps a NereusSDR meter to its WDSP index
+//                 (wdspTxaMeterIndex).  AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -623,6 +627,10 @@ public:
     // value, before the first read), and a refresh is posted; without one,
     // GetTXAMeter at once. MeterPoller and the TCI TX sensors read this.
     double txMeter(int meterType) const;
+    // D14, R-R3-49: the same, for a NereusSDR meter, mapped to the WDSP
+    // index it names (wdspTxaMeterIndex). Callers holding a TxMeterType use
+    // this; its values are not WDSP indices.
+    double txMeter(TxMeterType meter) const { return txMeter(wdspTxaMeterIndex(meter)); }
 
     // PureSignal on the lane. requestPSTXDelay posts SetPSTXDelay and reports
     // the delay WDSP applied through psTxDelayApplied (emitted on the lane,
