@@ -58,6 +58,7 @@
 #include "gui/setup/hardware/AntennaAlexAlex1Tab.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "OperatorWording.h"
 
 using namespace NereusSDR;
 
@@ -146,11 +147,14 @@ void prepareCore(RadioModel& model, HPSDRHW board, RadioConnection* conn)
 // a receiver per stream, and the slice's stream bound, so the per-chain
 // filter state (AlexController, rxFilter0Effective, the WIDE badge) is
 // computed from a live slice as it is with a radio.
-SliceModel* g2CoreWithSlice(RadioModel& model, P2RadioConnection& conn, double hz)
+// `board` defaults to the G2's; the PureSignal case also runs it on a
+// high-pass board.
+SliceModel* g2CoreWithSlice(RadioModel& model, P2RadioConnection& conn, double hz,
+                            HPSDRHW board = HPSDRHW::Saturn)
 {
-    conn.setBoardForTest(HPSDRHW::Saturn);
+    conn.setBoardForTest(board);
     conn.setReceiverFrequency(2, quint64(hz));
-    prepareCore(model, HPSDRHW::Saturn, &conn);
+    prepareCore(model, board, &conn);
     model.configureStreamPool(5, 5, 192000);
     for (int st = 0; st < 5; ++st) {
         model.receiverManager()->createReceiver();
@@ -597,6 +601,214 @@ private slots:
         model.applyAlexHpfSwitchSettings();
         QCOMPARE(p2Alex0Hpf(conn), k6mLna);
         QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+
+        model.injectConnectionForTest(nullptr);
+    }
+
+    // ── The keyed bypasses (follow-up 2 to Task 14) ─────────────────────
+    //
+    // HPF Bypass on PureSignal feedback, HPF Bypass on TX and Disable 6m
+    // LNA on TX put 0x20 in Alex0 only while keyed. WIDE shows each while it
+    // is on the wire (design section 16.4.1), with its own tooltip (section
+    // 16.4.4), and rxFilter0Effective says the same. Unkeyed nothing changes.
+    // The model is keyed through the codec-context seam, the same MOX and
+    // PureSignal inputs the DDC assignment reads; the connection is keyed
+    // separately so the wire can be checked beside the report.
+
+    // HPF Bypass on PureSignal feedback, on by default, on the G2 (a
+    // band-pass board): WIDE while PureSignal transmits, and only then.
+    void psFeedbackBypass_isReportedAsWide_whilePureSignalTransmits()
+    {
+        ConnectedP2 conn;
+        RadioModel model;
+        SliceModel* a = g2CoreWithSlice(model, conn, double(k40mHz));
+        QVERIFY(a);
+        QVERIFY(a->streamIndex() >= 0);
+        model.applyAlexHpfSwitchSettings();
+        const quint8 filtered = p2Alex0Hpf(conn);
+        QVERIFY(filtered != kBypass);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+
+        // Keyed without PureSignal: the filter stays in, nothing is shown.
+        conn.setMox(true);
+        model.setDdcContextForTest(true, false, false);
+        model.requestDdcAssignment();
+        QCOMPARE(p2Alex0Hpf(conn), filtered);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+        QVERIFY(!model.panBypassState({a->sliceIndex()}).bypassed);
+
+        // Keyed with PureSignal: the bypass is on the wire, and WIDE says so.
+        conn.setPuresignalRun(true);
+        model.setDdcContextForTest(true, true, false);
+        model.requestDdcAssignment();
+        QCOMPARE(p2Alex0Hpf(conn), kBypass);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Bypass));
+        const RadioModel::PanBypassState wide = model.panBypassState({a->sliceIndex()});
+        QVERIFY2(wide.bypassed, "PureSignal's bypass is on the wire but the pan shows no WIDE");
+        // Design section 16.4.4, "PureSignal TX" row, verbatim.
+        QCOMPARE(wide.reason,
+                 QStringLiteral("Preselector bypassed while PureSignal is transmitting, so "
+                                "the feedback path sees an unfiltered coupler signal. "
+                                "Filtering returns when transmit ends."));
+        QVERIFY(OperatorWording::isPlain(wide.reason));
+        QVERIFY(!wide.reason.contains(QStringLiteral(".cs:")));
+        QCOMPARE(model.rxFilter1Effective(), int(AlexController::BpfEffective::Filtered));
+
+        // The switch off: keyed with PureSignal, the filter stays in.
+        setSwitch("hpfBypassOnPs", false);
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(p2Alex0Hpf(conn), filtered);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+        setSwitch("hpfBypassOnPs", true);
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Bypass));
+
+        // Transmit ends: filtered again.
+        conn.setMox(false);
+        model.setDdcContextForTest(false, true, false);
+        model.requestDdcAssignment();
+        QCOMPARE(p2Alex0Hpf(conn), filtered);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+        QVERIFY(!model.panBypassState({a->sliceIndex()}).bypassed);
+
+        conn.setPuresignalRun(false);
+        model.injectConnectionForTest(nullptr);
+    }
+
+    // setAlexHPF, which the high-pass boards run, has no PureSignal arm: on
+    // the ANAN-200D keyed with PureSignal the filter stays in, and nothing
+    // is shown.
+    void psFeedbackBypass_isNotReported_onHighPassBoards()
+    {
+        ConnectedP2 conn;
+        RadioModel model;
+        SliceModel* a = g2CoreWithSlice(model, conn, double(k40mHz), HPSDRHW::Orion);
+        QVERIFY(a);
+        QVERIFY(a->streamIndex() >= 0);
+        model.applyAlexHpfSwitchSettings();
+        const quint8 filtered = p2Alex0Hpf(conn);
+        QVERIFY(filtered != kBypass);
+
+        conn.setPuresignalRun(true);
+        conn.setMox(true);
+        model.setDdcContextForTest(true, true, false);
+        model.requestDdcAssignment();
+        QCOMPARE(p2Alex0Hpf(conn), filtered);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+        QVERIFY(!model.panBypassState({a->sliceIndex()}).bypassed);
+
+        conn.setMox(false);
+        conn.setPuresignalRun(false);
+        model.injectConnectionForTest(nullptr);
+    }
+
+    // HPF Bypass on TX: WIDE while keyed, on any band.
+    void hpfBypassOnTx_isReportedAsWide_whileKeyed()
+    {
+        ConnectedP2 conn;
+        RadioModel model;
+        SliceModel* a = g2CoreWithSlice(model, conn, double(k40mHz));
+        QVERIFY(a);
+        QVERIFY(a->streamIndex() >= 0);
+        setSwitch("hpfBypassOnTx", true);
+        model.applyAlexHpfSwitchSettings();
+        const quint8 filtered = p2Alex0Hpf(conn);
+        QVERIFY(filtered != kBypass);
+        // Unkeyed the switch does nothing, on the wire or in the report.
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+        QVERIFY(!model.panBypassState({a->sliceIndex()}).bypassed);
+
+        conn.setMox(true);
+        model.setDdcContextForTest(true, false, false);
+        model.requestDdcAssignment();
+        QCOMPARE(p2Alex0Hpf(conn), kBypass);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Bypass));
+        const RadioModel::PanBypassState wide = model.panBypassState({a->sliceIndex()});
+        QVERIFY2(wide.bypassed, "HPF Bypass on TX is on the wire but the pan shows no WIDE");
+        QCOMPARE(wide.reason,
+                 QStringLiteral("Preselector bypassed while transmitting by the HPF Bypass on "
+                                "TX setting on the Antenna / ALEX page of the hardware setup. "
+                                "Filtering returns when transmit ends."));
+        QVERIFY(OperatorWording::isPlain(wide.reason));
+        QVERIFY(!wide.reason.contains(QStringLiteral(".cs:")));
+        QCOMPARE(model.rxFilter1Effective(), int(AlexController::BpfEffective::Filtered));
+
+        // The switch off while keyed: filtered.
+        setSwitch("hpfBypassOnTx", false);
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(p2Alex0Hpf(conn), filtered);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+        setSwitch("hpfBypassOnTx", true);
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Bypass));
+
+        // Transmit ends: filtered again.
+        conn.setMox(false);
+        model.setDdcContextForTest(false, false, false);
+        model.requestDdcAssignment();
+        QCOMPARE(p2Alex0Hpf(conn), filtered);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+        QVERIFY(!model.panBypassState({a->sliceIndex()}).bypassed);
+
+        model.injectConnectionForTest(nullptr);
+    }
+
+    // Disable 6m LNA on TX, on by default: WIDE while keyed on 6 m, and only
+    // on 6 m.
+    void sixMetreLnaOnTx_isReportedAsWide_whileKeyedOn6m()
+    {
+        ConnectedP2 conn;
+        RadioModel model;
+        SliceModel* a = g2CoreWithSlice(model, conn, double(k6mHz));
+        QVERIFY(a);
+        QVERIFY(a->streamIndex() >= 0);
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(p2Alex0Hpf(conn), k6mLna);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+
+        conn.setMox(true);
+        model.setDdcContextForTest(true, false, false);
+        model.requestDdcAssignment();
+        QCOMPARE(p2Alex0Hpf(conn), kBypass);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Bypass));
+        const RadioModel::PanBypassState wide = model.panBypassState({a->sliceIndex()});
+        QVERIFY2(wide.bypassed, "the 6 m LNA is bypassed on the wire but the pan shows no WIDE");
+        QCOMPARE(wide.reason,
+                 QStringLiteral("Preselector bypassed on 6 m while transmitting by the Disable "
+                                "6m LNA on TX setting on the Antenna / ALEX page of the "
+                                "hardware setup. Filtering returns when transmit ends."));
+        QVERIFY(OperatorWording::isPlain(wide.reason));
+        QVERIFY(!wide.reason.contains(QStringLiteral(".cs:")));
+
+        // Keyed on 40 m the switch changes nothing, and nothing is shown.
+        a->setFrequency(double(k40mHz));
+        conn.setReceiverFrequency(2, k40mHz);
+        model.requestDdcAssignment();
+        QCOMPARE(p2Alex0Hpf(conn),
+                 codec::alex::computeRxPreselector(double(k40mHz) / 1e6, HPSDRHW::Saturn));
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+        QVERIFY(!model.panBypassState({a->sliceIndex()}).bypassed);
+
+        // Back on 6 m, keyed: wide. The switch off: filtered.
+        a->setFrequency(double(k6mHz));
+        conn.setReceiverFrequency(2, k6mHz);
+        model.requestDdcAssignment();
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Bypass));
+        setSwitch("disable6mLnaOnTx", false);
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(p2Alex0Hpf(conn), k6mLna);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+        setSwitch("disable6mLnaOnTx", true);
+        model.applyAlexHpfSwitchSettings();
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Bypass));
+
+        // Transmit ends: filtered, the LNA back in.
+        conn.setMox(false);
+        model.setDdcContextForTest(false, false, false);
+        model.requestDdcAssignment();
+        QCOMPARE(p2Alex0Hpf(conn), k6mLna);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+        QVERIFY(!model.panBypassState({a->sliceIndex()}).bypassed);
 
         model.injectConnectionForTest(nullptr);
     }

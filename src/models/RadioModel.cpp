@@ -14664,19 +14664,43 @@ void RadioModel::republishAlexAdcSlices()
     //   From Thetis console.cs:6935 [v2.10.3.15] (the 6 m BPF/LNA branch)
     //     if (alex6bphpf_bypass || disable_6m_lna_on_rx || (_mox && disable_6m_lna_on_tx))
     // The 6 m arm applies where the selection sent for the chain is the
-    // 6 m BPF/LNA (0x40), which is the lowest slice's selection below. The
-    // keyed arms (on TX, on PureSignal feedback, the 6 m LNA on TX) are not
-    // reported here: they apply only while transmitting.
+    // 6 m BPF/LNA (0x40), which is the lowest slice's selection below.
+    //
+    // Task 14 follow-up 2: the keyed arms are reported too, while keyed.
+    //   From Thetis console.cs:6843-6848 [v2.10.3.15] (setAlexHPF)
+    //     if (_mox && disable_hpf_on_tx)
+    //     {
+    //         NetworkIO.SetAlexHPFBits(0x20);
+    //   From Thetis console.cs:6957 [v2.10.3.15] (setBPF1ForOrionIISaturn,
+    //   the band-pass boards only: usesBpf1Preselector)
+    //     if (_mox && (disable_hpf_on_tx || (disable_hpf_on_ps && PureSignalEnabled)))
+    //   and the 6 m branch's (_mox && disable_6m_lna_on_tx) at 6935 above.
+    // Keyed and PureSignal running are the codec context's inputs
+    // (currentCodecContext), the same the DDC assignment reads; a MOX edge
+    // and a PureSignal change each re-run this through
+    // refreshDdcAssignmentForRadioState. Where two causes are on at once
+    // the one reported is the one that outlasts transmit (the master
+    // switch, then the 6 m LNA on RX), so the tooltip's remedy holds.
     {
         AlexController::SwitchBypass chain0Switch = AlexController::SwitchBypass::None;
         if (boardCapabilities().hasAlexFilters) {
             static constexpr quint8 k6mBpfLna = 0x40;
+            const bool on6mLna = counts[0] > 0
+                && codec::alex::computeRxPreselector(lowestHz[0] / 1.0e6, alexBoard)
+                       == k6mBpfLna;
+            const NereusSDR::CodecContext radioState = currentCodecContext();
+            const bool keyed = radioState.mox;
             if (m_alexHpfBypassSwitch) {
                 chain0Switch = AlexController::SwitchBypass::HpfBypass;
-            } else if (m_alexDisable6mLnaOnRxSwitch && counts[0] > 0
-                       && codec::alex::computeRxPreselector(lowestHz[0] / 1.0e6, alexBoard)
-                              == k6mBpfLna) {
+            } else if (m_alexDisable6mLnaOnRxSwitch && on6mLna) {
                 chain0Switch = AlexController::SwitchBypass::Disable6mLnaOnRx;
+            } else if (keyed && m_alexHpfBypassOnTxSwitch) {
+                chain0Switch = AlexController::SwitchBypass::HpfBypassOnTx;
+            } else if (keyed && m_alexHpfBypassOnPsSwitch && radioState.puresignalRun
+                       && codec::alex::usesBpf1Preselector(alexBoard)) {
+                chain0Switch = AlexController::SwitchBypass::PureSignalTx;
+            } else if (keyed && m_alexDisable6mLnaOnTxSwitch && on6mLna) {
+                chain0Switch = AlexController::SwitchBypass::Disable6mLnaOnTx;
             }
         }
         m_alexController.setSwitchBypass(0, chain0Switch);
@@ -15222,8 +15246,8 @@ QString RadioModel::bypassReasonForAdc(
     }
 
     // Plan Task 14 re-review N4: an Alex tab switch put the bypass there.
-    // Design section 16.4.4 has no row for it; these name the setting and
-    // where to turn it off, in the same shape as its rows.
+    // Design section 16.4.4's setting rows, verbatim: these name the setting
+    // and where to turn it off.
     if (st.bypassSwitch == AlexController::SwitchBypass::HpfBypass) {
         return tr("Preselector bypassed by the HPF Bypass (master) setting on the "
                   "Antenna / ALEX page of the hardware setup. Turn it off there to "
@@ -15233,6 +15257,23 @@ QString RadioModel::bypassReasonForAdc(
         return tr("Preselector bypassed on 6 m by the Disable 6m LNA on RX setting "
                   "on the Antenna / ALEX page of the hardware setup. Turn it off "
                   "there to restore filtering.");
+    }
+    // Task 14 follow-up 2: the keyed causes, on the wire while keyed.
+    if (st.bypassSwitch == AlexController::SwitchBypass::PureSignalTx) {
+        // Design doc §16.4.4, "PureSignal TX" row, verbatim.
+        return tr("Preselector bypassed while PureSignal is transmitting, so the "
+                  "feedback path sees an unfiltered coupler signal. Filtering "
+                  "returns when transmit ends.");
+    }
+    if (st.bypassSwitch == AlexController::SwitchBypass::HpfBypassOnTx) {
+        return tr("Preselector bypassed while transmitting by the HPF Bypass on TX "
+                  "setting on the Antenna / ALEX page of the hardware setup. "
+                  "Filtering returns when transmit ends.");
+    }
+    if (st.bypassSwitch == AlexController::SwitchBypass::Disable6mLnaOnTx) {
+        return tr("Preselector bypassed on 6 m while transmitting by the Disable 6m "
+                  "LNA on TX setting on the Antenna / ALEX page of the hardware "
+                  "setup. Filtering returns when transmit ends.");
     }
 
     if (st.mode == AlexController::BpfMode::ForceBypass) {
@@ -19390,9 +19431,16 @@ void RadioModel::applyAlexHpfSwitchSettings()
     // chain reports (republishAlexAdcSlices), so the WIDE badge and
     // rxFilter*Effective show the bypass they put on the wire. The words
     // sent for the chains are the same as before.
-    if (bypass != m_alexHpfBypassSwitch || lnaOffRx != m_alexDisable6mLnaOnRxSwitch) {
+    // Task 14 follow-up 2: the three keyed switches as well, for the bypass
+    // they put on the wire while keyed.
+    if (bypass != m_alexHpfBypassSwitch || lnaOffRx != m_alexDisable6mLnaOnRxSwitch
+        || onTx != m_alexHpfBypassOnTxSwitch || onPs != m_alexHpfBypassOnPsSwitch
+        || lnaOffTx != m_alexDisable6mLnaOnTxSwitch) {
         m_alexHpfBypassSwitch = bypass;
         m_alexDisable6mLnaOnRxSwitch = lnaOffRx;
+        m_alexHpfBypassOnTxSwitch = onTx;
+        m_alexHpfBypassOnPsSwitch = onPs;
+        m_alexDisable6mLnaOnTxSwitch = lnaOffTx;
         republishAlexAdcSlices();
     }
 }

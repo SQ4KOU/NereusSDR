@@ -4913,6 +4913,13 @@ private:
     // republishAlexAdcSlices can report the bypass they put on Alex0.
     bool m_alexHpfBypassSwitch{false};
     bool m_alexDisable6mLnaOnRxSwitch{false};
+    // Task 14 follow-up 2: the three keyed switches as last applied, for the
+    // bypass they put on Alex0 while keyed. Defaults are the connection's
+    // (RadioConnection.h, m_hpfBypassOnTx / m_hpfBypassOnPs /
+    // m_disable6mLnaOnTx), which are Thetis's.
+    bool m_alexHpfBypassOnTxSwitch{false};
+    bool m_alexHpfBypassOnPsSwitch{true};
+    bool m_alexDisable6mLnaOnTxSwitch{true};
 
 #ifdef NEREUS_BUILD_TESTS
     std::optional<BoardCapabilities> m_testWidebandCaps;

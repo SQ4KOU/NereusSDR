@@ -27,6 +27,11 @@
 //                Alex tab's HPF Bypass (master) and Disable 6m LNA on RX
 //                when they put the bypass on the wire. NereusSDR-original.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : Task 14 follow-up 2 (Phase 3F section 16.4): the keyed
+//                SwitchBypass causes (HPF Bypass on TX, on PureSignal
+//                feedback, Disable 6m LNA on TX), reported while they put
+//                the bypass on the wire. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Alex.cs header (lines 1-23) ===
@@ -105,7 +110,13 @@ public:
     enum class SwitchBypass {
         None,
         HpfBypass,         ///< "HPF Bypass (master)": the bypass on any band
-        Disable6mLnaOnRx   ///< "Disable 6m LNA on RX": the bypass for the 6 m BPF/LNA
+        Disable6mLnaOnRx,  ///< "Disable 6m LNA on RX": the bypass for the 6 m BPF/LNA
+        // The keyed arms (Task 14 follow-up 2): on the wire only while keyed.
+        HpfBypassOnTx,     ///< "HPF Bypass on TX": the bypass on any band while keyed
+        PureSignalTx,      ///< "HPF Bypass on PureSignal feedback": keyed with PureSignal,
+                           ///< on the band-pass boards
+        Disable6mLnaOnTx   ///< "Disable 6m LNA on TX": the bypass for the 6 m BPF/LNA
+                           ///< while keyed
     };
 
     /// Per-ADC state computed by recomputeBpf().

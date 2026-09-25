@@ -2162,7 +2162,7 @@ bypasses the preselector. §16.7 Q3.
 Badge text: `WIDE`. Existing colours are already correct
 (`src/gui/widgets/SpectrumStatusOverlay.cpp:171-176`: amber on dark amber, `#ffb800` on `#604000`).
 
-Tooltip, one of these five, selected by cause. No source citations in user-visible strings, per
+Tooltip, one of these nine, selected by cause. No source citations in user-visible strings, per
 project convention:
 
 | Cause | Tooltip |
@@ -2172,6 +2172,10 @@ project convention:
 | operator override | `Preselector bypassed by your Filter Policy setting for this chain. Click to change it.` |
 | PureSignal TX | `Preselector bypassed while PureSignal is transmitting, so the feedback path sees an unfiltered coupler signal. Filtering returns when transmit ends.` |
 | diversity range mismatch | `Preselector bypassed because diversity has pinned both receiver chains to one filter range and this slice is outside it. Click to change the filter policy for this chain.` |
+| HPF Bypass (master) setting | `Preselector bypassed by the HPF Bypass (master) setting on the Antenna / ALEX page of the hardware setup. Turn it off there to restore filtering.` |
+| Disable 6m LNA on RX setting, on 6 m | `Preselector bypassed on 6 m by the Disable 6m LNA on RX setting on the Antenna / ALEX page of the hardware setup. Turn it off there to restore filtering.` |
+| HPF Bypass on TX setting, while keyed | `Preselector bypassed while transmitting by the HPF Bypass on TX setting on the Antenna / ALEX page of the hardware setup. Filtering returns when transmit ends.` |
+| Disable 6m LNA on TX setting, keyed on 6 m | `Preselector bypassed on 6 m while transmitting by the Disable 6m LNA on TX setting on the Antenna / ALEX page of the hardware setup. Filtering returns when transmit ends.` |
 
 Clicking the badge opens the Filter Policy dialog for that chain
 (`wideBadgeClicked` already exists, `src/gui/widgets/SpectrumStatusOverlay.cpp:211-216`).

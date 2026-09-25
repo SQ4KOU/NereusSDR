@@ -172,9 +172,26 @@ void AlexController::recomputeBpf(int adc)
     if (s.effective == BpfEffective::Filtered && m_switchBypass[adc] != SwitchBypass::None) {
         s.effective = BpfEffective::Bypass;
         s.bypassSwitch = m_switchBypass[adc];
-        s.reasonText = (m_switchBypass[adc] == SwitchBypass::HpfBypass)
-            ? QStringLiteral("BYPASS (HPF Bypass setting)")
-            : QStringLiteral("BYPASS (6m LNA off on RX)");
+        switch (m_switchBypass[adc]) {
+        case SwitchBypass::HpfBypass:
+            s.reasonText = QStringLiteral("BYPASS (HPF Bypass setting)");
+            break;
+        case SwitchBypass::Disable6mLnaOnRx:
+            s.reasonText = QStringLiteral("BYPASS (6m LNA off on RX)");
+            break;
+        // Task 14 follow-up 2: the keyed arms, on the wire while keyed.
+        case SwitchBypass::HpfBypassOnTx:
+            s.reasonText = QStringLiteral("BYPASS (HPF Bypass on TX)");
+            break;
+        case SwitchBypass::PureSignalTx:
+            s.reasonText = QStringLiteral("BYPASS (PureSignal TX)");
+            break;
+        case SwitchBypass::Disable6mLnaOnTx:
+            s.reasonText = QStringLiteral("BYPASS (6m LNA off on TX)");
+            break;
+        case SwitchBypass::None:
+            break;
+        }
     }
 
     if (s.effective != prev.effective || s.reasonText != prev.reasonText) {
