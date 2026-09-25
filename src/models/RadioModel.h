@@ -1394,6 +1394,11 @@ public:
     /// False, changing nothing, when the slice is not `owner`'s. Local only.
     bool setActiveSliceByIdFor(const QByteArray& owner, int sliceId);
 
+    /// The device holding transmit, empty for none (Task 34 calls this).
+    /// While one holds it, its active slice is the station-level one
+    /// (ruling 5.11). Local only.
+    void setTransmitHolder(const QByteArray& holder);
+
     /// The lowest slice id not in use (the next letter a new slice takes),
     /// or -1 when every id with a channel is in use.
     int lowestFreeSliceId() const;

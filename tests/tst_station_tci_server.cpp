@@ -305,6 +305,55 @@ private slots:
         app.socket.close();
     }
 
+    // iPhone app Task 73 (ruling 5.11): TCI's per-slice broadcasts that
+    // exist once per radio (digl_offset, digu_offset) follow the
+    // station-level active slice. Two devices, each with its own active
+    // slice: while A holds the station's slice (A holds transmit), B's
+    // choice of its own slice does not redirect them; with nobody holding
+    // transmit the most recent choice does.
+    void perSliceBroadcastsFollowTheStationLevelActiveSlice()
+    {
+        const quint16 port = freePort();
+        RadioModel station;
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 0);
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 1);
+        const QByteArray a(32, '\x41');
+        const QByteArray b(32, '\x42');
+        SliceOwnership* ownership = station.sliceOwnership();
+        ownership->setOwner(0, a);
+        ownership->setOwner(1, b);
+        station.setTransmitHolder(a);
+        QVERIFY(station.setActiveSliceByIdFor(a, 0));
+        QVERIFY(station.setActiveSliceByIdFor(b, 1));
+        // Each device's own active slice; the station's is A's.
+        QVERIFY(station.sliceById(0)->isActive());
+        QVERIFY(station.sliceById(1)->isActive());
+        QCOMPARE(station.activeSlice(), station.sliceById(0));
+
+        station.enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(station.setStationTciForStation(true, port, &reason));
+        TciApp app(port);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
+
+        app.frames.clear();
+        station.sliceById(1)->setDiglOffsetHz(1500);
+        station.sliceById(0)->setDiglOffsetHz(900);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("digl_offset:900;")), 3000);
+        QVERIFY(!app.has(QStringLiteral("digl_offset:1500;")));
+
+        // Nobody holds transmit: B's latest choice is the station's slice.
+        station.setTransmitHolder(QByteArray());
+        QVERIFY(station.setActiveSliceByIdFor(b, 1));
+        QCOMPARE(station.activeSlice(), station.sliceById(1));
+        app.frames.clear();
+        station.sliceById(0)->setDiglOffsetHz(950);
+        station.sliceById(1)->setDiglOffsetHz(1600);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("digl_offset:1600;")), 3000);
+        QVERIFY(!app.has(QStringLiteral("digl_offset:950;")));
+        app.socket.close();
+    }
+
     // R-R3-48: band follow over the Core's server. The amp's address
     // connected as an app: following. Before that: the address to enter
     // on the amp, or "this computer only". Switched off: off.

@@ -8963,6 +8963,15 @@ bool RadioModel::setActiveSliceByIdFor(const QByteArray& owner, int sliceId)
     return true;
 }
 
+void RadioModel::setTransmitHolder(const QByteArray& holder)
+{
+    if (role() != Role::Local) {
+        return;
+    }
+    m_sliceOwnership->setTransmitHolder(holder);
+    applyActiveSlices();
+}
+
 int RadioModel::lowestFreeSliceId() const
 {
     for (int id = 0; id < sliceChannelLimit(); ++id) {
