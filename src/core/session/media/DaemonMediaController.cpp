@@ -461,7 +461,17 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
     });
     // Task 76: this session's owner mix follows whose each slice is.
     connect(m_radioModel->sliceOwnership(), &SliceOwnership::markChanged, this,
-            [this](int, const QByteArray&, const QByteArray&) { refreshOwnerMixMask(); });
+            [this](int sliceId, const QByteArray&, const QByteArray&) {
+        const QPointer<DaemonMediaController> self(this);
+        refreshOwnerMixMask();
+        // Fix wave: a slice that passed to another owner is gone from this
+        // device's view (ruling 5.8 sends it object.destroy), so its
+        // displays retire as a removed slice's do (ruling 9.1).
+        if (self && m_epoch != 0 && m_radioModel && m_radioModel->sliceById(sliceId) != nullptr
+            && !ownsSlice(sliceId)) {
+            retireSliceDisplays(sliceId);
+        }
+    });
     // A slice made for this device is noted without a mark change.
     connect(m_radioModel->sliceOwnership(), &SliceOwnership::activeChanged, this,
             [this] { refreshOwnerMixMask(); });
@@ -3369,6 +3379,11 @@ void DaemonMediaController::onSliceRemoved(int sliceId)
         onOutputRoutesChanged();
         if (!self || m_peer.get() != before) { return; }
     }
+    retireSliceDisplays(sliceId);
+}
+
+bool DaemonMediaController::retireSliceDisplays(int sliceId)
+{
     MediaPeer* const peer = m_peer.get();
     const quint64 epoch = m_epoch;
     for (quint32 endpointId : endpointIds()) {
@@ -3382,9 +3397,10 @@ void DaemonMediaController::onSliceRemoved(int sliceId)
             const QPointer<DaemonMediaController> self(this);
             sendRejected(m_peer ? m_peer->connectionId() : QString(), endpointId, revision,
                          QString::fromLatin1(kRetireReasonSliceRemoved));
-            if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
+            if (!self || m_peer.get() != peer || m_epoch != epoch) { return false; }
         }
     }
+    return true;
 }
 
 void DaemonMediaController::reconcileAudio()

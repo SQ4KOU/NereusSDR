@@ -2445,6 +2445,42 @@ private slots:
         QCOMPARE(m.hub->sharedSpectrum()->source().activeSources().size(), 1);
     }
 
+    // Fix wave (ruling 9.1): a display on a slice that passes to another
+    // owner retires as a removed slice's does; the new owner's goes on.
+    void aDisplayRetiresWhenItsSlicePassesToAnotherOwner()
+    {
+        MediaCore m(DisplayBudgetLimits{10'000'000, 1'000'000, 1});
+        m.signInBoth();
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        SliceModel* a = m.core.model->sliceById(sliceA);
+        QVERIFY(a != nullptr && sliceB >= 0);
+        const double centre = m.core.model->streamCentreHz(a->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        QVERIFY(m.startMedia(m.appB));
+        sendMedia(m.appA, displayRequest(2, sliceA, centre));
+        sendMedia(m.appB, displayRequest(1, sliceB, centre));
+        QTRY_COMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 1);
+        QTRY_COMPARE(m.hub->controllerFor(m.epochOf(1))->activeEndpointCount(), 1);
+
+        m.core.model->sliceOwnership()->setOwner(sliceA, m.b.key.fingerprint());
+        QTRY_COMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 0);
+        const auto retired = [&m]() {
+            for (const QString& op : {QStringLiteral("allocation-result"), QStringLiteral("rejected")}) {
+                for (const QJsonObject& o : mediaOps(m.appA, op)) {
+                    if (o.value(QStringLiteral("endpointId")).toInteger() == 2
+                        && o.value(QStringLiteral("reason")).toString()
+                            == QLatin1String(kRetireReasonSliceRemoved)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        QTRY_VERIFY(retired());
+        QCOMPARE(m.hub->controllerFor(m.epochOf(1))->activeEndpointCount(), 1);
+    }
+
     // The governor sees every device's display charge, PureSignal's once.
     void theGovernorSeesEveryDevicesCharge()
     {

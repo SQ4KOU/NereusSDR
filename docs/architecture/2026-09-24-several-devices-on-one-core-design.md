@@ -1499,7 +1499,11 @@ display endpoints (at most 8, `DaemonMediaController.cpp:35`), receiver streams 
 
 - A receiver's FFT stays shared between everyone watching it, as the budget design keeps it
   (the budget design, section "Capacity descriptor and accounting"). A device subscribes a
-  display only for its own slices; its pans ride its slices' receivers, shared or not.
+  display only for its own slices; its pans ride its slices' receivers, shared or not. When a
+  slice passes to another owner, the old owner's displays on it retire exactly as a removed
+  slice's do (reason `slice removed`), since that device's view destroys the slice (ruling
+  5.8); its receiver streams already stopped as `slice-removed` (fix wave after the group review
+  of Tasks 71 to 76, `DaemonMediaController::retireSliceDisplays`).
 - A hosting desktop's own window draws locally and sends nothing over the network, so it has no
   media controller.
 - Telemetry (`station.metrics.v1`) goes to every session that negotiated it.

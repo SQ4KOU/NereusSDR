@@ -324,6 +324,10 @@ private:
     void onStreamGeometryChanged(int streamIndex, double centreHz, int sampleRateHz);
     void onStreamBindingsChanged(int streamIndex, const QVector<int>& sliceIds);
     void onSliceRemoved(int sliceId);
+    /// Fix wave after the several-devices group review: retires this
+    /// session's display endpoints on `sliceId` with the slice-removed
+    /// reason. False when the peer or session changed while doing so.
+    bool retireSliceDisplays(int sliceId);
     void onRadioConnectionStateChanged(ConnectionState state);
 
     bool handleStart(const QJsonObject& control);
