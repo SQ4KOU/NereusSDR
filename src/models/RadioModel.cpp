@@ -182,8 +182,10 @@
 //                Claude Code.
 //   2026-09-24 - Receiver and transmit gaps plan, Task 7 follow-up: the
 //                microphone-ready refusal is marked never queued; two-tone
-//                reads whether TUN is on. J.J. Boyd (KG4VCF), AI-assisted
-//                via Anthropic Claude Code.
+//                reads whether TUN is on and turns TUN off through
+//                setTune(false) before it keys (console.cs:44805-44813
+//                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1420,6 +1422,10 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // Task 7 follow-up (N1): TUN is on from setTune(true) until
     // completeTuneOff, which owns the manual key until then.
     m_twoToneController->setTuneActiveFn([this]() { return m_isTuning; });
+    // Task 7 follow-up (item 6): two-tone started with TUN on turns TUN off
+    // through its own TUN-off path first (console.cs:44805-44813
+    // [v2.10.3.15]), so RadioModel stops counting TUN on at tune power.
+    m_twoToneController->setTuneOffFn([this]() { setTune(false); });
 
     // R-R3-36: keep the generated-key record in step with two-tone's own
     // state, not only with MOX transitions. Two-tone can go live on a key

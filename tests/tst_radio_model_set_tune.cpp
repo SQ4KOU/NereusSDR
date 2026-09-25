@@ -51,6 +51,10 @@
 //  30. Task 7 follow-up, N1: a refused two-tone's 200 ms settle does not
 //      clear the manual key TUN took inside it, so a mic held at TUN-off
 //      does not key under the tune tone.
+//  31. Task 7 follow-up, item 6: two-tone started while TUN is on turns
+//      TUN off through its own TUN-off path first (tone, mode and power
+//      back, TUN no longer counted on), then keys, as Thetis
+//      chk2TONE_CheckedChanged does (console.cs:44805-44813 [v2.10.3.15]).
 
 #include <QtTest/QtTest>
 #include <QObject>
@@ -1659,6 +1663,57 @@ private slots:
         mox->onMicPttFromRadio(false);
         pump();
         QVERIFY(!mox->isMox());
+    }
+
+    // ── 31. Task 7 follow-up, item 6 ────────────────────────────────────────
+    void twoToneStartedDuringTuneEndsTuneFirst()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        SliceModel* slice = nullptr;
+        setupRefusalRig(model, conn, slice);   // CWU, 80 % drive
+        std::unique_ptr<MockConnection> connOwner(conn);
+        TxChannel tx{/*channelId=*/1};
+        TwoToneController* twoTone = model.twoToneController();
+        QVERIFY(twoTone != nullptr);
+        const auto detach = qScopeGuard([&model, twoTone]() {
+            twoTone->setActive(false);
+            QTest::qWait(20);
+            twoTone->setTxChannel(nullptr);
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(slice != nullptr);
+        MoxController* mox = model.moxController();
+        mox->setMoxCheck([]() {
+            return safety::BandPlanGuard::MoxCheckResult{true, QString()};
+        });
+        twoTone->setTxChannel(&tx);
+        twoTone->setPowerOn(true);
+        twoTone->setSettleDelaysMs(/*moxReleaseMs=*/0, /*tuneReleaseMs=*/0);
+
+        model.setTune(true);
+        pump();
+        QVERIFY(mox->isMox());
+        QVERIFY(model.isTune());
+        QVERIFY(model.transmitModel().isTune());
+        QCOMPARE(slice->dspMode(), DSPMode::USB);   // TUN's CW-to-SSB swap
+
+        bool tuneOnWhenKeyed = true;
+        QObject::connect(twoTone, &TwoToneController::twoToneActiveChanged, &model,
+                         [&model, &tuneOnWhenKeyed](bool on) {
+                             if (on) { tuneOnWhenKeyed = model.isTune(); }
+                         });
+        twoTone->setActive(true);
+        QVERIFY2(!model.transmitModel().isTune(),
+                 "TUN still counted on at tune power after two-tone started");
+        QTRY_VERIFY_WITH_TIMEOUT(twoTone->isActive(), 2000);
+        QVERIFY2(!tuneOnWhenKeyed, "two-tone keyed before TUN was off");
+        QVERIFY(!model.isTune());
+        QVERIFY(!model.tuneOffPendingForTest());   // tone off, mode, power back
+        QVERIFY(!mox->isManualMox());               // the TUN button is off
+        QCOMPARE(slice->dspMode(), DSPMode::CWU);
+        QVERIFY(mox->isMox());
+        QVERIFY(mox->isManualKey());                // two-tone's own
     }
 };
 

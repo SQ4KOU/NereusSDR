@@ -58,6 +58,9 @@
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code. setTuneActiveFn: the refused start's settle leaves
 //                 a manual key TUN or the MOX button holds (N1).
+//                 setTuneOffFn: a start with TUN on turns TUN off through
+//                 its own path first (item 6, console.cs:44805-44813
+//                 [v2.10.3.15]).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation
@@ -245,6 +248,13 @@ public:
     // TUN is taken as off.
     void setTuneActiveFn(std::function<bool()> fn);
 
+    // setTuneOffFn: Task 7 follow-up, item 6. RadioModel supplies TUN's own
+    // off path (setTune(false)). setActive(true) with TUN on calls it, waits
+    // kTuneReleaseSettleMs and until the TUN-off completes, then keys, as
+    // Thetis chk2TONE_CheckedChanged does (console.cs:44805-44813
+    // [v2.10.3.15]). Unset: TUN is not turned off (a bare MOX release).
+    void setTuneOffFn(std::function<void()> fn);
+
     // ── Test seam ──────────────────────────────────────────────────────────
     // Override the default settle / Freq2-delay timer durations.  FOR
     // TESTING ONLY — production code must use the kXxx defaults.
@@ -378,6 +388,10 @@ private:
     std::function<bool()> m_tuneOffPending;
     // Task 7 follow-up: see setTuneActiveFn.
     std::function<bool()> m_tuneActive;
+    // Task 7 follow-up, item 6: see setTuneOffFn.
+    std::function<void()> m_tuneOff;
+    // Stage 2 of activation (release MOX, then continueActivation).
+    void releaseMoxThenContinue();
 };
 
 } // namespace NereusSDR
