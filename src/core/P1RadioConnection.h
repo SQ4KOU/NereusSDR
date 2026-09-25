@@ -195,7 +195,10 @@ public slots:
     void setActiveReceiverCount(int count) override;
 
     // Which frame slots carry a live receiver (bit n = slot n). Phase 3F
-    // section 16.3.2.
+    // section 16.3.2. Two uses.
+    //
+    // The announced count covers the highest live slot, so every slot in use
+    // is inside the frame (see announceRxCount).
     //
     // The receive filters: Thetis derives the Alex high-pass, the receive
     // half of the low-pass and the OC outputs from RX1, and its RX1 always
@@ -350,8 +353,19 @@ private:
     //                   setActiveReceiverCount, which follows the operator
     //                   adding and removing panadapters.
     //
-    // The announced count is the max of the two, so neither axis can starve
-    // the other. Bench-caught 2026-08-01 (J.J. Boyd, KG4VCF) on a live HL2:
+    //   m_slotRxCount   the highest live frame slot + 1, from
+    //                   setLiveReceiverSlots (Phase 3F section 16.3.2). A
+    //                   count of receivers stops being enough once routing
+    //                   is by frame slot: with slice A closed, slices B and
+    //                   C sit on slots 1 and 2, the panadapter axis says 2,
+    //                   and slot 2 falls out of the frame. On the Atlas
+    //                   (HPSDR) nothing else raises the count, because
+    //                   Thetis gives that model no P1_rxcount
+    //                   (console.cs:8533-8534 [v2.10.3.15]); wherever Thetis
+    //                   does give one, m_codecRxCount still carries it.
+    //
+    // The announced count is the max of the three, so no axis can starve
+    // another. Bench-caught 2026-08-01 (J.J. Boyd, KG4VCF) on a live HL2:
     // these were a single field written by three call sites, last writer
     // wins. Removing the second panadapter with PureSignal on dropped the
     // announcement to one receiver, and DDC2 and DDC3 left the ep6 frame
@@ -653,6 +667,7 @@ private:
     int     m_activeRxCount{1};
     int     m_codecRxCount{1};   ///< DDC configuration axis (PureSignal, diversity)
     int     m_panRxCount{1};     ///< panadapter axis
+    int     m_slotRxCount{0};    ///< highest live frame slot + 1 (0 = none / not told yet)
 
     // The live frame slots and the slot standing in for Thetis's RX1. See
     // setLiveReceiverSlots. m_rx1Slot starts at 0, so until a mask arrives,

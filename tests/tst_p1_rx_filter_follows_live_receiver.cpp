@@ -108,8 +108,10 @@ struct Session {
         detach.model = &model;
         model.wireReceiverManagerHardwarePushesForTest();
 
-        const int streams = (board == HPSDRHW::HermesLite) ? 2 : 4;
-        model.configureStreamPool(streams, 4, 192000);
+        const int streams = (board == HPSDRHW::HermesLite) ? 2
+                          : (board == HPSDRHW::Atlas)      ? 3
+                                                           : 4;
+        model.configureStreamPool(streams, streams, 192000);
         for (int i = 0; i < streams; ++i) {
             model.receiverManager()->createReceiver();
         }
@@ -293,6 +295,42 @@ private slots:
         conn.setLiveReceiverSlots((1u << 0) | (1u << slotB));
         QCOMPARE(conn.rx1SlotForTest(), 0);
         QCOMPARE(hpfBits(conn), codec::alex::computeRxPreselector(k20mHz / 1e6, hw));
+    }
+
+    // ── Every live slot is announced (Phase 3F section 16.3.2) ───────────
+    //
+    // The announced receiver count sizes the EP6 frame. It was the max of
+    // the codec's count and the NUMBER of active receivers, which stops
+    // being enough once routing is by frame slot: with slice A closed,
+    // slices B and C sit on slots 1 and 2 and the count says 2, so slot 2
+    // is not in the frame and slice C is silent. The Atlas (HPSDR) is the
+    // board this reaches, because Thetis gives it no P1_rxcount:
+    //   From Thetis console.cs:8533-8534 [v2.10.3.15]
+    //     case HPSDRModel.HPSDR:
+    //         break;
+    // so nothing else raises its count above the connect-time seed of 2.
+    void atlasWithAClosed_sliceCIsAnnounced()
+    {
+        Session s(HPSDRHW::Atlas);
+
+        const int a = s.add(k20mHz);
+        const int b = s.add(k40mHz);
+        const int c = s.add(k80mHz);
+        QCOMPARE(s.slotOf(a), 0);
+        QCOMPARE(s.slotOf(b), 1);
+        QCOMPARE(s.slotOf(c), 2);
+        QVERIFY(s.conn.activeRxCountForTest() >= 3);
+
+        s.model.removeSlice(a);
+        QCOMPARE(s.slotOf(b), 1);
+        QCOMPARE(s.slotOf(c), 2);
+        QVERIFY2(s.conn.activeRxCountForTest() >= 3,
+                 qPrintable(QStringLiteral("announced %1 receivers; slot 2 is live")
+                                .arg(s.conn.activeRxCountForTest())));
+
+        // Closing C as well lets the count come back down to B's slot.
+        s.model.removeSlice(c);
+        QCOMPARE(s.conn.activeRxCountForTest(), 2);
     }
 
     // Until a slot set arrives, and whenever slot 0 is live, slot 0 is RX1:

@@ -934,6 +934,15 @@ void P1RadioConnection::setLiveReceiverSlots(quint32 slotMask)
 {
     m_liveSlotMask = slotMask;
 
+    // The announced-count axis: highest live slot + 1. Zero when nothing is
+    // live, so an empty mask never raises the announcement on its own. See
+    // the m_slotRxCount note on announceRxCount's declaration.
+    int highest = -1;
+    for (int slot = 31; slot >= 0; --slot) {
+        if (slotMask & (1u << slot)) { highest = slot; break; }
+    }
+    m_slotRxCount = highest + 1;
+
     // The RX1 stand-in. An empty mask keeps the previous one: see the
     // declaration.
     if (slotMask != 0) {
@@ -946,6 +955,8 @@ void P1RadioConnection::setLiveReceiverSlots(quint32 slotMask)
             recomputeReceiveFilters(-1);
         }
     }
+
+    announceRxCount();
 }
 
 // ---------------------------------------------------------------------------
@@ -1233,8 +1244,9 @@ void P1RadioConnection::restartStreamWithRate(int newSampleRate)
 // ---------------------------------------------------------------------------
 // announceRxCount — the single writer for the wire's receiver count
 //
-// The DDC configuration and the panadapters each get a say, and neither can
-// see the other, so the announcement is the max of the two. See the
+// The DDC configuration, the panadapters and the live frame slots each get a
+// say, and none can see the others, so the announcement is the max of the
+// three (the slot axis: Phase 3F section 16.3.2). See the
 // declaration in P1RadioConnection.h for the bench defect that made this a
 // derived value rather than three call sites writing one field.
 //
@@ -1244,7 +1256,7 @@ void P1RadioConnection::restartStreamWithRate(int newSampleRate)
 // ---------------------------------------------------------------------------
 void P1RadioConnection::announceRxCount()
 {
-    restartStreamWithCount(qMax(m_codecRxCount, m_panRxCount));
+    restartStreamWithCount(qMax(qMax(m_codecRxCount, m_panRxCount), m_slotRxCount));
 }
 
 // ---------------------------------------------------------------------------
