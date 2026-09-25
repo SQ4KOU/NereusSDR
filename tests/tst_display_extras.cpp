@@ -78,9 +78,14 @@ QVector<QVector<float>> recordedRows(int frames, int pixels)
         row[30] = -60.0f;
         row[29] = -75.0f;
         row[31] = -74.0f;
-        const int walker = 60 + (frame / 4) % (pixels - 80);
-        row[walker] = -70.0f - 5.0f * noise();
-        if ((frame / 40) % 2 == 0) {
+        // A row narrower than the walker's range or the keyed carrier's
+        // pixel leaves them out: writing past the row's end corrupted the
+        // heap and crashed later tests at random (fix wave 71-76).
+        if (pixels > 80) {
+            const int walker = 60 + (frame / 4) % (pixels - 80);
+            row[walker] = -70.0f - 5.0f * noise();
+        }
+        if (pixels > 200 && (frame / 40) % 2 == 0) {
             row[200] = -50.0f;
         }
         rows.append(row);
