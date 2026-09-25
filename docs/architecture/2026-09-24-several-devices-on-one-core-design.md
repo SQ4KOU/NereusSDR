@@ -3,8 +3,8 @@
 **Status:** Final, 2026-09-24. The iPhone session reviewed the draft against its screens
 (`multi-client-design-review.md`, findings 1 to 14, every ruling taken) and the operator
 answered its eight questions the same day (the iPhone design's D58 to D64). Both are folded in
-here, with the iPhone session's re-review of this revision. One narrowing waits for the
-operator's confirmation: an older window kept out of a full Core (section 15.2).
+here, with the iPhone session's re-review of this revision and the operator's confirmation of
+its last narrowing (an older window turned away from a full Core, section 15.2).
 **Date:** 2026-09-24
 **Author:** J.J. Boyd (KG4VCF), with AI-assisted drafting via Anthropic Claude Code
 **Code cited at:** `codex/lane-b` `0c9e10ab`, except where a cite is marked `@aa6c5505`: this
@@ -2243,12 +2243,16 @@ evidence and how the design handles it. Every open question the draft raised is 
   Core's computer, keys only while its window's device holds transmit, and on a Core with no
   window never (D58, answers A and B; rulings 8.3, 8.5, 8.14).
 
-**Narrowing listed for the operator (re-review finding 9, not yet confirmed):**
+**Narrowing confirmed by the operator on 2026-09-24 (re-review finding 9):** "Turned away,
+saying why".
 
-- **An older window can be kept out.** It cannot answer the fifth-device question, so a full
-  Core refuses it, retryable, instead of letting it take a place (D55); and a Core with no
-  slice for it refuses it the same way (D59 lets it in, but only with a slice). It gets in on
-  its own backoff when a place or a slice frees, or once it is updated (10.7, ruling 10.2).
+- **An older window is turned away when there is no room.** It cannot answer the
+  fifth-device question, so a full Core (four devices on) refuses it, retryable, instead of
+  letting it take a place (D55), and a Core with no receiver free for its slice refuses it the
+  same way (D59 lets it in, but only with a slice). The refusal says: "The Core is full. Update
+  NereusSDR to take a device's place, or try again later." Nobody already connected is
+  disturbed. It gets in on its own backoff when a place or a receiver frees, or once it is
+  updated (10.7, ruling 10.2).
 
 **The operator's own decision, not a narrowing:** a person's key on unheld transmit takes it
 and keys (D63, answer G; ruling 8.3). It differs from D51's rejected "Whoever keys first"
