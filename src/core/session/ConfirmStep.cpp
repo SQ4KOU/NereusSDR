@@ -110,6 +110,24 @@ QList<ConfirmStep::Notice> ConfirmStep::takePending(const QByteArray& device)
     return m_pending.take(device);
 }
 
+QList<ConfirmStep::Notice> ConfirmStep::endPendingTakeBacks(const QByteArray& device)
+{
+    QList<Notice> ended;
+    const auto it = m_pending.find(device);
+    if (it == m_pending.end()) {
+        return ended;
+    }
+    for (Notice& notice : *it) {
+        if (!notice.prompt.takeBack) {
+            continue;
+        }
+        ended.append(notice);
+        notice.prompt.takeBack = false;
+        forgetTakeBack(device, notice.id);
+    }
+    return ended;
+}
+
 int ConfirmStep::pendingCount(const QByteArray& device) const
 {
     return static_cast<int>(m_pending.value(device).size());

@@ -163,6 +163,11 @@ public:
     /// The device's waiting notices, oldest first, removed.
     QList<Notice> takePending(const QByteArray& device);
     int pendingCount(const QByteArray& device) const;
+    /// Fix wave 2 (the away device's taken slice): the device's waiting
+    /// notices that still offer Take it back no longer do (their records
+    /// go), and are returned as they were, so the slices they closed can be
+    /// saved for the device. The notices stay waiting.
+    QList<Notice> endPendingTakeBacks(const QByteArray& device);
 
     /// A revoked device: every question, record and waiting notice goes.
     void forgetDevice(const QByteArray& device);

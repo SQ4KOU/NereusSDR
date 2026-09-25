@@ -732,6 +732,93 @@ private slots:
                     .isEmpty());
     }
 
+    // Fix wave 2 (the re-review's second out-of-scope item): the phone is
+    // away (dropped, inside its 180 s) when the desktop takes its receiver.
+    // Its slice lives in the waiting Take it back notice; when the 180 s
+    // end first, the slice is saved in the phone's layout store, and its
+    // next sign-in restores it, with the notice arriving without Take it
+    // back.
+    void aSliceTakenFromAnAwayDeviceIsSavedWhenIts180SecondsEnd()
+    {
+        Core core;
+        Device phone;
+        Device desktop(QStringLiteral("Mac"), QStringLiteral("computer"));
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        core.pair(phone);
+        core.pair(desktop);
+        LoopbackTransport* appPhone = core.signIn(phone);
+        QVERIFY(admitted(appPhone));
+        core.model->sliceById(0)->setAfGain(19);
+        LoopbackTransport* appDesk = core.signIn(desktop);
+        QVERIFY(admitted(appDesk));
+        const int deskSlice =
+            core.model->sliceOwnership()->ownedBy(desktop.key.fingerprint()).first();
+        core.model->sliceById(deskSlice)->setFrequency(14074000.0);
+        const int phoneReceiver = streamOf(core, 0);
+        QVERIFY(phoneReceiver >= 0 && streamOf(core, deskSlice) != phoneReceiver);
+
+        core.now = 1000;
+        appPhone->closeLink(QStringLiteral("lost"));
+        QTRY_COMPARE(core.sessions().entry(phone.key.fingerprint())->state,
+                     DeviceSessionRegistry::State::Away);
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, phone.key.fingerprint());
+
+        // Every receiver is in use: the desktop takes the away phone's.
+        QCOMPARE(core.invoke(appDesk, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-d2"))})
+                     .value(QStringLiteral("accepted")).toBool(true),
+                 false);
+        const QJsonObject ask = waitForLast(appDesk, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("takeReceiver"));
+        int choice = -1;
+        for (const QJsonValue& v : ask.value(QStringLiteral("choices")).toArray()) {
+            if (v.toObject().value(QStringLiteral("streamIndex")).toInt() == phoneReceiver) {
+                choice = v.toObject().value(QStringLiteral("choice")).toInt();
+            }
+        }
+        QVERIFY(choice >= 0);
+        const QJsonObject done = core.invoke(
+            appDesk, "confirm.proceed",
+            {int64("id", ask.value(QStringLiteral("id")).toInteger()), int64("choice", choice)});
+        QVERIFY2(done.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(done).toJson().constData());
+        QVERIFY(core.model->sliceOwnership()->ownedBy(phone.key.fingerprint()).isEmpty());
+        // Inside the 180 s the slice is the notice's, for Take it back.
+        const QString mac = core.model->currentRadioMac();
+        QVERIFY(DeviceLayoutStore::load(AppSettings::instance(), mac, phone.key.fingerprint())
+                    .isEmpty());
+
+        // The 180 s end: saved, with its settings.
+        core.now = 1000 + DeviceSessionRegistry::kGraceMs;
+        QCOMPARE(core.sessions().expireAway().size(), 1);
+        const QList<SavedSlice> saved =
+            DeviceLayoutStore::load(AppSettings::instance(), mac, phone.key.fingerprint());
+        QCOMPARE(saved.size(), 1);
+        QCOMPARE(saved.first().frequencyHz, 7074000.0);
+        QCOMPARE(saved.first().settings.value(QStringLiteral("Slice/AfGain")), QStringLiteral("19"));
+
+        // The desktop closes its new slice, freeing the receiver; the phone
+        // signs in again and has its slice back.
+        const QString newKey = done.value(QStringLiteral("affected")).toArray().first().toString();
+        QVERIFY(newKey.startsWith(QStringLiteral("slice:")));
+        QVERIFY(core.invoke(appDesk, "removeSlice", {int64("sliceId", newKey.mid(6).toInt())})
+                    .value(QStringLiteral("accepted")).toBool());
+        core.now = 1000 + DeviceSessionRegistry::kGraceMs + 10000;
+        LoopbackTransport* back = core.signIn(phone);
+        QVERIFY(admitted(back));
+        const QList<int> own = core.model->sliceOwnership()->ownedBy(phone.key.fingerprint());
+        QCOMPARE(own.size(), 1);
+        QCOMPARE(core.model->sliceById(own.first())->frequency(), 7074000.0);
+        QCOMPARE(core.model->sliceById(own.first())->afGain(), 19);
+        QVERIFY(DeviceLayoutStore::load(AppSettings::instance(), mac, phone.key.fingerprint())
+                    .isEmpty());
+        // The taken notice still arrives, without Take it back.
+        QTRY_VERIFY(countOf(back, QStringLiteral("notice")) >= 2);
+        for (const QJsonObject& notice : ofType(back->received(), QStringLiteral("notice"))) {
+            QCOMPARE(notice.value(QStringLiteral("takeBack")).toBool(true), false);
+        }
+    }
+
     // Fix wave I2: A's question names A's slice 0. B takes that slice
     // (the slice cap is full) and B's new slice gets the lowest free id,
     // 0. A's proceed is refused as changed, and B's slice is untouched.

@@ -1175,7 +1175,11 @@ question the other way and, on proceed, recreates the closed slices with their s
 are sent right after its `snapshot.complete`. When it comes back after its 3 minutes have
 ended they still arrive, after its `graceEnded` notice and without Take it back, so it
 learns who took what and when; the Core keeps them until the device returns, it is revoked,
-or the Core restarts.
+or the Core restarts. A slice taken from an away device lives only in its notice while Take it
+back is possible; when the 3 minutes end first, Take it back ends and the slice is saved in the
+device's `DeviceLayoutStore` with its settings, as ruling 5.2 saves a held slice another device
+closes, so the device's next admission restores it (fix wave 2,
+`StationServer::saveTakenSlicesFor`).
 
 ### 7.5 The transmitter's own settings
 

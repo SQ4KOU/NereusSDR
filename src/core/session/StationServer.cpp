@@ -914,7 +914,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     });
     // iPhone app Task 73 (ruling 4.11): the end of a device's 180 s.
     connect(m_deviceSessions.get(), &DeviceSessionRegistry::graceEnded, this,
-            &StationServer::releaseDeviceSlices);
+            [this](const QByteArray& deviceId) {
+                // Fix wave 2: a slice another device took while this one
+                // was away lived only in its Take it back notice; now that
+                // Take it back is gone it is saved like the device's own.
+                saveTakenSlicesFor(deviceId);
+                releaseDeviceSlices(deviceId);
+            });
     // iPhone app Task 13 (R-IOS-08): the `devices` object. A device removed
     // by anything (devices.revoke, the console, a reset) loses its
     // connection at once; so does every connection signed in with the token
@@ -4311,6 +4317,30 @@ QByteArray StationServer::saveForAbsentSubject(int sliceId) const
         return {};
     }
     return subject;
+}
+
+void StationServer::saveTakenSlicesFor(const QByteArray& deviceId)
+{
+    const QList<ConfirmStep::Notice> taken = m_confirm->endPendingTakeBacks(deviceId);
+    if (m_radioModel.isNull() || deviceId.isEmpty() || deviceId.startsWith("token:")
+        || deviceId == SliceOwnership::stationDevice()) {
+        return;
+    }
+    const QString mac = m_radioModel->currentRadioMac();
+    if (mac.isEmpty()) {
+        return;
+    }
+    AppSettings& store = AppSettings::instance();
+    bool saved = false;
+    for (const ConfirmStep::Notice& notice : taken) {
+        for (const SavedSlice& slice : notice.closed) {
+            DeviceLayoutStore::append(store, mac, deviceId, slice, deviceLayoutLimit());
+            saved = true;
+        }
+    }
+    if (saved) {
+        m_radioModel->requestSettingsSave();
+    }
 }
 
 void StationServer::releaseDeviceSlices(const QByteArray& deviceId)
