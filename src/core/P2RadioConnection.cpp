@@ -940,6 +940,27 @@ void P2RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
     }
     m_rx[receiverIndex].frequency = static_cast<int>(frequencyHz);
     m_lastRetunedDdc = receiverIndex;
+    recomputeReceiveFilters();
+
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// recomputeReceiveFilters: the receive-side Alex selections (the fallback
+// high-pass m_alex.hpfBits and the receive low-pass m_alex.lpfBitsRx) from
+// the RX1 stand-in (rx1Ddc, plan Task 14, Phase 3F section 16.3.2). Until a
+// live-slot mask arrives the stand-in is the DDC retuned last, which is
+// exactly the selection this made before.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::recomputeReceiveFilters()
+{
+    const int rx1 = rx1Ddc();
+    const int rx1Hz = m_rx[static_cast<size_t>(rx1)].frequency;
+    if (rx1Hz <= 0) {
+        return;
+    }
 
     // Update Alex HPF/LPF based on new frequency
     // From Thetis console.cs:6830-7234 [@501e3f5] — auto-select band filters
@@ -953,7 +974,7 @@ void P2RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
     // silent on the air: the radio still hears the band, just through the
     // neighbouring filter.
     // From Thetis console.cs:6827-6837 setAlex1HPF [v2.10.3.15]
-    double freqMhz = frequencyHz / 1e6;
+    const double freqMhz = rx1Hz / 1e6;
     m_alex.hpfBits = NereusSDR::codec::alex::computeRxPreselector(
         freqMhz, m_caps ? m_caps->board : HPSDRHW::Unknown);
 
@@ -978,12 +999,31 @@ void P2RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
     // That `if (!_mox)` wrapper is why this is gated on the transmit state:
     // Thetis cannot reach the receive-derived write at all while keyed, so a
     // retune arriving mid-transmission must leave both words untouched.
+    //
+    // Which receive frequency: Thetis's rule, RX1 alone, or the HIGHER of
+    // RX1 and RX2 when RX2 shares this filter (no RX2 front end of its own),
+    // because a low-pass passes everything below its corner:
+    //   From Thetis console.cs:15487-15498 UpdateAlexTXFilter [v2.10.3.15]
+    //     if (!_rx2_preamp_present && chkRX2.Checked)
+    //     {
+    //         if (rx1_dds_freq_mhz > rx2_dds_freq_mhz) setAlexLPF(rx1_dds_freq_mhz, false);
+    //         else setAlexLPF(rx2_dds_freq_mhz, false);
+    //     }
+    //     else setAlexLPF(rx1_dds_freq_mhz, false);
+    // Plan Task 14: this used to be whichever DDC was retuned last, so on
+    // the G2 (RX2 has its own front end) adding slice B on a lower band put
+    // slice A behind B's low-pass. RX1 is the stand-in (rx1Ddc); RX2 is the
+    // next live receiver above it, since Thetis has exactly two.
     if (!m_mox) {
-        m_alex.lpfBitsRx = NereusSDR::codec::alex::computeLpf(freqMhz);
-    }
-
-    if (m_running) {
-        sendCmdHighPriority();
+        int rx2 = -1;
+        for (int ddc = rx1 + 1; ddc < kMaxRxStreams; ++ddc) {
+            if (m_liveSlotMask & (1u << ddc)) { rx2 = ddc; break; }
+        }
+        const bool rx2Live = rx2 >= 0 && m_rx[static_cast<size_t>(rx2)].frequency > 0;
+        const double rx2Mhz = rx2Live ? m_rx[static_cast<size_t>(rx2)].frequency / 1e6 : 0.0;
+        m_alex.lpfBitsRx = NereusSDR::codec::alex::computeLpf(
+            NereusSDR::codec::alex::receiveLpfFrequencyMhz(
+                freqMhz, rx2Mhz, rx2Live, m_caps ? m_caps->rx2PreampPresent : false));
     }
 }
 
@@ -1391,11 +1431,13 @@ void P2RadioConnection::setLiveReceiverSlots(quint32 slotMask)
     }
     int lowest = 0;
     while (lowest < 31 && (slotMask & (1u << lowest)) == 0) { ++lowest; }
-    if (lowest < kMaxRxStreams && lowest != m_rx1Slot) {
+    if (lowest < kMaxRxStreams) {
         m_rx1Slot = lowest;
-        if (m_running) {
-            sendCmdHighPriority();
-        }
+    }
+    // The stand-in or the receiver beside it may have changed.
+    recomputeReceiveFilters();
+    if (m_running) {
+        sendCmdHighPriority();
     }
 }
 

@@ -891,6 +891,10 @@ private:
     int     m_lastRetunedDdc{0};
     int     rx1Ddc() const { return m_rx1Slot >= 0 ? m_rx1Slot : m_lastRetunedDdc; }
 
+    // Recompute m_alex.hpfBits and m_alex.lpfBitsRx from the RX1 stand-in
+    // (and, for the low-pass, the receiver beside it).
+    void recomputeReceiveFilters();
+
     // Each DDC's slice VFO frequency (setReceiverVfoFrequencies); 0 = not
     // told, and the band falls back to the DDC's centre.
     std::array<quint64, kMaxRxStreams> m_rxVfoHz{};

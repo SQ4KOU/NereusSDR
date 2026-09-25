@@ -35,10 +35,12 @@
 #include <QtTest/QtTest>
 
 #include "core/AppSettings.h"
+#include "core/BoardCapabilities.h"
 #include "core/OcMatrix.h"
 #include "core/P2RadioConnection.h"
 #include "core/ReceiverManager.h"
 #include "core/TxSliceArbiter.h"
+#include "core/codec/AlexFilterMap.h"
 #include "core/codec/P2CodecSaturn.h"
 #include "models/Band.h"
 #include "models/RadioModel.h"
@@ -48,10 +50,13 @@ using namespace NereusSDR;
 
 namespace {
 
+constexpr double k10mHz = 28400000.0;
 constexpr double k20mHz = 14200000.0;
 constexpr double k40mHz =  7100000.0;
+constexpr double k80mHz =  3700000.0;
 
-constexpr int kOcByte = 1401;
+constexpr int kOcByte      = 1401;
+constexpr int kAlex0Offset = 1432;
 
 class ConnectedP2 final : public P2RadioConnection {
 public:
@@ -63,11 +68,41 @@ struct DetachConnection {
     ~DetachConnection() { if (model) { model->injectConnectionForTest(nullptr); } }
 };
 
+quint32 readBE32(const quint8* buf, int offset)
+{
+    return (quint32(buf[offset])     << 24)
+         | (quint32(buf[offset + 1]) << 16)
+         | (quint32(buf[offset + 2]) << 8)
+         |  quint32(buf[offset + 3]);
+}
+
+// Inverse of the LPF scatter in P2CodecOrionMkII::buildAlex0.
+// Bit map from Thetis ChannelMaster/netInterface.c:691-702 [v2.10.3.15].
+quint8 lpfMaskFromReg(quint32 reg)
+{
+    quint8 bits = 0;
+    if (reg & (1u << 20)) { bits |= 0x01; }
+    if (reg & (1u << 21)) { bits |= 0x02; }
+    if (reg & (1u << 22)) { bits |= 0x04; }
+    if (reg & (1u << 23)) { bits |= 0x08; }
+    if (reg & (1u << 29)) { bits |= 0x10; }
+    if (reg & (1u << 30)) { bits |= 0x20; }
+    if (reg & (1u << 31)) { bits |= 0x40; }
+    return bits;
+}
+
 quint8 highPriorityByte(P2RadioConnection& conn, int offset)
 {
     quint8 buf[1444] = {};
     conn.composeCmdHighPriorityForTest(buf);
     return buf[offset];
+}
+
+quint8 alex0Lpf(P2RadioConnection& conn)
+{
+    quint8 buf[1444] = {};
+    conn.composeCmdHighPriorityForTest(buf);
+    return lpfMaskFromReg(readBE32(buf, kAlex0Offset));
 }
 
 // The wire form of an OC mask, network.c:1031.
@@ -148,6 +183,62 @@ private slots:
         s.model.removeSlice(a);
         QCOMPARE(highPriorityByte(s.conn, kOcByte),
                  wireOc(s.oc.maskFor(Band::Band40m, /*tx=*/false)));
+    }
+
+    // ── The G2 receive low-pass is RX1's, not the last retune's ──────────
+    //
+    // The G2's RX2 has its own front end (rx2PreampPresent), so Thetis uses
+    // RX1 alone.
+    void g2_receiveLowPass_isRx1s()
+    {
+        G2Session s;
+        const int a = s.add(k20mHz);
+        QCOMPARE(alex0Lpf(s.conn), codec::alex::computeLpf(k20mHz / 1e6));
+
+        const int b = s.add(k80mHz);
+        QCOMPARE(alex0Lpf(s.conn), codec::alex::computeLpf(k20mHz / 1e6));
+
+        s.model.sliceById(b)->setFrequency(k40mHz);
+        QCOMPARE(alex0Lpf(s.conn), codec::alex::computeLpf(k20mHz / 1e6));
+
+        // A's own retune moves it.
+        s.model.sliceById(a)->setFrequency(k10mHz);
+        QCOMPARE(alex0Lpf(s.conn), codec::alex::computeLpf(k10mHz / 1e6));
+
+        // A closed: B stands in for RX1.
+        s.model.removeSlice(a);
+        QCOMPARE(alex0Lpf(s.conn), codec::alex::computeLpf(k40mHz / 1e6));
+    }
+
+    // ── Connection level: the higher of the two where RX2 shares the filter
+    void receiveLowPass_rule_data()
+    {
+        QTest::addColumn<int>("board");
+        QTest::addColumn<bool>("separateRx2");
+        QTest::newRow("Hermes (RX2 shares the filter)") << int(HPSDRHW::Hermes) << false;
+        QTest::newRow("G2 (RX2 has its own)")           << int(HPSDRHW::Saturn) << true;
+    }
+    void receiveLowPass_rule()
+    {
+        QFETCH(int, board);
+        QFETCH(bool, separateRx2);
+        P2RadioConnection conn;
+        conn.setBoardForTest(HPSDRHW(board));
+        QCOMPARE(BoardCapsTable::forBoard(HPSDRHW(board)).rx2PreampPresent, separateRx2);
+
+        // RX1 on DDC2, RX2 on DDC3, as the G2 codec routes them.
+        conn.setLiveReceiverSlots((1u << 2) | (1u << 3));
+        conn.setReceiverFrequency(2, quint64(k20mHz));
+        conn.setReceiverFrequency(3, quint64(k80mHz));
+        QCOMPARE(alex0Lpf(conn), codec::alex::computeLpf(k20mHz / 1e6));
+
+        conn.setReceiverFrequency(3, quint64(k10mHz));
+        QCOMPARE(alex0Lpf(conn),
+                 codec::alex::computeLpf((separateRx2 ? k20mHz : k10mHz) / 1e6));
+
+        // RX2 closed: RX1 alone.
+        conn.setLiveReceiverSlots(1u << 2);
+        QCOMPARE(alex0Lpf(conn), codec::alex::computeLpf(k20mHz / 1e6));
     }
 
     // ── The band comes from the VFO, not the DDC centre ──────────────────
