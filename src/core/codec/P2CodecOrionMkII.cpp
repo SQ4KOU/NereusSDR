@@ -256,7 +256,7 @@ void P2CodecOrionMkII::composeCmdHighPriority(const CodecContext& ctx, quint8 bu
     //   packetbuf[1401] = (prn->oc_output << 1) & 0xfe;
     // (The byte before it, not ported here, carries its own tag:
     //   packetbuf[1400] = xvtr_enable | (!audioamp_enable) << 1 | atu_tune << 2; //MW0LGE_22b  // user_dig_in was gettin overwritten by 1025 packet read
-    // network.c:1027 [v2.10.3.15].)
+    // network.c:1028 [v2.10.3.15].)
     buf[1401] = static_cast<quint8>((ctx.ocByte << 1) & 0xfe);
 
     // From Thetis network.c:1037-1038 [@501e3f5] — Mercury Attenuator

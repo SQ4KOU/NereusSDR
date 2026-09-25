@@ -1570,7 +1570,7 @@ quint8 P1RadioConnection::effectiveAlexLpfBits() const
 //         bits = TXABitMasks[idx];
 //     else bits = RXABitMasks[idx];
 // mi0bot's HL2 branch has the same transmit rule:
-//   From mi0bot-Thetis HPSDR/Penny.cs:176-181 [@c26a8a4]
+//   From mi0bot-Thetis HPSDR/Penny.cs:174-181 [@c26a8a4]
 //     if (HardwareSpecific.Model == HPSDRModel.HERMESLITE)    // MI0BOT: Select correct LPF for 2 receivers
 //     {
 //         if (tx)
