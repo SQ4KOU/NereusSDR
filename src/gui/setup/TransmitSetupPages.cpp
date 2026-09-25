@@ -161,6 +161,10 @@
 //                 Transmit > DEXP/VOX (it asked for a "VOX/DEXP" page that
 //                 does not exist). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 13: the External
+//                 TX Inhibit boxes apply to the gate at once, as
+//                 setup.cs:16660-16667 [v2.10.3.15] does. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #include "TransmitSetupPages.h"
 #include "gui/StyleConstants.h"
@@ -750,7 +754,16 @@ void PowerPage::buildExternalTxInhibitGroup()
     m_chkTXInhibit->setToolTip(tr("Thetis will update on TX inhibit state change"));
     m_chkTXInhibit->setChecked(
         s.value(QStringLiteral("TxInhibitMonitorEnabled"), QStringLiteral("False")).toString() == QStringLiteral("True"));
-    connect(m_chkTXInhibit, &QCheckBox::toggled, this, [](bool on) {
+    // Task 13: the box applies at once, as Thetis
+    // chkTXInhibit_CheckedChanged does (setup.cs:16660-16663 [v2.10.3.15]):
+    //   console.UseTxInhibit = chkTXInhibit.Checked;
+    // RadioModel saves it; a remote window's save reaches the Core, which
+    // applies it to its own gate (StationServer).
+    connect(m_chkTXInhibit, &QCheckBox::toggled, this, [this](bool on) {
+        if (model() != nullptr) {
+            model()->setUseTxInhibit(on);
+            return;
+        }
         AppSettings::instance().setValue(QStringLiteral("TxInhibitMonitorEnabled"), on ? QStringLiteral("True") : QStringLiteral("False"));
     });
     layout->addWidget(m_chkTXInhibit);
@@ -762,7 +775,13 @@ void PowerPage::buildExternalTxInhibitGroup()
     m_chkTXInhibitReverse->setToolTip(tr("Reverse the input state logic"));
     m_chkTXInhibitReverse->setChecked(
         s.value(QStringLiteral("TxInhibitMonitorReversed"), QStringLiteral("False")).toString() == QStringLiteral("True"));
-    connect(m_chkTXInhibitReverse, &QCheckBox::toggled, this, [](bool on) {
+    // Task 13: from Thetis setup.cs:16664-16667 [v2.10.3.15]:
+    //   console.ReverseTxInhibit = chkTXInhibitReverse.Checked;
+    connect(m_chkTXInhibitReverse, &QCheckBox::toggled, this, [this](bool on) {
+        if (model() != nullptr) {
+            model()->setReverseTxInhibit(on);
+            return;
+        }
         AppSettings::instance().setValue(QStringLiteral("TxInhibitMonitorReversed"), on ? QStringLiteral("True") : QStringLiteral("False"));
     });
     layout->addWidget(m_chkTXInhibitReverse);

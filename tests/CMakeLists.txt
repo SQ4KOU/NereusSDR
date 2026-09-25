@@ -2456,6 +2456,15 @@ nereus_add_test(tst_swr_protection_controller)
 # Ports Thetis console.cs:25801-25839 [v2.10.3.13] (PollTXInhibit loop).
 nereus_add_test(tst_tx_inhibit_monitor)
 
+# ── Task 13 (receiver and transmit gaps plan): the radio's TX inhibit input ──
+# P1 case-0x00 C1 bits 1..4 and P2 high-priority datagram byte 59 (ReadBufp[55])
+# parsed as user_dig_in; the per-model bit choice and reverse option of Thetis
+# PollTXInhibit (console.cs:25849-25887 [v2.10.3.15]); a change reaching the
+# keying gate within one status frame; the Setup boxes reaching the monitor,
+# locally and from a remote window on the Core.
+nereus_add_test(tst_tx_inhibit_input fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_tx_inhibit_input PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-0 Task 5 (updated 3M-1a E.5): setWatchdogEnabled(bool) ──────────
 # 8 tests assert boolean state-tracking on RadioConnection (P1 + P2).
 # Default changed from false to true in 3M-1a E.5 (see RadioConnection.h).

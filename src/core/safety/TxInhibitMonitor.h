@@ -21,6 +21,12 @@
 //                reference console.cs:15283-15307, console.cs:6770-6806,
 //                console.cs:29435-29481, and Andromeda.cs:285-306 as the
 //                Thetis upstream context for each inhibit source.
+//   2026-09-25 - Task 13 (receiver and transmit gaps plan): reads the
+//                radio's own TX inhibit input the way PollTXInhibit does
+//                (console.cs:25849-25887 [v2.10.3.15]): attachRadioInput,
+//                setRadioModel, notifyUserDigitalInputs and the per-model
+//                bit choice inhibitInputFromUserIo. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs ---
@@ -73,6 +79,8 @@
 
 #pragma once
 
+#include "core/HpsdrModel.h"
+
 #include <QObject>
 #include <QTimer>
 #include <cstdint>
@@ -90,9 +98,11 @@ namespace NereusSDR::safety {
 ///
 /// UserIo01 — per-board GPIO pin polled at 100 ms.
 ///   Cite: console.cs:25801-25839 [v2.10.3.13] (PollTXInhibit loop).
-///   Per-board active-low → bool flip is the caller's responsibility; the
-///   stored reader returns the logical ASSERTED (inhibit-requested) state.
-///   setReverseLogic() applies an additional inversion on top of that.
+///   In production the radio's input is read through attachRadioInput /
+///   notifyUserDigitalInputs, with the per-model bit choice and the
+///   active-low flip made here (inhibitInputFromUserIo, Task 13). A test
+///   reader (setUserIoReader) returns the logical ASSERTED state instead.
+///   setReverseLogic() applies an additional inversion on top of either.
 ///
 /// Rx2OnlyRadio — radio is hardware-only-RX (no PA fitted).
 ///   Cite: console.cs:15283-15307 [v2.10.3.13] (RXOnly property setter).
@@ -104,7 +114,7 @@ namespace NereusSDR::safety {
 ///   Cite: console.cs:29435-29481 [v2.10.3.13] (MOX-entry rejection);
 ///         Andromeda.cs:285-306 [v2.10.3.13] (AlexANT[2,3]RXOnly).
 ///
-/// The controller is inert (signals only, no radio I/O) until 3M-1a wires it.
+/// RadioModel feeds it from the connection's status frames (Task 13).
 ///
 /// Thread safety: all public methods (notify*(), setEnabled(), setReverseLogic(),
 /// setUserIoReader()) must be called on the same thread the object lives on.
@@ -142,6 +152,38 @@ public:
     /// caller's responsibility; reverseLogic is applied on top.
     /// Cite: console.cs:25814-25820 [v2.10.3.13] (inhibit_input = !getUserI01())
     void setUserIoReader(std::function<bool()> reader);
+
+    /// Task 13: the per-model choice of which user input is the TX inhibit
+    /// input, as PollTXInhibit makes it. `userDigIn` is the radio's
+    /// user_dig_in byte (RadioConnection::userDigitalInputsChanged). Returns
+    /// inhibit_input before the reverse option; false for the HPSDR model,
+    /// which PollTXInhibit never reads.
+    /// From Thetis console.cs:25855-25876 [v2.10.3.15]:
+    ///   if (_useTxInhibit && HardwareSpecific.Model != HPSDRModel.HPSDR)
+    ///   P1: G2E/7000D/8000D/RedPitaya !getUserI02(), else !getUserI01()
+    ///       //DH1KLM should be in P1  //N1GP G2E added
+    ///   P2: 7000D/8000D/G2/G2_1K/ANVELINAPRO3/RedPitaya !getUserI05_p2(),
+    ///       else !getUserI04_p2()
+    static bool inhibitInputFromUserIo(HPSDRModel model, int protocolVersion,
+                                       quint8 userDigIn);
+
+    /// Task 13: read the connected radio's TX inhibit input. The input
+    /// reads as 0 (asserted, as Thetis's prn->user_dig_in starts) until the
+    /// first notifyUserDigitalInputs. Takes precedence over a test reader.
+    void attachRadioInput(HPSDRModel model, int protocolVersion);
+
+    /// Task 13: the radio has gone; its input no longer inhibits.
+    void detachRadioInput();
+
+    /// Task 13: the connected radio's model changed (model override).
+    void setRadioModel(HPSDRModel model);
+
+    /// Task 13: the radio reported its user digital inputs. The change
+    /// reaches txInhibitedChanged now, not on the next 100 ms poll.
+    void notifyUserDigitalInputs(quint8 userDigIn);
+
+    bool isReverseLogic() const noexcept { return m_reverseLogic; }
+    bool hasRadioInput() const noexcept { return m_radioInputAttached; }
 
     /// Notify that the radio's RX-only flag changed.
     /// Cite: console.cs:15283-15307 [v2.10.3.13] (RXOnly property setter).
@@ -183,6 +225,12 @@ private:
     Source m_lastSource       = Source::None;
 
     std::function<bool()> m_userIoReader;
+
+    // Task 13: the connected radio's input (attachRadioInput).
+    bool       m_radioInputAttached = false;
+    HPSDRModel m_radioModel         = HPSDRModel::HPSDR;
+    int        m_radioProtocol      = 1;
+    quint8     m_userDigIn          = 0;
 
     QTimer* m_pollTimer = nullptr;
 

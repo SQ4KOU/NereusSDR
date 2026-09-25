@@ -32,6 +32,10 @@
 //                 setWatchdogEnabled quotes setup.cs:18024-18028
 //                 [v2.10.3.15]. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 13: case-0x00
+//                 status C1 bits 1..4 reported as the user digital inputs
+//                 (networkproto1.c:336 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -3301,6 +3305,12 @@ void P1RadioConnection::parseEp6Frame(const QByteArray& pkt)
             if (c1 & 0x01) {
                 emit adcOverflow(0);
             }
+            // Task 13: the user digital inputs, which carry the TX inhibit
+            // input TxInhibitMonitor reads.
+            // From Thetis networkproto1.c:336 [v2.10.3.15]:
+            //   prn->user_dig_in = ((ControlBytesIn[1] >> 1) & 0xf);
+            // (networkproto1.c:335 above it: //[2.10.3.13]MW0LGE)
+            reportUserDigitalInputs(static_cast<quint8>((c1 >> 1) & 0x0f));
             break;
         }
         case 0x08: {

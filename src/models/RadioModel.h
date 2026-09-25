@@ -628,6 +628,17 @@ public:
     void setNetworkWatchdogEnabled(bool enabled);
     void applyNetworkWatchdog(bool enabled);
 
+    // Task 13: External TX Inhibit (Setup > Transmit > Power, grpExtTXInhibit)
+    // is a Core setting: the gate sits where the radio is. The setters save
+    // (a remote window's save goes to the Core) and apply to this model's
+    // own TxInhibitMonitor; the Core applies a window's change through
+    // StationServer. Default off, as Thetis: console.cs:15336-15337
+    // [v2.10.3.15] _useTxInhibit = false, _reverseTxInhibit = false.
+    // From Thetis setup.cs:16660-16667 [v2.10.3.15]
+    // (chkTXInhibit_CheckedChanged / chkTXInhibitReverse_CheckedChanged).
+    void setUseTxInhibit(bool on);
+    void setReverseTxInhibit(bool on);
+
     // Sub-components
     RadioConnection*  connection()       { return m_connection; }
     const RadioConnection* connection() const { return m_connection; }
@@ -2449,6 +2460,10 @@ public:
     // tst_radio_model_mic_ptt_wire can verify the signal/slot bind + prime
     // path without spinning up the full wireConnectionSignals pipeline.
     void wireMicPttDisabledForTest() { connectMicPttDisabledSignal(); }
+    // Task 13: wire the injected connection's user digital inputs to the
+    // TX inhibit monitor, and undo it, without the full connect pipeline.
+    void wireTxInhibitInputForTest() { connectTxInhibitInput(); }
+    void teardownTxInhibitInputForTest() { m_txInhibit.detachRadioInput(); }
     void setLastBandForTest(NereusSDR::Band b) {
         const bool cross = (b != m_lastBand);
         m_lastBand = b;
@@ -3874,6 +3889,10 @@ private:
     // in isolation by tst_radio_model_mic_ptt_wire without needing to spin
     // up the full DSP-thread pipeline that wireConnectionSignals starts.
     void connectMicPttDisabledSignal();
+    // Task 13: the radio's user digital inputs reach TxInhibitMonitor
+    // (PollTXInhibit, console.cs:25849-25887 [v2.10.3.15]). Called from
+    // wireConnectionSignals.
+    void connectTxInhibitInput();
 
     // Issue #177 — deferred completion of the TUN-off path.
     //

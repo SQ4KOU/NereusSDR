@@ -67,6 +67,9 @@
 //                 Anthropic Claude Code.
 //   2026-09-24 - R-R3-49 fix wave: setup.cs's header added below, since setWatchdogEnabled quotes
 //                 setup.cs:18024-18028 [v2.10.3.15]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 13: high-priority status ReadBufp[55] (datagram byte 59)
+//                 reported as the user digital inputs (network.c:756 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -3613,6 +3616,21 @@ void P2RadioConnection::processHighPriorityStatus(const QByteArray& data)
         default:
             break;
         }
+    }
+
+    // Task 13: the user digital inputs, which carry the TX inhibit input
+    // TxInhibitMonitor reads. ReadBufp[55] is raw[59]: ReadUDPFrame copies
+    // readbuf + 4 (network.c:531 [v2.10.3.15]). console.cs's "byte 59"
+    // comments count from the datagram; network.c counts from ReadBufp.
+    // From Thetis network.c:750-756 [v2.10.3.15]:
+    //   //Byte 55 - Bit [0] - User I/O (IO4) 1 = active, 0 = inactive
+    //   //          Bit [1] - User I/O (IO5) 1 = active, 0 = inactive
+    //   //          Bit [2] - User I/O (IO6) 1 = active, 0 = inactive
+    //   //          Bit [3] - User I/O (IO8) 1 = active, 0 = inactive
+    //   //          Bit [4] - User I/O (IO2) 1 = active, 0 = inactive
+    //   prn->user_dig_in = prn->ReadBufp[55];
+    if (data.size() >= 4 + 56) {
+        reportUserDigitalInputs(raw[4 + 55]);
     }
 
     // Shell-chrome sub-PR-2 B.2: complete the ping RTT measurement.

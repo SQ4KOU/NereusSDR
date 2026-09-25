@@ -186,6 +186,12 @@
 //                setTune(false) before it keys (console.cs:44805-44813
 //                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 13: the radio's
+//                TX inhibit input reaches TxInhibitMonitor from the status
+//                frames (PollTXInhibit, console.cs:25849-25887
+//                [v2.10.3.15]); External TX Inhibit applies at once
+//                (setup.cs:16660-16667 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -8944,6 +8950,69 @@ void RadioModel::applyNetworkWatchdog(bool enabled)
     });
 }
 
+// ---------------------------------------------------------------------------
+// Task 13: External TX Inhibit, a Core setting.
+//
+// From Thetis setup.cs:16660-16667 [v2.10.3.15]:
+//   private void chkTXInhibit_CheckedChanged(object sender, EventArgs e)
+//   {
+//       console.UseTxInhibit = chkTXInhibit.Checked;
+//   }
+//   private void chkTXInhibitReverse_CheckedChanged(object sender, EventArgs e)
+//   {
+//       console.ReverseTxInhibit = chkTXInhibitReverse.Checked;
+//   }
+// The monitor applies them on its next pass, as PollTXInhibit reads
+// _useTxInhibit and _reverseTxInhibit on its next 100 ms pass.
+// ---------------------------------------------------------------------------
+void RadioModel::setUseTxInhibit(bool on)
+{
+    AppSettings::instance().setValue(QStringLiteral("TxInhibitMonitorEnabled"),
+                                     on ? QStringLiteral("True") : QStringLiteral("False"));
+    m_txInhibit.setEnabled(on);
+}
+
+void RadioModel::setReverseTxInhibit(bool on)
+{
+    AppSettings::instance().setValue(QStringLiteral("TxInhibitMonitorReversed"),
+                                     on ? QStringLiteral("True") : QStringLiteral("False"));
+    m_txInhibit.setReverseLogic(on);
+}
+
+// ---------------------------------------------------------------------------
+// Task 13: the radio's TX inhibit input reaches the keying gate.
+//
+// Thetis polls it every 100 ms from power-on (console.cs:27417-27425
+// [v2.10.3.15] starts PollTXInhibit; the loop reads prn->user_dig_in,
+// console.cs:25849-25887). Here the connection reports the inputs when they
+// change and the monitor evaluates them at once, so a change reaches the
+// gate within one status frame; the monitor's own 100 ms pass stays as the
+// poll. The per-model bit choice is TxInhibitMonitor::inhibitInputFromUserIo
+// (//DH1KLM should be in P1  //N1GP G2E added, console.cs:25862).
+// txInhibitedChanged then reaches MoxController through applyTxKeyBlock,
+// which gates every keying source (Task 7).
+// ---------------------------------------------------------------------------
+void RadioModel::connectTxInhibitInput()
+{
+    RadioConnection* const conn = m_connection;
+    if (conn == nullptr) {
+        return;
+    }
+    // From Thetis console.cs:25860 [v2.10.3.15]:
+    //   if (NetworkIO.CurrentRadioProtocol == RadioProtocol.USB) // protocol 1
+    m_txInhibit.attachRadioInput(m_hardwareProfile.model, conn->protocolVersion());
+    // The connection lives on its own thread; the monitor on this one.
+    // A report that arrives after this connection has gone is dropped.
+    connect(conn, &RadioConnection::userDigitalInputsChanged, this,
+            [this, conn](quint8 userDigIn) {
+                if (m_connection != conn) {
+                    return;
+                }
+                m_txInhibit.notifyUserDigitalInputs(userDigIn);
+            },
+            Qt::QueuedConnection);
+}
+
 
 // --- Connection ---
 
@@ -11976,6 +12045,9 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
                 m_moxController, &MoxController::onMicPttFromRadio,
                 Qt::QueuedConnection);
     }
+
+    // Task 13: the radio's TX inhibit input (PollTXInhibit).
+    connectTxInhibitInput();
 
     // ── Task 2.4 of P1 full-parity epic: TransmitModel → RadioConnection ────
     // Wire lineInGain + userDigOut model-layer signals to the wire-bit setters
@@ -15694,6 +15766,10 @@ void RadioModel::teardownConnection()
         setTune(false);
         completeTuneOff();
     }
+    // Task 13: the radio's TX inhibit input goes with the radio. Nothing is
+    // keyed by now (the PTT sources are cleared and MOX is off above), so
+    // lifting the gate here cannot key anything.
+    m_txInhibit.detachRadioInput();
 
     // Flush any pending coalesced slice save FIRST so the user's last
     // AF / step / freq / lock / RIT tweak isn't lost to the 500 ms
@@ -16161,6 +16237,9 @@ void RadioModel::applyHpsdrModel(HPSDRModel m)
 {
     m_hardwareProfile = ::NereusSDR::profileForModel(m);
     m_transmitModel.setHpsdrModel(m_hardwareProfile.model);
+    // Task 13: PollTXInhibit reads HardwareSpecific.Model on every pass
+    // (console.cs:25855-25873 [v2.10.3.15]).
+    m_txInhibit.setRadioModel(m_hardwareProfile.model);
     if (m_receiverManager) {
         m_receiverManager->setHpsdrModel(m_hardwareProfile.model);
 

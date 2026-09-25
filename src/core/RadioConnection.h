@@ -671,6 +671,28 @@ signals:
     //   (ReadBufp points to raw[4] in NereusSDR — after 4-byte seq prefix.)
     void micPttFromRadio(bool pressed);
 
+    // The radio's user digital inputs (Thetis prn->user_dig_in), emitted
+    // when the value changes and on the first status that carries it.
+    // Task 13: TxInhibitMonitor reads the TX inhibit input from these bits
+    // the way Thetis PollTXInhibit does (console.cs:25849-25887
+    // [v2.10.3.15]); the per-model bit choice lives there, not here.
+    //
+    // P1 source: C1 bits 1..4 of a case-0x00 status subframe.
+    //   From Thetis networkproto1.c:332-336 [v2.10.3.15]:
+    //     switch (ControlBytesIn[0] & 0xf8)
+    //     case 0x00: // C0 0000 0000
+    //       prn->user_dig_in = ((ControlBytesIn[1] >> 1) & 0xf);
+    //   (networkproto1.c:335, the ADC overload line in the same case, carries
+    //   //[2.10.3.13]MW0LGE)
+    //
+    // P2 source: High-Priority status ReadBufp[55], which is datagram byte
+    //   59 after the 4-byte sequence number (network.c:531 copies readbuf+4).
+    //   From Thetis network.c:750-756 [v2.10.3.15]:
+    //     //Byte 55 - Bit [0] - User I/O (IO4) 1 = active, 0 = inactive
+    //     //          Bit [1] - User I/O (IO5) 1 = active, 0 = inactive
+    //     prn->user_dig_in = prn->ReadBufp[55];
+    void userDigitalInputsChanged(quint8 userDigIn);
+
     // Radio firmware info received during handshake.
     void firmwareInfoReceived(int version, const QString& details);
 
@@ -705,6 +727,20 @@ private:
 
 protected:
     void setState(ConnectionState newState);
+
+    // Task 13: called by the P1/P2 status parsers with the user digital
+    // input bits; emits userDigitalInputsChanged on a change. Connection
+    // thread only.
+    void reportUserDigitalInputs(quint8 userDigIn)
+    {
+        if (m_lastUserDigIn == static_cast<int>(userDigIn)) {
+            return;
+        }
+        m_lastUserDigIn = static_cast<int>(userDigIn);
+        emit userDigitalInputsChanged(userDigIn);
+    }
+    // -1 until the first status that carries the inputs.
+    int m_lastUserDigIn{-1};
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};
     RadioInfo m_radioInfo;

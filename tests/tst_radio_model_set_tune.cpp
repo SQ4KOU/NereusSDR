@@ -1407,6 +1407,107 @@ private slots:
         QVERIFY(!model.moxController()->isManualMox());
     }
 
+    // ── 25b. Task 13: the radio's own TX inhibit input blocks every source ─
+    // The connection reports its user digital inputs; RadioModel hands them
+    // to TxInhibitMonitor (PollTXInhibit, console.cs:25849-25887
+    // [v2.10.3.15]); the monitor's change reaches MoxController's gate
+    // (Task 7). A HERMES on P1 reads !getUserI01(): bit 0 clear asserts.
+    // A CAT or TCI request made while blocked is dropped, not held: it does
+    // not key when the input lets go (Task 7 re-review, N3).
+    void radioInhibitInputBlocksEverySource_data()
+    {
+        QTest::addColumn<QString>("source");
+        for (const char* source : {"mic", "vox", "cat", "tci", "mox button", "tun",
+                                   "two-tone"}) {
+            QTest::newRow(source) << QString::fromLatin1(source);
+        }
+    }
+
+    void radioInhibitInputBlocksEverySource()
+    {
+        QFETCH(QString, source);
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(model.activeSlice() != nullptr);
+        model.activeSlice()->setDspMode(DSPMode::USB);
+        model.setHpsdrModelForTest(HPSDRModel::HERMES);
+        model.setUseTxInhibit(true);
+        model.wireTxInhibitInputForTest();
+        MoxController* mox = model.moxController();
+
+        emit conn->userDigitalInputsChanged(0x01);   // I01 set: not asserted
+        pump();
+        QVERIFY(!mox->isTxInhibited());
+        emit conn->userDigitalInputsChanged(0x00);   // I01 clear: asserted
+        pump();
+        QVERIFY(model.txInhibit().inhibited());
+        QVERIFY(mox->isTxInhibited());
+
+        if (source == QLatin1String("mic")) {
+            mox->onMicPttFromRadio(true);
+        } else if (source == QLatin1String("vox")) {
+            mox->onVoxActive(true);
+        } else if (source == QLatin1String("cat")) {
+            mox->onCatPtt(true);
+        } else if (source == QLatin1String("tci")) {
+            model.setMox(true);
+        } else if (source == QLatin1String("mox button")) {
+            model.setMoxFromButton(true);
+        } else if (source == QLatin1String("tun")) {
+            model.setTune(true);
+        } else {
+            // Two-tone keys with the manual key and setMox(true).
+            mox->setManualKey(true);
+            mox->setMox(true);
+        }
+        pump();
+        QVERIFY2(!mox->isMox(), qPrintable(source + QStringLiteral(" keyed while inhibited")));
+        QVERIFY(!model.isTune());
+
+        if (source == QLatin1String("cat") || source == QLatin1String("tci")
+            || source == QLatin1String("mox button") || source == QLatin1String("tun")) {
+            emit conn->userDigitalInputsChanged(0x01);   // the input lets go
+            pump();
+            QVERIFY(!mox->isTxInhibited());
+            QVERIFY2(!mox->isMox(),
+                     qPrintable(source + QStringLiteral(" keyed when the input let go")));
+        }
+    }
+
+    void radioInhibitInputUnkeysAnActiveKey()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(model.activeSlice() != nullptr);
+        model.activeSlice()->setDspMode(DSPMode::USB);
+        model.setHpsdrModelForTest(HPSDRModel::HERMES);
+        model.setUseTxInhibit(true);
+        model.wireTxInhibitInputForTest();
+        MoxController* mox = model.moxController();
+        emit conn->userDigitalInputsChanged(0x01);
+        pump();
+
+        model.setTune(true);
+        pump();
+        QVERIFY(mox->isMox());
+        QVERIFY(model.isTune());
+
+        emit conn->userDigitalInputsChanged(0x00);
+        pump();
+        QVERIFY2(!mox->isMox(), "the radio's inhibit input did not unkey TUN");
+        QVERIFY(!model.isTune());
+    }
+
     // ── 26. Task 7 fix wave, I3: a disconnect unkeys a MOX-button key ───────
     // From Thetis chkPower_CheckedChanged, power going off,
     // console.cs:27487 [v2.10.3.15]: chkMOX.Checked = false. Nothing holds
